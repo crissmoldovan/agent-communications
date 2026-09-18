@@ -135,7 +135,8 @@ export function hidesContent(style: Map<string, string>): boolean {
   if (opacity !== undefined && Number(opacity) <= 0.05) return true;
   const fontSize = numeric(style.get('font-size'));
   if (fontSize !== null && fontSize <= 1) return true;
-  if (style.get('color') === 'transparent') return true;
+  // Invisible text: `transparent`, an alpha of zero in rgba()/hsla()/#RRGGBBAA, or a fill colour that erases it.
+  if (isInvisibleColor(style.get('color')) || isInvisibleColor(style.get('-webkit-text-fill-color'))) return true;
   const overflowHidden = (style.get('overflow') ?? style.get('overflow-y') ?? '').includes('hidden');
   for (const dimension of ['max-height', 'height', 'max-width', 'width']) {
     const size = numeric(style.get(dimension));
@@ -171,6 +172,37 @@ const OFF_SCREEN_AFTER = 2000;
 
 function offScreen(offset: number | null): boolean {
   return offset !== null && (offset <= -OFF_SCREEN_BEFORE || offset >= OFF_SCREEN_AFTER);
+}
+
+/** The alpha of a colour, or 1 when it carries none. Anything unparseable reads as opaque rather than as hidden. */
+export function colorAlpha(value: string | undefined): number {
+  if (!value) return 1;
+  const text = value.trim().toLowerCase();
+  if (text === 'transparent') return 0;
+  const functional = /^(?:rgba?|hsla?)\(([^)]*)\)$/.exec(text);
+  if (functional) {
+    const inner = (functional[1] ?? '').trim();
+    // Both syntaxes: the comma form `rgba(0, 0, 0, 0)` and the modern slash form `rgb(0 0 0 / 0%)`.
+    const slash = inner.indexOf('/');
+    const alpha = slash >= 0 ? inner.slice(slash + 1).trim() : inner.split(',').map((part) => part.trim())[3];
+    if (alpha === undefined || alpha === '') return 1;
+    const percentage = alpha.endsWith('%');
+    const amount = Number.parseFloat(percentage ? alpha.slice(0, -1) : alpha);
+    if (!Number.isFinite(amount)) return 1;
+    return percentage ? amount / 100 : amount;
+  }
+  const hex = /^#([0-9a-f]{4}|[0-9a-f]{8})$/.exec(text);
+  if (hex) {
+    const digits = hex[1] ?? '';
+    const alpha = digits.length === 4 ? digits.slice(3).repeat(2) : digits.slice(6);
+    return Number.parseInt(alpha, 16) / 255;
+  }
+  return 1;
+}
+
+/** True when text in this colour cannot be seen at all — the same bar as `opacity`. */
+function isInvisibleColor(value: string | undefined): boolean {
+  return value !== undefined && colorAlpha(value) <= 0.05;
 }
 
 function normaliseColor(value: string | undefined): string | null {

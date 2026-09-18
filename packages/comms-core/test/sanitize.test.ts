@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { analyseLink, sanitizeHtmlToText, sanitizePlainText, stripInvisible } from '../src/sanitize.ts';
+import { analyseLink, colorAlpha, sanitizeHtmlToText, sanitizePlainText, stripInvisible } from '../src/sanitize.ts';
 
 const ZWSP = String.fromCodePoint(0x200b);
 const RLO = String.fromCodePoint(0x202e);
@@ -19,6 +19,13 @@ const HIDDEN_CASES: [string, string][] = [
   ['tiny em font', `<span style="font-size:0.01em">${INJECTION}</span>`],
   ['opacity zero', `<p style="opacity:0">${INJECTION}</p>`],
   ['transparent text', `<p style="color:transparent">${INJECTION}</p>`],
+  ['zero-alpha rgba text', `<p style="color:rgba(0,0,0,0)">${INJECTION}</p>`],
+  ['zero-alpha rgba with spaces', `<p style="color: RGBA( 12 , 34 , 56 , 0.0 )">${INJECTION}</p>`],
+  ['zero-alpha modern rgb syntax', `<p style="color:rgb(0 0 0 / 0%)">${INJECTION}</p>`],
+  ['zero-alpha hsla text', `<p style="color:hsla(120, 50%, 50%, 0)">${INJECTION}</p>`],
+  ['zero-alpha eight-digit hex', `<p style="color:#11223300">${INJECTION}</p>`],
+  ['zero-alpha four-digit hex', `<p style="color:#1230">${INJECTION}</p>`],
+  ['text fill colour erased', `<p style="-webkit-text-fill-color:transparent">${INJECTION}</p>`],
   ['zero height overflow hidden', `<div style="max-height:0;overflow:hidden">${INJECTION}</div>`],
   ['clip rect zero', `<div style="position:absolute;clip:rect(0,0,0,0)">${INJECTION}</div>`],
   ['clip-path inset', `<div style="clip-path: inset(100%)">${INJECTION}</div>`],
@@ -72,6 +79,34 @@ test('same foreground and background colour is flagged but kept for the reader t
   const { text, report } = sanitizeHtmlToText('<p style="color:#fff;background-color:#FFFFFF">white on white</p>');
   assert.equal(report.sameColorElements, 1);
   assert.match(text, /white on white/);
+});
+
+test('colours that can be seen are not mistaken for hidden text', () => {
+  const { text, report } = sanitizeHtmlToText(
+    '<p style="color:rgba(10,20,30,1)">opaque</p><p style="color:rgba(10,20,30,0.6)">translucent</p>' +
+      '<p style="color:#11223344">mostly transparent but readable</p><p style="color:rgb(1 2 3 / 80%)">modern</p>',
+  );
+  for (const word of ['opaque', 'translucent', 'readable', 'modern']) assert.match(text, new RegExp(word));
+  assert.equal(report.hiddenElements, 0);
+});
+
+test('an alpha this small means invisible, whatever syntax wrote it', () => {
+  for (const [value, alpha] of [
+    ['transparent', 0],
+    ['rgba(0,0,0,0)', 0],
+    ['rgba(0, 0, 0, 0.5)', 0.5],
+    ['rgb(0 0 0 / 40%)', 0.4],
+    ['hsla(0, 0%, 0%, 0)', 0],
+    ['#00000000', 0],
+    ['#0000', 0],
+    ['#000000ff', 1],
+    ['#000', 1],
+    ['red', 1],
+    ['nonsense', 1],
+    [undefined, 1],
+  ] as const) {
+    assert.equal(Math.round(colorAlpha(value) * 100) / 100, alpha, String(value));
+  }
 });
 
 test('ordinary positioning and small offsets are not mistaken for hiding', () => {

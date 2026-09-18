@@ -272,7 +272,12 @@ export class ApprovalStore {
       // Fail closed: an approval prepared against a known account may only be claimed by a caller that names the same
       // account. A caller that passes none is refused rather than trusted, whatever the reason it has none.
       if (current.inboxSub && current.inboxSub !== live.inboxSub) {
-        return voidWith('APPROVAL_VOID', 'the inbox is now connected to a different account');
+        return voidWith(
+          'APPROVAL_VOID',
+          live.inboxSub
+            ? 'the inbox is now connected to a different account'
+            : 'the account this was prepared for could not be confirmed',
+        );
       }
       if (live.policy === 'never')
         return voidWith('POLICY_NEVER', 'sending is turned off for this inbox (policy: never)');
