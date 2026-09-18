@@ -61,6 +61,15 @@ const HIDDEN_CASES: [string, string][] = [
   ['aria-hidden', `<div aria-hidden="true">${INJECTION}</div>`],
   ['class hidden by stylesheet', `<style>.x9 { display: none }</style><div class="a x9">${INJECTION}</div>`],
   ['id hidden by stylesheet', `<style>#q{font-size:0}</style><p id="q">${INJECTION}</p>`],
+  ['compound class selector', `<style>.a.b{display:none}</style><div class="a b">${INJECTION}</div>`],
+  ['tag with class', `<style>span.hidden-note{display:none}</style><span class="hidden-note">${INJECTION}</span>`],
+  [
+    'descendant selector',
+    `<style>.wrap > .secret{display:none}</style><div class="wrap"><i class="secret">${INJECTION}</i></div>`,
+  ],
+  ['id with class', `<style>#box.quiet{opacity:0}</style><div id="box" class="quiet">${INJECTION}</div>`],
+  ['selector list', `<style>.x, .y{display:none}</style><div class="y">${INJECTION}</div>`],
+  ['attribute selector', `<style>div[data-x]{display:none}</style><div data-x="1">${INJECTION}</div>`],
   ['comment', `<!-- ${INJECTION} -->`],
   ['mso conditional comment', `<!--[if mso]><p>${INJECTION}</p><![endif]-->`],
   ['script', `<script>/* ${INJECTION} */</script>`],
@@ -87,6 +96,33 @@ test('hidden content is counted, not silently dropped', () => {
   );
   assert.equal(report.hiddenElements, 2);
   assert.ok(report.hiddenChars >= INJECTION.length);
+});
+
+test('a stylesheet rule hides what it matches, and only that', () => {
+  // `.a.b` needs both classes: an element with only one of them is visible.
+  const partial = sanitizeHtmlToText(
+    '<style>.a.b{display:none}</style><div class="a">kept</div><div class="a b">gone</div>',
+  );
+  assert.match(partial.text, /kept/);
+  assert.doesNotMatch(partial.text, /gone/);
+  assert.equal(partial.report.hiddenElements, 1);
+
+  // In `.wrapper .secret` the wrapper is context, not the thing hidden.
+  const nested = sanitizeHtmlToText(
+    '<style>.wrapper .secret{display:none}</style><div class="wrapper">visible wrapper text<i class="secret">gone</i></div>',
+  );
+  assert.match(nested.text, /visible wrapper text/);
+  assert.doesNotMatch(nested.text, /gone/);
+
+  // Hover hides nothing in a mail client: the text is there when the message is opened.
+  const hover = sanitizeHtmlToText('<style>.link:hover{display:none}</style><a class="link">still there</a>');
+  assert.match(hover.text, /still there/);
+
+  // A selector this parser cannot read is declined rather than half-applied.
+  const exotic = sanitizeHtmlToText(
+    '<style>:is(.a, .b) ~ p::first-line{display:none}</style><p class="a">kept anyway</p>',
+  );
+  assert.match(exotic.text, /kept anyway/);
 });
 
 test('a box is only hidden when the axis that would show it is clipped', () => {
