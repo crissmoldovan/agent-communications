@@ -23,9 +23,9 @@ const TAG_LIKE = new RegExp(`<(/?)\\s*${UNTRUSTED_TAG}`, 'gi');
 
 export interface EnvelopeAttributes {
   /** The inbox alias the content came from. */
-  inbox?: string;
+  inbox?: string | undefined;
   /** Provider message or thread id. */
-  id?: string;
+  id?: string | undefined;
   /** Which field this is: body, subject, snippet, from-name, filename, attachment-text… */
   field: string;
 }
