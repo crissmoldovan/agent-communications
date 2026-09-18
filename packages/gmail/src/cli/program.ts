@@ -23,6 +23,7 @@ import { inboxList, inboxPolicy, inboxRemove, inboxRename, inboxShow, whoami } f
 import { runOauthListener } from '../operations/oauth-listen.ts';
 import { finishSignIn, startSignIn } from '../operations/signin.ts';
 import { VERSION } from '../version.ts';
+import { openInBrowser } from './browser.ts';
 import { askChallenge } from './prompt.ts';
 import {
   renderClientAdd,
@@ -155,6 +156,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       .option('--no-contacts', 'do not ask for contacts access')
       .option('--client <name>', 'sign in through this OAuth client')
       .option('--port <number>', 'use this loopback port for the redirect', (value) => Number.parseInt(value, 10))
+      .option('--no-browser', 'do not open the link, just print it')
       .option('--hd <domain>', 'restrict the account chooser to a Google Workspace domain')
       .option('--start', 'start the sign-in and return the link, to be finished later', false)
       .option('--finish <flowId>', 'finish a sign-in started earlier')
@@ -204,6 +206,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       return;
     }
     streams.stderr.write(`${renderSignInStarted(started, mode, globalOptions.color)}\n`);
+    if (options.browser !== false) openInBrowser(started.authUrl);
     const result = await started.listener.result;
     writeResult(result, output(), (data) => renderSignedIn(data, globalOptions.color), streams);
   };
