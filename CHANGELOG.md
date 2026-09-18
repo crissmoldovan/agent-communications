@@ -26,5 +26,6 @@ macOS and Windows, security policy, contribution guide, issue forms, Blocks revi
 **Why.** Every Gmail scope that allows drafting also allows sending, so "never send without approval" has to be
 enforced in code, in one place, before any Gmail code exists.
 
-**Impact.** **Nothing to install yet.** No package is published.
-- **Tests:** `pnpm verify` — root 14 passing, comms-core 117 passing, and a packed-tarball consumer check.
+**Impact.** **Nothing to install yet.** No package is published. Developing in this repository needs Node 22.18 or
+newer; the packages themselves will run on 22.12 or newer.
+- **Tests:** `pnpm verify` — root 14 passing, comms-core 118 passing, and a packed-tarball consumer check.

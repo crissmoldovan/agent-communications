@@ -7,10 +7,12 @@ import { fileURLToPath } from 'node:url';
 import { tempDir } from './helpers/temp.ts';
 
 const CLI = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
+// Type stripping is on by default only from Node 22.18; the flag lets the source CLI run on older 22.x too.
+const NODE_FLAGS = ['--experimental-strip-types', '--disable-warning=ExperimentalWarning'];
 
 function run(args: string[], env: Record<string, string> = {}) {
   const config = env.AGENT_COMMS_CONFIG_DIR ?? tempDir();
-  const result = spawnSync(process.execPath, [CLI, ...args], {
+  const result = spawnSync(process.execPath, [...NODE_FLAGS, CLI, ...args], {
     encoding: 'utf8',
     env: { PATH: process.env.PATH ?? '', HOME: tempDir(), AGENT_COMMS_CONFIG_DIR: config, NO_COLOR: '1', ...env },
   });

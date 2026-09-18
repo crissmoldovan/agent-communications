@@ -17,7 +17,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        node: [22, 24]
+        # 22.18.0 is the development floor (root package.json engines); 22 and 24 track the latest releases.
+        node: ['22.18.0', 22, 24]
         include:
           - os: macos-latest
             node: 24

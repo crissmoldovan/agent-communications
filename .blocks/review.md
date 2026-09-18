@@ -8,6 +8,10 @@
 pnpm verify
 ```
 
+The suite needs Node 22.18 or newer (the published packages run on 22.12, but the build tool does not). If the
+sandbox's Node was older, post-clone fetched Node 24 and wrote `.blocks/env.sh`: run `source .blocks/env.sh` first.
+A failure that only appears below 22.18 is an environment problem, not a finding — but say which Node you used.
+
 That is Biome, the type checks, the test suites (root `node --test` plus each package's), the builds and
 `scripts/verify-skills.mjs`. It should finish green. **If post-clone reported a failure, say in your verdict
 that the tests were not run and why.**

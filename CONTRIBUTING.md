@@ -29,7 +29,8 @@ The design lives in `docs/superpowers/specs/`, and the implementation plan in `d
 
 ## Local setup
 
-Use Node.js 22.12 or newer and pnpm 11 (`npm install -g pnpm@11`, or `corepack enable` on Node 22/24).
+Use Node.js 22.18 or newer and pnpm 11 (`npm install -g pnpm@11`, or `corepack enable` on Node 22/24). The build tool
+needs 22.18; the published packages themselves run on Node 22.12 or newer.
 
 ```bash
 pnpm install

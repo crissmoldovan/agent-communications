@@ -153,7 +153,29 @@ test('classifyChange: inheriting a looser default counts as loosening the inbox'
   before.inboxes.work = inbox('ibx_AAAAAAAAAAAAAAAA');
   const after = structuredClone(before);
   after.defaults.sendPolicy = 'chat';
-  assert.deepEqual(classifyChange(before, after).loosened, ['inboxes.work.sendPolicy']);
+  assert.deepEqual(classifyChange(before, after).loosened, ['inboxes.work.sendPolicy', 'defaults.sendPolicy']);
+});
+
+test('classifyChange: loosening the default policy counts even when there are no inboxes yet', async () => {
+  const before = emptyConfig();
+  before.defaults.sendPolicy = 'never';
+  const after = structuredClone(before);
+  after.defaults.sendPolicy = 'confirm';
+  assert.deepEqual(classifyChange(before, after).loosened, ['defaults.sendPolicy']);
+  assert.deepEqual(classifyChange(after, before).loosened, []);
+
+  const store = new ConfigStore(tempDir());
+  await store.update((c) => ({ ...c, defaults: { ...c.defaults, sendPolicy: 'confirm' } }));
+  const toChat = (c: ReturnType<typeof emptyConfig>) => ({
+    ...c,
+    defaults: { ...c.defaults, sendPolicy: 'chat' as const },
+  });
+  await assert.rejects(
+    store.update(toChat),
+    (e: unknown) => e instanceof CommsError && e.code === 'LOOSENING_REFUSED' && /defaults\.sendPolicy/.test(e.message),
+  );
+  await store.update(toChat, { consent: { kind: 'loosening-consent', paths: ['defaults.sendPolicy'] } });
+  assert.equal((await store.load()).defaults.sendPolicy, 'chat');
 });
 
 test('the schema reserves "all" and rejects duplicate inbox ids', () => {

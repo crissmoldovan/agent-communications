@@ -290,6 +290,9 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   }
   const b = before.defaults;
   const a = after.defaults;
+  // Checked directly as well: with no inboxes (yet), the loop above sees nothing, and the next inbox added would
+  // inherit the looser default without anyone having been asked.
+  if (POLICY_RANK[a.sendPolicy] < POLICY_RANK[b.sendPolicy]) loosened.push('defaults.sendPolicy');
   if (b.riskEscalation && !a.riskEscalation) loosened.push('defaults.riskEscalation');
   if (a.sendCaps.perHour > b.sendCaps.perHour || a.sendCaps.perDay > b.sendCaps.perDay)
     loosened.push('defaults.sendCaps');
