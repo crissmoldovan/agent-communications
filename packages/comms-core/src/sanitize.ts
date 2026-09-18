@@ -179,11 +179,14 @@ export function colorAlpha(value: string | undefined): number {
   if (!value) return 1;
   const text = value.trim().toLowerCase();
   if (text === 'transparent') return 0;
-  const functional = /^(?:rgba?|hsla?)\(([^)]*)\)$/.exec(text);
+  // Every functional colour syntax that can carry an alpha, including CSS Level 4's `color()` family. The inner text
+  // is taken to the last `)`, so a nested `calc(...)` does not cut the match short.
+  const functional = /^(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(([\s\S]*)\)$/.exec(text);
   if (functional) {
     const inner = (functional[1] ?? '').trim();
     // Both syntaxes: the comma form `rgba(0, 0, 0, 0)` and the modern slash form `rgb(0 0 0 / 0%)`.
-    const slash = inner.indexOf('/');
+    // The alpha follows the last top-level slash: `color(display-p3 0 0 0 / 0)`, `rgb(0 0 0 / calc(1 - 1))`.
+    const slash = lastTopLevelSlash(inner);
     const alpha = slash >= 0 ? inner.slice(slash + 1).trim() : inner.split(',').map((part) => part.trim())[3];
     if (alpha === undefined || alpha === '') return 1;
     const percentage = alpha.endsWith('%');
@@ -198,6 +201,19 @@ export function colorAlpha(value: string | undefined): number {
     return Number.parseInt(alpha, 16) / 255;
   }
   return 1;
+}
+
+/** The last `/` that is not inside parentheses, or -1. */
+function lastTopLevelSlash(value: string): number {
+  let depth = 0;
+  let found = -1;
+  for (let index = 0; index < value.length; index++) {
+    const character = value[index];
+    if (character === '(') depth++;
+    else if (character === ')') depth--;
+    else if (character === '/' && depth === 0) found = index;
+  }
+  return found;
 }
 
 /** True when text in this colour cannot be seen at all — the same bar as `opacity`. */

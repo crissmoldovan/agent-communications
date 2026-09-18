@@ -156,6 +156,37 @@ test('classifyChange: inheriting a looser default counts as loosening the inbox'
   assert.deepEqual(classifyChange(before, after).loosened, ['inboxes.work.sendPolicy', 'defaults.sendPolicy']);
 });
 
+test('classifyChange: an inbox added with a looser policy than the default needs consent too', async () => {
+  const before = emptyConfig();
+  before.defaults.sendPolicy = 'never';
+  const after = structuredClone(before);
+  after.inboxes.work = inbox('ibx_AAAAAAAAAAAAAAAA', { sendPolicy: 'chat' });
+  assert.deepEqual(classifyChange(before, after).loosened, ['inboxes.work.sendPolicy']);
+
+  // Inheriting the default, or being stricter than it, is not a loosening.
+  const inherits = structuredClone(before);
+  inherits.inboxes.work = inbox('ibx_AAAAAAAAAAAAAAAA');
+  assert.deepEqual(classifyChange(before, inherits).loosened, []);
+
+  // Connecting a mailbox under the ordinary default must not demand a typed challenge.
+  const ordinary = emptyConfig();
+  const added = structuredClone(ordinary);
+  added.inboxes.work = inbox('ibx_AAAAAAAAAAAAAAAA');
+  assert.deepEqual(classifyChange(ordinary, added).loosened, []);
+});
+
+test('classifyChange: a new inbox may trust its own domain, but not somebody else’s', () => {
+  const before = emptyConfig();
+  const own = structuredClone(before);
+  const row = inbox('ibx_AAAAAAAAAAAAAAAA');
+  own.inboxes.work = { ...row, email: 'jo@company.test', internalDomains: ['company.test'] };
+  assert.deepEqual(classifyChange(before, own).loosened, []);
+
+  const other = structuredClone(before);
+  other.inboxes.work = { ...row, email: 'jo@company.test', internalDomains: ['company.test', 'partner.test'] };
+  assert.deepEqual(classifyChange(before, other).loosened, ['inboxes.work.internalDomains']);
+});
+
 test('classifyChange: loosening the default policy counts even when there are no inboxes yet', async () => {
   const before = emptyConfig();
   before.defaults.sendPolicy = 'never';

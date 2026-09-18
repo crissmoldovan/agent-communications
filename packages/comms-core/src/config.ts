@@ -280,11 +280,16 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   const loosened: string[] = [];
   for (const [alias, inbox] of Object.entries(after.inboxes)) {
     const previous = Object.values(before.inboxes).find((i) => i.id === inbox.id);
-    if (!previous) continue;
-    const was = previous.sendPolicy ?? before.defaults.sendPolicy;
+    // A newly added inbox is measured against the policy in force before it existed: adding one that may send more
+    // freely than the default is the same loosening as relaxing an existing one, and needs the same consent.
+    const was = previous ? (previous.sendPolicy ?? before.defaults.sendPolicy) : before.defaults.sendPolicy;
     const now = inbox.sendPolicy ?? after.defaults.sendPolicy;
     if (POLICY_RANK[now] < POLICY_RANK[was]) loosened.push(`inboxes.${alias}.sendPolicy`);
-    if (inbox.internalDomains.some((d) => !previous.internalDomains.includes(d))) {
+    // For a new inbox, its own domain is part of what it is; any *other* domain declared internal is a claim about
+    // who to trust, and needs the same consent as widening an existing inbox's list.
+    const ownDomain = inbox.email.slice(inbox.email.lastIndexOf('@') + 1).toLowerCase();
+    const domainsBefore = previous ? previous.internalDomains : [ownDomain];
+    if (inbox.internalDomains.some((domain) => !domainsBefore.includes(domain))) {
       loosened.push(`inboxes.${alias}.internalDomains`);
     }
   }
