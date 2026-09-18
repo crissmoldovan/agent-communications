@@ -18,6 +18,18 @@ export interface GmailTransport {
   getProfile(): Promise<GmailProfile>;
   listLabels(): Promise<GmailLabel[]>;
   listSendAs(): Promise<SendAsAddress[]>;
+  /** One message with its full part tree. `format=metadata` has no parts, so reading always uses `full`. */
+  getMessage(messageId: string): Promise<RawMessage>;
+}
+
+/** The parts of Gmail's message resource this package reads. */
+export interface RawMessage {
+  id?: string | null;
+  threadId?: string | null;
+  labelIds?: string[] | null;
+  snippet?: string | null;
+  internalDate?: string | null;
+  payload?: gmail_v1.Schema$MessagePart | null;
 }
 
 export interface GmailProfile {
@@ -155,6 +167,13 @@ export class GoogleGmailTransport implements GmailTransport {
       messagesTotal: label.messagesTotal ?? undefined,
       messagesUnread: label.messagesUnread ?? undefined,
     }));
+  }
+
+  async getMessage(messageId: string): Promise<RawMessage> {
+    const { data } = await this.call('read a message', () =>
+      this.gmail().users.messages.get({ userId: 'me', id: messageId, format: 'full' }),
+    );
+    return data;
   }
 
   async listSendAs(): Promise<SendAsAddress[]> {

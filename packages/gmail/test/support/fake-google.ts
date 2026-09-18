@@ -33,6 +33,17 @@ export interface FakeAccount {
     signature?: string;
     verificationStatus?: string;
   }>;
+  /** Messages this account holds, keyed by id, in the shape `users.messages.get(format=full)` returns. */
+  messages?: Record<string, FakeMessage>;
+}
+
+export interface FakeMessage {
+  id?: string;
+  threadId?: string;
+  labelIds?: string[];
+  snippet?: string;
+  internalDate?: string;
+  payload?: unknown;
 }
 
 export interface FakeGoogleOptions {
@@ -268,6 +279,18 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
         });
         return;
       }
+      const message = /^\/gmail\/v1\/users\/me\/messages\/([^/]+)$/.exec(url.pathname);
+      if (message) {
+        const id = decodeURIComponent(message[1] ?? '');
+        const found = account?.messages?.[id];
+        if (!found) {
+          json(response, 404, { error: { code: 404, message: 'Requested entity was not found.', errors: [{ reason: 'notFound' }] } });
+          return;
+        }
+        json(response, 200, { id, ...found });
+        return;
+      }
+
       if (url.pathname === '/gmail/v1/users/me/settings/sendAs') {
         json(response, 200, {
           sendAs: account?.sendAs ?? [
