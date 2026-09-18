@@ -114,8 +114,16 @@ function parseStyle(style: string | undefined): Map<string, string> {
  */
 const VIEWPORT_WIDTH_PX = 1000;
 const VIEWPORT_HEIGHT_PX = 800;
+/** A percentage font size is relative to the parent's, which starts at the usual 16px default. */
+const FONT_SIZE_BASIS_PX = 16;
 
-function numeric(value: string | undefined): number | null {
+/**
+ * A percentage means different things in different properties: of the parent's font size for `font-size`, of the
+ * containing block for `left`, `text-indent` and the rest. One factor cannot serve both — scaling a layout
+ * percentage by the font-size basis made `text-indent:-200%` read as −32px, which is not off-screen, and the text
+ * hidden that way reached the reader.
+ */
+function numeric(value: string | undefined, percentBasis: number = VIEWPORT_WIDTH_PX): number | null {
   if (value === undefined) return null;
   const match = /^(-?\d*\.?\d+)\s*(px|pt|pc|in|cm|mm|q|em|rem|ex|ch|%|vw|vh|vmin|vmax)?$/i.exec(value.trim());
   if (!match) return null;
@@ -141,7 +149,7 @@ function numeric(value: string | undefined): number | null {
     case 'ch':
       return amount * 8;
     case '%':
-      return amount * 0.16;
+      return (amount * percentBasis) / 100;
     case 'vw':
       return (amount * VIEWPORT_WIDTH_PX) / 100;
     case 'vh':
@@ -164,13 +172,14 @@ export function hidesContent(style: Map<string, string>): boolean {
   if (style.get('mso-hide') === 'all') return true;
   const opacity = style.get('opacity');
   if (opacity !== undefined && Number(opacity) <= 0.05) return true;
-  const fontSize = numeric(style.get('font-size'));
+  const fontSize = numeric(style.get('font-size'), FONT_SIZE_BASIS_PX);
   if (fontSize !== null && fontSize <= 1) return true;
   // Invisible text: `transparent`, an alpha of zero in rgba()/hsla()/#RRGGBBAA, or a fill colour that erases it.
   if (isInvisibleColor(style.get('color')) || isInvisibleColor(style.get('-webkit-text-fill-color'))) return true;
   const overflowHidden = (style.get('overflow') ?? style.get('overflow-y') ?? '').includes('hidden');
   for (const dimension of ['max-height', 'height', 'max-width', 'width']) {
-    const size = numeric(style.get(dimension));
+    const vertical = dimension.endsWith('height');
+    const size = numeric(style.get(dimension), vertical ? VIEWPORT_HEIGHT_PX : VIEWPORT_WIDTH_PX);
     if (size !== null && size <= 1 && overflowHidden) return true;
   }
   const clip = style.get('clip') ?? '';
@@ -179,14 +188,15 @@ export function hidesContent(style: Map<string, string>): boolean {
   if (/inset\(\s*(50|100)%/.test(clipPath) || /circle\(\s*0/.test(clipPath)) return true;
   if (offScreen(numeric(style.get('text-indent')))) return true;
   for (const side of ['margin-left', 'margin-top']) {
-    if (offScreen(numeric(style.get(side)))) return true;
+    if (offScreen(numeric(style.get(side), side.endsWith('top') ? VIEWPORT_HEIGHT_PX : VIEWPORT_WIDTH_PX))) return true;
   }
   const position = style.get('position');
   if (position === 'absolute' || position === 'fixed' || position === 'relative') {
     // Far in either direction: a large positive left/top pushes content past the right or bottom edge just as a
     // large negative one pushes it past the left or top, and the same holds for right/bottom mirrored.
     for (const side of ['left', 'top', 'right', 'bottom']) {
-      if (offScreen(numeric(style.get(side)))) return true;
+      const vertical = side === 'top' || side === 'bottom';
+      if (offScreen(numeric(style.get(side), vertical ? VIEWPORT_HEIGHT_PX : VIEWPORT_WIDTH_PX))) return true;
     }
   }
   const transform = style.get('transform') ?? '';

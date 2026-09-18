@@ -44,6 +44,9 @@ const HIDDEN_CASES: [string, string][] = [
   ['zero height in viewport units', `<div style="height:0vh;overflow:hidden">${INJECTION}</div>`],
   ['tiny font in viewport units', `<span style="font-size:0.05vh">${INJECTION}</span>`],
   ['indent in viewport widths', `<div style="text-indent:-100vw">${INJECTION}</div>`],
+  ['indent in percent', `<div style="text-indent:-200%">${INJECTION}</div>`],
+  ['positioned off-screen in percent', `<div style="position:absolute;left:-150%">${INJECTION}</div>`],
+  ['pushed past the bottom in percent', `<div style="position:absolute;top:400%">${INJECTION}</div>`],
   ['off-screen in centimetres', `<div style="position:absolute;left:-500cm">${INJECTION}</div>`],
   ['margin pushed right', `<div style="margin-left:9999px">${INJECTION}</div>`],
   ['margin pushed down', `<div style="margin-top:9999px">${INJECTION}</div>`],
@@ -96,6 +99,27 @@ test('a near-white on white is flagged, not only exact white on white', () => {
     sanitizeHtmlToText('<p style="color:#111111;background-color:#ffffff">readable</p>').report.sameColorElements,
     0,
   );
+});
+
+test('a percentage is read against the right thing: the viewport for layout, the font for text size', () => {
+  // Layout percentages are of the containing block, so -200% is far off-screen…
+  const pushed = sanitizeHtmlToText(`<p>Visible</p><div style="position:absolute;left:-200%">${INJECTION}</div>`);
+  assert.doesNotMatch(pushed.text, /IGNORE PREVIOUS/);
+  assert.equal(pushed.report.hiddenElements, 1);
+
+  // …while a font-size percentage is of the parent's size, where 50% is small but perfectly readable.
+  const smaller = sanitizeHtmlToText('<p style="font-size:50%">readable small print</p>');
+  assert.match(smaller.text, /readable small print/);
+  assert.equal(smaller.report.hiddenElements, 0);
+
+  // A font size that really is nothing is still caught.
+  const invisible = sanitizeHtmlToText(`<p style="font-size:2%">${INJECTION}</p>`);
+  assert.doesNotMatch(invisible.text, /IGNORE PREVIOUS/);
+
+  // And an ordinary indent is not mistaken for hiding.
+  const indented = sanitizeHtmlToText('<p style="text-indent:5%">indented</p>');
+  assert.match(indented.text, /indented/);
+  assert.equal(indented.report.hiddenElements, 0);
 });
 
 test('lengths are understood in the units mail actually uses', () => {

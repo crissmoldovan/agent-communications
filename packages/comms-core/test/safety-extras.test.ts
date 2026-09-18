@@ -176,6 +176,23 @@ test('classifyChange: an inbox added with a looser policy than the default needs
   assert.deepEqual(classifyChange(ordinary, added).loosened, []);
 });
 
+test('classifyChange: narrowing the downloads directory is not a loosening', () => {
+  const before = emptyConfig();
+  before.defaults.downloadsDir = '/var/empty/downloads/mail';
+  const narrower = structuredClone(before);
+  narrower.defaults.downloadsDir = '/var/empty/downloads/mail/work';
+  assert.deepEqual(classifyChange(before, narrower).loosened, [], 'a subdirectory of the same place');
+
+  const elsewhere = structuredClone(before);
+  elsewhere.defaults.downloadsDir = '/tmp/anywhere';
+  assert.deepEqual(classifyChange(before, elsewhere).loosened, ['defaults.downloadsDir']);
+
+  // A name that merely starts with the same characters is not inside it.
+  const lookalike = structuredClone(before);
+  lookalike.defaults.downloadsDir = '/var/empty/downloads/mail-elsewhere';
+  assert.deepEqual(classifyChange(before, lookalike).loosened, ['defaults.downloadsDir']);
+});
+
 test('classifyChange: a new inbox may trust its own domain, but not somebody else’s', () => {
   const before = emptyConfig();
   const own = structuredClone(before);

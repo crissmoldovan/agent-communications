@@ -274,6 +274,15 @@ export function defaultInternalDomains(email: string, publicDomains: ReadonlySet
 
 const POLICY_RANK: Record<SendPolicy, number> = { chat: 0, confirm: 1, never: 2 };
 
+/** True when `candidate` is the same directory as `parent`, or inside it. Both may be unset. */
+function isInsideDirectory(candidate: string | undefined, parent: string | undefined): boolean {
+  if (!candidate || !parent) return false;
+  const normalise = (path: string) => path.replace(/[/\\]+$/, '');
+  const inside = normalise(candidate);
+  const root = normalise(parent);
+  return inside === root || inside.startsWith(`${root}/`) || inside.startsWith(`${root}\\`);
+}
+
 /**
  * Which paths of a config change loosen a safety setting. A safety setting may only be loosened by a person at a
  * terminal who typed a challenge (see LooseningConsent); tightening never needs consent.
@@ -305,7 +314,11 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
     loosened.push('defaults.sendCaps');
   if (a.attachRoots.some((r) => !b.attachRoots.includes(r))) loosened.push('defaults.attachRoots');
   if (b.attachDeny.some((d) => !a.attachDeny.includes(d))) loosened.push('defaults.attachDeny');
-  if (a.downloadsDir !== b.downloadsDir) loosened.push('defaults.downloadsDir');
+  // Moving where files from strangers land is a safety change — unless the new place is inside the old one, which
+  // narrows rather than widens it.
+  if (a.downloadsDir !== b.downloadsDir && !isInsideDirectory(a.downloadsDir, b.downloadsDir)) {
+    loosened.push('defaults.downloadsDir');
+  }
   if (a.confirm.elicitationClients.some((c) => !b.confirm.elicitationClients.includes(c))) {
     loosened.push('defaults.confirm.elicitationClients');
   }

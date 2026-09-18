@@ -82,6 +82,16 @@ test('parallel claims from many stores ("processes"): exactly one wins', async (
   assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
 });
 
+test('a display name around the same address is not a different recipient', async () => {
+  const { store, record } = await setup();
+  // The provider returns what it parsed; the caller gave bare addresses. Same people, so the approval still holds.
+  const claimed = await store.claimForSend(
+    record.approvalId,
+    live({ expect: { ...EXPECT, to: EXPECT.to.map((address) => `Sam Lee <${address}>`) } }),
+  );
+  assert.equal(claimed.state, 'sending');
+});
+
 test('integrity failures void the record for good; each carries its specific code', async () => {
   const cases: [string, Partial<ReturnType<typeof live>>, RegExp, string][] = [
     ['A→B→A swap restores content, not the message id', { draftMessageId: 'msg-v3' }, /edited after/, 'APPROVAL_VOID'],

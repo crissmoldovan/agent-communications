@@ -358,8 +358,18 @@ export class ApprovalStore {
   }
 }
 
+/**
+ * Compares recipient lists by address alone. A provider may return `Name <addr>` where the caller gave `addr`, and
+ * a difference in display name is not a difference in who receives the mail — while a spurious mismatch voids an
+ * approval the user already gave, and sends them round the loop again.
+ */
+function bareAddress(entry: string): string {
+  const angled = /<([^>]*)>/.exec(entry);
+  return (angled?.[1] ?? entry).trim().toLowerCase();
+}
+
 function sameList(a: readonly string[], b: readonly string[]): boolean {
-  const norm = (list: readonly string[]) => [...new Set(list.map((x) => x.trim().toLowerCase()))].sort().join('\n');
+  const norm = (list: readonly string[]) => [...new Set(list.map(bareAddress))].sort().join('\n');
   return norm(a) === norm(b);
 }
 
