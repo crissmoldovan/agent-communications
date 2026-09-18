@@ -24,6 +24,14 @@ const HIDDEN_CASES: [string, string][] = [
   ['clip-path inset', `<div style="clip-path: inset(100%)">${INJECTION}</div>`],
   ['text-indent off-screen', `<div style="text-indent:-9999px">${INJECTION}</div>`],
   ['absolute off-screen', `<div style="position:absolute;left:-10000px">${INJECTION}</div>`],
+  ['absolute pushed right', `<div style="position:absolute;left:9999px">${INJECTION}</div>`],
+  ['absolute pushed down', `<div style="position:absolute;top:9999px">${INJECTION}</div>`],
+  ['fixed pushed past the right edge', `<div style="position:fixed;right:-9999px">${INJECTION}</div>`],
+  ['relative pushed right in em', `<div style="position:relative;left:300em">${INJECTION}</div>`],
+  ['negative margin', `<div style="margin-left:-9999px">${INJECTION}</div>`],
+  ['text-indent pushed right', `<div style="text-indent:9999px;overflow:hidden">${INJECTION}</div>`],
+  ['translate off-screen', `<div style="transform:translateX(-9999px)">${INJECTION}</div>`],
+  ['translate3d off-screen', `<div style="transform:translate3d(0, 9999px, 0)">${INJECTION}</div>`],
   ['scale zero', `<div style="transform:scale(0)">${INJECTION}</div>`],
   ['mso-hide', `<div style="mso-hide:all">${INJECTION}</div>`],
   ['hidden attribute', `<div hidden>${INJECTION}</div>`],
@@ -62,6 +70,15 @@ test('same foreground and background colour is flagged but kept for the reader t
   const { text, report } = sanitizeHtmlToText('<p style="color:#fff;background-color:#FFFFFF">white on white</p>');
   assert.equal(report.sameColorElements, 1);
   assert.match(text, /white on white/);
+});
+
+test('ordinary positioning and small offsets are not mistaken for hiding', () => {
+  const { text, report } = sanitizeHtmlToText(
+    '<div style="position:absolute;left:20px;top:40px">badge</div><div style="position:relative;left:-12px">nudged</div>' +
+      '<p style="margin-left:-8px;text-indent:24px">indented</p><div style="transform:translateY(4px)">shifted</div>',
+  );
+  for (const word of ['badge', 'nudged', 'indented', 'shifted']) assert.match(text, new RegExp(word));
+  assert.equal(report.hiddenElements, 0);
 });
 
 test('visible formatting is preserved: small but readable text, paragraphs, lists', () => {

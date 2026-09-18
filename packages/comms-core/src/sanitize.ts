@@ -145,18 +145,33 @@ export function hidesContent(style: Map<string, string>): boolean {
   if (/rect\(\s*0(px)?[\s,]+0(px)?[\s,]+0(px)?[\s,]+0(px)?\s*\)/.test(clip)) return true;
   const clipPath = style.get('clip-path') ?? '';
   if (/inset\(\s*(50|100)%/.test(clipPath) || /circle\(\s*0/.test(clipPath)) return true;
-  const indent = numeric(style.get('text-indent'));
-  if (indent !== null && indent <= -500) return true;
+  if (offScreen(numeric(style.get('text-indent')))) return true;
+  for (const side of ['margin-left', 'margin-top']) {
+    const margin = numeric(style.get(side));
+    if (margin !== null && margin <= -OFF_SCREEN_BEFORE) return true;
+  }
   const position = style.get('position');
-  if (position === 'absolute' || position === 'fixed') {
+  if (position === 'absolute' || position === 'fixed' || position === 'relative') {
+    // Far in either direction: a large positive left/top pushes content past the right or bottom edge just as a
+    // large negative one pushes it past the left or top, and the same holds for right/bottom mirrored.
     for (const side of ['left', 'top', 'right', 'bottom']) {
-      const offset = numeric(style.get(side));
-      if (offset !== null && offset <= -500) return true;
+      if (offScreen(numeric(style.get(side)))) return true;
     }
   }
   const transform = style.get('transform') ?? '';
-  if (/scale\(\s*0(\.0+)?\s*[,)]/.test(transform)) return true;
+  if (/scale[xy]?\(\s*0(\.0+)?\s*[,)]/.test(transform)) return true;
+  for (const match of transform.matchAll(/translate[xy3d]*\(([^)]*)\)/g)) {
+    if ((match[1] ?? '').split(',').some((part) => offScreen(numeric(part)))) return true;
+  }
   return false;
+}
+
+/** How far content must be pushed before no mail client shows it: past the start edge, or past the far edge. */
+const OFF_SCREEN_BEFORE = 500;
+const OFF_SCREEN_AFTER = 2000;
+
+function offScreen(offset: number | null): boolean {
+  return offset !== null && (offset <= -OFF_SCREEN_BEFORE || offset >= OFF_SCREEN_AFTER);
 }
 
 function normaliseColor(value: string | undefined): string | null {
