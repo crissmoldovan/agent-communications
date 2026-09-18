@@ -17,10 +17,24 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-/** Where a call to a Gmail send endpoint is allowed to appear. Nothing else may name one. */
+/**
+ * Where a Gmail send endpoint may be named at all.
+ *
+ * It is the transport's own `sendDraft`, and nothing else: that method opens a one-shot permit and the auth client
+ * refuses any request to a `/send` path without one. Who may *call* it is the second test below.
+ */
 const ALLOWED = [
+  join('packages', 'gmail', 'src', 'gmail-api', 'transport.ts'),
+  // The tests that prove the gate refuses, and this file, which names the endpoints in order to look for them.
+  join('packages', 'gmail', 'test', 'send-gate.test.ts'),
+  join('packages', 'gmail', 'test', 'support', 'fake-google.ts'),
+  join('test', 'send-path.test.mjs'),
+];
+
+/** The one method that sends, and the one file allowed to call it. */
+const SEND_METHOD = /\.\s*sendDraft\s*\(/;
+const MAY_SEND = [
   join('packages', 'gmail', 'src', 'operations', 'send.ts'),
-  // The test that proves the gate refuses, and this file, which names the endpoints to look for them.
   join('packages', 'gmail', 'test', 'send-gate.test.ts'),
   join('test', 'send-path.test.mjs'),
 ];
@@ -70,7 +84,7 @@ test('only the send operation may call a Gmail send endpoint', async () => {
   );
 });
 
-test('the transport this package exposes has no send method at all', async () => {
+test('the transport has exactly one method that sends, and one caller of it', async () => {
   const transport = await readFile(join(ROOT, 'packages', 'gmail', 'src', 'gmail-api', 'transport.ts'), 'utf8');
   const interfaceBody = /export interface GmailTransport \{([\s\S]*?)\n\}/.exec(transport)?.[1] ?? '';
   assert.notEqual(interfaceBody, '', 'the GmailTransport interface should be readable');
@@ -79,5 +93,18 @@ test('the transport this package exposes has no send method at all', async () =>
   );
   // `listSendAs` reads the addresses an account may send as, which is not a way to transmit anything.
   const senders = members.filter((name) => /^send/i.test(name));
-  assert.deepEqual(senders, [], 'a send method on the shared transport would be reachable by anything that has it');
+  assert.deepEqual(senders, ['sendDraft'], 'exactly one method on the transport may transmit a message');
+
+  const callers = [];
+  for (const file of await sourceFiles(ROOT)) {
+    const path = relative(ROOT, file);
+    if (MAY_SEND.includes(path)) continue;
+    if (!SEND_METHOD.test(withoutComments(await readFile(file, 'utf8')))) continue;
+    callers.push(path.split(sep).join('/'));
+  }
+  assert.deepEqual(
+    callers,
+    [],
+    `only ${MAY_SEND[0]} may call sendDraft — it is what runs the approval checks. Found:\n${callers.join('\n')}`,
+  );
 });

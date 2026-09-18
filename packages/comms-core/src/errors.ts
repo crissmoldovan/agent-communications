@@ -28,6 +28,7 @@ export type ErrorCode =
   | 'APPROVAL_PENDING'
   | 'APPROVAL_EXPIRED'
   | 'APPROVAL_VOID'
+  | 'SEND_REFUSED'
   | 'POLICY_NEVER'
   | 'RATE_CAPPED'
   | 'UNSENDABLE_HTML'
@@ -65,6 +66,11 @@ export const ERROR_REGISTRY: Readonly<Record<ErrorCode, ErrorSpec>> = {
     summary: 'the approval window passed; prepare again',
   },
   APPROVAL_VOID: { exit: EXIT_CODES.APPROVAL, retryable: false, summary: 'the approval was voided; prepare again' },
+  SEND_REFUSED: {
+    exit: EXIT_CODES.APPROVAL,
+    retryable: false,
+    summary: 'a send was attempted outside the one approved path',
+  },
   POLICY_NEVER: { exit: EXIT_CODES.APPROVAL, retryable: false, summary: 'sending is turned off for this inbox' },
   RATE_CAPPED: { exit: EXIT_CODES.APPROVAL, retryable: true, summary: 'the send limit for this inbox is reached' },
   UNSENDABLE_HTML: { exit: EXIT_CODES.APPROVAL, retryable: false, summary: 'the draft has HTML an agent may not send' },

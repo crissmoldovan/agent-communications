@@ -61,6 +61,7 @@ test('the tool list is the same whatever is configured, and every tool says what
     'gmail_draft_get',
     'gmail_draft_list',
     'gmail_draft_reply',
+    'gmail_draft_send',
     'gmail_draft_update',
     'gmail_export',
     'gmail_followups',
@@ -70,6 +71,9 @@ test('the tool list is the same whatever is configured, and every tool says what
     'gmail_message_get',
     'gmail_organise',
     'gmail_search',
+    'gmail_send_cancel',
+    'gmail_send_list',
+    'gmail_send_prepare',
     'gmail_sendas_list',
     'gmail_thread_get',
     'gmail_thread_timeline',
@@ -78,12 +82,15 @@ test('the tool list is the same whatever is configured, and every tool says what
   ]);
   assert.deepEqual(await names(withInbox), withoutInboxes, 'registration must not depend on the inboxes present');
 
-  // Nothing on this server sends. The only name with "send" in it lists the addresses a mailbox may send as, which
-  // reads and nothing more; if another ever appears here, it is a new surface and needs the send gate, not a rename.
-  assert.deepEqual(
-    withoutInboxes.filter((name) => name.includes('send')),
-    ['gmail_sendas_list'],
-  );
+  // Exactly one tool sends, and it is registered whatever the policy is: registration has never been the gate, and a
+  // tool list that changed with the config would tell an agent which mailboxes are worth trying.
+  assert.deepEqual(withoutInboxes.filter((name) => name.includes('send')).sort(), [
+    'gmail_draft_send',
+    'gmail_send_cancel',
+    'gmail_send_list',
+    'gmail_send_prepare',
+    'gmail_sendas_list',
+  ]);
 });
 
 test('a read-only server does not offer the tools that would write', async () => {
@@ -103,6 +110,9 @@ test('a read-only server does not offer the tools that would write', async () =>
       'gmail_organise',
       'gmail_trash',
       'gmail_label_create',
+      'gmail_send_prepare',
+      'gmail_draft_send',
+      'gmail_send_cancel',
     ]) {
       assert.ok(!names.includes(withheld), `${withheld} must not be offered by a read-only server`);
     }

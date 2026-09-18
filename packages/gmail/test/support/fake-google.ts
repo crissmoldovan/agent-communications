@@ -583,6 +583,28 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
         });
         return;
       }
+      // Sending a draft: it leaves Drafts, gains SENT, and Gmail files it in the thread it was replying to.
+      if (url.pathname === '/gmail/v1/users/me/drafts/send' && request.method === 'POST') {
+        const parsed = JSON.parse(body || '{}') as { id?: string };
+        const draft = parsed.id ? account?.drafts?.[parsed.id] : undefined;
+        if (!draft) {
+          json(response, 404, { error: { code: 404, message: 'Not Found', errors: [{ reason: 'notFound' }] } });
+          return;
+        }
+        const message: FakeMessage = {
+          ...draft.message,
+          labelIds: [...(draft.message.labelIds ?? []).filter((label) => label !== 'DRAFT'), 'SENT'],
+        };
+        const messageId = message.id ?? `m_${randomBytes(6).toString('hex')}`;
+        message.id = messageId;
+        if (account) {
+          account.messages = { ...(account.messages ?? {}), [messageId]: message };
+          delete account.drafts?.[parsed.id ?? ''];
+        }
+        json(response, 200, { id: message.id, threadId: message.threadId, labelIds: message.labelIds });
+        return;
+      }
+
       const draftPath = /^\/gmail\/v1\/users\/me\/drafts\/([^/]+)$/.exec(url.pathname);
       if (draftPath) {
         const draftId = decodeURIComponent(draftPath[1] ?? '');

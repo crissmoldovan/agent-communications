@@ -61,7 +61,25 @@ export interface MessagePreview {
   body: string;
   attachments?: PreviewAttachment[] | undefined;
   /** Shown above the preview: the mailbox, the draft, whether anything has been sent. */
-  context?: { inbox?: string | undefined; draftId?: string | undefined; note?: string | undefined } | undefined;
+  context?:
+    | {
+        inbox?: string | undefined;
+        draftId?: string | undefined;
+        approvalId?: string | undefined;
+        note?: string | undefined;
+      }
+    | undefined;
+  /**
+   * What is known about each recipient, keyed by the address as it appears in the list — "EXTERNAL · FIRST-TIME",
+   * "14 earlier messages". The reader is deciding who this goes to, and an address alone rarely says enough.
+   */
+  recipientNotes?: Record<string, string> | undefined;
+  /** Where the conversation stands: "reply-all to Sam, 17 Sep 16:02 (6 messages)". */
+  thread?: string | undefined;
+  /** Every link in the message, with its full query string: a shortener or a tracker is only visible in full. */
+  links?: string[] | undefined;
+  /** The last line: what has to happen before this can be sent, in the reader's own terms. */
+  policy?: string | undefined;
   /** Facts worth seeing before approving: a first-time recipient, an external domain, a link. */
   warnings?: string[] | undefined;
 }
@@ -84,8 +102,9 @@ export function renderMessagePreview(preview: MessagePreview): string {
   const lines: string[] = [];
   const context = preview.context ?? {};
   const heading = [
-    'MESSAGE PREVIEW',
+    context.approvalId ? 'SEND PREVIEW' : 'MESSAGE PREVIEW',
     context.inbox ? `inbox ${context.inbox}` : '',
+    context.approvalId ? `approval ${context.approvalId}` : '',
     context.draftId ? `draft ${context.draftId}` : '',
     context.note ?? '',
   ]
@@ -95,11 +114,29 @@ export function renderMessagePreview(preview: MessagePreview): string {
 
   const list = (addresses: string[]) =>
     addresses.length > 0 ? addresses.map((a) => truncateDisplay(a, 120)).join(', ') : 'none';
+  const notes = preview.recipientNotes ?? {};
+  // One recipient per line when anything is known about them: "EXTERNAL · FIRST-TIME" beside a name the reader half
+  // recognises is the whole point of the preview, and it is lost in a comma-separated run.
+  const addressLines = (label: string, addresses: string[]): void => {
+    if (addresses.length === 0) {
+      if (label === 'To:') lines.push(line(label, 'none'));
+      return;
+    }
+    if (!addresses.some((address) => notes[address])) {
+      lines.push(line(label, list(addresses)));
+      return;
+    }
+    addresses.forEach((address, index) => {
+      const note = notes[address];
+      lines.push(line(index === 0 ? label : '', `${truncateDisplay(address, 90)}${note ? `   ${note}` : ''}`));
+    });
+  };
   lines.push(line('From:', truncateDisplay(preview.recipients.from, 120)));
-  lines.push(line('To:', list(preview.recipients.to)));
-  if (preview.recipients.cc.length > 0) lines.push(line('Cc:', list(preview.recipients.cc)));
-  if (preview.recipients.bcc.length > 0) lines.push(line('Bcc:', list(preview.recipients.bcc)));
+  addressLines('To:', preview.recipients.to);
+  if (preview.recipients.cc.length > 0) addressLines('Cc:', preview.recipients.cc);
+  if (preview.recipients.bcc.length > 0) addressLines('Bcc:', preview.recipients.bcc);
   lines.push(line('Subject:', truncateDisplay(preview.subject, 200)));
+  if (preview.thread) lines.push(line('Thread:', truncateDisplay(preview.thread, 120)));
 
   for (const attachment of preview.attachments ?? []) {
     lines.push(
@@ -109,6 +146,8 @@ export function renderMessagePreview(preview: MessagePreview): string {
       ),
     );
   }
+
+  for (const url of preview.links ?? []) lines.push(line('Link:', truncateDisplay(url, 160)));
 
   const words = preview.body.trim() ? preview.body.trim().split(/\s+/).length : 0;
   lines.push('', `Body (${words} word${words === 1 ? '' : 's'}, ${preview.body.length} characters):`);
@@ -121,5 +160,6 @@ export function renderMessagePreview(preview: MessagePreview): string {
     '',
     `── To ${list(preview.recipients.to)} · Cc ${list(preview.recipients.cc)} · Bcc ${list(preview.recipients.bcc)}`,
   );
+  if (preview.policy) lines.push(escapeForDisplay(preview.policy));
   return lines.join('\n');
 }

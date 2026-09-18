@@ -12,7 +12,10 @@ import type { InboxView, WhoamiResult } from '../operations/inboxes.ts';
 import type { ModifyResult, TrashResult } from '../operations/organise.ts';
 import type { ReadMessageResult, ReadThreadResult } from '../operations/read.ts';
 import type { SearchResult } from '../operations/search.ts';
+import type { listApprovals, SendPreparation, SendResult } from '../operations/send.ts';
 import type { StartedSignIn } from '../operations/signin.ts';
+
+type ApprovalView = Awaited<ReturnType<typeof listApprovals>>[number];
 
 /** Human renderings. `--json` prints the data itself; these exist so a person is not made to read JSON. */
 
@@ -541,4 +544,63 @@ export function renderTrash(result: TrashResult, color: boolean): string {
     `${verb} ${count} ${where} in ${result.inbox}.`,
     paint(color, 'dim', 'Gmail keeps a binned message for thirty days; nothing is deleted outright.'),
   ].join('\n');
+}
+
+export function renderSendPreparation(result: SendPreparation, color: boolean): string {
+  // The preview verbatim, then what has to happen: reformatting the preview would mean the thing shown is not the
+  // thing the digest was taken over.
+  const lines = [result.preview, ''];
+  if (result.riskFlags.length > 0) {
+    lines.push(paint(color, 'yellow', `! raised to "confirm": ${result.riskFlags.join(', ')}`));
+  }
+  lines.push(
+    paint(color, 'dim', `Approval ${result.approvalId}, good until ${result.expiresAt.slice(11, 16)} UTC.`),
+    result.nextStep,
+    paint(
+      color,
+      'dim',
+      `Then: agent-gmail send execute ${result.draftId} --inbox ${result.inbox} --approval ${result.approvalId} ` +
+        `--expect-to ${result.expect.to.join(' ') || 'none'} --expect-subject ${JSON.stringify(result.expect.subject || 'none')}`,
+    ),
+  );
+  return lines.join('\n');
+}
+
+export function renderSent(result: SendResult, color: boolean): string {
+  const lines = [
+    `Sent to ${result.to.join(', ') || '(nobody in To)'}${result.cc.length > 0 ? ` · cc ${result.cc.join(', ')}` : ''}.`,
+    paint(color, 'dim', `Message ${result.sentMessageId} in ${result.inbox}, approval ${result.approvalId}.`),
+  ];
+  if (result.verified) {
+    lines.push(
+      paint(
+        color,
+        'dim',
+        `Read back from the mailbox: ${result.verified.labelIds.join(', ') || 'no labels'}${
+          result.verified.threadId ? ` · conversation ${result.verified.threadId}` : ''
+        }.`,
+      ),
+    );
+  } else {
+    lines.push(paint(color, 'yellow', 'The message was sent but could not be read back to confirm where it landed.'));
+  }
+  return lines.join('\n');
+}
+
+export function renderApprovals(records: ApprovalView[], color: boolean): string {
+  if (records.length === 0) return 'No approvals waiting.';
+  return table(
+    [
+      ['APPROVAL', 'INBOX', 'STATE', 'DRAFT', 'TO', 'EXPIRES'],
+      ...records.map((record) => [
+        record.approvalId,
+        record.inbox,
+        record.state,
+        record.draftId,
+        record.expect.to.join(', ') || '—',
+        record.expiresAt.slice(11, 16),
+      ]),
+    ],
+    color,
+  );
 }

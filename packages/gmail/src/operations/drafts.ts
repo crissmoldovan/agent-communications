@@ -366,6 +366,7 @@ export async function listDrafts(context: GmailContext, alias: string, limit = 2
 export async function deleteDraft(context: GmailContext, alias: string, draftId: string): Promise<{ draftId: string }> {
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'draft');
+  await refuseWhileSending(context, resolved.inbox.id, draftId);
   const transport = await context.transport(alias);
   await transport.deleteDraft(draftId);
   await context.core.audit.append({
@@ -386,6 +387,23 @@ export async function deleteDraft(context: GmailContext, alias: string, draftId:
  * bound to the message id it was given, so editing a draft after it has been approved invalidates that approval
  * rather than quietly changing what gets sent.
  */
+/**
+ * Refuses to change a draft that a send is standing on.
+ *
+ * Between the final check and `drafts.send` there is a window in which an edit would mean the mail that goes is not
+ * the mail that was approved. Our own tools close it here — including two tool calls from the same agent in
+ * parallel. What remains is an edit made in Gmail web at that exact moment, and that is documented, not claimed.
+ */
+async function refuseWhileSending(context: GmailContext, inboxId: string, draftId: string): Promise<void> {
+  const sending = await context.core.approvals.list({ inboxId, states: ['sending'] });
+  if (sending.some((record) => record.draftId === draftId)) {
+    throw new CommsError('APPROVAL_PENDING', 'this draft is being sent right now, so it cannot be changed', {
+      hint: 'Wait for the send to finish, then look at the message in Sent.',
+      details: { draftId },
+    });
+  }
+}
+
 export async function updateDraft(
   context: GmailContext,
   alias: string,
@@ -394,6 +412,7 @@ export async function updateDraft(
 ): Promise<DraftResult> {
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'draft');
+  await refuseWhileSending(context, resolved.inbox.id, draftId);
   const transport = await context.transport(alias);
 
   const existing = await transport.getDraft(draftId);

@@ -393,3 +393,117 @@ test('organising previews before it acts, and says how to put it back', async ()
   assert.match(binned.stdout, /thirty days/);
   assert.ok(harness.google.accounts.get('sub-1')?.messages?.m1?.labelIds?.includes('TRASH'));
 });
+
+test('the CLI sends only what was prepared, and says so at every step', async () => {
+  const harness = await newHarness({
+    accounts: [
+      {
+        sub: 'sub-1',
+        email: 'jo@example.test',
+        sendAs: [{ sendAsEmail: 'jo@example.test', displayName: 'Jo', isDefault: true, isPrimary: true }],
+      },
+    ],
+  });
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1' });
+  await harness.core.config.update(
+    (config) => ({ ...config, defaults: { ...config.defaults, riskEscalation: false } }),
+    { consent: { kind: 'loosening-consent', paths: ['defaults.riskEscalation'] } },
+  );
+
+  const drafted = await cli(harness, [
+    'draft',
+    'new',
+    '--inbox',
+    'work',
+    '--to',
+    'sam@partner.test',
+    '--subject',
+    'Tuesday',
+    '--text',
+    'Tuesday works.',
+    '--json',
+  ]);
+  const draftId = dataOf(drafted.json<Envelope<{ draftId: string }>>()).draftId;
+
+  const prepared = await cli(harness, ['send', 'prepare', draftId, '--inbox', 'work']);
+  assert.equal(prepared.code, 0, `${prepared.stdout}${prepared.stderr}`);
+  assert.match(prepared.stdout, /SEND PREVIEW/);
+  assert.match(prepared.stdout, /Show the preview to the user verbatim/);
+  const approvalId = /\b(ap_[A-Za-z0-9]+)\b/.exec(prepared.stdout)?.[1] ?? '';
+  assert.ok(approvalId, 'the preview names the approval to send with');
+
+  // An agent that guesses the recipients gets nothing sent — and burns that approval: naming recipients the draft
+  // does not have is not a typo to retry, it is a claim that did not hold, so the approval is voided.
+  const wrong = await cli(harness, [
+    'send',
+    'execute',
+    draftId,
+    '--inbox',
+    'work',
+    '--approval',
+    approvalId,
+    '--expect-to',
+    'someone@else.test',
+    '--expect-subject',
+    'Tuesday',
+    '--json',
+  ]);
+  assert.equal(wrong.code, EXIT_CODES.APPROVAL);
+  assert.equal(wrong.json<Envelope<never>>().error?.code, 'APPROVAL_VOID');
+  const reused = await cli(harness, [
+    'send',
+    'execute',
+    draftId,
+    '--inbox',
+    'work',
+    '--approval',
+    approvalId,
+    '--expect-to',
+    'sam@partner.test',
+    '--expect-subject',
+    'Tuesday',
+    '--json',
+  ]);
+  assert.equal(reused.code, EXIT_CODES.APPROVAL, 'the voided approval is not usable afterwards');
+
+  // So the user is shown the message again, and approves it again.
+  const again = await cli(harness, ['send', 'prepare', draftId, '--inbox', 'work']);
+  const secondApproval = /\b(ap_[A-Za-z0-9]+)\b/.exec(again.stdout)?.[1] ?? '';
+  assert.ok(secondApproval && secondApproval !== approvalId);
+
+  const sent = await cli(harness, [
+    'send',
+    'execute',
+    draftId,
+    '--inbox',
+    'work',
+    '--approval',
+    secondApproval,
+    '--expect-to',
+    'sam@partner.test',
+    '--expect-cc',
+    'none',
+    '--expect-bcc',
+    'none',
+    '--expect-subject',
+    'Tuesday',
+  ]);
+  assert.equal(sent.code, 0, `${sent.stdout}${sent.stderr}`);
+  assert.match(sent.stdout, /Sent to sam@partner\.test/);
+  assert.match(sent.stdout, /Read back from the mailbox/);
+});
+
+test('approving a send refuses an agent, and refuses a pipe', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1' });
+
+  // The marker check runs before anything else: an agent is told to hand this to a person, whatever the id.
+  const agent = await cli(harness, ['approve', 'ap_whatever', '--json'], { env: { CLAUDECODE: '1' } });
+  assert.equal(agent.code, EXIT_CODES.APPROVAL);
+  assert.match(agent.json<Envelope<never>>().error?.hint ?? '', /their own terminal/);
+
+  // And without a terminal there is nobody to ask.
+  const piped = await cli(harness, ['approve', 'ap_whatever', '--json']);
+  assert.equal(piped.code, EXIT_CODES.APPROVAL);
+  assert.match(piped.json<Envelope<never>>().error?.message ?? '', /interactive terminal/);
+});

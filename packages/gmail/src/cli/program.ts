@@ -29,11 +29,20 @@ import { runOauthListener } from '../operations/oauth-listen.ts';
 import { createLabel, modify, trash } from '../operations/organise.ts';
 import { readMessage, readThread } from '../operations/read.ts';
 import { search } from '../operations/search.ts';
+import {
+  beginApproval,
+  executeSend,
+  finishApproval,
+  listApprovals,
+  prepareSend,
+  revokeApproval,
+} from '../operations/send.ts';
 import { finishSignIn, startSignIn } from '../operations/signin.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
-import { askChallenge } from './prompt.ts';
+import { askChallenge, askFor } from './prompt.ts';
 import {
+  renderApprovals,
   renderAttachments,
   renderClientAdd,
   renderClients,
@@ -52,6 +61,8 @@ import {
   renderModify,
   renderSearch,
   renderSendAs,
+  renderSendPreparation,
+  renderSent,
   renderSignedIn,
   renderSignInStarted,
   renderThread,
@@ -150,6 +161,18 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       });
     }
     return text;
+  };
+
+  /**
+   * An `--expect-*` list as the caller meant it. `none` is the explicit empty list.
+   *
+   * Explicit, because an omitted flag and an empty one look the same on a command line, and the difference here is
+   * "I know there are no Bcc recipients" versus "I did not think about Bcc" — which is the difference between a
+   * check and a formality.
+   */
+  const expected = (value: unknown): string[] => {
+    const list = (Array.isArray(value) ? value : value === undefined ? [] : [value]).map(String);
+    return list.length === 1 && list[0] === 'none' ? [] : list;
   };
 
   /** The options every draft command shares, so `draft new` and `draft reply` take the same flags. */
@@ -670,6 +693,111 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       act(async (context, _globalOptions, draftId: string, options: Options) => {
         const result = await deleteDraft(context, String(options.inbox), draftId);
         writeResult(result, output(), (data) => `Deleted draft ${data.draftId}.`, streams);
+      }),
+    );
+
+  // ---- sending ------------------------------------------------------------------
+  // Two commands, deliberately. `send prepare` shows what would go and records an approval; `send` sends what was
+  // approved and nothing else. They are separate because an agent that can do both in one step can send mail nobody
+  // read, and the whole point of this package is that it cannot.
+  const send = program
+    .command('send')
+    .description('send a draft that has been prepared and approved — never anything else');
+
+  send
+    .command('prepare <draftId>')
+    .description('show exactly what would be sent, and record an approval for it')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .action(
+      act(async (context, globalOptions, draftId: string, options: Options) => {
+        const result = await prepareSend(context, String(options.inbox), draftId);
+        writeResult(result, output(), (data) => renderSendPreparation(data, globalOptions.color), streams);
+      }),
+    );
+
+  send
+    .command('execute <draftId>')
+    .description('send it — only with an approval, and only to the recipients that approval names')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .requiredOption('--approval <id>', 'the approval from `send prepare`')
+    .requiredOption('--expect-to <address...>', 'who you believe this goes to; `none` for nobody')
+    .requiredOption('--expect-subject <subject>', 'the subject you believe it has; `none` for an empty one')
+    .option('--expect-cc <address...>', 'who you believe is copied; `none` for nobody', ['none'])
+    .option('--expect-bcc <address...>', 'who you believe is blind-copied; `none` for nobody', ['none'])
+    .action(
+      act(async (context, globalOptions, draftId: string, options: Options) => {
+        const result = await executeSend(context, String(options.inbox), {
+          draftId,
+          approvalId: String(options.approval),
+          expect: {
+            to: expected(options.expectTo),
+            cc: expected(options.expectCc),
+            bcc: expected(options.expectBcc),
+            subject: String(options.expectSubject) === 'none' ? '' : String(options.expectSubject),
+          },
+        });
+        writeResult(result, output(), (data) => renderSent(data, globalOptions.color), streams);
+      }),
+    );
+
+  send
+    .command('list')
+    .description('approvals waiting, and what each one is for')
+    .option('--inbox <alias>', 'only this mailbox')
+    .action(
+      act(async (context, globalOptions, options: Options) => {
+        const result = await listApprovals(context, { inbox: options.inbox ? String(options.inbox) : undefined });
+        writeResult(result, output(), (data) => renderApprovals(data, globalOptions.color), streams);
+      }),
+    );
+
+  send
+    .command('cancel <approvalId>')
+    .description('cancel an approval — refusing to send is never the dangerous direction')
+    .action(
+      act(async (context, _globalOptions, approvalId: string) => {
+        const result = await revokeApproval(context, approvalId);
+        writeResult(
+          result,
+          output(),
+          (data) => `Approval ${data.approvalId} is ${data.state}. Nothing was sent.`,
+          streams,
+        );
+      }),
+    );
+
+  program
+    .command('approve <approvalId>')
+    .description('approve a send at this terminal: read the message, then type the code back')
+    .action(
+      act(async (context, globalOptions, approvalId: string) => {
+        // The one command an agent may not run for the user. A shell agent can defeat this — `script -q /dev/null`
+        // makes any command see a terminal — and SECURITY.md says so. It is a speed bump against the ordinary case,
+        // not a boundary; the boundary for an agent with a shell is the `never` policy and sending from Gmail.
+        const marker = agentMarker(env);
+        if (marker) {
+          throw new CommsError('APPROVAL_REQUIRED', 'only a person can approve a send, not an agent', {
+            hint: `Ask the user to run \`agent-gmail approve ${approvalId}\` in their own terminal.`,
+            details: { marker },
+          });
+        }
+        if (!canPrompt(env, streams, { json: globalOptions.json, noInput: globalOptions.noInput })) {
+          throw new CommsError('APPROVAL_REQUIRED', 'approving a send needs an interactive terminal', {
+            hint: `Run \`agent-gmail approve ${approvalId}\` directly in a terminal, or send the draft from Gmail.`,
+          });
+        }
+        const prompt = await beginApproval(context, approvalId);
+        streams.stdout.write(`${prompt.preview}\n\n`);
+        const answer = await askFor(streams, {
+          question: `Type ${paint(globalOptions.color, 'bold', prompt.challenge)} to send this, or press Enter to cancel: `,
+        });
+        if (!answer.trim()) {
+          await revokeApproval(context, approvalId);
+          streams.stdout.write('Cancelled. Nothing was sent.\n');
+          return;
+        }
+        await finishApproval(context, approvalId, answer);
+        streams.stdout.write('Approved. The agent can send it now — this command approves, it does not send.\n');
       }),
     );
 

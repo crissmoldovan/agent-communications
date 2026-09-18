@@ -1,3 +1,4 @@
+import { CommsError } from '@cloudpixel/comms-core';
 import { type gmail_v1, gmail as gmailApi } from '@googleapis/gmail';
 import { type people_v1, people as peopleApi } from '@googleapis/people';
 import { OAuth2Client } from 'google-auth-library';
@@ -10,7 +11,9 @@ import { createLimiter, type RetryMode, withRetry } from './retry.ts';
  * Everything this package may ask Google to do. Operations depend on this interface, never on `@googleapis/*`, so
  * they can be tested against a fake and so the surface stays small enough to see at a glance.
  *
- * **There is no send method here.** The send gate adds one in its own phase, reachable only from `send.execute`.
+ * **There is still no send method here.** Sending goes through `withSendPermit`, which opens the door for exactly one
+ * call and closes it again; every request this transport makes is checked against that permit, so a send reaching
+ * Google without one is a runtime error rather than a review oversight.
  */
 export interface GmailTransport {
   readonly alias: string;
@@ -42,6 +45,18 @@ export interface GmailTransport {
   getDraft(draftId: string): Promise<{ id: string; message?: RawMessage | undefined }>;
   listDrafts(limit: number): Promise<Array<{ id: string; message?: RawMessage | undefined }>>;
   deleteDraft(draftId: string): Promise<void>;
+  /**
+   * Sends a draft that already exists. **The only method here that makes mail leave**, and the only one that may.
+   *
+   * Two things guard it, because one of them is only a convention. The convention: a test asserts this method is
+   * called from exactly one file, `operations/send.ts`, after an approval. The mechanism: the real transport opens a
+   * one-shot permit for this draft id and the auth client refuses any request to a path ending in `/send` without
+   * one — so a second send in the same call, a send of another draft, or a `messages.send` added anywhere in this
+   * package fails at the request rather than at review time.
+   *
+   * Never retried, at any layer: a retried send may deliver the same mail twice, and nothing here can tell.
+   */
+  sendDraft(draftId: string): Promise<{ id: string; threadId: string | undefined }>;
   /** Adds and removes labels on many messages at once. Changing a label is not sending anything. */
   modifyMessages(
     messageIds: readonly string[],
@@ -149,6 +164,50 @@ function listParameters(options: ListOptions): {
 }
 
 /** The live transport: `@googleapis/gmail` and `@googleapis/people`, with our own auth, retries and error mapping. */
+/**
+ * The URL path of every Gmail endpoint that makes mail leave: `drafts/{id}/send`, `messages/send`. Matching the path
+ * rather than the method name means a future call, a hand-built request, or a redirect to one is caught too.
+ */
+const SEND_PATH = /\/send$/;
+
+/**
+ * Refuses any request to a send endpoint unless a permit for that draft is open.
+ *
+ * This wraps the auth client's own `request`, which is where every Gmail call in this package ends up —
+ * `@googleapis/gmail` issues its requests through it. So this is the narrowest place where every send can be seen,
+ * and the only one that cannot be bypassed by adding another method somewhere else in the package.
+ */
+function guardSendRequests(client: OAuth2Client, permit: { draftId: string | null }): void {
+  const inner = client.request.bind(client) as (options: unknown, callback?: unknown) => unknown;
+  const guarded = (options: { url?: string | undefined; data?: unknown }, callback?: unknown): unknown => {
+    const url = String(options?.url ?? '');
+    let path = url;
+    try {
+      path = new URL(url).pathname;
+    } catch {
+      // A relative or malformed URL: check the whole string rather than assuming it is harmless.
+    }
+    if (SEND_PATH.test(path.replace(/\/$/, ''))) {
+      if (!permit.draftId) {
+        throw new CommsError('SEND_REFUSED', 'a send was attempted without an approval', {
+          hint: 'Mail leaves only through `send execute`, after an approval. This is a bug — please report it.',
+        });
+      }
+      // `drafts/send` names the draft in the body, `messages/{id}/send` in the path; check wherever it is.
+      const body = typeof options.data === 'string' ? options.data : JSON.stringify(options.data ?? {});
+      if (!path.includes(permit.draftId) && !body.includes(permit.draftId)) {
+        throw new CommsError('SEND_REFUSED', 'a send was attempted for a different draft than the approved one', {
+          hint: 'The approval names one draft. Prepare the send again for the draft you mean.',
+        });
+      }
+      // One permit, one request: a second send inside the same permit finds the door shut.
+      permit.draftId = null;
+    }
+    return inner(options, callback);
+  };
+  client.request = guarded as OAuth2Client['request'];
+}
+
 export class GoogleGmailTransport implements GmailTransport {
   readonly alias: string;
   readonly inboxId: string;
@@ -159,6 +218,8 @@ export class GoogleGmailTransport implements GmailTransport {
   #gmail: gmail_v1.Gmail | null = null;
   #people: people_v1.People | null = null;
   #oauth: OAuth2Client | null = null;
+  /** Open only inside `withSendPermit`, and only for the draft named there. */
+  readonly #sendPermit: { draftId: string | null } = { draftId: null };
 
   constructor(options: TransportOptions) {
     this.#tokens = options.tokens;
@@ -178,6 +239,7 @@ export class GoogleGmailTransport implements GmailTransport {
   #auth(): OAuth2Client {
     if (this.#oauth) return this.#oauth;
     const client = new OAuth2Client();
+    guardSendRequests(client, this.#sendPermit);
     client.refreshHandler = async () => {
       const token = await this.#tokens.accessToken();
       return { access_token: token.token, expiry_date: token.expiresAt, scope: token.scopes.join(' ') };
@@ -404,6 +466,25 @@ export class GoogleGmailTransport implements GmailTransport {
     await this.call('delete a draft', () => this.gmail().users.drafts.delete({ userId: 'me', id: draftId }), {
       mode: 'rate-limit-only',
     });
+  }
+
+  async sendDraft(draftId: string): Promise<{ id: string; threadId: string | undefined }> {
+    this.#auth();
+    if (this.#sendPermit.draftId) {
+      throw new CommsError('SEND_REFUSED', 'a send is already in progress on this transport');
+    }
+    this.#sendPermit.draftId = draftId;
+    try {
+      const { data } = await this.call(
+        'send the draft',
+        () => this.gmail().users.drafts.send({ userId: 'me', requestBody: { id: draftId } }),
+        // `never`: not one retry, at any layer. The first attempt may already have delivered the mail.
+        { mode: 'never' },
+      );
+      return { id: data.id ?? '', threadId: data.threadId ?? undefined };
+    } finally {
+      this.#sendPermit.draftId = null;
+    }
   }
 
   async modifyMessages(

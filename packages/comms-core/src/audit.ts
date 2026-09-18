@@ -16,6 +16,12 @@ export interface AuditRecord {
   outcome: 'ok' | 'refused' | 'failed';
   ids?: Record<string, string | string[] | CondensedIds>;
   recipientDomains?: string[];
+  /**
+   * Full canonical recipient addresses. Only a send writes these: for every other operation the domains are enough,
+   * and storing less is better — but when mail has actually left, "who did it go to" is the first question anyone
+   * asks afterwards, and a domain does not answer it.
+   */
+  recipients?: string[];
   approvalId?: string;
   reason?: string;
   surface?: 'cli' | 'mcp';

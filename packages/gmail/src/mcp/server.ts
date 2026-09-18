@@ -12,6 +12,7 @@ import { inboxList, whoami } from '../operations/inboxes.ts';
 import { createLabel, modify, trash } from '../operations/organise.ts';
 import { readMessage, readThread } from '../operations/read.ts';
 import { search } from '../operations/search.ts';
+import { executeSend, listApprovals, prepareSend, revokeApproval } from '../operations/send.ts';
 import { VERSION } from '../version.ts';
 import { inboxArgument, mcpBoolean, mcpInboxes, mcpInteger, mcpStringArray } from './schemas.ts';
 
@@ -75,6 +76,19 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     // Resolve now so a pinned server fails loudly at startup rather than on the first call.
     await context.inbox(pinned);
   }
+
+  // Whether any mailbox this server can reach needs an approval the model cannot give. Read once, at start-up, only
+  // to decide a client hint; what a send actually needs is re-read from config on every call.
+  const needsInteraction = await (async (): Promise<boolean> => {
+    try {
+      const config = await context.config();
+      const served = pinned ? [config.inboxes[pinned]].filter(Boolean) : Object.values(config.inboxes);
+      return served.some((inbox) => (inbox?.sendPolicy ?? config.defaults.sendPolicy) !== 'chat');
+    } catch {
+      // Unreadable config: ask for the human. The wrong answer in this direction costs a prompt, not a send.
+      return true;
+    }
+  })();
 
   const server = new McpServer(
     { name: 'agent-gmail', version: VERSION },
@@ -946,6 +960,160 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       },
     );
   }
+
+  // ---- sending ------------------------------------------------------------------
+  // The one place mail can leave, and it takes two calls on purpose: one that shows what would go, one that sends
+  // exactly that. A model that has read the preview to the user can complete the second; a model that has not cannot,
+  // because it does not have the approval id, the recipients or the subject the first call returned.
+  if (!options.readOnly) {
+    const expectationSchema = z.object({
+      to: mcpStringArray().describe('who you believe this goes to; an empty list means nobody'),
+      cc: mcpStringArray().describe('who you believe is copied; an empty list means nobody'),
+      bcc: mcpStringArray().describe('who you believe is blind-copied; an empty list means nobody'),
+      subject: z.string().describe('the subject you believe it has; an empty string means no subject'),
+    });
+
+    server.registerTool(
+      'gmail_send_prepare',
+      {
+        title: 'Prepare a send',
+        description:
+          'Read a draft and return the preview the person must approve, with an approval id bound to exactly this content. Nothing is sent. Show the returned `preview` to the user **verbatim** — do not summarise it, do not re-type the recipients — and wait for an explicit yes before calling gmail_draft_send. If the reply says the send needs approval outside the chat, say so and stop: you cannot approve it yourself.',
+        inputSchema: z.object({
+          inbox: inboxArgument(Boolean(pinned)),
+          draftId: z.string().min(1).describe('the draft to send, from gmail_draft_create or gmail_draft_list'),
+        }),
+        outputSchema: z.object({
+          approvalId: z.string(),
+          inbox: z.string(),
+          draftId: z.string(),
+          preview: z.string().describe('show this to the user exactly as it is'),
+          policy: z.string(),
+          effectivePolicy: z.string(),
+          riskFlags: z.array(z.string()),
+          expect: expectationSchema,
+          digest: z.string(),
+          expiresAt: z.string(),
+          nextStep: z.string(),
+        }),
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      },
+      async ({ inbox, draftId }) => {
+        try {
+          return reply(await prepareSend(context, targetInbox(inbox), draftId));
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+
+    server.registerTool(
+      'gmail_draft_send',
+      {
+        title: 'Send an approved draft',
+        description:
+          'Send a draft that gmail_send_prepare has prepared and the user has approved. You must pass the recipients and subject you believe you are sending to: if they are not what the draft says, nothing is sent. Any edit to the draft since the preview voids the approval. This is irreversible — mail cannot be recalled. Call it only after the user has seen the preview and said yes in this conversation.',
+        inputSchema: z.object({
+          inbox: inboxArgument(Boolean(pinned)),
+          draftId: z.string().min(1),
+          approvalId: z.string().min(1).describe('from gmail_send_prepare'),
+          expect: expectationSchema.describe('what you believe you are sending; checked against the draft'),
+        }),
+        outputSchema: z.object({
+          inbox: z.string(),
+          approvalId: z.string(),
+          draftId: z.string(),
+          sentMessageId: z.string(),
+          threadId: z.string().nullable(),
+          to: z.array(z.string()),
+          cc: z.array(z.string()),
+          bcc: z.array(z.string()),
+          subject: z.string(),
+          verified: z
+            .object({ threadId: z.string().nullable(), labelIds: z.array(z.string()) })
+            .nullable()
+            .describe('what the mailbox says about the message it filed, read back after the send'),
+        }),
+        annotations: {
+          readOnlyHint: false,
+          // Irreversible in the way that matters: the recipient has it.
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: true,
+        },
+        // Claude Code enforces this in every permission mode, so a confirm mailbox always reaches a human.
+        _meta: needsInteraction ? { 'anthropic/requiresUserInteraction': true } : {},
+      },
+      async ({ inbox, draftId, approvalId, expect }) => {
+        try {
+          const result = await executeSend(context, targetInbox(inbox), { draftId, approvalId, expect });
+          return reply({ ...result, threadId: result.threadId ?? null, verified: result.verified });
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+
+    server.registerTool(
+      'gmail_send_cancel',
+      {
+        title: 'Cancel an approval',
+        description:
+          'Cancel a prepared send. Use it when the user says no, or changes their mind: an approval left lying around is one somebody can still act on.',
+        inputSchema: z.object({ approvalId: z.string().min(1) }),
+        outputSchema: z.object({ approvalId: z.string(), state: z.string() }),
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      },
+      async ({ approvalId }) => {
+        try {
+          const record = await revokeApproval(context, approvalId);
+          return reply({ approvalId: record.approvalId, state: record.state });
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+  }
+
+  server.registerTool(
+    'gmail_send_list',
+    {
+      title: 'List prepared sends',
+      description:
+        'Approvals that have been prepared and not yet used, with what each one would send and when it expires.',
+      inputSchema: z.object({ inbox: z.string().min(1).optional() }),
+      outputSchema: z.object({
+        approvals: z.array(
+          z.object({
+            approvalId: z.string(),
+            inbox: z.string(),
+            state: z.string(),
+            draftId: z.string(),
+            riskFlags: z.array(z.string()),
+            expiresAt: z.string(),
+          }),
+        ),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ inbox }) => {
+      try {
+        const records = await listApprovals(context, { inbox });
+        return reply({
+          approvals: records.map((record) => ({
+            approvalId: record.approvalId,
+            inbox: record.inbox,
+            state: record.state,
+            draftId: record.draftId,
+            riskFlags: record.riskFlags,
+            expiresAt: record.expiresAt,
+          })),
+        });
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
 
   return {
     server,
