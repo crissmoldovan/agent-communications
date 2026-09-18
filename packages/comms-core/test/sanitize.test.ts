@@ -91,6 +91,26 @@ const HIDDEN_CASES: [string, string][] = [
     'at-rule before the rule that hides',
     `<style>@font-face{font-family:x;src:url(data:,)}.f1{display:none}</style><div class="f1">${INJECTION}</div>`,
   ],
+  [
+    'import before the rule that hides',
+    `<style>@import url(https://x.test/a.css);.i1{display:none}</style><div class="i1">${INJECTION}</div>`,
+  ],
+  [
+    'charset before the rule that hides',
+    `<style>@charset "utf-8";.c1{visibility:hidden}</style><div class="c1">${INJECTION}</div>`,
+  ],
+  [
+    'import whose url contains a semicolon',
+    `<style>@import url("https://x.test/a.css?a=1;b=2");.j1{display:none}</style><div class="j1">${INJECTION}</div>`,
+  ],
+  [
+    'namespace before the rule that hides',
+    `<style>@namespace svg url(http://www.w3.org/2000/svg);.n2{opacity:0}</style><div class="n2">${INJECTION}</div>`,
+  ],
+  [
+    'stray semicolon before the rule that hides',
+    `<style>;;.s2{display:none}</style><div class="s2">${INJECTION}</div>`,
+  ],
   ['clip-path polygon with no area', `<div style="clip-path:polygon(0 0, 0 0, 0 0)">${INJECTION}</div>`],
   ['comment', `<!-- ${INJECTION} -->`],
   ['mso conditional comment', `<!--[if mso]><p>${INJECTION}</p><![endif]-->`],
@@ -169,6 +189,29 @@ test('an at-rule block is read, except when it only applies to paper', () => {
   assert.match(frames.text, /kept/);
   assert.match(frames.text, /also kept/);
   assert.equal(frames.report.hiddenElements, 0);
+});
+
+test('a statement that ends in a semicolon does not swallow the rule after it', () => {
+  // The bug this guards: taking everything up to the next `{` as the prelude glues `@import …;` onto `.hide`, the
+  // merged text starts with `@`, and the rule is skipped as an at-rule — while a mail client applies it.
+  const imported = sanitizeHtmlToText(
+    `<style>@import url(https://x.test/a.css);.hide{display:none}</style><p>kept</p><div class="hide">${INJECTION}</div>`,
+  );
+  assert.doesNotMatch(imported.text, /IGNORE PREVIOUS/);
+  assert.match(imported.text, /kept/);
+  assert.equal(imported.report.hiddenElements, 1, 'and it is reported, not silently dropped');
+
+  // Several in a row, and one inside an at-rule block.
+  const several = sanitizeHtmlToText(
+    '<style>@charset "utf-8";@import "a.css";@media screen{@import "b.css";.x{display:none}}</style>' +
+      '<div class="x">gone</div><p>kept</p>',
+  );
+  assert.doesNotMatch(several.text, /gone/);
+  assert.match(several.text, /kept/);
+
+  // A statement that never terminates must not hide the document: an unclosed quote ends the stylesheet, not the mail.
+  const unterminated = sanitizeHtmlToText('<style>@import "a.css</style><p>still readable</p>');
+  assert.match(unterminated.text, /still readable/);
 });
 
 test('an attribute selector hides what carries the attribute, not every element of that tag', () => {

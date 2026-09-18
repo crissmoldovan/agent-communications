@@ -80,10 +80,25 @@ test('the outbound analyser finds beacons, hidden text, forms and scripts that a
     'full query strings are kept',
   );
   assert.ok(report.hidden.some((h) => h.text.includes('other thread contents')));
-  assert.ok(report.forms >= 2);
+  assert.ok(report.forms + report.formFields >= 2);
   assert.ok(report.scripts >= 1);
   assert.match(report.visibleText, /Received, thanks\./);
   assert.ok(!report.visibleText.includes('other thread contents'));
+});
+
+test('a form and the fields inside it are counted as the different things they are', () => {
+  // One number for both read as four forms in a message carrying one, and that number is shown to the person deciding
+  // whether to trust the mail.
+  const report = analyseOutboundHtml(
+    '<form action="https://x.test/p"><input name="a"><input name="b"><button>Go</button></form><p>hi</p>',
+  );
+  assert.equal(report.forms, 1, 'one form, not four');
+  assert.equal(report.formFields, 3);
+
+  // A field outside a form still matters, and still is not a form.
+  const loose = analyseOutboundHtml('<input name="a"><textarea></textarea>');
+  assert.equal(loose.forms, 0);
+  assert.equal(loose.formFields, 2);
 });
 
 test('HTML we render ourselves passes the analyser cleanly', () => {
@@ -93,6 +108,7 @@ test('HTML we render ourselves passes the analyser cleanly', () => {
   assert.deepEqual(report.remoteResources, []);
   assert.deepEqual(report.hidden, []);
   assert.equal(report.forms, 0);
+  assert.equal(report.formFields, 0);
   assert.equal(report.scripts, 0);
 });
 
