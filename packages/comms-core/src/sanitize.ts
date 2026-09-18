@@ -147,8 +147,7 @@ export function hidesContent(style: Map<string, string>): boolean {
   if (/inset\(\s*(50|100)%/.test(clipPath) || /circle\(\s*0/.test(clipPath)) return true;
   if (offScreen(numeric(style.get('text-indent')))) return true;
   for (const side of ['margin-left', 'margin-top']) {
-    const margin = numeric(style.get(side));
-    if (margin !== null && margin <= -OFF_SCREEN_BEFORE) return true;
+    if (offScreen(numeric(style.get(side)))) return true;
   }
   const position = style.get('position');
   if (position === 'absolute' || position === 'fixed' || position === 'relative') {
