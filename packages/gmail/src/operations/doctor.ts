@@ -1,0 +1,298 @@
+import { access, constants, stat } from 'node:fs/promises';
+import { type CommsError, isGroupOrWorldAccessible, probeKeychain, secretsStoreOf } from '@cloudpixel/comms-core';
+import { capabilitiesOf, scopesFor, TIERS, type Tier } from '../auth/scopes.ts';
+import { TokenSource } from '../auth/session.ts';
+import type { GmailContext } from '../context.ts';
+import { findUngatedGmailServers, listRegisteredServers } from './client-configs.ts';
+
+export type CheckStatus = 'ok' | 'warn' | 'fail' | 'skipped';
+
+export interface Check {
+  /** Stable id, so an agent can branch on the check rather than on its wording. */
+  id: string;
+  title: string;
+  status: CheckStatus;
+  detail: string;
+  /** One command or action that fixes it. */
+  fix?: string | undefined;
+  inbox?: string | undefined;
+}
+
+export interface DoctorResult {
+  checks: Check[];
+  summary: { ok: number; warn: number; fail: number; skipped: number };
+  /** True when nothing is wrong that would stop the package working. */
+  healthy: boolean;
+}
+
+const MINIMUM_NODE = [22, 12, 0];
+const UNUSED_WARNING_DAYS = 150; // Google drops a refresh token unused for six months.
+
+/**
+ * A single place that answers "why doesn't it work?". Every check states what it found and the one thing to do about
+ * it; nothing here changes anything.
+ */
+export async function doctor(
+  context: GmailContext,
+  options: { inbox?: string | undefined } = {},
+): Promise<DoctorResult> {
+  const checks: Check[] = [];
+  checks.push(nodeCheck());
+  checks.push(...(await directoryChecks(context)));
+  checks.push(await secretStoreCheck(context));
+
+  const config = await context.config();
+  const clients = Object.entries(config.clients);
+  checks.push({
+    id: 'oauth-client',
+    title: 'OAuth client',
+    status: clients.length > 0 ? 'ok' : 'fail',
+    detail:
+      clients.length > 0
+        ? `${clients.length} registered: ${clients.map(([name]) => name).join(', ')}`
+        : 'none registered',
+    fix: clients.length > 0 ? undefined : 'agent-gmail client add ~/Downloads/client_secret_*.json --move',
+  });
+
+  const aliases = options.inbox ? [options.inbox] : Object.keys(config.inboxes);
+  if (aliases.length === 0) {
+    checks.push({
+      id: 'inboxes',
+      title: 'Mailboxes',
+      status: 'warn',
+      detail: 'none connected yet',
+      fix: 'agent-gmail inbox add work --start',
+    });
+  }
+  for (const alias of aliases) {
+    checks.push(...(await inboxChecks(context, alias)));
+  }
+
+  checks.push(...(await mcpChecks(context)));
+
+  const summary = {
+    ok: checks.filter((check) => check.status === 'ok').length,
+    warn: checks.filter((check) => check.status === 'warn').length,
+    fail: checks.filter((check) => check.status === 'fail').length,
+    skipped: checks.filter((check) => check.status === 'skipped').length,
+  };
+  return { checks, summary, healthy: summary.fail === 0 };
+}
+
+/** Compares dotted version numbers left to right: the first difference decides. */
+function atLeast(version: string, minimum: readonly number[]): boolean {
+  const parts = version.split('.').map((part) => Number.parseInt(part, 10) || 0);
+  for (const [index, floor] of minimum.entries()) {
+    const part = parts[index] ?? 0;
+    if (part > floor) return true;
+    if (part < floor) return false;
+  }
+  return true;
+}
+
+function nodeCheck(): Check {
+  const enough = atLeast(process.versions.node, MINIMUM_NODE);
+  return {
+    id: 'node-version',
+    title: 'Node.js',
+    status: enough ? 'ok' : 'fail',
+    detail: `v${process.versions.node}`,
+    fix: enough ? undefined : `Install Node ${MINIMUM_NODE.join('.')} or newer.`,
+  };
+}
+
+async function directoryChecks(context: GmailContext): Promise<Check[]> {
+  const checks: Check[] = [];
+  for (const [id, path] of [
+    ['config-dir', context.core.paths.configDir],
+    ['state-dir', context.core.paths.stateDir],
+  ] as const) {
+    try {
+      await stat(path);
+    } catch {
+      checks.push({ id, title: `Directory ${path}`, status: 'ok', detail: 'not created yet' });
+      continue;
+    }
+    const loose = await isGroupOrWorldAccessible(path);
+    checks.push({
+      id,
+      title: `Directory ${path}`,
+      status: loose ? 'warn' : 'ok',
+      detail: loose ? 'readable by other users on this machine' : 'owner-only',
+      fix: loose ? `chmod 700 ${path}` : undefined,
+    });
+  }
+  return checks;
+}
+
+async function secretStoreCheck(context: GmailContext): Promise<Check> {
+  const config = await context.config();
+  const kind = secretsStoreOf(config);
+  if (kind === 'file') {
+    return {
+      id: 'secret-store',
+      title: 'Secret store',
+      status: 'ok',
+      detail: 'owner-only files in the config directory',
+    };
+  }
+  const probe = await probeKeychain();
+  return {
+    id: 'secret-store',
+    title: 'Secret store',
+    status: probe.ok ? 'ok' : 'fail',
+    detail: probe.ok ? 'the system keychain answers' : `the system keychain cannot be used: ${probe.reason}`,
+    fix: probe.ok ? undefined : 'agentcomms secrets migrate --to file',
+  };
+}
+
+async function inboxChecks(context: GmailContext, alias: string): Promise<Check[]> {
+  const checks: Check[] = [];
+  const config = await context.config();
+  const inbox = config.inboxes[alias];
+  if (!inbox) {
+    return [
+      {
+        id: 'inbox-known',
+        title: `Mailbox ${alias}`,
+        status: 'fail',
+        detail: 'no such mailbox',
+        fix: `agent-gmail inbox add ${alias} --start`,
+        inbox: alias,
+      },
+    ];
+  }
+
+  // Scopes first: it needs no network, and explains most "it stopped working" reports.
+  const granted = capabilitiesOf(inbox.grantedScopes);
+  const wanted = scopesFor(
+    (TIERS as readonly string[]).includes(inbox.tier) ? (inbox.tier as Tier) : 'organize',
+    inbox.contacts,
+  );
+  const missing = wanted.filter((scope) => !inbox.grantedScopes.includes(scope));
+  checks.push({
+    id: 'inbox-scopes',
+    title: `Permissions for ${alias}`,
+    status: missing.length === 0 ? 'ok' : 'warn',
+    detail: missing.length === 0 ? `${[...granted].join(', ')}` : `missing: ${missing.join(', ')}`,
+    fix: missing.length === 0 ? undefined : `agent-gmail inbox reauth ${alias}`,
+    inbox: alias,
+  });
+
+  const client = config.clients[inbox.client];
+  if (!client) {
+    checks.push({
+      id: 'inbox-client',
+      title: `OAuth client for ${alias}`,
+      status: 'fail',
+      detail: `"${inbox.client}" is not registered`,
+      fix: 'agent-gmail client add <client_secret.json>',
+      inbox: alias,
+    });
+    return checks;
+  }
+
+  let tokenOk = false;
+  try {
+    const source = new TokenSource({ core: context.core, endpoints: context.endpoints, inbox, client, alias });
+    await source.accessToken();
+    tokenOk = true;
+    checks.push({
+      id: 'inbox-token',
+      title: `Sign-in for ${alias}`,
+      status: 'ok',
+      detail: 'Google renewed the access token',
+      inbox: alias,
+    });
+  } catch (error) {
+    const failure = error as CommsError;
+    checks.push({
+      id: 'inbox-token',
+      title: `Sign-in for ${alias}`,
+      status: 'fail',
+      detail: failure.message,
+      fix: failure.hint ?? `agent-gmail inbox reauth ${alias}`,
+      inbox: alias,
+    });
+  }
+
+  if (tokenOk) {
+    try {
+      const transport = await context.transport(alias);
+      const profile = await transport.getProfile();
+      const matches = profile.emailAddress.toLowerCase() === inbox.email.toLowerCase();
+      checks.push({
+        id: 'inbox-profile',
+        title: `Mailbox ${alias}`,
+        status: matches ? 'ok' : 'warn',
+        detail: matches ? profile.emailAddress : `recorded as ${inbox.email}, but Google says ${profile.emailAddress}`,
+        fix: matches ? undefined : `agent-gmail inbox reauth ${alias}`,
+        inbox: alias,
+      });
+    } catch (error) {
+      const failure = error as CommsError;
+      checks.push({
+        id: 'inbox-profile',
+        title: `Mailbox ${alias}`,
+        status: 'fail',
+        detail: failure.message,
+        fix: failure.hint,
+        inbox: alias,
+      });
+    }
+  }
+
+  const state = await context.core.states.get(inbox.id);
+  const lastUsed = state.lastUsedAt ?? state.lastRefreshOkAt;
+  if (lastUsed) {
+    const days = (context.now().getTime() - Date.parse(lastUsed)) / 86_400_000;
+    if (days >= UNUSED_WARNING_DAYS) {
+      checks.push({
+        id: 'inbox-idle',
+        title: `Last used: ${alias}`,
+        status: 'warn',
+        detail: `${Math.floor(days)} days ago; Google drops a token unused for six months`,
+        fix: `agent-gmail whoami --inbox ${alias}`,
+        inbox: alias,
+      });
+    }
+  }
+  return checks;
+}
+
+async function mcpChecks(context: GmailContext): Promise<Check[]> {
+  const servers = await listRegisteredServers(context.env);
+  const checks: Check[] = [];
+  const ungated = findUngatedGmailServers(servers);
+  checks.push({
+    id: 'other-gmail-servers',
+    title: 'Other Gmail MCP servers',
+    status: ungated.length === 0 ? 'ok' : 'fail',
+    detail:
+      ungated.length === 0
+        ? 'none registered'
+        : ungated
+            .map((finding) => `${finding.name} in ${finding.path} (${finding.client}): ${finding.reason}`)
+            .join('; '),
+    fix: ungated.length === 0 ? undefined : ungated.map((finding) => finding.removal).join(' && '),
+  });
+
+  const ours = servers.filter((server) => [server.command, ...server.args].join(' ').includes('agent-gmail'));
+  for (const server of ours) {
+    if (!server.command || server.command === 'npx' || !server.command.includes('/')) continue;
+    let runnable = true;
+    try {
+      await access(server.command, constants.X_OK);
+    } catch {
+      runnable = false;
+    }
+    checks.push({
+      id: 'mcp-command',
+      title: `MCP entry "${server.name}" (${server.client})`,
+      status: runnable ? 'ok' : 'fail',
+      detail: runnable ? server.command : `${server.command} is not there any more`,
+      fix: runnable ? undefined : `agent-gmail mcp install --client ${server.client}`,
+    });
+  }
+  return checks;
+}

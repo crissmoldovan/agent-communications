@@ -50,20 +50,25 @@ Still to do before the PR:
 
 ## Phase 2 — auth, inbox lifecycle, surfaces (`feat/gmail-auth`)
 
-- [ ] `@cloudpixel/gmail` package skeleton (tsdown: bundled `cli.mjs`, library `index.mjs`).
-- [ ] Local fake Google server for tests (token endpoint, userinfo, Gmail profile/labels/list/get, People search).
-- [ ] Transport over `@googleapis/gmail`/`people` with the retry layer (§7.11) and `AGENT_COMMS_GOOGLE_ROOT_URL`
-      (loopback only).
-- [ ] OAuth: loopback + PKCE + state; detached two-step flow (`--start`/`--finish --wait`); post-consent checks
+- [x] `@cloudpixel/gmail` package skeleton (tsdown: bundled `cli.mjs`, library `index.mjs`).
+- [x] Local fake Google server for tests (consent, token, revoke, Gmail profile/labels/sendAs), used through
+      `AGENT_COMMS_GOOGLE_ROOT_URL` so the real bundled Google libraries are exercised.
+- [x] Transport over `@googleapis/gmail`/`people` with the retry layer (§7.11) and `AGENT_COMMS_GOOGLE_ROOT_URL`
+      (loopback only). `forceRefreshOnFailure` is deliberately off; a 401 is retried once in our own layer.
+- [x] OAuth: loopback + PKCE + state; detached two-step flow (`--start`/`--finish --wait`); post-consent checks
       (scopes, identity); reauth identity binding; token refresh persistence.
-- [ ] `client add|list|remove`, `inbox add|list|show|reauth|rename|policy|remove`, `inbox import artymclabin`
+- [x] `client add|list|remove`, `inbox add|list|show|reauth|rename|policy|remove`, `inbox import`
       (with the legacy-server scan), `whoami`, `doctor`.
-- [ ] CLI skeleton (commander), shared envelope and exit codes, coercion rules.
-- [ ] MCP server skeleton on SDK v2: handshake verified with Claude Code and Codex; `gmail_inboxes_list`,
-      `gmail_whoami`, `gmail_doctor`; per-call config re-check; elicitation round trip with the SDK v2 client.
-- [ ] `mcp install --client …` (managed launcher), `@cloudpixel/gmail-mcp`, package checks for both.
+- [x] CLI skeleton (commander), shared envelope and exit codes, coercion rules.
+- [x] MCP server skeleton on SDK v2: `gmail_inboxes_list`, `gmail_whoami`, `gmail_doctor`; per-call config re-check;
+      tool list independent of the inboxes present; structuredContent mirrored in one text block.
+- [x] `mcp install --client …` (managed, npx and local launchers; proves the server starts),
+      `@cloudpixel/gmail-mcp`, packed-tarball consumer checks for both.
+- [ ] Elicitation round trip with the SDK v2 client (`gmail_confirm_probe` + `confirm-clients`) — moved to P5 with
+      the rest of the `confirm` channel, which is where the allowlist it feeds is used.
+- [ ] Handshake checked against Claude Code and Codex themselves (needs the author's machine).
 - [ ] **Live check (needs the author):** fresh two-step `inbox add` of one inbox; doctor; whoami;
-      `import artymclabin --dry-run`.
+      `import --dry-run`.
 
 ## Phase 3 — read and analyse (`feat/gmail-read`)
 

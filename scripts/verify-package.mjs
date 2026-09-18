@@ -57,14 +57,39 @@ function readTarball(bytes) {
   return entries;
 }
 
-try {
-  run('pnpm', ['run', 'build'], packageDir);
-  run('pnpm', ['pack', '--pack-destination', tempRoot], packageDir);
-  const packed = (await import('node:fs')).readdirSync(tempRoot).filter((name) => name.endsWith('.tgz'));
-  if (packed.length !== 1) throw new Error(`expected one tarball, found ${packed.length}`);
+const { readdirSync } = await import('node:fs');
+
+/** Builds and packs one workspace package, returning the tarball under a name unique to this run. */
+async function packPackage(directory, label) {
+  const before = new Set(readdirSync(tempRoot).filter((name) => name.endsWith('.tgz')));
+  run('pnpm', ['run', 'build'], directory);
+  run('pnpm', ['pack', '--pack-destination', tempRoot], directory);
+  const packed = readdirSync(tempRoot).filter((name) => name.endsWith('.tgz') && !before.has(name));
+  if (packed.length !== 1) throw new Error(`expected one new tarball for ${label}, found ${packed.length}`);
   // A unique path per run: npm caches local file: sources by name and version.
-  const tarball = join(tempRoot, `candidate-${process.pid}-${Date.now()}.tgz`);
+  const tarball = join(tempRoot, `${label}-${process.pid}-${Date.now()}.tgz`);
   await copyFile(join(tempRoot, packed[0]), tarball);
+  return tarball;
+}
+
+/**
+ * Packages in this workspace that the candidate depends on at runtime. They are not published yet, so a consumer
+ * install has to be given their tarballs too — which also proves that what they export is what the candidate uses.
+ */
+async function packWorkspaceDependencies() {
+  const declared = { ...manifest.dependencies, ...manifest.optionalDependencies };
+  const tarballs = [];
+  for (const [name, specifier] of Object.entries(declared)) {
+    if (!String(specifier).startsWith('workspace:')) continue;
+    const directory = resolve(packageDir, '..', name.split('/').pop());
+    tarballs.push(await packPackage(directory, `dependency-${name.replace(/[@/]/g, '-')}`));
+  }
+  return tarballs;
+}
+
+try {
+  const dependencyTarballs = await packWorkspaceDependencies();
+  const tarball = await packPackage(packageDir, 'candidate');
 
   const entries = readTarball(await readFile(tarball));
   for (const required of ['package/package.json', 'package/LICENSE', 'package/README.md']) {
@@ -81,7 +106,16 @@ try {
   await writeFile(join(consumer, 'package.json'), JSON.stringify({ name: 'consumer', private: true, type: 'module' }));
   run(
     'npm',
-    ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--cache', join(tempRoot, 'npm-cache'), tarball],
+    [
+      'install',
+      '--ignore-scripts',
+      '--no-audit',
+      '--no-fund',
+      '--cache',
+      join(tempRoot, 'npm-cache'),
+      ...dependencyTarballs,
+      tarball,
+    ],
     consumer,
   );
   const check = await readFile(join(packageDir, 'test', 'consumer-check.mjs'), 'utf8');

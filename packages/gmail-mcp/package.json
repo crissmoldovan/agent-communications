@@ -1,0 +1,45 @@
+{
+  "name": "@cloudpixel/gmail-mcp",
+  "version": "0.0.0",
+  "description": "The Gmail MCP server for coding agents: search, read, analyse and draft across inboxes, with sending gated by approval.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/crissmoldovan/agent-communications.git",
+    "directory": "packages/gmail-mcp"
+  },
+  "bin": {
+    "agent-gmail-mcp": "./dist/server.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "mcp",
+    "gmail",
+    "email",
+    "agent",
+    "claude",
+    "model-context-protocol"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --experimental-strip-types --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@cloudpixel/gmail": "workspace:*"
+  },
+  "optionalDependencies": {
+    "@napi-rs/keyring": "2.1.0"
+  }
+}
