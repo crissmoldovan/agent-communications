@@ -30,6 +30,8 @@ export interface GmailTransport {
    * reports attachments has to ask for `full` and drop the bodies with a partial response instead.
    */
   getMessageMetadata(messageId: string): Promise<RawMessage>;
+  /** The bytes of one attachment. The id is resolved fresh from the message: Gmail's can change between fetches. */
+  getAttachment(messageId: string, attachmentId: string): Promise<Buffer>;
 }
 
 export interface ListOptions {
@@ -266,6 +268,13 @@ export class GoogleGmailTransport implements GmailTransport {
       }),
     );
     return data;
+  }
+
+  async getAttachment(messageId: string, attachmentId: string): Promise<Buffer> {
+    const { data } = await this.call('download an attachment', () =>
+      this.gmail().users.messages.attachments.get({ userId: 'me', messageId, id: attachmentId }),
+    );
+    return Buffer.from(data.data ?? '', 'base64url');
   }
 
   async listSendAs(): Promise<SendAsAddress[]> {

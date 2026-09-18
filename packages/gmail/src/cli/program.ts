@@ -17,6 +17,7 @@ import { TIERS } from '../auth/scopes.ts';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
 import type { Launcher, SupportedClient } from '../mcp/install.ts';
 import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts';
+import { downloadAttachments, findAttachments } from '../operations/attachments.ts';
 import { clientAdd, clientList, clientRemove } from '../operations/clients.ts';
 import { doctor } from '../operations/doctor.ts';
 import { importLegacy } from '../operations/import-legacy.ts';
@@ -29,9 +30,11 @@ import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
 import { askChallenge } from './prompt.ts';
 import {
+  renderAttachments,
   renderClientAdd,
   renderClients,
   renderDoctor,
+  renderDownloads,
   renderImport,
   renderInboxList,
   renderInboxShow,
@@ -409,6 +412,59 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           () => (format === 'mermaid' ? result.mermaid : result.markdown),
           streams,
         );
+      }),
+    );
+
+  const attachments = program.command('attachments').description('find and download files people sent');
+  attachments
+    .command('find')
+    .description('find attachments across mailboxes')
+    .option('--inbox <alias...>', 'search these mailboxes (default: all)')
+    .option('--from <address>', 'only from this sender')
+    .option('--filename <text>', 'name or extension')
+    .option('--after <date>', 'only after this date')
+    .option('--before <date>', 'only before this date')
+    .option('--min-bytes <number>', 'at least this big', (value) => Number.parseInt(value, 10))
+    .option('--max-bytes <number>', 'at most this big', (value) => Number.parseInt(value, 10))
+    .option('--type <mimeType>', 'only this content type')
+    .option('--query <query>', 'extra Gmail search syntax')
+    .option('--limit <number>', 'how many rows', (value) => Number.parseInt(value, 10))
+    .action(
+      act(async (context, globalOptions, options: Options) => {
+        const result = await findAttachments(context, {
+          inboxes: options.inbox as string[] | undefined,
+          from: options.from ? String(options.from) : undefined,
+          filename: options.filename ? String(options.filename) : undefined,
+          after: options.after ? String(options.after) : undefined,
+          before: options.before ? String(options.before) : undefined,
+          minBytes: options.minBytes === undefined ? undefined : Number(options.minBytes),
+          maxBytes: options.maxBytes === undefined ? undefined : Number(options.maxBytes),
+          mimeType: options.type ? String(options.type) : undefined,
+          query: options.query ? String(options.query) : undefined,
+          limit: options.limit === undefined ? undefined : Number(options.limit),
+        });
+        writeResult(result, output(), (data) => renderAttachments(data, globalOptions.color), streams);
+      }),
+    );
+  attachments
+    .command('download <messageId...>')
+    .description('download the attachments of one or more messages, under the downloads folder')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .option('--part <partId>', 'one specific attachment')
+    .option('--out <subpath>', 'a folder inside the downloads root')
+    .option('--max-files <number>', 'stop after this many files', (value) => Number.parseInt(value, 10))
+    .action(
+      act(async (context, globalOptions, messageIds: string[], options: Options) => {
+        const result = await downloadAttachments(
+          context,
+          String(options.inbox),
+          messageIds.map((messageId) => ({ messageId, partId: options.part ? String(options.part) : undefined })),
+          {
+            out: options.out ? String(options.out) : undefined,
+            maxFiles: options.maxFiles === undefined ? undefined : Number(options.maxFiles),
+          },
+        );
+        writeResult(result, output(), (data) => renderDownloads(data, globalOptions.color), streams);
       }),
     );
 

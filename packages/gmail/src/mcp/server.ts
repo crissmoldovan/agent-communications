@@ -3,12 +3,13 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
 import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts';
+import { downloadAttachments, findAttachments } from '../operations/attachments.ts';
 import { doctor } from '../operations/doctor.ts';
 import { inboxList, whoami } from '../operations/inboxes.ts';
 import { readMessage, readThread } from '../operations/read.ts';
 import { search } from '../operations/search.ts';
 import { VERSION } from '../version.ts';
-import { inboxArgument, mcpBoolean, mcpInboxes, mcpInteger } from './schemas.ts';
+import { inboxArgument, mcpBoolean, mcpInboxes, mcpInteger, mcpStringArray } from './schemas.ts';
 
 export interface GmailMcpOptions extends GmailContextOptions {
   /** Serve only this inbox; its `inbox` argument becomes optional and fixed. */
@@ -379,6 +380,89 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       try {
         const result = await threadTimeline(context, targetInbox(inbox), threadId, { businessHours });
         return reply({ timeline: result.timeline, markdown: result.markdown, mermaid: result.mermaid });
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'gmail_attachments_find',
+    {
+      title: 'Find attachments',
+      description:
+        'Find files people sent, across mailboxes, with filters for sender, name, date and size. Each row carries risk flags (executable, script, macro-enabled, markup, archive, double-extension, a filename using bidi characters to disguise its type). Finding does not download anything.',
+      inputSchema: z.object({
+        inboxes: mcpInboxes().optional(),
+        from: z.string().optional(),
+        filename: z.string().optional().describe('a name or an extension'),
+        after: z.string().optional(),
+        before: z.string().optional(),
+        minBytes: mcpInteger().optional(),
+        maxBytes: mcpInteger().optional(),
+        mimeType: z.string().optional(),
+        query: z.string().optional().describe('extra Gmail search syntax'),
+        limit: mcpInteger().optional(),
+      }),
+      outputSchema: z.object({
+        rows: z.array(z.looseObject({})),
+        query: z.string(),
+        driveLinks: z.number(),
+        complete: z.boolean(),
+        errors: z.array(z.object({ inbox: z.string(), code: z.string(), message: z.string() })),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async (args) => {
+      try {
+        const result = await findAttachments(context, {
+          ...args,
+          inboxes: pinned ? [pinned] : (args.inboxes as string[] | 'all' | undefined),
+        });
+        return reply({
+          rows: result.rows,
+          query: result.query,
+          driveLinks: result.driveLinks,
+          complete: result.complete,
+          errors: result.errors,
+        });
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'gmail_attachment_download',
+    {
+      title: 'Download attachments',
+      description:
+        'Save the attachments of one or more messages to disk, under the downloads folder and nowhere else. Filenames are rebuilt safely, identical files are written once, and a manifest lists what was saved. Nothing is ever opened or run — inspect a file yourself before using it.',
+      inputSchema: z.object({
+        inbox: inboxArgument(Boolean(pinned)),
+        messageIds: mcpStringArray().describe('the messages whose attachments to save'),
+        partId: z.string().optional().describe('one specific attachment of a single message'),
+        out: z.string().optional().describe('a folder inside the downloads root; never an absolute path'),
+        maxFiles: mcpInteger().optional(),
+      }),
+      outputSchema: z.object({
+        directory: z.string(),
+        files: z.array(z.looseObject({})),
+        skipped: z.array(z.looseObject({})),
+        manifestPath: z.string(),
+        totalBytes: z.number(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ inbox, messageIds, partId, out, maxFiles }) => {
+      try {
+        const result = await downloadAttachments(
+          context,
+          targetInbox(inbox),
+          messageIds.map((messageId) => ({ messageId, partId })),
+          { out, maxFiles },
+        );
+        return reply(result);
       } catch (error) {
         return fail(error);
       }

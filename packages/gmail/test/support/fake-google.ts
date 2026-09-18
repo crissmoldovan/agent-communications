@@ -35,6 +35,8 @@ export interface FakeAccount {
   }>;
   /** Messages this account holds, keyed by id, in the shape `users.messages.get(format=full)` returns. */
   messages?: Record<string, FakeMessage>;
+  /** Attachment bytes, keyed by attachment id. */
+  attachments?: Record<string, string>;
 }
 
 export interface FakeMessage {
@@ -349,6 +351,17 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
           ...(next ? { nextPageToken: next } : {}),
           resultSizeEstimate: rows.length,
         });
+        return;
+      }
+
+      const attachment = /^\/gmail\/v1\/users\/me\/messages\/([^/]+)\/attachments\/([^/]+)$/.exec(url.pathname);
+      if (attachment) {
+        const bytes = account?.attachments?.[decodeURIComponent(attachment[2] ?? '')];
+        if (bytes === undefined) {
+          json(response, 404, { error: { code: 404, message: 'Not Found', errors: [{ reason: 'notFound' }] } });
+          return;
+        }
+        json(response, 200, { size: Buffer.byteLength(bytes), data: Buffer.from(bytes).toString('base64url') });
         return;
       }
 

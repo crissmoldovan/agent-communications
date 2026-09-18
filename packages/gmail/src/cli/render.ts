@@ -1,6 +1,7 @@
 import { paint } from '@cloudpixel/comms-core';
 import type { InstallResult } from '../mcp/install.ts';
 import type { LabelSummary, SendAsSummary } from '../operations/analyse.ts';
+import type { DownloadResult, FindAttachmentsResult } from '../operations/attachments.ts';
 import type { ClientAddResult, ClientView } from '../operations/clients.ts';
 import type { ConsentResult } from '../operations/consent.ts';
 import type { DoctorResult } from '../operations/doctor.ts';
@@ -351,4 +352,50 @@ export function renderSendAs(addresses: SendAsSummary[], color: boolean): string
     ],
     color,
   );
+}
+
+export function renderAttachments(result: FindAttachmentsResult, color: boolean): string {
+  if (result.rows.length === 0) return 'No attachments matched.';
+  const lines = [
+    table(
+      [
+        ['WHEN', 'INBOX', 'FROM', 'FILE', 'SIZE', 'FLAGS'],
+        ...result.rows.map((row) => [
+          row.date?.slice(0, 10) ?? '—',
+          row.inbox,
+          row.from ?? '—',
+          row.filename,
+          `${Math.round(row.size / 1024)} KB`,
+          row.riskFlags.join(', '),
+        ]),
+      ],
+      color,
+    ),
+    '',
+    `${result.rows.length} attachment(s). Download with \`agent-gmail attachments download <messageId> --inbox <name>\`.`,
+  ];
+  if (result.driveLinks > 0) {
+    lines.push(
+      paint(color, 'dim', `${result.driveLinks} Drive link(s) were skipped: they are links, not files in the message.`),
+    );
+  }
+  for (const error of result.errors) lines.push(paint(color, 'yellow', `${error.inbox}: ${error.message}`));
+  return lines.join('\n');
+}
+
+export function renderDownloads(result: DownloadResult, color: boolean): string {
+  const lines: string[] = [];
+  for (const file of result.files) {
+    lines.push(
+      `${file.duplicate ? paint(color, 'dim', 'same as') : 'saved '} ${file.path}` +
+        (file.riskFlags.length ? paint(color, 'yellow', `  [${file.riskFlags.join(', ')}]`) : ''),
+    );
+  }
+  for (const skip of result.skipped) lines.push(paint(color, 'yellow', `skipped ${skip.messageId}: ${skip.reason}`));
+  lines.push(
+    '',
+    `${result.files.filter((file) => !file.duplicate).length} file(s), ${Math.round(result.totalBytes / 1024)} KB, listed in ${result.manifestPath}`,
+    paint(color, 'dim', 'Nothing was opened or run.'),
+  );
+  return lines.join('\n');
 }

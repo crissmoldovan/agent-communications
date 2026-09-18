@@ -52,6 +52,8 @@ test('the tool list is the same whatever is configured, and every tool says what
 
   const withoutInboxes = await names(empty);
   assert.deepEqual(withoutInboxes, [
+    'gmail_attachment_download',
+    'gmail_attachments_find',
     'gmail_doctor',
     'gmail_inboxes_list',
     'gmail_labels_list',

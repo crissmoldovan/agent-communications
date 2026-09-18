@@ -64,6 +64,8 @@ send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
 const tools = await waitFor(2);
 const names = tools.result.tools.map((tool) => tool.name).sort();
 assert.deepEqual(names, [
+  'gmail_attachment_download',
+  'gmail_attachments_find',
   'gmail_doctor',
   'gmail_inboxes_list',
   'gmail_labels_list',
