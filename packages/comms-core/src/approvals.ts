@@ -269,7 +269,9 @@ export class ApprovalStore {
       };
       if (live.inboxId !== current.inboxId)
         return voidWith('APPROVAL_VOID', 'the approval belongs to a different inbox');
-      if (current.inboxSub && live.inboxSub && current.inboxSub !== live.inboxSub) {
+      // Fail closed: an approval prepared against a known account may only be claimed by a caller that names the same
+      // account. A caller that passes none is refused rather than trusted, whatever the reason it has none.
+      if (current.inboxSub && current.inboxSub !== live.inboxSub) {
         return voidWith('APPROVAL_VOID', 'the inbox is now connected to a different account');
       }
       if (live.policy === 'never')

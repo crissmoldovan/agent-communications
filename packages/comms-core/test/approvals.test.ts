@@ -88,6 +88,7 @@ test('integrity failures void the record for good; each carries its specific cod
     ['content changed', { digest: 'digest-B' }, /content changed/, 'APPROVAL_VOID'],
     ['other inbox', { inboxId: OTHER_INBOX }, /different inbox/, 'APPROVAL_VOID'],
     ['other account', { inboxSub: 'sub-2' }, /different account/, 'APPROVAL_VOID'],
+    ['no account named at all', { inboxSub: undefined }, /different account/, 'APPROVAL_VOID'],
     ['recipients differ', { expect: { ...EXPECT, bcc: ['x@evil.test'] } }, /do not match/, 'APPROVAL_VOID'],
     ['policy tightened to never', { policy: 'never' }, /policy: never/, 'POLICY_NEVER'],
   ];
