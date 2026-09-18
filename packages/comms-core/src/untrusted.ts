@@ -18,7 +18,8 @@ export const UNTRUSTED_NOTICE: string =
 // Control tokens of common chat templates, and role markers used by several providers.
 const SPECIAL_TOKENS =
   /<\|(?:im_start|im_end|im_sep|endoftext|eot_id|start_header_id|end_header_id|begin_of_text|system|user|assistant|end|fim_\w+)\|>|\[\/?INST\]|<<\/?SYS>>|<\/?s>|<start_of_turn>|<end_of_turn>/gi;
-const ROLE_MARKERS = /(^|\n)(\s*)(Human|Assistant|System)\s*:/g;
+// The role labels model frameworks put at the start of a line. A message that includes one is quoting, not speaking.
+const ROLE_MARKERS = /(^|\n)(\s*)(Human|Assistant|System|User|Developer|Tool|Function)\s*:/gi;
 const TAG_LIKE = new RegExp(`<(/?)\\s*${UNTRUSTED_TAG}`, 'gi');
 
 export interface EnvelopeAttributes {

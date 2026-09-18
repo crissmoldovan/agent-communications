@@ -45,8 +45,15 @@ async function takeOverStale(lockPath: string, staleMs: number): Promise<void> {
   }
   const moved = await readLock(aside);
   if (!isStale(moved, staleMs)) {
-    // Not stale after all: restore it unless a new holder already exists.
-    await link(aside, lockPath).catch(() => undefined);
+    // Not stale after all: put it back. `link` leaves the copy in place to clean up, but some file systems (overlay
+    // mounts in containers) have no hard links, so fall back to renaming it back — losing the holder's lock would
+    // leave no mutual exclusion at all.
+    try {
+      await link(aside, lockPath);
+    } catch {
+      await rename(aside, lockPath).catch(() => undefined);
+      return;
+    }
   }
   await rm(aside, { force: true });
 }

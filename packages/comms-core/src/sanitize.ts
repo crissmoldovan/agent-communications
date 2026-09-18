@@ -106,19 +106,50 @@ function parseStyle(style: string | undefined): Map<string, string> {
   return map;
 }
 
+/**
+ * A nominal mail-reading viewport, so lengths in viewport units can be compared with the thresholds above. The exact
+ * size does not matter: `left:-200vw` is off-screen at any plausible width, and `width:0vw` is nothing wide at every
+ * width. What matters is that these units are understood at all — unparsed, they read as "no length", and an element
+ * pushed off-screen with them would have been treated as visible.
+ */
+const VIEWPORT_WIDTH_PX = 1000;
+const VIEWPORT_HEIGHT_PX = 800;
+
 function numeric(value: string | undefined): number | null {
   if (value === undefined) return null;
-  const match = /^(-?\d*\.?\d+)\s*(px|pt|em|rem|%)?$/.exec(value.trim());
+  const match = /^(-?\d*\.?\d+)\s*(px|pt|pc|in|cm|mm|q|em|rem|ex|ch|%|vw|vh|vmin|vmax)?$/i.exec(value.trim());
   if (!match) return null;
   const amount = Number(match[1]);
-  switch (match[2]) {
+  switch ((match[2] ?? '').toLowerCase()) {
     case 'pt':
       return amount * (4 / 3);
+    case 'pc':
+      return amount * 16;
+    case 'in':
+      return amount * 96;
+    case 'cm':
+      return amount * 37.8;
+    case 'mm':
+      return amount * 3.78;
+    case 'q':
+      return amount * 0.945;
     case 'em':
     case 'rem':
       return amount * 16;
+    case 'ex':
+      return amount * 8;
+    case 'ch':
+      return amount * 8;
     case '%':
       return amount * 0.16;
+    case 'vw':
+      return (amount * VIEWPORT_WIDTH_PX) / 100;
+    case 'vh':
+      return (amount * VIEWPORT_HEIGHT_PX) / 100;
+    case 'vmin':
+      return (amount * Math.min(VIEWPORT_WIDTH_PX, VIEWPORT_HEIGHT_PX)) / 100;
+    case 'vmax':
+      return (amount * Math.max(VIEWPORT_WIDTH_PX, VIEWPORT_HEIGHT_PX)) / 100;
     default:
       return amount;
   }
@@ -221,6 +252,31 @@ function isInvisibleColor(value: string | undefined): boolean {
   return value !== undefined && colorAlpha(value) <= 0.05;
 }
 
+/**
+ * The CSS named colours that matter here: the near-whites and near-blacks people use to hide text against a
+ * background. Not the full list of 148 — a colour nobody writes text in cannot hide it.
+ */
+const NAMED_COLORS: Record<string, string> = {
+  white: '#ffffff',
+  snow: '#fffafa',
+  ivory: '#fffff0',
+  ghostwhite: '#f8f8ff',
+  floralwhite: '#fffaf0',
+  seashell: '#fff5ee',
+  whitesmoke: '#f5f5f5',
+  aliceblue: '#f0f8ff',
+  mintcream: '#f5fffa',
+  azure: '#f0ffff',
+  honeydew: '#f0fff0',
+  linen: '#faf0e6',
+  oldlace: '#fdf5e6',
+  beige: '#f5f5dc',
+  lavenderblush: '#fff0f5',
+  cornsilk: '#fff8dc',
+  black: '#000000',
+  transparent: '#00000000',
+};
+
 function normaliseColor(value: string | undefined): string | null {
   if (!value) return null;
   const v = value.trim().toLowerCase();
@@ -231,8 +287,7 @@ function normaliseColor(value: string | undefined): string | null {
   if (rgb) {
     return `#${[rgb[1], rgb[2], rgb[3]].map((n) => Number(n).toString(16).padStart(2, '0')).join('')}`;
   }
-  const named: Record<string, string> = { white: '#ffffff', black: '#000000' };
-  return named[v] ?? null;
+  return NAMED_COLORS[v] ?? null;
 }
 
 interface StylesheetRules {

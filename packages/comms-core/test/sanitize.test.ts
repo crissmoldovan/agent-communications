@@ -39,6 +39,12 @@ const HIDDEN_CASES: [string, string][] = [
   ['fixed pushed past the right edge', `<div style="position:fixed;right:-9999px">${INJECTION}</div>`],
   ['relative pushed right in em', `<div style="position:relative;left:300em">${INJECTION}</div>`],
   ['negative margin', `<div style="margin-left:-9999px">${INJECTION}</div>`],
+  ['pushed off-screen in viewport widths', `<div style="position:absolute;left:-200vw">${INJECTION}</div>`],
+  ['pushed below in viewport heights', `<div style="position:fixed;top:300vh">${INJECTION}</div>`],
+  ['zero height in viewport units', `<div style="height:0vh;overflow:hidden">${INJECTION}</div>`],
+  ['tiny font in viewport units', `<span style="font-size:0.05vh">${INJECTION}</span>`],
+  ['indent in viewport widths', `<div style="text-indent:-100vw">${INJECTION}</div>`],
+  ['off-screen in centimetres', `<div style="position:absolute;left:-500cm">${INJECTION}</div>`],
   ['margin pushed right', `<div style="margin-left:9999px">${INJECTION}</div>`],
   ['margin pushed down', `<div style="margin-top:9999px">${INJECTION}</div>`],
   ['text-indent pushed right', `<div style="text-indent:9999px;overflow:hidden">${INJECTION}</div>`],
@@ -76,6 +82,35 @@ test('hidden content is counted, not silently dropped', () => {
   );
   assert.equal(report.hiddenElements, 2);
   assert.ok(report.hiddenChars >= INJECTION.length);
+});
+
+test('a near-white on white is flagged, not only exact white on white', () => {
+  for (const colour of ['ivory', 'snow', 'ghostwhite', '#fffff0']) {
+    const { report } = sanitizeHtmlToText(
+      `<p style="color:${colour};background-color:${colour}">hidden in plain sight</p>`,
+    );
+    assert.equal(report.sameColorElements, 1, colour);
+  }
+  // Ordinary readable text is not flagged.
+  assert.equal(
+    sanitizeHtmlToText('<p style="color:#111111;background-color:#ffffff">readable</p>').report.sameColorElements,
+    0,
+  );
+});
+
+test('lengths are understood in the units mail actually uses', () => {
+  // Every unit below is a way of saying "far off-screen"; none of them may read as "no length given".
+  for (const value of ['-200vw', '300vh', '-100vmin', '250vmax', '-30cm', '-12in', '-800pt']) {
+    const { text, report } = sanitizeHtmlToText(
+      `<p>Visible</p><div style="position:absolute;left:${value}">${INJECTION}</div>`,
+    );
+    assert.doesNotMatch(text, /IGNORE PREVIOUS/, value);
+    assert.equal(report.hiddenElements, 1, value);
+  }
+  // A small offset in the same units is not hiding anything.
+  const nudged = sanitizeHtmlToText('<div style="position:absolute;left:2vw">badge</div>');
+  assert.match(nudged.text, /badge/);
+  assert.equal(nudged.report.hiddenElements, 0);
 });
 
 test('same foreground and background colour is flagged but kept for the reader to see', () => {
