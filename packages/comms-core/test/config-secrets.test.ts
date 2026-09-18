@@ -292,3 +292,36 @@ test('runtime state lives outside config and merges under a lock', async () => {
   });
   await assert.rejects(states.get('../../etc/passwd'), /not an inbox id/);
 });
+
+test('the secret store can be chosen once, and not quietly moved afterwards', async () => {
+  const store = new ConfigStore(tempDir());
+
+  // Setup: nothing has ever been stored, so choosing files is a choice, not a downgrade. A machine with no keychain
+  // has no other option, and a typed challenge cannot be asked for in the middle of an unattended install.
+  await store.update((config) => ({ ...config, secrets: { store: 'file' } }));
+  assert.equal((await store.load()).secrets?.store, 'file');
+
+  // Tightening afterwards is free.
+  await store.update((config) => ({ ...config, secrets: { store: 'keychain' } }));
+
+  // Moving away from a recorded keychain is refused…
+  await assert.rejects(
+    store.update((config) => ({ ...config, secrets: { store: 'file' } })),
+    (error: unknown) => error instanceof CommsError && error.code === 'LOOSENING_REFUSED',
+  );
+
+  // …including by erasing the record so the next write can choose freely.
+  await assert.rejects(
+    store.update((config) => {
+      const next = { ...config };
+      delete next.secrets;
+      return next;
+    }),
+    (error: unknown) => error instanceof CommsError && error.code === 'LOOSENING_REFUSED',
+  );
+
+  await store.update((config) => ({ ...config, secrets: { store: 'file' } }), {
+    consent: { kind: 'loosening-consent', paths: ['secrets.store'] },
+  });
+  assert.equal((await store.load()).secrets?.store, 'file');
+});

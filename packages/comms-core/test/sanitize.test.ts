@@ -30,6 +30,8 @@ const HIDDEN_CASES: [string, string][] = [
   ['text fill colour erased', `<p style="-webkit-text-fill-color:transparent">${INJECTION}</p>`],
   ['text fill colour with zero alpha', `<p style="-webkit-text-fill-color:rgba(0,0,0,0)">${INJECTION}</p>`],
   ['zero height overflow hidden', `<div style="max-height:0;overflow:hidden">${INJECTION}</div>`],
+  ['zero width clipped across', `<div style="width:0px;overflow-x:hidden">${INJECTION}</div>`],
+  ['zero height clipped down', `<div style="height:0;overflow-y:hidden">${INJECTION}</div>`],
   ['clip rect zero', `<div style="position:absolute;clip:rect(0,0,0,0)">${INJECTION}</div>`],
   ['clip-path inset', `<div style="clip-path: inset(100%)">${INJECTION}</div>`],
   ['text-indent off-screen', `<div style="text-indent:-9999px">${INJECTION}</div>`],
@@ -85,6 +87,26 @@ test('hidden content is counted, not silently dropped', () => {
   );
   assert.equal(report.hiddenElements, 2);
   assert.ok(report.hiddenChars >= INJECTION.length);
+});
+
+test('a box is only hidden when the axis that would show it is clipped', () => {
+  // Clipped on the axis that matters: hidden.
+  assert.equal(
+    sanitizeHtmlToText(`<div style="width:0;overflow-x:hidden">${INJECTION}</div>`).report.hiddenElements,
+    1,
+  );
+  // Clipped on the other axis: the text still spills out, so it is visible and stays.
+  const spilling = sanitizeHtmlToText(`<div style="width:0;overflow-y:hidden">visible anyway</div>`);
+  assert.match(spilling.text, /visible anyway/);
+  assert.equal(spilling.report.hiddenElements, 0);
+});
+
+test('two strangers under the same public suffix are not the same organisation', () => {
+  // Both end in `.co.uk`, and only the label before it says who owns them.
+  assert.ok(analyseLink('victim.co.uk', 'https://attacker.co.uk/login').flags.includes('text-domain-mismatch'));
+  assert.ok(!analyseLink('mail.example.com', 'https://www.example.com/x').flags.includes('text-domain-mismatch'));
+  assert.ok(!analyseLink('shop.example.co.uk', 'https://www.example.co.uk/x').flags.includes('text-domain-mismatch'));
+  assert.ok(analyseLink('alice.github.io', 'https://mallory.github.io/x').flags.includes('text-domain-mismatch'));
 });
 
 test('a near-white on white is flagged, not only exact white on white', () => {

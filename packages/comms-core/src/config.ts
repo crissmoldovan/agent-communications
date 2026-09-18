@@ -1,10 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { CommsError } from './errors.ts';
 import { writeFileAtomic } from './fs.ts';
 import { withFileLock } from './lock.ts';
+import { expandHome } from './paths.ts';
 
 /**
  * The one config file. Provider-neutral: provider-specific fields (scopes, tiers) are plain strings here and validated
@@ -274,6 +276,12 @@ export function defaultInternalDomains(email: string, publicDomains: ReadonlySet
 
 const POLICY_RANK: Record<SendPolicy, number> = { chat: 0, confirm: 1, never: 2 };
 
+/** A path as it will actually be used: `~` expanded, separators normalised, no trailing slash. */
+function normalisePath(path: string): string {
+  const expanded = expandHome(path.trim(), homedir());
+  return expanded.replace(/[/\\]+$/, '');
+}
+
 /** True when `candidate` is the same directory as `parent`, or inside it. Both may be unset. */
 function isInsideDirectory(candidate: string | undefined, parent: string | undefined): boolean {
   if (!candidate || !parent) return false;
@@ -312,8 +320,14 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   if (b.riskEscalation && !a.riskEscalation) loosened.push('defaults.riskEscalation');
   if (a.sendCaps.perHour > b.sendCaps.perHour || a.sendCaps.perDay > b.sendCaps.perDay)
     loosened.push('defaults.sendCaps');
-  if (a.attachRoots.some((r) => !b.attachRoots.includes(r))) loosened.push('defaults.attachRoots');
-  if (b.attachDeny.some((d) => !a.attachDeny.includes(d))) loosened.push('defaults.attachDeny');
+  // Paths are compared by what they resolve to: a path written with `~` and the same path written in full are the
+  // same place, and comparing them as strings would either ask for consent that is not needed or miss a change
+  // that is.
+  const roots = (list: readonly string[]) => new Set(list.map(normalisePath));
+  const before_roots = roots(b.attachRoots);
+  const after_deny = roots(a.attachDeny);
+  if ([...roots(a.attachRoots)].some((root) => !before_roots.has(root))) loosened.push('defaults.attachRoots');
+  if ([...roots(b.attachDeny)].some((deny) => !after_deny.has(deny))) loosened.push('defaults.attachDeny');
   // Moving where files from strangers land is a safety change — unless the new place is inside the old one, which
   // narrows rather than widens it.
   if (a.downloadsDir !== b.downloadsDir && !isInsideDirectory(a.downloadsDir, b.downloadsDir)) {
@@ -322,7 +336,10 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   if (a.confirm.elicitationClients.some((c) => !b.confirm.elicitationClients.includes(c))) {
     loosened.push('defaults.confirm.elicitationClients');
   }
-  if (before.secrets?.store === 'keychain' && after.secrets?.store === 'file') loosened.push('secrets.store');
+  // Moving away from a recorded keychain is a downgrade, whether it names another store or erases the record so the
+  // next write can name one. Choosing a store on a configuration that has never held a secret is not a downgrade —
+  // it is setup, and on a machine with no keychain (a server, a container) files are the only thing that works.
+  if (before.secrets?.store === 'keychain' && after.secrets?.store !== 'keychain') loosened.push('secrets.store');
   return { loosened };
 }
 

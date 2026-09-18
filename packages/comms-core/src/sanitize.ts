@@ -176,11 +176,15 @@ export function hidesContent(style: Map<string, string>): boolean {
   if (fontSize !== null && fontSize <= 1) return true;
   // Invisible text: `transparent`, an alpha of zero in rgba()/hsla()/#RRGGBBAA, or a fill colour that erases it.
   if (isInvisibleColor(style.get('color')) || isInvisibleColor(style.get('-webkit-text-fill-color'))) return true;
-  const overflowHidden = (style.get('overflow') ?? style.get('overflow-y') ?? '').includes('hidden');
+  // Overflow is clipped per axis: a zero-width box needs `overflow-x` (or the shorthand) to hide its text, a
+  // zero-height one needs `overflow-y`. Checking only the shorthand and the y axis let `overflow-x` through.
+  const overflow = style.get('overflow') ?? '';
+  const hiddenAcross = (axis: 'x' | 'y'): boolean =>
+    overflow.includes('hidden') || (style.get(`overflow-${axis}`) ?? '').includes('hidden');
   for (const dimension of ['max-height', 'height', 'max-width', 'width']) {
     const vertical = dimension.endsWith('height');
     const size = numeric(style.get(dimension), vertical ? VIEWPORT_HEIGHT_PX : VIEWPORT_WIDTH_PX);
-    if (size !== null && size <= 1 && overflowHidden) return true;
+    if (size !== null && size <= 1 && hiddenAcross(vertical ? 'y' : 'x')) return true;
   }
   const clip = style.get('clip') ?? '';
   if (/rect\(\s*0(px)?[\s,]+0(px)?[\s,]+0(px)?[\s,]+0(px)?\s*\)/.test(clip)) return true;
@@ -399,9 +403,74 @@ function hostOf(href: string): { host: string | null; protocol: string | null } 
   }
 }
 
+/**
+ * Suffixes under which anyone can register, so the last two labels are not the owner. Not the full public suffix
+ * list — that is a downloaded, versioned dataset — but enough that `attacker.co.uk` and `victim.co.uk` are not
+ * treated as the same organisation, which silently suppressed the mismatch flag.
+ */
+const MULTI_LABEL_SUFFIXES = new Set([
+  'co.uk',
+  'org.uk',
+  'me.uk',
+  'ltd.uk',
+  'plc.uk',
+  'net.uk',
+  'sch.uk',
+  'ac.uk',
+  'gov.uk',
+  'com.au',
+  'net.au',
+  'org.au',
+  'edu.au',
+  'gov.au',
+  'id.au',
+  'co.nz',
+  'net.nz',
+  'org.nz',
+  'govt.nz',
+  'co.jp',
+  'or.jp',
+  'ne.jp',
+  'ac.jp',
+  'go.jp',
+  'com.br',
+  'com.cn',
+  'com.hk',
+  'com.sg',
+  'com.tr',
+  'com.mx',
+  'com.ar',
+  'com.tw',
+  'co.za',
+  'co.in',
+  'co.kr',
+  'co.il',
+  'com.pl',
+  'com.ua',
+  'com.ph',
+  'com.my',
+  'com.vn',
+  'com.eg',
+  'com.sa',
+  'github.io',
+  'gitlab.io',
+  'pages.dev',
+  'workers.dev',
+  'vercel.app',
+  'netlify.app',
+  'herokuapp.com',
+  'blogspot.com',
+  'wordpress.com',
+  'notion.site',
+  'r2.dev',
+  's3.amazonaws.com',
+]);
+
 function registrable(host: string): string {
   const parts = host.split('.');
-  return parts.length <= 2 ? host : parts.slice(-2).join('.');
+  if (parts.length <= 2) return host;
+  const lastTwo = parts.slice(-2).join('.');
+  return MULTI_LABEL_SUFFIXES.has(lastTwo) ? parts.slice(-3).join('.') : lastTwo;
 }
 
 /** Analyses one link as a human would see it: its visible text versus where it really goes. */

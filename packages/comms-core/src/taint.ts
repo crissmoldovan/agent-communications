@@ -131,7 +131,7 @@ export class TaintStore {
   #prune(file: TaintFile): TaintFile {
     const cutoff = this.#now().getTime() - TAINT_WINDOW_MS;
     const keep = (map: Record<string, TaintEntry>) =>
-      Object.fromEntries(Object.entries(map).filter(([, entry]) => new Date(entry.at).getTime() > cutoff));
+      Object.fromEntries(Object.entries(map).filter(([, entry]) => new Date(entry.at).getTime() >= cutoff));
     return { addresses: keep(file.addresses), domains: keep(file.domains) };
   }
 
