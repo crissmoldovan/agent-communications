@@ -103,3 +103,22 @@ test('checkAttachable enforces allowed roots, the deny list and dotenv files', a
     await assert.rejects(checkAttachable('~/docs/innocent.pdf', policy), /refusing to attach a file from ~\/\.ssh/);
   }
 });
+
+test('the default deny list covers every hidden folder in home, git folders and app data', async () => {
+  const { defaultAttachDeny } = await import('../src/jail.ts');
+  const home = tempDir();
+  for (const dir of ['.config/gh', '.cursor', 'docs', 'repo/.git', 'Library/Cookies']) {
+    mkdirSync(join(home, dir), { recursive: true });
+  }
+  writeFileSync(join(home, '.config', 'gh', 'hosts.yml'), 'x');
+  writeFileSync(join(home, '.cursor', 'mcp.json'), 'x');
+  writeFileSync(join(home, 'docs', 'ok.pdf'), 'x');
+  writeFileSync(join(home, 'repo', '.git', 'config'), 'x');
+  writeFileSync(join(home, 'Library', 'Cookies', 'c'), 'x');
+  const policy = { roots: ['~'], deny: defaultAttachDeny(join(home, '.config', 'agent-communications'), {}), home };
+  assert.ok(await checkAttachable('~/docs/ok.pdf', policy));
+  await assert.rejects(checkAttachable('~/.config/gh/hosts.yml', policy), /hidden folders in your home/);
+  await assert.rejects(checkAttachable('~/.cursor/mcp.json', policy), /hidden folders in your home/);
+  await assert.rejects(checkAttachable('~/repo/.git/config', policy), /\.git folder/);
+  await assert.rejects(checkAttachable('~/Library/Cookies/c', policy), /from ~\/Library/);
+});

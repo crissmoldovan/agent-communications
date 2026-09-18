@@ -1,6 +1,7 @@
 # agent-communications — Gmail for coding agents: skills, CLI and MCP server
 
-- **Status:** draft for design review (codex), then implementation in six gated phases
+- **Status:** revision 2 — revised after a six-lens adversarial design review (codex was out of quota; codex
+  re-reviews when available); implementation in seven gated phases
 - **Date:** 2026-09-18
 - **Repository:** crissmoldovan/agent-communications (private until v0.1.0), branch `feat/foundation`
 - **Builds on:** the conventions of `crissmoldovan/agent-skills` (skill contract, verifier, README and
@@ -147,62 +148,112 @@ adapters that parse input, call it, and render its typed result. Parity between 
 | Config dir | `$XDG_CONFIG_HOME/agent-communications`, else `~/.config/agent-communications` (macOS and Linux), `%APPDATA%\agent-communications` (Windows) | `AGENT_COMMS_CONFIG_DIR` |
 | State dir (approvals, pending OAuth flows, audit log) | `<config>/state` | `AGENT_COMMS_STATE_DIR` |
 | File secret store | `<config>/secrets/` | — |
-| Attachment downloads and exports | `~/Downloads/agent-communications/<inbox>/` | `downloadsDir` in config, `--out` per call (must pass the path jail) |
+| Attachment downloads and exports | `~/Downloads/agent-communications/<inbox>/` | `downloadsDir` in config (CLI). Over MCP, `out` is only a **relative subpath of the downloads root**; the CLI accepts `--out` elsewhere only on an interactive TTY and never into a dot-directory |
 
 Directories are created `0700`, files `0600`, written atomically (temp file + rename). `doctor` checks
 permissions and ownership. On Windows the ACL defaults of `%APPDATA%` apply.
 
-### 5.2 Config file (`config.json`, versioned)
+### 5.2 Config file (`config.json`, versioned) — user intent only
 
 ```jsonc
 {
   "version": 1,
+  "secrets": { "store": "keychain" },                       // ONE backend for every secret in this config dir
   "clients": {
     "default": { "provider": "gmail", "clientId": "…apps.googleusercontent.com", "projectId": "…",
-                 "secretRef": "client:default", "addedAt": "…" }
+                 "secretRef": "client:default:secret", "addedAt": "…" }
   },
   "inboxes": {
-    "work": {
+    "work": {                                                // the key is the alias: a mutable label
+      "id": "ibx_7Q2K9ZB4XM3HTC1R",                          // immutable, generated at add/import
       "provider": "gmail", "email": "me@example.com", "sub": "1043…", "identity": "oidc",   // or "legacy"
       "client": "default", "tier": "organize", "contacts": true,
       "grantedScopes": ["https://www.googleapis.com/auth/gmail.modify", "…"],
-      "secretRef": "gmail:<clientId>:<sub>", "store": "keychain",                       // or "file"
+      "secretRef": "gmail:refresh:ibx_7Q2K9ZB4XM3HTC1R",
       "sendPolicy": "chat",                                                              // chat | confirm | never
-      "internalDomains": ["example.com"], "createdAt": "…", "lastRefreshOkAt": "…"
+      "internalDomains": ["example.com"], "createdAt": "…"
     }
   },
   "defaults": {
     "sendPolicy": "chat", "riskEscalation": true,
     "sendCaps": { "perHour": 20, "perDay": 100 },
-    "attachRoots": ["~"], "attachDeny": ["<config>", "~/.ssh", "~/.aws", "~/.gnupg", "~/.config/gcloud", "**/.env*"],
-    "timezone": "system"      // IANA name or "system"; every CLI command also takes --tz
+    "attachRoots": ["~"], "attachDeny": [],                  // added to the built-in deny list (§7.4)
+    "timezone": "system",                                    // IANA name or "system"; every CLI command also takes --tz
+    "confirm": { "elicitationClients": [] }                  // fail-closed allowlist (§8.3)
   }
 }
 ```
 
 - Validated with zod on every load. Unknown `version` → exit 78 with a migration hint.
 - **No secret ever appears in `config.json`.** Only references into the secret store.
-- Inboxes are keyed by a user-chosen **alias** (`[a-z0-9][a-z0-9-]{0,31}`); identity is `sub` from the ID
-  token (stable, never reused **[V]**); `email` is a display field that may change.
+- **Identity.** Every inbox has an immutable `id` (`ibx_` + 16 random base32 characters) created at add or import.
+  Secrets, approvals, rate caps, taint, plan tokens, audit rows and runtime state are keyed by `id`; the
+  **alias** (`[a-z0-9][a-z0-9-]{0,31}`) is a label users and agents type, and `inbox rename` changes only the
+  label. `sub` from the ID token is the stable account identity **[V]**; `email` is a display field.
+  `inbox add` and `import` refuse a second inbox for the same `(client, sub)` — or `(client, lower-cased email)`
+  for legacy inboxes — and name the existing alias. A legacy inbox gains `sub` on its first re-consent without
+  moving its secret.
+- **Only user intent lives here.** Anything a running process updates (last successful refresh, last use,
+  health, granted-scope drift, `refresh_token_expires_in`) lives in `<state>/inboxes/<id>.json` (§5.5).
+- **Concurrency.** Only CLI lifecycle commands write `config.json`, and every write is a read-modify-write under
+  an exclusive lock (`<state>/config.lock`: `O_EXCL`, holder pid and time, stale after 30 s), re-reading the file
+  inside the lock, then temp file + fsync + rename. **MCP servers never write `config.json`.** Readers check the
+  file's (inode, mtime, size) on every call rather than relying on `fs.watch` (which stops firing after the first
+  rename on Linux), so a tightened policy applies to the next tool call of an already-running server.
 
 ### 5.3 Secret store
 
-- Backends: `keychain` (macOS Keychain, Windows Credential Manager, Linux Secret Service — pinned, never
-  keyutils **[V]**) via optional `@napi-rs/keyring` ^2.1 loaded with dynamic `import()`; `file` (0600 JSON per
-  secret in a 0700 dir). The default is `keychain`. When the keychain round-trip test fails, `inbox add` stops with
-  exit 78 and says why and how to choose `--store file` explicitly; there is no automatic fallback. The
-  chosen backend is recorded per inbox and never switched at runtime; `inbox list` and `doctor` show it.
-- Stored secrets: the OAuth client secret (per client) and the refresh token (per inbox). Access tokens live
-  in memory only. Each secret is well under the Windows 2,560-byte blob limit **[V]**.
-- `@napi-rs/keyring` v2 throws on a locked or denied store **[V]**; the store maps every throw to a
-  `SECRET_STORE_UNAVAILABLE` error with a `doctor` hint rather than falling back.
+- Backends: `keychain` (macOS Keychain, Windows Credential Manager, Linux Secret Service) via the optional
+  `@napi-rs/keyring` ^2.1 loaded with dynamic `import()`; `file` (0600 JSON per secret in a 0700 dir, named by a
+  hash of the reference).
+- **One backend per config directory:** `secrets.store` holds client secrets, refresh tokens and the approval HMAC
+  key together — every token refresh needs both the client secret and the refresh token, so splitting them across
+  backends only creates failure modes. The first command that writes a secret (`client add`, `inbox import`)
+  sets it with `--store keychain|file`; the default is `keychain`, and when its round-trip probe fails the command
+  stops with exit 78 and explains how to choose `--store file`. **There is no automatic fallback and no runtime
+  switching;** changing backend later is an explicit `agentcomms secrets migrate --to file|keychain`.
+- **Linux is pinned to Secret Service** (`{ linux: { store: 'secret-service' } }`): in auto mode the library
+  silently falls back to the kernel keyring, which forgets everything on reboot **[V: gap-3]**. When no session bus
+  is reachable (SSH, containers, clients that strip `DBUS_SESSION_BUS_ADDRESS`), the probe fails and the user is
+  told to choose `--store file`. `mcp install` writes `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` into the
+  server's env on Linux.
+- **Background servers must not hang on OS prompts.** A native keychain call runs on the libuv thread pool and
+  cannot be cancelled once started; a macOS access dialog (ad-hoc-signed Node builds such as Homebrew's, after a
+  Node upgrade) or a locked Secret Service holds it indefinitely **[V: gap-3]**. So: one keychain call in flight
+  at a time; each raced against a 12-second JS timer that fails the tool call with `KEYCHAIN_APPROVAL_PENDING`
+  ("look for a system dialog, then retry") rather than waiting; values cached in memory after the first read
+  (one prompt per secret per server start). `mcp install` registers the same `node` binary that ran
+  `inbox add` where possible, and `doctor` warns when that binary is ad-hoc signed on macOS (its keychain access
+  control resets on every upgrade). Official Node builds (nodejs.org, nvm, Volta) read each other's items silently
+  **[V: gap-3]**.
+- Stored secrets: client secrets, refresh tokens, the approval HMAC key. Access tokens live in memory only.
+  Each is well under the Windows 2,560-byte blob limit **[V]**.
+- A missing entry reads as `null` ("not linked"); anything thrown reads as "store unavailable" — different
+  messages, never a fallback **[V: `@napi-rs/keyring` 2.x]**.
 
 ### 5.4 Audit log
 
 Append-only JSONL at `<state>/audit/YYYY-MM.jsonl`: every mailbox write (draft create/update/delete, modify,
-trash, label create, send prepare/approve/execute/refuse), with timestamp, inbox, operation, ids,
-recipient domains (not full bodies), approval id, outcome. `agentcomms audit tail` reads it. Never contains
-message bodies or secrets.
+trash, label create, send prepare/approve/execute/refuse), with timestamp, inbox id and alias, operation, ids,
+recipient domains (not full addresses or bodies), approval id, outcome. `agentcomms audit tail` reads it. Never
+contains message bodies or secrets.
+
+### 5.5 Runtime state
+
+`<state>/` also holds, each written only under its own lock and each keyed by inbox `id`:
+
+| Path | Contents | Writers |
+|---|---|---|
+| `inboxes/<id>.json` | last successful refresh and use, health, granted-scope drift | any process |
+| `approvals/<approvalId>.json` | approval records and their state machine (§8.3) | CLI and MCP |
+| `sends/<id>.jsonl` | send ledger used for rate caps across **all** processes | `send.execute` only |
+| `taint/<id>.json` | addresses seen only in untrusted content, with timestamps (§8.4) | read paths |
+| `plans/<token>.json` | bulk-operation plans (§7.9) | CLI and MCP |
+| `flows/<flowId>.json` | pending two-step OAuth flows (§6.2), 10-minute TTL | CLI |
+
+Several server processes can run at once (Claude Desktop starts separate chat and Cowork instances of every
+server **[V: gap-5]**), so every limit and every state transition is computed from these shared files, never from
+per-process memory.
 
 ## 6. Authentication and inbox lifecycle
 
@@ -239,15 +290,15 @@ message bodies or secrets.
 
 | Command | Behaviour |
 |---|---|
-| `client add <path> [--name default] [--move]` | Accepts a Desktop (`installed`) client JSON only; rejects `web` with the `redirect_uri_mismatch` explanation. Stores `client_id` in config and the secret in the store. `--move` deletes the source file after a verified store. Prints only non-secret fields |
+| `client add <path> [--name default] [--store keychain\|file] [--move]` (`--store` only on the first secret write) | Accepts a Desktop (`installed`) client JSON only; rejects `web` with the `redirect_uri_mismatch` explanation. Stores `client_id` in config and the secret in the store. `--move` deletes the source file after a verified store. Prints only non-secret fields |
 | `client list`, `client remove <name>` | Remove refuses while inboxes reference the client |
-| `inbox add <alias> [--email] [--tier] [--no-contacts] [--client] [--store keychain\|file] [--port N] [--no-browser]` | Interactive loopback flow |
-| `inbox add <alias> --start` / `inbox add --finish <flowId> --url <pasted-url>` | Two-step manual flow for headless machines and for agents: `--start` returns `{flowId, authUrl}` as JSON; the pending flow (state, verifier, redirect URI) lives in a 0600 file with a 10-minute TTL |
+| `inbox add <alias> [--email] [--tier] [--no-contacts] [--client] [--port N] [--no-browser]` | Interactive loopback flow on a human terminal. The pending flow is persisted like `--start`'s |
+| `inbox add <alias> [options] --start` · `inbox add --finish <flowId> [--url <pasted-url>] [--wait 60]` | **The agent-driven flow** (agent shells time out long before a 10-minute loopback wait; Claude Code's Bash tool defaults to 120 s). `--start` fixes alias, tier, contacts, client and expected email in a 0600 flow file (`flowId` = 128 random bits, validated against `^fl_[A-Za-z0-9]{22}$` before it names a file; 10-minute TTL), starts a **detached** loopback listener on `127.0.0.1:<random port>` that completes the flow when the browser redirect arrives, and returns `{flowId, authUrl}`. The agent shows the link; `--finish` waits up to `--wait` seconds for the listener's result, or accepts the address-bar URL pasted back on a headless machine. `--finish` claims the flow atomically (single use), enforces the TTL, checks `state`, maps `error=access_denied` and the other OAuth errors to the setup error table, and runs the post-consent checks before anything is stored |
 | `inbox list`, `inbox show <alias>` | Alias, email, tier, scopes, store, send policy, last refresh, health |
-| `inbox reauth <alias> [--tier] [--contacts/--no-contacts]` | Fresh full consent; replaces the stored token; does **not** revoke the old one (revocation may kill the new grant **[I, to be tested]**) |
+| `inbox reauth <alias> [--tier] [--contacts/--no-contacts] [--start\|--finish]` | Fresh full consent with `login_hint` = the stored email. **The new grant must be the same account:** its `sub` must equal the stored `sub` — or, for a legacy inbox, its normalised `getProfile` email must equal the stored email, after which `sub` is recorded and `identity` becomes `oidc`. On a mismatch nothing is written (exit 77); a `sub` already bound to another alias is refused. Replaces the stored token; does **not** revoke the old one (revocation may kill the new grant **[I, to be tested]**); warns on a tier downgrade that the old, broader grant stays valid until revoked in the Google account |
 | `inbox rename <old> <new>`, `inbox policy <alias> --send chat\|confirm\|never` | Loosening a policy (never→confirm→chat) requires an interactive TTY; tightening does not (§8.4) |
 | `inbox remove <alias> [--revoke] [--yes]` | Deletes the stored token and the registry row. Does **not** revoke by default: revoking one token may revoke the whole account+client grant **[I, to be tested]**, which would also break other tools sharing it (the legacy server shares imported tokens). `--revoke` calls `POST https://oauth2.googleapis.com/revoke` after a warning. Prints `https://myaccount.google.com/connections` |
-| `inbox import artymclabin [--dir ~/.gmail-mcp] [--from-claude-config] [--dry-run]` | Non-destructive migration: imports `gcp-oauth.keys.json` as a client and each `creds-<alias>.json` (both the `{tokens,scopes}` and the legacy flat format) as an inbox; refreshes, fills `email` from `getProfile`, marks `identity: legacy` (no `sub` without `openid`); tier inferred from granted scopes. Leaves old files and client config untouched. Imported `readonly`+`compose` grants cannot label or archive, so reaching `organize` still needs one re-consent per inbox: the import saves setup, not consent |
+| `inbox import artymclabin [--dir ~/.gmail-mcp] [--from-claude-config] [--dry-run]` | Non-destructive migration: imports `gcp-oauth.keys.json` as a client and each `creds-<alias>.json` (both the `{tokens,scopes}` and the legacy flat format) as an inbox; refreshes, fills `email` from `getProfile`, marks `identity: legacy` (no `sub` without `openid`); tier inferred from granted scopes. Leaves old files and client config untouched. Imported `readonly`+`compose` grants cannot label or archive, so reaching `organize` still needs one re-consent per inbox: the import saves setup, not consent. At the end, `import` scans known client configs for the legacy servers and prints: **send safety does not hold while those servers are connected** (they expose ungated `send_email`, `send_draft`, `reply_all`), with the exact removal commands |
 | `doctor [--inbox x] [--json]` | See §6.3 |
 | `whoami --inbox x` | `getProfile` + tier + policy + store (1 quota unit) |
 
@@ -259,8 +310,10 @@ store round-trip (Linux: Secret Service reachable); client JSON type; per inbox 
 required scopes, `getProfile` email matches, Gmail API enabled (403 `SERVICE_DISABLED` → enable URL from the
 error), People API enabled when contacts are on, last successful use (warn at 5 months: tokens die after 6
 months unused and idle clients are deleted after 6 months **[V]**); heuristic "invalid_grant ≈ 7 days after
-consent → the app is still in Testing: publish it". MCP client configs found for Claude Code / Codex: absolute
-`command` path exists and is executable.
+consent → the app is still in Testing: publish it". MCP client configs found for Claude Code / Codex / Claude Desktop / Cursor: absolute `command` path exists and is
+executable, and **no other Gmail MCP server with send tools is registered** (known: `@artymclabin/gmail-mcp`,
+`@gongrzhe/server-gmail-autoauth-mcp` and forks) — if one is, doctor reports "ungated send path: <server> in
+<file>" with the removal command, because every guarantee in §8 assumes our send path is the only one.
 
 ### 6.4 Guided setup (what the `gmail-setup` skill drives)
 
@@ -292,25 +345,36 @@ are type-tagged in field names (`messageId`, `threadId`, `draftId`, `attachmentI
 
 - `query` uses Gmail search syntax. `after:`/`before:` dates are rewritten to epoch seconds in the configured
   timezone (the API reads them as PST midnight **[V]**); the compiled query is echoed back.
-- `kind`: `threads` (default) or `messages`. `limit` default 20, max 50. `cursor` wraps Gmail
-  `pageToken`s (one per inbox in cross-inbox mode).
+- `kind`: `threads` (default) or `messages`. `limit` default 20, max 50. `cursor` is opaque but validated: per inbox
+  `{pageToken of the current list page, ids already consumed from it, exhausted}` plus the compiled query and
+  inbox set (a cursor replayed with a different query or inbox set → exit 64). Merging is lazy by date of each
+  inbox's head, fetching metadata only for heads and emitted rows; re-listing a page costs 10 units. A failing inbox
+  goes to `errors[]` with `complete: false` rather than failing the whole search.
 - Result rows: `inbox, threadId, messageId (latest), date, from {name,email}, toCount, subject (≤120 chars,
   untrusted), snippet (untrusted), labels (names), attachmentCount, unread, messageCount, webLink`, plus
   `resultSizeEstimate` **explicitly labelled a lower bound**, `hasMore`, `nextCursor` (gogcli #983: agents
   read a capped page as the full answer **[V]**).
-- Row metadata costs `messages.get(format=metadata)` 20 units or `threads.get(format=metadata)` 40 units
+- `format=metadata` returns headers and labels but **no part tree** **[V: discovery]**, so rows that report
+  attachments use `format=full` with a `fields` partial response that drops `body/data` (same 20/40 units).
+  Row metadata costs `messages.get` 20 units or `threads.get` 40 units
   per row **[V]**; bounded concurrency (5 per inbox) keeps a 20-row page well inside 6,000 units/min.
 
 ### 7.2 Read a message / a thread
 
-- **Body pipeline** (domain, pure): choose `text/plain` unless it is a placeholder ("See HTML version",
-  empty, or < 10 % the size of the HTML text); otherwise sanitise HTML (§9) → `html-to-text`. Decode with a
-  UTF-8-first guard, falling back to the declared charset **[C: gogcli #446]**. Collapse quoted history and
-  signatures into `[quoted: N lines omitted — includeQuoted=true]` (`email-reply-parser`). `maxChars`
-  default 8,000 with `offset` continuation; the response states `truncated` and the next offset.
+- **Body pipeline** (domain, pure): **when an HTML part exists it is authoritative**, because that is what Gmail
+  shows the human; the body is the sanitised HTML (§9) converted with `html-to-text`. `text/plain` is used only when
+  there is no HTML part or its visible text is empty. Both are always computed: when the text part contains
+  material missing from the visible HTML (a token-set difference over a threshold), the result reports
+  `plainHtmlMismatch {extraChars, sample}` and counts it as hidden text — a text part is invisible to a Gmail
+  reader and is exactly where an injection would hide. Decode with a UTF-8-first guard, falling back to the
+  declared charset **[C: gogcli #446]**. Collapse quoted history and signatures (Gmail's `gmail_quote` class, then
+  `email-reply-parser` for plain text) into `[quoted: N lines omitted — includeQuoted=true]`. `maxChars` default
+  8,000 with `offset` continuation; the response states `truncated` and the next offset.
 - **Message result:** headers (`from, replyTo, to, cc, bcc (own drafts/sent only), date, subject,
-  messageIdHeader, inReplyTo, references`), labels, `auth` (`spf/dkim/dmarc` from `Authentication-Results`,
-  `replyToDiffers`, `displayNameContainsOtherAddress`), `attachments[]` (partId, attachmentId, filename,
+  messageIdHeader, inReplyTo, references`), labels, `auth` — parsed **only** from the topmost `Authentication-Results` header whose authserv-id is
+  `mx.google.com` (senders can add forged instances; RFC 8601 §7.1), exposing `spf`, `dkim` with its `header.d`,
+  `dmarc`, and `aligned` (DKIM domain vs From domain), or `evaluatedBy: null` when no qualifying header exists —
+  plus `replyToDiffers` and `displayNameContainsOtherAddress`, `attachments[]` (partId, attachmentId, filename,
   mimeType, size, inline, riskFlags), `sanitisation` report, `body` in the untrusted envelope.
 - **Thread result:** `threads.get` once (40 units, cheaper than per-message gets for ≥ 3 messages **[V]**);
   messages in chronological order; each body de-duplicated against quoted text; drafts flagged `isDraft`
@@ -318,7 +382,8 @@ are type-tagged in field names (`messageId`, `threadId`, `draftId`, `attachmentI
 
 ### 7.3 Thread timeline (deterministic)
 
-Computed in code from `threads.get(format=metadata)` plus attachment part metadata — never by the model:
+Computed in code from one `threads.get(format=full)` with a `fields` partial response that drops body data
+(metadata format has no part tree) — never by the model:
 
 - one event per message: `at`, `from`, `direction` (`in`/`out` relative to the inbox identity and its sendAs
   addresses), `to/cc`, `isDraft`, `attachments[]`, `subjectChanged`;
@@ -342,8 +407,11 @@ and must label them as inferred and cite `[mN]` message indices; computed facts 
   separators and control chars, NFC-normalise, avoid Windows reserved names, ≤ 255 bytes, `-2` suffix on
   collision; dedupe by sha256; `manifest.json` per batch. Opened with `O_NOFOLLOW` semantics and a realpath
   re-check against the jail. **Nothing is ever opened or executed.**
-- **Add** — drafts accept `attachments: [{path}]` (must pass the attach jail: under `attachRoots`, not under
-  `attachDeny`) and `forwardAttachmentsFrom: {messageId, partIds?}`. Size check: the MIME message (after
+- **Add** — drafts accept `attachments: [{path}]`, which must pass the attach jail: under `attachRoots` (default
+  `~`) and under none of the deny entries — built in: **every dot-entry directly under home** (`~/.*`: SSH, cloud,
+  npm, git and shell credentials), `~/Library`, `%APPDATA%`, browser profile directories, `**/.git/**`,
+  `**/.env*`, the config directory — plus `attachDeny`. The attachment name is the source file's basename, never
+  agent input; the draft result and the audit log show the absolute source path and `forwardAttachmentsFrom: {messageId, partIds?}`. Size check: the MIME message (after
   base64 inflation ≈ 1.33×) must stay under 35 MiB **[V]**; warn above 25 MB of attachments (Gmail's user-facing limit); suggest a
   Drive link beyond that.
 
@@ -383,18 +451,34 @@ stated in the result.
 - **Reply composition** (pure domain function): `In-Reply-To` = parent `Message-ID` header; `References` =
   parent `References` + parent `Message-ID`; subject = parent subject with a single `Re:` (`Fwd:` for
   forward); `threadId` always set, on create **and** every update (all three Gmail threading conditions
-  **[V]**); recipients follow Reply-To precedence; **reply-all excludes every sendAs address of the inbox**;
+  **[V]**); recipients are computed by one pure, unit-tested function: Reply-To precedence (all Reply-To addresses);
+  when the parent was sent by this inbox, reply goes to the parent's To (not to ourselves); **reply-all excludes every
+  sendAs address of the inbox**; addresses are normalised and de-duplicated; the parent's Bcc is **never** copied;
+  a Reply-To in a different domain from From is a draft and send warning (`replyToDiffers`) and taints that
+  address; References falls back to the parent's In-Reply-To when the parent has no References;
   `From` is always derived from the inbox that owns the thread (never agent input), with display name from
   `sendAs.displayName`; forward quotes the original headers and optionally carries its attachments.
-- **Body format:** plain text by default (we do not hard-wrap lines); `html` (caller-supplied) or `markdown`
-  (converted to HTML, sent as multipart/alternative with a text part) on request. Inline images are out of
-  scope for v0.1.
-- **Signature:** API drafts get no signature **[V]**. Default `signature: auto` appends the inbox's default
-  sendAs signature (text version for plain drafts; HTML wrapped in `<div data-smartmail="gmail_signature">`
-  for HTML drafts); `signature: false` skips it. Whether Gmail web adds a second signature when an API
-  draft is opened is reported but unverified **[C]**; the P6 live check (drafts only) decides whether
-  `auto` stays the default.
-- `drafts.update` replaces the whole draft **[V]**: updates are read-modify-write of the whole message.
+- **Body format:** `body` is plain text or `markdown` (`format: "text" | "markdown"`); **no caller-supplied
+  HTML** (§8.2). The server renders the HTML part itself (markdown-it with raw HTML and images disabled; plain text
+  becomes escaped paragraphs) and builds every draft as `multipart/alternative`, because Gmail web hard-wraps
+  `text/plain` at 70 characters or fewer when it sends **[V: gap-4]**. Inline images are out of scope for v0.1.
+- **Signature:** API drafts get no signature **[V]**. Default `signature: auto` fetches `sendAs.get` for the
+  exact From alias and appends it wrapped as `<div dir="ltr" class="gmail_signature"
+  data-smartmail="gmail_signature">…</div>` — the wrapped form was reproduced as **not** doubling when the draft is
+  opened in Gmail, the unwrapped form does double **[V: gap-4]**. In replies it goes before the `gmail_quote` block;
+  the text part gets `-- ` plus a text rendering. `draft update` finds its own signature by the marker and replaces
+  it rather than appending another. `signature: false` skips it.
+- **Reply validation:** a reply, reply-all or forward draft is refused unless it carries `threadId`,
+  `In-Reply-To` = parent `Message-ID`, `References` = parent References + parent Message-ID, and a subject of
+  `Re: ` (or `Fwd: `) plus the original without stacked prefixes **[V: gap-4]**.
+- `drafts.update` replaces the whole draft **[V]**, so an update reads the draft with `format=raw`, requires
+  `expectedMessageId` from the rendering the caller last saw (a Gmail web autosave in between → refused, re-read),
+  refuses parts it cannot round-trip (e.g. inline images) unless `dropParts: true`, replaces our signature block by
+  its marker instead of appending, and refuses subject changes on a reply draft unless `newThread: true`.
+- **Transport:** `drafts.create`/`update` always use media upload (`message/rfc822` + `requestBody: {message:
+  {threadId}}`, multipart to `/upload`), because the JSON `raw` path has much smaller undocumented caps; the size
+  check is the compiled MIME byte length against 36,700,160 bytes (base64 with CRLF every 76 characters inflates by
+  about 1.37×), and a transport test asserts the `/upload` URL.
 - Every draft operation returns the **full verbatim rendering** (From, To, Cc, Bcc, Subject, thread, body,
   attachments with sizes) and warnings (attachment mentioned but none attached, recipient added who was not
   on the thread, lookalike domain).
@@ -442,82 +526,160 @@ TTL); execution requires that token. Trash always requires a plan token. Every w
 - **T3 — malicious client or supply chain.** Out of scope; mitigated by pinned versions, provenance and a
   small bundled dependency set.
 
-### 8.2 One send path
+### 8.2 One send path, one kind of outbound content
 
-Only `send.execute(inbox, draftId, approvalId, expect)` can send, and it only sends **existing drafts**.
-There is no `send_email` or "reply and send" tool: replies, reply-alls and forwards are always drafts first.
-`expect: {to[], cc[], bcc[], subject}` must match the live draft — so a client's argument-only permission
-prompt shows the real recipients and subject, not just an opaque draft ID.
+- Only `send.execute(inboxId, draftId, approvalId, expect)` can send, and it only sends **existing drafts**. There is
+  no `send_email` or "reply and send" tool: replies, reply-alls and forwards are always drafts first.
+  `expect: {to[], cc[], bcc[], subject}` must match the live draft, so a client's argument-only permission prompt
+  shows the real recipients and subject rather than an opaque draft id.
+- **Drafts carry no caller-supplied HTML.** Draft tools accept `body` as plain text or `markdown`; the server
+  renders the HTML part deterministically (markdown with raw HTML disabled, **no images**, links kept visible),
+  and every draft is `multipart/alternative` because Gmail web hard-wraps `text/plain` at send time
+  **[V: gap-4]**. So everything a recipient can see is derived from text that appears in the preview.
+- **Drafts written elsewhere** (in Gmail by the user, or by another tool) may contain arbitrary HTML. `prepare`
+  analyses the HTML part of every draft with an outbound analyser that is the opposite of the inbound sanitiser:
+  it **shows** hidden elements instead of dropping them and lists every URL (href, src, srcset, CSS `url()`,
+  background, form action) with its full query string. `prepare` **refuses** (exit 10, `UNSENDABLE_HTML`, "review
+  it and send it from Gmail") a draft whose HTML contains remote resources, hidden elements, forms or scripts, or
+  visible text that differs from the text part beyond whitespace and the signature. Agents only send what they
+  could have written themselves.
 
 ### 8.3 Prepare → approve → execute
 
-1. **Prepare** (`send prepare` / `gmail_send_prepare`): fetch the draft; compute a **digest** = SHA-256 of
-   the canonical form (from, sorted lower-cased to/cc/bcc, subject, normalised text body, HTML body hash,
-   In-Reply-To, References, each attachment's filename + MIME type + sha256); run recipient analysis; create
-   an **approval record** `{approvalId, inbox, draftId, digest, policy, riskFlags, createdAt, expiresAt
-   (+10 min), state: pending, challenge?}` in `<state>/approvals/` (0600); return a deterministic **preview**:
+1. **Prepare** (`send prepare` / `gmail_send_prepare`):
+   - fetch the draft (`drafts.get`, `format=raw`) and parse it;
+   - compute the **digest** = SHA-256 of a canonical form: From, To, Cc, Bcc, Reply-To, Subject, `threadId`,
+     In-Reply-To, References, the whitespace-collapsed visible text **and** the SHA-256 of the HTML part, the text
+     part, and each attachment's filename + MIME type + size + sha256. Excluded: Message-ID, Date, MIME boundaries
+     and transfer encodings, which Gmail regenerates **[V: gap-4]**;
+   - run recipient analysis (§8.4) and the outbound HTML analysis (§8.2);
+   - create the **approval record** in `<state>/approvals/` (0600):
+     `{approvalId, inboxId, inboxSub, draftId, draftMessageId, digest, policy, riskFlags, createdAt,
+     expiresAt (+10 min), state: "pending", challenge?}`. Gmail gives a draft a new `message.id` on every save
+     **[V: gap-4]**, so binding to it detects any edit, including an A→B→A swap that restores identical content;
+   - return a deterministic **preview**, rendered under the safety rules in §8.5:
 
    ```
-   SEND PREVIEW · approval ap_7K2Q · digest 3f9a…c1 · nothing has been sent
+   SEND PREVIEW · approval ap_7K2Q · nothing has been sent
    From:    Jo Example <jo@example.com>   [inbox: work]
    To:      Sam Lee <sam@partner.test>     EXTERNAL · 14 earlier messages
    Cc:      Ana Ruiz <ana@partner.test>    EXTERNAL · FIRST-TIME · not on the original thread
    Subject: Re: Phase 2 plan
    Thread:  reply-all to Sam, 17 Sep 16:02 (6 messages)
    Attachments: phase2-plan.pdf · 412 KB · application/pdf · sha256 3f9a…c1
-   Body (plain text, 142 words):
-     <full body, verbatim>
+   Links:   https://docs.example.com/plan?v=2
+   Body (142 words):
+   ````text
+   <full body, verbatim, fenced>
+   ````
    Warnings: body mentions "deck" but nothing like a deck is attached
+   ── Recipients again: To sam@partner.test · Cc ana@partner.test · Bcc none
    Policy: chat — send only after the user approves this exact preview
    ```
 
-2. **Approve**, by policy:
-   - **`chat` (default):** the agent must show the preview **verbatim** and receive an explicit yes from the
-     user in the conversation. The server cannot verify a chat reply, so what it guarantees is narrower and
-     stated plainly: nothing is sent without a prepare step for **exactly** this content, within 10 minutes,
-     once, with matching `expect`, under the rate caps, audited. The approval record moves to `approved`
-     when `execute` is called with it.
+2. **Approve**, by policy (policy is read from the live config at this moment, not from the record):
+   - **`chat` (default):** the agent must show the preview **verbatim** and receive an explicit yes from the user
+     in the conversation. The server cannot verify a chat reply, so what it guarantees is narrower and stated
+     plainly: nothing is sent without a prepare step for **exactly** this content (same digest, same draft
+     message id), within 10 minutes, once, with matching `expect`, under the rate caps, audited — and never
+     from an inbox whose policy is `never` or `confirm`.
    - **`confirm`:** approval must come from a channel the model cannot answer, tried in order:
-     (a) **MCP form elicitation** where the client declares it — MRTR `inputRequired.elicit` with an
-     HMAC-sealed, context-bound `requestState` (`createRequestStateCodec`, 32-byte key in the secret store)
-     **[V: SDK typings]**, a form showing From/To/Cc/Bcc with flags, subject, the first 600 body characters and
-     attachments, and a **typed 4-character challenge** (a non-empty schema defeats clients that
-     auto-accept empty confirmations, e.g. Codex **[V]**); decline, cancel, timeout or a denylisted client
-     (initially Claude Cowork **[V: hangs]**) = not sent;
-     (b) **terminal approval**: `agent-gmail approve <approvalId>` — requires stdin and stdout to be TTYs,
-     re-fetches the draft, re-renders the preview, shows a random challenge in the terminal and requires it
-     typed back; marks the record `approved`;
-     (c) **Gmail UI**: the agent tells the user the draft is ready in Gmail Drafts and to press Send there.
-   - **`never`:** `gmail_send_prepare` and `gmail_draft_send` are not registered; the CLI `send` exits 10.
-   - Under `confirm`, **no argument or flag the agent can supply authorises a send**: only a record moved
-     to `approved` by (a) or (b). The elicitation channel is refused for clients on a `clientInfo` denylist
-     (initially Claude Cowork, which hangs, and Hermes unless the user opts in, because Hermes can route
-     approvals to a channel an agent can answer **[V: `permissions_respond` tool exists]**); those fall to
-     (b) or (c). A user-installed `Elicitation` hook that answers the challenge defeats (a); that is a
-     deliberate local configuration (T2) and is documented, not designed around.
-3. **Execute** (`send` / `gmail_draft_send`): re-fetch the draft, recompute the digest, require: record
-   exists, not expired, not used, digest equal, `expect` equal, policy satisfied (`confirm` → state
-   `approved` by (a) or (b)), rate caps not exceeded. Then `drafts.send` exactly once; mark the record
-   `used`; audit; read back the Sent message (`rfc822msgid:`) and return its ID and thread link. Any
-   mismatch → exit 10 / tool error `APPROVAL_REQUIRED` with the reason; nothing is sent.
+     (a) **MCP form elicitation**, only for clients on the **fail-closed allowlist**
+     `defaults.confirm.elicitationClients` (empty by default). `clientInfo` is self-reported, and one name —
+     `claude-code` — covers the interactive CLI, SDK-hosted agents whose host code answers elicitations, and
+     Claude Cowork, whose elicitation hangs **[V: gap-5]**; Hermes can route approvals to a channel another agent
+     can answer **[V: `permissions_respond` exists]**. A client is added only by the CLI, on a TTY, after
+     `agent-gmail approve --probe` has shown a human sees the form in that client. The form (MRTR
+     `inputRequired.elicit`, HMAC-sealed and context-bound `requestState` via `createRequestStateCodec`, key in the
+     secret store **[V: SDK typings]**) shows the §8.5 rendering with the **full** body up to 4,000 characters (a
+     longer body skips (a) and uses (b) or (c); total length and line count are always stated) and requires a **typed 4-character challenge**
+     (a non-empty schema defeats clients that auto-accept empty confirmations, e.g. Codex **[V]**); one round,
+     at most 60 s; decline, cancel or timeout = not sent;
+     (b) **terminal approval** — `agent-gmail approve <approvalId>`: requires stdin and stdout to be TTYs,
+     re-fetches the draft and **voids the record unless its digest and message id still equal the record's**,
+     renders the preview under §8.5, and requires the challenge typed back. The record stores `approvedDigest`,
+     the digest actually shown to the human;
+     (c) **Gmail UI**: the agent tells the user the draft is ready in Gmail Drafts and to send it from there.
+   - **`never`:** prepare and execute refuse with `POLICY_NEVER` (exit 10). Tools may still be registered for
+     other inboxes; registration is never the enforcement (§11).
+   - Under `confirm`, **no argument or flag the agent can supply authorises a send**: only a record moved to
+     `approved` by (a) or (b). A user-installed `Elicitation` hook that answers the challenge defeats (a); that is
+     a deliberate local configuration (T2) and is documented, not designed around.
+3. **Execute** (`send` / `gmail_draft_send`), in this order:
+   1. Take the record's lock and move it `pending|approved → sending` by compare-and-swap; a record already
+      `sending`, `used`, `failed`, `expired` or `revoked` is refused. This is the single-use guarantee across
+      processes.
+   2. Check, against the **live** config and state: inbox id and `sub` match the record; the policy is not
+      `never`; under `confirm` the record is `approved` and `approvedDigest == digest`; `expect` equals the draft;
+      rate caps from the shared send ledger are not exceeded.
+   3. **Final check immediately before sending:** `drafts.get` again; `message.id` and digest must equal the
+      record's. Only then call `drafts.send`, exactly once, never retried.
+   4. Record the outcome: `used` (with the Sent message id) or `failed`; append to the send ledger and the audit
+      log; read the Sent message back and verify its `threadId` and reply headers **[V: gap-4 rec 8]**.
+   5. Any mismatch → `APPROVAL_REQUIRED` (exit 10) with the reason; the record is voided; nothing is sent.
+   - Residual window: between step 3's `drafts.get` and `drafts.send` a concurrent edit could land. A P5 spike
+     tests whether `drafts.send` with the verified `message.raw` in its request body sends exactly those bytes; if
+     it does, execute sends the verified bytes and the window closes. Until proven, the window is documented.
 
 ### 8.4 Guard rails that hold under every policy
 
-- **Risk escalation (`riskEscalation`, default on):** a `chat` send is escalated to `confirm` when a recipient
-  is **tainted** — the address appeared in untrusted content this server returned in the last 24 hours and
-  never appears in the inbox's correspondence history (Sent headers) — or when the draft forwards
-  attachments to a first-time external recipient. This is the exact shape of the documented exfiltration
-  attacks and is rare in legitimate use. The taint set is in memory plus a 24-hour state file.
-- **Rate caps** (default 20/hour, 100/day per inbox) refuse with exit 10 and the reset time.
-- **Policy changes are CLI-only.** No MCP tool changes policy, adds or removes inboxes or clients. Loosening
-  requires an interactive TTY; tightening does not.
-- **Client hints:** `gmail_draft_send` carries `destructiveHint: true, openWorldHint: true,
-  idempotentHint: false`; under `confirm` it also carries `_meta["anthropic/requiresUserInteraction"]: true`,
-  which Claude Code enforces in every permission mode **[V]**. `mcp install --client claude-code` offers (does
+- **Risk escalation (`riskEscalation`, default on):** a `chat` send is escalated to `confirm` when:
+  - a recipient is **tainted**: the address, or its domain, was extracted from any message a read, export or
+    download returned for this inbox in the last 7 days — header fields (From, Reply-To, Sender, To, Cc) and body
+    text alike — **and** it never appears in the inbox's Sent headers (one `in:sent (to:x OR cc:x OR bcc:x)`
+    search per new address, cached for the day, then confirmed by exact parsed-address comparison because Gmail's
+    `to:` matching is fuzzy). Recipients who are header participants of the thread the draft replies to are
+    exempt — replying to someone who wrote to you is normal; being told by a message to write to someone else is
+    the attack;
+  - the draft carries any attachment (local or forwarded) or forwarded content to a first-time external
+    recipient; or
+  - a recipient's domain is a lookalike of a known correspondent's domain (edit distance ≤ 2).
+
+  Literal matching is beaten by obfuscated addresses ("x at evil dot test"); the spec says so rather than claiming
+  otherwise.
+
+  The taint set is written by read paths to `<state>/taint/<inboxId>.json`, so the CLI and every server share it.
+  This matches the documented exfiltration attacks and is rare in legitimate use.
+- **Rate caps** (default 20/hour, 100/day per inbox) are counted from the shared send ledger, so parallel server
+  processes (e.g. Claude Desktop's chat and Cowork instances **[V: gap-5]**) cannot multiply them; over the cap
+  → exit 10 with the reset time.
+- **Policy changes are CLI-only.** No MCP tool changes policy, adds or removes inboxes or clients, or edits the
+  elicitation allowlist. Loosening (never → confirm → chat, or adding an allowlisted client) requires an
+  interactive TTY and a typed challenge and is audited; tightening does not.
+- **Shell agents are T2, and the docs say so.** Skills fall back to the CLI, so an agent that uses them has a
+  shell, and `script -q /dev/null …` makes any command see a TTY (verified on the author's machine). Terminal
+  approval (b), TTY `send` and policy loosening therefore refuse when well-known agent markers are set
+  (`CLAUDECODE`, `CODEX_*`, `CURSOR_*` and similar) — a speed bump, documented as such, not a boundary.
+  `mcp install --client claude-code` offers `ask` rules for `Bash(agent-gmail approve*)`,
+  `Bash(agent-gmail inbox policy*)`, `Bash(npx * @cloudpixel/gmail* send*)` and the pty wrappers (`script`,
+  `expect`, `unbuffer`), and `Edit`/`Write` deny rules for the config and state directories. SECURITY.md and
+  `gmail-send` state that terminal approval does not stop an agent with a shell, and recommend `confirm` with an
+  allowlisted client, or `never` and sending from the Gmail UI, for coding agents. Because readers re-check config on every call, a
+  tightened policy takes effect at the next tool call of a running server.
+- **Client hints:** `gmail_draft_send` carries `destructiveHint: true, openWorldHint: true, idempotentHint:
+  false`, and `_meta["anthropic/requiresUserInteraction"]: true` whenever any served inbox is `confirm`, which
+  Claude Code enforces in every permission mode **[V]**; in a mixed server the chat inboxes then get the prompt
+  too, so the docs recommend pinned servers for mixed policies. `mcp install --client claude-code` offers (does
   not force) an `ask` rule for the send tool.
-- **Skill layer:** `gmail-send` stays model-invocable (the user saying "send it" must load it); the server is
-  the gate and the skill makes the preview-and-approval conversation go well. Every compose skill ends with
-  "never send; hand over to gmail-send", and `gmail-send`'s procedure is the verbatim-preview protocol above.
+- **Skill layer:** `gmail-send` stays model-invocable (the user saying "send it" must load it); the server is the
+  gate, and the skill makes the preview-and-approval conversation go well. Every compose skill ends with "never
+  send; hand over to gmail-send". Skills tell the user: if you edit a draft in Gmail, send it from Gmail — any
+  edit voids the approval anyway.
+
+### 8.5 Rendering previews safely
+
+The preview is shown on three surfaces: the chat, the elicitation form, and the terminal. On all three, text the
+draft's author controls — body, subject, display names, attachment names, link text — could imitate the preview's
+own lines, or, in a terminal, move the cursor and overwrite them (an ESC/CSI sequence in the body could rewrite
+the To line the human reads). So every surface uses one renderer that:
+
+- escapes C0/C1 control characters except `\n` and `\t`, plus ESC, DEL, bidi controls, zero-width and Unicode tag
+  characters, into visible `<U+XXXX>` form;
+- truncates display names and file names to a fixed width;
+- fences the body in the chat preview with a fence longer than any backtick run inside it;
+- repeats the recipients in a fixed-order block **after** the body, and again on the terminal challenge line
+  ("Type K7QD to send to sam@partner.test, ana@partner.test");
+- is tested with ESC, CSI, OSC, bidi-override and fake-header payloads, asserting the exact rendered bytes.
 
 ## 9. Untrusted content
 
@@ -536,6 +698,12 @@ prompt shows the real recipients and subject, not just an opaque draft ID.
 - **Links and images.** Links render as `text [domain]`; flag text/href domain mismatch, punycode, IP
   literals, known shorteners. **Never emit Markdown images or auto-fetchable URLs** (EchoLeak **[V]**); images
   become `[image: name, not loaded]`. The server never fetches URLs.
+- **Every sender-controlled string** — body (HTML or plain), search-row `snippet` (Gmail generates it from the
+  message text, hidden preheaders included), subject, display names, attachment names — gets the invisible-character
+  strip and the envelope, not only the HTML path.
+- **Taint recording** is a side effect of the core envelope builder and of the export and download writers
+  (addresses are extracted from the wrapped text and from header fields), so every read path records taint without
+  a per-path retrofit (§8.4).
 - **Sender authenticity** (§7.2) is part of every message result.
 
 ## 10. CLI surface — `agent-gmail`
@@ -593,8 +761,10 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
   server is pinned — there is no default inbox). Cross-inbox tools take `inboxes` (`["a","b"]` or `"all"`).
   Aliases are validated **at call time** against the registry, which is re-read when `config.json` changes,
   so an inbox added through the CLI works without restarting the server and `tools/list` never varies (the
-  alias list in `instructions` refreshes on restart). Every result echoes the inbox; argument coercion accepts numbers/booleans/arrays sent
-  as strings — GongRzhe #95/#96 **[V]** — and rejects unknown fields):
+  alias list in `instructions` refreshes on restart). Every result echoes the inbox; argument coercion accepts values some clients send as strings — GongRzhe #95/#96 **[V]** — with exact
+  semantics: booleans only case-insensitive `"true"`/`"false"`, integers only `^-?\d+$`, arrays only JSON that
+  parses to an array of strings, `inboxes` also a single alias → `[alias]`; everything else is a validation error;
+  `z.coerce.*` is banned (`z.coerce.boolean()` turns `"false"` into `true` **[V]**); unknown fields are rejected):
 
 | Tool | Class | Annotations |
 |---|---|---|
@@ -612,11 +782,17 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
 | `gmail_send_prepare` | prepare | destructive:false |
 | `gmail_draft_send` | **send** | destructive, openWorld, not idempotent, requiresUserInteraction under `confirm` |
 
-- Results: `structuredContent` conforming to a declared `outputSchema`, plus the same JSON minified in a text
-  block (spec SHOULD **[V]**); defaults sized under Claude Code's 10k-token warning **[V]**; bodies and exports
-  prefer files for anything large.
-- Tools are filtered by capability (§6.1) and policy (§8). `tools/list` does not vary per connection
-  (2026-07-28 rule **[V]**): it is computed once at start-up from the registry.
+- **Results:** `structuredContent` conforming to a declared `outputSchema`, and the same JSON minified in one text
+  block. Claude Code and Codex pass **only** `structuredContent` to the model and drop text blocks; Cursor passes
+  **only** text blocks; none doubles the tokens **[V: gap-2, measured]**. So everything the model must see —
+  including untrusted-wrapped bodies — lives inside `structuredContent`, and the text block mirrors it for
+  Cursor-style clients. Defaults are sized under Claude Code's 10k-token warning **[V]**; large bodies and exports
+  go to files.
+- **Registration is not enforcement.** One server serves inboxes with different tiers and policies, and
+  `tools/list` must not vary per connection (2026-07-28 rule **[V]**), so a tool is registered when at least one
+  served inbox could use it, computed at start-up. **Every tier, scope and policy check runs again at call time**
+  against the live registry: a `never` inbox gets `POLICY_NEVER` from the send tools, a `read`-tier inbox gets
+  `SCOPE_MISSING` (with the re-consent command) from write tools. Mixed-policy users are pointed to pinned servers.
 
 ## 12. Distribution
 
@@ -641,7 +817,10 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
 ### 12.3 Client wiring — `agent-gmail mcp install`
 
 - `--launcher managed` (default): installs the exact running version into a versioned directory
-  `<data>/runtime/<version>/` (`npm install --prefix` of `@cloudpixel/gmail@<version>`, which brings the
+  `<dataDir>/runtime/<version>/` (`dataDir` per §5.1: `$XDG_DATA_HOME` or `~/.local/share/agent-communications`,
+  `%LOCALAPPDATA%` on Windows) by running npm through `process.execPath` + npm's own `npm-cli.js` (spawning
+  `npm.cmd` without a shell throws on current Node on Windows), with exact versions for everything including the
+  optional keyring (`npm install --prefix … --save-exact @cloudpixel/gmail@<version>`, which brings the
   optional native keyring alongside the single-file bundle — the npx cache is pruned and cannot be pointed
   at). Registers `command` = the absolute path of the **PATH-visible** `node` the user runs (resolved like
   `command -v node`; `process.execPath` only when they agree — on the author's machine `process.execPath` is a
@@ -676,9 +855,11 @@ Agent Skills spec defines it — **not** the house single string: Codex 0.145 re
 string … expected struct SkillFrontmatterMetadata"). The ported verifier parses the map form. No
 client-specific gating fields. Skills are **not** hidden when the MCP server
 is absent: each skill's Prerequisites check for the MCP tools and otherwise use the CLI
-(`npx -y @cloudpixel/gmail@<version> … --json`), because `npx skills add` installs skills without servers. Every skill: house frontmatter (`name`, quoted `description`, `license: MIT`,
+(`npx -y @cloudpixel/gmail@<version> … --json`), because `npx skills add` installs skills without servers. Every skill: frontmatter (`name`, quoted `description`, `license: MIT`,
 `compatibility`, `metadata` as a map — `group: communications`, `lifecycle: release`, `version: "1.0.0"`,
-`author: crissmoldovan` —, `allowed-tools`), `references/fit.json` with `kind: requestOnly`, and the house body structure — title +
+`author: crissmoldovan` — and **no `allowed-tools`**: in Claude Code, `allowed-tools` pre-approves tools for the
+turn that invokes the skill, so a Gmail skill listing `Bash` would let the CLI send path run without a prompt. The
+verifier rejects `allowed-tools` in `gmail-*` skills unless it lists only `Read`, `Grep` and `Glob`), `references/fit.json` with `kind: requestOnly`, and the house body structure — title +
 failure modes, "What this skill does not own" table, **When to Use**, **Prerequisites** (each with *Complete
 when*), **Procedure** (bold-lead steps, each with *Complete when*), **Usage Examples** (good and bad),
 **Pitfalls**, **Verification** checklist, **Deeper reading** — body ≤ 484 lines, depth in `references/`.
@@ -754,31 +935,44 @@ exist, or when a registered tool/command is documented nowhere.
    without approval, elicitation decline/cancel/timeout, tainted-recipient escalation; a repository-wide test
    that `drafts.send`/`messages.send` appear only in `send.execute`.
 4. **CLI e2e** against the built bundle with a temp config dir: envelopes, exit codes, `NO_COLOR`, TTY rules.
-5. **MCP e2e**: spawn the bundle, `initialize`, `tools/list` (deterministic, capability-filtered), call read
-   tools against the fake transport (injected via a test-only env hook that is compiled out of release
-   builds or refuses to run unless `NODE_ENV=test`), first-stdout-byte test.
+5. **MCP e2e**: spawn the **bundle**, `initialize`, `tools/list` (deterministic), call tools, first-stdout-byte
+   test. The bundle talks to a **local fake Google server** (a small HTTP server in the test suite implementing the
+   token endpoint and the Gmail/People endpoints the tools use), selected with `AGENT_COMMS_GOOGLE_ROOT_URL`, which
+   the code honours only for loopback addresses. This exercises the real bundled `@googleapis/*`,
+   `google-auth-library` and gaxios paths — token refresh included — in CI and from the packed tarball, without a
+   test-only code path in release builds.
+5a. **Auth tests** against the same fake server: loopback flow with PKCE S256 and `state` checks, the two-step flow
+   (single use, TTL, `state` mismatch, `access_denied`), identity verification on add and reauth, granted-scope
+   diffing, refresh-token persistence and every OAuth error mapped to its doctor line.
 6. **Surface parity + drift tests**: every operation reachable from both CLI and MCP; every tool/command
    documented in skills and `docs/`.
 7. **Skill trigger evaluations** (`test/skill-evals.json`: prompt → expected skill, including sibling-confusion
    pairs such as compose vs send, triage vs organise, and injected-email prompts). CI checks structure and
    that every skill has at least three entries; running them against a model is a manual release step.
 8. **Tarball-consumer tests** per package (§12.1).
-9. **Live smoke (manual, before release)** against the author's inboxes after `inbox import artymclabin`:
-   read-only calls on all six, a draft created and deleted in one inbox, and one real send to the author's
-   own address under `chat` policy — only with the author's explicit approval at that moment.
+9. **Live checks per phase, not batched at the end** (each needs the author for a browser consent or an approval):
+   P2 — fresh `inbox add` of one real inbox with the two-step flow (openid, organize, contacts), doctor, whoami,
+   and `import artymclabin --dry-run`; P3 — read-only search/read/thread/timeline/attachments/contacts on that
+   inbox; P4 — drafts created, updated (signature idempotency, opened once in Gmail web to observe doubling and
+   autosave), then deleted; organise on a label created for the test; P5 — **after the legacy servers are
+   disconnected**, one self-addressed send under `chat` and one under `confirm` via terminal approval, only with the
+   author's explicit approval at that moment, plus the `drafts.send`-with-raw spike (§8.3).
 
 ## 16. Phases
 
-Each phase is one branch and one PR into `main`, reviewed by codex and by Blocks until green, then merged.
+Each phase is one branch and one PR into `main`, reviewed by codex (when its quota allows; a multi-agent
+adversarial panel otherwise) and by Blocks until green, then merged. Every phase ends with its live check (§15.9)
+where it touches Gmail.
 
 | Phase | Branch | Delivers | Depends on |
 |---|---|---|---|
-| **P1 Foundation + core** | `feat/foundation` | This spec and the plan; pnpm workspace, tsconfig, tsdown, Biome, CI; OSS files; `.blocks/`; ported and extended skill verifier; `@cloudpixel/comms-core` complete (paths, config, registry, secret store, audit, envelope, exit codes, untrusted envelope + HTML sanitiser, path jails, approval engine, taint set, rate caps) with its bin and tests | — |
-| **P2 Auth + inbox lifecycle** | `feat/gmail-auth` | `@cloudpixel/gmail` skeleton; Gmail/People transport + retry; OAuth flows (loopback, two-step manual); client and inbox commands; import from artymclabin; doctor; whoami; CLI skeleton with envelope/exit codes; MCP server skeleton with `gmail_inboxes_list`, `gmail_whoami`, `gmail_doctor`; `mcp install`; `@cloudpixel/gmail-mcp` | P1 |
-| **P3 Read + analyse** | `feat/gmail-read` | search (cross-inbox), message/thread read with the body pipeline, timeline, attachments find/download, export, contacts, follow-ups, labels/sendAs/drafts list — in operations, CLI and MCP | P2 |
-| **P4 Write + send gate** | `feat/gmail-write` | MIME compose, drafts create/reply/reply-all/forward/update/get/delete with attachments and signatures, organise with plans and undo, label create, trash/untrash, send prepare/execute under `chat`/`confirm`/`never`, elicitation, terminal approval, risk escalation, caps, audit | P3 |
-| **P5 Skills + docs + manifests** | `feat/skills` | The twelve skills with references and the shared contract, README, `docs/` (getting started, Google Cloud setup, multi-inbox, safety model, per-client wiring, CLI and MCP references generated from the registry), plugin manifests, launcher, drift tests | P4 |
-| **P6 Release** | `release/v0.1.0` | Tarball-consumer tests, release workflow with trusted publishing, sync-versions, THIRD_PARTY_LICENSES, CodeQL, CHANGELOG 0.1.0, live smoke; then (with the user) npm login + stub publish + trust setup, flip to public, publish 0.1.0 | P5 |
+| **P1 Foundation + core** | `feat/foundation` | This spec and the plan; pnpm workspace, TypeScript 7, tsdown, Biome, CI (Linux, macOS, Windows); OSS files; `.blocks/`; ported and extended skill verifier; `@cloudpixel/comms-core` complete: paths, config (user intent only, locked writes, immutable inbox ids), runtime state, secret store (one backend, keychain with JS timeout and cache, file), audit log, envelope and exit codes, untrusted envelope **with taint recording**, HTML sanitiser, path jails, **approval engine with its full interface** (records, state machine, CAS transitions, digests, challenges, plan tokens), send ledger and rate caps, taint store, the `agentcomms` bin; a tarball-consumer test for `comms-core` so packaging is exercised from the first phase | — |
+| **P2 Auth + lifecycle + surfaces** | `feat/gmail-auth` | `@cloudpixel/gmail` skeleton; Gmail/People transport + retry; the local fake Google server used by tests; OAuth (loopback, detached two-step flow); client/inbox commands incl. reauth identity binding; import from artymclabin with the legacy-server scan; doctor; whoami; CLI skeleton (envelope, exit codes, coercion rules); MCP server skeleton on SDK v2 (handshake verified with Claude Code and Codex, `inboxes_list`, `whoami`, `doctor`); an elicitation round-trip test with the SDK v2 client; `mcp install`; `@cloudpixel/gmail-mcp`; live check | P1 |
+| **P3 Read + analyse** | `feat/gmail-read` | search (cross-inbox cursor), message/thread read with the body pipeline, timeline, attachments find/download, export, contacts, follow-ups, labels/sendAs/drafts list — operations, CLI and MCP; live check | P2 |
+| **P4 Compose + organise** | `feat/gmail-compose` | MIME compose (multipart, markdown), drafts create/reply/reply-all/forward/update/get/delete with attachments and signatures, outbound HTML analyser, organise with plans and undo, label create, trash/untrash; live check | P3 |
+| **P5 Send gate** | `feat/gmail-send` | prepare/approve/execute under `chat`/`confirm`/`never`, preview renderer (§8.5), MRTR elicitation with the allowlist, terminal approval, risk escalation, caps, readback; the `drafts.send`-with-raw spike; live check after the legacy servers are disconnected | P4 |
+| **P6 Skills + docs + manifests** | `feat/skills` | The twelve skills with references and the shared contract, README, `docs/` (getting started, Google Cloud setup, multi-inbox, safety model, per-client wiring, CLI and MCP references generated from the registry), plugin manifests, launcher, drift tests, skill trigger evaluations | P5 |
+| **P7 Release** | `release/v0.1.0` | Tarball-consumer tests for all packages, release workflow with trusted publishing, sync-versions, THIRD_PARTY_LICENSES, CodeQL, CHANGELOG 0.1.0; then (with the user) npm login + stub publish + trust setup, a history check before the repo goes public (no real addresses or content in any commit), flip to public, publish 0.1.0 | P6 |
 
 ## 17. Roadmap (not in v0.1.0)
 
@@ -792,12 +986,61 @@ Agent Plugins 1.0 portable manifest, further providers (Outlook, Slack) on `comm
 
 | Risk / question | Handling |
 |---|---|
-| `@modelcontextprotocol/server` 2.0 is seven weeks old | P2 spike: stdio handshake with Claude Code and Codex before building on it; fall back to `@modelcontextprotocol/sdk` 1.30 (legacy protocol, `elicitInput`) behind the same tool registry if it fails |
-| Revoking one token may revoke the whole account+client grant | Tested in P6 live smoke with a throwaway re-auth; until then `inbox remove` warns about shared grants |
+| `@modelcontextprotocol/server` 2.0 is seven weeks old | P2: stdio handshake with Claude Code and Codex, and an elicitation round trip with the SDK v2 client, before building on it; fall back to `@modelcontextprotocol/sdk` 1.30 (legacy protocol, `elicitInput`) behind the same tool registry if it fails |
+| Revoking one token may revoke the whole account+client grant | Tested in a live check with a throwaway re-auth; until then `inbox remove` does not revoke by default |
 | Is `client_secret` optional for Desktop token exchange? | Always send it |
-| macOS Keychain may prompt a background MCP server after a Node upgrade | `doctor` detects keychain access failure; documented re-save; `file` store available |
+| A macOS Keychain prompt can hold a background server's keychain call indefinitely | JS-level 12 s timeout with `KEYCHAIN_APPROVAL_PENDING`, one call in flight, in-memory cache; `doctor` warns on ad-hoc-signed Node (§5.3) |
 | Custom `Message-ID` preservation on send (readback) | Readback falls back to the newest `in:sent` message in the thread when `rfc822msgid:` finds nothing |
-| Which parts of a tool result reach the model (`structuredContent`, text blocks, or both) is unverified per client | P2 spike measures it in Claude Code and Codex; until then the untrusted-wrapped bodies live **inside** `structuredContent` strings and the whole JSON is mirrored in one text block, so either path carries the envelope |
-| SDK v2's legacy elicitation shim has not been run end to end | P4 spike with a probe server in Claude Code and Codex before building `confirm` on it |
-| Elicitation support drifts monthly across clients | `confirm` always has the terminal and Gmail-UI channels; client denylist in config |
+| Which parts of a tool result reach the model | Measured: Claude Code and Codex pass only `structuredContent`, Cursor only text blocks **[V: gap-2]**; everything lives in `structuredContent` and is mirrored in one text block (§11) |
+| SDK v2's legacy elicitation shim has not been run end to end | P2 round-trip test with the SDK v2 client; P5 checks real clients before any is allowlisted |
+| Elicitation support drifts monthly across clients | `confirm` always has the terminal and Gmail-UI channels; elicitation only for allowlisted clients |
 | `chat` policy cannot stop a fully compromised agent (T1 with a lying agent) | Stated plainly; risk escalation covers the exfiltration pattern; `confirm` is one command away |
+
+## 19. Design review disposition (revision 2)
+
+A six-lens adversarial panel (send safety, OAuth and lifecycle, Gmail correctness, MCP and untrusted content,
+packaging and OSS, phasing) reviewed revision 1; a skeptic per lens tried to refute each P0/P1 finding. None was
+refuted; several were downgraded. Final count: **5 P0, 34 P1, 81 P2**. Every P0 and P1 is resolved in this
+revision, where shown below. P2s are considered in the phase that touches them and are listed in the plan.
+
+| Severity | Finding | Resolved in |
+|---|---|---|
+| P0 | `html-part-not-in-preview` (send-safety) | §8.2 (no caller HTML; outbound analyser refuses remote resources/hidden elements/divergence), §8.3 digest covers the HTML |
+| P0 | `approval-aba-and-toctou` (send-safety) | §8.3: record binds draft message id + sub; approve voids on mismatch; CAS state machine; final check immediately before send; raw-send spike |
+| P0 | `approval-render-terminal-injection` (send-safety) | §8.5 one safe renderer for chat, form and terminal, with byte-exact tests |
+| P1 | `elicitation-client-denylist-unimplementable` (send-safety) | §8.3(a) fail-closed allowlist, CLI-only after a probe, 60 s round |
+| P1 | `taint-definition-underspecified` (send-safety) | §8.4 precise sources, 7-day window, exact address check, thread-participant exemption, stated limits |
+| P1 | `t2-boundary-cli-pty` (send-safety) | §8.4 shell agents are T2: agent-marker speed bump, offered ask/deny rules, honest SECURITY wording |
+| P1 | `confirm-form-shows-truncated-body` (send-safety) | §8.3(a) full body up to 4,000 characters, else another channel |
+| P1 | `legacy-ungated-send-servers` (send-safety) | §6.2 import scan and §6.3 doctor scan; P5 live send only after disconnecting them |
+| P1 | `out-path-and-attach-jail` (send-safety) | §5.1 MCP out = relative subpath of downloads root; §7.4 attach deny list covers all home dot-entries |
+| P1 | `config-multiwriter-lost-update` (phasing) | §5.2, §5.5, §8.3 CAS state machine, shared send ledger (duplicate) |
+| P0 | `outbound-html-not-in-preview` (phasing) | same as above (duplicate) |
+| P1 | `taint-hidden-dependency-and-file-bypass` (phasing) | §9 taint recorded by the core envelope builder and the export/download writers (P1) |
+| P1 | `client-denylist-unimplementable` (phasing) | same as above (duplicate) |
+| P1 | `live-verification-batched-and-hazardous` (phasing) | §15.9 live checks per phase; §16 |
+| P1 | `auth-and-secret-store-untested` (phasing) | §15.5a auth tests against a local fake Google server; secret-store tests in P1 |
+| P1 | `agent-driven-inbox-add-times-out` (phasing) | §6.2 detached two-step flow with --start/--finish --wait |
+| P1 | `legacy-ungated-send-tools-remain` (phasing) | same as above (duplicate) |
+| P0 | `config-lost-update` (oauth-lifecycle) | §5.2 user intent only, CLI-only locked writes, per-call stat; §5.5 runtime state |
+| P1 | `inbox-identity-key` (oauth-lifecycle) | §5.2 immutable ibx_ id; everything keyed by id; duplicates refused |
+| P1 | `client-secret-store-undefined` (oauth-lifecycle) | §5.3 one secret backend per config directory (the verifier's simpler fix) |
+| P1 | `reauth-identity-binding` (oauth-lifecycle) | §6.2 reauth must land on the same sub (or legacy email), then upgrades identity |
+| P1 | `two-step-flow-contract` (oauth-lifecycle) | §6.2 flow file fixes parameters; flowId pattern; atomic claim; TTL; state check |
+| P1 | `keychain-blocking` (oauth-lifecycle) | §5.3 JS timeout, single in-flight call, cache (implemented in P1) |
+| P1 | `running-server-staleness` (oauth-lifecycle) | §5.2 stat on every call instead of fs.watch |
+| P1 | `per-inbox-gating-vs-global-tool-list` (mcp-untrusted) | §11 registration is not enforcement; call-time checks; POLICY_NEVER / SCOPE_MISSING |
+| P1 | `plain-part-hidden-text-bypass` (mcp-untrusted) | §7.2 HTML authoritative, plainHtmlMismatch reported |
+| P1 | `argument-coercion-semantics` (mcp-untrusted) | §11 exact coercion rules; z.coerce banned |
+| P1 | `agent-supplied-paths` (mcp-untrusted) | same as above (duplicate) |
+| P1 | `allowed-tools-send-bypass` (packaging-oss) | §13 no allowed-tools in gmail skills; verifier enforces |
+| P1 | `managed-launcher-underspecified` (packaging-oss) | §12.3 dataDir, npm via execPath + npm-cli.js, exact versions |
+| P1 | `legacy-servers-left-registered` (packaging-oss) | same as above; personal skills updated at rollout (§13 overlay) |
+| P1 | `bundled-google-stack-never-exercised` (packaging-oss) | §15.5 bundle tested against a local fake Google server |
+| P1 | `body-hidden-text-bypass` (gmail-correctness) | §7.2 and §9 (every sender-controlled string, snippets included) |
+| P1 | `auth-results-trust` (gmail-correctness) | §7.2 topmost mx.google.com Authentication-Results only, alignment |
+| P1 | `metadata-format-has-no-parts` (gmail-correctness) | §7.1 and §7.3 format=full with a fields partial response |
+| P1 | `cross-inbox-cursor` (gmail-correctness) | §7.1 validated per-inbox cursor, lazy merge, errors[] |
+| P1 | `reply-recipient-rules` (gmail-correctness) | §7.8 one pure recipient function with the listed rules |
+| P1 | `draft-update-rmw` (gmail-correctness) | §7.8 raw read, expectedMessageId, dropParts, signature marker, subject lock |
+| P1 | `upload-endpoint-size` (gmail-correctness) | §7.8 always media upload; 36,700,160-byte check; transport test |

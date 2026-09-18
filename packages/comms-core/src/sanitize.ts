@@ -32,9 +32,29 @@ const DROP_TAGS = new Set([
   'math',
 ]);
 
-// Zero-width and formatting characters, bidi controls, and Unicode tag characters (U+E0000–U+E007F).
-const INVISIBLE_CHARS =
-  /[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0]|\udb40[\udc00-\udc7f]/g;
+// Zero-width and formatting characters, bidi controls, variation selectors and Unicode tag characters
+// (U+E0000–U+E007F), as code-point ranges. Built with RegExp so no invisible character appears in this file.
+const INVISIBLE_RANGES: readonly (readonly [number, number])[] = [
+  [0x00ad, 0x00ad], // soft hyphen
+  [0x034f, 0x034f], // combining grapheme joiner
+  [0x061c, 0x061c], // Arabic letter mark
+  [0x115f, 0x1160], // Hangul fillers
+  [0x17b4, 0x17b5], // Khmer inherent vowels
+  [0x180b, 0x180f], // Mongolian variation selectors and vowel separator
+  [0x200b, 0x200f], // zero-width space/non-joiner/joiner, LRM, RLM
+  [0x202a, 0x202e], // bidi embeddings and overrides
+  [0x2060, 0x2064], // word joiner and invisible operators
+  [0x2066, 0x206f], // bidi isolates and deprecated format characters
+  [0x3164, 0x3164], // Hangul filler
+  [0xfe00, 0xfe0f], // variation selectors
+  [0xfeff, 0xfeff], // zero-width no-break space / BOM
+  [0xffa0, 0xffa0], // halfwidth Hangul filler
+  [0xe0000, 0xe007f], // Unicode tag characters
+];
+const INVISIBLE_CHARS = new RegExp(
+  `[${INVISIBLE_RANGES.map(([from, to]) => (from === to ? `\\u{${from.toString(16)}}` : `\\u{${from.toString(16)}}-\\u{${to.toString(16)}}`)).join('')}]`,
+  'gu',
+);
 
 const URL_SHORTENERS = new Set([
   'bit.ly',

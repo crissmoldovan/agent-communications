@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import type { TaintCollector } from './taint.ts';
 
 /**
  * Everything a sender controls — body, subject, snippet, display name, attachment file name, extracted text — reaches
@@ -67,9 +68,16 @@ export function newBoundary(): string {
 
 /**
  * Wraps sender-controlled text. Pass one boundary for every field of a single response so the model sees a consistent
- * marker; a fresh one per response.
+ * marker; a fresh one per response. When a collector is given, every address in the text is recorded as tainted — so
+ * any read path that wraps content records taint without doing anything else.
  */
-export function wrapUntrusted(text: string, attributes: EnvelopeAttributes, boundary: string = newBoundary()): string {
+export function wrapUntrusted(
+  text: string,
+  attributes: EnvelopeAttributes,
+  boundary: string = newBoundary(),
+  collector?: TaintCollector,
+): string {
+  collector?.observeText(text);
   const { text: safe } = neutralise(text);
   const open =
     `<${UNTRUSTED_TAG}${attribute('boundary', boundary)}${attribute('field', attributes.field)}` +

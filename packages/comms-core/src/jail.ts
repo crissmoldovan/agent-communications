@@ -117,22 +117,16 @@ export async function createUniqueFile(
   throw new CommsError('BAD_DATA', `could not find a free file name for ${filename} in ${directory}`);
 }
 
-/** Default places attachments may never be read from, whatever the allowed roots say. */
-export function defaultAttachDeny(configDir: string): string[] {
-  return [
-    configDir,
-    '~/.ssh',
-    '~/.aws',
-    '~/.gnupg',
-    '~/.config/gcloud',
-    '~/.kube',
-    '~/.docker',
-    '~/.npmrc',
-    '~/.netrc',
-    '~/.claude.json',
-    '~/Library/Keychains',
-    '**/.env*',
-  ];
+/**
+ * Default places attachments may never be read from, whatever the allowed roots say. `~/.*` means every dot-entry
+ * directly under home — SSH, cloud, npm, git and shell credentials, agent configs; `**∕.git/**` any repository's git
+ * directory; `**∕.env*` dotenv files anywhere.
+ */
+export function defaultAttachDeny(configDir: string, env: NodeJS.ProcessEnv = process.env): string[] {
+  const deny = [configDir, '~/.*', '~/Library', '**/.git/**', '**/.env*'];
+  if (env.APPDATA) deny.push(env.APPDATA);
+  if (env.LOCALAPPDATA) deny.push(env.LOCALAPPDATA);
+  return deny;
 }
 
 export interface AttachPolicy {
@@ -173,7 +167,25 @@ export async function checkAttachable(path: string, policy: AttachPolicy): Promi
     });
   }
   const name = basename(real);
+  const homeDir = await realOrResolved(home ?? (await import('node:os')).homedir());
   for (const entry of policy.deny) {
+    if (entry === '~/.*') {
+      if (isInside(real, homeDir)) {
+        const first = relative(homeDir, real).split(sep)[0] ?? '';
+        if (first.startsWith('.')) {
+          throw new CommsError(
+            'BAD_DATA',
+            `refusing to attach a file from ~/${first}: hidden folders in your home are never attached`,
+          );
+        }
+      }
+      continue;
+    }
+    if (entry === '**/.git/**') {
+      if (real.split(sep).includes('.git'))
+        throw new CommsError('BAD_DATA', 'refusing to attach a file from a .git folder');
+      continue;
+    }
     if (entry.startsWith('**/')) {
       const pattern = entry.slice(3);
       const prefix = pattern.endsWith('*') ? pattern.slice(0, -1) : pattern;
