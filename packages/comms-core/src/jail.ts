@@ -188,7 +188,7 @@ export async function checkAttachable(path: string, policy: AttachPolicy): Promi
       continue;
     }
     if (entry === '**/.git/**') {
-      if (real.split(sep).includes('.git'))
+      if (real.split(sep).some((segment) => segment.toLowerCase() === '.git'))
         throw new CommsError('BAD_DATA', 'refusing to attach a file from a .git folder');
       continue;
     }

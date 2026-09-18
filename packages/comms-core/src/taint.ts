@@ -51,8 +51,13 @@ export const PUBLIC_MAILBOX_DOMAINS: ReadonlySet<string> = new Set([
   '163.com',
 ]);
 
-// A pragmatic pattern to find addresses in free text; header fields are parsed properly elsewhere.
-const ADDRESS_IN_TEXT = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+/**
+ * A pragmatic pattern to find addresses in free text; header fields are parsed properly elsewhere.
+ *
+ * Letters here are Unicode letters, not ASCII: an internationalised address (`jose@compañía.es`, a `.рф` domain) is
+ * an address, and a pattern that cannot see one lets a reply-to hidden in the body past the checks that read this.
+ */
+const ADDRESS_IN_TEXT = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.[\p{L}]{2,}/gu;
 
 /** Canonical form for matching: trimmed, lower-cased, IDN domain in punycode; no dot or plus folding. */
 export function canonicalAddress(address: string): string {
