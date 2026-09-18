@@ -290,10 +290,7 @@ function normalisePath(path: string): string {
 /** True when `candidate` is the same directory as `parent`, or inside it. Both may be unset. */
 function isInsideDirectory(candidate: string | undefined, parent: string | undefined): boolean {
   if (!candidate || !parent) return false;
-  const normalise = (path: string) => path.replace(/[/\\]+$/, '');
-  const inside = normalise(candidate);
-  const root = normalise(parent);
-  return inside === root || inside.startsWith(`${root}/`) || inside.startsWith(`${root}\\`);
+  return candidate === parent || candidate.startsWith(`${parent}/`) || candidate.startsWith(`${parent}\\`);
 }
 
 /**
@@ -335,7 +332,9 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   if ([...roots(b.attachDeny)].some((deny) => !after_deny.has(deny))) loosened.push('defaults.attachDeny');
   // Moving where files from strangers land is a safety change — unless the new place is inside the old one, which
   // narrows rather than widens it.
-  if (a.downloadsDir !== b.downloadsDir && !isInsideDirectory(a.downloadsDir, b.downloadsDir)) {
+  const downloadsBefore = b.downloadsDir === undefined ? undefined : normalisePath(b.downloadsDir);
+  const downloadsAfter = a.downloadsDir === undefined ? undefined : normalisePath(a.downloadsDir);
+  if (downloadsAfter !== downloadsBefore && !isInsideDirectory(downloadsAfter, downloadsBefore)) {
     loosened.push('defaults.downloadsDir');
   }
   if (a.confirm.elicitationClients.some((c) => !b.confirm.elicitationClients.includes(c))) {

@@ -51,8 +51,20 @@ async function takeOverStale(lockPath: string, staleMs: number): Promise<void> {
     try {
       await link(aside, lockPath);
     } catch {
-      await rename(aside, lockPath).catch(() => undefined);
-      return;
+      try {
+        await rename(aside, lockPath);
+        return;
+      } catch {
+        // Neither worked. Write the holder's lock back by hand rather than leaving the path unlocked — `wx` so a
+        // new holder that has appeared in the meantime keeps theirs.
+        try {
+          const handle = await open(lockPath, 'wx', 0o600);
+          await handle.writeFile(JSON.stringify(moved));
+          await handle.close();
+        } catch {
+          // A new holder exists, or the path is unusable; either way there is nothing left to restore.
+        }
+      }
     }
   }
   await rm(aside, { force: true });
