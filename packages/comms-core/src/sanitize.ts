@@ -190,6 +190,9 @@ export function hidesContent(style: Map<string, string>): boolean {
   if (/rect\(\s*0(px)?[\s,]+0(px)?[\s,]+0(px)?[\s,]+0(px)?\s*\)/.test(clip)) return true;
   const clipPath = style.get('clip-path') ?? '';
   if (/inset\(\s*(50|100)%/.test(clipPath) || /circle\(\s*0/.test(clipPath)) return true;
+  // `polygon(0 0, 0 0, 0 0)` and the like: a shape with no area shows nothing.
+  const polygon = /polygon\(([^)]*)\)/.exec(clipPath);
+  if (polygon && /^[\s,]*(?:0(?:px|%|em|rem)?[\s,]+0(?:px|%|em|rem)?[\s,]*)+$/.test(polygon[1] ?? 'x')) return true;
   if (offScreen(numeric(style.get('text-indent')))) return true;
   for (const side of ['margin-left', 'margin-top']) {
     if (offScreen(numeric(style.get(side), side.endsWith('top') ? VIEWPORT_HEIGHT_PX : VIEWPORT_WIDTH_PX))) return true;
@@ -312,6 +315,8 @@ interface HidingRule {
   tag: string | null;
   id: string | null;
   classes: string[];
+  /** `[data-x]`, `[data-x="y"]`, `[class~="y"]` and the other comparisons CSS allows. */
+  attributes: Array<{ name: string; operator: string; value: string }>;
 }
 
 interface StylesheetRules {
@@ -335,10 +340,10 @@ export function parseHidingSelector(selector: string): HidingRule | null {
     .at(-1);
   if (!subject || subject === '*') return null;
 
-  const rule: HidingRule = { tag: null, id: null, classes: [] };
+  const rule: HidingRule = { tag: null, id: null, classes: [], attributes: [] };
   // Walk the compound: `div#id.a.b[attr]:not(.c)` — everything this parser does not understand makes it give up,
   // because a rule it half-understands is worse than one it declines to apply.
-  const pattern = /^([a-z][\w-]*)|\.([\w-]+)|#([\w-]+)|\[[^\]]*\]/;
+  const pattern = /^([a-z][\w-]*)|\.([\w-]+)|#([\w-]+)|\[([^\]]*)\]/;
   let rest = subject;
   let first = true;
   while (rest.length > 0) {
@@ -351,14 +356,60 @@ export function parseHidingSelector(selector: string): HidingRule | null {
       rule.classes.push(match[2]);
     } else if (match[3] !== undefined) {
       rule.id = match[3];
+    } else if (match[4] !== undefined) {
+      const attribute = /^\s*([\w-]+)\s*(?:([~^$*|]?=)\s*"?([^"\]]*)"?)?\s*$/.exec(match[4]);
+      if (!attribute?.[1]) return null;
+      rule.attributes.push({
+        name: attribute[1].toLowerCase(),
+        operator: attribute[2] ?? '',
+        value: attribute[3] ?? '',
+      });
     }
     rest = rest.slice(match[0].length);
     first = false;
   }
-  return rule.tag || rule.id || rule.classes.length > 0 ? rule : null;
+  return rule.tag || rule.id || rule.classes.length > 0 || rule.attributes.length > 0 ? rule : null;
 }
 
 /** Collects simple selectors (`.class`, `#id`, `tag`, `tag.class`) whose declarations hide content. */
+/** At-rules whose body is ordinary rules that still apply when the message is opened. */
+const NESTING_AT_RULES = /^@(media|supports|layer|container|scope|document)\b/i;
+
+/**
+ * Walks a stylesheet rule by rule, descending into `@media` and friends.
+ *
+ * Splitting on `}` and skipping anything containing `@` — which is what this did — means every rule inside a
+ * `@media screen` or `@supports` block is ignored, and text hidden by one of them reaches the reader. Only a
+ * print-only block is genuinely irrelevant: what it hides is still visible on screen, which is where mail is read.
+ */
+export function eachStyleRule(css: string, visit: (selectors: string, declarations: string) => void): void {
+  let index = 0;
+  while (index < css.length) {
+    const open = css.indexOf('{', index);
+    if (open < 0) return;
+    const prelude = css.slice(index, open).trim();
+
+    let depth = 1;
+    let cursor = open + 1;
+    while (cursor < css.length && depth > 0) {
+      const character = css[cursor];
+      if (character === '{') depth++;
+      else if (character === '}') depth--;
+      cursor++;
+    }
+    const body = css.slice(open + 1, Math.max(open + 1, cursor - 1));
+
+    if (prelude.startsWith('@')) {
+      const printOnly = /@media\b/i.test(prelude) && /\bprint\b/i.test(prelude) && !/\b(screen|all)\b/i.test(prelude);
+      if (NESTING_AT_RULES.test(prelude) && !printOnly) eachStyleRule(body, visit);
+      // @font-face, @keyframes, @import and the rest hide nothing.
+    } else if (prelude) {
+      visit(prelude, body);
+    }
+    index = cursor;
+  }
+}
+
 function hiddenSelectorsFromStylesheets(root: AnyNode): StylesheetRules {
   const rules: StylesheetRules = { rules: [] };
   const visit = (node: AnyNode): void => {
@@ -368,17 +419,13 @@ function hiddenSelectorsFromStylesheets(root: AnyNode): StylesheetRules {
         .map((t) => t.data)
         .join('')
         .replace(/\/\*[\s\S]*?\*\//g, '');
-      for (const block of css.split('}')) {
-        const brace = block.indexOf('{');
-        if (brace < 0) continue;
-        const selectors = block.slice(0, brace);
-        if (selectors.includes('@')) continue;
-        if (!hidesContent(parseStyle(block.slice(brace + 1)))) continue;
+      eachStyleRule(css, (selectors, declarations) => {
+        if (!hidesContent(parseStyle(declarations))) return;
         for (const raw of selectors.split(',')) {
           const rule = parseHidingSelector(raw);
           if (rule) rules.rules.push(rule);
         }
-      }
+      });
     }
     if ('children' in node) for (const child of (node as Element).children) visit(child);
   };
@@ -392,6 +439,31 @@ function textLength(node: AnyNode): number {
   return 0;
 }
 
+/** CSS attribute comparison, so `div[data-x]` hides the divs carrying it rather than every div. */
+function attributeMatches(actual: string | undefined, attribute: { operator: string; value: string }): boolean {
+  if (actual === undefined) return false;
+  const value = attribute.value.toLowerCase();
+  const found = actual.toLowerCase();
+  switch (attribute.operator) {
+    case '':
+      return true;
+    case '=':
+      return found === value;
+    case '~=':
+      return found.split(/\s+/).includes(value);
+    case '|=':
+      return found === value || found.startsWith(`${value}-`);
+    case '^=':
+      return found.startsWith(value);
+    case '$=':
+      return found.endsWith(value);
+    case '*=':
+      return found.includes(value);
+    default:
+      return false;
+  }
+}
+
 function isHiddenElement(element: Element, rules: StylesheetRules): boolean {
   const attribs = element.attribs;
   if ('hidden' in attribs) return true;
@@ -402,6 +474,7 @@ function isHiddenElement(element: Element, rules: StylesheetRules): boolean {
     if (rule.tag && rule.tag !== element.name) continue;
     if (rule.id && rule.id !== id) continue;
     if (rule.classes.some((name) => !classes.has(name))) continue;
+    if (rule.attributes.some((attribute) => !attributeMatches(attribs[attribute.name], attribute))) continue;
     return true;
   }
   if (hidesContent(parseStyle(attribs.style))) return true;

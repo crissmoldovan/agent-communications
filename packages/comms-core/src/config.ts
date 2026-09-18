@@ -327,9 +327,16 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   if ([...roots(b.attachDeny)].some((deny) => !after_deny.has(deny))) loosened.push('defaults.attachDeny');
   // Moving where files from strangers land is a safety change — unless the new place is inside the old one, which
   // narrows rather than widens it.
+  // Unset is not "anywhere": it means the built-in downloads directory under our own state, which is the narrowest
+  // place there is. So clearing the setting returns to that default and loosens nothing, while naming a directory
+  // where none was named moves downloads out of it.
   const downloadsBefore = b.downloadsDir === undefined ? undefined : normalisePath(b.downloadsDir);
   const downloadsAfter = a.downloadsDir === undefined ? undefined : normalisePath(a.downloadsDir);
-  if (downloadsAfter !== downloadsBefore && !isInsideDirectory(downloadsAfter, downloadsBefore)) {
+  if (
+    downloadsAfter !== undefined &&
+    downloadsAfter !== downloadsBefore &&
+    !isInsideDirectory(downloadsAfter, downloadsBefore)
+  ) {
     loosened.push('defaults.downloadsDir');
   }
   if (a.confirm.elicitationClients.some((c) => !b.confirm.elicitationClients.includes(c))) {

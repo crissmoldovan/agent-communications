@@ -196,6 +196,14 @@ test('classifyChange: narrowing the downloads directory is not a loosening', () 
   const lookalike = structuredClone(before);
   lookalike.defaults.downloadsDir = '/var/empty/downloads/mail-elsewhere';
   assert.deepEqual(classifyChange(before, lookalike).loosened, ['defaults.downloadsDir']);
+
+  // Clearing it returns to the built-in directory under our own state, which is the narrowest place there is.
+  const cleared = structuredClone(before);
+  delete cleared.defaults.downloadsDir;
+  assert.deepEqual(classifyChange(before, cleared).loosened, []);
+
+  // Naming one where none was named moves downloads out of that built-in directory, which does need consent.
+  assert.deepEqual(classifyChange(cleared, before).loosened, ['defaults.downloadsDir']);
 });
 
 test('classifyChange: a new inbox may trust its own domain, but not somebody else’s', () => {

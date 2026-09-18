@@ -162,6 +162,8 @@ test('taint: one store for all inboxes; public mailbox domains taint by address 
   time.advance(7 * 24 * 60 * 60 * 1000 + 1);
   assert.deepEqual(await store.check('billing@evil.test'), { address: false, domain: false });
   assert.deepEqual(extractAddresses('a@b.co, A@B.CO and not-an-address@ and x@y'), ['a@b.co']);
+  // An internationalised address is an address: a reply-to hidden in the body must not be invisible to this.
+  assert.deepEqual(extractAddresses('write to josé@compañía.es please'), ['josé@xn--compaa-7va5a.es']);
 });
 
 test('a taint flush that cannot write fails loudly, so the read fails closed', async () => {

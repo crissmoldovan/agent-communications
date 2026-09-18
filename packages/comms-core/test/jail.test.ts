@@ -123,6 +123,11 @@ test('the default deny list covers every hidden folder in home, git folders and 
   await assert.rejects(checkAttachable('~/.config/gh/hosts.yml', policy), /hidden folders in your home/);
   await assert.rejects(checkAttachable('~/.cursor/mcp.json', policy), /hidden folders in your home/);
   await assert.rejects(checkAttachable('~/repo/.git/config', policy), /\.git folder/);
+  // A case-insensitive filesystem — which is the default on macOS and Windows — reaches the same folder by another
+  // spelling, so the check compares the way the filesystem does.
+  mkdirSync(join(home, 'other', '.GIT'), { recursive: true });
+  writeFileSync(join(home, 'other', '.GIT', 'config'), 'x');
+  await assert.rejects(checkAttachable('~/other/.GIT/config', policy), /\.git folder/);
   await assert.rejects(checkAttachable('~/Library/Cookies/c', policy), /from ~\/Library/);
 });
 

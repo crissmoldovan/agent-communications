@@ -70,6 +70,28 @@ const HIDDEN_CASES: [string, string][] = [
   ['id with class', `<style>#box.quiet{opacity:0}</style><div id="box" class="quiet">${INJECTION}</div>`],
   ['selector list', `<style>.x, .y{display:none}</style><div class="y">${INJECTION}</div>`],
   ['attribute selector', `<style>div[data-x]{display:none}</style><div data-x="1">${INJECTION}</div>`],
+  [
+    'attribute selector with a value',
+    `<style>span[data-role="note"]{opacity:0}</style><span data-role="note">${INJECTION}</span>`,
+  ],
+  ['media query', `<style>@media screen { .m1 { display:none } }</style><div class="m1">${INJECTION}</div>`],
+  [
+    'media query with a width condition',
+    `<style>@media only screen and (min-width:1px){#m2{font-size:0}}</style><p id="m2">${INJECTION}</p>`,
+  ],
+  [
+    'supports query',
+    `<style>@supports (display:none) { .s1 { visibility:hidden } }</style><div class="s1">${INJECTION}</div>`,
+  ],
+  [
+    'rule nested two at-rules deep',
+    `<style>@layer mail { @media screen { .n1 { display:none } } }</style><div class="n1">${INJECTION}</div>`,
+  ],
+  [
+    'at-rule before the rule that hides',
+    `<style>@font-face{font-family:x;src:url(data:,)}.f1{display:none}</style><div class="f1">${INJECTION}</div>`,
+  ],
+  ['clip-path polygon with no area', `<div style="clip-path:polygon(0 0, 0 0, 0 0)">${INJECTION}</div>`],
   ['comment', `<!-- ${INJECTION} -->`],
   ['mso conditional comment', `<!--[if mso]><p>${INJECTION}</p><![endif]-->`],
   ['script', `<script>/* ${INJECTION} */</script>`],
@@ -123,6 +145,51 @@ test('a stylesheet rule hides what it matches, and only that', () => {
     '<style>:is(.a, .b) ~ p::first-line{display:none}</style><p class="a">kept anyway</p>',
   );
   assert.match(exotic.text, /kept anyway/);
+});
+
+test('an at-rule block is read, except when it only applies to paper', () => {
+  // A rule inside `@media screen` applies when the message is opened, so what it hides is hidden.
+  const screen = sanitizeHtmlToText(`<style>@media screen{.a{display:none}}</style><div class="a">${INJECTION}</div>`);
+  assert.doesNotMatch(screen.text, /IGNORE PREVIOUS/);
+  assert.equal(screen.report.hiddenElements, 1);
+
+  // A print-only rule hides nothing on screen, which is where the message is read: the text stays, and stays visible.
+  const paper = sanitizeHtmlToText('<style>@media print{.a{display:none}}</style><div class="a">on screen</div>');
+  assert.match(paper.text, /on screen/);
+  assert.equal(paper.report.hiddenElements, 0);
+
+  // `@media print, screen` still covers the screen, so it is not print-only.
+  const both = sanitizeHtmlToText('<style>@media print, screen{.a{display:none}}</style><div class="a">gone</div>');
+  assert.doesNotMatch(both.text, /gone/);
+
+  // @keyframes is not a nesting of ordinary rules; its `from`/`to` blocks must not be read as selectors.
+  const frames = sanitizeHtmlToText(
+    '<style>@keyframes fade{from{opacity:0}to{opacity:1}}</style><p>kept</p><div class="from">also kept</div>',
+  );
+  assert.match(frames.text, /kept/);
+  assert.match(frames.text, /also kept/);
+  assert.equal(frames.report.hiddenElements, 0);
+});
+
+test('an attribute selector hides what carries the attribute, not every element of that tag', () => {
+  const bare = sanitizeHtmlToText('<style>div[data-x]{display:none}</style><div>kept</div><div data-x="1">gone</div>');
+  assert.match(bare.text, /kept/);
+  assert.doesNotMatch(bare.text, /gone/);
+  assert.equal(bare.report.hiddenElements, 1);
+
+  // A value comparison is a comparison: another value is another element.
+  const valued = sanitizeHtmlToText(
+    '<style>p[data-role="note"]{display:none}</style><p data-role="body">kept</p><p data-role="note">gone</p>',
+  );
+  assert.match(valued.text, /kept/);
+  assert.doesNotMatch(valued.text, /gone/);
+
+  // The substring and word-list forms behave as CSS does.
+  const fuzzy = sanitizeHtmlToText(
+    '<style>p[class*="ec"]{display:none}</style><p class="header">kept</p><p class="secret">gone</p>',
+  );
+  assert.match(fuzzy.text, /kept/);
+  assert.doesNotMatch(fuzzy.text, /gone/);
 });
 
 test('a box is only hidden when the axis that would show it is clipped', () => {
