@@ -14,7 +14,10 @@ const BEL = String.fromCharCode(7);
 test('safeFilename strips separators, control and Windows-illegal characters', () => {
   assert.equal(safeFilename('../../etc/passwd'), '_.._etc_passwd');
   assert.equal(safeFilename('a\\b/c.pdf'), 'a_b_c.pdf');
-  assert.equal(safeFilename(`in${NUL}voice${BEL}.pdf`), 'in_voice_.pdf');
+  // Control characters are removed rather than replaced: they are never part of a name anyone meant to give.
+  assert.equal(safeFilename(`in${NUL}voice${BEL}.pdf`), 'invoice.pdf');
+  // A tab still becomes a separator-safe placeholder, because it is whitespace a name could legitimately contain.
+  assert.equal(safeFilename('in\tvoice.pdf'), 'in_voice.pdf');
   assert.equal(safeFilename('what?:*|<>".txt'), 'what_______.txt');
   assert.equal(safeFilename('  ..hidden  '), 'hidden');
   assert.equal(safeFilename(''), 'attachment');
@@ -121,4 +124,14 @@ test('the default deny list covers every hidden folder in home, git folders and 
   await assert.rejects(checkAttachable('~/.cursor/mcp.json', policy), /hidden folders in your home/);
   await assert.rejects(checkAttachable('~/repo/.git/config', policy), /\.git folder/);
   await assert.rejects(checkAttachable('~/Library/Cookies/c', policy), /from ~\/Library/);
+});
+
+test('a name that lies about what it is loses the characters doing the lying', () => {
+  const rlo = String.fromCodePoint(0x202e);
+  const zwj = String.fromCodePoint(0x200b);
+  // Displayed as `invoiceexe.pdf` by a file manager; it is an executable.
+  assert.equal(safeFilename(`invoice${rlo}fdp.exe`), 'invoicefdp.exe');
+  assert.equal(safeFilename(`re${zwj}port.pdf`), 'report.pdf');
+  // An ordinary name is untouched, accents and all.
+  assert.equal(safeFilename('Rapport financier — août.pdf'), 'Rapport financier — août.pdf');
 });

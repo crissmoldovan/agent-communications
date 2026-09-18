@@ -1,6 +1,7 @@
 import { constants } from 'node:fs';
 import { type FileHandle, open, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isDangerous } from './chars.ts';
 import { CommsError } from './errors.ts';
 import { expandHome } from './paths.ts';
 
@@ -28,7 +29,12 @@ function truncateBytes(value: string, maxBytes: number): string {
  * bytes with the extension kept. Never empty.
  */
 export function safeFilename(name: string, maxBytes = 255, fallback = 'attachment'): string {
-  let cleaned = name.normalize('NFC').replace(UNSAFE_FILENAME_CHARS, '_').replace(/\s+/g, ' ');
+  // Invisible and bidi characters go first: `invoice<RLO>fdp.exe` is displayed as `invoiceexe.pdf` by file managers
+  // and mail clients, which is how an executable is opened by someone who thought they were opening a PDF.
+  const visible = [...name.normalize('NFC')]
+    .filter((character) => !isDangerous(character.codePointAt(0) ?? 0))
+    .join('');
+  let cleaned = visible.replace(UNSAFE_FILENAME_CHARS, '_').replace(/\s+/g, ' ');
   cleaned = cleaned.replace(/^[.\s]+/, '').replace(/[.\s]+$/, '');
   if (cleaned === '') cleaned = fallback;
   const extension = extname(cleaned);

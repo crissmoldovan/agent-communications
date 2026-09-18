@@ -28,4 +28,4 @@ enforced in code, in one place, before any Gmail code exists.
 
 **Impact.** **Nothing to install yet.** No package is published. Developing in this repository needs Node 22.18 or
 newer; the packages themselves will run on 22.12 or newer.
-- **Tests:** `pnpm verify` — root 14 passing, comms-core 158 passing, and a packed-tarball consumer check.
+- **Tests:** `pnpm verify` — root 14 passing, comms-core 159 passing, and a packed-tarball consumer check.
