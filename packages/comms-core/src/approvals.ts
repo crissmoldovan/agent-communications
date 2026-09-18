@@ -1,25 +1,28 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { open, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SendPolicy } from './config.ts';
-import { CommsError } from './errors.ts';
-import { writeFileAtomic } from './fs.ts';
-import { APPROVAL_ID_PATTERN, newApprovalId, newChallenge } from './ids.ts';
+import { CommsError, type ErrorCode } from './errors.ts';
+import { ensurePrivateDir, writeFileAtomic } from './fs.ts';
+import { APPROVAL_ID_PATTERN, challengeMatches, hashChallenge, newApprovalId, newChallenge } from './ids.ts';
 import { withFileLock } from './lock.ts';
 
 /**
- * Approval records bind a send to exactly one draft version. The states:
+ * Approval records bind a send to exactly one draft version. States:
  *
- *   pending ──approve──▶ approved ──claim──▶ sending ──▶ used
- *      │                     │                  └──────▶ failed
- *      └──claim (chat)───────┘
- *   pending|approved ──▶ expired (time) | revoked (voided: content changed, policy tightened, user revoked)
+ *   pending ──approve──▶ approved ──claim──▶ sending ──▶ used | failed
+ *      └──claim (effective policy chat)──────┘      └──▶ unknown (the process died mid-send)
+ *   pending | approved ──▶ revoked ("voided": content changed, wrong inbox, too many wrong challenges, user revoked)
+ *   expired is derived: a pending or approved record past its deadline reads as expired.
  *
- * Every transition is a compare-and-swap under a per-record lock, so a record is used at most once even when a CLI
- * and several MCP server processes race for it.
+ * Every transition is a compare-and-swap under a per-record lock. Single use does not rest on the lock alone: a claim
+ * also creates `<id>.claim` with O_EXCL, which the file system guarantees only one process can do.
  */
 
-export type ApprovalState = 'pending' | 'approved' | 'sending' | 'used' | 'failed' | 'expired' | 'revoked';
-export type ApprovalChannel = 'chat' | 'elicitation' | 'terminal';
+export type ApprovalState = 'pending' | 'approved' | 'sending' | 'used' | 'failed' | 'unknown' | 'expired' | 'revoked';
+export type ApprovalChannel = 'elicitation' | 'terminal';
+
+/** Bumped whenever the canonical form of a digest changes; a record prepared under another version is refused. */
+export const DIGEST_VERSION = 1;
 
 export interface Expectation {
   to: string[];
@@ -30,6 +33,7 @@ export interface Expectation {
 
 export interface ApprovalRecord {
   approvalId: string;
+  digestVersion: number;
   inboxId: string;
   inboxSub?: string | undefined;
   draftId: string;
@@ -39,13 +43,15 @@ export interface ApprovalRecord {
   /** The digest the human was actually shown when approving through a confirm channel. */
   approvedDigest?: string | undefined;
   approvedVia?: ApprovalChannel | undefined;
-  /** Policy at prepare time. Execution re-reads the live policy; this is for display and audit. */
+  /** Live policy at prepare time, for display and audit. */
   policy: SendPolicy;
-  /** True when risk escalation raised a chat send to confirm. */
-  escalated: boolean;
+  /** `confirm` when risk escalation raised this send. The effective policy is the stricter of this and the live one. */
+  requiredPolicy: SendPolicy;
   riskFlags: string[];
   expect: Expectation;
-  challenge: string;
+  /** Hash of the challenge currently issued to a human; the challenge itself is never stored or returned. */
+  challengeHash?: string | undefined;
+  challengeAttempts: number;
   state: ApprovalState;
   createdAt: string;
   expiresAt: string;
@@ -61,7 +67,7 @@ export interface CreateApprovalInput {
   draftMessageId: string;
   digest: string;
   policy: SendPolicy;
-  escalated: boolean;
+  requiredPolicy: SendPolicy;
   riskFlags: string[];
   expect: Expectation;
 }
@@ -73,14 +79,30 @@ export interface LiveDraft {
 }
 
 export const APPROVAL_TTL_MS: number = 10 * 60 * 1000;
-const TERMINAL: ReadonlySet<ApprovalState> = new Set(['used', 'failed', 'expired', 'revoked']);
+/** A record left in `sending` this long belongs to a process that died mid-send: the outcome is unknown. */
+export const SENDING_STALE_MS: number = 5 * 60 * 1000;
+export const MAX_CHALLENGE_ATTEMPTS = 3;
+const POLICY_RANK: Record<SendPolicy, number> = { chat: 0, confirm: 1, never: 2 };
 
-function refuse(reason: string, record?: ApprovalRecord, hint?: string): CommsError {
-  return new CommsError('APPROVAL_REQUIRED', `nothing was sent: ${reason}`, {
+/** The stricter of two policies. */
+export function stricterPolicy(a: SendPolicy, b: SendPolicy): SendPolicy {
+  return POLICY_RANK[a] >= POLICY_RANK[b] ? a : b;
+}
+
+function refuse(code: ErrorCode, reason: string, record?: ApprovalRecord, hint?: string): CommsError {
+  return new CommsError(code, `nothing was sent: ${reason}`, {
     hint: hint ?? 'Prepare the send again and show the new preview to the user.',
     details: record ? { approvalId: record.approvalId, state: record.state } : {},
   });
 }
+
+/** The record as it may be shown to anyone, agents included: never the challenge hash. */
+export function publicView(record: ApprovalRecord): Omit<ApprovalRecord, 'challengeHash'> {
+  const { challengeHash: _hidden, ...rest } = record;
+  return rest;
+}
+
+type Failure = { code: ErrorCode; reason: string };
 
 export class ApprovalStore {
   readonly directory: string;
@@ -93,9 +115,9 @@ export class ApprovalStore {
     this.#ttlMs = options.ttlMs ?? APPROVAL_TTL_MS;
   }
 
-  #path(approvalId: string): string {
-    if (!APPROVAL_ID_PATTERN.test(approvalId)) throw refuse(`"${approvalId}" is not an approval id`);
-    return join(this.directory, `${approvalId}.json`);
+  #path(approvalId: string, suffix = '.json'): string {
+    if (!APPROVAL_ID_PATTERN.test(approvalId)) throw refuse('USAGE', `"${approvalId}" is not an approval id`);
+    return join(this.directory, `${approvalId}${suffix}`);
   }
 
   async #read(approvalId: string): Promise<ApprovalRecord | null> {
@@ -111,26 +133,31 @@ export class ApprovalStore {
     await writeFileAtomic(this.#path(record.approvalId), `${JSON.stringify(record, null, 2)}\n`);
   }
 
-  /** Applies expiry lazily: a pending or approved record past its deadline reads as expired. */
-  #withExpiry(record: ApprovalRecord): ApprovalRecord {
-    if ((record.state === 'pending' || record.state === 'approved') && this.#now() >= new Date(record.expiresAt)) {
+  /** Derived states: expiry for pending/approved, `unknown` for a send whose process died. */
+  #derive(record: ApprovalRecord): ApprovalRecord {
+    const now = this.#now().getTime();
+    if ((record.state === 'pending' || record.state === 'approved') && now >= new Date(record.expiresAt).getTime()) {
       return { ...record, state: 'expired', reason: record.reason ?? 'the approval window passed' };
+    }
+    if (record.state === 'sending' && now - new Date(record.updatedAt).getTime() >= SENDING_STALE_MS) {
+      return { ...record, state: 'unknown', reason: 'the sending process stopped before recording an outcome' };
     }
     return record;
   }
 
   async create(input: CreateApprovalInput): Promise<ApprovalRecord> {
     const now = this.#now();
-    // Built field by field: nothing a caller passes can set the id, the state or the challenge.
+    // Built field by field: nothing a caller passes can set the id, the state or a challenge.
     const record: ApprovalRecord = {
       approvalId: newApprovalId(),
+      digestVersion: DIGEST_VERSION,
       inboxId: input.inboxId,
       inboxSub: input.inboxSub,
       draftId: input.draftId,
       draftMessageId: input.draftMessageId,
       digest: input.digest,
       policy: input.policy,
-      escalated: input.escalated,
+      requiredPolicy: stricterPolicy(input.policy, input.requiredPolicy),
       riskFlags: [...input.riskFlags],
       expect: {
         to: [...input.expect.to],
@@ -138,7 +165,7 @@ export class ApprovalStore {
         bcc: [...input.expect.bcc],
         subject: input.expect.subject,
       },
-      challenge: newChallenge(),
+      challengeAttempts: 0,
       state: 'pending',
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + this.#ttlMs).toISOString(),
@@ -150,107 +177,164 @@ export class ApprovalStore {
 
   async get(approvalId: string): Promise<ApprovalRecord | null> {
     const record = await this.#read(approvalId);
-    return record ? this.#withExpiry(record) : null;
+    return record ? this.#derive(record) : null;
   }
 
-  /** Compare-and-swap: runs `decide` on the current record under its lock; `decide` returns the next record or throws. */
+  /** Compare-and-swap under the record's lock. `decide` returns the next record (written) or throws (nothing written). */
   async #transition(approvalId: string, decide: (current: ApprovalRecord) => ApprovalRecord): Promise<ApprovalRecord> {
     const path = this.#path(approvalId);
     return withFileLock(`${path}.lock`, async () => {
       const stored = await this.#read(approvalId);
-      if (!stored) throw refuse(`no approval ${approvalId}`);
-      const current = this.#withExpiry(stored);
-      if (current.state === 'expired' && stored.state !== 'expired') {
-        await this.#write({ ...current, updatedAt: this.#now().toISOString() });
+      if (!stored) throw refuse('NOT_FOUND', `no approval ${approvalId}`);
+      const current = this.#derive(stored);
+      if (current.state !== stored.state) await this.#write({ ...current, updatedAt: this.#now().toISOString() });
+      if (current.digestVersion !== DIGEST_VERSION) {
+        throw refuse(
+          'APPROVAL_VOID',
+          'the approval was prepared by a different version of agent-communications',
+          current,
+        );
       }
       const next = decide(current);
-      await this.#write({ ...next, updatedAt: this.#now().toISOString() });
+      if (next !== current) await this.#write({ ...next, updatedAt: this.#now().toISOString() });
       return next;
     });
   }
 
-  /**
-   * A human approved through a confirm channel. The draft must still be exactly what the record was prepared for:
-   * otherwise the record is voided, because the human would be approving content the record does not describe.
-   */
-  async approve(approvalId: string, via: 'elicitation' | 'terminal', live: LiveDraft): Promise<ApprovalRecord> {
-    let voided: ApprovalRecord | null = null;
-    const result = await this.#transition(approvalId, (current) => {
-      if (current.state !== 'pending') throw refuse(`the approval is ${current.state}`, current);
-      if (live.draftMessageId !== current.draftMessageId || live.digest !== current.digest) {
-        voided = { ...current, state: 'revoked', reason: 'the draft changed after the preview was prepared' };
-        return voided;
-      }
-      return { ...current, state: 'approved', approvedDigest: live.digest, approvedVia: via };
+  #stateError(record: ApprovalRecord): CommsError {
+    if (record.state === 'expired')
+      return refuse('APPROVAL_EXPIRED', 'the approval expired before it was used', record);
+    if (record.state === 'revoked') {
+      return refuse('APPROVAL_VOID', `the approval was voided (${record.reason ?? 'revoked'})`, record);
+    }
+    return refuse('APPROVAL_REQUIRED', `the approval is ${record.state}`, record);
+  }
+
+  /** Issues a new challenge to show a human; only its hash is kept. */
+  async issueChallenge(approvalId: string): Promise<string> {
+    const challenge = newChallenge();
+    await this.#transition(approvalId, (current) => {
+      if (current.state !== 'pending') throw this.#stateError(current);
+      return { ...current, challengeHash: hashChallenge(challenge) };
     });
-    if (voided) throw refuse('the draft changed after the preview was prepared', result);
+    return challenge;
+  }
+
+  /**
+   * A human approved through a confirm channel by typing the issued challenge. The draft must still be exactly what the
+   * record was prepared for; otherwise the record is voided, because the human would be approving content the record
+   * does not describe. Three wrong answers void it too.
+   */
+  async approve(approvalId: string, via: ApprovalChannel, live: LiveDraft, answer: string): Promise<ApprovalRecord> {
+    let failure: Failure | null = null;
+    const result = await this.#transition(approvalId, (current) => {
+      if (current.state !== 'pending') throw this.#stateError(current);
+      if (!current.challengeHash)
+        throw refuse('APPROVAL_REQUIRED', 'no challenge was issued for this approval', current);
+      if (live.draftMessageId !== current.draftMessageId || live.digest !== current.digest) {
+        failure = { code: 'APPROVAL_VOID', reason: 'the draft changed after the preview was prepared' };
+        return { ...current, state: 'revoked', reason: failure.reason };
+      }
+      if (!challengeMatches(answer, current.challengeHash)) {
+        const attempts = current.challengeAttempts + 1;
+        if (attempts >= MAX_CHALLENGE_ATTEMPTS) {
+          failure = { code: 'APPROVAL_VOID', reason: 'too many wrong answers to the challenge' };
+          return { ...current, challengeAttempts: attempts, state: 'revoked', reason: failure.reason };
+        }
+        failure = { code: 'APPROVAL_REQUIRED', reason: 'the challenge did not match' };
+        return { ...current, challengeAttempts: attempts };
+      }
+      return { ...current, state: 'approved', approvedDigest: live.digest, approvedVia: via, challengeHash: undefined };
+    });
+    const failed = failure as Failure | null;
+    if (failed) throw refuse(failed.code, failed.reason, result);
     return result;
   }
 
   /**
-   * Claims the record for sending, once. Checks, against what the caller just read from the provider and the live
-   * policy: same inbox and account, content unchanged, policy allows it, and — under confirm, or when escalated — a
-   * human approved exactly this digest. Any failure voids the record so it cannot be retried.
+   * Claims the record for sending, once. Non-consuming refusals (not yet approved) leave the record untouched so the
+   * human can still approve it; integrity failures (other inbox or account, edited or changed draft, different
+   * recipients or subject) void it. Success creates the O_EXCL claim marker.
    */
   async claimForSend(
     approvalId: string,
     live: LiveDraft & { inboxId: string; inboxSub?: string | undefined; policy: SendPolicy; expect: Expectation },
   ): Promise<ApprovalRecord> {
-    let failure: string | null = null;
+    let failure: Failure | null = null;
     const result = await this.#transition(approvalId, (current) => {
-      if (current.state !== 'pending' && current.state !== 'approved') {
-        throw refuse(`the approval is ${current.state}`, current);
-      }
-      const fail = (reason: string): ApprovalRecord => {
-        failure = reason;
+      if (current.state !== 'pending' && current.state !== 'approved') throw this.#stateError(current);
+      const voidWith = (code: ErrorCode, reason: string): ApprovalRecord => {
+        failure = { code, reason };
         return { ...current, state: 'revoked', reason };
       };
-      if (live.inboxId !== current.inboxId) return fail('the approval belongs to a different inbox');
+      if (live.inboxId !== current.inboxId)
+        return voidWith('APPROVAL_VOID', 'the approval belongs to a different inbox');
       if (current.inboxSub && live.inboxSub && current.inboxSub !== live.inboxSub) {
-        return fail('the inbox is now connected to a different account');
+        return voidWith('APPROVAL_VOID', 'the inbox is now connected to a different account');
       }
-      if (live.policy === 'never') return fail('sending is turned off for this inbox (policy: never)');
-      if (live.draftMessageId !== current.draftMessageId) return fail('the draft was edited after the preview');
-      if (live.digest !== current.digest) return fail('the draft content changed after the preview');
+      if (live.policy === 'never')
+        return voidWith('POLICY_NEVER', 'sending is turned off for this inbox (policy: never)');
+      if (live.draftMessageId !== current.draftMessageId) {
+        return voidWith('APPROVAL_VOID', 'the draft was edited after the preview');
+      }
+      if (live.digest !== current.digest)
+        return voidWith('APPROVAL_VOID', 'the draft content changed after the preview');
       if (!sameExpectation(live.expect, current.expect)) {
-        return fail('the recipients or subject given do not match the prepared draft');
+        return voidWith('APPROVAL_VOID', 'the recipients or subject given do not match the prepared draft');
       }
-      const needsHuman = live.policy === 'confirm' || current.escalated;
-      if (needsHuman) {
+      if (stricterPolicy(live.policy, current.requiredPolicy) === 'confirm') {
         if (current.state !== 'approved') {
-          failure = 'this send needs approval outside the chat first';
-          throw refuse(failure, current, 'Ask the user to approve it (terminal or form), or send it from Gmail.');
+          throw refuse(
+            'APPROVAL_PENDING',
+            'this send needs approval outside the chat first',
+            current,
+            'Ask the user to approve it in the terminal (`agent-gmail approve <id>`) or in a trusted client form, or to send it from Gmail.',
+          );
         }
-        if (current.approvedDigest !== live.digest)
-          return fail('the approved content is not the content now in the draft');
+        if (current.approvedDigest !== live.digest) {
+          return voidWith('APPROVAL_VOID', 'the approved content is not the content now in the draft');
+        }
       }
       return { ...current, state: 'sending' };
     });
-    if (failure && result.state === 'revoked') throw refuse(failure, result);
+    const failed = failure as Failure | null;
+    if (failed) throw refuse(failed.code, failed.reason, result);
+    // The file system's O_EXCL is the single-use guarantee, independent of the lock.
+    await ensurePrivateDir(this.directory);
+    try {
+      const marker = await open(this.#path(approvalId, '.claim'), 'wx', 0o600);
+      await marker.writeFile(JSON.stringify({ pid: process.pid, at: this.#now().toISOString() }));
+      await marker.close();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw refuse('APPROVAL_VOID', 'this approval was already claimed by another process', result);
+      }
+      throw error;
+    }
     return result;
   }
 
   /** Records the outcome of the one send attempt. */
   async complete(approvalId: string, outcome: { sentMessageId: string } | { error: string }): Promise<ApprovalRecord> {
     return this.#transition(approvalId, (current) => {
-      if (current.state !== 'sending') throw refuse(`the approval is ${current.state}, not sending`, current);
+      if (current.state !== 'sending' && current.state !== 'unknown') throw this.#stateError(current);
       return 'sentMessageId' in outcome
         ? { ...current, state: 'used', sentMessageId: outcome.sentMessageId }
         : { ...current, state: 'failed', reason: outcome.error };
     });
   }
 
-  /** Voids a pending or approved record (user revoked it, or policy tightened). Terminal records are left alone. */
+  /** Voids a pending or approved record (user revoked it, or policy tightened). Other records are left as they are. */
   async revoke(approvalId: string, reason: string): Promise<ApprovalRecord> {
     return this.#transition(approvalId, (current) =>
-      TERMINAL.has(current.state) || current.state === 'sending' ? current : { ...current, state: 'revoked', reason },
+      current.state === 'pending' || current.state === 'approved' ? { ...current, state: 'revoked', reason } : current,
     );
   }
 
   async list(filter: { inboxId?: string; states?: ApprovalState[] } = {}): Promise<ApprovalRecord[]> {
     let names: string[];
     try {
-      names = (await readdir(this.directory)).filter((n) => n.endsWith('.json'));
+      names = (await readdir(this.directory)).filter((n) => /^ap_[0-9A-Z]{26}\.json$/.test(n));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw error;

@@ -1,24 +1,11 @@
+import { isDangerous } from './chars.ts';
+
 /**
  * One renderer for every surface a send preview is shown on — the chat, an elicitation form, a terminal. Text the
  * draft's author controls (body, subject, display names, file names, link text) must not be able to change how the
  * rest of the preview reads: an ESC/CSI sequence in a body can move a terminal cursor and overwrite the To line the
  * human is about to approve; a bidi override can reverse an address; a zero-width character can hide a difference.
  */
-
-function isUnsafeForDisplay(codePoint: number): boolean {
-  if (codePoint === 0x0a || codePoint === 0x09) return false;
-  if (codePoint < 0x20 || codePoint === 0x7f) return true; // C0 controls (ESC included) and DEL
-  if (codePoint >= 0x80 && codePoint <= 0x9f) return true; // C1 controls (CSI included)
-  if (codePoint === 0x00ad || codePoint === 0x034f || codePoint === 0x061c) return true;
-  if (codePoint >= 0x200b && codePoint <= 0x200f) return true; // zero-width and directional marks
-  if (codePoint === 0x2028 || codePoint === 0x2029) return true; // line and paragraph separators
-  if (codePoint >= 0x202a && codePoint <= 0x202e) return true; // bidi embeddings and overrides
-  if (codePoint >= 0x2060 && codePoint <= 0x206f) return true; // word joiner, bidi isolates
-  if (codePoint >= 0xfe00 && codePoint <= 0xfe0f) return true; // variation selectors
-  if (codePoint === 0xfeff) return true;
-  if (codePoint >= 0xe0000 && codePoint <= 0xe007f) return true; // Unicode tag characters
-  return false;
-}
 
 function visible(codePoint: number): string {
   return `<U+${codePoint.toString(16).toUpperCase().padStart(4, '0')}>`;
@@ -30,7 +17,7 @@ export function escapeForDisplay(text: string): string {
   const normalised = text.replace(/\r\n/g, '\n');
   for (const char of normalised) {
     const codePoint = char.codePointAt(0) ?? 0;
-    out += isUnsafeForDisplay(codePoint) ? visible(codePoint) : char;
+    out += isDangerous(codePoint) ? visible(codePoint) : char;
   }
   return out;
 }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readdirSync, statSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
@@ -57,7 +57,7 @@ test('an empty config has the documented defaults', () => {
   assert.equal(config.defaults.riskEscalation, true);
   assert.deepEqual(config.defaults.sendCaps, { perHour: 20, perDay: 100 });
   assert.deepEqual(config.defaults.confirm.elicitationClients, [], 'the elicitation allowlist starts empty');
-  assert.equal(config.secrets.store, 'keychain');
+  assert.equal(config.secrets, undefined, 'no backend is chosen until the first secret is stored');
 });
 
 test('inbox ids are immutable-looking and unique; duplicates of one account are detected', () => {
@@ -152,20 +152,24 @@ test('withFileLock serialises critical sections and clears a stale lock', async 
   );
   assert.equal(maxInside, 1);
 
-  writeFileSync(lock, 'abandoned');
-  const { utimesSync } = await import('node:fs');
-  const old = new Date(Date.now() - 60_000);
-  utimesSync(lock, old, old);
+  writeFileSync(lock, JSON.stringify({ pid: 1, at: new Date(Date.now() - 60_000).toISOString(), token: 'dead' }));
   assert.equal(await withFileLock(lock, async () => 'ran', { staleMs: 1000 }), 'ran');
+  // A live lock is never taken over, however many waiters look at it.
+  writeFileSync(lock, JSON.stringify({ pid: 1, at: new Date().toISOString(), token: 'alive' }));
+  await assert.rejects(
+    withFileLock(lock, async () => 'stolen', { staleMs: 1000, timeoutMs: 150 }),
+    /holding/,
+  );
+  assert.match(readFileSync(lock, 'utf8'), /alive/);
 });
 
-test('withFileLock times out with a TRANSIENT error while another holder is alive', async () => {
+test('withFileLock times out with LOCK_TIMEOUT while another holder is alive', async () => {
   const dir = tempDir();
   const lock = join(dir, 'held.lock');
   writeFileSync(lock, 'held');
   await assert.rejects(
     withFileLock(lock, async () => 'never', { timeoutMs: 100 }),
-    (e: unknown) => e instanceof CommsError && e.code === 'TRANSIENT',
+    (e: unknown) => e instanceof CommsError && e.code === 'LOCK_TIMEOUT' && e.exitCode === 75,
   );
 });
 

@@ -14,8 +14,9 @@ macOS and Windows, security policy, contribution guide, issue forms, Blocks revi
 - one secret backend per config directory: the OS keychain (Linux pinned to Secret Service; a call that an OS
   prompt holds up fails after 12 seconds instead of hanging a background server) or owner-only files;
 - the approval engine that will gate every send: records bound to the inbox, the account, the draft's message id
-  and a content digest; a compare-and-swap state machine so an approval is used at most once across processes; any
-  edit to the draft voids it;
+  and a content digest; a compare-and-swap state machine plus an exclusive claim file, so an approval is used at most
+  once across processes; any edit to the draft voids it; challenges a human types are stored only as hashes;
+- a config store that refuses any change loosening a safety setting unless a person consented at a terminal;
 - a shared send ledger for rate caps, single-use plan tokens for bulk changes, and a taint store for recipients
   that appeared only in email content;
 - the untrusted-content envelope and an HTML sanitiser that removes what a mail client would not show (and reports
@@ -26,4 +27,4 @@ macOS and Windows, security policy, contribution guide, issue forms, Blocks revi
 enforced in code, in one place, before any Gmail code exists.
 
 **Impact.** **Nothing to install yet.** No package is published.
-- **Tests:** `pnpm verify` — root 14 passing, comms-core 103 passing, and a packed-tarball consumer check.
+- **Tests:** `pnpm verify` — root 14 passing, comms-core 117 passing, and a packed-tarball consumer check.

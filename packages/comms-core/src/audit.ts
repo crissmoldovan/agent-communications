@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { appendPrivateLine } from './fs.ts';
@@ -8,14 +9,44 @@ import { appendPrivateLine } from './fs.ts';
  */
 export interface AuditRecord {
   at: string;
-  inbox: string;
+  /** Immutable inbox id; `alias` is the label at the time. */
+  inboxId: string;
+  alias?: string;
   operation: string;
   outcome: 'ok' | 'refused' | 'failed';
-  ids?: Record<string, string | string[]>;
+  ids?: Record<string, string | string[] | CondensedIds>;
   recipientDomains?: string[];
   approvalId?: string;
   reason?: string;
   surface?: 'cli' | 'mcp';
+}
+
+/** Large id lists are condensed so every audit line stays small enough to be appended atomically. */
+export interface CondensedIds {
+  count: number;
+  sha256: string;
+  first: string[];
+}
+
+const MAX_LISTED_IDS = 20;
+
+function condense(ids: AuditRecord['ids']): AuditRecord['ids'] {
+  if (!ids) return ids;
+  const out: NonNullable<AuditRecord['ids']> = {};
+  for (const [key, value] of Object.entries(ids)) {
+    if (Array.isArray(value) && value.length > MAX_LISTED_IDS) {
+      out[key] = {
+        count: value.length,
+        sha256: createHash('sha256')
+          .update([...value].sort().join('\n'))
+          .digest('hex'),
+        first: value.slice(0, MAX_LISTED_IDS),
+      };
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
 }
 
 export class AuditLog {
@@ -29,7 +60,11 @@ export class AuditLog {
 
   async append(record: Omit<AuditRecord, 'at'> & { at?: string }): Promise<AuditRecord> {
     const at = record.at ?? this.#now().toISOString();
-    const full: AuditRecord = { ...record, at };
+    const full: AuditRecord = {
+      ...record,
+      at,
+      ...(record.ids ? { ids: condense(record.ids) as NonNullable<AuditRecord['ids']> } : {}),
+    };
     await appendPrivateLine(join(this.directory, `${at.slice(0, 7)}.jsonl`), JSON.stringify(full));
     return full;
   }
@@ -54,7 +89,7 @@ export class AuditLog {
         } catch {
           continue;
         }
-        if (options.inbox && record.inbox !== options.inbox) continue;
+        if (options.inbox && record.inboxId !== options.inbox && record.alias !== options.inbox) continue;
         if (options.since && record.at < options.since) return out.reverse();
         out.push(record);
         if (out.length >= limit) return out.reverse();

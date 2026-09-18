@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { access, constants, stat } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
+import { publicView } from './approvals.ts';
 import { colorEnabled, type OutputOptions, runCommand, writeError, writeResult } from './cli-runtime.ts';
-import { type Config, emptyConfig } from './config.ts';
+import { type Config, emptyConfig, secretsStoreOf } from './config.ts';
 import { type Core, openCore } from './core.ts';
 import { CommsError } from './errors.ts';
 import { isGroupOrWorldAccessible } from './fs.ts';
@@ -108,7 +109,7 @@ async function doctor(core: Core): Promise<{ checks: Check[]; ok: boolean }> {
 
   const keyring = await loadKeyringModule();
   const probe = await probeKeychain(keyring, keychainNamespace(core.paths.configDir));
-  const usesKeychain = config.secrets.store === 'keychain';
+  const usesKeychain = secretsStoreOf(config) === 'keychain';
   checks.push({
     name: 'system keychain',
     ok: probe.ok || !usesKeychain,
@@ -117,7 +118,11 @@ async function doctor(core: Core): Promise<{ checks: Check[]; ok: boolean }> {
       ? {}
       : { fix: 'Unlock the keychain, or move secrets to files: `agentcomms secrets migrate --to file`.' }),
   });
-  checks.push({ name: 'secret backend', ok: true, detail: config.secrets.store });
+  checks.push({
+    name: 'secret backend',
+    ok: true,
+    detail: config.secrets?.store ?? 'not chosen yet (keychain by default)',
+  });
   return { checks, ok: checks.every((c) => c.ok) };
 }
 
@@ -127,7 +132,7 @@ async function migrateSecrets(
   to: SecretStoreKind,
 ): Promise<{ from: SecretStoreKind; to: SecretStoreKind; moved: number }> {
   const config = await core.config.load();
-  const from = config.secrets.store;
+  const from = secretsStoreOf(config);
   if (from === to) return { from, to, moved: 0 };
   const source = await core.secrets(from);
   const target = await openSecretStore(to, {
@@ -228,12 +233,15 @@ export async function main(
         const limit = values.limit ? Number.parseInt(values.limit, 10) : 50;
         if (!Number.isInteger(limit) || limit < 1) throw usage('--limit must be a positive whole number');
         const records = (await core.audit.tail({ limit, ...(values.since ? { since: values.since } : {}) })).filter(
-          (r) => !inboxId || r.inbox === inboxId || r.inbox === values.inbox,
+          (r) => !inboxId || r.inboxId === inboxId,
         );
         writeResult(records, output, (rs) =>
           rs.length
             ? rs
-                .map((r) => `${r.at}  ${r.inbox}  ${r.operation}  ${r.outcome}${r.reason ? `  (${r.reason})` : ''}`)
+                .map(
+                  (r) =>
+                    `${r.at}  ${r.alias ?? r.inboxId}  ${r.operation}  ${r.outcome}${r.reason ? `  (${r.reason})` : ''}`,
+                )
                 .join('\n')
             : 'no audit records',
         );
@@ -244,7 +252,9 @@ export async function main(
         if (sub === 'list') {
           const inboxId = inboxIdFor(config, values.inbox);
           const states = values.state ? [values.state as never] : undefined;
-          const records = await core.approvals.list({ ...(inboxId ? { inboxId } : {}), ...(states ? { states } : {}) });
+          const records = (
+            await core.approvals.list({ ...(inboxId ? { inboxId } : {}), ...(states ? { states } : {}) })
+          ).map(publicView);
           writeResult(records, output, (rs) =>
             rs.length
               ? rs.map((r) => `${r.approvalId}  ${r.state.padEnd(8)}  ${r.policy}  expires ${r.expiresAt}`).join('\n')
@@ -254,7 +264,7 @@ export async function main(
         }
         if (sub === 'revoke') {
           if (!arg) throw usage('usage: agentcomms approvals revoke <approvalId>');
-          const record = await core.approvals.revoke(arg, 'revoked by the user');
+          const record = publicView(await core.approvals.revoke(arg, 'revoked by the user'));
           writeResult(record, output, (r) => `${r.approvalId} is ${r.state}`);
           return;
         }

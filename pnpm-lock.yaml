@@ -53,6 +53,9 @@ importers:
       htmlparser2:
         specifier: ^10.1.0
         version: 10.1.0
+      postal-mime:
+        specifier: ^3.0.0
+        version: 3.0.0
       zod:
         specifier: 'catalog:'
         version: 4.6.5
@@ -669,6 +672,9 @@ packages:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
 
+  postal-mime@3.0.0:
+    resolution: {integrity: sha512-Z4a9ar2Bv3YpK3IXag+Yda30k7bMZfpRuUGyqtHnZ2pjHG8Bl62EhZIk4n1dzv00gfzP9g+94e9kd8+XmjVWLA==}
+
   quansync@1.0.0:
     resolution: {integrity: sha512-5xZacEEufv3HSTPQuchrvV6soaiACMFnq1H8wkVioctoH3TRha9Sz66lOxRwPK/qZj7HPiSveih9yAyh98gvqA==}
 
@@ -1139,6 +1145,8 @@ snapshots:
   peberminta@0.10.0: {}
 
   picomatch@4.0.7: {}
+
+  postal-mime@3.0.0: {}
 
   quansync@1.0.0: {}
 

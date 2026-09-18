@@ -65,8 +65,11 @@ export interface Defaults {
 
 export interface Config {
   version: typeof CONFIG_VERSION;
-  /** The one secret backend for this config directory: client secrets, refresh tokens and the approval key. */
-  secrets: { store: StoreKind };
+  /**
+   * The one secret backend for this config directory: client secrets, refresh tokens and the approval key. Absent
+   * until the first command that stores a secret chooses it.
+   */
+  secrets?: { store: StoreKind } | undefined;
   clients: Record<string, ClientConfig>;
   inboxes: Record<string, InboxConfig>;
   defaults: Defaults;
@@ -123,13 +126,33 @@ const defaultsSchema = z.object({
   confirm: z.object({ elicitationClients: z.array(z.string()).default([]) }).default({ elicitationClients: [] }),
 });
 
-export const configSchema: z.ZodType<Config, unknown> = z.object({
-  version: z.literal(CONFIG_VERSION),
-  secrets: z.object({ store: storeKindSchema }).default({ store: 'keychain' }),
-  clients: z.record(aliasSchema, clientSchema).default({}),
-  inboxes: z.record(aliasSchema, inboxSchema).default({}),
-  defaults: defaultsSchema.default(defaultsSchema.parse({})),
-});
+export const RESERVED_ALIASES: ReadonlySet<string> = new Set(['all']);
+
+export const configSchema: z.ZodType<Config, unknown> = z
+  .object({
+    version: z.literal(CONFIG_VERSION),
+    secrets: z.object({ store: storeKindSchema }).optional(),
+    clients: z.record(aliasSchema, clientSchema).default({}),
+    inboxes: z.record(aliasSchema, inboxSchema).default({}),
+    defaults: defaultsSchema.default(defaultsSchema.parse({})),
+  })
+  .superRefine((config, ctx) => {
+    const seen = new Map<string, string>();
+    for (const [alias, inbox] of Object.entries(config.inboxes)) {
+      if (RESERVED_ALIASES.has(alias)) {
+        ctx.addIssue({ code: 'custom', path: ['inboxes', alias], message: `"${alias}" is reserved` });
+      }
+      const other = seen.get(inbox.id);
+      if (other)
+        ctx.addIssue({ code: 'custom', path: ['inboxes', alias, 'id'], message: `duplicates the id of "${other}"` });
+      seen.set(inbox.id, alias);
+    }
+  });
+
+/** The secret backend in use: the recorded one, or the keychain before anything has been stored. */
+export function secretsStoreOf(config: Config): StoreKind {
+  return config.secrets?.store ?? 'keychain';
+}
 
 /** True when `alias` is a valid inbox or client name. */
 export function isValidAlias(alias: string): boolean {
@@ -188,7 +211,8 @@ export class ConfigStore {
 
   constructor(configDir: string) {
     this.path = join(configDir, 'config.json');
-    this.#lockPath = join(configDir, 'state', 'config.lock');
+    // The lock sits next to the file it guards, so an overridden state directory cannot split it.
+    this.#lockPath = join(configDir, '.config.lock');
   }
 
   /** The current config; an empty one when the file does not exist yet. */
@@ -212,19 +236,77 @@ export class ConfigStore {
    * Read-modify-write under a lock, so a CLI command and a running MCP server never lose each other's changes. The
    * mutator receives a fresh copy read inside the lock and returns the new config, which is validated before writing.
    */
-  async update(mutator: (config: Config) => Config | Promise<Config>): Promise<Config> {
+  async update(
+    mutator: (config: Config) => Config | Promise<Config>,
+    options: { consent?: LooseningConsent } = {},
+  ): Promise<Config> {
     return withFileLock(this.#lockPath, async () => {
       this.#cache = null;
       const current = structuredClone(await this.load());
-      const next = await mutator(current);
+      const next = await mutator(structuredClone(current));
       const parsed = configSchema.safeParse(next);
-      if (!parsed.success)
+      if (!parsed.success) {
         throw new CommsError('CONFIG', `refusing to write invalid config: ${describeIssues(parsed.error)}`);
+      }
+      const { loosened } = classifyChange(current, parsed.data);
+      const allowed = new Set(options.consent?.paths ?? []);
+      const unconsented = loosened.filter((path) => !allowed.has(path));
+      if (unconsented.length > 0) {
+        throw new CommsError('LOOSENING_REFUSED', `this change loosens a safety setting: ${unconsented.join(', ')}`, {
+          hint: 'Only a person at a terminal can loosen these, by running the matching command and typing the challenge it shows.',
+          details: { paths: unconsented },
+        });
+      }
       await writeFileAtomic(this.path, `${JSON.stringify(parsed.data, null, 2)}\n`);
       this.#cache = null;
       return parsed.data;
     });
   }
+}
+
+/** The default `internalDomains` for a new inbox: its own domain, unless that is a public mailbox provider. */
+export function defaultInternalDomains(email: string, publicDomains: ReadonlySet<string>): string[] {
+  const domain = email.slice(email.lastIndexOf('@') + 1).toLowerCase();
+  return domain && !publicDomains.has(domain) ? [domain] : [];
+}
+
+const POLICY_RANK: Record<SendPolicy, number> = { chat: 0, confirm: 1, never: 2 };
+
+/**
+ * Which paths of a config change loosen a safety setting. A safety setting may only be loosened by a person at a
+ * terminal who typed a challenge (see LooseningConsent); tightening never needs consent.
+ */
+export function classifyChange(before: Config, after: Config): { loosened: string[] } {
+  const loosened: string[] = [];
+  for (const [alias, inbox] of Object.entries(after.inboxes)) {
+    const previous = Object.values(before.inboxes).find((i) => i.id === inbox.id);
+    if (!previous) continue;
+    const was = previous.sendPolicy ?? before.defaults.sendPolicy;
+    const now = inbox.sendPolicy ?? after.defaults.sendPolicy;
+    if (POLICY_RANK[now] < POLICY_RANK[was]) loosened.push(`inboxes.${alias}.sendPolicy`);
+    if (inbox.internalDomains.some((d) => !previous.internalDomains.includes(d))) {
+      loosened.push(`inboxes.${alias}.internalDomains`);
+    }
+  }
+  const b = before.defaults;
+  const a = after.defaults;
+  if (b.riskEscalation && !a.riskEscalation) loosened.push('defaults.riskEscalation');
+  if (a.sendCaps.perHour > b.sendCaps.perHour || a.sendCaps.perDay > b.sendCaps.perDay)
+    loosened.push('defaults.sendCaps');
+  if (a.attachRoots.some((r) => !b.attachRoots.includes(r))) loosened.push('defaults.attachRoots');
+  if (b.attachDeny.some((d) => !a.attachDeny.includes(d))) loosened.push('defaults.attachDeny');
+  if (a.downloadsDir !== b.downloadsDir) loosened.push('defaults.downloadsDir');
+  if (a.confirm.elicitationClients.some((c) => !b.confirm.elicitationClients.includes(c))) {
+    loosened.push('defaults.confirm.elicitationClients');
+  }
+  if (before.secrets?.store === 'keychain' && after.secrets?.store === 'file') loosened.push('secrets.store');
+  return { loosened };
+}
+
+/** Proof, produced by the CLI after a person at a terminal typed a challenge, that exactly these paths may loosen. */
+export interface LooseningConsent {
+  kind: 'loosening-consent';
+  paths: readonly string[];
 }
 
 /** Finds an inbox by its immutable id. */

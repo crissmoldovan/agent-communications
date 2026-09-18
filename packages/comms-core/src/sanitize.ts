@@ -2,6 +2,7 @@ import render from 'dom-serializer';
 import { type AnyNode, type ChildNode, type Element, isComment, isTag, isText } from 'domhandler';
 import { convert } from 'html-to-text';
 import { parseDocument } from 'htmlparser2';
+import { isDangerous } from './chars.ts';
 
 /**
  * Email HTML is attacker-controlled. Before any of it becomes text a model reads, this removes what a human reading
@@ -31,30 +32,6 @@ const DROP_TAGS = new Set([
   'svg',
   'math',
 ]);
-
-// Zero-width and formatting characters, bidi controls, variation selectors and Unicode tag characters
-// (U+E0000–U+E007F), as code-point ranges. Built with RegExp so no invisible character appears in this file.
-const INVISIBLE_RANGES: readonly (readonly [number, number])[] = [
-  [0x00ad, 0x00ad], // soft hyphen
-  [0x034f, 0x034f], // combining grapheme joiner
-  [0x061c, 0x061c], // Arabic letter mark
-  [0x115f, 0x1160], // Hangul fillers
-  [0x17b4, 0x17b5], // Khmer inherent vowels
-  [0x180b, 0x180f], // Mongolian variation selectors and vowel separator
-  [0x200b, 0x200f], // zero-width space/non-joiner/joiner, LRM, RLM
-  [0x202a, 0x202e], // bidi embeddings and overrides
-  [0x2060, 0x2064], // word joiner and invisible operators
-  [0x2066, 0x206f], // bidi isolates and deprecated format characters
-  [0x3164, 0x3164], // Hangul filler
-  [0xfe00, 0xfe0f], // variation selectors
-  [0xfeff, 0xfeff], // zero-width no-break space / BOM
-  [0xffa0, 0xffa0], // halfwidth Hangul filler
-  [0xe0000, 0xe007f], // Unicode tag characters
-];
-const INVISIBLE_CHARS = new RegExp(
-  `[${INVISIBLE_RANGES.map(([from, to]) => (from === to ? `\\u{${from.toString(16)}}` : `\\u{${from.toString(16)}}-\\u{${to.toString(16)}}`)).join('')}]`,
-  'gu',
-);
 
 const URL_SHORTENERS = new Set([
   'bit.ly',
@@ -321,14 +298,18 @@ export function analyseLink(text: string, href: string): SanitizedLink {
   return { text, domain: host, flags };
 }
 
-/** Strips zero-width, bidi-control and tag characters; returns the text and how many were removed. */
+/**
+ * Strips control characters (ESC, CSI, OSC and the rest), DEL, lone carriage returns, zero-width, bidi-control and tag
+ * characters from sender-controlled text; returns the text and how many were removed. CRLF becomes LF first.
+ */
 export function stripInvisible(text: string): { text: string; removed: number } {
   let removed = 0;
-  const cleaned = text.replace(INVISIBLE_CHARS, () => {
-    removed += 1;
-    return '';
-  });
-  return { text: cleaned, removed };
+  let out = '';
+  for (const char of text.replace(/\r\n/g, '\n')) {
+    if (isDangerous(char.codePointAt(0) ?? 0)) removed += 1;
+    else out += char;
+  }
+  return { text: out, removed };
 }
 
 /**
@@ -393,4 +374,126 @@ export function sanitizePlainText(text: string): SanitizedText {
   const stripped = stripInvisible(text);
   report.invisibleCharsRemoved = stripped.removed;
   return { text: stripped.text, report };
+}
+
+export interface OutboundHtmlReport {
+  /** What a recipient sees, as text (hidden content removed) — compared with the draft's text part. */
+  visibleText: string;
+  /** Content a recipient would not see, with why; shown to the approver, never silently dropped. */
+  hidden: { reason: string; text: string }[];
+  /** Every URL in the HTML with its full query string, and where it appears. */
+  urls: { where: string; url: string }[];
+  /** URLs a mail client fetches on open — each one a potential beacon carrying data out. */
+  remoteResources: string[];
+  forms: number;
+  scripts: number;
+}
+
+const URL_ATTRIBUTES = ['href', 'src', 'action', 'background', 'poster', 'data', 'formaction', 'cite', 'longdesc'];
+const AUTO_LOADING = new Set([
+  'img',
+  'image',
+  'iframe',
+  'frame',
+  'object',
+  'embed',
+  'video',
+  'audio',
+  'source',
+  'track',
+  'input',
+]);
+const FORM_TAGS = new Set(['form', 'input', 'button', 'select', 'textarea']);
+const CSS_URL = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
+
+function isRemote(url: string): boolean {
+  return /^(?:https?:)?\/\//i.test(url.trim());
+}
+
+/**
+ * Analyses HTML an agent is about to send. The opposite of the inbound sanitiser: it shows hidden content instead of
+ * dropping it, and lists every URL and every resource a mail client would load on open, so a preview cannot look
+ * clean while the HTML carries a beacon or hidden text to the recipient.
+ */
+export function analyseOutboundHtml(html: string): OutboundHtmlReport {
+  const document = parseDocument(html, { decodeEntities: true, lowerCaseTags: true, lowerCaseAttributeNames: true });
+  const rules = hiddenSelectorsFromStylesheets(document);
+  const report: OutboundHtmlReport = {
+    visibleText: '',
+    hidden: [],
+    urls: [],
+    remoteResources: [],
+    forms: 0,
+    scripts: 0,
+  };
+  const addUrl = (where: string, url: string, autoLoads: boolean): void => {
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    report.urls.push({ where, url: trimmed });
+    if (autoLoads && isRemote(trimmed)) report.remoteResources.push(trimmed);
+    if (/^\s*javascript:/i.test(trimmed)) report.scripts += 1;
+  };
+  const visit = (nodes: ChildNode[], hiddenAncestor: boolean): void => {
+    for (const node of nodes) {
+      if (isComment(node)) {
+        if (node.data.trim()) report.hidden.push({ reason: 'comment', text: node.data.trim().slice(0, 500) });
+        continue;
+      }
+      if (!isTag(node)) continue;
+      const tag = node.name;
+      if (tag === 'script') report.scripts += 1;
+      if (FORM_TAGS.has(tag)) report.forms += 1;
+      if (tag === 'style') {
+        const css = node.children
+          .filter(isText)
+          .map((t) => t.data)
+          .join('');
+        for (const match of css.matchAll(CSS_URL)) addUrl('style block', match[2] ?? '', true);
+        continue;
+      }
+      for (const [name, value] of Object.entries(node.attribs)) {
+        if (name.startsWith('on')) report.scripts += 1;
+        if (URL_ATTRIBUTES.includes(name)) {
+          const autoLoads =
+            name === 'background' ||
+            (name === 'src' && AUTO_LOADING.has(tag)) ||
+            (name === 'data' && tag === 'object') ||
+            name === 'poster';
+          addUrl(`${tag}[${name}]`, value, autoLoads || (tag === 'link' && name === 'href'));
+        }
+        if (name === 'srcset') {
+          for (const candidate of value.split(','))
+            addUrl(`${tag}[srcset]`, candidate.trim().split(/\s+/)[0] ?? '', true);
+        }
+        if (name === 'style')
+          for (const match of value.matchAll(CSS_URL)) addUrl(`${tag}[style]`, match[2] ?? '', true);
+      }
+      let hidden = hiddenAncestor;
+      if (!hiddenAncestor && (isHiddenElement(node, rules) || DROP_TAGS.has(tag))) {
+        hidden = true;
+        const text = textLength(node) > 0 ? textOfNode(node) : '';
+        if (text || !DROP_TAGS.has(tag))
+          report.hidden.push({ reason: hiddenReason(node, rules), text: text.slice(0, 500) });
+      }
+      visit(node.children, hidden);
+    }
+  };
+  visit(document.children, false);
+  report.visibleText = sanitizeHtmlToText(html).text;
+  return report;
+}
+
+function textOfNode(node: AnyNode): string {
+  if (isText(node)) return node.data;
+  if ('children' in node) return (node as Element).children.map(textOfNode).join(' ').replace(/\s+/g, ' ').trim();
+  return '';
+}
+
+function hiddenReason(element: Element, rules: StylesheetRules): string {
+  if (DROP_TAGS.has(element.name)) return `<${element.name}> is never shown`;
+  if ('hidden' in element.attribs) return 'hidden attribute';
+  if ((element.attribs['aria-hidden'] ?? '').toLowerCase() === 'true') return 'aria-hidden';
+  if (element.attribs.style && hidesContent(parseStyle(element.attribs.style)))
+    return `inline style: ${element.attribs.style.slice(0, 120)}`;
+  return 'hidden by a stylesheet rule';
 }

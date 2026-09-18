@@ -91,7 +91,7 @@ export class SendLedger {
     return withFileLock(`${path}.lock`, async () => {
       const status = this.#statusOf(await this.#active(inboxId), caps);
       if (status.hour >= caps.perHour || status.day >= caps.perDay) {
-        throw new CommsError('APPROVAL_REQUIRED', 'nothing was sent: the send limit for this inbox is reached', {
+        throw new CommsError('RATE_CAPPED', 'nothing was sent: the send limit for this inbox is reached', {
           hint: `Limits: ${caps.perHour} per hour, ${caps.perDay} per day. Next slot: ${status.resetAt ?? 'soon'}.`,
           details: { ...status },
         });

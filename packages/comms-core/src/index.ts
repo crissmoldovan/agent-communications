@@ -1,5 +1,7 @@
+export * from './addresses.ts';
 export * from './approvals.ts';
 export * from './audit.ts';
+export * from './chars.ts';
 export * from './cli-runtime.ts';
 export * from './config.ts';
 export * from './core.ts';

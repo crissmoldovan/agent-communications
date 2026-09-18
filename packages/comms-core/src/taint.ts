@@ -1,60 +1,102 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { domainToASCII } from 'node:url';
 import { normaliseAddress } from './digest.ts';
 import { writeFileAtomic } from './fs.ts';
 import { withFileLock } from './lock.ts';
 
 /**
- * Addresses and domains that reached the model through untrusted content (headers and bodies of messages a read,
- * export or download returned). A send to a tainted recipient that the inbox has never written to before is escalated
- * from `chat` to `confirm`: being told by an email to write to someone else is the shape of the exfiltration attacks.
+ * Addresses and domains that reached the model through email content (header fields and bodies of messages a read,
+ * export or download returned) — for ALL inboxes in one store, because an injected message read in one inbox can ask
+ * for a send from another. A send to a tainted recipient that the sending inbox has never written to is escalated from
+ * `chat` to `confirm`: being told by an email to write to someone else is the shape of the exfiltration attacks.
  * Literal matching is beaten by obfuscated addresses ("x at evil dot test"); this is a tripwire, not a boundary.
  */
 
 export const TAINT_WINDOW_MS: number = 7 * 24 * 60 * 60 * 1000;
 
-// A pragmatic address pattern: good enough to find addresses in text; parsing of header fields is done elsewhere.
+/**
+ * Public mailbox providers. Their domains are never tainted as a whole — one message from someone at gmail.com must
+ * not make every gmail.com recipient suspicious — so taint applies to the exact address only.
+ */
+export const PUBLIC_MAILBOX_DOMAINS: ReadonlySet<string> = new Set([
+  'gmail.com',
+  'googlemail.com',
+  'outlook.com',
+  'hotmail.com',
+  'live.com',
+  'msn.com',
+  'yahoo.com',
+  'yahoo.co.uk',
+  'ymail.com',
+  'icloud.com',
+  'me.com',
+  'mac.com',
+  'aol.com',
+  'proton.me',
+  'protonmail.com',
+  'pm.me',
+  'gmx.com',
+  'gmx.net',
+  'gmx.de',
+  'web.de',
+  'mail.com',
+  'zoho.com',
+  'yandex.com',
+  'yandex.ru',
+  'fastmail.com',
+  'hey.com',
+  'tutanota.com',
+  'qq.com',
+  '163.com',
+]);
+
+// A pragmatic pattern to find addresses in free text; header fields are parsed properly elsewhere.
 const ADDRESS_IN_TEXT = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 
-export function extractAddresses(text: string): string[] {
-  return [...new Set((text.match(ADDRESS_IN_TEXT) ?? []).map((a) => a.toLowerCase()))];
+/** Canonical form for matching: trimmed, lower-cased, IDN domain in punycode; no dot or plus folding. */
+export function canonicalAddress(address: string): string {
+  const bare = normaliseAddress(address);
+  const at = bare.lastIndexOf('@');
+  if (at <= 0) return bare;
+  const domain = domainToASCII(bare.slice(at + 1)) || bare.slice(at + 1);
+  return `${bare.slice(0, at)}@${domain.toLowerCase()}`;
 }
 
 export function domainOf(address: string): string | null {
-  const normalised = normaliseAddress(address);
-  const at = normalised.lastIndexOf('@');
-  return at > 0 ? normalised.slice(at + 1) : null;
+  const canonical = canonicalAddress(address);
+  const at = canonical.lastIndexOf('@');
+  return at > 0 ? canonical.slice(at + 1) : null;
 }
 
-/** Collects addresses seen while building one response; flushed to the store once at the end. */
-export class TaintCollector {
-  readonly #addresses = new Set<string>();
+export function extractAddresses(text: string): string[] {
+  return [...new Set((text.match(ADDRESS_IN_TEXT) ?? []).map(canonicalAddress))];
+}
 
-  /** Scans free text (bodies, subjects, snippets, attachment text) for addresses. */
-  observeText(text: string): void {
-    for (const address of extractAddresses(text)) this.#addresses.add(address);
-  }
+export type TaintSource = 'header' | 'body';
 
-  /** Records header addresses (From, Reply-To, Sender, To, Cc), already parsed. */
-  observeAddresses(addresses: Iterable<string>): void {
-    for (const address of addresses) {
-      const normalised = normaliseAddress(address);
-      if (normalised.includes('@')) this.#addresses.add(normalised);
-    }
-  }
+export interface TaintObservation {
+  address: string;
+  source: TaintSource;
+  inboxId: string;
+  messageId?: string | undefined;
+}
 
-  get size(): number {
-    return this.#addresses.size;
-  }
+/** What is never recorded: the user's own addresses and the domains they call internal. */
+export interface TaintExclusions {
+  ownAddresses: readonly string[];
+  internalDomains: readonly string[];
+}
 
-  addresses(): string[] {
-    return [...this.#addresses];
-  }
+interface TaintEntry {
+  at: string;
+  source: TaintSource;
+  inboxIds: string[];
 }
 
 interface TaintFile {
-  addresses: Record<string, string>;
-  domains: Record<string, string>;
+  addresses: Record<string, TaintEntry>;
+  domains: Record<string, TaintEntry>;
 }
 
 export interface TaintCheck {
@@ -71,47 +113,117 @@ export class TaintStore {
     this.#now = now;
   }
 
-  #path(inboxId: string): string {
-    if (!/^ibx_[A-Z0-9]{16}$/.test(inboxId)) throw new Error(`not an inbox id: ${inboxId}`);
-    return join(this.directory, `${inboxId}.json`);
+  get #path(): string {
+    return join(this.directory, 'taint.json');
   }
 
-  async #read(inboxId: string): Promise<TaintFile> {
+  async #read(): Promise<TaintFile> {
     try {
-      const parsed = JSON.parse(await readFile(this.#path(inboxId), 'utf8')) as Partial<TaintFile>;
+      const parsed = JSON.parse(await readFile(this.#path, 'utf8')) as Partial<TaintFile>;
       return { addresses: parsed.addresses ?? {}, domains: parsed.domains ?? {} };
-    } catch {
-      return { addresses: {}, domains: {} };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { addresses: {}, domains: {} };
+      if (error instanceof SyntaxError) return { addresses: {}, domains: {} };
+      throw error;
     }
   }
 
   #prune(file: TaintFile): TaintFile {
     const cutoff = this.#now().getTime() - TAINT_WINDOW_MS;
-    const keep = (map: Record<string, string>) =>
-      Object.fromEntries(Object.entries(map).filter(([, at]) => new Date(at).getTime() > cutoff));
+    const keep = (map: Record<string, TaintEntry>) =>
+      Object.fromEntries(Object.entries(map).filter(([, entry]) => new Date(entry.at).getTime() > cutoff));
     return { addresses: keep(file.addresses), domains: keep(file.domains) };
   }
 
-  /** Merges what a collector saw into the inbox's taint set, refreshing timestamps. */
-  async record(inboxId: string, collector: TaintCollector): Promise<void> {
-    if (collector.size === 0) return;
-    const path = this.#path(inboxId);
+  /**
+   * Records observations. Throws if it cannot — callers must fail the read rather than return content whose taint
+   * was not recorded.
+   */
+  async record(observations: readonly TaintObservation[], exclusions: TaintExclusions): Promise<void> {
+    const own = new Set(exclusions.ownAddresses.map(canonicalAddress));
+    const internal = new Set(exclusions.internalDomains.map((d) => d.toLowerCase()));
+    const kept = observations
+      .map((o) => ({ ...o, address: canonicalAddress(o.address) }))
+      .filter((o) => o.address.includes('@') && !own.has(o.address) && !internal.has(domainOf(o.address) ?? ''));
+    if (kept.length === 0) return;
+    const path = this.#path;
     await withFileLock(`${path}.lock`, async () => {
-      const file = this.#prune(await this.#read(inboxId));
+      const file = this.#prune(await this.#read());
       const at = this.#now().toISOString();
-      for (const address of collector.addresses()) {
-        file.addresses[address] = at;
-        const domain = domainOf(address);
-        if (domain) file.domains[domain] = at;
+      const touch = (map: Record<string, TaintEntry>, key: string, o: TaintObservation) => {
+        const existing = map[key];
+        const inboxIds = [...new Set([...(existing?.inboxIds ?? []), o.inboxId])];
+        // A header sighting is kept once seen: it is the stronger signal.
+        const source: TaintSource = existing?.source === 'header' ? 'header' : o.source;
+        map[key] = { at, source, inboxIds };
+      };
+      for (const o of kept) {
+        touch(file.addresses, o.address, o);
+        const domain = domainOf(o.address);
+        if (domain && !PUBLIC_MAILBOX_DOMAINS.has(domain)) touch(file.domains, domain, o);
       }
       await writeFileAtomic(path, JSON.stringify(file));
     });
   }
 
-  async check(inboxId: string, address: string): Promise<TaintCheck> {
-    const file = this.#prune(await this.#read(inboxId));
-    const normalised = normaliseAddress(address);
-    const domain = domainOf(normalised);
-    return { address: normalised in file.addresses, domain: domain !== null && domain in file.domains };
+  /** Whether an address, or its (non-public) domain, was seen in email content in the window — from any inbox. */
+  async check(address: string): Promise<TaintCheck> {
+    const file = this.#prune(await this.#read());
+    const canonical = canonicalAddress(address);
+    const domain = domainOf(canonical);
+    return {
+      address: canonical in file.addresses,
+      domain: domain !== null && !PUBLIC_MAILBOX_DOMAINS.has(domain) && domain in file.domains,
+    };
+  }
+}
+
+/**
+ * The context every read path uses to put sender-controlled content into a result. It wraps strings in the untrusted
+ * envelope and collects every address it sees; `flush` records them once, and a read must not return until it has.
+ */
+export class TaintCollector {
+  readonly #observations: TaintObservation[] = [];
+  readonly #inboxId: string;
+  readonly #messageId: string | undefined;
+
+  constructor(inboxId: string, messageId?: string) {
+    this.#inboxId = inboxId;
+    this.#messageId = messageId;
+  }
+
+  /** Scans free text (bodies, subjects, snippets, attachment text) for addresses. */
+  observeText(text: string): void {
+    for (const address of extractAddresses(text)) {
+      this.#observations.push({ address, source: 'body', inboxId: this.#inboxId, messageId: this.#messageId });
+    }
+  }
+
+  /** Records parsed header addresses (From, Reply-To, Sender, To, Cc). */
+  observeHeaders(addresses: Iterable<string>): void {
+    for (const address of addresses) {
+      const canonical = canonicalAddress(address);
+      if (canonical.includes('@')) {
+        this.#observations.push({
+          address: canonical,
+          source: 'header',
+          inboxId: this.#inboxId,
+          messageId: this.#messageId,
+        });
+      }
+    }
+  }
+
+  get size(): number {
+    return this.#observations.length;
+  }
+
+  observations(): TaintObservation[] {
+    return [...this.#observations];
+  }
+
+  /** Records everything collected. Throws when it cannot, so the read fails closed. */
+  async flush(store: TaintStore, exclusions: TaintExclusions): Promise<void> {
+    await store.record(this.#observations, exclusions);
   }
 }

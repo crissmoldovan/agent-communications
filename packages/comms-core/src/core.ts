@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { ApprovalStore } from './approvals.ts';
 import { AuditLog } from './audit.ts';
-import { ConfigStore } from './config.ts';
+import { ConfigStore, secretsStoreOf } from './config.ts';
 import { SendLedger } from './ledger.ts';
 import { type PathEnvironment, type ResolvedPaths, resolvePaths } from './paths.ts';
 import { PlanStore } from './plans.ts';
@@ -42,7 +42,7 @@ export function openCore(options: OpenCoreOptions = {}): Core {
     taint: new TaintStore(paths.stateDir, now),
     audit: new AuditLog(paths.stateDir, now),
     async secrets(kind?: SecretStoreKind): Promise<SecretStore> {
-      const chosen = kind ?? (await config.load()).secrets.store;
+      const chosen = kind ?? secretsStoreOf(await config.load());
       if (cached?.kind === chosen) return cached.store;
       const store = await openSecretStore(chosen, {
         secretsDir: join(paths.configDir, 'secrets'),

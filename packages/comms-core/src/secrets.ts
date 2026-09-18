@@ -19,6 +19,8 @@ export interface SecretStore {
   get(ref: string): Promise<string | null>;
   set(ref: string, value: string): Promise<void>;
   delete(ref: string): Promise<boolean>;
+  /** Forgets any cached value, so the next read goes to the backend (e.g. after another process re-authorised). */
+  invalidate(ref: string): void;
 }
 
 export const KEYCHAIN_SERVICE = 'agent-communications';
@@ -48,7 +50,7 @@ export class FileSecretStore implements SecretStore {
       return parsed.value;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw new CommsError('CONFIG', 'a stored secret file could not be read', {
+      throw new CommsError('SECRET_STORE_UNAVAILABLE', 'a stored secret file could not be read', {
         hint: 'Run `agentcomms doctor`; re-authorise the inbox if the file is damaged.',
         cause: error,
       });
@@ -57,6 +59,10 @@ export class FileSecretStore implements SecretStore {
 
   async set(ref: string, value: string): Promise<void> {
     await writeFileAtomic(this.#path(ref), JSON.stringify({ ref, value, updatedAt: new Date().toISOString() }));
+  }
+
+  invalidate(_ref: string): void {
+    // Nothing is cached: every read goes to the file.
   }
 
   async delete(ref: string): Promise<boolean> {
@@ -101,7 +107,7 @@ class KeychainTimeout extends Error {
 function keychainError(action: string, cause: unknown, timeoutMs: number): CommsError {
   const timedOut = cause instanceof KeychainTimeout;
   return new CommsError(
-    'CONFIG',
+    timedOut ? 'KEYCHAIN_APPROVAL_PENDING' : 'SECRET_STORE_UNAVAILABLE',
     timedOut
       ? `the system keychain did not answer within ${Math.round(timeoutMs / 1000)}s while trying to ${action}`
       : `the system keychain refused to ${action} (it may be locked, or access was denied)`,
@@ -138,6 +144,11 @@ export class KeychainSecretStore implements SecretStore {
   readonly #namespace: string;
   /** One keychain call at a time: parallel calls would each raise their own OS prompt and exhaust the thread pool. */
   #queue: Promise<unknown> = Promise.resolve();
+  /**
+   * A native call that timed out but has not settled — typically held by an OS dialog. It still occupies a libuv
+   * thread (which file I/O shares), so no further native call may start until it settles; callers fail fast instead.
+   */
+  #stuck: Promise<unknown> | null = null;
   /** Values already read, so a server start costs at most one prompt per secret. */
   readonly #cache = new Map<string, string | null>();
 
@@ -159,14 +170,30 @@ export class KeychainSecretStore implements SecretStore {
 
   #serial<T>(action: string, fn: () => Promise<T>): Promise<T> {
     const run = this.#queue.then(async () => {
+      if (this.#stuck) throw keychainError(action, new KeychainTimeout(), this.#timeoutMs);
+      const native = fn();
       try {
-        return await raceTimeout(fn(), this.#timeoutMs);
+        return await raceTimeout(native, this.#timeoutMs);
       } catch (error) {
+        if (error instanceof KeychainTimeout) {
+          const stuck: Promise<unknown> = native.then(
+            () => undefined,
+            () => undefined,
+          );
+          this.#stuck = stuck;
+          void stuck.then(() => {
+            if (this.#stuck === stuck) this.#stuck = null;
+          });
+        }
         throw keychainError(action, error, this.#timeoutMs);
       }
     });
     this.#queue = run.catch(() => undefined);
     return run;
+  }
+
+  invalidate(ref: string): void {
+    this.#cache.delete(ref);
   }
 
   async get(ref: string): Promise<string | null> {
@@ -228,8 +255,8 @@ export async function openSecretStore(
   const keyring = options.keyring === undefined ? await loadKeyringModule() : options.keyring;
   if (!keyring) {
     throw new CommsError(
-      'CONFIG',
-      'this inbox stores its token in the system keychain, but the keychain module is missing',
+      'SECRET_STORE_UNAVAILABLE',
+      'secrets are kept in the system keychain, but the keychain module is missing',
       {
         hint: 'Reinstall with optional dependencies, or re-add the inbox with --store file.',
       },

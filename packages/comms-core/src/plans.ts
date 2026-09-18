@@ -88,14 +88,14 @@ export class PlanStore {
       try {
         record = JSON.parse(await readFile(path, 'utf8')) as PlanRecord;
       } catch {
-        throw new CommsError('APPROVAL_REQUIRED', 'that plan does not exist or was already used', {
+        throw new CommsError('APPROVAL_VOID', 'that plan does not exist or was already used', {
           hint: 'Run the operation with --dry-run again.',
         });
       }
       // Single use: the plan is gone whether or not it matches.
       await rm(path, { force: true });
       if (this.#now() >= new Date(record.expiresAt)) {
-        throw new CommsError('APPROVAL_REQUIRED', 'that plan expired', {
+        throw new CommsError('APPROVAL_EXPIRED', 'that plan expired', {
           hint: 'Run the operation with --dry-run again.',
         });
       }
@@ -105,7 +105,7 @@ export class PlanStore {
       else if (record.paramsDigest !== paramsDigest(expected.params)) mismatch = 'different changes';
       else if (record.idsDigest !== idsDigest(expected.ids)) mismatch = 'a different set of messages';
       if (mismatch) {
-        throw new CommsError('APPROVAL_REQUIRED', `that plan was made for ${mismatch}`, {
+        throw new CommsError('APPROVAL_VOID', `that plan was made for ${mismatch}`, {
           hint: 'Run the operation with --dry-run again and use the new plan.',
         });
       }

@@ -35,10 +35,24 @@ export async function writeFileAtomic(
   }
   try {
     if (process.platform !== 'win32') await chmod(temp, mode);
-    await rename(temp, path);
+    await renameWithRetry(temp, path);
   } catch (error) {
     await rm(temp, { force: true });
     throw error;
+  }
+}
+
+/** On Windows a rename onto a file another process has open (or a scanner is reading) fails briefly; retry ~1 s. */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= 20 || !(code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
 }
 

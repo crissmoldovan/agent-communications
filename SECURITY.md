@@ -34,7 +34,16 @@ This project reads and writes people's email. In scope, among others:
 
 ## What the safety model does not claim
 
-The send gate protects against a mistaken or prompt-injected agent that uses this project's tools. It does **not**
-protect against a program that runs as your user with shell or file access: such a program can read the stored
-tokens and call Gmail directly. Reports that restate this documented limit are welcome as documentation
-improvements, not as vulnerabilities.
+The send gate protects against a mistaken or prompt-injected agent that uses this project's tools. Stated plainly:
+
+- **An agent with a shell is outside the boundary.** A program that runs as your user with shell or file access can
+  read the stored tokens and call Gmail directly, and can make any command believe it runs in a terminal. Terminal
+  approval and the agent-marker checks are speed bumps against that, not walls. For coding agents, use the `confirm`
+  policy with a client whose approval form you have verified, or the `never` policy and send from Gmail.
+- **Under the default `chat` policy, a message that asks you to reply to its own sender with private data** is
+  caught only by you reading the preview. Risk escalation covers being told by a message to write to *someone
+  else*; `confirm` covers both.
+- **An MCP client's name is self-reported.** One name (`claude-code`) covers the interactive CLI, SDK-hosted agents
+  and Claude Cowork. That is why approval forms are trusted only for clients you have added after a probe.
+
+Reports that restate these documented limits are welcome as documentation improvements, not as vulnerabilities.

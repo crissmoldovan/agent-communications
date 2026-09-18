@@ -39,9 +39,14 @@ Done in this branch:
 
 Still to do before the PR:
 
-- [ ] Attach deny list extended to every dot-entry under home, `~/Library`, `%APPDATA%`, browser profiles, `.git`
-      (§7.4, revision 2).
-- [ ] CHANGELOG `## Unreleased` entry.
+- [x] Attach deny list extended to every dot-entry under home, `~/Library`, `%APPDATA%`, `.git` (§7.4).
+- [x] Revision 3 core changes: specific error codes with one registry; hashed, attempt-limited challenges; O_EXCL
+      claim marker; `unknown` state; digest version; loosening classification with consent; reserved alias and
+      unique ids; one taint store across inboxes with a fail-closed collector; one dangerous-character table;
+      outbound HTML analyser; address-list parsing; keychain fail-fast for unsettled calls; lock takeover hardening;
+      condensed audit lines.
+- [x] CHANGELOG `## Unreleased` entry.
+- [ ] codex re-review of the spec and this phase's code once its quota resets (the review panel stood in for it).
 
 ## Phase 2 — auth, inbox lifecycle, surfaces (`feat/gmail-auth`)
 
