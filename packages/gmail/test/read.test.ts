@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { CommsError } from '@cloudpixel/comms-core';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { GmailContext } from '../src/context.ts';
-import { attachmentRisks, readMessage } from '../src/operations/read.ts';
+import { attachmentRisks, readMessage, readThread } from '../src/operations/read.ts';
 import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import type { FakeMessage } from './support/fake-google.ts';
 import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET } from './support/harness.ts';
@@ -232,4 +232,61 @@ test('attachment risks name what a file could do, including the extension trick'
   assert.deepEqual(attachmentRisks('page.svg', 'image/svg+xml'), ['markup']);
   assert.ok(attachmentRisks('invoice.pdf.exe', 'application/octet-stream').includes('double-extension'));
   assert.ok(attachmentRisks('photo.png', 'image/png').length === 0);
+});
+
+test('a thread is read in one call, oldest first, with each body collapsed', async () => {
+  const conversation: Record<string, FakeMessage> = {
+    m1: {
+      ...message({ html: '<p>Does Tuesday work?</p>', plain: 'Does Tuesday work?' }),
+      id: 'm1',
+      internalDate: String(Date.parse('2026-09-15T09:00:00Z')),
+    },
+    m3: {
+      ...message({ html: '<p>Tuesday is fine.</p>', plain: 'Tuesday is fine.' }),
+      id: 'm3',
+      internalDate: String(Date.parse('2026-09-17T11:00:00Z')),
+    },
+    m2: {
+      ...message({
+        html: '<p>Yes.</p><blockquote>Does Tuesday work?</blockquote>',
+        plain: 'Yes.\n\nOn Mon, 15 Sep 2026 at 10:00, Sam wrote:\n> Does Tuesday work?',
+      }),
+      id: 'm2',
+      internalDate: String(Date.parse('2026-09-16T10:00:00Z')),
+    },
+  };
+  const { harness, context } = await inboxWith(conversation);
+
+  const thread = await readThread(context, 'work', 't1');
+  assert.equal(thread.messageCount, 3);
+  assert.deepEqual(
+    thread.messages.map((entry) => entry.messageId),
+    ['m1', 'm2', 'm3'],
+    'a conversation reads oldest first, whatever order the API returned',
+  );
+  assert.deepEqual(thread.participants.sort(), ['ana@partner.test', 'jo@example.test', 'sam@partner.test']);
+
+  // One call for the whole thread, not one per message.
+  const calls = harness.google.requests.filter((request) => request.path.includes('/gmail/v1/users/me/'));
+  assert.equal(calls.filter((request) => request.path.includes('/threads/')).length, 1);
+  assert.equal(calls.filter((request) => request.path.includes('/messages/')).length, 0);
+
+  // The reply quotes the first message; the quote is collapsed rather than repeated.
+  const reply = thread.messages[1];
+  assert.match(reply?.body.enveloped ?? '', /Yes\./);
+  assert.equal(thread.truncated, false);
+});
+
+test('a thread longer than the budget stops, and says it stopped', async () => {
+  const long = 'sentence about the project '.repeat(200);
+  const { context } = await inboxWith({
+    m1: { ...message({ html: `<p>${long}</p>`, plain: long }), id: 'm1', internalDate: '1757930400000' },
+    m2: { ...message({ html: `<p>${long}</p>`, plain: long }), id: 'm2', internalDate: '1758016800000' },
+    m3: { ...message({ html: `<p>${long}</p>`, plain: long }), id: 'm3', internalDate: '1758103200000' },
+  });
+  const thread = await readThread(context, 'work', 't1', { maxThreadChars: 6000 });
+  assert.equal(thread.truncated, true);
+  assert.ok(thread.totalChars <= 6000 + 5400, 'the budget bounds what comes back');
+  assert.equal(thread.messageCount, 3, 'the count is of the thread, not of what fitted');
+  assert.ok(thread.messages.length >= 1);
 });

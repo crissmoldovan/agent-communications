@@ -86,6 +86,52 @@ export interface FakeGoogle {
   close(): Promise<void>;
 }
 
+/**
+ * The little of Gmail's query language the fake understands: `from:`, `subject:`, `has:attachment`, `is:unread`,
+ * `after:`/`before:` as epoch seconds, and bare words against the snippet. Enough to prove the compiled query is
+ * what reaches the API, which is what the tests are about.
+ */
+function matchesQuery(message: { internalDate?: string; snippet?: string; labelIds?: string[]; payload?: unknown }, query: string): boolean {
+  if (!query.trim()) return true;
+  const headers =
+    ((message.payload as { headers?: Array<{ name?: string; value?: string }> } | undefined)?.headers ?? []).map(
+      (header) => `${(header.name ?? '').toLowerCase()}:${header.value ?? ''}`,
+    ) ?? [];
+  const headerValue = (name: string): string =>
+    headers.find((header) => header.startsWith(`${name}:`))?.slice(name.length + 1) ?? '';
+
+  for (const token of query.split(/\s+/).filter(Boolean)) {
+    const colon = token.indexOf(':');
+    const operator = colon > 0 ? token.slice(0, colon).toLowerCase() : '';
+    const value = colon > 0 ? token.slice(colon + 1).replace(/^"|"$/g, '') : token;
+    switch (operator) {
+      case 'from':
+        if (!headerValue('from').toLowerCase().includes(value.toLowerCase())) return false;
+        break;
+      case 'subject':
+        if (!headerValue('subject').toLowerCase().includes(value.toLowerCase())) return false;
+        break;
+      case 'after':
+        if (Number(message.internalDate ?? 0) < Number(value) * 1000) return false;
+        break;
+      case 'before':
+        if (Number(message.internalDate ?? 0) >= Number(value) * 1000) return false;
+        break;
+      case 'is':
+        if (value === 'unread' && !(message.labelIds ?? []).includes('UNREAD')) return false;
+        break;
+      case 'has':
+        if (value === 'attachment' && !JSON.stringify(message.payload ?? {}).includes('attachmentId')) return false;
+        break;
+      default:
+        if (!`${message.snippet ?? ''} ${headerValue('subject')}`.toLowerCase().includes(value.toLowerCase())) {
+          return false;
+        }
+    }
+  }
+  return true;
+}
+
 function readBody(request: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -279,6 +325,44 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
         });
         return;
       }
+      // Listing: ids only, newest first, paged. `q` is recorded so a test can assert what was actually sent.
+      if (url.pathname === '/gmail/v1/users/me/messages' || url.pathname === '/gmail/v1/users/me/threads') {
+        const wantsThreads = url.pathname.endsWith('/threads');
+        const all = Object.entries(account?.messages ?? {})
+          .map(([messageId, value]) => ({ id: messageId, ...value }))
+          .sort((a, b) => Number(b.internalDate ?? 0) - Number(a.internalDate ?? 0));
+        const matching = all.filter((value) => matchesQuery(value, params.q ?? ''));
+        const rows = wantsThreads
+          ? [...new Map(matching.map((value) => [value.threadId ?? value.id, value])).values()]
+          : matching;
+        const pageSize = Math.max(1, Number(params.maxResults ?? 25));
+        const start = Number(params.pageToken ?? '0');
+        const page = rows.slice(start, start + pageSize);
+        const next = start + pageSize < rows.length ? String(start + pageSize) : undefined;
+        json(response, 200, {
+          [wantsThreads ? 'threads' : 'messages']: page.map((value) =>
+            wantsThreads ? { id: value.threadId ?? value.id } : { id: value.id, threadId: value.threadId },
+          ),
+          ...(next ? { nextPageToken: next } : {}),
+          resultSizeEstimate: rows.length,
+        });
+        return;
+      }
+
+      const thread = /^\/gmail\/v1\/users\/me\/threads\/([^/]+)$/.exec(url.pathname);
+      if (thread) {
+        const id = decodeURIComponent(thread[1] ?? '');
+        const messages = Object.entries(account?.messages ?? {})
+          .map(([messageId, value]) => ({ id: messageId, ...value }))
+          .filter((value) => (value.threadId ?? '') === id);
+        if (messages.length === 0) {
+          json(response, 404, { error: { code: 404, message: 'Requested entity was not found.', errors: [{ reason: 'notFound' }] } });
+          return;
+        }
+        json(response, 200, { id, messages });
+        return;
+      }
+
       const message = /^\/gmail\/v1\/users\/me\/messages\/([^/]+)$/.exec(url.pathname);
       if (message) {
         const id = decodeURIComponent(message[1] ?? '');

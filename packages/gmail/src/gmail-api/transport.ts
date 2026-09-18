@@ -20,6 +20,37 @@ export interface GmailTransport {
   listSendAs(): Promise<SendAsAddress[]>;
   /** One message with its full part tree. `format=metadata` has no parts, so reading always uses `full`. */
   getMessage(messageId: string): Promise<RawMessage>;
+  /** A whole thread in one call: cheaper than a get per message from three messages up. */
+  getThread(threadId: string): Promise<RawThread>;
+  /** One page of ids matching a query. Ids only: metadata is fetched for the rows actually shown. */
+  listMessages(options: ListOptions): Promise<ListPage>;
+  listThreads(options: ListOptions): Promise<ListPage>;
+  /**
+   * Headers, labels and the part tree without body bytes. `format=metadata` returns no parts at all, so a row that
+   * reports attachments has to ask for `full` and drop the bodies with a partial response instead.
+   */
+  getMessageMetadata(messageId: string): Promise<RawMessage>;
+}
+
+export interface ListOptions {
+  query: string;
+  pageToken?: string | undefined;
+  maxResults?: number | undefined;
+  includeSpamTrash?: boolean | undefined;
+}
+
+export interface ListPage {
+  /** Message or thread ids, newest first, as Gmail returns them. */
+  ids: Array<{ id: string; threadId?: string | undefined }>;
+  nextPageToken: string | undefined;
+  /** Gmail's own estimate. It is a lower bound on a capped page, and is reported as one. */
+  resultSizeEstimate: number | undefined;
+}
+
+export interface RawThread {
+  id?: string | null;
+  historyId?: string | null;
+  messages?: RawMessage[] | null;
 }
 
 /** The parts of Gmail's message resource this package reads. */
@@ -63,6 +94,23 @@ export interface TransportOptions {
   /** Concurrency cap per inbox: Gmail's per-user quota, not the network, is the limit worth respecting. */
   concurrency?: number;
   retry?: { attempts?: number; sleep?: (ms: number) => Promise<void>; random?: () => number };
+}
+
+/** Builds the list parameters, omitting the page token entirely when there is none. */
+function listParameters(options: ListOptions): {
+  userId: string;
+  q: string;
+  maxResults: number;
+  includeSpamTrash: boolean;
+  pageToken?: string;
+} {
+  const parameters = {
+    userId: 'me',
+    q: options.query,
+    maxResults: options.maxResults ?? 25,
+    includeSpamTrash: options.includeSpamTrash ?? false,
+  };
+  return options.pageToken === undefined ? parameters : { ...parameters, pageToken: options.pageToken };
 }
 
 /** The live transport: `@googleapis/gmail` and `@googleapis/people`, with our own auth, retries and error mapping. */
@@ -172,6 +220,52 @@ export class GoogleGmailTransport implements GmailTransport {
   async getMessage(messageId: string): Promise<RawMessage> {
     const { data } = await this.call('read a message', () =>
       this.gmail().users.messages.get({ userId: 'me', id: messageId, format: 'full' }),
+    );
+    return data;
+  }
+
+  async getThread(threadId: string): Promise<RawThread> {
+    const { data } = await this.call('read a thread', () =>
+      this.gmail().users.threads.get({ userId: 'me', id: threadId, format: 'full' }),
+    );
+    return data;
+  }
+
+  async listMessages(options: ListOptions): Promise<ListPage> {
+    const { data } = await this.call('search messages', () =>
+      this.gmail().users.messages.list(listParameters(options)),
+    );
+    return {
+      ids: (data.messages ?? []).map((message) => ({
+        id: message.id ?? '',
+        threadId: message.threadId ?? undefined,
+      })),
+      nextPageToken: data.nextPageToken ?? undefined,
+      resultSizeEstimate: data.resultSizeEstimate ?? undefined,
+    };
+  }
+
+  async listThreads(options: ListOptions): Promise<ListPage> {
+    const { data } = await this.call('search threads', () =>
+      this.gmail().users.threads.list(listParameters(options)),
+    );
+    return {
+      ids: (data.threads ?? []).map((thread) => ({ id: thread.id ?? '', threadId: thread.id ?? undefined })),
+      nextPageToken: data.nextPageToken ?? undefined,
+      resultSizeEstimate: data.resultSizeEstimate ?? undefined,
+    };
+  }
+
+  async getMessageMetadata(messageId: string): Promise<RawMessage> {
+    const { data } = await this.call('read message metadata', () =>
+      this.gmail().users.messages.get({
+        userId: 'me',
+        id: messageId,
+        format: 'full',
+        // Everything a search row needs, and none of the body bytes.
+        fields:
+          'id,threadId,labelIds,snippet,internalDate,payload(partId,mimeType,filename,headers,body/size,body/attachmentId,parts(partId,mimeType,filename,headers,body/size,body/attachmentId,parts(partId,mimeType,filename,headers,body/size,body/attachmentId)))',
+      }),
     );
     return data;
   }

@@ -7,7 +7,7 @@ import {
   wrapUntrusted,
 } from '@cloudpixel/comms-core';
 import { type AuthResults, readAuthResults, readSenderWarnings, type SenderWarnings } from '../domain/auth-results.ts';
-import { type BodyOptions, buildBody, type MessageBody } from '../domain/body.ts';
+import { type BodyOptions, buildBody, DEFAULT_MAX_CHARS, type MessageBody } from '../domain/body.ts';
 import { type GmailPart, headerValue, readParts } from '../domain/mime.ts';
 import type { GmailContext } from '../context.ts';
 
@@ -179,6 +179,89 @@ export async function taintExclusions(
 ): Promise<{ ownAddresses: string[]; internalDomains: string[] }> {
   const { inbox } = await context.inbox(alias);
   return { ownAddresses: [inbox.email], internalDomains: inbox.internalDomains };
+}
+
+export interface ReadThreadResult {
+  inbox: string;
+  threadId: string;
+  subject: string;
+  messageCount: number;
+  participants: string[];
+  /** Chronological, oldest first: a thread is read as a conversation, not as a stack. */
+  messages: ReadMessageResult[];
+  /** True when the per-thread cap cut the last messages short. */
+  truncated: boolean;
+  totalChars: number;
+}
+
+/** Total characters of body across a thread before it is cut: a whole thread should not fill a context window. */
+export const DEFAULT_THREAD_CHARS = 20_000;
+
+/**
+ * Reads a whole thread in one call. Later messages quote earlier ones, so each body is collapsed as usual, and the
+ * budget is spent oldest-first — a reader who runs out of room has still seen how the conversation started.
+ */
+export async function readThread(
+  context: GmailContext,
+  alias: string,
+  threadId: string,
+  options: ReadOptions & { maxThreadChars?: number | undefined } = {},
+): Promise<ReadThreadResult> {
+  const resolved = await context.inbox(alias);
+  await context.requireCapability(resolved, 'read');
+  const transport = await context.transport(alias);
+  const thread = await transport.getThread(threadId);
+
+  const boundary = options.boundary ?? newBoundary();
+  const collector = new TaintCollector(resolved.inbox.id, threadId);
+  const ordered = [...(thread.messages ?? [])].sort(
+    (a, b) => Number(a.internalDate ?? 0) - Number(b.internalDate ?? 0),
+  );
+
+  const budget = options.maxThreadChars ?? DEFAULT_THREAD_CHARS;
+  const messages: ReadMessageResult[] = [];
+  let spent = 0;
+  let truncated = false;
+  for (const message of ordered) {
+    const remaining = budget - spent;
+    if (remaining <= 0) {
+      truncated = true;
+      break;
+    }
+    const result = buildMessageResult(message, {
+      inbox: alias,
+      boundary,
+      collector,
+      body: { ...options, maxChars: Math.min(options.maxChars ?? DEFAULT_MAX_CHARS, remaining) },
+    });
+    spent += result.body.totalChars;
+    if (result.body.truncated) truncated = true;
+    messages.push(result);
+  }
+
+  await collector.flush(context.core.taint, await taintExclusions(context, alias));
+  await context.core.states.update(resolved.inbox.id, { lastUsedAt: context.now().toISOString() });
+
+  const participants = [
+    ...new Set(
+      messages.flatMap((message) =>
+        [message.from?.address, ...message.to.map((a) => a.address), ...message.cc.map((a) => a.address)].filter(
+          (address): address is string => Boolean(address),
+        ),
+      ),
+    ),
+  ];
+
+  return {
+    inbox: alias,
+    threadId: thread.id ?? threadId,
+    subject: messages[0]?.subject ?? '',
+    messageCount: ordered.length,
+    participants,
+    messages,
+    truncated,
+    totalChars: spent,
+  };
 }
 
 /** Reads one message. The result is returned only after the taint it observed has been recorded. */
