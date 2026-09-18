@@ -109,7 +109,9 @@ const inboxSchema = z.object({
   grantedScopes: z.array(z.string()).default([]),
   secretRef: z.string().min(1),
   sendPolicy: sendPolicySchema.optional(),
-  internalDomains: z.array(z.string()).default([]),
+  // Lower-cased on the way in: domains are case-insensitive, and a mixed-case entry would otherwise fail to match
+  // the inbox's own domain and demand consent for a change that is not one.
+  internalDomains: z.array(z.string().transform((domain) => domain.trim().toLowerCase())).default([]),
   createdAt: z.string(),
 });
 

@@ -4,6 +4,7 @@ import { parseAddressList } from '../src/addresses.ts';
 import {
   ConfigStore,
   classifyChange,
+  configSchema,
   defaultInternalDomains,
   emptyConfig,
   type InboxConfig,
@@ -185,6 +186,11 @@ test('classifyChange: a new inbox may trust its own domain, but not somebody els
   const other = structuredClone(before);
   other.inboxes.work = { ...row, email: 'jo@company.test', internalDomains: ['company.test', 'partner.test'] };
   assert.deepEqual(classifyChange(before, other).loosened, ['inboxes.work.internalDomains']);
+
+  // Domains are case-insensitive: writing one in capitals is not a change of meaning, so it needs no consent.
+  const shouted = structuredClone(before);
+  shouted.inboxes.work = { ...row, email: 'Jo@Company.TEST', internalDomains: ['Company.TEST'] };
+  assert.deepEqual(classifyChange(before, configSchema.parse(shouted)).loosened, []);
 });
 
 test('classifyChange: loosening the default policy counts even when there are no inboxes yet', async () => {

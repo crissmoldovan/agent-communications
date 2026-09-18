@@ -28,6 +28,7 @@ const HIDDEN_CASES: [string, string][] = [
   ['zero-alpha oklch', `<p style="color:oklch(0.5 0.1 200 / 0%)">${INJECTION}</p>`],
   ['zero-alpha four-digit hex', `<p style="color:#1230">${INJECTION}</p>`],
   ['text fill colour erased', `<p style="-webkit-text-fill-color:transparent">${INJECTION}</p>`],
+  ['text fill colour with zero alpha', `<p style="-webkit-text-fill-color:rgba(0,0,0,0)">${INJECTION}</p>`],
   ['zero height overflow hidden', `<div style="max-height:0;overflow:hidden">${INJECTION}</div>`],
   ['clip rect zero', `<div style="position:absolute;clip:rect(0,0,0,0)">${INJECTION}</div>`],
   ['clip-path inset', `<div style="clip-path: inset(100%)">${INJECTION}</div>`],
