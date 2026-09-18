@@ -187,6 +187,11 @@ test('classifyChange: narrowing the downloads directory is not a loosening', () 
   elsewhere.defaults.downloadsDir = '/tmp/anywhere';
   assert.deepEqual(classifyChange(before, elsewhere).loosened, ['defaults.downloadsDir']);
 
+  // `~` and the same path written out resolve to one place, so moving between the two spellings is not a change.
+  const tilde = structuredClone(before);
+  tilde.defaults.downloadsDir = '/var/empty/downloads/mail';
+  assert.deepEqual(classifyChange(before, tilde).loosened, []);
+
   // A name that merely starts with the same characters is not inside it.
   const lookalike = structuredClone(before);
   lookalike.defaults.downloadsDir = '/var/empty/downloads/mail-elsewhere';
