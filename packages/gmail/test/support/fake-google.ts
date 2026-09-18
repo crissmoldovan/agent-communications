@@ -41,6 +41,8 @@ export interface FakeAccount {
   contacts?: Array<{ name?: string; email: string }>;
   /** People Google recorded as corresponded with, but never saved. */
   otherContacts?: Array<{ name?: string; email: string }>;
+  /** Drafts this account holds, keyed by draft id. Created by the tests through the API, like a client would. */
+  drafts?: Record<string, { id: string; message: FakeMessage }>;
 }
 
 export interface FakeMessage {
@@ -173,6 +175,50 @@ function matchesQuery(
     if (!matchesTerm(token)) return false;
   }
   return true;
+}
+
+/** Undoes the quoted-printable encoding MailComposer applies, so the body reads back as it was written. */
+function decodeQuotedPrintable(text: string): string {
+  return text
+    .replace(/=\r?\n/g, '')
+    .replace(/=([0-9A-F]{2})/g, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+}
+
+/** Parses the raw message a client saved into the shape Gmail returns when the draft is read back. */
+function messageFromRaw(id: string, raw: string, threadId?: string): FakeMessage {
+  const text = Buffer.from(raw, 'base64url').toString('utf8');
+  const split = text.indexOf('\r\n\r\n');
+  const headerBlock = split >= 0 ? text.slice(0, split) : text;
+  const bodyBlock = split >= 0 ? text.slice(split + 4) : '';
+  // Unfold continuation lines, then split each header once on its colon.
+  const headers = headerBlock
+    .replace(/\r\n[ \t]+/g, ' ')
+    .split(/\r\n/)
+    .map((line) => {
+      const colon = line.indexOf(':');
+      return colon > 0 ? { name: line.slice(0, colon).trim(), value: line.slice(colon + 1).trim() } : null;
+    })
+    .filter((header): header is { name: string; value: string } => header !== null);
+
+  // The body is kept as one text part, quoted-printable decoded, so a draft reads back as the author wrote it.
+  const plain = decodeQuotedPrintable(
+    bodyBlock
+      .replace(/^--.*$/gm, '')
+      .replace(/Content-[^\n]*\n/g, '')
+      .trim(),
+  );
+  return {
+    id,
+    threadId: threadId ?? id,
+    labelIds: ['DRAFT'],
+    internalDate: String(Date.now()),
+    payload: {
+      partId: '',
+      mimeType: 'text/plain',
+      headers,
+      body: { size: plain.length, data: Buffer.from(plain, 'utf8').toString('base64url') },
+    },
+  };
 }
 
 function readBody(request: IncomingMessage): Promise<string> {
@@ -456,6 +502,54 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
             },
           ],
         });
+        return;
+      }
+
+      // ---- Drafts ---------------------------------------------------------------
+      // Gmail gives a draft's message a new id on every save; that is what lets an edit be detected later, so the
+      // fake does the same rather than keeping one id.
+      if (url.pathname === '/gmail/v1/users/me/drafts' && request.method === 'POST') {
+        const parsed = JSON.parse(body || '{}') as { message?: { raw?: string; threadId?: string } };
+        const draftId = `d_${randomBytes(6).toString('hex')}`;
+        const messageId = `dm_${randomBytes(6).toString('hex')}`;
+        const message = messageFromRaw(messageId, parsed.message?.raw ?? '', parsed.message?.threadId);
+        if (account) {
+          account.drafts = { ...(account.drafts ?? {}), [draftId]: { id: draftId, message } };
+        }
+        json(response, 200, { id: draftId, message: { id: messageId, threadId: message.threadId } });
+        return;
+      }
+      if (url.pathname === '/gmail/v1/users/me/drafts' && request.method === 'GET') {
+        json(response, 200, {
+          drafts: Object.values(account?.drafts ?? {}).map((draft) => ({
+            id: draft.id,
+            message: { id: draft.message.id },
+          })),
+        });
+        return;
+      }
+      const draftPath = /^\/gmail\/v1\/users\/me\/drafts\/([^/]+)$/.exec(url.pathname);
+      if (draftPath) {
+        const draftId = decodeURIComponent(draftPath[1] ?? '');
+        const existing = account?.drafts?.[draftId];
+        if (!existing) {
+          json(response, 404, { error: { code: 404, message: 'Not Found', errors: [{ reason: 'notFound' }] } });
+          return;
+        }
+        if (request.method === 'DELETE') {
+          if (account?.drafts) delete account.drafts[draftId];
+          response.writeHead(204).end();
+          return;
+        }
+        if (request.method === 'PUT') {
+          const parsed = JSON.parse(body || '{}') as { message?: { raw?: string; threadId?: string } };
+          const messageId = `dm_${randomBytes(6).toString('hex')}`;
+          const message = messageFromRaw(messageId, parsed.message?.raw ?? '', parsed.message?.threadId);
+          if (account?.drafts) account.drafts[draftId] = { id: draftId, message };
+          json(response, 200, { id: draftId, message: { id: messageId, threadId: message.threadId } });
+          return;
+        }
+        json(response, 200, { id: draftId, message: existing.message });
         return;
       }
 

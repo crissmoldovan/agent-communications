@@ -36,6 +36,19 @@ export interface GmailTransport {
   searchContacts(query: string): Promise<ContactMatch[]>;
   /** The message exactly as it arrived, for an `.eml` export. */
   getRawMessage(messageId: string): Promise<Buffer>;
+  /** Saves a draft. Creating one is not sending one, and no method here sends. */
+  createDraft(raw: Buffer, threadId?: string | undefined): Promise<DraftHandle>;
+  updateDraft(draftId: string, raw: Buffer, threadId?: string | undefined): Promise<DraftHandle>;
+  getDraft(draftId: string): Promise<{ id: string; message?: RawMessage | undefined }>;
+  listDrafts(limit: number): Promise<Array<{ id: string; message?: RawMessage | undefined }>>;
+  deleteDraft(draftId: string): Promise<void>;
+}
+
+export interface DraftHandle {
+  draftId: string;
+  /** Gmail gives the draft's message a new id on every save, which is how an edit is detected later. */
+  messageId: string;
+  threadId: string | undefined;
 }
 
 export interface ContactMatch {
@@ -329,6 +342,59 @@ export class GoogleGmailTransport implements GmailTransport {
       this.gmail().users.messages.get({ userId: 'me', id: messageId, format: 'raw' }),
     );
     return Buffer.from(data.raw ?? '', 'base64url');
+  }
+
+  async createDraft(raw: Buffer, threadId?: string | undefined): Promise<DraftHandle> {
+    const { data } = await this.call('save a draft', () =>
+      this.gmail().users.drafts.create({
+        userId: 'me',
+        requestBody: { message: { raw: raw.toString('base64url'), ...(threadId ? { threadId } : {}) } },
+      }),
+    );
+    return {
+      draftId: data.id ?? '',
+      messageId: data.message?.id ?? '',
+      threadId: data.message?.threadId ?? undefined,
+    };
+  }
+
+  async updateDraft(draftId: string, raw: Buffer, threadId?: string | undefined): Promise<DraftHandle> {
+    const { data } = await this.call('update a draft', () =>
+      this.gmail().users.drafts.update({
+        userId: 'me',
+        id: draftId,
+        requestBody: { message: { raw: raw.toString('base64url'), ...(threadId ? { threadId } : {}) } },
+      }),
+    );
+    return {
+      draftId: data.id ?? draftId,
+      messageId: data.message?.id ?? '',
+      threadId: data.message?.threadId ?? undefined,
+    };
+  }
+
+  async getDraft(draftId: string): Promise<{ id: string; message?: RawMessage | undefined }> {
+    const { data } = await this.call('read a draft', () =>
+      this.gmail().users.drafts.get({ userId: 'me', id: draftId, format: 'full' }),
+    );
+    return { id: data.id ?? draftId, message: data.message ?? undefined };
+  }
+
+  async listDrafts(limit: number): Promise<Array<{ id: string; message?: RawMessage | undefined }>> {
+    const { data } = await this.call('list drafts', () =>
+      this.gmail().users.drafts.list({ userId: 'me', maxResults: limit }),
+    );
+    const drafts = data.drafts ?? [];
+    // The list gives ids only; each draft's headers come from its own read.
+    return Promise.all(
+      drafts.map(async (draft) => (draft.id ? this.getDraft(draft.id) : { id: '', message: undefined })),
+    );
+  }
+
+  async deleteDraft(draftId: string): Promise<void> {
+    await this.call('delete a draft', () => this.gmail().users.drafts.delete({ userId: 'me', id: draftId }), {
+      mode: 'rate-limit-only',
+    });
   }
 
   async listSendAs(): Promise<SendAsAddress[]> {
