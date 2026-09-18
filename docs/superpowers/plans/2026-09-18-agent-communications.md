@@ -72,9 +72,15 @@ Still to do before the PR:
 
 ## Phase 3 — read and analyse (`feat/gmail-read`)
 
-- [ ] Search with the validated cross-inbox cursor; message and thread read with the body pipeline (HTML
-      authoritative, plain/HTML mismatch); timeline; attachments find/download; export; contacts; follow-ups;
-      labels/sendAs/drafts list — operations, CLI, MCP, tests.
+- [x] Search with the validated cross-inbox cursor (bound to query and mailbox set, lazy merge by date).
+- [x] Message and thread read with the body pipeline: HTML authoritative, text present only in the plain part
+      reported as a mismatch and counted as hidden, quoted history collapsed, truncation with a continuation offset.
+- [x] Timeline computed from headers and dates, with business-hours gaps and who is waited on; Markdown and Mermaid.
+- [x] Attachments: find with risk flags, download under the jail with safe names, dedupe and a manifest.
+- [x] Export to md, json or eml.
+- [x] Contacts across the address book, other contacts and past mail; follow-ups in both directions.
+- [x] labels and sendAs lists; everything above on both the CLI and the MCP server (fourteen tools).
+- [ ] Drafts list — moved to Phase 4, where drafts are created.
 - [ ] **Live check:** read-only calls on the P2 inbox.
 
 ## Phase 4 — compose and organise (`feat/gmail-compose`)
