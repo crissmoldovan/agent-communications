@@ -7,6 +7,7 @@ import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { GmailContext } from '../src/context.ts';
 import { attachmentQuery, downloadAttachments, findAttachments } from '../src/operations/attachments.ts';
+import { exportMail } from '../src/operations/export.ts';
 import type { FakeMessage } from './support/fake-google.ts';
 import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
 
@@ -313,4 +314,43 @@ test('an attachment that is not there is skipped with a reason, not a crash', as
   assert.equal(result.skipped[0]?.reason, 'no such attachment');
   // The manifest is still written, so a caller can see what happened.
   assert.ok((await readdir(join(downloads, 'work'))).includes('manifest.json'));
+});
+
+test('a thread exports to a file instead of into the conversation', async () => {
+  const { context, downloads } = await connected(
+    {
+      m1: withAttachment({
+        id: 'm1',
+        at: '2026-09-15T09:00:00Z',
+        from: 'Sam Lee <sam@partner.test>',
+        subject: 'Invoice for August',
+        filename: 'invoice.pdf',
+        attachmentId: 'a1',
+      }),
+    },
+    { a1: 'invoice bytes' },
+  );
+
+  const markdown = await exportMail(context, 'work', 'm1');
+  assert.equal(markdown.format, 'md');
+  assert.ok(markdown.path.startsWith(downloads));
+  const text = await readFile(markdown.path, 'utf8');
+  assert.match(text, /## Invoice for August/);
+  assert.match(text, /sam@partner\.test/);
+  assert.match(text, /invoice\.pdf/);
+  // The body keeps its envelope: a file is read back by the same models.
+  assert.match(text, /<untrusted-email-content/);
+
+  const json = await exportMail(context, 'work', 'm1', { format: 'json' });
+  const parsed = JSON.parse(await readFile(json.path, 'utf8')) as { messageId: string };
+  assert.equal(parsed.messageId, 'm1');
+
+  const eml = await exportMail(context, 'work', 'm1', { format: 'eml' });
+  assert.match(await readFile(eml.path, 'utf8'), /^From: Sam Lee <sam@partner\.test>/);
+
+  // A thread cannot be one .eml file, and says so rather than writing something misleading.
+  await assert.rejects(
+    exportMail(context, 'work', 'm1', { format: 'eml', thread: true }),
+    (error: unknown) => error instanceof CommsError && error.code === 'USAGE',
+  );
 });

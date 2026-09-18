@@ -6,6 +6,7 @@ import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts
 import { downloadAttachments, findAttachments } from '../operations/attachments.ts';
 import { followUps, searchContacts } from '../operations/contacts.ts';
 import { doctor } from '../operations/doctor.ts';
+import { exportMail } from '../operations/export.ts';
 import { inboxList, whoami } from '../operations/inboxes.ts';
 import { readMessage, readThread } from '../operations/read.ts';
 import { search } from '../operations/search.ts';
@@ -540,6 +541,38 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           limit,
         });
         return reply({ rows: result.rows, query: result.query, complete: result.complete, errors: result.errors });
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'gmail_export',
+    {
+      title: 'Export to a file',
+      description:
+        'Write a message or a whole thread to a file under the downloads folder, as Markdown, JSON or (for one message) the original .eml. Use this instead of reading a long thread into the conversation: the file can then be read in pieces.',
+      inputSchema: z.object({
+        inbox: inboxArgument(Boolean(pinned)),
+        id: z.string().min(1).describe('a message id, or a thread id with thread: true'),
+        thread: mcpBoolean().optional(),
+        format: z.enum(['md', 'json', 'eml']).optional(),
+        out: z.string().optional().describe('a folder inside the downloads root'),
+        includeQuoted: mcpBoolean().optional(),
+      }),
+      outputSchema: z.object({
+        path: z.string(),
+        format: z.string(),
+        bytes: z.number(),
+        kind: z.string(),
+        messageCount: z.number(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ inbox, id, thread, format, out, includeQuoted }) => {
+      try {
+        return reply(await exportMail(context, targetInbox(inbox), id, { thread, format, out, includeQuoted }));
       } catch (error) {
         return fail(error);
       }

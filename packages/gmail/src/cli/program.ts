@@ -21,6 +21,7 @@ import { downloadAttachments, findAttachments } from '../operations/attachments.
 import { clientAdd, clientList, clientRemove } from '../operations/clients.ts';
 import { followUps, searchContacts } from '../operations/contacts.ts';
 import { doctor } from '../operations/doctor.ts';
+import { exportMail } from '../operations/export.ts';
 import { importLegacy } from '../operations/import-legacy.ts';
 import { inboxList, inboxPolicy, inboxRemove, inboxRename, inboxShow, whoami } from '../operations/inboxes.ts';
 import { runOauthListener } from '../operations/oauth-listen.ts';
@@ -506,6 +507,33 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           limit: options.limit === undefined ? undefined : Number(options.limit),
         });
         writeResult(result, output(), (data) => renderFollowUps(data, globalOptions.color), streams);
+      }),
+    );
+
+  program
+    .command('export <id>')
+    .description('write a message or a thread to a file, to read without filling the conversation')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .option('--thread', 'export the whole conversation', false)
+    .addOption(new Option('--format <format>', 'md, json or eml').choices(['md', 'json', 'eml']))
+    .option('--out <subpath>', 'a folder inside the downloads root')
+    .option('--quoted', 'keep quoted history', false)
+    .action(
+      act(async (context, globalOptions, id: string, options: Options) => {
+        const result = await exportMail(context, String(options.inbox), id, {
+          thread: Boolean(options.thread),
+          format: options.format as 'md' | 'json' | 'eml' | undefined,
+          out: options.out ? String(options.out) : undefined,
+          includeQuoted: Boolean(options.quoted),
+        });
+        writeResult(
+          result,
+          output(),
+          (data) =>
+            `Wrote ${data.kind === 'thread' ? `${data.messageCount} messages` : 'the message'} to ${data.path} ` +
+            `(${Math.round(data.bytes / 1024)} KB, ${data.format}).`,
+          streams,
+        );
       }),
     );
 

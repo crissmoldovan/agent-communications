@@ -34,6 +34,8 @@ export interface GmailTransport {
   getAttachment(messageId: string, attachmentId: string): Promise<Buffer>;
   /** People the user has saved, and people they have corresponded with. Needs the contacts permission. */
   searchContacts(query: string): Promise<ContactMatch[]>;
+  /** The message exactly as it arrived, for an `.eml` export. */
+  getRawMessage(messageId: string): Promise<Buffer>;
 }
 
 export interface ContactMatch {
@@ -320,6 +322,13 @@ export class GoogleGmailTransport implements GmailTransport {
     collect(saved.data, 'contacts');
     collect(others.data, 'other-contacts');
     return matches;
+  }
+
+  async getRawMessage(messageId: string): Promise<Buffer> {
+    const { data } = await this.call('export a message', () =>
+      this.gmail().users.messages.get({ userId: 'me', id: messageId, format: 'raw' }),
+    );
+    return Buffer.from(data.raw ?? '', 'base64url');
   }
 
   async listSendAs(): Promise<SendAsAddress[]> {

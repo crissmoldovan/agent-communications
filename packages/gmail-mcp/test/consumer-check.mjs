@@ -68,6 +68,7 @@ assert.deepEqual(names, [
   'gmail_attachments_find',
   'gmail_contacts_search',
   'gmail_doctor',
+  'gmail_export',
   'gmail_followups',
   'gmail_inboxes_list',
   'gmail_labels_list',

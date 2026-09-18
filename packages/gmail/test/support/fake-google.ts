@@ -429,6 +429,16 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
           });
           return;
         }
+        if ((params.format ?? '') === 'raw') {
+          const headers = (
+            (found.payload as { headers?: Array<{ name?: string; value?: string }> } | undefined)?.headers ?? []
+          )
+            .map((header) => `${header.name}: ${header.value}`)
+            .join('\r\n');
+          const raw = `${headers}\r\n\r\n${found.snippet ?? ''}`;
+          json(response, 200, { id, threadId: found.threadId, raw: Buffer.from(raw).toString('base64url') });
+          return;
+        }
         json(response, 200, { id, ...found });
         return;
       }
