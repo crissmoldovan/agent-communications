@@ -6,8 +6,10 @@ import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts
 import { downloadAttachments, findAttachments } from '../operations/attachments.ts';
 import { followUps, searchContacts } from '../operations/contacts.ts';
 import { doctor } from '../operations/doctor.ts';
+import { createDraft, deleteDraft, getDraft, listDrafts, replyDraft, updateDraft } from '../operations/drafts.ts';
 import { exportMail } from '../operations/export.ts';
 import { inboxList, whoami } from '../operations/inboxes.ts';
+import { createLabel, modify, trash } from '../operations/organise.ts';
 import { readMessage, readThread } from '../operations/read.ts';
 import { search } from '../operations/search.ts';
 import { VERSION } from '../version.ts';
@@ -649,6 +651,301 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       }
     },
   );
+
+  // ---- drafts -------------------------------------------------------------------
+  // A draft is written, never sent. Sending is a separate, approved act, and no tool here can perform it.
+  const draftView = z.object({
+    inbox: z.string(),
+    draftId: z.string(),
+    messageId: z.string(),
+    threadId: z.string().nullable(),
+    to: z.array(z.string()),
+    cc: z.array(z.string()),
+    bcc: z.array(z.string()),
+    subject: z.string(),
+    preview: z.string().describe('the message as the person must see it before approving anything'),
+    attachments: z.array(
+      z.object({ filename: z.string(), size: z.number(), mimeType: z.string(), source: z.string() }),
+    ),
+    bytes: z.number(),
+    warnings: z.array(z.string()),
+    profile: z.string().nullable(),
+  });
+  const draftReply = (result: Awaited<ReturnType<typeof createDraft>>): ReturnType<typeof reply> =>
+    reply({
+      ...result,
+      threadId: result.threadId ?? null,
+      profile: result.profile ?? null,
+    });
+
+  const bodyArgument = z
+    .string()
+    .min(1)
+    .describe(
+      'the body as plain text; the HTML part is generated from it, so markup here is written out, not rendered',
+    );
+
+  server.registerTool(
+    'gmail_draft_list',
+    {
+      title: 'List drafts',
+      description: 'The drafts waiting in a mailbox: who each is to, its subject, and when it was last saved.',
+      inputSchema: z.object({
+        inbox: inboxArgument(Boolean(pinned)),
+        limit: mcpInteger().optional().describe('default 20'),
+      }),
+      outputSchema: z.object({
+        drafts: z.array(
+          z.object({
+            draftId: z.string(),
+            messageId: z.string(),
+            threadId: z.string().nullable(),
+            to: z.array(z.string()),
+            subject: z.string(),
+            updatedAt: z.string().nullable(),
+          }),
+        ),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ inbox, limit }) => {
+      try {
+        const drafts = await listDrafts(context, targetInbox(inbox), limit);
+        return reply({ drafts: drafts.map((draft) => ({ ...draft, threadId: draft.threadId ?? null })) });
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'gmail_draft_get',
+    {
+      title: 'Read a draft',
+      description: 'Read a draft back, with the same preview the person would approve. Show the preview verbatim.',
+      inputSchema: z.object({ inbox: inboxArgument(Boolean(pinned)), draftId: z.string().min(1) }),
+      outputSchema: draftView,
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ inbox, draftId }) => {
+      try {
+        return draftReply(await getDraft(context, targetInbox(inbox), draftId));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  /**
+   * Everything past here changes the mailbox, so `readOnly` decides whether it exists at all.
+   *
+   * Not registering is the honest reading of the flag: a client's tool list then says what this server can do,
+   * rather than offering a tool that is refused once the model has already decided to use it. None of these sends
+   * anything — a draft is written where the person can read it, and organising moves mail around inside the
+   * mailbox — but all of them write, and a server started read-only was started that way for a reason.
+   */
+  if (!options.readOnly) {
+    server.registerTool(
+      'gmail_draft_create',
+      {
+        title: 'Write a draft',
+        description:
+          'Write a new message into Drafts and return the preview the person must read before anything is sent. Nothing is sent by this tool, or by any tool on this server: the person sends it from Gmail, or approves a send explicitly. Show the returned `preview` to the person verbatim.',
+        inputSchema: z.object({
+          inbox: inboxArgument(Boolean(pinned)),
+          to: mcpStringArray().describe('who it goes to'),
+          cc: mcpStringArray().optional(),
+          bcc: mcpStringArray().optional(),
+          subject: z.string().optional(),
+          text: bodyArgument,
+          attach: mcpStringArray().optional().describe('local file paths; each is checked against the attachment jail'),
+          signature: mcpBoolean().optional().describe('use the mailbox signature (default true)'),
+          includeProfile: mcpBoolean().optional().describe('return the mailbox writing profile alongside the draft'),
+        }),
+        outputSchema: draftView,
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      },
+      async ({ inbox, ...input }) => {
+        try {
+          return draftReply(await createDraft(context, targetInbox(inbox), input));
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+
+    server.registerTool(
+      'gmail_draft_reply',
+      {
+        title: 'Draft a reply or forward',
+        description:
+          'Draft an answer to a message, or forward it. The recipients are computed from the original — Reply-To wins, reply-all drops your own addresses — and returned so they can be checked before anything is sent. A forward starts a new conversation and needs `to`. Nothing is sent by this tool.',
+        inputSchema: z.object({
+          inbox: inboxArgument(Boolean(pinned)),
+          messageId: z.string().min(1).describe('the message being answered'),
+          mode: z.enum(['reply', 'reply_all', 'forward']).optional().describe('default: reply'),
+          to: mcpStringArray().optional().describe('required for a forward; computed for a reply'),
+          cc: mcpStringArray().optional(),
+          bcc: mcpStringArray().optional(),
+          text: bodyArgument,
+          attach: mcpStringArray().optional(),
+          signature: mcpBoolean().optional(),
+          includeProfile: mcpBoolean().optional(),
+        }),
+        outputSchema: draftView,
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      },
+      async ({ inbox, messageId, ...input }) => {
+        try {
+          return draftReply(await replyDraft(context, targetInbox(inbox), messageId, input));
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+
+    server.registerTool(
+      'gmail_draft_update',
+      {
+        title: 'Rewrite a draft',
+        description:
+          'Replace a draft’s body, and optionally its recipients or subject. Anything not restated is kept. Gmail gives the draft a new message id on every save, which is what makes an edit detectable later.',
+        inputSchema: z.object({
+          inbox: inboxArgument(Boolean(pinned)),
+          draftId: z.string().min(1),
+          to: mcpStringArray().optional(),
+          cc: mcpStringArray().optional(),
+          bcc: mcpStringArray().optional(),
+          subject: z.string().optional(),
+          text: bodyArgument,
+          attach: mcpStringArray().optional(),
+          signature: mcpBoolean().optional(),
+          includeProfile: mcpBoolean().optional(),
+        }),
+        outputSchema: draftView,
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      },
+      async ({ inbox, draftId, ...input }) => {
+        try {
+          return draftReply(await updateDraft(context, targetInbox(inbox), draftId, input));
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+
+    server.registerTool(
+      'gmail_draft_delete',
+      {
+        title: 'Delete a draft',
+        description: 'Throw a draft away. A draft has never been sent, so nothing leaves the mailbox either way.',
+        inputSchema: z.object({ inbox: inboxArgument(Boolean(pinned)), draftId: z.string().min(1) }),
+        outputSchema: z.object({ draftId: z.string() }),
+        annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+      },
+      async ({ inbox, draftId }) => {
+        try {
+          return reply(await deleteDraft(context, targetInbox(inbox), draftId));
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+
+    // ---- organising ---------------------------------------------------------------
+    server.registerTool(
+      'gmail_organise',
+      {
+        title: 'Label, archive, star, mark read',
+        description:
+          'Change labels on messages or whole conversations: add or remove a label, archive, star, mark read or unread. Every change is reversible and the result carries the exact change that puts it back. Pass `dryRun` first when the selection came from a search: it reports how many messages would change and touches nothing.',
+        inputSchema: z.object({
+          inbox: inboxArgument(Boolean(pinned)),
+          messageIds: mcpStringArray().optional(),
+          threadIds: mcpStringArray().optional().describe('every message in these conversations'),
+          addLabels: mcpStringArray().optional().describe('by name or id; system names work in any case'),
+          removeLabels: mcpStringArray().optional(),
+          archive: mcpBoolean().optional(),
+          markRead: mcpBoolean().optional(),
+          markUnread: mcpBoolean().optional(),
+          star: mcpBoolean().optional(),
+          unstar: mcpBoolean().optional(),
+          dryRun: mcpBoolean().optional(),
+        }),
+        outputSchema: z.object({
+          inbox: z.string(),
+          dryRun: z.boolean(),
+          messages: z.number(),
+          threads: z.number(),
+          addLabelIds: z.array(z.string()),
+          removeLabelIds: z.array(z.string()),
+          undo: z
+            .object({
+              addLabelIds: z.array(z.string()),
+              removeLabelIds: z.array(z.string()),
+              messageIds: z.array(z.string()),
+            })
+            .nullable(),
+        }),
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      },
+      async ({ inbox, ...input }) => {
+        try {
+          return reply(await modify(context, targetInbox(inbox), input));
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+
+    server.registerTool(
+      'gmail_trash',
+      {
+        title: 'Move to the bin',
+        description:
+          'Move messages or conversations to the bin, or take them out again with `undo`. Gmail keeps a binned message for thirty days; permanent deletion is not offered by this server at all. Use `dryRun` to see what would move.',
+        inputSchema: z.object({
+          inbox: inboxArgument(Boolean(pinned)),
+          messageIds: mcpStringArray().optional(),
+          threadIds: mcpStringArray().optional(),
+          undo: mcpBoolean().optional().describe('take them out of the bin instead'),
+          dryRun: mcpBoolean().optional(),
+        }),
+        outputSchema: z.object({
+          inbox: z.string(),
+          dryRun: z.boolean(),
+          messages: z.array(z.string()),
+          action: z.enum(['trash', 'untrash']),
+        }),
+        annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+      },
+      async ({ inbox, ...input }) => {
+        try {
+          return reply(await trash(context, targetInbox(inbox), input));
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+
+    server.registerTool(
+      'gmail_label_create',
+      {
+        title: 'Create a label',
+        description: 'Create a label, or return the one already there. Asking twice is not an error.',
+        inputSchema: z.object({ inbox: inboxArgument(Boolean(pinned)), name: z.string().min(1) }),
+        outputSchema: z.object({ id: z.string(), name: z.string(), existed: z.boolean() }),
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      },
+      async ({ inbox, name }) => {
+        try {
+          return reply(await createLabel(context, targetInbox(inbox), name));
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+  }
 
   return {
     server,

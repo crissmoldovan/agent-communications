@@ -42,6 +42,15 @@ export interface GmailTransport {
   getDraft(draftId: string): Promise<{ id: string; message?: RawMessage | undefined }>;
   listDrafts(limit: number): Promise<Array<{ id: string; message?: RawMessage | undefined }>>;
   deleteDraft(draftId: string): Promise<void>;
+  /** Adds and removes labels on many messages at once. Changing a label is not sending anything. */
+  modifyMessages(
+    messageIds: readonly string[],
+    addLabelIds: readonly string[],
+    removeLabelIds: readonly string[],
+  ): Promise<void>;
+  trashMessage(messageId: string): Promise<void>;
+  untrashMessage(messageId: string): Promise<void>;
+  createLabel(name: string): Promise<{ id: string; name: string }>;
 }
 
 export interface DraftHandle {
@@ -395,6 +404,48 @@ export class GoogleGmailTransport implements GmailTransport {
     await this.call('delete a draft', () => this.gmail().users.drafts.delete({ userId: 'me', id: draftId }), {
       mode: 'rate-limit-only',
     });
+  }
+
+  async modifyMessages(
+    messageIds: readonly string[],
+    addLabelIds: readonly string[],
+    removeLabelIds: readonly string[],
+  ): Promise<void> {
+    // Gmail's batch endpoint takes up to a thousand ids per call and costs far less than one call each.
+    for (let index = 0; index < messageIds.length; index += 1000) {
+      const chunk = messageIds.slice(index, index + 1000);
+      await this.call('change labels', () =>
+        this.gmail().users.messages.batchModify({
+          userId: 'me',
+          requestBody: { ids: [...chunk], addLabelIds: [...addLabelIds], removeLabelIds: [...removeLabelIds] },
+        }),
+      );
+    }
+  }
+
+  async trashMessage(messageId: string): Promise<void> {
+    await this.call('move a message to the bin', () =>
+      this.gmail().users.messages.trash({ userId: 'me', id: messageId }),
+    );
+  }
+
+  async untrashMessage(messageId: string): Promise<void> {
+    await this.call('take a message out of the bin', () =>
+      this.gmail().users.messages.untrash({ userId: 'me', id: messageId }),
+    );
+  }
+
+  async createLabel(name: string): Promise<{ id: string; name: string }> {
+    const { data } = await this.call(
+      'create a label',
+      () =>
+        this.gmail().users.labels.create({
+          userId: 'me',
+          requestBody: { name, labelListVisibility: 'labelShow', messageListVisibility: 'show' },
+        }),
+      { mode: 'rate-limit-only' },
+    );
+    return { id: data.id ?? '', name: data.name ?? name };
   }
 
   async listSendAs(): Promise<SendAsAddress[]> {

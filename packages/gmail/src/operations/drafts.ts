@@ -379,6 +379,91 @@ export async function deleteDraft(context: GmailContext, alias: string, draftId:
   return { draftId };
 }
 
+/**
+ * Replaces the content of a draft that already exists.
+ *
+ * Gmail gives the draft's message a new id on every save, which is how an edit is noticed later: an approval is
+ * bound to the message id it was given, so editing a draft after it has been approved invalidates that approval
+ * rather than quietly changing what gets sent.
+ */
+export async function updateDraft(
+  context: GmailContext,
+  alias: string,
+  draftId: string,
+  input: DraftInput,
+): Promise<DraftResult> {
+  const resolved = await context.inbox(alias);
+  await context.requireCapability(resolved, 'draft');
+  const transport = await context.transport(alias);
+
+  const existing = await transport.getDraft(draftId);
+  const headers = existing.message?.payload?.headers ?? [];
+  // Anything the caller does not restate keeps what the draft already had.
+  const to = input.to ?? parseAddressList(headerValue(headers, 'To')).map((entry) => entry.address);
+  const cc = input.cc ?? parseAddressList(headerValue(headers, 'Cc')).map((entry) => entry.address);
+  const bcc = input.bcc ?? parseAddressList(headerValue(headers, 'Bcc')).map((entry) => entry.address);
+  const subject = input.subject ?? headerValue(headers, 'Subject') ?? '';
+  const from = resolved.inbox.email;
+
+  const { attachments, described, warnings: attachmentWarnings } = await attachmentsFor(context, input.attach ?? []);
+  const signature = input.signature === false ? undefined : await signatureFor(context, alias, from);
+  const inReplyTo = headerValue(headers, 'In-Reply-To');
+  const references = (headerValue(headers, 'References') ?? '').split(/\s+/).filter(Boolean);
+
+  const composed = await composeMessage({
+    from: formatAddress({ name: '', address: from }),
+    to,
+    cc,
+    bcc,
+    subject,
+    text: input.text,
+    signature,
+    attachments,
+    inReplyTo,
+    references,
+  });
+
+  const saved = await transport.updateDraft(draftId, composed.raw, existing.message?.threadId ?? undefined);
+  const warnings = [...attachmentWarnings, ...warningsFor({ to, cc, bcc, ownDomains: resolved.inbox.internalDomains })];
+
+  await context.core.audit.append({
+    inboxId: resolved.inbox.id,
+    alias,
+    operation: 'draft.update',
+    outcome: 'ok',
+    surface: context.surface,
+    ids: { draftIds: [draftId], messageIds: [saved.messageId] },
+    recipientDomains: recipientDomains([...to, ...cc, ...bcc]),
+  });
+
+  return {
+    inbox: alias,
+    draftId: saved.draftId,
+    messageId: saved.messageId,
+    threadId: saved.threadId,
+    to,
+    cc,
+    bcc,
+    subject,
+    preview: renderMessagePreview({
+      recipients: { from, to, cc, bcc },
+      subject,
+      body: composed.text,
+      attachments: described.map((attachment) => ({
+        filename: attachment.filename,
+        size: attachment.size,
+        mimeType: attachment.mimeType,
+      })),
+      context: { inbox: alias, draftId: saved.draftId, note: 'nothing has been sent' },
+      warnings,
+    }),
+    attachments: described,
+    bytes: composed.bytes,
+    warnings,
+    profile: input.includeProfile ? await profileFor(context, alias) : undefined,
+  };
+}
+
 /** Reads a draft back, with the preview: what the user would approve if asked now. */
 export async function getDraft(context: GmailContext, alias: string, draftId: string): Promise<DraftResult> {
   const resolved = await context.inbox(alias);

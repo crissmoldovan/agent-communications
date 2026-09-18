@@ -6,7 +6,7 @@ import { CommsError } from '@cloudpixel/comms-core';
 import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { GmailContext } from '../src/context.ts';
-import { createDraft, deleteDraft, getDraft, listDrafts, replyDraft } from '../src/operations/drafts.ts';
+import { createDraft, deleteDraft, getDraft, listDrafts, replyDraft, updateDraft } from '../src/operations/drafts.ts';
 import type { FakeMessage } from './support/fake-google.ts';
 import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
 
@@ -294,4 +294,24 @@ test('a message going outside the organisation says so, and blind copies are nam
   });
   assert.ok(draft.warnings.some((warning) => /goes outside your organisation: quiet@partner\.test/.test(warning)));
   assert.ok(draft.warnings.some((warning) => /1 blind recipient/.test(warning)));
+});
+
+test('updating a draft replaces its content and gives it a new message id', async () => {
+  const { context } = await connected();
+  const first = await createDraft(context, 'work', {
+    to: ['sam@partner.test'],
+    subject: 'Tuesday',
+    text: 'Tuesday works.',
+  });
+
+  const revised = await updateDraft(context, 'work', first.draftId, { text: 'Wednesday is better, sorry.' });
+  assert.equal(revised.draftId, first.draftId, 'the same draft, not a second one');
+  assert.notEqual(revised.messageId, first.messageId, 'a new message id is what makes an edit detectable');
+  assert.deepEqual(revised.to, ['sam@partner.test'], 'what was not restated is kept');
+  assert.equal(revised.subject, 'Tuesday');
+  assert.match(revised.preview, /Wednesday is better/);
+
+  const read = await getDraft(context, 'work', first.draftId);
+  assert.match(read.preview, /Wednesday is better/);
+  assert.equal((await listDrafts(context, 'work')).length, 1, 'no orphan draft was left behind');
 });

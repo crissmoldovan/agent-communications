@@ -6,8 +6,10 @@ import type { ClientAddResult, ClientView } from '../operations/clients.ts';
 import type { ConsentResult } from '../operations/consent.ts';
 import type { ContactsResult, FollowUpsResult } from '../operations/contacts.ts';
 import type { DoctorResult } from '../operations/doctor.ts';
+import type { DraftResult, DraftSummary } from '../operations/drafts.ts';
 import type { ImportResult } from '../operations/import-legacy.ts';
 import type { InboxView, WhoamiResult } from '../operations/inboxes.ts';
+import type { ModifyResult, TrashResult } from '../operations/organise.ts';
 import type { ReadMessageResult, ReadThreadResult } from '../operations/read.ts';
 import type { SearchResult } from '../operations/search.ts';
 import type { StartedSignIn } from '../operations/signin.ts';
@@ -452,4 +454,91 @@ export function renderFollowUps(result: FollowUpsResult, color: boolean): string
   ];
   for (const error of result.errors) lines.push(paint(color, 'yellow', `${error.inbox}: ${error.message}`));
   return lines.join('\n');
+}
+
+export function renderDraft(result: DraftResult, color: boolean): string {
+  // The preview is the point of the command, so it is printed as it is: it is what the user approves or rejects, and
+  // reformatting it here would mean the thing approved is not the thing shown.
+  const lines = [result.preview];
+  if (result.attachments.length > 0) {
+    lines.push(
+      '',
+      table(
+        [
+          ['ATTACHED', 'SIZE', 'TYPE', 'FROM'],
+          ...result.attachments.map((attachment) => [
+            attachment.filename,
+            `${Math.max(1, Math.round(attachment.size / 1024))} KB`,
+            attachment.mimeType,
+            attachment.source,
+          ]),
+        ],
+        color,
+      ),
+    );
+  }
+  for (const warning of result.warnings) lines.push(paint(color, 'yellow', `! ${warning}`));
+  lines.push(
+    '',
+    paint(color, 'dim', `Saved as a draft in ${result.inbox} (${result.draftId}). Nothing has been sent.`),
+    paint(color, 'dim', 'Open it in Gmail to send it, or ask for it to be sent and approve the send when prompted.'),
+  );
+  if (result.profile) lines.push('', paint(color, 'dim', '— writing profile —'), result.profile);
+  return lines.join('\n');
+}
+
+export function renderDrafts(drafts: DraftSummary[], color: boolean): string {
+  if (drafts.length === 0) return 'No drafts.';
+  return table(
+    [
+      ['DRAFT', 'TO', 'SUBJECT', 'UPDATED'],
+      ...drafts.map((draft) => [
+        draft.draftId,
+        draft.to.join(', ') || '—',
+        draft.subject || '(no subject)',
+        draft.updatedAt?.slice(0, 16).replace('T', ' ') ?? '—',
+      ]),
+    ],
+    color,
+  );
+}
+
+export function renderModify(result: ModifyResult, color: boolean): string {
+  const what = [
+    result.addLabelIds.length > 0 ? `+${result.addLabelIds.join(' +')}` : '',
+    result.removeLabelIds.length > 0 ? `-${result.removeLabelIds.join(' -')}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const scope = `${result.messages} message${result.messages === 1 ? '' : 's'}`;
+  if (result.dryRun) {
+    const lines = [`Would change ${scope} in ${result.inbox}: ${what}.`, paint(color, 'dim', 'Nothing was changed.')];
+    return lines.join('\n');
+  }
+  const lines = [`Changed ${scope} in ${result.inbox}: ${what}.`];
+  if (result.undo) {
+    lines.push(
+      paint(
+        color,
+        'dim',
+        `To put it back: agent-gmail organise --inbox ${result.inbox}` +
+          `${result.undo.addLabelIds.map((label) => ` --add ${label}`).join('')}` +
+          `${result.undo.removeLabelIds.map((label) => ` --remove ${label}`).join('')}` +
+          ` --message ${result.undo.messageIds.join(' --message ')}`,
+      ),
+    );
+  }
+  return lines.join('\n');
+}
+
+export function renderTrash(result: TrashResult, color: boolean): string {
+  const count = `${result.messages.length} message${result.messages.length === 1 ? '' : 's'}`;
+  if (result.dryRun)
+    return `Would move ${count} to the bin in ${result.inbox}.\n${paint(color, 'dim', 'Nothing was moved.')}`;
+  const verb = result.action === 'trash' ? 'Moved' : 'Restored';
+  const where = result.action === 'trash' ? 'to the bin' : 'from the bin';
+  return [
+    `${verb} ${count} ${where} in ${result.inbox}.`,
+    paint(color, 'dim', 'Gmail keeps a binned message for thirty days; nothing is deleted outright.'),
+  ].join('\n');
 }

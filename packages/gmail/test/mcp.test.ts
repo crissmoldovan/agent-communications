@@ -56,18 +56,64 @@ test('the tool list is the same whatever is configured, and every tool says what
     'gmail_attachments_find',
     'gmail_contacts_search',
     'gmail_doctor',
+    'gmail_draft_create',
+    'gmail_draft_delete',
+    'gmail_draft_get',
+    'gmail_draft_list',
+    'gmail_draft_reply',
+    'gmail_draft_update',
     'gmail_export',
     'gmail_followups',
     'gmail_inboxes_list',
+    'gmail_label_create',
     'gmail_labels_list',
     'gmail_message_get',
+    'gmail_organise',
     'gmail_search',
     'gmail_sendas_list',
     'gmail_thread_get',
     'gmail_thread_timeline',
+    'gmail_trash',
     'gmail_whoami',
   ]);
   assert.deepEqual(await names(withInbox), withoutInboxes, 'registration must not depend on the inboxes present');
+
+  // Nothing on this server sends. The only name with "send" in it lists the addresses a mailbox may send as, which
+  // reads and nothing more; if another ever appears here, it is a new surface and needs the send gate, not a rename.
+  assert.deepEqual(
+    withoutInboxes.filter((name) => name.includes('send')),
+    ['gmail_sendas_list'],
+  );
+});
+
+test('a read-only server does not offer the tools that would write', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  const { client, close } = await connect({ core: harness.core, env: harness.env, readOnly: true });
+  try {
+    const names = (await client.listTools()).tools.map((tool) => tool.name);
+    // Reading a draft is reading; writing one is not.
+    assert.ok(names.includes('gmail_draft_list'));
+    assert.ok(names.includes('gmail_draft_get'));
+    for (const withheld of [
+      'gmail_draft_create',
+      'gmail_draft_reply',
+      'gmail_draft_update',
+      'gmail_draft_delete',
+      'gmail_organise',
+      'gmail_trash',
+      'gmail_label_create',
+    ]) {
+      assert.ok(!names.includes(withheld), `${withheld} must not be offered by a read-only server`);
+    }
+    // A tool that was not registered is not there to be called: the protocol itself refuses, before any handler runs.
+    await assert.rejects(
+      client.callTool({ name: 'gmail_organise', arguments: { inbox: 'work', messageIds: ['m1'], archive: true } }),
+      /not found/i,
+    );
+  } finally {
+    await close();
+  }
 });
 
 test('results arrive as structured content and as text, so every client sees them', async () => {

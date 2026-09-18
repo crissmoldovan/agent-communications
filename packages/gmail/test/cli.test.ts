@@ -21,7 +21,7 @@ interface Captured {
 async function cli(
   harness: Harness,
   argv: string[],
-  options: { tty?: boolean; env?: NodeJS.ProcessEnv } = {},
+  options: { tty?: boolean; env?: NodeJS.ProcessEnv; stdin?: string } = {},
 ): Promise<Captured> {
   let stdout = '';
   let stderr = '';
@@ -33,10 +33,12 @@ async function cli(
   err.on('data', (chunk) => {
     stderr += String(chunk);
   });
+  const input = new PassThrough();
+  if (options.stdin !== undefined) input.end(options.stdin);
   const streams = {
     stdout: Object.assign(out, { isTTY: options.tty ?? false }),
     stderr: Object.assign(err, { isTTY: options.tty ?? false }),
-    stdin: Object.assign(new PassThrough(), { isTTY: options.tty ?? false }),
+    stdin: Object.assign(input, { isTTY: options.tty ?? false }),
   };
   const code = await run(argv, {
     core: harness.core,
@@ -283,3 +285,111 @@ function dataOf<T>(envelope: Envelope<T>): T {
   }
   return envelope.data;
 }
+
+test('drafting from the CLI writes to Drafts, shows a preview, and sends nothing', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1' });
+
+  const written = await cli(harness, [
+    'draft',
+    'new',
+    '--inbox',
+    'work',
+    '--to',
+    'sam@partner.test',
+    '--subject',
+    'Tuesday',
+    '--text',
+    'Tuesday works for me.',
+  ]);
+  assert.equal(written.code, 0, `${written.stdout}${written.stderr}`);
+  // The preview is what a person approves, so it must be on screen, fenced, and unmistakably not sent.
+  assert.match(written.stdout, /MESSAGE PREVIEW/);
+  assert.match(written.stdout, /```text/);
+  assert.match(written.stdout, /Tuesday works for me\./);
+  assert.match(written.stdout, /Nothing has been sent\./);
+
+  const listed = await cli(harness, ['draft', 'list', '--inbox', 'work', '--json']);
+  const drafts = dataOf(listed.json<Envelope<Array<{ draftId: string; subject: string }>>>());
+  assert.equal(drafts.length, 1);
+  assert.equal(drafts[0]?.subject, 'Tuesday');
+
+  const deleted = await cli(harness, ['draft', 'delete', String(drafts[0]?.draftId), '--inbox', 'work']);
+  assert.equal(deleted.code, 0);
+  assert.deepEqual(
+    dataOf((await cli(harness, ['draft', 'list', '--inbox', 'work', '--json'])).json<Envelope<unknown[]>>()),
+    [],
+  );
+});
+
+test('the body can be piped in, which is the only way prose survives a shell intact', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1' });
+
+  const piped = await cli(
+    harness,
+    ['draft', 'new', '--inbox', 'work', '--to', 'sam@partner.test', '--subject', 'Notes', '--json'],
+    { stdin: 'Line one.\n\nLine "two" — with punctuation.\n' },
+  );
+  assert.equal(piped.code, 0);
+  assert.match(dataOf(piped.json<Envelope<{ preview: string }>>()).preview, /Line "two" — with punctuation\./);
+
+  // On a terminal with nothing piped there is no body to read, and the error says where one comes from.
+  const empty = await cli(harness, ['draft', 'new', '--inbox', 'work', '--to', 'sam@partner.test', '--json'], {
+    tty: true,
+  });
+  assert.equal(empty.code, EXIT_CODES.USAGE);
+  assert.match(empty.json<Envelope<never>>().error?.hint ?? '', /--text|--file|standard input/);
+});
+
+test('organising previews before it acts, and says how to put it back', async () => {
+  const harness = await newHarness({
+    accounts: [
+      {
+        sub: 'sub-1',
+        email: 'jo@example.test',
+        messages: {
+          m1: {
+            id: 'm1',
+            threadId: 't1',
+            labelIds: ['INBOX', 'UNREAD'],
+            internalDate: String(Date.parse('2026-09-17T09:00:00Z')),
+            payload: {
+              partId: '',
+              mimeType: 'text/plain',
+              headers: [
+                { name: 'From', value: 'sam@partner.test' },
+                { name: 'Subject', value: 'Invoice' },
+              ],
+              body: { size: 2, data: Buffer.from('hi', 'utf8').toString('base64url') },
+            },
+          },
+        },
+        labels: [
+          { id: 'INBOX', name: 'INBOX', type: 'system' },
+          { id: 'UNREAD', name: 'UNREAD', type: 'system' },
+        ],
+      },
+    ],
+  });
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1' });
+
+  const planned = await cli(harness, ['organise', '--inbox', 'work', '--message', 'm1', '--archive', '--dry-run']);
+  assert.equal(planned.code, 0);
+  assert.match(planned.stdout, /Would change 1 message/);
+  assert.match(planned.stdout, /Nothing was changed\./);
+  assert.deepEqual(harness.google.accounts.get('sub-1')?.messages?.m1?.labelIds, ['INBOX', 'UNREAD']);
+
+  const done = await cli(harness, ['organise', '--inbox', 'work', '--message', 'm1', '--archive', '--read']);
+  assert.match(done.stdout, /Changed 1 message/);
+  assert.match(done.stdout, /To put it back: agent-gmail organise/);
+  assert.deepEqual(harness.google.accounts.get('sub-1')?.messages?.m1?.labelIds, []);
+
+  // The American spelling reaches the same command, because half the world types it.
+  const spelled = await cli(harness, ['organize', '--inbox', 'work', '--message', 'm1', '--star', '--json']);
+  assert.equal(spelled.code, 0);
+
+  const binned = await cli(harness, ['trash', '--inbox', 'work', '--message', 'm1']);
+  assert.match(binned.stdout, /thirty days/);
+  assert.ok(harness.google.accounts.get('sub-1')?.messages?.m1?.labelIds?.includes('TRASH'));
+});

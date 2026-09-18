@@ -21,10 +21,12 @@ import { downloadAttachments, findAttachments } from '../operations/attachments.
 import { clientAdd, clientList, clientRemove } from '../operations/clients.ts';
 import { followUps, searchContacts } from '../operations/contacts.ts';
 import { doctor } from '../operations/doctor.ts';
+import { createDraft, deleteDraft, getDraft, listDrafts, replyDraft, updateDraft } from '../operations/drafts.ts';
 import { exportMail } from '../operations/export.ts';
 import { importLegacy } from '../operations/import-legacy.ts';
 import { inboxList, inboxPolicy, inboxRemove, inboxRename, inboxShow, whoami } from '../operations/inboxes.ts';
 import { runOauthListener } from '../operations/oauth-listen.ts';
+import { createLabel, modify, trash } from '../operations/organise.ts';
 import { readMessage, readThread } from '../operations/read.ts';
 import { search } from '../operations/search.ts';
 import { finishSignIn, startSignIn } from '../operations/signin.ts';
@@ -38,6 +40,8 @@ import {
   renderContacts,
   renderDoctor,
   renderDownloads,
+  renderDraft,
+  renderDrafts,
   renderFollowUps,
   renderImport,
   renderInboxList,
@@ -45,11 +49,13 @@ import {
   renderInstall,
   renderLabels,
   renderMessage,
+  renderModify,
   renderSearch,
   renderSendAs,
   renderSignedIn,
   renderSignInStarted,
   renderThread,
+  renderTrash,
   renderWhoami,
 } from './render.ts';
 
@@ -116,6 +122,57 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       const context = new GmailContext({ ...deps, env, surface: 'cli' });
       exitCode = await runCommand(output(), () => body(context, globals(), ...args), streams);
     };
+
+  /**
+   * The body of a message, from `--text`, from `--file`, or from standard input.
+   *
+   * Standard input matters more than it looks: a body is prose with newlines and quotes in it, and an agent that has
+   * to fit one into a shell argument will mangle it. Piping it in is the way that always works.
+   */
+  const bodyText = async (options: Options): Promise<string> => {
+    if (typeof options.text === 'string') return options.text;
+    if (typeof options.file === 'string') {
+      const { readFile } = await import('node:fs/promises');
+      return readFile(String(options.file), 'utf8');
+    }
+    const stdin = streams.stdin as NodeJS.ReadableStream & { isTTY?: boolean };
+    if (stdin.isTTY) {
+      throw new CommsError('USAGE', 'no message body', {
+        hint: 'Pass --text "…", or --file <path>, or pipe the body in on standard input.',
+      });
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of stdin) chunks.push(Buffer.from(chunk as Buffer));
+    const text = Buffer.concat(chunks).toString('utf8');
+    if (!text.trim()) {
+      throw new CommsError('USAGE', 'the message body was empty', {
+        hint: 'Pass --text "…", or --file <path>, or pipe the body in on standard input.',
+      });
+    }
+    return text;
+  };
+
+  /** The options every draft command shares, so `draft new` and `draft reply` take the same flags. */
+  const withDraftOptions = (command: Command): Command =>
+    command
+      .option('--text <text>', 'the body, as plain text (the HTML part is generated from it)')
+      .option('--file <path>', 'read the body from a file')
+      .option('--cc <address...>', 'copy these people')
+      .option('--bcc <address...>', 'blind-copy these people')
+      .option('--attach <path...>', 'attach these local files')
+      .option('--no-signature', 'leave the mailbox signature off')
+      .option('--profile', 'include the mailbox writing profile in the result', false);
+
+  const draftInput = async (options: Options): Promise<Parameters<typeof createDraft>[2]> => ({
+    to: options.to as string[] | undefined,
+    cc: options.cc as string[] | undefined,
+    bcc: options.bcc as string[] | undefined,
+    subject: options.subject === undefined ? undefined : String(options.subject),
+    text: await bodyText(options),
+    attach: options.attach as string[] | undefined,
+    signature: options.signature !== false,
+    includeProfile: Boolean(options.profile),
+  });
 
   // ---- clients ----------------------------------------------------------------
   const client = program.command('client').description('the Google Cloud OAuth client every inbox signs in through');
@@ -532,6 +589,156 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           (data) =>
             `Wrote ${data.kind === 'thread' ? `${data.messageCount} messages` : 'the message'} to ${data.path} ` +
             `(${Math.round(data.bytes / 1024)} KB, ${data.format}).`,
+          streams,
+        );
+      }),
+    );
+
+  // ---- drafts -----------------------------------------------------------------
+  // Everything here writes to the Drafts folder and nothing else. A draft is the finished article sitting where the
+  // user can read it, change it and send it themselves; sending it from here is a separate, approved act.
+  const draft = program.command('draft').description('write messages into Drafts — never sent from here');
+
+  withDraftOptions(draft.command('new').description('write a new message into Drafts'))
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .requiredOption('--to <address...>', 'who it goes to')
+    .option('--subject <subject>', 'the subject line')
+    .action(
+      act(async (context, globalOptions, options: Options) => {
+        const result = await createDraft(context, String(options.inbox), await draftInput(options));
+        writeResult(result, output(), (data) => renderDraft(data, globalOptions.color), streams);
+      }),
+    );
+
+  withDraftOptions(draft.command('reply <messageId>').description('reply, reply to all, or forward'))
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .addOption(new Option('--mode <mode>', 'how to answer').choices(['reply', 'reply_all', 'forward']))
+    .option('--to <address...>', 'who it goes to (a forward needs this; a reply computes it)')
+    .action(
+      act(async (context, globalOptions, messageId: string, options: Options) => {
+        const result = await replyDraft(context, String(options.inbox), messageId, {
+          ...(await draftInput(options)),
+          mode: options.mode as 'reply' | 'reply_all' | 'forward' | undefined,
+        });
+        writeResult(result, output(), (data) => renderDraft(data, globalOptions.color), streams);
+      }),
+    );
+
+  draft
+    .command('list')
+    .description('the drafts in a mailbox')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .option('--limit <number>', 'how many rows', (value) => Number.parseInt(value, 10))
+    .action(
+      act(async (context, globalOptions, options: Options) => {
+        const result = await listDrafts(
+          context,
+          String(options.inbox),
+          options.limit === undefined ? undefined : Number(options.limit),
+        );
+        writeResult(result, output(), (data) => renderDrafts(data, globalOptions.color), streams);
+      }),
+    );
+
+  draft
+    .command('show <draftId>')
+    .description('read a draft back, with the preview the sender would approve')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .action(
+      act(async (context, globalOptions, draftId: string, options: Options) => {
+        const result = await getDraft(context, String(options.inbox), draftId);
+        writeResult(result, output(), (data) => renderDraft(data, globalOptions.color), streams);
+      }),
+    );
+
+  withDraftOptions(draft.command('update <draftId>').description('rewrite a draft, keeping what is not restated'))
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .option('--to <address...>', 'replace the recipients')
+    .option('--subject <subject>', 'replace the subject line')
+    .action(
+      act(async (context, globalOptions, draftId: string, options: Options) => {
+        const result = await updateDraft(context, String(options.inbox), draftId, await draftInput(options));
+        writeResult(result, output(), (data) => renderDraft(data, globalOptions.color), streams);
+      }),
+    );
+
+  draft
+    .command('delete <draftId>')
+    .description('throw a draft away')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .action(
+      act(async (context, _globalOptions, draftId: string, options: Options) => {
+        const result = await deleteDraft(context, String(options.inbox), draftId);
+        writeResult(result, output(), (data) => `Deleted draft ${data.draftId}.`, streams);
+      }),
+    );
+
+  // ---- organising ---------------------------------------------------------------
+  program
+    .command('organise')
+    .alias('organize')
+    .description('label, archive, star and mark read — every change reversible, and previewable with --dry-run')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .option('--message <id...>', 'these messages')
+    .option('--thread <id...>', 'every message in these conversations')
+    .option('--add <label...>', 'add these labels (by name or id)')
+    .option('--remove <label...>', 'remove these labels')
+    .option('--archive', 'take it out of the inbox', false)
+    .option('--read', 'mark it read', false)
+    .option('--unread', 'mark it unread', false)
+    .option('--star', 'star it', false)
+    .option('--unstar', 'unstar it', false)
+    .option('--dry-run', 'say what would change and change nothing', false)
+    .action(
+      act(async (context, globalOptions, options: Options) => {
+        const result = await modify(context, String(options.inbox), {
+          messageIds: options.message as string[] | undefined,
+          threadIds: options.thread as string[] | undefined,
+          addLabels: options.add as string[] | undefined,
+          removeLabels: options.remove as string[] | undefined,
+          archive: Boolean(options.archive),
+          markRead: Boolean(options.read),
+          markUnread: Boolean(options.unread),
+          star: Boolean(options.star),
+          unstar: Boolean(options.unstar),
+          dryRun: Boolean(options.dryRun),
+        });
+        writeResult(result, output(), (data) => renderModify(data, globalOptions.color), streams);
+      }),
+    );
+
+  program
+    .command('trash')
+    .description('move mail to the bin, or take it out again — nothing is ever deleted outright')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .option('--message <id...>', 'these messages')
+    .option('--thread <id...>', 'every message in these conversations')
+    .option('--undo', 'take them out of the bin instead', false)
+    .option('--dry-run', 'say what would move and move nothing', false)
+    .action(
+      act(async (context, globalOptions, options: Options) => {
+        const result = await trash(context, String(options.inbox), {
+          messageIds: options.message as string[] | undefined,
+          threadIds: options.thread as string[] | undefined,
+          undo: Boolean(options.undo),
+          dryRun: Boolean(options.dryRun),
+        });
+        writeResult(result, output(), (data) => renderTrash(data, globalOptions.color), streams);
+      }),
+    );
+
+  program
+    .command('label <name>')
+    .description('create a label, or find the one already there')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .action(
+      act(async (context, _globalOptions, name: string, options: Options) => {
+        const result = await createLabel(context, String(options.inbox), name);
+        writeResult(
+          result,
+          output(),
+          (data) =>
+            data.existed ? `"${data.name}" already exists (${data.id}).` : `Created "${data.name}" (${data.id}).`,
           streams,
         );
       }),

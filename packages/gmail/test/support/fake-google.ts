@@ -221,6 +221,16 @@ function messageFromRaw(id: string, raw: string, threadId?: string): FakeMessage
   };
 }
 
+/** An account's labels: whatever the test gave it, or the two every mailbox has. */
+function labelsOf(account: FakeAccount | undefined): NonNullable<FakeAccount['labels']> {
+  return (
+    account?.labels ?? [
+      { id: 'INBOX', name: 'INBOX', type: 'system', messagesTotal: 12, messagesUnread: 3 },
+      { id: 'Label_1', name: 'Clients', type: 'user', messagesTotal: 4, messagesUnread: 0 },
+    ]
+  );
+}
+
 function readBody(request: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -279,7 +289,9 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
   const server = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
-      const body = request.method === 'POST' ? await readBody(request) : '';
+      // PUT carries a body too — drafts are updated with one — and a route that never reads it silently stores an
+      // empty message, which reads back as a draft the author never wrote.
+      const body = request.method === 'POST' || request.method === 'PUT' ? await readBody(request) : '';
       const params: Record<string, string> = {};
       for (const [key, value] of url.searchParams) params[key] = value;
       if (body && (request.headers['content-type'] ?? '').includes('x-www-form-urlencoded')) {
@@ -405,13 +417,8 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
         });
         return;
       }
-      if (url.pathname === '/gmail/v1/users/me/labels') {
-        json(response, 200, {
-          labels: account?.labels ?? [
-            { id: 'INBOX', name: 'INBOX', type: 'system', messagesTotal: 12, messagesUnread: 3 },
-            { id: 'Label_1', name: 'Clients', type: 'user', messagesTotal: 4, messagesUnread: 0 },
-          ],
-        });
+      if (url.pathname === '/gmail/v1/users/me/labels' && request.method === 'GET') {
+        json(response, 200, { labels: labelsOf(account) });
         return;
       }
       // Listing: ids only, newest first, paged. `q` is recorded so a test can assert what was actually sent.
@@ -465,7 +472,8 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
         return;
       }
 
-      const message = /^\/gmail\/v1\/users\/me\/messages\/([^/]+)$/.exec(url.pathname);
+      // `batchModify` sits at the same depth as a message id, so it is matched before this route, not by it.
+      const message = /^\/gmail\/v1\/users\/me\/messages\/(?!batchModify$)([^/]+)$/.exec(url.pathname);
       if (message) {
         const id = decodeURIComponent(message[1] ?? '');
         const found = account?.messages?.[id];
@@ -502,6 +510,53 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
             },
           ],
         });
+        return;
+      }
+
+      // ---- Organising -------------------------------------------------------------
+      if (url.pathname === '/gmail/v1/users/me/messages/batchModify' && request.method === 'POST') {
+        const parsed = JSON.parse(body || '{}') as {
+          ids?: string[];
+          addLabelIds?: string[];
+          removeLabelIds?: string[];
+        };
+        for (const messageId of parsed.ids ?? []) {
+          const message = account?.messages?.[messageId];
+          if (!message) continue;
+          const labels = new Set(message.labelIds ?? []);
+          for (const label of parsed.removeLabelIds ?? []) labels.delete(label);
+          for (const label of parsed.addLabelIds ?? []) labels.add(label);
+          message.labelIds = [...labels];
+        }
+        json(response, 200, {});
+        return;
+      }
+      const trashPath = /^\/gmail\/v1\/users\/me\/messages\/([^/]+)\/(trash|untrash)$/.exec(url.pathname);
+      if (trashPath) {
+        const message = account?.messages?.[decodeURIComponent(trashPath[1] ?? '')];
+        if (!message) {
+          json(response, 404, { error: { code: 404, message: 'Not Found', errors: [{ reason: 'notFound' }] } });
+          return;
+        }
+        const labels = new Set(message.labelIds ?? []);
+        if (trashPath[2] === 'trash') {
+          labels.add('TRASH');
+          labels.delete('INBOX');
+        } else {
+          labels.delete('TRASH');
+          labels.add('INBOX');
+        }
+        message.labelIds = [...labels];
+        json(response, 200, { id: message.id, labelIds: message.labelIds });
+        return;
+      }
+      if (url.pathname === '/gmail/v1/users/me/labels' && request.method === 'POST') {
+        const parsed = JSON.parse(body || '{}') as { name?: string };
+        const id = `Label_${randomBytes(3).toString('hex')}`;
+        if (account) {
+          account.labels = [...labelsOf(account), { id, name: parsed.name ?? '', type: 'user' }];
+        }
+        json(response, 200, { id, name: parsed.name, type: 'user' });
         return;
       }
 
