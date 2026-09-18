@@ -1,10 +1,9 @@
 import { createHash } from 'node:crypto';
-import { CommsError, newBoundary, TaintCollector, wrapUntrusted } from '@cloudpixel/comms-core';
-import { compileQuery } from '../domain/query.ts';
-import { headerValue, readParts } from '../domain/mime.ts';
-import type { GmailTransport, RawMessage } from '../gmail-api/transport.ts';
+import { CommsError, newBoundary, parseAddressList, TaintCollector, wrapUntrusted } from '@cloudpixel/comms-core';
 import type { GmailContext } from '../context.ts';
-import { parseAddressList } from '@cloudpixel/comms-core';
+import { headerValue, readParts } from '../domain/mime.ts';
+import { compileQuery } from '../domain/query.ts';
+import type { GmailTransport, RawMessage } from '../gmail-api/transport.ts';
 import { taintExclusions } from './read.ts';
 
 /**
@@ -44,7 +43,12 @@ export interface SearchError {
 
 export interface SearchResult {
   /** The query as sent to Gmail, with what was rewritten and why. */
-  query: { given: string; compiled: string; rewrites: Array<{ operator: string; from: string; to: string }>; timezone: string };
+  query: {
+    given: string;
+    compiled: string;
+    rewrites: Array<{ operator: string; from: string; to: string }>;
+    timezone: string;
+  };
   kind: SearchKind;
   inboxes: string[];
   rows: SearchRow[];
@@ -244,7 +248,10 @@ function rowFrom(alias: string, message: RawMessage, threadId: string): SearchRo
 }
 
 /** Resolves the mailbox list: named aliases, or every connected mailbox. */
-export async function resolveInboxes(context: GmailContext, requested: string[] | 'all' | undefined): Promise<string[]> {
+export async function resolveInboxes(
+  context: GmailContext,
+  requested: string[] | 'all' | undefined,
+): Promise<string[]> {
   const config = await context.config();
   const known = Object.keys(config.inboxes);
   if (requested === undefined || requested === 'all') {
@@ -374,7 +381,12 @@ export async function search(context: GmailContext, options: SearchOptions): Pro
   );
 
   return {
-    query: { given: options.query, compiled: compiled.compiled, rewrites: compiled.rewrites, timezone: compiled.timezone },
+    query: {
+      given: options.query,
+      compiled: compiled.compiled,
+      rewrites: compiled.rewrites,
+      timezone: compiled.timezone,
+    },
     kind,
     inboxes: aliases,
     rows,

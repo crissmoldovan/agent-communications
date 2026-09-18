@@ -164,7 +164,9 @@ export function buildBody(parts: MessageParts, options: BodyOptions = {}): Messa
   if (!htmlHasText && html && plain) report = mergeReports(report, html.report);
 
   const full = (htmlHasText ? html?.text : plain?.text) ?? '';
-  const collapsed = options.includeQuoted ? { text: full, quoted: { linesOmitted: 0, collapsed: false } } : collapseQuoted(full);
+  const collapsed = options.includeQuoted
+    ? { text: full, quoted: { linesOmitted: 0, collapsed: false } }
+    : collapseQuoted(full);
   const totalChars = collapsed.text.length;
   const window = collapsed.text.slice(offset, offset + maxChars);
   const truncated = offset + window.length < totalChars;

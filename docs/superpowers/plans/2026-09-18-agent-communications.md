@@ -79,6 +79,21 @@ Still to do before the PR:
 
 ## Phase 4 — compose and organise (`feat/gmail-compose`)
 
+**Composition profile and message preview** (added 2026-09-18 at the user's request, from the existing user-level
+skill `drafting-criss-emails`, which carries both a voice and a send protocol and is written around the old Gmail
+MCP tool names):
+
+- [ ] One preview renderer in `comms-core`, used by every surface (chat, CLI, MCP): fenced with `fenceFor` so a body
+      containing backticks cannot break out of its own preview, control and invisible characters shown as
+      `<U+XXXX>`, and the recipients repeated *after* the body so a long message cannot scroll them out of view.
+- [ ] A composition profile resolved in order — built-in defaults → user profile → platform (`gmail`) → per-inbox —
+      so platform specifics (subject conventions, signature handling, reply threading) extend the generic voice
+      rules rather than forking them. Stored as files under the config directory, editable by hand.
+- [ ] `draft create|reply|update` render the preview in their result, so "show it verbatim before asking" is what
+      the tool returns rather than something a skill has to remember to do.
+- [ ] Phase 6: a generic `compose-message` skill plus `gmail-compose`, both pointing at the same contract; the
+      user's existing `drafting-criss-emails` becomes a voice profile rather than a second send protocol.
+
 - [ ] MIME (multipart, markdown without raw HTML or images), reply/reply-all/forward composition and validation,
       signatures with the Gmail marker, draft update read-modify-write, media-upload transport, outbound HTML analyser,
       organise with plans and undo, label create, trash/untrash.

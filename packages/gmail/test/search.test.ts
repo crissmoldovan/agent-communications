@@ -56,7 +56,9 @@ function message(options: {
 }
 
 /** A harness with one or more signed-in mailboxes, each holding its own messages. */
-async function connected(accounts: Array<{ alias: string; email: string; sub: string; messages: Record<string, FakeMessage> }>): Promise<{
+async function connected(
+  accounts: Array<{ alias: string; email: string; sub: string; messages: Record<string, FakeMessage> }>,
+): Promise<{
   harness: Harness;
   context: GmailContext;
 }> {
@@ -245,8 +247,7 @@ test('a cursor cannot be replayed against a different search', async () => {
 
   await assert.rejects(
     search(context, { query: 'different', inboxes: ['work'], cursor: page.nextCursor }),
-    (error: unknown) =>
-      error instanceof CommsError && error.code === 'CURSOR_MISMATCH' && error.exitCode === 64,
+    (error: unknown) => error instanceof CommsError && error.code === 'CURSOR_MISMATCH' && error.exitCode === 64,
   );
   await assert.rejects(
     search(context, { query: 'o', inboxes: 'all', cursor: page.nextCursor }),

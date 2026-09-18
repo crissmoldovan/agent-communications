@@ -6,10 +6,10 @@ import {
   TaintCollector,
   wrapUntrusted,
 } from '@cloudpixel/comms-core';
+import type { GmailContext } from '../context.ts';
 import { type AuthResults, readAuthResults, readSenderWarnings, type SenderWarnings } from '../domain/auth-results.ts';
 import { type BodyOptions, buildBody, DEFAULT_MAX_CHARS, type MessageBody } from '../domain/body.ts';
 import { type GmailPart, headerValue, readParts } from '../domain/mime.ts';
-import type { GmailContext } from '../context.ts';
 
 /**
  * Reading mail — the operation with the largest blast radius in this package, because everything it returns was
@@ -119,7 +119,11 @@ export function buildMessageResult(
   const subject = headerValue(headers, 'Subject') ?? '';
 
   // Everything the sender chose: the addresses in the headers, and every address inside the body text.
-  options.collector.observeHeaders([from?.address, ...replyTo.map((a) => a.address), ...to.map((a) => a.address), ...cc.map((a) => a.address)].filter((address): address is string => Boolean(address)));
+  options.collector.observeHeaders(
+    [from?.address, ...replyTo.map((a) => a.address), ...to.map((a) => a.address), ...cc.map((a) => a.address)].filter(
+      (address): address is string => Boolean(address),
+    ),
+  );
 
   const enveloped = wrapUntrusted(
     `Subject: ${subject}\n\n${body.text}`,

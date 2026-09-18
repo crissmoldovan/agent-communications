@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { CommsError } from '@cloudpixel/comms-core';
+import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { GmailContext } from '../src/context.ts';
 import { attachmentRisks, readMessage, readThread } from '../src/operations/read.ts';
-import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import type { FakeMessage } from './support/fake-google.ts';
 import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET } from './support/harness.ts';
 
@@ -15,7 +15,11 @@ function base64url(text: string): string {
 }
 
 /** A message as Gmail returns it: multipart with both parts, headers Google added, and one attachment. */
-function message(options: { html: string; plain: string; extraHeaders?: Array<{ name: string; value: string }> }): FakeMessage {
+function message(options: {
+  html: string;
+  plain: string;
+  extraHeaders?: Array<{ name: string; value: string }>;
+}): FakeMessage {
   return {
     id: 'm1',
     threadId: 't1',

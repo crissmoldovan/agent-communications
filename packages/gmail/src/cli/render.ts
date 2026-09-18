@@ -1,10 +1,13 @@
 import { paint } from '@cloudpixel/comms-core';
 import type { InstallResult } from '../mcp/install.ts';
+import type { LabelSummary, SendAsSummary } from '../operations/analyse.ts';
 import type { ClientAddResult, ClientView } from '../operations/clients.ts';
 import type { ConsentResult } from '../operations/consent.ts';
 import type { DoctorResult } from '../operations/doctor.ts';
 import type { ImportResult } from '../operations/import-legacy.ts';
 import type { InboxView, WhoamiResult } from '../operations/inboxes.ts';
+import type { ReadMessageResult, ReadThreadResult } from '../operations/read.ts';
+import type { SearchResult } from '../operations/search.ts';
 import type { StartedSignIn } from '../operations/signin.ts';
 
 /** Human renderings. `--json` prints the data itself; these exist so a person is not made to read JSON. */
@@ -224,4 +227,128 @@ export function renderInstall(result: InstallResult, color: boolean): string {
   );
   for (const warning of result.warnings) lines.push('', paint(color, 'red', warning));
   return lines.join('\n');
+}
+
+export function renderSearch(result: SearchResult, color: boolean): string {
+  const lines: string[] = [];
+  if (result.query.rewrites.length > 0) {
+    lines.push(paint(color, 'dim', `query: ${result.query.compiled}  (dates read in ${result.query.timezone})`));
+  }
+  if (result.rows.length === 0) {
+    lines.push('Nothing matched.');
+  } else {
+    for (const [index, row] of result.rows.entries()) {
+      const marks = [row.unread ? 'unread' : '', row.attachmentCount > 0 ? `${row.attachmentCount} attached` : '']
+        .filter(Boolean)
+        .join(' · ');
+      lines.push(
+        `${paint(color, 'dim', String(index + 1).padStart(2))} ${row.date?.slice(0, 16).replace('T', ' ') ?? '—'}  ${paint(color, 'bold', row.inbox)}  ${row.from?.address ?? 'unknown'}`,
+        `   ${row.subject || '(no subject)'}${marks ? paint(color, 'dim', `  [${marks}]`) : ''}`,
+        `   ${paint(color, 'dim', `${row.threadId}${row.messageId === row.threadId ? '' : ` · message ${row.messageId}`}`)}`,
+      );
+    }
+  }
+  lines.push('');
+  lines.push(
+    `${result.returned} shown${result.hasMore ? '; more available' : '; that is all of them'}${
+      result.hasMore ? ` (continue with --cursor ${result.nextCursor})` : ''
+    }`,
+  );
+  for (const error of result.errors) {
+    lines.push(paint(color, 'yellow', `${error.inbox} could not be searched: ${error.message}`));
+  }
+  return lines.join('\n');
+}
+
+export function renderMessage(message: ReadMessageResult, color: boolean): string {
+  const lines = [
+    paint(color, 'bold', message.subject || '(no subject)'),
+    `from: ${message.from?.address ?? 'unknown'}${message.from?.name ? ` (${message.from.name})` : ''}`,
+    `to:   ${message.to.map((entry) => entry.address).join(', ') || '—'}`,
+  ];
+  if (message.cc.length > 0) lines.push(`cc:   ${message.cc.map((entry) => entry.address).join(', ')}`);
+  lines.push(`date: ${message.date ?? 'unknown'}   ${paint(color, 'dim', `[${message.inbox}] ${message.messageId}`)}`);
+
+  const warnings: string[] = [];
+  if (message.sender.replyToDiffers) warnings.push(`replies would go to ${message.sender.replyToDomains.join(', ')}`);
+  if (message.sender.displayNameContainsOtherAddress) warnings.push('the display name contains another address');
+  if (message.auth.evaluatedBy === null) warnings.push('Google published no authentication result for this message');
+  else if (message.auth.dmarc !== 'pass') warnings.push(`DMARC: ${message.auth.dmarc ?? 'none'}`);
+  if (message.sanitisation.hiddenElements > 0) {
+    warnings.push(`${message.sanitisation.hiddenElements} hidden element(s) removed`);
+  }
+  if (message.sanitisation.plainHtmlMismatch) {
+    warnings.push(
+      `the plain-text part carries ${message.sanitisation.plainHtmlMismatch.extraChars} characters the reader never sees`,
+    );
+  }
+  for (const warning of warnings) lines.push(paint(color, 'yellow', `!     ${warning}`));
+
+  if (message.attachments.length > 0) {
+    lines.push('', paint(color, 'bold', 'Attachments'));
+    for (const attachment of message.attachments) {
+      lines.push(
+        `  ${attachment.filename} · ${Math.round(attachment.size / 1024)} KB · ${attachment.mimeType}${
+          attachment.riskFlags.length ? paint(color, 'yellow', `  [${attachment.riskFlags.join(', ')}]`) : ''
+        }`,
+      );
+    }
+  }
+
+  lines.push('', message.body.enveloped);
+  if (message.body.truncated) {
+    lines.push(paint(color, 'dim', `(truncated; continue with --offset ${message.body.nextOffset})`));
+  }
+  return lines.join('\n');
+}
+
+export function renderThread(thread: ReadThreadResult, color: boolean): string {
+  const lines = [
+    paint(color, 'bold', `${thread.subject || '(no subject)'} — ${thread.messageCount} messages`),
+    paint(color, 'dim', `${thread.inbox} · ${thread.threadId} · ${thread.participants.join(', ')}`),
+  ];
+  for (const message of thread.messages) {
+    lines.push(
+      '',
+      paint(color, 'dim', `── ${message.date ?? 'unknown'} · ${message.from?.address ?? 'unknown'}`),
+      message.body.enveloped,
+    );
+  }
+  if (thread.truncated)
+    lines.push('', paint(color, 'dim', '(the thread was cut short; read single messages for more)'));
+  return lines.join('\n');
+}
+
+export function renderLabels(labels: LabelSummary[], color: boolean): string {
+  if (labels.length === 0) return 'No labels.';
+  return table(
+    [
+      ['NAME', 'ID', 'TYPE', 'TOTAL', 'UNREAD'],
+      ...labels.map((label) => [
+        label.name,
+        label.id,
+        label.type,
+        String(label.messagesTotal ?? '—'),
+        String(label.messagesUnread ?? '—'),
+      ]),
+    ],
+    color,
+  );
+}
+
+export function renderSendAs(addresses: SendAsSummary[], color: boolean): string {
+  if (addresses.length === 0) return 'No send-as addresses.';
+  return table(
+    [
+      ['ADDRESS', 'NAME', 'DEFAULT', 'VERIFIED', 'SIGNATURE'],
+      ...addresses.map((entry) => [
+        entry.email,
+        entry.displayName || '—',
+        entry.isDefault ? 'yes' : '',
+        entry.verificationStatus ?? '—',
+        entry.hasSignature ? 'yes' : '',
+      ]),
+    ],
+    color,
+  );
 }

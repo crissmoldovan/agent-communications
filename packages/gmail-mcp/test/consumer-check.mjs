@@ -63,7 +63,17 @@ send({ jsonrpc: '2.0', method: 'notifications/initialized' });
 send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
 const tools = await waitFor(2);
 const names = tools.result.tools.map((tool) => tool.name).sort();
-assert.deepEqual(names, ['gmail_doctor', 'gmail_inboxes_list', 'gmail_whoami']);
+assert.deepEqual(names, [
+  'gmail_doctor',
+  'gmail_inboxes_list',
+  'gmail_labels_list',
+  'gmail_message_get',
+  'gmail_search',
+  'gmail_sendas_list',
+  'gmail_thread_get',
+  'gmail_thread_timeline',
+  'gmail_whoami',
+]);
 
 child.stdin.end();
 child.kill();

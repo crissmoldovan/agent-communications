@@ -51,7 +51,17 @@ test('the tool list is the same whatever is configured, and every tool says what
   };
 
   const withoutInboxes = await names(empty);
-  assert.deepEqual(withoutInboxes, ['gmail_doctor', 'gmail_inboxes_list', 'gmail_whoami']);
+  assert.deepEqual(withoutInboxes, [
+    'gmail_doctor',
+    'gmail_inboxes_list',
+    'gmail_labels_list',
+    'gmail_message_get',
+    'gmail_search',
+    'gmail_sendas_list',
+    'gmail_thread_get',
+    'gmail_thread_timeline',
+    'gmail_whoami',
+  ]);
   assert.deepEqual(await names(withInbox), withoutInboxes, 'registration must not depend on the inboxes present');
 });
 

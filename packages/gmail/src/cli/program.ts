@@ -16,11 +16,14 @@ import { Command, CommanderError, Option } from 'commander';
 import { TIERS } from '../auth/scopes.ts';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
 import type { Launcher, SupportedClient } from '../mcp/install.ts';
+import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts';
 import { clientAdd, clientList, clientRemove } from '../operations/clients.ts';
 import { doctor } from '../operations/doctor.ts';
 import { importLegacy } from '../operations/import-legacy.ts';
 import { inboxList, inboxPolicy, inboxRemove, inboxRename, inboxShow, whoami } from '../operations/inboxes.ts';
 import { runOauthListener } from '../operations/oauth-listen.ts';
+import { readMessage, readThread } from '../operations/read.ts';
+import { search } from '../operations/search.ts';
 import { finishSignIn, startSignIn } from '../operations/signin.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
@@ -33,8 +36,13 @@ import {
   renderInboxList,
   renderInboxShow,
   renderInstall,
+  renderLabels,
+  renderMessage,
+  renderSearch,
+  renderSendAs,
   renderSignedIn,
   renderSignInStarted,
+  renderThread,
   renderWhoami,
 } from './render.ts';
 
@@ -320,6 +328,115 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             (data.revoked
               ? 'Its token was revoked with Google.'
               : 'Its token was deleted from this machine. To revoke it with Google: https://myaccount.google.com/connections'),
+          streams,
+        );
+      }),
+    );
+
+  // ---- reading ----------------------------------------------------------------
+  program
+    .command('search <query>')
+    .description('search across mailboxes, newest first')
+    .option('--inbox <alias...>', 'search these mailboxes (default: all)')
+    .option('--all', 'search every connected mailbox', false)
+    .option('--messages', 'return messages rather than threads', false)
+    .option('--limit <number>', 'how many rows', (value) => Number.parseInt(value, 10))
+    .option('--cursor <cursor>', 'continue a previous search')
+    .option('--include-spam-trash', 'include spam and trash', false)
+    .action(
+      act(async (context, globalOptions, query: string, options: Options) => {
+        const result = await search(context, {
+          query,
+          inboxes: options.all ? 'all' : (options.inbox as string[] | undefined),
+          kind: options.messages ? 'messages' : 'threads',
+          limit: options.limit === undefined ? undefined : Number(options.limit),
+          cursor: options.cursor ? String(options.cursor) : undefined,
+          includeSpamTrash: Boolean(options.includeSpamTrash),
+        });
+        writeResult(result, output(), (data) => renderSearch(data, globalOptions.color), streams);
+      }),
+    );
+
+  program
+    .command('read <messageId>')
+    .description('read one message: headers, body, attachments and what was hidden in it')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .option('--quoted', 'keep quoted history and signatures', false)
+    .option('--max-chars <number>', 'how much body to return', (value) => Number.parseInt(value, 10))
+    .option('--offset <number>', 'continue from this character', (value) => Number.parseInt(value, 10))
+    .action(
+      act(async (context, globalOptions, messageId: string, options: Options) => {
+        const result = await readMessage(context, String(options.inbox), messageId, {
+          includeQuoted: Boolean(options.quoted),
+          maxChars: options.maxChars === undefined ? undefined : Number(options.maxChars),
+          offset: options.offset === undefined ? undefined : Number(options.offset),
+        });
+        writeResult(result, output(), (data) => renderMessage(data, globalOptions.color), streams);
+      }),
+    );
+
+  program
+    .command('thread <threadId>')
+    .description('read a whole conversation, oldest first')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .option('--quoted', 'keep quoted history and signatures', false)
+    .option('--max-chars <number>', 'how much of each body to return', (value) => Number.parseInt(value, 10))
+    .action(
+      act(async (context, globalOptions, threadId: string, options: Options) => {
+        const result = await readThread(context, String(options.inbox), threadId, {
+          includeQuoted: Boolean(options.quoted),
+          maxChars: options.maxChars === undefined ? undefined : Number(options.maxChars),
+        });
+        writeResult(result, output(), (data) => renderThread(data, globalOptions.color), streams);
+      }),
+    );
+
+  program
+    .command('timeline <threadId>')
+    .description('what happened in a conversation, computed from the messages')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .addOption(new Option('--format <format>', 'how to render it').choices(['md', 'json', 'mermaid']))
+    .option('--business-hours', 'count waiting time in working hours only', false)
+    .action(
+      act(async (context, _globalOptions, threadId: string, options: Options) => {
+        const result = await threadTimeline(context, String(options.inbox), threadId, {
+          businessHours: Boolean(options.businessHours),
+        });
+        const format = String(options.format ?? 'md');
+        writeResult(
+          format === 'json' ? result.timeline : result,
+          output(),
+          () => (format === 'mermaid' ? result.mermaid : result.markdown),
+          streams,
+        );
+      }),
+    );
+
+  program
+    .command('labels')
+    .description('the labels in a mailbox')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .action(
+      act(async (context, globalOptions, options: Options) => {
+        writeResult(
+          await listLabels(context, String(options.inbox)),
+          output(),
+          (data) => renderLabels(data, globalOptions.color),
+          streams,
+        );
+      }),
+    );
+
+  program
+    .command('sendas')
+    .description('the addresses this mailbox can send as')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .action(
+      act(async (context, globalOptions, options: Options) => {
+        writeResult(
+          await listSendAs(context, String(options.inbox)),
+          output(),
+          (data) => renderSendAs(data, globalOptions.color),
           streams,
         );
       }),

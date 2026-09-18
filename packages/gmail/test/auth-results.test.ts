@@ -24,7 +24,10 @@ test('only Google’s own verdict is read; a forged header in the message is ign
 });
 
 test('a message with no verdict from Google says so, rather than reporting a pass', () => {
-  const results = readAuthResults([{ name: 'Authentication-Results', value: 'evil.test; dkim=pass; dmarc=pass' }], 'a@b.test');
+  const results = readAuthResults(
+    [{ name: 'Authentication-Results', value: 'evil.test; dkim=pass; dmarc=pass' }],
+    'a@b.test',
+  );
   assert.equal(results.evaluatedBy, null);
   assert.equal(results.dkim, null);
   assert.equal(results.dmarc, null);

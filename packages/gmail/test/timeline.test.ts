@@ -52,7 +52,14 @@ function message(options: {
       plainHtmlMismatch: undefined,
       charsetOverridden: false,
     },
-    body: { enveloped: '', source: 'html', truncated: false, nextOffset: undefined, totalChars: 0, quotedLinesOmitted: 0 },
+    body: {
+      enveloped: '',
+      source: 'html',
+      truncated: false,
+      nextOffset: undefined,
+      totalChars: 0,
+      quotedLinesOmitted: 0,
+    },
     webLink: '',
   };
 }

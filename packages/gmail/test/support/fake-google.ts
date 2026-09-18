@@ -91,7 +91,10 @@ export interface FakeGoogle {
  * `after:`/`before:` as epoch seconds, and bare words against the snippet. Enough to prove the compiled query is
  * what reaches the API, which is what the tests are about.
  */
-function matchesQuery(message: { internalDate?: string; snippet?: string; labelIds?: string[]; payload?: unknown }, query: string): boolean {
+function matchesQuery(
+  message: { internalDate?: string; snippet?: string; labelIds?: string[]; payload?: unknown },
+  query: string,
+): boolean {
   if (!query.trim()) return true;
   const headers =
     ((message.payload as { headers?: Array<{ name?: string; value?: string }> } | undefined)?.headers ?? []).map(
@@ -356,7 +359,9 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
           .map(([messageId, value]) => ({ id: messageId, ...value }))
           .filter((value) => (value.threadId ?? '') === id);
         if (messages.length === 0) {
-          json(response, 404, { error: { code: 404, message: 'Requested entity was not found.', errors: [{ reason: 'notFound' }] } });
+          json(response, 404, {
+            error: { code: 404, message: 'Requested entity was not found.', errors: [{ reason: 'notFound' }] },
+          });
           return;
         }
         json(response, 200, { id, messages });
@@ -368,7 +373,9 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
         const id = decodeURIComponent(message[1] ?? '');
         const found = account?.messages?.[id];
         if (!found) {
-          json(response, 404, { error: { code: 404, message: 'Requested entity was not found.', errors: [{ reason: 'notFound' }] } });
+          json(response, 404, {
+            error: { code: 404, message: 'Requested entity was not found.', errors: [{ reason: 'notFound' }] },
+          });
           return;
         }
         json(response, 200, { id, ...found });

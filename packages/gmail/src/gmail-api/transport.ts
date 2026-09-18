@@ -246,9 +246,7 @@ export class GoogleGmailTransport implements GmailTransport {
   }
 
   async listThreads(options: ListOptions): Promise<ListPage> {
-    const { data } = await this.call('search threads', () =>
-      this.gmail().users.threads.list(listParameters(options)),
-    );
+    const { data } = await this.call('search threads', () => this.gmail().users.threads.list(listParameters(options)));
     return {
       ids: (data.threads ?? []).map((thread) => ({ id: thread.id ?? '', threadId: thread.id ?? undefined })),
       nextPageToken: data.nextPageToken ?? undefined,

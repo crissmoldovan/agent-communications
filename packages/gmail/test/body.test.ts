@@ -83,7 +83,10 @@ test('the part tree is flattened, with attachments kept apart from the body', ()
       {
         partId: '2',
         mimeType: 'image/png',
-        headers: [{ name: 'Content-Disposition', value: 'inline; filename="logo.png"' }, { name: 'Content-ID', value: '<logo>' }],
+        headers: [
+          { name: 'Content-Disposition', value: 'inline; filename="logo.png"' },
+          { name: 'Content-ID', value: '<logo>' },
+        ],
         body: { size: 1024, attachmentId: 'att-2' },
       },
     ],
