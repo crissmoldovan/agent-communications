@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { CommsError } from '@cloudpixel/comms-core';
@@ -9,7 +9,7 @@ import { GmailContext } from '../src/context.ts';
 import { findUngatedGmailServers, listRegisteredServers } from '../src/operations/client-configs.ts';
 import { doctor } from '../src/operations/doctor.ts';
 import { aliasFromCredentialsFile, importLegacy, parseLegacyCredentials } from '../src/operations/import-legacy.ts';
-import { inboxList } from '../src/operations/inboxes.ts';
+import { inboxList, inboxRemove, orphanedSecretsPath } from '../src/operations/inboxes.ts';
 import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
 
 const CLIENT = { clientId: TEST_CLIENT_ID, clientSecret: TEST_CLIENT_SECRET };
@@ -181,6 +181,31 @@ test('other Gmail servers registered on this machine are found and reported as u
   ]);
   assert.match(findings.find((finding) => finding.client === 'claude-code')?.removal ?? '', /claude mcp remove/);
   assert.match(findings.find((finding) => finding.client === 'codex')?.removal ?? '', /codex mcp remove/);
+});
+
+test('a token that could not be deleted is remembered and reported, not forgotten', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+
+  // A secret store that refuses to delete: the inbox still goes, and the leftover token is recorded.
+  const secrets = await harness.core.secrets('file');
+  const original = secrets.delete.bind(secrets);
+  secrets.delete = async () => {
+    throw new Error('the keychain is locked');
+  };
+  const removed = await inboxRemove(context, 'work');
+  secrets.delete = original;
+
+  assert.equal(removed.orphanedSecret, 'gmail:refresh:' + removed.id);
+  assert.deepEqual(await inboxList(context), []);
+  const recorded = await readFile(orphanedSecretsPath(context), 'utf8');
+  assert.match(recorded, /the keychain is locked/);
+
+  const checks = await doctor(context);
+  const orphans = checks.checks.find((check) => check.id === 'orphaned-secrets');
+  assert.equal(orphans?.status, 'warn');
+  assert.match(orphans?.fix ?? '', /keychain/);
 });
 
 test('doctor reports what is missing with the command that fixes it, and finds ungated servers', async () => {

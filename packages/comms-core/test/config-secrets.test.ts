@@ -325,3 +325,47 @@ test('the secret store can be chosen once, and not quietly moved afterwards', as
   });
   assert.equal((await store.load()).secrets?.store, 'file');
 });
+
+test('settings a newer version wrote survive an older reader, instead of being silently dropped', async () => {
+  const dir = tempDir();
+  const store = new ConfigStore(dir);
+  await store.update((config) => ({
+    ...config,
+    secrets: { store: 'file' },
+    inboxes: {
+      work: {
+        id: newInboxId(),
+        provider: 'gmail',
+        email: 'jo@example.test',
+        identity: 'legacy',
+        client: 'default',
+        tier: 'read',
+        contacts: false,
+        grantedScopes: [],
+        secretRef: 'gmail:refresh:x',
+        internalDomains: [],
+        createdAt: '2026-09-18T10:00:00.000Z',
+      },
+    },
+  }));
+
+  // A later version adds fields this one has never heard of, at each level of the file.
+  const path = join(dir, 'config.json');
+  const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+  raw.futureTopLevel = { enabled: true };
+  (raw.defaults as Record<string, unknown>).futureDefault = 42;
+  ((raw.inboxes as Record<string, Record<string, unknown>>).work as Record<string, unknown>).futureInboxField = 'keep';
+  writeFileSync(path, JSON.stringify(raw, null, 2));
+
+  // Reading keeps them...
+  const loaded = (await store.load()) as unknown as Record<string, unknown>;
+  assert.deepEqual(loaded.futureTopLevel, { enabled: true });
+
+  // ...and so does a write by this version, which is what stops one process undoing another's settings.
+  await store.update((config) => ({ ...config, defaults: { ...config.defaults, timezone: 'Europe/London' } }));
+  const after = JSON.parse(readFileSync(path, 'utf8')) as Record<string, Record<string, unknown>>;
+  assert.deepEqual(after.futureTopLevel, { enabled: true });
+  assert.equal(after.defaults?.futureDefault, 42);
+  assert.equal((after.inboxes?.work as Record<string, unknown>)?.futureInboxField, 'keep');
+  assert.equal(after.defaults?.timezone, 'Europe/London');
+});

@@ -25,7 +25,11 @@ together under one version.
   connections, permission checks that re-run on every call, and results carried in both `structuredContent` and one
   text block so every client sees them;
 - `mcp install` writes the entry with an absolute interpreter path and an explicit environment (clients start
-  servers with a minimal PATH), then starts the server through that exact entry to prove it works.
+  servers with a minimal PATH), then starts the server through that exact entry to prove it works;
+- settings written by a newer version are preserved rather than dropped when an older one writes the file, so two
+  versions sharing a machine cannot silently undo each other;
+- on Windows, tokens, approvals and the audit log move out of the roaming profile (`%APPDATA%`) into
+  `%LOCALAPPDATA%`, which a domain does not copy between machines.
 
 **Why.** Everything else in this project needs a mailbox connected and a way for an agent to reach it. The parts
 that took the most care are the ones that fail quietly: the account you did not mean to authorise, the permission
@@ -33,7 +37,7 @@ you did not notice was missing, and the second Gmail server that can send mail w
 
 **Impact.** **Nothing to install yet.** No package is published. Developing in this repository needs Node 22.18 or
 newer; the packages themselves will run on 22.12 or newer.
-- **Tests:** `pnpm verify` — root 14, comms-core 129, gmail 53, gmail-mcp 3, and a packed-tarball consumer check per
+- **Tests:** `pnpm verify` — root 14, comms-core 131, gmail 54, gmail-mcp 3, and a packed-tarball consumer check per
   package (the MCP one completes a real `initialize` and `tools/list` over stdio).
 
 ### Phase 1 — the foundation and the core

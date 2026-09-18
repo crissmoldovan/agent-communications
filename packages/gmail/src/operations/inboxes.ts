@@ -1,5 +1,7 @@
+import { join } from 'node:path';
 import {
   ALIAS_PATTERN,
+  appendPrivateLine,
   CommsError,
   effectiveSendPolicy,
   type InboxRuntimeState,
@@ -184,8 +186,19 @@ export async function inboxRemove(
   let orphanedSecret: string | undefined;
   try {
     await secrets.delete(inbox.secretRef);
-  } catch {
+  } catch (error) {
+    // The row is already gone, so the inbox is disconnected either way; but a token still sitting in the keychain is
+    // worth saying out loud rather than forgetting, so `doctor` can report it and the user can remove it.
     orphanedSecret = inbox.secretRef;
+    await appendPrivateLine(
+      orphanedSecretsPath(context),
+      JSON.stringify({
+        at: context.now().toISOString(),
+        secretRef: inbox.secretRef,
+        alias,
+        reason: error instanceof Error ? error.message : String(error),
+      }),
+    ).catch(() => undefined);
   }
   await context.core.states.update(inbox.id, { lastError: undefined });
   await context.core.audit.append({
@@ -197,6 +210,10 @@ export async function inboxRemove(
     reason: revoked ? 'token revoked' : 'token deleted locally',
   });
   return { alias, id: inbox.id, email: inbox.email, revoked, orphanedSecret };
+}
+
+export function orphanedSecretsPath(context: GmailContext): string {
+  return join(context.core.paths.stateDir, 'orphaned-secrets.jsonl');
 }
 
 export interface WhoamiResult {

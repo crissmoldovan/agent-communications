@@ -91,7 +91,7 @@ export function newInboxId(): string {
 const sendPolicySchema = z.enum(['chat', 'confirm', 'never']);
 const storeKindSchema = z.enum(['keychain', 'file']);
 
-const clientSchema = z.object({
+const clientSchema = z.looseObject({
   provider: z.string().min(1),
   clientId: z.string().min(1),
   projectId: z.string().optional(),
@@ -99,7 +99,7 @@ const clientSchema = z.object({
   addedAt: z.string(),
 });
 
-const inboxSchema = z.object({
+const inboxSchema = z.looseObject({
   id: z.string().regex(INBOX_ID_PATTERN, 'inbox ids look like ibx_ followed by 16 characters'),
   provider: z.string().min(1),
   email: z.string().min(3),
@@ -117,7 +117,7 @@ const inboxSchema = z.object({
   createdAt: z.string(),
 });
 
-const defaultsSchema = z.object({
+const defaultsSchema = z.looseObject({
   sendPolicy: sendPolicySchema.default('chat'),
   riskEscalation: z.boolean().default(true),
   sendCaps: z
@@ -132,10 +132,15 @@ const defaultsSchema = z.object({
 
 export const RESERVED_ALIASES: ReadonlySet<string> = new Set(['all']);
 
+/**
+ * Unknown keys are kept, never dropped. Two versions of this software share one config file — an MCP server started
+ * last week, a CLI installed today — and a reader that silently discarded what it did not understand would quietly
+ * undo settings the other one wrote. Within `version: 1` every change is additive for that reason.
+ */
 export const configSchema: z.ZodType<Config, unknown> = z
-  .object({
+  .looseObject({
     version: z.literal(CONFIG_VERSION),
-    secrets: z.object({ store: storeKindSchema }).optional(),
+    secrets: z.looseObject({ store: storeKindSchema }).optional(),
     clients: z.record(aliasSchema, clientSchema).default({}),
     inboxes: z.record(aliasSchema, inboxSchema).default({}),
     defaults: defaultsSchema.default(defaultsSchema.parse({})),

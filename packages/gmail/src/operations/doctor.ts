@@ -1,9 +1,10 @@
-import { access, constants, stat } from 'node:fs/promises';
+import { access, constants, readFile, stat } from 'node:fs/promises';
 import { type CommsError, isGroupOrWorldAccessible, probeKeychain, secretsStoreOf } from '@cloudpixel/comms-core';
 import { capabilitiesOf, scopesFor, TIERS, type Tier } from '../auth/scopes.ts';
 import { TokenSource } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';
 import { findUngatedGmailServers, listRegisteredServers } from './client-configs.ts';
+import { orphanedSecretsPath } from './inboxes.ts';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'skipped';
 
@@ -68,6 +69,7 @@ export async function doctor(
     checks.push(...(await inboxChecks(context, alias)));
   }
 
+  checks.push(await orphanedSecretsCheck(context));
   checks.push(...(await mcpChecks(context)));
 
   const summary = {
@@ -258,6 +260,27 @@ async function inboxChecks(context: GmailContext, alias: string): Promise<Check[
     }
   }
   return checks;
+}
+
+/** Tokens whose removal failed when an inbox was disconnected: still in the keychain, no longer referenced. */
+async function orphanedSecretsCheck(context: GmailContext): Promise<Check> {
+  let lines: string[] = [];
+  try {
+    lines = (await readFile(orphanedSecretsPath(context), 'utf8')).split('\n').filter((line) => line.trim());
+  } catch {
+    // Nothing recorded: nothing was ever left behind.
+  }
+  return {
+    id: 'orphaned-secrets',
+    title: 'Tokens left behind',
+    status: lines.length === 0 ? 'ok' : 'warn',
+    detail:
+      lines.length === 0 ? 'none' : `${lines.length} stored token(s) could not be deleted when an inbox was removed`,
+    fix:
+      lines.length === 0
+        ? undefined
+        : `Remove them from the system keychain by hand, then delete ${orphanedSecretsPath(context)}`,
+  };
 }
 
 async function mcpChecks(context: GmailContext): Promise<Check[]> {
