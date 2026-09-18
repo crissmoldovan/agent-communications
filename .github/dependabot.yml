@@ -1,0 +1,19 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      github-actions:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    # At least pnpm's minimumReleaseAge (one day), so a proposed version is always installable.
+    cooldown:
+      default-days: 3
+    groups:
+      dependencies:
+        patterns: ["*"]

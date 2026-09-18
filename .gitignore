@@ -11,3 +11,5 @@ coverage/
 gcp-oauth.keys.json
 creds-*.json
 tokens/
+.tmp/
+.superpowers/

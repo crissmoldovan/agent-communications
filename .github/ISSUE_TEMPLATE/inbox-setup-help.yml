@@ -1,0 +1,28 @@
+name: Inbox setup help
+description: Adding an inbox or the Google Cloud setup did not work.
+labels: [setup]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Run `agent-gmail doctor --json` first — it names most problems and their fix.
+        **Never paste your client secret JSON or any token.**
+  - type: textarea
+    id: step
+    attributes:
+      label: Which step failed
+      description: The step from docs/getting-started.md and the exact error text or screen.
+    validations:
+      required: true
+  - type: dropdown
+    id: account
+    attributes:
+      label: Account type
+      options: [Personal Gmail, Google Workspace, Workspace with an admin who restricts apps, Not sure]
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: agent-gmail doctor --json
+      render: json
