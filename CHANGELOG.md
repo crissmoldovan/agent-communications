@@ -37,7 +37,8 @@ you did not notice was missing, and the second Gmail server that can send mail w
 
 **Impact.** **Nothing to install yet.** No package is published. Developing in this repository needs Node 22.18 or
 newer; the packages themselves will run on 22.12 or newer.
-- **Tests:** `pnpm verify` — root 14, comms-core 131, gmail 54, gmail-mcp 3, and a packed-tarball consumer check per
+- **Tests:** `pnpm verify` — root 16 (including a guard that mail can leave from exactly one place, in from the
+  phase before sending exists), comms-core 138, gmail 54, gmail-mcp 3, and a packed-tarball consumer check per
   package (the MCP one completes a real `initialize` and `tools/list` over stdio).
 
 ### Phase 1 — the foundation and the core
