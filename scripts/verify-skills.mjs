@@ -70,6 +70,11 @@ const SECRET_PATTERNS = [
   /sk-[A-Za-z0-9]{20,}/,
 ];
 
+/** Paths in messages always use forward slashes, so output reads the same on every platform. */
+function show(path) {
+  return relative(root, path).split(sep).join('/');
+}
+
 function fail(message) {
   failures.push(message);
 }
@@ -93,12 +98,12 @@ function isWithin(candidate, container) {
 
 function parseFrontmatter(source, file) {
   if (!source.startsWith('---\n')) {
-    fail(`${relative(root, file)}: SKILL.md must start with YAML frontmatter`);
+    fail(`${show(file)}: SKILL.md must start with YAML frontmatter`);
     return null;
   }
   const close = source.indexOf('\n---\n', 4);
   if (close < 0) {
-    fail(`${relative(root, file)}: frontmatter must close with ---`);
+    fail(`${show(file)}: frontmatter must close with ---`);
     return null;
   }
   const frontmatter = source.slice(4, close);
@@ -173,7 +178,7 @@ function validateCarriedFiles(source, file, skillDirectory) {
   for (const match of source.matchAll(CARRIED_FILE_PATTERN)) {
     const token = match[1].replace(/[.,;:)\]]+$/, '');
     if (!existsSync(resolve(skillDirectory, token))) {
-      fail(`${relative(root, file)}: names a carried file the skill does not carry: ${token}`);
+      fail(`${show(file)}: names a carried file the skill does not carry: ${token}`);
     }
   }
 }
@@ -181,7 +186,7 @@ function validateCarriedFiles(source, file, skillDirectory) {
 /** `references/fit.json`: present, parseable, and one of the three kinds. */
 function validateFit(skillDirectory, file) {
   const fitPath = resolve(skillDirectory, 'references', 'fit.json');
-  const where = relative(root, file);
+  const where = show(file);
   if (!existsSync(fitPath)) {
     fail(`${where}: no references/fit.json — declare where this skill fits (kinds: ${[...FIT_KINDS].join(', ')})`);
     return;
@@ -229,9 +234,9 @@ function validateLinks(source, file, skillDirectory) {
     if (!pathname) continue;
     const resolved = resolve(dirname(file), pathname);
     if (!isWithin(resolved, skillDirectory)) {
-      fail(`${relative(root, file)}: local link escapes its skill directory: ${target}`);
+      fail(`${show(file)}: local link escapes its skill directory: ${target}`);
     } else if (!existsSync(resolved)) {
-      fail(`${relative(root, file)}: local link does not resolve: ${target}`);
+      fail(`${show(file)}: local link does not resolve: ${target}`);
     }
   }
 }
@@ -246,33 +251,31 @@ for (const file of skillFiles) {
   const skillDirectory = dirname(file);
   const expectedDirectory = resolve(skillsRoot, relative(skillsRoot, skillDirectory).split(sep)[0]);
   if (skillDirectory !== expectedDirectory) {
-    fail(`${relative(root, file)}: skill must be exactly skills/<name>/SKILL.md`);
+    fail(`${show(file)}: skill must be exactly skills/<name>/SKILL.md`);
     continue;
   }
   const name = relative(skillsRoot, skillDirectory);
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
-    fail(`${relative(root, file)}: skill directory name must use lowercase letters, digits, and single hyphens`);
+    fail(`${show(file)}: skill directory name must use lowercase letters, digits, and single hyphens`);
   }
   const source = readFileSync(file, 'utf8');
   const frontmatter = parseFrontmatter(source, file);
   if (frontmatter) {
-    if (!frontmatter.name) fail(`${relative(root, file)}: missing frontmatter name`);
-    else if (frontmatter.name !== name)
-      fail(`${relative(root, file)}: frontmatter name must match directory (${name})`);
-    if (!frontmatter.description) fail(`${relative(root, file)}: missing frontmatter description`);
+    if (!frontmatter.name) fail(`${show(file)}: missing frontmatter name`);
+    else if (frontmatter.name !== name) fail(`${show(file)}: frontmatter name must match directory (${name})`);
+    if (!frontmatter.description) fail(`${show(file)}: missing frontmatter description`);
     else if (readme !== null && !readme.includes(frontmatter.description))
-      fail(`${relative(root, file)}: README must list the exact frontmatter description`);
-    if (frontmatter.metadataError) fail(`${relative(root, file)}: ${frontmatter.metadataError}`);
+      fail(`${show(file)}: README must list the exact frontmatter description`);
+    if (frontmatter.metadataError) fail(`${show(file)}: ${frontmatter.metadataError}`);
     for (const [key, limit] of Object.entries(FIELD_LIMITS)) {
       const length = [...(frontmatter[key] ?? '')].length;
-      if (length > limit)
-        fail(`${relative(root, file)}: ${key} is ${length} characters; the portable spec allows ${limit}`);
+      if (length > limit) fail(`${show(file)}: ${key} is ${length} characters; the portable spec allows ${limit}`);
     }
   }
   const bodyLines = bodyLineCount(source);
   if (bodyLines > MAX_BODY_LINES) {
     fail(
-      `${relative(root, file)}: body is ${bodyLines} lines; the cap is ${MAX_BODY_LINES} — move detail into carried reference files`,
+      `${show(file)}: body is ${bodyLines} lines; the cap is ${MAX_BODY_LINES} — move detail into carried reference files`,
     );
   }
   validateFit(skillDirectory, file);
@@ -285,8 +288,8 @@ for (const file of skillFiles) {
 }
 
 for (const file of walk(root)) {
-  const relativeFile = relative(root, file);
-  if (relativeFile.split(sep).includes('.git') || relativeFile.startsWith('node_modules')) continue;
+  const relativeFile = show(file);
+  if (relativeFile.split('/').includes('.git') || relativeFile.startsWith('node_modules')) continue;
   const extension = relativeFile.slice(relativeFile.lastIndexOf('.')).toLowerCase();
   if (!textExtensions.has(extension) && !['README', 'LICENSE', 'CONTRIBUTING', 'SECURITY'].includes(relativeFile))
     continue;

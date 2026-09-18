@@ -472,8 +472,7 @@ export function analyseOutboundHtml(html: string): OutboundHtmlReport {
       if (!hiddenAncestor && (isHiddenElement(node, rules) || DROP_TAGS.has(tag))) {
         hidden = true;
         const text = textLength(node) > 0 ? textOfNode(node) : '';
-        if (text || !DROP_TAGS.has(tag))
-          report.hidden.push({ reason: hiddenReason(node, rules), text: text.slice(0, 500) });
+        if (text || !DROP_TAGS.has(tag)) report.hidden.push({ reason: hiddenReason(node), text: text.slice(0, 500) });
       }
       visit(node.children, hidden);
     }
@@ -489,7 +488,7 @@ function textOfNode(node: AnyNode): string {
   return '';
 }
 
-function hiddenReason(element: Element, rules: StylesheetRules): string {
+function hiddenReason(element: Element): string {
   if (DROP_TAGS.has(element.name)) return `<${element.name}> is never shown`;
   if ('hidden' in element.attribs) return 'hidden attribute';
   if ((element.attribs['aria-hidden'] ?? '').toLowerCase() === 'true') return 'aria-hidden';

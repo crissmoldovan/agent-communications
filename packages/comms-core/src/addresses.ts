@@ -22,8 +22,8 @@ export function parseAddressList(header: string | undefined | null): ParsedAddre
         continue;
       }
       const raw = (entry as { address?: string }).address;
-      if (!raw || !raw.includes('@')) continue;
-      const address = canonicalAddress(raw);
+      if (!raw?.includes('@')) continue;
+      const address = canonicalAddress(raw as string);
       if (seen.has(address)) continue;
       seen.add(address);
       out.push({ name: ((entry as { name?: string }).name ?? '').trim(), address });
