@@ -304,15 +304,63 @@ function normaliseColor(value: string | undefined): string | null {
   return NAMED_COLORS[v] ?? null;
 }
 
+/**
+ * A rule that hides whatever it matches. `classes` must all be present, which is what makes `.a.b` different from
+ * `.a` — the first hides only elements carrying both.
+ */
+interface HidingRule {
+  tag: string | null;
+  id: string | null;
+  classes: string[];
+}
+
 interface StylesheetRules {
-  hiddenClasses: Set<string>;
-  hiddenIds: Set<string>;
-  hiddenTags: Set<string>;
+  rules: HidingRule[];
+}
+
+/** A rule that only applies while the reader is doing something hides nothing in a message they simply open. */
+const INTERACTION_PSEUDO = /:(?:hover|focus(?:-within|-visible)?|active|visited|target|checked)\b/;
+
+/**
+ * The part of a selector that says which element is hidden: the last compound, after any combinator. In
+ * `.wrapper > .secret`, `.wrapper` is context and `.secret` is what disappears — marking both would remove content
+ * the reader can see.
+ */
+export function parseHidingSelector(selector: string): HidingRule | null {
+  const cleaned = selector.trim().toLowerCase();
+  if (!cleaned || INTERACTION_PSEUDO.test(cleaned)) return null;
+  const subject = cleaned
+    .split(/[\s>+~]+/)
+    .filter(Boolean)
+    .at(-1);
+  if (!subject || subject === '*') return null;
+
+  const rule: HidingRule = { tag: null, id: null, classes: [] };
+  // Walk the compound: `div#id.a.b[attr]:not(.c)` — everything this parser does not understand makes it give up,
+  // because a rule it half-understands is worse than one it declines to apply.
+  const pattern = /^([a-z][\w-]*)|\.([\w-]+)|#([\w-]+)|\[[^\]]*\]/;
+  let rest = subject;
+  let first = true;
+  while (rest.length > 0) {
+    const match = pattern.exec(rest);
+    if (!match) return null;
+    if (match[1] !== undefined) {
+      if (!first) return null;
+      rule.tag = match[1];
+    } else if (match[2] !== undefined) {
+      rule.classes.push(match[2]);
+    } else if (match[3] !== undefined) {
+      rule.id = match[3];
+    }
+    rest = rest.slice(match[0].length);
+    first = false;
+  }
+  return rule.tag || rule.id || rule.classes.length > 0 ? rule : null;
 }
 
 /** Collects simple selectors (`.class`, `#id`, `tag`, `tag.class`) whose declarations hide content. */
 function hiddenSelectorsFromStylesheets(root: AnyNode): StylesheetRules {
-  const rules: StylesheetRules = { hiddenClasses: new Set(), hiddenIds: new Set(), hiddenTags: new Set() };
+  const rules: StylesheetRules = { rules: [] };
   const visit = (node: AnyNode): void => {
     if (isTag(node) && node.name === 'style') {
       const css = node.children
@@ -327,13 +375,8 @@ function hiddenSelectorsFromStylesheets(root: AnyNode): StylesheetRules {
         if (selectors.includes('@')) continue;
         if (!hidesContent(parseStyle(block.slice(brace + 1)))) continue;
         for (const raw of selectors.split(',')) {
-          const selector = raw.trim().toLowerCase();
-          const match = /^([a-z][a-z0-9]*)?(?:([.#])([a-z0-9_-]+))?$/.exec(selector);
-          if (!match) continue;
-          const [, tag, kind, name] = match;
-          if (kind === '.' && name) rules.hiddenClasses.add(name);
-          else if (kind === '#' && name) rules.hiddenIds.add(name);
-          else if (tag && !kind) rules.hiddenTags.add(tag);
+          const rule = parseHidingSelector(raw);
+          if (rule) rules.rules.push(rule);
         }
       }
     }
@@ -353,10 +396,13 @@ function isHiddenElement(element: Element, rules: StylesheetRules): boolean {
   const attribs = element.attribs;
   if ('hidden' in attribs) return true;
   if ((attribs['aria-hidden'] ?? '').toLowerCase() === 'true') return true;
-  if (rules.hiddenTags.has(element.name)) return true;
-  if (attribs.id && rules.hiddenIds.has(attribs.id.toLowerCase())) return true;
-  for (const cls of (attribs.class ?? '').toLowerCase().split(/\s+/)) {
-    if (cls && rules.hiddenClasses.has(cls)) return true;
+  const id = (attribs.id ?? '').toLowerCase();
+  const classes = new Set((attribs.class ?? '').toLowerCase().split(/\s+/).filter(Boolean));
+  for (const rule of rules.rules) {
+    if (rule.tag && rule.tag !== element.name) continue;
+    if (rule.id && rule.id !== id) continue;
+    if (rule.classes.some((name) => !classes.has(name))) continue;
+    return true;
   }
   if (hidesContent(parseStyle(attribs.style))) return true;
   // <font size="1"> and smaller is still readable; only an explicit zero is hidden.
