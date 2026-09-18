@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { CommsError } from './errors.ts';
@@ -281,10 +281,16 @@ export function defaultInternalDomains(email: string, publicDomains: ReadonlySet
 
 const POLICY_RANK: Record<SendPolicy, number> = { chat: 0, confirm: 1, never: 2 };
 
-/** A path as it will actually be used: `~` expanded, separators normalised, no trailing slash. */
+/**
+ * A path as it will actually be used: `~` expanded, separators normalised, no trailing slash.
+ *
+ * Case is folded on macOS and Windows, whose filesystems are case-insensitive by default: there, `~/Downloads` and
+ * `~/downloads` are one directory, and treating them as two reports a loosening that never happened — which costs the
+ * user a consent prompt for a change that is not one. Linux is case-sensitive, so case is kept.
+ */
 function normalisePath(path: string): string {
-  const expanded = expandHome(path.trim(), homedir());
-  return expanded.replace(/[/\\]+$/, '');
+  const expanded = expandHome(path.trim(), homedir()).replace(/[/\\]+$/, '');
+  return platform() === 'darwin' || platform() === 'win32' ? expanded.toLowerCase() : expanded;
 }
 
 /** True when `candidate` is the same directory as `parent`, or inside it. Both may be unset. */

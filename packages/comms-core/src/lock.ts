@@ -12,6 +12,15 @@ export interface LockOptions {
   staleMs?: number;
 }
 
+/**
+ * Opening `wx` failed because someone else holds the path — retry, rather than failing the command.
+ *
+ * EPERM and EBUSY are how Windows reports what EEXIST reports elsewhere: the file is there, or the holder is deleting
+ * it as we open it. EACCES is deliberately not here — that is a permissions problem, and waiting five seconds to
+ * announce that another process holds the lock would be both slower and untrue.
+ */
+const CONTENDED = new Set(['EEXIST', 'EPERM', 'EBUSY']);
+
 interface LockBody {
   pid: number;
   at: string;
@@ -51,19 +60,15 @@ async function takeOverStale(lockPath: string, staleMs: number): Promise<void> {
     try {
       await link(aside, lockPath);
     } catch {
+      // Write the holder's lock back by hand rather than leaving the path unlocked. `wx`, never a rename: a rename
+      // replaces whatever is there, and between the move and now another waiter may have taken the lock legitimately.
+      // Overwriting that would hand the same lock to two holders, which is worse than the case this is repairing.
       try {
-        await rename(aside, lockPath);
-        return;
+        const handle = await open(lockPath, 'wx', 0o600);
+        await handle.writeFile(JSON.stringify(moved));
+        await handle.close();
       } catch {
-        // Neither worked. Write the holder's lock back by hand rather than leaving the path unlocked — `wx` so a
-        // new holder that has appeared in the meantime keeps theirs.
-        try {
-          const handle = await open(lockPath, 'wx', 0o600);
-          await handle.writeFile(JSON.stringify(moved));
-          await handle.close();
-        } catch {
-          // A new holder exists, or the path is unusable; either way there is nothing left to restore.
-        }
+        // A new holder exists, or the path is unusable; either way there is nothing left to restore.
       }
     }
   }
@@ -81,6 +86,7 @@ export async function withFileLock<T>(lockPath: string, fn: () => Promise<T>, op
   const staleMs = options.staleMs ?? 30_000;
   const deadline = Date.now() + timeoutMs;
   const token = randomBytes(12).toString('hex');
+  let lastCode = 'EEXIST';
   await ensurePrivateDir(dirname(lockPath));
   for (;;) {
     try {
@@ -89,14 +95,20 @@ export async function withFileLock<T>(lockPath: string, fn: () => Promise<T>, op
       await handle.close();
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      if (isStale(await readLock(lockPath), staleMs)) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!CONTENDED.has(code ?? '')) throw error;
+      lastCode = code ?? lastCode;
+      // Only EEXIST tells us the file is really there and can be read; under the Windows codes there is nothing to
+      // read yet, so back off and look again rather than deciding it is abandoned.
+      if (code === 'EEXIST' && isStale(await readLock(lockPath), staleMs)) {
         await takeOverStale(lockPath, staleMs);
         continue;
       }
       if (Date.now() > deadline) {
         throw new CommsError('LOCK_TIMEOUT', `another agent-communications process is holding ${lockPath}`, {
-          hint: 'Retry in a moment. If it persists and no other process is running, delete the lock file.',
+          hint:
+            `Retry in a moment. If it persists and no other process is running, delete the lock file.` +
+            (lastCode === 'EEXIST' ? '' : ` (last error: ${lastCode})`),
         });
       }
       await sleep(25 + Math.floor(Math.random() * 50));

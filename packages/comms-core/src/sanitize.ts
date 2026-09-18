@@ -376,6 +376,31 @@ export function parseHidingSelector(selector: string): HidingRule | null {
 const NESTING_AT_RULES = /^@(media|supports|layer|container|scope|document)\b/i;
 
 /**
+ * If the next thing in the stylesheet ends with `;` rather than a block, returns where it ends; otherwise null.
+ *
+ * Quotes and brackets are tracked because a semicolon inside them is part of a value, not the end of a statement:
+ * `@import url("a;b.css");` is one statement, and `@import "x"; .hide{display:none}` is two.
+ */
+function endOfStatement(css: string, from: number): number | null {
+  let quote: string | null = null;
+  let depth = 0;
+  for (let index = from; index < css.length; index++) {
+    const character = css[index];
+    if (quote) {
+      if (character === '\\') index++;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") quote = character;
+    else if (character === '(' || character === '[') depth++;
+    else if (character === ')' || character === ']') depth = Math.max(0, depth - 1);
+    else if (depth === 0 && character === '{') return null;
+    else if (depth === 0 && character === ';') return index + 1;
+  }
+  return null;
+}
+
+/**
  * Walks a stylesheet rule by rule, descending into `@media` and friends.
  *
  * Splitting on `}` and skipping anything containing `@` — which is what this did — means every rule inside a
@@ -385,6 +410,15 @@ const NESTING_AT_RULES = /^@(media|supports|layer|container|scope|document)\b/i;
 export function eachStyleRule(css: string, visit: (selectors: string, declarations: string) => void): void {
   let index = 0;
   while (index < css.length) {
+    // Find where this rule's prelude ends. A `;` before the `{` ends a statement that has no block at all — `@import`,
+    // `@charset`, `@namespace`, or a stray semicolon. Taking everything up to the next `{` instead would glue that
+    // statement onto the selector that follows it, and the merged text starts with `@`, so a hiding rule after an
+    // `@import` would be skipped as though it were an at-rule. A browser discards the statement and applies the rule.
+    const statementEnd = endOfStatement(css, index);
+    if (statementEnd !== null) {
+      index = statementEnd;
+      continue;
+    }
     const open = css.indexOf('{', index);
     if (open < 0) return;
     const prelude = css.slice(index, open).trim();
@@ -700,7 +734,10 @@ export interface OutboundHtmlReport {
   urls: { where: string; url: string }[];
   /** URLs a mail client fetches on open — each one a potential beacon carrying data out. */
   remoteResources: string[];
+  /** `<form>` elements. Mail clients do not submit them, but their presence says the message is trying. */
   forms: number;
+  /** Interactive fields — input, button, select, textarea — whether or not they sit inside a form. */
+  formFields: number;
   scripts: number;
 }
 
@@ -718,7 +755,7 @@ const AUTO_LOADING = new Set([
   'track',
   'input',
 ]);
-const FORM_TAGS = new Set(['form', 'input', 'button', 'select', 'textarea']);
+const FORM_FIELD_TAGS = new Set(['input', 'button', 'select', 'textarea']);
 const CSS_URL = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
 
 function isRemote(url: string): boolean {
@@ -739,6 +776,7 @@ export function analyseOutboundHtml(html: string): OutboundHtmlReport {
     urls: [],
     remoteResources: [],
     forms: 0,
+    formFields: 0,
     scripts: 0,
   };
   const addUrl = (where: string, url: string, autoLoads: boolean): void => {
@@ -757,7 +795,8 @@ export function analyseOutboundHtml(html: string): OutboundHtmlReport {
       if (!isTag(node)) continue;
       const tag = node.name;
       if (tag === 'script') report.scripts += 1;
-      if (FORM_TAGS.has(tag)) report.forms += 1;
+      if (tag === 'form') report.forms += 1;
+      else if (FORM_FIELD_TAGS.has(tag)) report.formFields += 1;
       if (tag === 'style') {
         const css = node.children
           .filter(isText)

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { platform } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
@@ -161,6 +162,27 @@ test('withFileLock serialises critical sections and clears a stale lock', async 
     /holding/,
   );
   assert.match(readFileSync(lock, 'utf8'), /alive/);
+});
+
+test('a permissions problem fails immediately; it is not reported as contention', async () => {
+  // Contention is worth waiting out; a directory we cannot write to never becomes writable, and announcing "another
+  // process is holding it" five seconds later would be both slower and untrue. Root ignores the mode, and Windows
+  // does not have these semantics at all.
+  if (platform() === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)) return;
+  const dir = tempDir();
+  const lock = join(dir, 'sealed', 'x.lock');
+  mkdirSync(join(dir, 'sealed'));
+  chmodSync(join(dir, 'sealed'), 0o500);
+  try {
+    const started = Date.now();
+    await assert.rejects(
+      withFileLock(lock, async () => 'never', { timeoutMs: 5000 }),
+      (error: unknown) => (error as NodeJS.ErrnoException).code === 'EACCES',
+    );
+    assert.ok(Date.now() - started < 2000, 'it should not have waited out the timeout');
+  } finally {
+    chmodSync(join(dir, 'sealed'), 0o700);
+  }
 });
 
 test('withFileLock times out with LOCK_TIMEOUT while another holder is alive', async () => {
