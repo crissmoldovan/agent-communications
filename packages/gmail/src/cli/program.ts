@@ -19,6 +19,7 @@ import type { Launcher, SupportedClient } from '../mcp/install.ts';
 import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts';
 import { downloadAttachments, findAttachments } from '../operations/attachments.ts';
 import { clientAdd, clientList, clientRemove } from '../operations/clients.ts';
+import { followUps, searchContacts } from '../operations/contacts.ts';
 import { doctor } from '../operations/doctor.ts';
 import { importLegacy } from '../operations/import-legacy.ts';
 import { inboxList, inboxPolicy, inboxRemove, inboxRename, inboxShow, whoami } from '../operations/inboxes.ts';
@@ -33,8 +34,10 @@ import {
   renderAttachments,
   renderClientAdd,
   renderClients,
+  renderContacts,
   renderDoctor,
   renderDownloads,
+  renderFollowUps,
   renderImport,
   renderInboxList,
   renderInboxShow,
@@ -465,6 +468,44 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           },
         );
         writeResult(result, output(), (data) => renderDownloads(data, globalOptions.color), streams);
+      }),
+    );
+
+  program
+    .command('contacts <query>')
+    .description('find someone’s address: from the address book, from people written to, and from past mail')
+    .option('--inbox <alias...>', 'search these mailboxes (default: all)')
+    .option('--sources <source...>', 'contacts, other-contacts, history')
+    .option('--limit <number>', 'how many rows', (value) => Number.parseInt(value, 10))
+    .action(
+      act(async (context, globalOptions, query: string, options: Options) => {
+        const result = await searchContacts(context, query, {
+          inboxes: options.inbox as string[] | undefined,
+          sources: options.sources as Array<'contacts' | 'other-contacts' | 'history'> | undefined,
+          limit: options.limit === undefined ? undefined : Number(options.limit),
+        });
+        writeResult(result, output(), (data) => renderContacts(data, globalOptions.color), streams);
+      }),
+    );
+
+  program
+    .command('followups')
+    .description('conversations waiting on somebody')
+    .option('--inbox <alias...>', 'these mailboxes (default: all)')
+    .addOption(new Option('--direction <who>', 'who is being waited on').choices(['them', 'me']))
+    .option('--older-than <days>', 'only threads quiet for this long', (value) => Number.parseInt(value, 10))
+    .option('--lookback <days>', 'how far back to look', (value) => Number.parseInt(value, 10))
+    .option('--limit <number>', 'how many rows', (value) => Number.parseInt(value, 10))
+    .action(
+      act(async (context, globalOptions, options: Options) => {
+        const result = await followUps(context, {
+          inboxes: options.inbox as string[] | undefined,
+          direction: options.direction as 'them' | 'me' | undefined,
+          olderThanDays: options.olderThan === undefined ? undefined : Number(options.olderThan),
+          lookbackDays: options.lookback === undefined ? undefined : Number(options.lookback),
+          limit: options.limit === undefined ? undefined : Number(options.limit),
+        });
+        writeResult(result, output(), (data) => renderFollowUps(data, globalOptions.color), streams);
       }),
     );
 

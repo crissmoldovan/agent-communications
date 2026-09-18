@@ -37,6 +37,10 @@ export interface FakeAccount {
   messages?: Record<string, FakeMessage>;
   /** Attachment bytes, keyed by attachment id. */
   attachments?: Record<string, string>;
+  /** People saved in this account's contacts. */
+  contacts?: Array<{ name?: string; email: string }>;
+  /** People Google recorded as corresponded with, but never saved. */
+  otherContacts?: Array<{ name?: string; email: string }>;
 }
 
 export interface FakeMessage {
@@ -89,13 +93,15 @@ export interface FakeGoogle {
 }
 
 /**
- * The little of Gmail's query language the fake understands: `from:`, `subject:`, `has:attachment`, `is:unread`,
- * `after:`/`before:` as epoch seconds, and bare words against the snippet. Enough to prove the compiled query is
- * what reaches the API, which is what the tests are about.
+ * The part of Gmail's query language the fake understands: `from:`, `to:`, `subject:`, `in:`, `has:attachment`,
+ * `is:unread`, `after:`/`before:` as epoch seconds, `older_than:`/`newer_than:` in days, `OR` and `{a b}` groups,
+ * `-` negation, and bare words against the subject and snippet. Enough that a test proves the compiled query does
+ * what it claims, rather than proving the fake agrees with itself.
  */
 function matchesQuery(
   message: { internalDate?: string; snippet?: string; labelIds?: string[]; payload?: unknown },
   query: string,
+  now: number,
 ): boolean {
   if (!query.trim()) return true;
   const headers =
@@ -105,34 +111,66 @@ function matchesQuery(
   const headerValue = (name: string): string =>
     headers.find((header) => header.startsWith(`${name}:`))?.slice(name.length + 1) ?? '';
 
-  for (const token of query.split(/\s+/).filter(Boolean)) {
-    const colon = token.indexOf(':');
-    const operator = colon > 0 ? token.slice(0, colon).toLowerCase() : '';
-    const value = colon > 0 ? token.slice(colon + 1).replace(/^"|"$/g, '') : token;
+  const matchesTerm = (term: string): boolean => {
+    if (term.startsWith('-')) return !matchesTerm(term.slice(1));
+    const colon = term.indexOf(':');
+    const operator = colon > 0 ? term.slice(0, colon).toLowerCase() : '';
+    const value = (colon > 0 ? term.slice(colon + 1) : term).replace(/^"|"$/g, '').toLowerCase();
+    const at = Number(message.internalDate ?? 0);
+    const labels = (message.labelIds ?? []).map((label) => label.toLowerCase());
     switch (operator) {
       case 'from':
-        if (!headerValue('from').toLowerCase().includes(value.toLowerCase())) return false;
-        break;
+        return headerValue('from').toLowerCase().includes(value);
+      case 'to':
+        return headerValue('to').toLowerCase().includes(value) || headerValue('cc').toLowerCase().includes(value);
       case 'subject':
-        if (!headerValue('subject').toLowerCase().includes(value.toLowerCase())) return false;
-        break;
+        return headerValue('subject').toLowerCase().includes(value);
+      case 'in':
+        return labels.includes(value);
+      case 'label':
+        return labels.includes(value);
       case 'after':
-        if (Number(message.internalDate ?? 0) < Number(value) * 1000) return false;
-        break;
+        return at >= Number(value) * 1000;
       case 'before':
-        if (Number(message.internalDate ?? 0) >= Number(value) * 1000) return false;
-        break;
+        return at < Number(value) * 1000;
+      case 'older_than':
+        return at <= now - Number.parseInt(value, 10) * 86_400_000;
+      case 'newer_than':
+        return at >= now - Number.parseInt(value, 10) * 86_400_000;
       case 'is':
-        if (value === 'unread' && !(message.labelIds ?? []).includes('UNREAD')) return false;
-        break;
+        return value !== 'unread' || labels.includes('unread');
       case 'has':
-        if (value === 'attachment' && !JSON.stringify(message.payload ?? {}).includes('attachmentId')) return false;
-        break;
+        return value !== 'attachment' || JSON.stringify(message.payload ?? {}).includes('attachmentId');
+      case 'category':
+        // No categories are modelled, so a category never matches — and `-category:x` therefore always does.
+        return false;
       default:
-        if (!`${message.snippet ?? ''} ${headerValue('subject')}`.toLowerCase().includes(value.toLowerCase())) {
-          return false;
-        }
+        return `${message.snippet ?? ''} ${headerValue('subject')}`.toLowerCase().includes(value);
     }
+  };
+
+  // `{a b}` and `a OR b` are any-of; everything else is all-of.
+  const tokens = query.match(/\{[^}]*\}|"[^"]*"|\S+/g) ?? [];
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index] ?? '';
+    if (token.toUpperCase() === 'OR') continue;
+    if (token.startsWith('{')) {
+      const any = token.slice(1, -1).split(/\s+/).filter(Boolean);
+      if (!any.some(matchesTerm)) return false;
+      continue;
+    }
+    const nextIsOr = (tokens[index + 1] ?? '').toUpperCase() === 'OR';
+    if (nextIsOr) {
+      // Collect the whole OR chain and accept it if any side matches.
+      const chain = [token];
+      while ((tokens[index + 1] ?? '').toUpperCase() === 'OR' && tokens[index + 2] !== undefined) {
+        chain.push(tokens[index + 2] ?? '');
+        index += 2;
+      }
+      if (!chain.some(matchesTerm)) return false;
+      continue;
+    }
+    if (!matchesTerm(token)) return false;
   }
   return true;
 }
@@ -336,7 +374,7 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
         const all = Object.entries(account?.messages ?? {})
           .map(([messageId, value]) => ({ id: messageId, ...value }))
           .sort((a, b) => Number(b.internalDate ?? 0) - Number(a.internalDate ?? 0));
-        const matching = all.filter((value) => matchesQuery(value, params.q ?? ''));
+        const matching = all.filter((value) => matchesQuery(value, params.q ?? '', now()));
         const rows = wantsThreads
           ? [...new Map(matching.map((value) => [value.threadId ?? value.id, value])).values()]
           : matching;
@@ -413,7 +451,22 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
 
       // ---- People ---------------------------------------------------------------
       if (url.pathname === '/v1/people:searchContacts' || url.pathname === '/v1/otherContacts:search') {
-        json(response, 200, { results: [] });
+        const saved = url.pathname.endsWith('searchContacts');
+        const needle = (params.query ?? '').toLowerCase();
+        const people = (saved ? account?.contacts : account?.otherContacts) ?? [];
+        json(response, 200, {
+          results: people
+            .filter(
+              (person) =>
+                person.email.toLowerCase().includes(needle) || (person.name ?? '').toLowerCase().includes(needle),
+            )
+            .map((person) => ({
+              person: {
+                names: person.name ? [{ displayName: person.name }] : [],
+                emailAddresses: [{ value: person.email }],
+              },
+            })),
+        });
         return;
       }
 

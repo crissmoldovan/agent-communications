@@ -4,6 +4,7 @@ import type { LabelSummary, SendAsSummary } from '../operations/analyse.ts';
 import type { DownloadResult, FindAttachmentsResult } from '../operations/attachments.ts';
 import type { ClientAddResult, ClientView } from '../operations/clients.ts';
 import type { ConsentResult } from '../operations/consent.ts';
+import type { ContactsResult, FollowUpsResult } from '../operations/contacts.ts';
 import type { DoctorResult } from '../operations/doctor.ts';
 import type { ImportResult } from '../operations/import-legacy.ts';
 import type { InboxView, WhoamiResult } from '../operations/inboxes.ts';
@@ -397,5 +398,58 @@ export function renderDownloads(result: DownloadResult, color: boolean): string 
     `${result.files.filter((file) => !file.duplicate).length} file(s), ${Math.round(result.totalBytes / 1024)} KB, listed in ${result.manifestPath}`,
     paint(color, 'dim', 'Nothing was opened or run.'),
   );
+  return lines.join('\n');
+}
+
+export function renderContacts(result: ContactsResult, color: boolean): string {
+  if (result.contacts.length === 0) return `Nobody matched "${result.query}".`;
+  const lines = [
+    table(
+      [
+        ['ADDRESS', 'NAME', 'INBOX', 'WHERE FROM', 'MESSAGES', 'LAST SEEN'],
+        ...result.contacts.map((contact) => [
+          contact.email,
+          contact.name || '—',
+          contact.inbox,
+          contact.sources.join('+'),
+          contact.messages ? String(contact.messages) : '—',
+          contact.lastSeen?.slice(0, 10) ?? '—',
+        ]),
+      ],
+      color,
+    ),
+    '',
+    paint(
+      color,
+      'dim',
+      'Similar addresses are shown, not filtered: a lookalike domain matches a name as readily as the real one.',
+    ),
+  ];
+  for (const error of result.errors) lines.push(paint(color, 'yellow', `${error.inbox}: ${error.message}`));
+  return lines.join('\n');
+}
+
+export function renderFollowUps(result: FollowUpsResult, color: boolean): string {
+  if (result.rows.length === 0) return 'Nothing is waiting.';
+  const lines = [
+    table(
+      [
+        ['DAYS', 'INBOX', 'WITH', 'SUBJECT', 'THREAD'],
+        ...result.rows.map((row) => [
+          String(row.ageDays),
+          row.inbox,
+          row.with,
+          row.subject || '(no subject)',
+          row.threadId,
+        ]),
+      ],
+      color,
+    ),
+    '',
+    result.rows[0]?.direction === 'awaiting-them'
+      ? 'These are conversations where you spoke last.'
+      : 'These arrived and have not been answered.',
+  ];
+  for (const error of result.errors) lines.push(paint(color, 'yellow', `${error.inbox}: ${error.message}`));
   return lines.join('\n');
 }

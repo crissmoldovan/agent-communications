@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
 import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts';
 import { downloadAttachments, findAttachments } from '../operations/attachments.ts';
+import { followUps, searchContacts } from '../operations/contacts.ts';
 import { doctor } from '../operations/doctor.ts';
 import { inboxList, whoami } from '../operations/inboxes.ts';
 import { readMessage, readThread } from '../operations/read.ts';
@@ -463,6 +464,82 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           { out, maxFiles },
         );
         return reply(result);
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'gmail_contacts_search',
+    {
+      title: 'Find an address',
+      description:
+        'Find someone’s email address from the saved address book, from people the user has corresponded with, and from the headers of past mail. Every row says where it came from and how often it was seen. A lookalike domain matches a name as readily as the real one, so treat these as candidates and let the user choose.',
+      inputSchema: z.object({
+        query: z.string().min(1).describe('a name, part of an address, or a domain'),
+        inboxes: mcpInboxes().optional(),
+        sources: mcpStringArray().optional().describe('contacts, other-contacts, history'),
+        limit: mcpInteger().optional(),
+      }),
+      outputSchema: z.object({
+        contacts: z.array(z.looseObject({})),
+        query: z.string(),
+        complete: z.boolean(),
+        errors: z.array(z.object({ inbox: z.string(), code: z.string(), message: z.string() })),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ query, inboxes, sources, limit }) => {
+      try {
+        const result = await searchContacts(context, query, {
+          inboxes: pinned ? [pinned] : (inboxes as string[] | 'all' | undefined),
+          sources: sources as Array<'contacts' | 'other-contacts' | 'history'> | undefined,
+          limit,
+        });
+        return reply({
+          contacts: result.contacts,
+          query: result.query,
+          complete: result.complete,
+          errors: result.errors,
+        });
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'gmail_followups',
+    {
+      title: 'What is waiting',
+      description:
+        'Conversations waiting on somebody: threads where the user spoke last and nobody replied (direction "them"), or that arrived and have not been answered (direction "me"). Computed from what Gmail records as sent and received, not from reading the text.',
+      inputSchema: z.object({
+        inboxes: mcpInboxes().optional(),
+        direction: z.enum(['them', 'me']).optional().describe('who is being waited on; "them" by default'),
+        olderThanDays: mcpInteger().optional(),
+        lookbackDays: mcpInteger().optional(),
+        limit: mcpInteger().optional(),
+      }),
+      outputSchema: z.object({
+        rows: z.array(z.looseObject({})),
+        query: z.string(),
+        complete: z.boolean(),
+        errors: z.array(z.object({ inbox: z.string(), code: z.string(), message: z.string() })),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ inboxes, direction, olderThanDays, lookbackDays, limit }) => {
+      try {
+        const result = await followUps(context, {
+          inboxes: pinned ? [pinned] : (inboxes as string[] | 'all' | undefined),
+          direction,
+          olderThanDays,
+          lookbackDays,
+          limit,
+        });
+        return reply({ rows: result.rows, query: result.query, complete: result.complete, errors: result.errors });
       } catch (error) {
         return fail(error);
       }

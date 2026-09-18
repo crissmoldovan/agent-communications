@@ -32,6 +32,15 @@ export interface GmailTransport {
   getMessageMetadata(messageId: string): Promise<RawMessage>;
   /** The bytes of one attachment. The id is resolved fresh from the message: Gmail's can change between fetches. */
   getAttachment(messageId: string, attachmentId: string): Promise<Buffer>;
+  /** People the user has saved, and people they have corresponded with. Needs the contacts permission. */
+  searchContacts(query: string): Promise<ContactMatch[]>;
+}
+
+export interface ContactMatch {
+  name: string;
+  email: string;
+  /** Where the match came from, which is also how much it is worth trusting. */
+  source: 'contacts' | 'other-contacts';
 }
 
 export interface ListOptions {
@@ -275,6 +284,42 @@ export class GoogleGmailTransport implements GmailTransport {
       this.gmail().users.messages.attachments.get({ userId: 'me', messageId, id: attachmentId }),
     );
     return Buffer.from(data.data ?? '', 'base64url');
+  }
+
+  /**
+   * The People API needs a warm-up call before it returns anything for a query, which is why the first search of a
+   * session can come back empty. Both collections are asked; the caller merges them with what it saw in headers.
+   */
+  async searchContacts(query: string): Promise<ContactMatch[]> {
+    const fields = 'names,emailAddresses';
+    const [saved, others] = await Promise.all([
+      this.call(
+        'search contacts',
+        () => this.people().people.searchContacts({ query, readMask: fields, pageSize: 20 }),
+        { api: 'people' },
+      ),
+      this.call(
+        'search other contacts',
+        () => this.people().otherContacts.search({ query, readMask: fields, pageSize: 20 }),
+        { api: 'people' },
+      ),
+    ]);
+
+    const matches: ContactMatch[] = [];
+    const collect = (results: unknown, source: ContactMatch['source']): void => {
+      for (const entry of (results as { results?: Array<{ person?: unknown }> } | undefined)?.results ?? []) {
+        const person = entry.person as
+          | { names?: Array<{ displayName?: string | null }>; emailAddresses?: Array<{ value?: string | null }> }
+          | undefined;
+        const name = person?.names?.[0]?.displayName ?? '';
+        for (const address of person?.emailAddresses ?? []) {
+          if (address.value) matches.push({ name, email: address.value.toLowerCase(), source });
+        }
+      }
+    };
+    collect(saved.data, 'contacts');
+    collect(others.data, 'other-contacts');
+    return matches;
   }
 
   async listSendAs(): Promise<SendAsAddress[]> {

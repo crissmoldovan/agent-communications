@@ -54,7 +54,9 @@ test('the tool list is the same whatever is configured, and every tool says what
   assert.deepEqual(withoutInboxes, [
     'gmail_attachment_download',
     'gmail_attachments_find',
+    'gmail_contacts_search',
     'gmail_doctor',
+    'gmail_followups',
     'gmail_inboxes_list',
     'gmail_labels_list',
     'gmail_message_get',
