@@ -323,8 +323,11 @@ export function hidesContent(style: Map<string, string>): boolean {
   // Overflow is clipped per axis: a zero-width box needs `overflow-x` (or the shorthand) to hide its text, a
   // zero-height one needs `overflow-y`. Checking only the shorthand and the y axis let `overflow-x` through.
   const overflow = style.get('overflow') ?? '';
-  const hiddenAcross = (axis: 'x' | 'y'): boolean =>
-    overflow.includes('hidden') || (style.get(`overflow-${axis}`) ?? '').includes('hidden');
+  // `clip` as well as `hidden`: CSS Overflow 3 added it, Chromium-based Gmail and Apple Mail both honour it, and
+  // it clips exactly the same content — so matching only `hidden` left `height:0; overflow-y:clip` as a way to
+  // hide text that the sanitiser then handed over with nothing said.
+  const clips = (value: string) => /\b(hidden|clip)\b/.test(value);
+  const hiddenAcross = (axis: 'x' | 'y'): boolean => clips(overflow) || clips(style.get(`overflow-${axis}`) ?? '');
   for (const dimension of ['max-height', 'height', 'max-width', 'width']) {
     const vertical = dimension.endsWith('height');
     const size = numeric(style.get(dimension), vertical ? VIEWPORT_HEIGHT_PX : VIEWPORT_WIDTH_PX);

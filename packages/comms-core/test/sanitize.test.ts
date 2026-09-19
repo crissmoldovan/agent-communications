@@ -39,6 +39,8 @@ const HIDDEN_CASES: [string, string][] = [
   ['zero height overflow hidden', `<div style="max-height:0;overflow:hidden">${INJECTION}</div>`],
   ['zero width clipped across', `<div style="width:0px;overflow-x:hidden">${INJECTION}</div>`],
   ['zero height clipped down', `<div style="height:0;overflow-y:hidden">${INJECTION}</div>`],
+  ['zero height clipped with overflow clip', `<div style="height:0;overflow-y:clip">${INJECTION}</div>`],
+  ['zero width clipped with the shorthand', `<div style="width:0;overflow:clip">${INJECTION}</div>`],
   ['clip rect zero', `<div style="position:absolute;clip:rect(0,0,0,0)">${INJECTION}</div>`],
   ['clip-path inset', `<div style="clip-path: inset(100%)">${INJECTION}</div>`],
   ['text-indent off-screen', `<div style="text-indent:-9999px">${INJECTION}</div>`],
@@ -397,6 +399,15 @@ test('a box is only hidden when the axis that would show it is clipped', () => {
   const spilling = sanitizeHtmlToText(`<div style="width:0;overflow-y:hidden">visible anyway</div>`);
   assert.match(spilling.text, /visible anyway/);
   assert.equal(spilling.report.hiddenElements, 0);
+
+  // `clip` clips the same content `hidden` does, on the axis it names and no other.
+  assert.equal(sanitizeHtmlToText(`<div style="width:0;overflow-x:clip">${INJECTION}</div>`).report.hiddenElements, 1);
+  const spillingClip = sanitizeHtmlToText('<div style="width:0;overflow-y:clip">visible anyway</div>');
+  assert.match(spillingClip.text, /visible anyway/);
+
+  // A word that merely contains "clip" is not `clip`.
+  const unclipped = sanitizeHtmlToText('<div style="width:0;overflow:clipped-nonsense">still here</div>');
+  assert.match(unclipped.text, /still here/);
 });
 
 test('two strangers under the same public suffix are not the same organisation', () => {
