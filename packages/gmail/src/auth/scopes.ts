@@ -31,9 +31,30 @@ export function scopesFor(tier: Tier, contacts: boolean): string[] {
   return scopes;
 }
 
-/** Normalises the space-separated `scope` of a token response; `email` may come back as the userinfo URL. */
+/**
+ * Normalises a space-separated `scope` value into the full scope URLs the rest of this package compares against.
+ *
+ * Google's own token responses use full URLs, but not everything that writes a credentials file does. The legacy
+ * `@artymclabin/gmail-mcp` server records the shorthand — `gmail.readonly gmail.compose` — and `inbox import` reads
+ * exactly those files. Comparing shorthand against `https://www.googleapis.com/auth/gmail.readonly` matches nothing,
+ * so every mailbox in a real six-account migration was skipped as "this grant cannot read the mailbox" when all six
+ * could read perfectly well. Anything without a scheme is expanded to the `auth/` URL it is shorthand for.
+ *
+ * `openid` is left alone: it is a bare token by specification, not shorthand for a URL. `email` and `profile` are
+ * aliases Google itself accepts for the `userinfo.*` URLs, so they are mapped rather than expanded.
+ */
 export function parseGrantedScopes(scope: string | undefined): string[] {
-  return [...new Set((scope ?? '').split(/\s+/).filter(Boolean))].map((s) => (s === 'email' ? SCOPES.email : s));
+  const ALIASES: Record<string, string> = {
+    email: SCOPES.email,
+    profile: 'https://www.googleapis.com/auth/userinfo.profile',
+  };
+  const expand = (value: string): string => {
+    if (value === SCOPES.openid) return value;
+    if (ALIASES[value]) return ALIASES[value];
+    if (value.includes('://')) return value;
+    return `https://www.googleapis.com/auth/${value}`;
+  };
+  return [...new Set((scope ?? '').split(/\s+/).filter(Boolean).map(expand))];
 }
 
 /** What an inbox can do with the scopes it was actually granted (users can untick boxes on the consent screen). */
