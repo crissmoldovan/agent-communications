@@ -484,8 +484,11 @@ test('an alpha this small means invisible, whatever syntax wrote it', () => {
     ['color(display-p3 0 0 0 / 0)', 0],
     ['color(display-p3 1 1 1)', 1],
     ['oklch(0.5 0.1 200 / 50%)', 0.5],
-    // A value this parser cannot evaluate reads as opaque: it may not hide text on a guess.
-    ['rgb(0 0 0 / calc(1 - 1))', 1],
+    // A `calc()` simple enough to evaluate is evaluated: this one really is zero, and the text really is invisible.
+    ['rgb(0 0 0 / calc(1 - 1))', 0],
+    ['rgba(0, 0, 0, calc(0))', 0],
+    // One this parser cannot be sure of still reads as opaque: it may not hide text on a guess.
+    ['rgb(0 0 0 / calc(var(--a) * 1))', 1],
     ['#000000ff', 1],
     ['#000', 1],
     ['red', 1],
@@ -494,6 +497,36 @@ test('an alpha this small means invisible, whatever syntax wrote it', () => {
   ] as const) {
     assert.equal(Math.round(colorAlpha(value) * 100) / 100, alpha, String(value));
   }
+});
+
+test('a length written as calc() is evaluated, like an alpha', () => {
+  // The same bypass one property along: fixing `opacity` and leaving `font-size` meant `calc(0px)` still hid text
+  // and the sanitiser still reported nothing.
+  for (const style of [
+    'font-size:calc(0px)',
+    'font-size:calc(2px - 2px)',
+    'text-indent:calc(-9999px)',
+    'transform:translateX(calc(-9999px))',
+    'position:absolute;left:calc(-10000px)',
+  ]) {
+    const { text, report } = sanitizeHtmlToText(`<p>kept</p><div style="${style}">${INJECTION}</div>`);
+    assert.doesNotMatch(text, /IGNORE PREVIOUS/, style);
+    assert.match(text, /kept/, style);
+    assert.equal(report.hiddenElements, 1, style);
+  }
+
+  // And an ordinary calc that leaves the element visible does not remove it.
+  const visible = sanitizeHtmlToText('<div style="font-size:calc(14px + 2px)">readable</div>');
+  assert.match(visible.text, /readable/);
+  assert.equal(visible.report.hiddenElements, 0);
+});
+
+test('an @import is counted, because the stylesheet it names is never fetched', () => {
+  const { report } = sanitizeHtmlToText('<style>@import url(https://x.test/a.css);</style><p>hi</p>');
+  assert.equal(report.unreadableHidingRules, 1, 'that stylesheet may hold the rule that hides the text');
+
+  const none = sanitizeHtmlToText('<style>.a{color:red}</style><p>hi</p>');
+  assert.equal(none.report.unreadableHidingRules, 0);
 });
 
 test('ordinary positioning and small offsets are not mistaken for hiding', () => {
