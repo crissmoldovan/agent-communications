@@ -1,6 +1,8 @@
 # Slack for agent-communications — design
 
-**Status:** specified, not started. Gmail v0.1.0 ships first.
+**Status:** specified and decided, not started. **No Slack code is written until Gmail v0.1.0 is published**, which
+is the sequence the author asked for. The decisions in §8 exist so that implementation can begin the hour it is,
+rather than with another round of questions.
 **Research:** [`docs/research/2026-09-19-slack-platform.md`](../../research/2026-09-19-slack-platform.md) — every
 platform claim below is sourced there, and where the research says "not verified" this spec treats it as unknown
 rather than true.
@@ -195,16 +197,64 @@ body, in the same position the recipient list occupies for mail.
 
 Each phase follows the Gmail pattern: a branch, tests, a review round, a squash-merge.
 
-## 8. Open questions for the author
+## 8. Decisions, and the unknowns designed around
 
-1. **Is `read` mode the default, or the only mode in v1?** Shipping read-only first would mean the first Slack
-   release has a guarantee we cannot break. My recommendation: ship both, default to `read`, and make `send`
-   require the re-install — the gate is stronger that way than any flag.
-2. **Which workspaces?** The Gmail build learned that multi-account is easier designed in than added. Same
-   assumption here unless you say otherwise.
-3. **Reactions in v1?** They are the smallest useful write and the best way to test the gate on something
-   low-stakes. My recommendation: yes, at lower ceremony.
-4. **Socket Mode in v1?** My recommendation: no. Reserve it, verify the DM question first.
+The four questions the first draft left open are decided below. Each is reversible — a decision is not a claim
+that no other answer was defensible, only that shipping needs one and waiting for certainty costs more than being
+wrong here would.
+
+### D10 — v1 ships both modes, defaulting to `read`
+
+Read-only alone would be a smaller, honest first release, and the argument for it is real: the guarantee would be
+Slack's rather than ours, and nothing we wrote could break it.
+
+Against: a package that can only read is not the thing anybody asked for, and the send gate is the part that took
+the longest to get right for Gmail. Shipping it unexercised, later, is worse than shipping it with everything we
+learned still fresh. And the two modes are not equally risky — `read` is the default, and moving a workspace to
+`send` is a re-installation the person approves in Slack's own UI, which is a stronger gate than any flag we could
+offer.
+
+So: both, `read` default, and the documentation states which guarantee each mode carries without implying one
+number covers both.
+
+### D11 — multi-workspace from the start
+
+The Gmail build learned this the expensive way: an alias-to-account map added later touches every operation, every
+tool schema and every skill. The config already carries `accounts` keyed by alias with a `provider` discriminator
+(§6), so the cost now is a map lookup and the cost later is a migration.
+
+### D12 — reactions in v1, at lower ceremony
+
+They are the smallest useful write, and that is exactly why they belong in the first release: the gate gets
+exercised on something where a mistake costs embarrassment rather than money, before anybody trusts it with a
+message. Under `chat`, naming the emoji and the message and waiting for a yes is proportionate. Under `confirm`,
+the same typed approval as a message — because a reaction from the user's account is still the user speaking.
+
+### D13 — no Socket Mode in v1
+
+Reading is on demand, so nothing in v1 needs events. The one feature that would want them — "what needs my
+attention" — has no API and would be built on a subscription whose behaviour the research could not verify. Adding
+a persistent connection for a feature we cannot yet specify is how a v1 acquires a component nobody can debug.
+
+The design reserves it (§5, D9) and the verification below is the gate on building it.
+
+### The six unknowns, and how v1 behaves without answering them
+
+The research marked six things as unverified. None of them blocks v1, because each is designed around rather than
+guessed at — the rule being that where the answer is unknown, the behaviour that is safe if the pessimistic answer
+is true is the one we ship.
+
+| Unknown | How v1 behaves | What to test before relying on it |
+|---|---|---|
+| Whether user-perspective subscriptions deliver the person's own DMs over Socket Mode | No feature depends on events at all | Install a `read` app, subscribe, send yourself a DM, and see whether it arrives. Until it does, "what needs my attention" is a search, not a subscription |
+| Whether a user-token `chat.update` shows "(edited)" | The preview says an edit **may** be visible to anyone who saw the original, and never promises a silent correction | Post, edit, and look at another account's client |
+| Whether `files.upload` is hard-disabled past its sunset | Only the current three-step external upload flow is implemented; the old one is not called at all | Nothing — we do not depend on it either way |
+| Whether the API can read the 90-day band free workspaces hide | A search that returns nothing says "nothing in what this workspace lets the API see", never "nothing exists" | Search a free workspace for a message older than 90 days |
+| Whether a user token can post to a public channel the person has not joined | The preview names the channel **and whether the person is a member of it**, and a non-member post is refused by us regardless of whether Slack allows it | Attempt one, and see |
+| The exact body of a 429 | The retry reads `Retry-After` from the header, which is documented, and treats a missing one as sixty seconds | Trip one deliberately and record the body |
+
+Two of those — the edit label and the non-member post — are the ones that could mislead a person about what their
+approval meant, and both are handled by the preview saying less rather than by assuming more.
 
 ## 9. What this design does not protect against
 
