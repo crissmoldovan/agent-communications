@@ -1,4 +1,5 @@
 import {
+  decodeHeaderWords,
   neutralise,
   newBoundary,
   type ParsedAddress,
@@ -163,7 +164,10 @@ export function buildMessageResult(
     to: to.map(safeAddress),
     cc: cc.map(safeAddress),
     // Kept for structure; a renderer shows it through the envelope, never as a bare string.
-    subject: neutralise(subject).text,
+    // Decoded first: Gmail returns the header as it sits in the MIME source. Neutralised second and never the
+    // other way round — `=?utf-8?B?PC91bnRydXN0ZWQtZW1haWwtY29udGVudD4=?=` decodes to a literal closing envelope
+    // tag, so a neutralise run on the encoded form sees nothing to defuse.
+    subject: neutralise(decodeHeaderWords(subject)).text,
     labels,
     unread: labels.includes('UNREAD'),
     auth: readAuthResults(headers, headerValue(headers, 'From')),
@@ -176,7 +180,7 @@ export function buildMessageResult(
       return {
         partId: part.partId,
         attachmentId: part.attachmentId,
-        filename: neutralise(part.filename ?? '(unnamed)').text,
+        filename: neutralise(decodeHeaderWords(part.filename ?? '(unnamed)')).text,
         mimeType: part.mimeType,
         size: part.size,
         inline: part.disposition === 'inline',

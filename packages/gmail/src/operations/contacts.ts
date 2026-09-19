@@ -1,4 +1,4 @@
-import { CommsError, canonicalAddress, neutralise, parseAddressList } from '@cloudpixel/comms-core';
+import { CommsError, canonicalAddress, decodeHeaderWords, neutralise, parseAddressList } from '@cloudpixel/comms-core';
 import type { GmailContext } from '../context.ts';
 import { headerValue } from '../domain/mime.ts';
 import { resolveInboxes } from './search.ts';
@@ -263,7 +263,7 @@ export async function followUps(context: GmailContext, options: FollowUpOptions 
           // Sender-controlled and outside any envelope. `followUps` is a tool an agent calls on its own
           // initiative when triaging, so leaving a message unanswered is enough to put a payload in front of
           // the model — the user never has to open it.
-          subject: neutralise((headerValue(headers, 'Subject') ?? '').slice(0, 120)).text,
+          subject: neutralise(decodeHeaderWords(headerValue(headers, 'Subject') ?? '').slice(0, 120)).text,
           with: counterpart,
           lastAt: at?.toISOString() ?? null,
           ageDays,

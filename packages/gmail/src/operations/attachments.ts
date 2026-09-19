@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   type CommsError,
   createUniqueFile,
+  decodeHeaderWords,
   ensurePrivateDir,
   expandHome,
   homeDirectory,
@@ -127,12 +128,12 @@ export async function findAttachments(
             // function as a bare string in a structured result, outside any envelope, and an attachment name or a
             // subject can hold arbitrary bytes. This path is reached by an agent triaging mail on its own
             // initiative, so the sender does not need the user to open anything.
-            filename: neutralise(filename).text,
+            filename: neutralise(decodeHeaderWords(filename)).text,
             mimeType: part.mimeType,
             size: part.size,
             date,
             from,
-            subject: neutralise(subject.slice(0, 120)).text,
+            subject: neutralise(decodeHeaderWords(subject).slice(0, 120)).text,
             // Flagged on the name the file would actually be written under, not the one the sender sent:
             // `invoice.exe ` is stripped to `invoice.exe` on the way to disk, and the `$`-anchored extension checks
             // do not match the trailing space, so the executable was written and the flag was not raised.

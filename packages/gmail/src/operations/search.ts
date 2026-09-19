@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   CommsError,
+  decodeHeaderWords,
   neutralise,
   newBoundary,
   parseAddressList,
@@ -248,7 +249,9 @@ function rowFrom(alias: string, message: RawMessage, threadId: string): SearchRo
     // all — RFC 2047 encoding puts arbitrary bytes, newlines included, into a field that looks like a name.
     from: from ? { ...from, name: neutralise(from.name).text } : null,
     toCount: parseAddressList(headerValue(headers, 'To')).length + parseAddressList(headerValue(headers, 'Cc')).length,
-    subject: neutralise((headerValue(headers, 'Subject') ?? '').slice(0, 120)).text,
+    // Decode, then cut, then neutralise. Cutting first can slice an encoded-word in half, and decoding after
+    // neutralising hands a decoded closing envelope tag straight to the reader.
+    subject: neutralise(decodeHeaderWords(headerValue(headers, 'Subject') ?? '').slice(0, 120)).text,
     snippet: neutralise(message.snippet ?? '').text,
     labels,
     attachmentCount: parts.attachments.filter((part) => part.disposition !== 'inline').length,
