@@ -65,6 +65,18 @@ const HIDDEN_CASES: [string, string][] = [
   ['translate off-screen', `<div style="transform:translateX(-9999px)">${INJECTION}</div>`],
   ['translate3d off-screen', `<div style="transform:translate3d(0, 9999px, 0)">${INJECTION}</div>`],
   ['scale zero', `<div style="transform:scale(0)">${INJECTION}</div>`],
+  ['standalone scale property', `<div style="scale:0">${INJECTION}</div>`],
+  ['standalone translate property', `<div style="translate:-9999px">${INJECTION}</div>`],
+  ['standalone translate on the second axis', `<div style="translate:0 -9999px">${INJECTION}</div>`],
+  ['content-visibility hidden', `<div style="content-visibility:hidden">${INJECTION}</div>`],
+  ['filter opacity zero', `<p style="filter:opacity(0)">${INJECTION}</p>`],
+  ['filter opacity as a percentage', `<p style="-webkit-filter:opacity(0%)">${INJECTION}</p>`],
+  ['margin shorthand off-screen', `<div style="margin:0 -9999px">${INJECTION}</div>`],
+  ['margin-right off-screen', `<div style="margin-right:-9999px">${INJECTION}</div>`],
+  ['inset shorthand off-screen', `<div style="position:absolute;inset:-9999px">${INJECTION}</div>`],
+  ['sticky pushed off-screen', `<div style="position:sticky;left:-9999px">${INJECTION}</div>`],
+  ['matrix translation off-screen', `<div style="transform:matrix(1,0,0,1,-9999,0)">${INJECTION}</div>`],
+  ['matrix scaled to nothing', `<div style="transform:matrix(0,0,0,0,0,0)">${INJECTION}</div>`],
   ['mso-hide', `<div style="mso-hide:all">${INJECTION}</div>`],
   ['hidden attribute', `<div hidden>${INJECTION}</div>`],
   ['aria-hidden', `<div aria-hidden="true">${INJECTION}</div>`],
@@ -538,6 +550,27 @@ test('an @import is counted, because the stylesheet it names is never fetched', 
 
   const none = sanitizeHtmlToText('<style>.a{color:red}</style><p>hi</p>');
   assert.equal(none.report.unreadableHidingRules, 0);
+});
+
+test('the siblings of a hiding property hide too, and their ordinary values do not', () => {
+  // Every one of these is the same idea one property along from something already checked, which is the shape
+  // three of the last four findings took. Looked for on purpose this time rather than found later.
+  for (const style of [
+    'scale:1',
+    'translate:0 4px',
+    'content-visibility:auto',
+    'filter:opacity(0.9)',
+    'filter:blur(2px)',
+    'margin:0 8px',
+    'margin-right:-12px',
+    'position:absolute;inset:8px',
+    'position:sticky;top:0',
+    'transform:matrix(1,0,0,1,12,0)',
+  ]) {
+    const { text, report } = sanitizeHtmlToText(`<div style="${style}">visible</div>`);
+    assert.match(text, /visible/, style);
+    assert.equal(report.hiddenElements, 0, style);
+  }
 });
 
 test('ordinary positioning and small offsets are not mistaken for hiding', () => {
