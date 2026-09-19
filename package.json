@@ -1,0 +1,32 @@
+{
+  "name": "agent-communications",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Agent Skills, a CLI and an MCP server that let coding agents work with Gmail safely across many inboxes.",
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/crissmoldovan/agent-communications.git"
+  },
+  "scripts": {
+    "build": "pnpm -r --filter ./packages/** run build",
+    "typecheck": "pnpm -r --filter ./packages/** run typecheck",
+    "test": "node --test \"test/**/*.test.mjs\" && pnpm -r --filter ./packages/** run test",
+    "lint": "biome ci .",
+    "format": "biome format --write .",
+    "verify:skills": "node scripts/verify-skills.mjs",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm verify:skills && pnpm verify:packages",
+    "verify:packages": "node scripts/verify-package.mjs packages/comms-core"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "catalog:",
+    "@types/node": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:"
+  }
+}

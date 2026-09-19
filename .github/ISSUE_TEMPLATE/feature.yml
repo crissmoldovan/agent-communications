@@ -1,0 +1,22 @@
+name: Feature request
+description: Something an agent or a person should be able to do with their mail.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: job
+    attributes:
+      label: The job
+      description: What are you (or your agent) trying to get done? Describe the outcome, not the implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: What happens today
+  - type: dropdown
+    id: safety
+    attributes:
+      label: Does it write to the mailbox or send anything?
+      options: [No — read only, Writes drafts or labels, Sends or forwards mail, Not sure]
+    validations:
+      required: true
