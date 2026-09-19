@@ -1,9 +1,10 @@
-import { CommsError, toCommsError } from '@cloudpixel/comms-core';
-import { McpServer } from '@modelcontextprotocol/server';
+import { CommsError, stricterPolicy, toCommsError } from '@cloudpixel/comms-core';
+import { acceptedContent, inputRequired, inputResponse, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
 import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts';
 import { downloadAttachments, findAttachments } from '../operations/attachments.ts';
+import { completeProbe, startProbe } from '../operations/confirm-clients.ts';
 import { followUps, searchContacts } from '../operations/contacts.ts';
 import { doctor } from '../operations/doctor.ts';
 import { createDraft, deleteDraft, getDraft, listDrafts, replyDraft, updateDraft } from '../operations/drafts.ts';
@@ -12,7 +13,14 @@ import { inboxList, whoami } from '../operations/inboxes.ts';
 import { createLabel, modify, trash } from '../operations/organise.ts';
 import { readMessage, readThread } from '../operations/read.ts';
 import { search } from '../operations/search.ts';
-import { executeSend, listApprovals, prepareSend, revokeApproval } from '../operations/send.ts';
+import {
+  beginApproval,
+  executeSend,
+  finishApproval,
+  listApprovals,
+  prepareSend,
+  revokeApproval,
+} from '../operations/send.ts';
 import { VERSION } from '../version.ts';
 import { inboxArgument, mcpBoolean, mcpInboxes, mcpInteger, mcpStringArray } from './schemas.ts';
 
@@ -962,6 +970,29 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
   }
 
   // ---- sending ------------------------------------------------------------------
+  /** The keys the two multi-round-trip forms answer under. */
+  const APPROVAL_KEY = 'approve';
+  const PROBE_KEY = 'probe';
+  /** Probe codes in flight, per client. Held here rather than on disk: a probe is one exchange, in one process. */
+  const probes = new Map<string, { probeId: string; code: string }>();
+
+  /** Whether this approval must be approved outside the chat, read from config now rather than at prepare time. */
+  const needsConfirmation = async (alias: string, approvalId: string): Promise<boolean> => {
+    const record = await context.core.approvals.get(approvalId);
+    if (!record || record.state === 'approved') return false;
+    const config = await context.config();
+    const live = config.inboxes[alias]?.sendPolicy ?? config.defaults.sendPolicy;
+    return stricterPolicy(live, record.requiredPolicy) === 'confirm';
+  };
+
+  const isAllowlisted = async (client: string): Promise<boolean> => {
+    if (!client) return false;
+    // The list is the standing decision, and the only thing checked here. A probe is evidence for the person who
+    // makes that decision, not a second gate on every send: requiring a fresh one would mean probing before each
+    // message, and a check nobody can satisfy is one people turn off.
+    return (await context.config()).defaults.confirm.elicitationClients.includes(client);
+  };
+
   // The one place mail can leave, and it takes two calls on purpose: one that shows what would go, one that sends
   // exactly that. A model that has read the preview to the user can complete the second; a model that has not cannot,
   // because it does not have the approval id, the recipients or the subject the first call returned.
@@ -1044,10 +1075,114 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         // Claude Code enforces this in every permission mode, so a confirm mailbox always reaches a human.
         _meta: needsInteraction ? { 'anthropic/requiresUserInteraction': true } : {},
       },
-      async ({ inbox, draftId, approvalId, expect }) => {
+      async ({ inbox, draftId, approvalId, expect }, ctx) => {
         try {
-          const result = await executeSend(context, targetInbox(inbox), { draftId, approvalId, expect });
+          const alias = targetInbox(inbox);
+          // Channel (a): a form the model cannot answer, but only from a client that has proved its forms reach a
+          // person. An un-allowlisted client is told to use the terminal or Gmail — and the approval is left alone,
+          // because being asked from the wrong client is not evidence that anything is wrong with the message.
+          if (await needsConfirmation(alias, approvalId)) {
+            const answered = inputResponse(ctx.mcpReq.inputResponses, APPROVAL_KEY);
+            if (answered.kind === 'missing') {
+              const client = server.server.getClientVersion()?.name ?? '';
+              if (!(await isAllowlisted(client))) {
+                throw new CommsError('APPROVAL_REQUIRED', 'this send needs approval outside the chat', {
+                  hint: `Ask the user to run \`agent-gmail approve ${approvalId}\` in a terminal, or to send the draft from Gmail. This client is not on the list of clients whose approval forms are known to reach a person.`,
+                  details: { approvalId, client },
+                });
+              }
+              const prompt = await beginApproval(context, approvalId);
+              return inputRequired({
+                inputRequests: {
+                  [APPROVAL_KEY]: inputRequired.elicit({
+                    message: `${prompt.preview}\n\nType ${prompt.challenge} to send this message. Anything else cancels it.`,
+                    requestedSchema: {
+                      type: 'object',
+                      properties: {
+                        code: { type: 'string', title: `Type ${prompt.challenge} to send`, minLength: 1 },
+                      },
+                      required: ['code'],
+                    },
+                  }),
+                },
+              });
+            }
+            if (answered.kind !== 'elicit' || answered.action !== 'accept') {
+              throw new CommsError(
+                'APPROVAL_REQUIRED',
+                `nothing was sent: the approval was ${answered.kind === 'elicit' ? answered.action + 'ed' : 'not given'}`,
+                {
+                  hint: 'Prepare the send again if it should still go.',
+                },
+              );
+            }
+            const typed = acceptedContent(ctx.mcpReq.inputResponses, APPROVAL_KEY, z.object({ code: z.string() }));
+            // A wrong code is counted against the record's own attempt limit, in constant time, inside the store.
+            await finishApproval(context, approvalId, typed?.code ?? '', 'elicitation');
+          }
+          const result = await executeSend(context, alias, { draftId, approvalId, expect });
           return reply({ ...result, threadId: result.threadId ?? null, verified: result.verified });
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+
+    server.registerTool(
+      'gmail_confirm_probe',
+      {
+        title: 'Check that approval forms reach a person',
+        description:
+          'Raise a test approval form carrying a short code, so the user can prove this client shows forms to a human rather than answering them itself. Run it when the user wants to approve sends in this client instead of in a terminal. It sends nothing and changes nothing on its own: after it succeeds the user still has to run `agent-gmail confirm-clients add <name>` in a terminal.',
+        inputSchema: z.object({}),
+        outputSchema: z.object({
+          client: z.string(),
+          probeId: z.string(),
+          completed: z.boolean(),
+          nextStep: z.string(),
+        }),
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      },
+      async (_args, ctx) => {
+        try {
+          const client = server.server.getClientVersion()?.name ?? '';
+          if (!client) throw new CommsError('USAGE', 'this client did not say what it is called');
+          const answered = inputResponse(ctx.mcpReq.inputResponses, PROBE_KEY);
+          if (answered.kind === 'missing') {
+            const probe = await startProbe(context, client);
+            probes.set(client, probe);
+            return inputRequired({
+              inputRequests: {
+                [PROBE_KEY]: inputRequired.elicit({
+                  message: `A person is reading this: type ${probe.code} to confirm that approval forms from "${client}" reach you.`,
+                  requestedSchema: {
+                    type: 'object',
+                    properties: { code: { type: 'string', title: `Type ${probe.code}`, minLength: 1 } },
+                    required: ['code'],
+                  },
+                }),
+              },
+            });
+          }
+          const pending = probes.get(client);
+          const typed = acceptedContent(ctx.mcpReq.inputResponses, PROBE_KEY, z.object({ code: z.string() }));
+          if (answered.kind !== 'elicit' || answered.action !== 'accept' || !pending) {
+            throw new CommsError('APPROVAL_REQUIRED', 'the probe was not completed, so nothing was recorded');
+          }
+          if ((typed?.code ?? '').trim().toUpperCase() !== pending.code) {
+            probes.delete(client);
+            throw new CommsError('APPROVAL_REQUIRED', 'that code did not match, so nothing was recorded', {
+              hint: 'Run the probe again and type the code exactly as it is shown.',
+            });
+          }
+          await completeProbe(context, pending.probeId);
+          probes.delete(client);
+          return reply({
+            client,
+            probeId: pending.probeId,
+            completed: true,
+            nextStep: `Ask the user to run \`agent-gmail confirm-clients add ${client}\` in a terminal within ten minutes. You cannot do this yourself.`,
+          });
         } catch (error) {
           return fail(error);
         }

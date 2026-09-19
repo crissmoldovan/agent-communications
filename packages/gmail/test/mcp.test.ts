@@ -54,6 +54,7 @@ test('the tool list is the same whatever is configured, and every tool says what
   assert.deepEqual(withoutInboxes, [
     'gmail_attachment_download',
     'gmail_attachments_find',
+    'gmail_confirm_probe',
     'gmail_contacts_search',
     'gmail_doctor',
     'gmail_draft_create',
@@ -113,6 +114,7 @@ test('a read-only server does not offer the tools that would write', async () =>
       'gmail_send_prepare',
       'gmail_draft_send',
       'gmail_send_cancel',
+      'gmail_confirm_probe',
     ]) {
       assert.ok(!names.includes(withheld), `${withheld} must not be offered by a read-only server`);
     }

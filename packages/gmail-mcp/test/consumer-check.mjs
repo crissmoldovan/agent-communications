@@ -66,6 +66,7 @@ const names = tools.result.tools.map((tool) => tool.name).sort();
 assert.deepEqual(names, [
   'gmail_attachment_download',
   'gmail_attachments_find',
+  'gmail_confirm_probe',
   'gmail_contacts_search',
   'gmail_doctor',
   'gmail_draft_create',

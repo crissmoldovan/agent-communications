@@ -19,6 +19,7 @@ import type { Launcher, SupportedClient } from '../mcp/install.ts';
 import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts';
 import { downloadAttachments, findAttachments } from '../operations/attachments.ts';
 import { clientAdd, clientList, clientRemove } from '../operations/clients.ts';
+import { addConfirmClient, listConfirmClients, removeConfirmClient } from '../operations/confirm-clients.ts';
 import { followUps, searchContacts } from '../operations/contacts.ts';
 import { doctor } from '../operations/doctor.ts';
 import { createDraft, deleteDraft, getDraft, listDrafts, replyDraft, updateDraft } from '../operations/drafts.ts';
@@ -798,6 +799,76 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         }
         await finishApproval(context, approvalId, answer);
         streams.stdout.write('Approved. The agent can send it now — this command approves, it does not send.\n');
+      }),
+    );
+
+  // Which clients may put an approval form in front of a person. Empty by default and fail-closed: `clientInfo.name`
+  // is self-reported, so a name gets here only after a probe a human answered, and only from a terminal.
+  const confirmClients = program
+    .command('confirm-clients')
+    .description('MCP clients whose approval forms are trusted to reach you');
+
+  confirmClients
+    .command('list')
+    .description('the clients on the list')
+    .action(
+      act(async (context, _globalOptions) => {
+        writeResult(
+          await listConfirmClients(context),
+          output(),
+          (data) =>
+            data.length === 0
+              ? 'No client may show approval forms. Sends under "confirm" are approved in a terminal, or from Gmail.'
+              : `Trusted to show approval forms: ${data.join(', ')}.`,
+          streams,
+        );
+      }),
+    );
+
+  confirmClients
+    .command('add <name>')
+    .description('trust a client that has just passed the probe')
+    .action(
+      act(async (context, globalOptions, name: string) => {
+        const marker = agentMarker(env);
+        if (marker) {
+          throw new CommsError('LOOSENING_REFUSED', 'only a person can decide which clients they trust', {
+            hint: `Ask the user to run \`agent-gmail confirm-clients add ${name}\` in their own terminal.`,
+            details: { marker },
+          });
+        }
+        if (!canPrompt(env, streams, { json: globalOptions.json, noInput: globalOptions.noInput })) {
+          throw new CommsError('LOOSENING_REFUSED', 'this needs an interactive terminal', {
+            hint: `Run \`agent-gmail confirm-clients add ${name}\` directly in a terminal.`,
+          });
+        }
+        await askChallenge(streams, {
+          prompt:
+            `This lets "${name}" ask you to approve a send in its own window, instead of in a terminal.\n` +
+            'Only say yes if you just answered its probe form yourself.',
+          color: globalOptions.color,
+        });
+        const clients = await addConfirmClient(context, name, {
+          kind: 'loosening-consent',
+          paths: ['defaults.confirm.elicitationClients'],
+        });
+        writeResult(clients, output(), (data) => `Trusted to show approval forms: ${data.join(', ')}.`, streams);
+      }),
+    );
+
+  confirmClients
+    .command('remove <name>')
+    .description('stop trusting a client — never needs permission')
+    .action(
+      act(async (context, _globalOptions, name: string) => {
+        const clients = await removeConfirmClient(context, name);
+        writeResult(
+          clients,
+          output(),
+          (data) =>
+            data.length === 0 ? 'No client may show approval forms now.' : `Still trusted: ${data.join(', ')}.`,
+          streams,
+        );
       }),
     );
 
