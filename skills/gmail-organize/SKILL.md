@@ -57,7 +57,7 @@ bind here:
   selected by a search rather than named individually, runs as a dry run: report what would change
   and how many, then ask. Both halves of that rule matter — six messages picked by a query still get
   a dry run, because the risk is the selection, not the count.
-- **Every change returns the change that reverses it. Keep it and offer it.** An undo you did not
+- **Every change returns the change that reverses it, per message. Keep it and offer it.** An undo you did not
   report is an undo the user does not have.
 - **Nothing is deleted outright.** The bin is what is offered. Thirty days, then Gmail's own
   timetable.
@@ -147,13 +147,16 @@ to archive it.
    query run a minute later matches different mail.
    **Complete when:** the call returned `dryRun: false` and a message count that matches the plan.
 
-6. **Offer the undo.** The result's `undo` is the same change with the two label lists swapped and
-   pinned to the exact message ids that changed. Give it to the user in a form they can act on — the
-   CLI prints one ready to paste:
+6. **Offer the undo.** The result's `undo` is a list, one entry per message, each restoring exactly
+   the labels that message had. It is per message rather than one swap for the whole selection
+   because a selection is rarely uniform: undoing "archive these forty threads" by adding `INBOX` to
+   all of them would put back the twelve that were already archived before anyone touched them, and
+   the user would have no way to tell which. A message that needs nothing put back does not appear.
 
-   ```text
-   To put it back: agent-gmail organise --inbox work --add INBOX --message 18f2c… --message 18f2d…
-   ```
+   Keep the array. To apply it, pass it straight back:
+
+   - MCP: `gmail_organise_undo` with `inbox` and the `undo` array, unchanged.
+   - CLI: `agent-gmail organise-undo --inbox work`, with the `undo` from a `--json` run piped in.
 
    For a bin, the reverse is the same call with `undo: true` (CLI: `--undo`) over the ids in the
    result's `messages`. Keep those ids in the conversation; they are the only durable handle on what

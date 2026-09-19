@@ -519,17 +519,18 @@ export function renderModify(result: ModifyResult, color: boolean): string {
     return lines.join('\n');
   }
   const lines = [`Changed ${scope} in ${result.inbox}: ${what}.`];
-  if (result.undo) {
+  if (result.undo && result.undo.length > 0) {
+    // The undo differs per message, so it is not a command line to retype — it is the `undo` array from `--json`.
     lines.push(
       paint(
         color,
         'dim',
-        `To put it back: agent-gmail organise --inbox ${result.inbox}` +
-          `${result.undo.addLabelIds.map((label) => ` --add ${label}`).join('')}` +
-          `${result.undo.removeLabelIds.map((label) => ` --remove ${label}`).join('')}` +
-          ` --message ${result.undo.messageIds.join(' --message ')}`,
+        `${result.undo.length} message(s) can be put back exactly as they were: ` +
+          `re-run with --json, then pipe its \`undo\` into \`agent-gmail organise-undo --inbox ${result.inbox}\`.`,
       ),
     );
+  } else {
+    lines.push(paint(color, 'dim', 'Nothing to put back: every message already had these labels.'));
   }
   return lines.join('\n');
 }

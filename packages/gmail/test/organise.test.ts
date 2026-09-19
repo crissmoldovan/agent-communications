@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { CommsError } from '@cloudpixel/comms-core';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { GmailContext } from '../src/context.ts';
-import { createLabel, modify, resolveLabelIds, trash } from '../src/operations/organise.ts';
+import { applyUndo, createLabel, modify, resolveLabelIds, trash } from '../src/operations/organise.ts';
 import type { FakeGoogle, FakeMessage } from './support/fake-google.ts';
 import { type Harness, newHarness } from './support/harness.ts';
 
@@ -76,7 +76,10 @@ test('a dry run says what would change and touches nothing', async () => {
   assert.equal(planned.dryRun, true);
   assert.equal(planned.messages, 2, 'both messages in the thread');
   assert.deepEqual(planned.removeLabelIds, ['INBOX']);
-  assert.deepEqual(planned.undo, { addLabelIds: ['INBOX'], removeLabelIds: [], messageIds: ['m1', 'm2'] });
+  assert.deepEqual(planned.undo, [
+    { messageId: 'm1', addLabelIds: ['INBOX'], removeLabelIds: [] },
+    { messageId: 'm2', addLabelIds: ['INBOX'], removeLabelIds: [] },
+  ]);
 
   // Nothing was asked of Gmail beyond reading the thread and the labels.
   assert.equal(google.requests.filter((request) => request.path.includes('batchModify')).length, 0);
@@ -97,14 +100,10 @@ test('archiving, reading and starring are label changes, and can be put back', a
   assert.deepEqual(result.removeLabelIds.sort(), ['INBOX', 'UNREAD']);
   assert.deepEqual(google.accounts.get('sub-1')?.messages?.m1?.labelIds, ['Label_9']);
 
-  // The undo is the same change with the lists swapped, and it restores what was there.
+  // The undo restores exactly what each message had, so applying it returns the mailbox to where it started.
   const undo = result.undo;
   assert.ok(undo);
-  await modify(context, 'work', {
-    messageIds: undo.messageIds,
-    addLabels: undo.addLabelIds,
-    removeLabels: undo.removeLabelIds,
-  });
+  await applyUndo(context, 'work', undo);
   assert.deepEqual((google.accounts.get('sub-1')?.messages?.m1?.labelIds ?? []).sort(), ['INBOX', 'UNREAD']);
 
   const audit = await harness.core.audit.tail({ inbox: 'work' });
@@ -170,4 +169,27 @@ test('organising needs the permission to organise, checked before Google is call
     return true;
   });
   assert.equal(google.requests.filter((request) => request.path.includes('batchModify')).length, 0);
+});
+
+test('the undo puts back what each message had, not what the selection had in common', async () => {
+  const { context, google } = await connected();
+  const account = google.accounts.get('sub-1');
+  assert.ok(account);
+  // m2 is already archived. A selection is rarely uniform, and this is the case a wholesale swap gets wrong.
+  account.messages = {
+    ...account.messages,
+    m2: { ...(account.messages?.m2 ?? {}), id: 'm2', threadId: 't1', labelIds: ['UNREAD'] },
+  };
+
+  const archived = await modify(context, 'work', { messageIds: ['m1', 'm2'], archive: true });
+  assert.equal(archived.messages, 2);
+  // Only m1 had INBOX, so only m1 is put back.
+  assert.deepEqual(archived.undo, [{ messageId: 'm1', addLabelIds: ['INBOX'], removeLabelIds: [] }]);
+
+  await applyUndo(context, 'work', archived.undo ?? []);
+  assert.ok(google.accounts.get('sub-1')?.messages?.m1?.labelIds?.includes('INBOX'));
+  assert.ok(
+    !google.accounts.get('sub-1')?.messages?.m2?.labelIds?.includes('INBOX'),
+    'a message that was already archived stays archived — the undo restores, it does not impose',
+  );
 });

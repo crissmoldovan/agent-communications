@@ -83,6 +83,7 @@ assert.deepEqual(names, [
   'gmail_labels_list',
   'gmail_message_get',
   'gmail_organise',
+  'gmail_organise_undo',
   'gmail_search',
   'gmail_send_cancel',
   'gmail_send_list',

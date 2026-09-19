@@ -382,7 +382,8 @@ test('organising previews before it acts, and says how to put it back', async ()
 
   const done = await cli(harness, ['organise', '--inbox', 'work', '--message', 'm1', '--archive', '--read']);
   assert.match(done.stdout, /Changed 1 message/);
-  assert.match(done.stdout, /To put it back: agent-gmail organise/);
+  assert.match(done.stdout, /can be put back exactly as they were/);
+  assert.match(done.stdout, /agent-gmail organise-undo/);
   assert.deepEqual(harness.google.accounts.get('sub-1')?.messages?.m1?.labelIds, []);
 
   // The American spelling reaches the same command, because half the world types it.

@@ -35,8 +35,15 @@ export interface ModifyResult {
   threads: number;
   addLabelIds: string[];
   removeLabelIds: string[];
-  /** What to pass to put it back, when the change is reversible. */
-  undo: { addLabelIds: string[]; removeLabelIds: string[]; messageIds: string[] } | null;
+  /**
+   * What to pass to put it back, as a list of per-message changes.
+   *
+   * Per message, not one swap for the whole selection, because the swap is wrong whenever the selection was not
+   * uniform: undoing "archive these forty threads" by adding INBOX to all of them puts back the twelve that were
+   * already archived before anyone touched them, and the user has no way to tell which. Each entry here restores
+   * exactly the labels that message had.
+   */
+  undo: { messageId: string; addLabelIds: string[]; removeLabelIds: string[] }[] | null;
 }
 
 /** Resolves a label the way a person means it: by id, by its Gmail name, or by a system name in any case. */
@@ -65,6 +72,47 @@ export async function resolveLabelIds(
         .join(', ')}.`,
     });
   });
+}
+
+/**
+ * Applies an undo returned by `modify`.
+ *
+ * The entries differ per message, and Gmail's batch takes one pair of label lists for a whole set of ids — so the
+ * entries are grouped by the change they ask for and one batch is sent per group. Two or three groups is typical;
+ * a selection that was already uniform collapses to one.
+ */
+export async function applyUndo(
+  context: GmailContext,
+  alias: string,
+  entries: readonly NonNullable<ModifyResult['undo']>[number][],
+): Promise<{ inbox: string; messages: number; groups: number }> {
+  const resolved = await context.inbox(alias);
+  await context.requireCapability(resolved, 'organize');
+  const transport = await context.transport(alias);
+  if (entries.length === 0) throw new CommsError('USAGE', 'there is nothing to put back');
+
+  const groups = new Map<string, { add: string[]; remove: string[]; ids: string[] }>();
+  for (const entry of entries) {
+    const add = [...entry.addLabelIds].sort();
+    const remove = [...entry.removeLabelIds].sort();
+    const key = `${add.join(',')}|${remove.join(',')}`;
+    const group = groups.get(key) ?? { add, remove, ids: [] };
+    group.ids.push(entry.messageId);
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) {
+    await transport.modifyMessages(group.ids, group.add, group.remove);
+  }
+  await context.core.audit.append({
+    inboxId: resolved.inbox.id,
+    alias,
+    operation: 'modify.undo',
+    outcome: 'ok',
+    surface: context.surface,
+    ids: { messageIds: entries.map((entry) => entry.messageId) },
+    reason: `${groups.size} group(s)`,
+  });
+  return { inbox: alias, messages: entries.length, groups: groups.size };
 }
 
 export async function modify(context: GmailContext, alias: string, options: ModifyOptions): Promise<ModifyResult> {
@@ -108,6 +156,28 @@ export async function modify(context: GmailContext, alias: string, options: Modi
   }
   const unique = [...new Set(expanded)];
 
+  // What each message carries now, so the undo can restore exactly that. One metadata read per message, which is
+  // the price of an undo that is actually an undo; a dry run pays it too, so the user can see the reverse before
+  // agreeing to the change.
+  const undo: NonNullable<ModifyResult['undo']> = [];
+  for (const messageId of unique) {
+    let current: string[] = [];
+    try {
+      current = (await transport.getMessageMetadata(messageId)).labelIds ?? [];
+    } catch {
+      // A message we cannot read is one we cannot promise to restore. It is still changed — Gmail's batch does not
+      // take exceptions — so the undo simply does not claim it.
+      continue;
+    }
+    const held = new Set(current);
+    undo.push({
+      messageId,
+      // Put back only what this message actually had, and take away only what it actually lacked.
+      addLabelIds: [...remove].filter((label) => held.has(label)),
+      removeLabelIds: [...add].filter((label) => !held.has(label)),
+    });
+  }
+
   const result: ModifyResult = {
     inbox: alias,
     dryRun: Boolean(options.dryRun),
@@ -115,8 +185,7 @@ export async function modify(context: GmailContext, alias: string, options: Modi
     threads: threadIds.length,
     addLabelIds: [...add],
     removeLabelIds: [...remove],
-    // Putting it back is the same change with the two lists swapped.
-    undo: { addLabelIds: [...remove], removeLabelIds: [...add], messageIds: unique },
+    undo: undo.filter((entry) => entry.addLabelIds.length > 0 || entry.removeLabelIds.length > 0),
   };
   if (options.dryRun) return result;
 

@@ -10,7 +10,7 @@ import { doctor } from '../operations/doctor.ts';
 import { createDraft, deleteDraft, getDraft, listDrafts, replyDraft, updateDraft } from '../operations/drafts.ts';
 import { exportMail } from '../operations/export.ts';
 import { inboxList, whoami } from '../operations/inboxes.ts';
-import { createLabel, modify, trash } from '../operations/organise.ts';
+import { applyUndo, createLabel, modify, trash } from '../operations/organise.ts';
 import { readMessage, readThread } from '../operations/read.ts';
 import { search } from '../operations/search.ts';
 import {
@@ -907,18 +907,52 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           addLabelIds: z.array(z.string()),
           removeLabelIds: z.array(z.string()),
           undo: z
-            .object({
-              addLabelIds: z.array(z.string()),
-              removeLabelIds: z.array(z.string()),
-              messageIds: z.array(z.string()),
-            })
-            .nullable(),
+            .array(
+              z.object({
+                messageId: z.string(),
+                addLabelIds: z.array(z.string()),
+                removeLabelIds: z.array(z.string()),
+              }),
+            )
+            .nullable()
+            .describe('pass this back to gmail_organise_undo to restore exactly what each message had'),
         }),
         annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       },
       async ({ inbox, ...input }) => {
         try {
           return reply(await modify(context, targetInbox(inbox), input));
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+
+    server.registerTool(
+      'gmail_organise_undo',
+      {
+        title: 'Put an organising change back',
+        description:
+          'Restore the labels the messages had before a gmail_organise call, using the `undo` it returned. Each message is restored to exactly what it had, so a message that was already archived before a bulk archive stays archived.',
+        inputSchema: z.object({
+          inbox: inboxArgument(Boolean(pinned)),
+          undo: z
+            .array(
+              z.object({
+                messageId: z.string().min(1),
+                addLabelIds: mcpStringArray(),
+                removeLabelIds: mcpStringArray(),
+              }),
+            )
+            .min(1)
+            .describe('the `undo` array from the gmail_organise result, unchanged'),
+        }),
+        outputSchema: z.object({ inbox: z.string(), messages: z.number(), groups: z.number() }),
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      },
+      async ({ inbox, undo }) => {
+        try {
+          return reply(await applyUndo(context, targetInbox(inbox), undo));
         } catch (error) {
           return fail(error);
         }

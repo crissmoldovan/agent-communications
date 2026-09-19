@@ -27,7 +27,7 @@ import { exportMail } from '../operations/export.ts';
 import { importLegacy } from '../operations/import-legacy.ts';
 import { inboxList, inboxPolicy, inboxRemove, inboxRename, inboxShow, whoami } from '../operations/inboxes.ts';
 import { runOauthListener } from '../operations/oauth-listen.ts';
-import { createLabel, modify, trash } from '../operations/organise.ts';
+import { applyUndo, createLabel, modify, trash } from '../operations/organise.ts';
 import { readMessage, readThread } from '../operations/read.ts';
 import { search } from '../operations/search.ts';
 import {
@@ -915,6 +915,51 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           dryRun: Boolean(options.dryRun),
         });
         writeResult(result, output(), (data) => renderModify(data, globalOptions.color), streams);
+      }),
+    );
+
+  program
+    .command('organise-undo')
+    .alias('organize-undo')
+    .description('put an organising change back, from the `undo` a --json organise returned')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .option('--from <path>', 'a file holding the undo array; `-` reads standard input', '-')
+    .action(
+      act(async (context, _globalOptions, options: Options) => {
+        const source = String(options.from);
+        const raw =
+          source === '-'
+            ? await (async () => {
+                const chunks: Buffer[] = [];
+                for await (const chunk of streams.stdin as NodeJS.ReadableStream)
+                  chunks.push(Buffer.from(chunk as Buffer));
+                return Buffer.concat(chunks).toString('utf8');
+              })()
+            : await (await import('node:fs/promises')).readFile(source, 'utf8');
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          throw new CommsError('BAD_DATA', 'that is not the undo from an organise result', {
+            hint: 'Pipe in the `undo` array from `agent-gmail organise … --json`.',
+          });
+        }
+        // The envelope or the array itself, because both are things a person plausibly pipes in.
+        const entries = Array.isArray(parsed)
+          ? parsed
+          : ((parsed as { data?: { undo?: unknown } })?.data?.undo ?? (parsed as { undo?: unknown })?.undo);
+        if (!Array.isArray(entries)) {
+          throw new CommsError('BAD_DATA', 'that JSON has no undo array in it', {
+            hint: 'Pipe in the `undo` array from `agent-gmail organise … --json`.',
+          });
+        }
+        const result = await applyUndo(context, String(options.inbox), entries as never);
+        writeResult(
+          result,
+          output(),
+          (data) => `Put ${data.messages} message(s) back in ${data.inbox}, exactly as each one was.`,
+          streams,
+        );
       }),
     );
 
