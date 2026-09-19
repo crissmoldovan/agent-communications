@@ -1,115 +1,95 @@
 # Releasing
 
 What a release takes, in the order it takes it, with the reasoning attached so a future release does not have to
-rediscover it. Written after v0.1.0 was staged and the last three steps turned out to need credentials.
+rediscover it.
 
-## Before anything
+The mechanism is `scripts/release.mjs`; the working instructions are `.claude/skills/release/SKILL.md`. This page is
+the why.
 
-`main` must be green. The workflow re-verifies from scratch anyway, but finding out locally costs a minute and
-finding out in CI costs ten:
+## Releases are run from a person's machine
 
-```bash
-pnpm verify
-```
+Not from CI. Pushing a tag runs the checks and nothing else: `.github/workflows/release.yml` has no publish step and
+no credential, and should not be given one.
 
-That runs lint → build → typecheck → test → skills → versions → licences → packed-tarball consumer checks.
-**Build comes before typecheck deliberately:** the `gmail` package typechecks against `comms-core`'s emitted
-declarations, and for a long time this ran the other way round — which passed on every machine that already had a
-`dist` lying about and failed on a clean checkout with 235 `Cannot find module` errors. If you reorder it, you will
-reintroduce that.
+The reason is that publishing cannot be undone. npm keeps a version for ever — the 72-hour unpublish window is not a
+fix once somebody has installed it, and the name and version are burned either way. A step like that belongs where a
+person can watch it happen, not in something that fires when a tag appears.
 
-## One-time setup, per package
+**What this costs: provenance.** npm can only attest a package published by a supported CI runner, so versions
+released this way carry no attestation. Nobody installing can cryptographically verify which commit and which
+workflow built the tarball; they have the repository and the maintainer's word. That is a real loss for a package
+whose central claim is that an agent cannot send mail without approval, and it is given up knowingly rather than
+overlooked.
 
-Only needed before the first publish of each package — and it does **not** run in the order you would guess.
+The tempting fix — put an npm token in repository secrets and publish from Actions — is a worse trade. A long-lived
+credential in a public repository is a standing risk that nobody rotates, and it buys an attestation *about*
+supply-chain integrity at the cost of a real hole *in* it. If this is ever revisited, the route is npm **trusted
+publishing**, which mints a short-lived credential from the workflow's own identity and stores no secret at all. It
+has one catch worth writing down, because learning it cost a wasted release attempt: npm will not configure a
+trusted publisher for a package that does not exist yet, so it can never perform a package's *first* publish.
 
-The steady state is trusted publishing: npm mints a short-lived credential from the workflow's own identity, so no
-long-lived token sits in repository secrets to leak or to go unrotated. But a trusted publisher is configured *on a
-package*, and npm will not configure one for a package that does not exist yet. A brand-new scope therefore cannot
-start at the steady state. The v0.1.0 attempt found this out the expensive way: the run reported
-`Skipped OIDC: ERR_PNPM_AUTH_TOKEN_EXCHANGE … 404`, then `E404 PUT /@cloudpixel%2fcomms-core`, which reads like a
-misconfigured publisher and is in fact npm saying there is nothing here to publish *to*.
-
-So the first publish is a bootstrap, and the token that does it is meant to be thrown away:
-
-0. **Make the repository public.** Not cosmetic, and not deferrable to after the release: npm publishes the
-   provenance attestation to the public Sigstore transparency log, so it refuses to attest a package whose source
-   repository is private. The refusal is a registry-side 422 naming `repository_visibility`, delivered *after* the
-   tarball is built and uploaded — the same place in the run as an auth failure, and easily mistaken for one. The
-   publish job now checks this first and stops with a readable message, so the cost of forgetting is a failed run
-   rather than a wasted token and a moved tag. Publishing the first version of a mail-sending toolchain without
-   provenance is the worse trade; wait instead.
-1. On npmjs.com, create the **`@cloudpixel`** organisation. Free tier covers unlimited public packages.
-2. Generate a **granular access token** scoped to the `@cloudpixel` scope, permission *read and write*, with the
-   shortest expiry offered. It has one job.
-3. Add it as the repository secret **`NPM_TOKEN`** (Settings → Secrets and variables → Actions). The publish step
-   already maps it to `NODE_AUTH_TOKEN`, and `setup-node`'s `registry-url` has already written the `.npmrc` that
-   reads it.
-4. Release as below. Authenticating with a token does not weaken provenance — but `id-token: write` is not
-   sufficient for it either; step 0 is the other half.
-5. **Now** configure trusted publishing on each of `@cloudpixel/comms-core`, `@cloudpixel/gmail`,
-   `@cloudpixel/gmail-mcp`: repository `crissmoldovan/agent-communications`, workflow `release.yml`, environment
-   `release`. npm does not validate any of those four strings when you save them — a typo surfaces only as a failed
-   publish months later, so read them back.
-6. Delete the `env:` block from the publish step and revoke the token. From the next version on there is no npm
-   credential in this repository at all.
-
-## The release
+## The order, and why it is that order
 
 ```bash
 # 1. The version, everywhere it is written down.
-#    Edit the root package.json version, then:
 pnpm sync:versions          # three manifests, two plugin files, the launcher, twelve skills
-pnpm licenses               # regenerate THIRD_PARTY_LICENSES for the bundles
-pnpm verify                 # --check runs of both are part of this
+pnpm licenses               # third-party notices that ship inside the bundles
 
 # 2. The changelog entry, written by a person. `## Unreleased` becomes `## X.Y.Z`.
 
-# 3. Commit, then tag. The tag is what publishes.
-git commit -am "release: vX.Y.Z"
-git push origin main
+# 3. Commit and push. What is published must be what anyone else can read.
+
+# 4. Rehearse, then publish.
+pnpm release                # every check, then stops before sending anything
+npm login                   # a credential action: a person does this, never a script
+pnpm release:publish
+
+# 5. Tag AFTER the publish succeeded.
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-The workflow then: verifies on six matrix legs (Ubuntu, macOS and Windows × Node 22.18 and 24), refuses if the tag
-does not match the version the repository declares or if `sync-versions --check` fails, builds, runs the
-packed-tarball consumer checks, and publishes the three packages **in dependency order** — a consumer installing
-`@cloudpixel/gmail` must find the exact `comms-core` it pins already on the registry.
+**The tag comes last.** A tag is a claim that a version was released. Tagging first produces a tag that may name a
+release which never happened — and since the checks workflow keys on tags, it would advertise a green build for
+something nobody can install.
 
-### When the publish fails and the fix is in `release.yml`
+**The packages publish in dependency order** — `comms-core`, then `gmail`, then `gmail-mcp` — because a consumer
+installing `@cloudpixel/gmail` must find the exact `comms-core` it pins already on the registry.
 
-`gh run rerun` is the wrong tool, and it fails in the quiet direction: a re-run deliberately reuses the commit and
-ref of the original event, so it re-reads the workflow file *from the tag*, not from `main`. Fix the workflow, watch
-the re-run reproduce the identical failure, and the natural conclusion is that the fix was wrong.
+**`pnpm verify` runs build before typecheck, deliberately.** The `gmail` package typechecks against `comms-core`'s
+emitted declarations. For a long time this ran the other way round, which passed on every machine that already had a
+`dist` lying about and failed on a clean checkout with 235 `Cannot find module` errors. If you reorder it, you will
+reintroduce that.
 
-Move the tag onto the commit that carries the fix instead — `git tag -f vX.Y.Z && git push --force origin vX.Y.Z` —
-which is a fresh `push: tags` event and reads the new file. Force-moving a tag is only acceptable while nothing has
-consumed it: before the first successful publish, with the GitHub release still a draft, nothing has. After a
-version is on npm the tag is immutable evidence of what produced it; from then on, a broken release is fixed by
-releasing X.Y.Z+1, never by moving X.Y.Z.
+**The release asks the registry what arrived** rather than trusting the publish command's exit code. `pnpm --filter`
+exits 0 when it matches nothing — "No projects matched the filters" is not an error — so a renamed package or a
+changed scope would publish fewer packages than the hardcoded list claims and still finish green. The first person
+to find out would be a consumer whose install of `gmail-mcp` cannot resolve the `gmail` it pins.
 
-## Rehearsing without publishing
+## If a publish fails part way through
 
-```bash
-gh workflow run release.yml -f dry-run=true
-```
+The packages that already went out are on the registry permanently. **Do not retry the same version.** Bump it and
+release again. The script prints which packages it managed to send at the point of failure, because that list is the
+only record of which half of the release exists.
 
-Everything except the publish. Worth running before every release, and worth running after any change to the build:
-it is the only thing here that installs from a genuinely clean checkout, and it has found four real bugs that
-nothing else could — the build-order one above, a consumer check that parsed a half-written line when a response
-spanned pipe chunks, a test running `/bin/sh` on Windows, and one asking whether a path contained `/` when it meant
-"is absolute".
+## What the verify actually proves
+
+`pnpm verify` is lint → build → typecheck → test → skills → versions → licences → **packed-tarball consumer checks**.
+
+That last stage is the one worth protecting. It packs each package exactly as it will be published, installs the
+tarball into a fresh project with its own npm cache, and runs it there. It is the only thing that catches a missing
+file, a wrong export map, an undeclared dependency or a broken bin — none of which the source tests can see, because
+they import from `src/`.
 
 ## After publishing
 
 - `npm view @cloudpixel/gmail version` — confirm what actually went out.
-- Install it somewhere clean and run it: `npx -y @cloudpixel/gmail@X.Y.Z --version`, then `doctor`.
-- `npx skills add crissmoldovan/agent-communications --skill '*'` in a scratch directory, and check a skill carries
-  its `references/`.
+- `npx -y @cloudpixel/gmail@X.Y.Z --version`, then `doctor`, somewhere that is not this repository.
+- `npx skills add crissmoldovan/agent-communications --skill '*'` in a scratch directory; check a skill brought its
+  `references/` with it.
 - Cut the GitHub release from the tag, with the changelog section as its body.
 
-## What cannot be undone
+## Do not run agents in this checkout during a release
 
-npm keeps a published version for ever. The 72-hour unpublish window is not a fix once somebody has installed it,
-and the name and version are burned either way. That is why the tag is the trigger rather than a push to `main`,
-why the workflow re-verifies from a clean checkout rather than trusting the one that made the tag, and why the
-dry run exists.
+Subagents share the working tree. One reading history with `git checkout` will move the branch under you, and a
+release that starts on `main` can finish somewhere else — this has happened. Give them worktree isolation, or wait
+until the release is done.
