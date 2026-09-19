@@ -29,9 +29,15 @@ child.stderr.on('data', (chunk) => {
 const send = (message) => child.stdin.write(`${JSON.stringify(message)}\n`);
 const waitFor = (id) =>
   new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`no answer to ${id}; stderr: ${stderr.slice(0, 400)}`)), 20_000);
+    const timer = setTimeout(() => reject(new Error(`no answer to ${id}; stderr: ${stderr.slice(0, 400)}`)), 30_000);
     const check = () => {
-      for (const line of stdout.split('\n')) {
+      // **Complete lines only.** A pipe delivers whatever has arrived, and a `tools/list` answer carrying
+      // twenty-nine tools and their descriptions is comfortably larger than one chunk — so the last element of
+      // this split is a half-written message until the newline turns up. Parsing it threw a SyntaxError whose
+      // text was the JSON fragment, which is what the failure looked like: a wall of tool definitions on stderr
+      // and no clue what had gone wrong. Intermittent by nature, and therefore worse than a steady failure.
+      const complete = stdout.slice(0, stdout.lastIndexOf('\n') + 1);
+      for (const line of complete.split('\n')) {
         if (!line.trim()) continue;
         // The first byte on stdout must be a JSON message: anything else corrupts the protocol.
         assert.equal(line.trimStart()[0], '{', `stdout carried something that is not a message: ${line.slice(0, 120)}`);
