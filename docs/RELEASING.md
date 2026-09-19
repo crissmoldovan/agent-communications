@@ -31,13 +31,21 @@ misconfigured publisher and is in fact npm saying there is nothing here to publi
 
 So the first publish is a bootstrap, and the token that does it is meant to be thrown away:
 
+0. **Make the repository public.** Not cosmetic, and not deferrable to after the release: npm publishes the
+   provenance attestation to the public Sigstore transparency log, so it refuses to attest a package whose source
+   repository is private. The refusal is a registry-side 422 naming `repository_visibility`, delivered *after* the
+   tarball is built and uploaded — the same place in the run as an auth failure, and easily mistaken for one. The
+   publish job now checks this first and stops with a readable message, so the cost of forgetting is a failed run
+   rather than a wasted token and a moved tag. Publishing the first version of a mail-sending toolchain without
+   provenance is the worse trade; wait instead.
 1. On npmjs.com, create the **`@cloudpixel`** organisation. Free tier covers unlimited public packages.
 2. Generate a **granular access token** scoped to the `@cloudpixel` scope, permission *read and write*, with the
    shortest expiry offered. It has one job.
 3. Add it as the repository secret **`NPM_TOKEN`** (Settings → Secrets and variables → Actions). The publish step
    already maps it to `NODE_AUTH_TOKEN`, and `setup-node`'s `registry-url` has already written the `.npmrc` that
    reads it.
-4. Release as below. Provenance is unaffected by authenticating with a token — it comes from `id-token: write`.
+4. Release as below. Authenticating with a token does not weaken provenance — but `id-token: write` is not
+   sufficient for it either; step 0 is the other half.
 5. **Now** configure trusted publishing on each of `@cloudpixel/comms-core`, `@cloudpixel/gmail`,
    `@cloudpixel/gmail-mcp`: repository `crissmoldovan/agent-communications`, workflow `release.yml`, environment
    `release`. npm does not validate any of those four strings when you save them — a typo surfaces only as a failed

@@ -47,7 +47,8 @@ jobs:
     permissions:
       contents: read
       # Trusted publishing: npm mints a short-lived credential from this token, so no long-lived npm secret exists
-      # in this repository to leak, and every published version carries provenance back to this workflow run.
+      # in this repository to leak, and published versions carry provenance back to this workflow run — provided the
+      # repository is public, which the publish job checks before spending anything.
       id-token: write
     steps:
       - uses: actions/checkout@v7
@@ -82,7 +83,25 @@ jobs:
       # package that does not exist, so the *first* publish of each of these three has to authenticate with a token —
       # which is what the v0.1.0 attempt discovered, as an OIDC exchange that 404ed against a package that was not
       # there yet. Once they exist, configure trusted publishing against them, delete this `env:` block, and revoke the
-      # secret. Provenance does not depend on it either way: that comes from `id-token: write` above.
+      # secret. How the publish authenticated does not affect provenance — but `id-token: write` is not on its own
+      # enough for it either; see the visibility check above.
+      # npm will not attest a package whose source repository is private. The attestation is published to the public
+      # Sigstore transparency log, so a private repository cannot be its subject, and npm enforces this at the
+      # registry rather than in the client: the tarball is built, uploaded, and *then* refused with a 422 naming
+      # `repository_visibility`. That arrives at the same point in the run as the auth failures above and reads
+      # exactly like one, which is the reason for checking here instead — before a token has been spent and a tag
+      # moved. The fix is to make the repository public, not to drop the flag: publishing the first version of a
+      # mail-sending toolchain without provenance is a worse trade than waiting.
+      - name: provenance requires a public source repository
+        if: ${{ inputs.dry-run != true && github.event.repository.private }}
+        run: |
+          {
+            echo "::error::This repository is private, so npm will reject the provenance attestation with a 422."
+            echo "Make ${GITHUB_REPOSITORY} public before releasing, or remove --provenance from the publish step"
+            echo "and delete the provenance claims in docs/RELEASING.md and the comments in this file."
+          } >&2
+          exit 1
+
       - name: publish
         if: ${{ inputs.dry-run != true }}
         env:
@@ -90,6 +109,23 @@ jobs:
         run: |
           for package in comms-core gmail gmail-mcp; do
             pnpm --filter "@cloudpixel/$package" publish --access public --no-git-checks --provenance
+          done
+
+      # `pnpm --filter` exits 0 when it matches nothing — "No projects matched the filters" is not an error. So a
+      # renamed package, or a changed scope, would publish fewer packages than this list claims and still finish
+      # green; the first person to learn would be a consumer whose install of gmail-mcp cannot resolve the gmail it
+      # pins. Ask the registry what is actually there rather than trusting the loop's exit code.
+      - name: confirm what actually reached the registry
+        if: ${{ inputs.dry-run != true }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          for package in comms-core gmail gmail-mcp; do
+            found=$(npm view "@cloudpixel/$package@$version" version 2>/dev/null || true)
+            if [ "$found" != "$version" ]; then
+              echo "::error::@cloudpixel/$package@$version is not on the registry, but the publish step succeeded." >&2
+              exit 1
+            fi
+            echo "@cloudpixel/$package@$version confirmed on the registry"
           done
 
       - name: what would have been published
