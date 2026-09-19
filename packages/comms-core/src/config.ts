@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { CommsError } from './errors.ts';
 import { writeFileAtomic } from './fs.ts';
@@ -282,15 +282,28 @@ export function defaultInternalDomains(email: string, publicDomains: ReadonlySet
 const POLICY_RANK: Record<SendPolicy, number> = { chat: 0, confirm: 1, never: 2 };
 
 /**
- * A path as it will actually be used: `~` expanded, separators normalised, no trailing slash.
+ * A path as it will actually be used: `~` expanded, `..` resolved, separators normalised, no trailing slash.
+ *
+ * Resolving `..` is the whole point, not tidiness. `isInsideDirectory` compares by string prefix, so
+ * `~/downloads/../../../tmp` "is inside" `~/downloads` while naming somewhere else entirely — and that comparison
+ * decides whether moving the downloads directory needs the user's consent. Without `resolve`, an agent could redirect
+ * every attachment it downloads into a world-readable directory without anyone being asked.
  *
  * Case is folded on macOS and Windows, whose filesystems are case-insensitive by default: there, `~/Downloads` and
  * `~/downloads` are one directory, and treating them as two reports a loosening that never happened — which costs the
  * user a consent prompt for a change that is not one. Linux is case-sensitive, so case is kept.
  */
 function normalisePath(path: string): string {
-  const expanded = expandHome(path.trim(), homedir()).replace(/[/\\]+$/, '');
+  const expanded = resolve(expandHome(path.trim(), homedir())).replace(/[/\\]+$/, '');
   return platform() === 'darwin' || platform() === 'win32' ? expanded.toLowerCase() : expanded;
+}
+
+/** Whether anything in this configuration already points at a stored secret. */
+function holdsSecrets(config: Config): boolean {
+  return (
+    Object.values(config.clients).some((client) => Boolean(client.secretRef)) ||
+    Object.values(config.inboxes).some((inbox) => Boolean(inbox.secretRef))
+  );
 }
 
 /** True when `candidate` is the same directory as `parent`, or inside it. Both may be unset. */
@@ -357,6 +370,13 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   // next write can name one. Choosing a store on a configuration that has never held a secret is not a downgrade —
   // it is setup, and on a machine with no keychain (a server, a container) files are the only thing that works.
   if (before.secrets?.store === 'keychain' && after.secrets?.store !== 'keychain') loosened.push('secrets.store');
+  // And the unrecorded case, which is the same downgrade wearing a different shape: with no `secrets` block the
+  // effective store is the keychain (`secretsStoreOf`), so if this configuration already holds secret references,
+  // naming `file` for the first time moves real secrets out of the keychain. Only a configuration with nothing
+  // stored yet is setup.
+  if (before.secrets === undefined && after.secrets !== undefined && after.secrets.store !== 'keychain') {
+    if (holdsSecrets(before)) loosened.push('secrets.store');
+  }
   return { loosened };
 }
 

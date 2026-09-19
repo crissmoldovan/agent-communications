@@ -112,6 +112,14 @@ const HIDDEN_CASES: [string, string][] = [
     `<style>;;.s2{display:none}</style><div class="s2">${INJECTION}</div>`,
   ],
   ['clip-path polygon with no area', `<div style="clip-path:polygon(0 0, 0 0, 0 0)">${INJECTION}</div>`],
+  [
+    'media query that excludes print',
+    `<style>@media not print{.np{display:none}}</style><div class="np">${INJECTION}</div>`,
+  ],
+  [
+    'brace inside a string before the rule that hides',
+    `<style>.q::after{content:"}"}.h9{display:none}</style><div class="h9">${INJECTION}</div>`,
+  ],
   ['comment', `<!-- ${INJECTION} -->`],
   ['mso conditional comment', `<!--[if mso]><p>${INJECTION}</p><![endif]-->`],
   ['script', `<script>/* ${INJECTION} */</script>`],
@@ -181,6 +189,18 @@ test('an at-rule block is read, except when it only applies to paper', () => {
   // `@media print, screen` still covers the screen, so it is not print-only.
   const both = sanitizeHtmlToText('<style>@media print, screen{.a{display:none}}</style><div class="a">gone</div>');
   assert.doesNotMatch(both.text, /gone/);
+
+  // `not print` reads like a print query and means the opposite: everything except print, the screen included.
+  const negated = sanitizeHtmlToText('<style>@media not print{.a{display:none}}</style><div class="a">gone</div>');
+  assert.doesNotMatch(negated.text, /gone/);
+  assert.equal(negated.report.hiddenElements, 1);
+
+  // A brace inside a declaration's string is text: the rule after it must still be read.
+  const quoted = sanitizeHtmlToText(
+    '<style>.q::after{content:"}"}.hide{display:none}</style><p>kept</p><div class="hide">gone</div>',
+  );
+  assert.match(quoted.text, /kept/);
+  assert.doesNotMatch(quoted.text, /gone/);
 
   // @keyframes is not a nesting of ordinary rules; its `from`/`to` blocks must not be read as selectors.
   const frames = sanitizeHtmlToText(

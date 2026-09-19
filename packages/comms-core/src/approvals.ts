@@ -289,18 +289,29 @@ export class ApprovalStore {
       if (!sameExpectation(live.expect, current.expect)) {
         return voidWith('APPROVAL_VOID', 'the recipients or subject given do not match the prepared draft');
       }
-      if (stricterPolicy(live.policy, current.requiredPolicy) === 'confirm') {
-        if (current.state !== 'approved') {
-          throw refuse(
-            'APPROVAL_PENDING',
-            'this send needs approval outside the chat first',
-            current,
-            'Ask the user to approve it in the terminal (`agent-gmail approve <id>`) or in a trusted client form, or to send it from Gmail.',
-          );
+      // A switch over the effective policy, so a policy value nobody thought about here cannot fall through to
+      // "send it". `never` reached this way is not only the live setting: a record can carry
+      // `requiredPolicy: never`, and reading only for `confirm` let that one straight through.
+      const effective = stricterPolicy(live.policy, current.requiredPolicy);
+      switch (effective) {
+        case 'never':
+          return voidWith('POLICY_NEVER', 'sending is turned off for this approval (policy: never)');
+        case 'confirm': {
+          if (current.state !== 'approved') {
+            throw refuse(
+              'APPROVAL_PENDING',
+              'this send needs approval outside the chat first',
+              current,
+              'Ask the user to approve it in the terminal (`agent-gmail approve <id>`) or in a trusted client form, or to send it from Gmail.',
+            );
+          }
+          if (current.approvedDigest !== live.digest) {
+            return voidWith('APPROVAL_VOID', 'the approved content is not the content now in the draft');
+          }
+          break;
         }
-        if (current.approvedDigest !== live.digest) {
-          return voidWith('APPROVAL_VOID', 'the approved content is not the content now in the draft');
-        }
+        case 'chat':
+          break;
       }
       return { ...current, state: 'sending' };
     });

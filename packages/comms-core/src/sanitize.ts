@@ -401,6 +401,22 @@ function endOfStatement(css: string, from: number): number | null {
 }
 
 /**
+ * Whether a media query applies **only** on paper, in which case what it hides is still visible on screen.
+ *
+ * `not print` is the trap: it reads as a print query and means the opposite — everything except print, which very
+ * much includes the screen. So a negated query is never print-only, and neither is one that also names `screen`,
+ * `all`, or a feature every medium has.
+ */
+function isPrintOnly(prelude: string): boolean {
+  if (!/@media\b/i.test(prelude)) return false;
+  const query = prelude.replace(/^\s*@media\s*/i, '');
+  // Any comma-separated alternative that is not print-only makes the whole query apply somewhere else too.
+  return query
+    .split(',')
+    .every((part) => /\bprint\b/i.test(part) && !/\bnot\b/i.test(part) && !/\b(screen|all|speech)\b/i.test(part));
+}
+
+/**
  * Walks a stylesheet rule by rule, descending into `@media` and friends.
  *
  * Splitting on `}` and skipping anything containing `@` — which is what this did — means every rule inside a
@@ -423,18 +439,29 @@ export function eachStyleRule(css: string, visit: (selectors: string, declaratio
     if (open < 0) return;
     const prelude = css.slice(index, open).trim();
 
+    // Braces inside a string are text, not structure: `.a::after{content:"}"}` would otherwise end the rule early
+    // and leave the rest of the stylesheet — including whatever hides the injected text — parsed as garbage.
     let depth = 1;
     let cursor = open + 1;
+    let quote: string | null = null;
     while (cursor < css.length && depth > 0) {
       const character = css[cursor];
-      if (character === '{') depth++;
-      else if (character === '}') depth--;
+      if (quote) {
+        if (character === '\\') cursor++;
+        else if (character === quote) quote = null;
+      } else if (character === '"' || character === "'") {
+        quote = character;
+      } else if (character === '{') {
+        depth++;
+      } else if (character === '}') {
+        depth--;
+      }
       cursor++;
     }
     const body = css.slice(open + 1, Math.max(open + 1, cursor - 1));
 
     if (prelude.startsWith('@')) {
-      const printOnly = /@media\b/i.test(prelude) && /\bprint\b/i.test(prelude) && !/\b(screen|all)\b/i.test(prelude);
+      const printOnly = isPrintOnly(prelude);
       if (NESTING_AT_RULES.test(prelude) && !printOnly) eachStyleRule(body, visit);
       // @font-face, @keyframes, @import and the rest hide nothing.
     } else if (prelude) {
