@@ -221,3 +221,36 @@ test('an empty message is a body of nothing, not a crash', () => {
   assert.equal(body.text, '');
   assert.equal(body.totalChars, 0);
 });
+
+test('one header-shaped line does not delete the rest of the message', async () => {
+  const { collapseQuoted } = await import('../src/domain/body.ts');
+
+  // The bug: a bare `From:` line was the whole marker, so a sender could put one mid-paragraph and everything
+  // after it vanished from what the agent read — labelled as quoted history, so there was no reason to look.
+  const planted = [
+    'Approved, go ahead.',
+    'From: Finance <finance@example.test>',
+    'The account to pay is 12345678, sort code 00-00-00.',
+    'Please confirm once it has gone.',
+  ].join('\n');
+  const kept = collapseQuoted(planted);
+  assert.match(kept.text, /account to pay/, 'the rest of the message survives');
+  assert.equal(kept.quoted.collapsed, false);
+
+  // A real forwarded header block — several header lines together — still collapses.
+  const forwarded = [
+    'See below.',
+    'From: Sam <sam@partner.test>',
+    'Date: 17 September 2026',
+    'Subject: Phase 2',
+    'To: Jo <jo@example.test>',
+    'The original message text.',
+  ].join('\n');
+  const collapsed = collapseQuoted(forwarded);
+  assert.match(collapsed.text, /See below\./);
+  assert.doesNotMatch(collapsed.text, /original message text/);
+  assert.equal(collapsed.quoted.collapsed, true);
+
+  // And the ordinary markers still work.
+  assert.equal(collapseQuoted('Thanks.\nOn 17 Sep 2026 at 16:02, Sam wrote:\n> old').quoted.collapsed, true);
+});

@@ -189,11 +189,17 @@ async function reauthorise(
   }
 
   // The same account, or nothing is written: a re-consent must not quietly point an alias at a different mailbox.
-  if (existing.inbox.sub) {
-    if (identity.sub !== existing.inbox.sub) {
-      refuseWrongAccount(existing.inbox.email, identity.email, existing.alias);
-    }
-  } else if (existing.inbox.email.toLowerCase() !== identity.email.toLowerCase()) {
+  //
+  // **Both** the account id and the address, not either alone. The `sub` comes from an `id_token` this code decodes
+  // without verifying its signature — safe today because the token arrives in the body of our own TLS POST to
+  // Google, and that is the whole reason it is safe. Making one unverified claim the sole decision about which
+  // mailbox an alias points at leaves nothing behind it if that assumption ever stops holding. The address is
+  // resolved separately, from Gmail's own profile endpoint, so requiring both means two independent answers have
+  // to agree.
+  if (existing.inbox.sub && identity.sub !== existing.inbox.sub) {
+    refuseWrongAccount(existing.inbox.email, identity.email, existing.alias);
+  }
+  if (existing.inbox.email.toLowerCase() !== identity.email.toLowerCase()) {
     refuseWrongAccount(existing.inbox.email, identity.email, existing.alias);
   }
   // A sub that already belongs to another alias would leave two aliases sharing one grant.

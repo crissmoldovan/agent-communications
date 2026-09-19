@@ -70,13 +70,15 @@ const GMAIL_SIGNATURE = /<div[^>]*class="[^"]*gmail_signature[^"]*"[^>]*>([\s\S]
 export function separateSignature(
   html: string,
   liveSignature: string | undefined,
-): { body: string; signature: string | null } {
+): { body: string; signature: { block: string; inner: string } | null } {
   if (!liveSignature?.trim()) return { body: html, signature: null };
   const match = GMAIL_SIGNATURE.exec(html);
   if (!match) return { body: html, signature: null };
   const inner = match[1] ?? '';
   if (inner.trim() !== liveSignature.trim()) return { body: html, signature: null };
-  return { body: html.replace(match[0], ''), signature: inner };
+  // Both: `inner` is what was compared against the live signature, `block` is what leaves the body and therefore
+  // what has to be analysed — they differ by the opening tag, which can carry anything.
+  return { body: html.replace(match[0], ''), signature: { block: match[0], inner } };
 }
 
 /**
@@ -111,10 +113,30 @@ export async function analyseDraft(options: {
   const fromAddress = normaliseAddress(parseAddressList(from)[0]?.address ?? '');
   const liveSignature = sendAs.find((entry) => normaliseAddress(entry.sendAsEmail) === fromAddress)?.signature;
 
-  // The first part of each kind is the message; a later one is an alternative inside a nested multipart.
+  const refusals: Unsendable[] = [];
+
+  // Exactly one body part of each kind, or this refuses.
+  //
+  // Reading only the first meant a second `text/html` part was invisible to everything: not analysed, not
+  // previewed, not in the digest — so a draft could carry a whole second message that no check saw and no person
+  // approved, and the recipient's client would render it. A draft this package composed always has one of each;
+  // anything else came from somewhere that does not have to follow our rules.
+  if (parts.plain.length > 1 || parts.html.length > 1) {
+    refusals.push({
+      reason: 'it has more than one body part, and only one of each can be shown and checked',
+      detail: `${parts.plain.length} text part(s), ${parts.html.length} HTML part(s)`,
+    });
+  }
   const text = parts.plain[0]?.text ?? '';
   const html = parts.html[0]?.text ?? '';
-  const refusals: Unsendable[] = [];
+  // An HTML-only draft previewed as an empty body while the recipient read the whole message. The preview is what
+  // a person approves, so a message with nothing to show in it is a message that cannot be approved.
+  if (html && !text.trim()) {
+    refusals.push({
+      reason: 'it has no plain-text part, so there is nothing to show you that matches what would be sent',
+      detail: 'every message this package composes carries both parts',
+    });
+  }
   let visibleText = collapseWhitespace(text);
   let links: string[] = [];
   let signatureResources: string[] = [];
@@ -125,7 +147,10 @@ export async function analyseDraft(options: {
     visibleText = collapseWhitespace(report.visibleText);
     links = [...new Set(report.urls.map((entry) => entry.url))];
     if (signature) {
-      const inSignature = analyseOutboundHtml(signature);
+      // The whole block, opening tag included. Analysing only the inner HTML left every attribute on that tag in
+      // a gap — `<div class="gmail_signature" style="background-image:url(…)">` loaded a beacon that appeared in
+      // neither the body analysis nor the signature's, so the preview's "signature loads N images" said nothing.
+      const inSignature = analyseOutboundHtml(signature.block);
       signatureResources = [...new Set(inSignature.remoteResources)];
       links = [...new Set([...links, ...inSignature.urls.map((entry) => entry.url)])];
     }
@@ -154,18 +179,38 @@ export async function analyseDraft(options: {
     }
     // The text part is what the preview shows and the HTML is what most people read: if they say different things,
     // approving one is not approving the other.
+    //
+    // Compared like with like, which took two corrections. The HTML side is read **with its signature still in
+    // it**, because the text part carries the signature too — stripping it from one side only made every message
+    // with a signature look like a mismatch. And both sides are compared without the `[domain]` a link gets and
+    // the `[image not loaded]` an image gets, because those are annotations for a reader and the plain part has
+    // none — so every message containing a URL looked like a mismatch as well. Between them those two refused the
+    // package's own ordinary output, with a message telling the user to go and use Gmail instead. A gate that
+    // refuses correct messages is a gate people turn off.
+    const comparable = collapseWhitespace(analyseOutboundHtml(html).comparableText);
     const plain = collapseWhitespace(text);
-    if (plain && visibleText && plain !== visibleText) {
+    if (plain && comparable && plain !== comparable) {
       refusals.push({
         reason: 'its plain-text and HTML parts do not say the same thing',
-        detail: `text ${plain.length} characters, HTML ${visibleText.length}`,
+        detail: `text ${plain.length} characters, HTML ${comparable.length}`,
       });
     }
   }
 
   const attachments: OutboundAttachment[] = [];
   for (const attachment of parts.attachments) {
-    const bytes = attachment.attachmentId ? await options.fetchAttachment(attachment.attachmentId) : Buffer.alloc(0);
+    // By id where there is one, from the part's own bytes where there is not. Hashing an empty buffer for the
+    // second case meant two entirely different documents under the same filename produced the same digest — and
+    // the comment above this function promised the opposite.
+    const bytes = attachment.attachmentId
+      ? await options.fetchAttachment(attachment.attachmentId)
+      : Buffer.from(attachment.text ?? '', 'utf8');
+    if (bytes.length === 0) {
+      refusals.push({
+        reason: `the attachment "${attachment.filename ?? '(unnamed)'}" has no readable content`,
+        detail: 'an attachment whose bytes cannot be read cannot be bound to the approval',
+      });
+    }
     attachments.push({
       filename: attachment.filename ?? '(unnamed)',
       mimeType: attachment.mimeType ?? 'application/octet-stream',

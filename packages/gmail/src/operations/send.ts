@@ -297,7 +297,15 @@ function previewFor(options: {
     warnings.push(`${analysis.bcc.length} blind recipient(s) — the others will not see them`);
   }
   const preview: MessagePreview = {
-    recipients: { from: analysis.from, to: analysis.to, cc: analysis.cc, bcc: analysis.bcc },
+    recipients: {
+      from: analysis.from,
+      to: analysis.to,
+      cc: analysis.cc,
+      bcc: analysis.bcc,
+      // Only when it points somewhere else: a Reply-To equal to From is noise, and noise in a preview is what
+      // teaches people to skim it.
+      replyTo: analysis.replyTo.filter((address) => canonicalAddress(address) !== canonicalAddress(analysis.from)),
+    },
     subject: analysis.subject,
     body: analysis.text,
     attachments: analysis.attachments,
@@ -584,7 +592,9 @@ export async function executeSend(
     outcome: 'ok',
     surface: context.surface,
     ids: { approvalIds: [options.approvalId], draftIds: [options.draftId], messageIds: [sentMessageId] },
-    recipients: [...options.expect.to, ...options.expect.cc, ...options.expect.bcc].map(canonicalAddress),
+    // From the record, not from what the caller claimed: the two are checked to be equal, but the record is the
+    // one a person approved, and an audit line is worth having only if it says what actually happened.
+    recipients: [...claimed.expect.to, ...claimed.expect.cc, ...claimed.expect.bcc].map(canonicalAddress),
     reason: `digest ${claimed.digest.slice(0, 12)} · policy ${livePolicy} · ${claimed.approvedVia ?? 'chat'}`,
   });
 
@@ -594,10 +604,10 @@ export async function executeSend(
     draftId: options.draftId,
     sentMessageId,
     threadId: sent.threadId,
-    to: options.expect.to,
-    cc: options.expect.cc,
-    bcc: options.expect.bcc,
-    subject: options.expect.subject,
+    to: claimed.expect.to,
+    cc: claimed.expect.cc,
+    bcc: claimed.expect.bcc,
+    subject: claimed.expect.subject,
     verified,
   };
 }

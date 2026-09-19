@@ -16,6 +16,20 @@ import { withFileLock } from './lock.ts';
 export const TAINT_WINDOW_MS: number = 7 * 24 * 60 * 60 * 1000;
 
 /**
+ * How many addresses one message may add to the store.
+ *
+ * Unbounded, one body naming forty thousand addresses produced a seven-megabyte store that every later read
+ * rewrote under a lock and every send checked against — and, worse, a body naming the user's own correspondents'
+ * domains tainted all of them, so every send escalated to `confirm`. Alarm fatigue on the one prompt that matters
+ * is a real attack, not an inconvenience. A message with more than this many addresses in it is a mailing list or
+ * an attack, and neither needs recording in full.
+ */
+const MAX_PER_MESSAGE = 200;
+
+/** How many entries the store keeps in total, oldest dropped first. */
+const MAX_ENTRIES = 20_000;
+
+/**
  * Public mailbox providers. Their domains are never tainted as a whole — one message from someone at gmail.com must
  * not make every gmail.com recipient suspicious — so taint applies to the exact address only.
  */
@@ -135,8 +149,14 @@ export class TaintStore {
 
   #prune(file: TaintFile): TaintFile {
     const cutoff = this.#now().getTime() - TAINT_WINDOW_MS;
-    const keep = (map: Record<string, TaintEntry>) =>
-      Object.fromEntries(Object.entries(map).filter(([, entry]) => new Date(entry.at).getTime() >= cutoff));
+    const keep = (map: Record<string, TaintEntry>) => {
+      const fresh = Object.entries(map).filter(([, entry]) => new Date(entry.at).getTime() >= cutoff);
+      if (fresh.length <= MAX_ENTRIES) return Object.fromEntries(fresh);
+      // Newest first, then cut. Every read rewrites this file under a lock, so an unbounded store is a growing
+      // cost on every read and every send — and the oldest entries are the ones closest to ageing out anyway.
+      fresh.sort((a, b) => new Date(b[1].at).getTime() - new Date(a[1].at).getTime());
+      return Object.fromEntries(fresh.slice(0, MAX_ENTRIES));
+    };
     return { addresses: keep(file.addresses), domains: keep(file.domains) };
   }
 
@@ -149,7 +169,11 @@ export class TaintStore {
     const internal = new Set(exclusions.internalDomains.map((d) => d.toLowerCase()));
     const kept = observations
       .map((o) => ({ ...o, address: canonicalAddress(o.address) }))
-      .filter((o) => o.address.includes('@') && !own.has(o.address) && !internal.has(domainOf(o.address) ?? ''));
+      .filter((o) => o.address.includes('@') && !own.has(o.address) && !internal.has(domainOf(o.address) ?? ''))
+      // Headers first, then body sightings: a header address is the stronger signal, so it is the one that
+      // survives if a single message carries more addresses than this will record.
+      .sort((a, b) => (a.source === b.source ? 0 : a.source === 'header' ? -1 : 1))
+      .slice(0, MAX_PER_MESSAGE);
     if (kept.length === 0) return;
     const path = this.#path;
     await withFileLock(`${path}.lock`, async () => {

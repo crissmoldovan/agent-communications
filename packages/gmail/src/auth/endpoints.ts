@@ -20,13 +20,27 @@ export const GOOGLE_ENDPOINTS: GoogleEndpoints = {
 };
 
 /**
+ * True when this module was loaded from TypeScript source — which is to say, from a checkout, never from a release.
+ *
+ * The published packages are bundles: `dist/*.mjs`. So this is a distinction an attacker cannot flip without
+ * replacing the installed files, and at that point the endpoint override is the least of anybody's problems.
+ */
+const RUNNING_FROM_SOURCE = import.meta.url.endsWith('.ts');
+
+/**
  * `AGENT_COMMS_GOOGLE_ROOT_URL` replaces every Google endpoint with a local test server, so the tests exercise the
- * real bundled Google libraries — token refresh included — instead of a test-only code path. It is honoured only for
- * loopback hosts, so it cannot redirect tokens anywhere else.
+ * real bundled Google libraries — token refresh included — instead of a test-only code path.
+ *
+ * **It is ignored entirely in a released build**, and that is not belt-and-braces. Anyone able to influence this
+ * process's environment — an `env` block added to an MCP server entry in a client's config file, a shell profile, a
+ * launchd unit — could otherwise point the token endpoint at a local server of their own and receive every inbox's
+ * refresh token and the OAuth client secret in cleartext, the moment a token was refreshed. That is precisely the
+ * actor this package designs against elsewhere: one with file-write access and no mailbox access. The loopback
+ * restriction below does not help, because a local attacker is already local.
  */
 export function resolveEndpoints(env: NodeJS.ProcessEnv): GoogleEndpoints {
   const override = env.AGENT_COMMS_GOOGLE_ROOT_URL;
-  if (!override) return GOOGLE_ENDPOINTS;
+  if (!override || !RUNNING_FROM_SOURCE) return GOOGLE_ENDPOINTS;
   let url: URL;
   try {
     url = new URL(override);

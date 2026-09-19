@@ -1,6 +1,7 @@
 import { open, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SendPolicy } from './config.ts';
+import { normaliseAddress } from './digest.ts';
 import { CommsError, type ErrorCode } from './errors.ts';
 import { ensurePrivateDir, writeFileAtomic } from './fs.ts';
 import { APPROVAL_ID_PATTERN, challengeMatches, hashChallenge, newApprovalId, newChallenge } from './ids.ts';
@@ -136,8 +137,19 @@ export class ApprovalStore {
   /** Derived states: expiry for pending/approved, `unknown` for a send whose process died. */
   #derive(record: ApprovalRecord): ApprovalRecord {
     const now = this.#now().getTime();
-    if ((record.state === 'pending' || record.state === 'approved') && now >= new Date(record.expiresAt).getTime()) {
-      return { ...record, state: 'expired', reason: record.reason ?? 'the approval window passed' };
+    const expiresAt = new Date(record.expiresAt).getTime();
+    const createdAt = new Date(record.createdAt).getTime();
+    // Expired, and also: an expiry that does not parse, and a clock that has moved behind the record's own
+    // creation. `now >= NaN` is false, so a record with a nonsense `expiresAt` never expired at all; and a clock
+    // stepped backwards — an NTP correction, a resumed VM, a user changing the date — put an expired record back
+    // into `pending`. Neither should be the difference between a send and no send.
+    const unusable = !Number.isFinite(expiresAt) || (Number.isFinite(createdAt) && now < createdAt);
+    if ((record.state === 'pending' || record.state === 'approved') && (unusable || now >= expiresAt)) {
+      return {
+        ...record,
+        state: 'expired',
+        reason: record.reason ?? (unusable ? 'the approval window cannot be read' : 'the approval window passed'),
+      };
     }
     if (record.state === 'sending' && now - new Date(record.updatedAt).getTime() >= SENDING_STALE_MS) {
       return { ...record, state: 'unknown', reason: 'the sending process stopped before recording an outcome' };
@@ -376,9 +388,16 @@ export class ApprovalStore {
  * a difference in display name is not a difference in who receives the mail — while a spurious mismatch voids an
  * approval the user already gave, and sends them round the loop again.
  */
+/**
+ * The address inside an entry, read the same way every other part of this package reads it.
+ *
+ * This took the **first** `<…>` while `normaliseAddress` takes the **last**, so
+ * `"<attacker@evil.test> Sam <sam@partner.test>"` satisfied an expectation check against one address while every
+ * other reader saw the other. Two parsers for one idea is how a check ends up guarding something different from
+ * what it appears to guard.
+ */
 function bareAddress(entry: string): string {
-  const angled = /<([^>]*)>/.exec(entry);
-  return (angled?.[1] ?? entry).trim().toLowerCase();
+  return normaliseAddress(entry);
 }
 
 function sameList(a: readonly string[], b: readonly string[]): boolean {

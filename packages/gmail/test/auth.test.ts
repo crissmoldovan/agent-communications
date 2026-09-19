@@ -312,3 +312,18 @@ function defaultClient(config: { clients: Record<string, ClientConfig> }): Clien
   if (!client) throw new Error('the harness did not register a default client');
   return client;
 }
+
+test('the endpoint override is a test facility, and a released build ignores it', async () => {
+  // Running from source, so the override works — this is the path the whole test suite depends on.
+  const local = resolveEndpoints({ AGENT_COMMS_GOOGLE_ROOT_URL: 'http://127.0.0.1:8123' });
+  assert.equal(local.tokenUrl, 'http://127.0.0.1:8123/token');
+
+  // And in the bundle it does nothing at all. Checked by reading what is published rather than by mocking the
+  // check, because the property being asserted is about the released artefact: anyone able to add an `env` block
+  // to an MCP server entry could otherwise redirect the token endpoint and collect every refresh token.
+  const { readFile } = await import('node:fs/promises');
+  const { fileURLToPath } = await import('node:url');
+  const source = await readFile(fileURLToPath(new URL('../src/auth/endpoints.ts', import.meta.url)), 'utf8');
+  assert.match(source, /RUNNING_FROM_SOURCE = import\.meta\.url\.endsWith\('\.ts'\)/);
+  assert.match(source, /!override \|\| !RUNNING_FROM_SOURCE/, 'and the gate is on the early return');
+});

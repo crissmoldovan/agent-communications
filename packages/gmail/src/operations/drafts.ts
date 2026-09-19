@@ -188,7 +188,11 @@ export async function createDraft(context: GmailContext, alias: string, input: D
   });
 
   const created = await transport.createDraft(composed.raw);
-  const warnings = [...attachmentWarnings, ...warningsFor({ to, cc, bcc, ownDomains: resolved.inbox.internalDomains })];
+  const warnings = [
+    ...attachmentWarnings,
+    ...signatureWarnings(composed.signatureResources),
+    ...warningsFor({ to, cc, bcc, ownDomains: resolved.inbox.internalDomains }),
+  ];
 
   await context.core.audit.append({
     inboxId: resolved.inbox.id,
@@ -210,7 +214,10 @@ export async function createDraft(context: GmailContext, alias: string, input: D
     bcc,
     subject: input.subject ?? '',
     preview: renderMessagePreview({
-      recipients: { from, to, cc, bcc },
+      // Parsed, not the raw strings the caller passed: `"Sam <sam@partner.test> (Finance)…" <collector@evil.test>`
+      // is one address whose display name contains another, and the preview truncated at 90 characters showed the
+      // decoy and never the real recipient.
+      recipients: { from, to: previewable(to), cc: previewable(cc), bcc: previewable(bcc) },
       subject: input.subject ?? '',
       body: composed.text,
       attachments: described.map((attachment) => ({
@@ -248,20 +255,28 @@ export interface ReplyInput extends DraftInput {
  */
 function quoteOf(original: RawMessage, mode: 'reply' | 'reply_all' | 'forward'): QuotedOriginal | undefined {
   const headers = original.payload?.headers ?? [];
-  const body = buildBody(readParts(original.payload), { maxChars: QUOTE_MAX_CHARS, includeQuoted: false });
+  // `includeQuoted: true`: the point of a forward is the original, and collapsing its history meant forwarding a
+  // message with the part the recipient needed replaced by a line naming one of our own options.
+  const body = buildBody(readParts(original.payload), { maxChars: QUOTE_MAX_CHARS, includeQuoted: true });
   if (!body.text.trim()) return undefined;
+  // And a cut is said out loud rather than left as text that simply stops.
+  const quotedText = body.truncated
+    ? `${body.text}
+
+[the original continues — ${body.totalChars - body.text.length} more characters not quoted]`
+    : body.text;
   const sender = headerValue(headers, 'From') ?? 'someone';
   const date = headerValue(headers, 'Date');
   const when = date ? new Date(date) : null;
   const stamp = when && !Number.isNaN(when.getTime()) ? when.toUTCString() : (date ?? 'an earlier date');
 
   if (mode !== 'forward') {
-    return { attribution: `On ${stamp}, ${sender} wrote:`, text: body.text };
+    return { attribution: `On ${stamp}, ${sender} wrote:`, text: quotedText };
   }
   // A forward restates who it was from, when, to whom and about what: without those the quote is orphaned text.
   return {
     attribution: '---------- Forwarded message ----------',
-    text: body.text,
+    text: quotedText,
     headerLines: [
       `From: ${sender}`,
       `Date: ${stamp}`,
@@ -278,6 +293,28 @@ function stripTrailing(text: string, trailing: string | undefined): string {
   const trimmed = text.replace(/\s+$/, '');
   const block = trailing.replace(/\s+$/, '');
   return trimmed.endsWith(block) ? trimmed.slice(0, -block.length).replace(/\s+$/, '') : text;
+}
+
+/**
+ * What the mailbox's own signature fetches when the message is opened.
+ *
+ * Not a refusal — it is the user's signature and a company logo is the ordinary case — but the person approving a
+ * message should know that opening it tells someone's server it was opened.
+ */
+function signatureWarnings(resources: readonly string[]): string[] {
+  if (resources.length === 0) return [];
+  return [
+    `your signature loads ${resources.length} image(s) from the internet when the message is opened: ` +
+      resources.slice(0, 3).join(', '),
+  ];
+}
+
+/** Addresses as they will actually be used, so a display name cannot stand in for the recipient in a preview. */
+function previewable(entries: readonly string[]): string[] {
+  return entries.flatMap((entry) => {
+    const parsed = parseAddressList(entry);
+    return parsed.length > 0 ? parsed.map((address) => formatAddress(address)) : [entry];
+  });
 }
 
 /** How much of an original is quoted. Long enough for context, short enough not to dominate the message. */
@@ -376,6 +413,7 @@ export async function replyDraft(
   const warnings = [
     ...attachmentWarnings,
     ...senderWarnings,
+    ...signatureWarnings(composed.signatureResources),
     ...warningsFor({ to, cc, bcc, ownDomains: resolved.inbox.internalDomains }),
   ];
 
@@ -399,7 +437,10 @@ export async function replyDraft(
     bcc,
     subject,
     preview: renderMessagePreview({
-      recipients: { from, to, cc, bcc },
+      // Parsed, not the raw strings the caller passed: `"Sam <sam@partner.test> (Finance)…" <collector@evil.test>`
+      // is one address whose display name contains another, and the preview truncated at 90 characters showed the
+      // decoy and never the real recipient.
+      recipients: { from, to: previewable(to), cc: previewable(cc), bcc: previewable(bcc) },
       subject,
       body: composed.text,
       attachments: described.map((attachment) => ({
@@ -553,7 +594,11 @@ export async function updateDraft(
   });
 
   const saved = await transport.updateDraft(draftId, composed.raw, existing.message?.threadId ?? undefined);
-  const warnings = [...attachmentWarnings, ...warningsFor({ to, cc, bcc, ownDomains: resolved.inbox.internalDomains })];
+  const warnings = [
+    ...attachmentWarnings,
+    ...signatureWarnings(composed.signatureResources),
+    ...warningsFor({ to, cc, bcc, ownDomains: resolved.inbox.internalDomains }),
+  ];
 
   await context.core.audit.append({
     inboxId: resolved.inbox.id,
@@ -575,7 +620,10 @@ export async function updateDraft(
     bcc,
     subject,
     preview: renderMessagePreview({
-      recipients: { from, to, cc, bcc },
+      // Parsed, not the raw strings the caller passed: `"Sam <sam@partner.test> (Finance)…" <collector@evil.test>`
+      // is one address whose display name contains another, and the preview truncated at 90 characters showed the
+      // decoy and never the real recipient.
+      recipients: { from, to: previewable(to), cc: previewable(cc), bcc: previewable(bcc) },
       subject,
       body: composed.text,
       attachments: described.map((attachment) => ({

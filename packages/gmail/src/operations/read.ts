@@ -1,8 +1,10 @@
 import {
+  neutralise,
   newBoundary,
   type ParsedAddress,
   parseAddressList,
   type SanitizeReport,
+  safeFilename,
   TaintCollector,
   wrapUntrusted,
 } from '@cloudpixel/comms-core';
@@ -69,6 +71,17 @@ const RISK_RULES: Array<{ flag: string; extensions?: RegExp; mimeTypes?: RegExp 
   { flag: 'archive', extensions: /\.(zip|rar|7z|tar|gz|bz2|xz|iso|cab)$/i },
   { flag: 'disk-image', extensions: /\.(iso|img|vhd|vmdk)$/i },
 ];
+
+/**
+ * A parsed address with its display name neutralised.
+ *
+ * The address itself is structure — it is parsed, canonicalised and compared elsewhere — but the display name is
+ * free text the sender chose, and it travels in the same object.
+ */
+function safeAddress<T extends { name: string; address: string } | null>(entry: T): T {
+  if (!entry) return entry;
+  return { ...entry, name: neutralise(entry.name).text } as T;
+}
 
 export function attachmentRisks(filename: string, mimeType: string): string[] {
   const flags: string[] = [];
@@ -140,25 +153,36 @@ export function buildMessageResult(
     messageId: message.id ?? '',
     threadId: message.threadId ?? '',
     date,
-    from,
-    replyTo,
-    to,
-    cc,
+    // Every one of these is written by the sender, and every one of them leaves this object as a bare string in a
+    // structured result that a client serialises into the model's text. The body was enveloped and neutralised and
+    // these were not, which is a gap with no upside: a display name carrying `<|im_start|>system` or a closing
+    // envelope tag arrived intact beside the carefully wrapped body it was attached to. RFC 2047 encoding means a
+    // display name can hold any bytes at all, newlines included.
+    from: safeAddress(from),
+    replyTo: replyTo.map(safeAddress),
+    to: to.map(safeAddress),
+    cc: cc.map(safeAddress),
     // Kept for structure; a renderer shows it through the envelope, never as a bare string.
-    subject,
+    subject: neutralise(subject).text,
     labels,
     unread: labels.includes('UNREAD'),
     auth: readAuthResults(headers, headerValue(headers, 'From')),
     sender: readSenderWarnings(headerValue(headers, 'From'), headerValue(headers, 'Reply-To')),
-    attachments: parts.attachments.map((part) => ({
-      partId: part.partId,
-      attachmentId: part.attachmentId,
-      filename: part.filename ?? '(unnamed)',
-      mimeType: part.mimeType,
-      size: part.size,
-      inline: part.disposition === 'inline',
-      riskFlags: attachmentRisks(part.filename ?? '', part.mimeType),
-    })),
+    attachments: parts.attachments.map((part) => {
+      // Flagged on the name the file is actually written under, not the one the sender sent. `invoice.exe ` is
+      // stripped to `invoice.exe` on the way to disk, and the `$`-anchored extension checks did not match the
+      // trailing space — so the executable was written and the flag was not raised.
+      const safe = safeFilename(part.filename ?? '');
+      return {
+        partId: part.partId,
+        attachmentId: part.attachmentId,
+        filename: neutralise(part.filename ?? '(unnamed)').text,
+        mimeType: part.mimeType,
+        size: part.size,
+        inline: part.disposition === 'inline',
+        riskFlags: attachmentRisks(safe, part.mimeType),
+      };
+    }),
     sanitisation: {
       ...body.report,
       plainHtmlMismatch: body.mismatch,

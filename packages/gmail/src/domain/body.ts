@@ -1,4 +1,4 @@
-import { type SanitizeReport, sanitizeHtmlToText, sanitizePlainText } from '@cloudpixel/comms-core';
+import { neutralise, type SanitizeReport, sanitizeHtmlToText, sanitizePlainText } from '@cloudpixel/comms-core';
 import type { MessageParts } from './mime.ts';
 
 /**
@@ -53,13 +53,23 @@ export const DEFAULT_MAX_CHARS = 8000;
 const MISMATCH_THRESHOLD_CHARS = 60;
 
 /** Markers Gmail and other clients leave where quoted history starts. */
+/**
+ * Lines that begin quoted history.
+ *
+ * A bare `From:` line used to be here, and it was the whole marker: one line of the sender's choosing —
+ * `From: Finance <finance@example.test>` in the middle of a paragraph — cut everything after it out of what the
+ * agent read, labelled as quoted history so there was no reason to look. The human sees the whole message in
+ * Gmail. That one is gone; a header block is recognised below, where it has to look like a header block.
+ */
 const QUOTE_MARKERS = [
   /^On .{10,120}\bwrote:\s*$/,
   /^-{2,}\s*Original Message\s*-{2,}$/i,
   /^_{5,}$/,
-  /^From:\s.+$/,
   /^Sent from my \w+/i,
 ];
+
+/** A forwarded-header block: two or more of these in consecutive lines, which prose does not do by accident. */
+const HEADER_LINE = /^(From|Sent|Date|To|Cc|Subject|Reply-To):\s/i;
 
 /** A signature block: the standard `-- ` separator, and nothing after it. */
 const SIGNATURE_MARKER = /^--\s?$/;
@@ -73,7 +83,10 @@ export function collapseQuoted(text: string): { text: string; quoted: QuoteColla
   let cut = -1;
   for (const [index, line] of lines.entries()) {
     const trimmed = line.trim();
-    const isMarker = SIGNATURE_MARKER.test(trimmed) || QUOTE_MARKERS.some((marker) => marker.test(trimmed));
+    const isMarker =
+      SIGNATURE_MARKER.test(trimmed) ||
+      QUOTE_MARKERS.some((marker) => marker.test(trimmed)) ||
+      isHeaderBlock(lines, index);
     if (!isMarker) continue;
     const before = lines.slice(0, index).join('\n').trim();
     if (before.length === 0) continue;
@@ -97,6 +110,24 @@ export function collapseQuoted(text: string): { text: string; quoted: QuoteColla
     text: `${kept}\n\n[quoted: ${omitted} lines omitted — pass includeQuoted to see them]`,
     quoted: { linesOmitted: omitted, collapsed: true },
   };
+}
+
+/**
+ * Whether a run of header-shaped lines starts here.
+ *
+ * Two or more consecutive `From:` / `Date:` / `To:` / `Subject:` lines is a forwarded header block; one on its own
+ * is a sentence somebody wrote, and treating it as a block boundary let a sender hide the rest of their message.
+ */
+function isHeaderBlock(lines: readonly string[], index: number): boolean {
+  if (!HEADER_LINE.test((lines[index] ?? '').trim())) return false;
+  let run = 0;
+  for (let at = index; at < lines.length && at < index + 6; at++) {
+    const line = (lines[at] ?? '').trim();
+    if (line === '') continue;
+    if (!HEADER_LINE.test(line)) break;
+    run += 1;
+  }
+  return run >= 2;
 }
 
 /** Words of four characters or more, lower-cased: enough to tell "this text is elsewhere too" from "this is new". */
@@ -131,6 +162,7 @@ function mergeReports(primary: SanitizeReport, secondary: SanitizeReport): Sanit
     hiddenChars: primary.hiddenChars + secondary.hiddenChars,
     sameColorElements: primary.sameColorElements + secondary.sameColorElements,
     invisibleCharsRemoved: primary.invisibleCharsRemoved + secondary.invisibleCharsRemoved,
+    tokensNeutralised: primary.tokensNeutralised + secondary.tokensNeutralised,
     unreadableHidingRules: primary.unreadableHidingRules + secondary.unreadableHidingRules,
     links: [...primary.links, ...secondary.links],
     imagesNotLoaded: primary.imagesNotLoaded + secondary.imagesNotLoaded,
@@ -168,8 +200,16 @@ export function buildBody(parts: MessageParts, options: BodyOptions = {}): Messa
   const collapsed = options.includeQuoted
     ? { text: full, quoted: { linesOmitted: 0, collapsed: false } }
     : collapseQuoted(full);
-  const totalChars = collapsed.text.length;
-  const window = collapsed.text.slice(offset, offset + maxChars);
+  // Neutralised **before** the window is cut, not after.
+  //
+  // The envelope neutralises each page in isolation, so a control token straddling a page boundary — `<|im_s` at
+  // the end of one, `tart|>` at the start of the next — was neutralised on neither, and rejoining the pages put it
+  // back together. Doing it here means the token is gone from the text the window is taken from, whatever offset
+  // the caller asks for.
+  const neutralised = neutralise(collapsed.text);
+  report.tokensNeutralised += neutralised.tokensNeutralised;
+  const totalChars = neutralised.text.length;
+  const window = neutralised.text.slice(offset, offset + maxChars);
   const truncated = offset + window.length < totalChars;
 
   return {

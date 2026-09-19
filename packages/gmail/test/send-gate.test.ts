@@ -339,3 +339,49 @@ test('while a send is in flight, nothing else may touch the draft it is standing
   const otherDraft = await (await import('../src/operations/drafts.ts')).getDraft(context, 'work', other);
   await modify(context, 'work', { messageIds: [otherDraft.messageId], addLabels: ['INBOX'], dryRun: true });
 });
+
+test('a draft this package composed can be sent: signature, link and all', async () => {
+  // The check that the two parts agree was comparing the HTML with its signature stripped against a text part that
+  // still had one, and comparing link annotations that only the HTML side carries. Between them they refused the
+  // package's own ordinary output — with a message telling the user to go and use Gmail instead.
+  const harness = await newHarness({
+    accounts: [
+      {
+        sub: 'sub-1',
+        email: 'jo@example.test',
+        sendAs: [
+          {
+            sendAsEmail: 'jo@example.test',
+            displayName: 'Jo Example',
+            isDefault: true,
+            isPrimary: true,
+            signature: '<div>— Jo<br>Head of Things</div>',
+          },
+        ],
+      },
+    ],
+  });
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', sendPolicy: 'chat' });
+  await harness.core.config.update(
+    (config) => ({ ...config, defaults: { ...config.defaults, riskEscalation: false } }),
+    { consent: { kind: 'loosening-consent', paths: ['defaults.riskEscalation'] } },
+  );
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+
+  const draft = await createDraft(context, 'work', {
+    to: ['sam@partner.test'],
+    subject: 'Tuesday',
+    text: 'Tuesday works. The plan is at https://example.test/plan?v=2 — take a look.',
+  });
+
+  const prepared = await prepareSend(context, 'work', draft.draftId);
+  assert.match(prepared.preview, /Tuesday works\./);
+  assert.match(prepared.preview, /Head of Things/, 'the signature is part of what is approved');
+
+  const sent = await executeSend(context, 'work', {
+    draftId: draft.draftId,
+    approvalId: prepared.approvalId,
+    expect: prepared.expect,
+  });
+  assert.ok(sent.sentMessageId);
+});

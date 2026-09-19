@@ -185,7 +185,17 @@ function guardSendRequests(client: OAuth2Client, permit: { draftId: string | nul
     try {
       path = new URL(url).pathname;
     } catch {
-      // A relative or malformed URL: check the whole string rather than assuming it is harmless.
+      // A relative or malformed URL: check the whole string rather than assuming it is harmless — but drop the
+      // query first, or `/drafts/send?alt=json` does not end in `/send` and the guard waves it through.
+      path = url.split(/[?#]/)[0] ?? url;
+    }
+    // A batch endpoint carries other requests inside its body, which this cannot see. Nothing here batches, and
+    // the guarantee is that a send cannot reach Google any other way — so a batch is refused outright rather than
+    // trusted to contain nothing.
+    if (/\/batch(\/|$)/.test(path)) {
+      throw new CommsError('SEND_REFUSED', 'this package does not batch requests, and a batch could hide a send', {
+        hint: 'This is a bug — please report it.',
+      });
     }
     if (SEND_PATH.test(path.replace(/\/$/, ''))) {
       if (!permit.draftId) {
@@ -416,11 +426,17 @@ export class GoogleGmailTransport implements GmailTransport {
   }
 
   async createDraft(raw: Buffer, threadId?: string | undefined): Promise<DraftHandle> {
-    const { data } = await this.call('save a draft', () =>
-      this.gmail().users.drafts.create({
-        userId: 'me',
-        requestBody: { message: { raw: raw.toString('base64url'), ...(threadId ? { threadId } : {}) } },
-      }),
+    const { data } = await this.call(
+      'save a draft',
+      () =>
+        this.gmail().users.drafts.create({
+          userId: 'me',
+          requestBody: { message: { raw: raw.toString('base64url'), ...(threadId ? { threadId } : {}) } },
+        }),
+      // A connection dropped *after* Gmail accepted the POST looks exactly like one dropped before it, so a retry
+      // on no-status leaves two drafts from one call. Rate-limit retries are still fine: those carry a status and
+      // mean the request was refused rather than acted on.
+      { mode: 'rate-limit-only' },
     );
     return {
       draftId: data.id ?? '',

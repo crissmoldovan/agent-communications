@@ -38,8 +38,9 @@ export function safeFilename(name: string, maxBytes = 255, fallback = 'attachmen
   cleaned = cleaned.replace(/^[.\s]+/, '').replace(/[.\s]+$/, '');
   if (cleaned === '') cleaned = fallback;
   const extension = extname(cleaned);
-  const stem = extension ? cleaned.slice(0, -extension.length) : cleaned;
-  if (WINDOWS_RESERVED.test(stem)) cleaned = `_${cleaned}`;
+  // Windows resolves the segment before the **first** dot, not the last: `con.tar.gz` is still `CON`, and
+  // `extname` only strips `.gz`. Checked against the first segment for that reason.
+  if (WINDOWS_RESERVED.test(cleaned.split('.')[0] ?? cleaned)) cleaned = `_${cleaned}`;
   if (Buffer.byteLength(cleaned, 'utf8') <= maxBytes) return cleaned;
   const keptExtension = Buffer.byteLength(extension, 'utf8') < maxBytes / 2 ? extension : '';
   const keptStem = keptExtension ? cleaned.slice(0, -keptExtension.length) : cleaned;

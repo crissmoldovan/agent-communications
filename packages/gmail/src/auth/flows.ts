@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { open, readFile, rm } from 'node:fs/promises';
+import { open, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CommsError, ensurePrivateDir, writeFileAtomic } from '@cloudpixel/comms-core';
 
@@ -74,8 +74,41 @@ export class FlowStore {
       expiresAt: new Date(now.getTime() + FLOW_TTL_MS).toISOString(),
     };
     await ensurePrivateDir(this.directory);
+    await this.#sweep();
     await writeFileAtomic(this.#path(record.flowId), `${JSON.stringify(record, null, 2)}\n`);
     return record;
+  }
+
+  /**
+   * Discards flows whose window has passed.
+   *
+   * Nothing swept before, so an abandoned `inbox add --start` left its PKCE verifier, its `state` and — if consent
+   * happened but `--finish` never ran — the **authorization code** on disk for ever. All of it is 0600 inside a
+   * 0700 directory, so no other user can read it; the exposure is to whatever else reads the user's own files, a
+   * backup or a `~/.config` tarball attached to a bug report. Swept here rather than on a timer because this is
+   * the moment somebody is already writing to the directory.
+   */
+  async #sweep(): Promise<void> {
+    let names: string[];
+    try {
+      names = await readdir(this.directory);
+    } catch {
+      return;
+    }
+    const now = this.#now().getTime();
+    for (const name of names) {
+      const flowId = name.replace(/\.(outcome\.)?json$/, '');
+      if (!FLOW_ID_PATTERN.test(flowId)) continue;
+      try {
+        const record = JSON.parse(await readFile(this.#path(flowId), 'utf8')) as OAuthFlow;
+        // An unreadable expiry is a flow nobody can use, so it goes too.
+        const expiresAt = new Date(record.expiresAt).getTime();
+        if (Number.isFinite(expiresAt) && now < expiresAt) continue;
+      } catch {
+        // A flow file that will not parse cannot be completed either.
+      }
+      await this.discard(flowId);
+    }
   }
 
   /** Merges fields into a flow that has not been claimed (used to record the listener's port and pid). */

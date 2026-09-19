@@ -46,6 +46,7 @@ function message(options: {
       hiddenElements: 0,
       hiddenChars: 0,
       unreadableHidingRules: 0,
+      tokensNeutralised: 0,
       sameColorElements: 0,
       invisibleCharsRemoved: 0,
       links: [],

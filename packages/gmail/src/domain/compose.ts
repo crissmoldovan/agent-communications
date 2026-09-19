@@ -52,6 +52,13 @@ export interface QuotedOriginal {
 
 export interface ComposedMessage {
   raw: Buffer;
+  /**
+   * Remote images the mailbox's own signature loads when the message is opened.
+   *
+   * Reported rather than refused: it is the user's signature, they chose it, and a company logo is the ordinary
+   * case. It belongs in the preview so the person approving knows what will be fetched.
+   */
+  signatureResources: string[];
   /** The text part, as it will be sent. */
   text: string;
   /** The generated HTML part. */
@@ -150,6 +157,11 @@ function renderQuote(quoted: QuotedOriginal): { text: string; html: string } {
   return { text: plain, html };
 }
 
+/** The signature exactly as it is written into the message, so the strip and the analysis cannot drift apart. */
+function signatureBlock(signature: { text: string; html: string }): string {
+  return `<div class="gmail_signature" data-smartmail="gmail_signature">${signature.html}</div>`;
+}
+
 export async function composeMessage(input: ComposeInput): Promise<ComposedMessage> {
   if (input.to.length === 0 && (input.cc?.length ?? 0) === 0 && (input.bcc?.length ?? 0) === 0) {
     throw new CommsError('BAD_DATA', 'a message needs at least one recipient');
@@ -160,11 +172,17 @@ export async function composeMessage(input: ComposeInput): Promise<ComposedMessa
   const text = input.signature ? `${written.replace(/\s+$/, '')}\n\n${input.signature.text}` : written;
   // Gmail wraps a signature in its own element so its editor recognises it; the wrapper is kept byte-for-byte.
   const body = quote ? `${textToHtml(input.text)}\n${quote.html}` : textToHtml(input.text);
-  const html = input.signature
-    ? `${body}\n<div class="gmail_signature" data-smartmail="gmail_signature">${input.signature.html}</div>`
-    : body;
+  const html = input.signature ? `${body}\n${signatureBlock(input.signature)}` : body;
 
-  const report = analyseOutboundHtml(html);
+  // Analysed **without the signature**, because the signature is the user's own HTML and is not ours to judge.
+  //
+  // A company logo is a remote image. An editor's `<!-- -->` comment is hidden content. A `display:none` span for
+  // a mobile layout is hidden content. All three are ordinary in a real Gmail signature, and all three made this
+  // refuse to compose *any* draft for that mailbox — with a hint saying the fault was in this package, which was
+  // accurate and useless. What this check is for is the HTML **we generate**, so that is what it reads. The
+  // signature's own remote resources are reported to the caller instead, and shown in the preview.
+  const generated = input.signature ? html.replace(signatureBlock(input.signature), '') : html;
+  const report = analyseOutboundHtml(generated);
   const problems = [
     report.scripts > 0 ? 'scripts' : '',
     report.forms > 0 ? 'forms' : '',
@@ -177,6 +195,9 @@ export async function composeMessage(input: ComposeInput): Promise<ComposedMessa
       details: { report },
     });
   }
+  const signatureResources = input.signature
+    ? [...new Set(analyseOutboundHtml(signatureBlock(input.signature)).remoteResources)]
+    : [];
 
   const composer = new MailComposer({
     from: input.from,
@@ -208,7 +229,7 @@ export async function composeMessage(input: ComposeInput): Promise<ComposedMessa
       },
     );
   }
-  return { raw, text, html, bytes: raw.byteLength };
+  return { raw, text, html, bytes: raw.byteLength, signatureResources };
 }
 
 export interface ReplyContext {

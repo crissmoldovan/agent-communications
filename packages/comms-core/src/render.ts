@@ -47,6 +47,14 @@ export interface PreviewRecipients {
   to: string[];
   cc: string[];
   bcc: string[];
+  /**
+   * Where replies would go, when that is not the From address.
+   *
+   * Bound by the digest and previously invisible: a draft carrying `Reply-To: someone@else.test` previewed exactly
+   * like one without, so a person could approve a message every answer to which goes somewhere they were never
+   * told about.
+   */
+  replyTo?: string[] | undefined;
 }
 
 export interface PreviewAttachment {
@@ -132,6 +140,9 @@ export function renderMessagePreview(preview: MessagePreview): string {
     });
   };
   lines.push(line('From:', truncateDisplay(preview.recipients.from, 120)));
+  if ((preview.recipients.replyTo ?? []).length > 0) {
+    lines.push(line('Reply-To:', `${list(preview.recipients.replyTo ?? [])}   REPLIES GO HERE, NOT TO FROM`));
+  }
   addressLines('To:', preview.recipients.to);
   if (preview.recipients.cc.length > 0) addressLines('Cc:', preview.recipients.cc);
   if (preview.recipients.bcc.length > 0) addressLines('Bcc:', preview.recipients.bcc);

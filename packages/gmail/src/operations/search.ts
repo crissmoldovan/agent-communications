@@ -1,5 +1,12 @@
 import { createHash } from 'node:crypto';
-import { CommsError, newBoundary, parseAddressList, TaintCollector, wrapUntrusted } from '@cloudpixel/comms-core';
+import {
+  CommsError,
+  neutralise,
+  newBoundary,
+  parseAddressList,
+  TaintCollector,
+  wrapUntrusted,
+} from '@cloudpixel/comms-core';
 import type { GmailContext } from '../context.ts';
 import { headerValue, readParts } from '../domain/mime.ts';
 import { compileQuery } from '../domain/query.ts';
@@ -236,10 +243,13 @@ function rowFrom(alias: string, message: RawMessage, threadId: string): SearchRo
     threadId,
     messageId: message.id ?? '',
     date: message.internalDate ? new Date(Number(message.internalDate)).toISOString() : null,
-    from,
+    // Sender-controlled, and therefore neutralised: a search row leaves this function as a bare string in a
+    // structured result, beside the enveloped body rather than inside it. A display name can carry anything at
+    // all — RFC 2047 encoding puts arbitrary bytes, newlines included, into a field that looks like a name.
+    from: from ? { ...from, name: neutralise(from.name).text } : null,
     toCount: parseAddressList(headerValue(headers, 'To')).length + parseAddressList(headerValue(headers, 'Cc')).length,
-    subject: (headerValue(headers, 'Subject') ?? '').slice(0, 120),
-    snippet: message.snippet ?? '',
+    subject: neutralise((headerValue(headers, 'Subject') ?? '').slice(0, 120)).text,
+    snippet: neutralise(message.snippet ?? '').text,
     labels,
     attachmentCount: parts.attachments.filter((part) => part.disposition !== 'inline').length,
     unread: labels.includes('UNREAD'),
