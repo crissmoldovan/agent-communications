@@ -352,7 +352,9 @@ export class ApprovalStore {
   async list(filter: { inboxId?: string; states?: ApprovalState[] } = {}): Promise<ApprovalRecord[]> {
     let names: string[];
     try {
-      names = (await readdir(this.directory)).filter((n) => /^ap_[0-9A-Z]{26}\.json$/.test(n));
+      // The same pattern the store validates an id against, so a file this listing shows is a file it can open.
+      // A looser one here silently skipped records whose names it had itself accepted as plausible.
+      names = (await readdir(this.directory)).filter((name) => APPROVAL_ID_PATTERN.test(name.replace(/\.json$/, '')));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw error;

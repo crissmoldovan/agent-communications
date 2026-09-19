@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { analyseLink, colorAlpha, sanitizeHtmlToText, sanitizePlainText, stripInvisible } from '../src/sanitize.ts';
+import {
+  alphaValue,
+  analyseLink,
+  colorAlpha,
+  sanitizeHtmlToText,
+  sanitizePlainText,
+  stripInvisible,
+} from '../src/sanitize.ts';
 
 const ZWSP = String.fromCodePoint(0x200b);
 const RLO = String.fromCodePoint(0x202e);
@@ -112,6 +119,27 @@ const HIDDEN_CASES: [string, string][] = [
     `<style>;;.s2{display:none}</style><div class="s2">${INJECTION}</div>`,
   ],
   ['clip-path polygon with no area', `<div style="clip-path:polygon(0 0, 0 0, 0 0)">${INJECTION}</div>`],
+  ['clip-path ellipse with no radius', `<div style="clip-path:ellipse(0 0 at 50% 50%)">${INJECTION}</div>`],
+  ['opacity as a percentage', `<p style="opacity:0%">${INJECTION}</p>`],
+  ['opacity as a small percentage', `<p style="opacity:2%">${INJECTION}</p>`],
+  ['opacity computed to zero', `<p style="opacity:calc(0 * 1)">${INJECTION}</p>`],
+  ['opacity computed by subtraction', `<p style="opacity:calc(100% - 100%)">${INJECTION}</p>`],
+  [
+    'structural pseudo-class on the hiding rule',
+    `<style>.inject:first-child{display:none}</style><div><span class="inject">${INJECTION}</span></div>`,
+  ],
+  [
+    'negation pseudo-class on a class rule',
+    `<style>.q:not(.visible){display:none}</style><p class="q">${INJECTION}</p>`,
+  ],
+  [
+    'nth-child on a class rule',
+    `<style>.cell:nth-child(2n+1){font-size:0}</style><table><tr><td class="cell">${INJECTION}</td></tr></table>`,
+  ],
+  [
+    'pseudo-element on the hiding rule',
+    `<style>.h::before{display:none}.h{display:none}</style><div class="h">${INJECTION}</div>`,
+  ],
   [
     'media query that excludes print',
     `<style>@media not print{.np{display:none}}</style><div class="np">${INJECTION}</div>`,
@@ -168,10 +196,9 @@ test('a stylesheet rule hides what it matches, and only that', () => {
   const hover = sanitizeHtmlToText('<style>.link:hover{display:none}</style><a class="link">still there</a>');
   assert.match(hover.text, /still there/);
 
-  // A selector this parser cannot read is declined rather than half-applied.
-  const exotic = sanitizeHtmlToText(
-    '<style>:is(.a, .b) ~ p::first-line{display:none}</style><p class="a">kept anyway</p>',
-  );
+  // A compound that names no element after its pseudo-classes are dropped is still declined: `p` here is the
+  // subject, and it has no tag, id, class or attribute of its own to match on beyond the tag — which does match.
+  const exotic = sanitizeHtmlToText('<style>:is(.a, .b){display:none}</style><p class="a">kept anyway</p>');
   assert.match(exotic.text, /kept anyway/);
 });
 
@@ -209,6 +236,65 @@ test('an at-rule block is read, except when it only applies to paper', () => {
   assert.match(frames.text, /kept/);
   assert.match(frames.text, /also kept/);
   assert.equal(frames.report.hiddenElements, 0);
+});
+
+test('a pseudo-class widens a hiding rule rather than cancelling it', () => {
+  // The bypass: declining the whole rule because of `:first-child` meant the element stayed, and the injection
+  // inside it reached the model. Gmail and Outlook both apply this rule.
+  const structural = sanitizeHtmlToText(
+    `<style>.inject:first-child{display:none}</style><p>kept</p><span class="inject">${INJECTION}</span>`,
+  );
+  assert.doesNotMatch(structural.text, /IGNORE PREVIOUS/);
+  assert.match(structural.text, /kept/);
+  assert.equal(structural.report.hiddenElements, 1);
+
+  // Widening is deliberate and has a cost: an element CSS would have left visible can be removed. That is the
+  // direction to err in — a reader losing a line is recoverable, an undetected injection is not.
+  const widened = sanitizeHtmlToText('<style>.x:nth-child(2){display:none}</style><b class="x">first</b>');
+  assert.doesNotMatch(widened.text, /first/);
+
+  // But a compound that reduces to a bare tag is not widened: `p:not(.intro){display:none}` would mean "hide every
+  // paragraph", which destroys an ordinary message. It is declined — and counted, so the silence is not silent.
+  const tagOnly = sanitizeHtmlToText(
+    '<style>p:not(.intro){display:none}</style><p>the report is attached</p><p class="x">and this</p>',
+  );
+  assert.match(tagOnly.text, /the report is attached/);
+  assert.match(tagOnly.text, /and this/);
+  assert.equal(tagOnly.report.unreadableHidingRules, 1, 'the reader is told a rule could not be read');
+
+  // A rule that is applied is not counted as unreadable.
+  assert.equal(structural.report.unreadableHidingRules, 0);
+  // Nor is `:hover`, which hides nothing when a message is opened.
+  assert.equal(
+    sanitizeHtmlToText('<style>.l:hover{display:none}</style><a class="l">x</a>').report.unreadableHidingRules,
+    0,
+  );
+
+  // Interaction pseudo-classes are still refused: `:hover` hides nothing when a message is opened.
+  const hover = sanitizeHtmlToText('<style>.link:hover{display:none}</style><a class="link">still there</a>');
+  assert.match(hover.text, /still there/);
+
+  // A compound that is nothing but a pseudo-class names no element, and is still declined.
+  const bare = sanitizeHtmlToText('<style>:not(.x){display:none}</style><p>kept anyway</p>');
+  assert.match(bare.text, /kept anyway/);
+});
+
+test('opacity is read in every form a mail client accepts', () => {
+  assert.equal(alphaValue('0'), 0);
+  assert.equal(alphaValue('0%'), 0);
+  assert.equal(alphaValue('2%'), 0.02);
+  assert.equal(alphaValue('.5'), 0.5);
+  assert.equal(alphaValue('calc(0 * 1)'), 0);
+  assert.equal(alphaValue('calc(100% - 100%)'), 0);
+  assert.equal(alphaValue('calc(1 / 4)'), 0.25);
+  // Anything this cannot evaluate still reads as opaque: guessing the other way removes text a reader can see.
+  assert.equal(alphaValue('calc(var(--x) * 1)'), null);
+  assert.equal(alphaValue('inherit'), null);
+
+  // And a visible opacity stays visible.
+  const visible = sanitizeHtmlToText('<p style="opacity:50%">half there</p>');
+  assert.match(visible.text, /half there/);
+  assert.equal(visible.report.hiddenElements, 0);
 });
 
 test('a statement that ends in a semicolon does not swallow the rule after it', () => {

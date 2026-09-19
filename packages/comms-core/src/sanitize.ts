@@ -70,6 +70,14 @@ export interface SanitizeReport {
   invisibleCharsRemoved: number;
   links: SanitizedLink[];
   imagesNotLoaded: number;
+  /**
+   * Hiding rules in a stylesheet that this parser could not apply to any element.
+   *
+   * Not zero means some text a mail client would have hidden is still in `text`. It is reported rather than guessed
+   * at, because the two ways of guessing are both bad: applying such a rule to every element of a tag would gut a
+   * legitimate message, and ignoring it silently is how hidden text reaches a model unannounced.
+   */
+  unreadableHidingRules: number;
 }
 
 export interface SanitizedText {
@@ -80,6 +88,7 @@ export interface SanitizedText {
 function emptyReport(): SanitizeReport {
   return {
     hiddenElements: 0,
+    unreadableHidingRules: 0,
     hiddenChars: 0,
     sameColorElements: 0,
     invisibleCharsRemoved: 0,
@@ -163,6 +172,56 @@ function numeric(value: string | undefined, percentBasis: number = VIEWPORT_WIDT
   }
 }
 
+/**
+ * An alpha or opacity value as a number in 0–1: `0`, `0%`, `.04`, or a `calc()` this can evaluate.
+ *
+ * `Number('0%')` is `NaN`, which read as "not transparent" and let `opacity: 0%` — valid in every Chromium-based
+ * mail client — hide text the sanitiser then handed to the model. `calc()` was the same gap wearing an expression:
+ * anything unevaluated defaulted to opaque, so `calc(0 * 1)` hid text invisibly. Simple arithmetic is evaluated
+ * here; anything more complicated still reads as opaque, because guessing the other way removes text a reader can
+ * see.
+ */
+export function alphaValue(raw: string | undefined): number | null {
+  if (raw === undefined) return null;
+  const value = raw.trim().toLowerCase();
+  if (!value) return null;
+  const calc = /^calc\((.*)\)$/.exec(value);
+  if (calc) {
+    const evaluated = evaluateSimpleCalc(calc[1] ?? '');
+    return evaluated;
+  }
+  if (value.endsWith('%')) {
+    const percent = Number(value.slice(0, -1));
+    return Number.isFinite(percent) ? percent / 100 : null;
+  }
+  const plain = Number(value);
+  return Number.isFinite(plain) ? plain : null;
+}
+
+/** `0.5 * 0`, `100% - 100%`, `1/4` — two operands and one operator, which is what mail actually contains. */
+function evaluateSimpleCalc(expression: string): number | null {
+  const parsed = /^\s*([\d.]+%?)\s*([-+*/])\s*([\d.]+%?)\s*$/.exec(expression.trim());
+  if (!parsed) {
+    const single = /^\s*([\d.]+%?)\s*$/.exec(expression.trim());
+    return single ? alphaValue(single[1]) : null;
+  }
+  const left = alphaValue(parsed[1]);
+  const right = alphaValue(parsed[3]);
+  if (left === null || right === null) return null;
+  switch (parsed[2]) {
+    case '+':
+      return left + right;
+    case '-':
+      return left - right;
+    case '*':
+      return left * right;
+    case '/':
+      return right === 0 ? null : left / right;
+    default:
+      return null;
+  }
+}
+
 /** True when a set of declarations hides the element from a human reader. */
 export function hidesContent(style: Map<string, string>): boolean {
   const display = style.get('display');
@@ -170,8 +229,8 @@ export function hidesContent(style: Map<string, string>): boolean {
   const visibility = style.get('visibility');
   if (visibility === 'hidden' || visibility === 'collapse') return true;
   if (style.get('mso-hide') === 'all') return true;
-  const opacity = style.get('opacity');
-  if (opacity !== undefined && Number(opacity) <= 0.05) return true;
+  const opacity = alphaValue(style.get('opacity'));
+  if (opacity !== null && opacity <= 0.05) return true;
   const fontSize = numeric(style.get('font-size'), FONT_SIZE_BASIS_PX);
   if (fontSize !== null && fontSize <= 1) return true;
   // Invisible text: `transparent`, an alpha of zero in rgba()/hsla()/#RRGGBBAA, or a fill colour that erases it.
@@ -191,6 +250,9 @@ export function hidesContent(style: Map<string, string>): boolean {
   const clipPath = style.get('clip-path') ?? '';
   if (/inset\(\s*(50|100)%/.test(clipPath) || /circle\(\s*0/.test(clipPath)) return true;
   // `polygon(0 0, 0 0, 0 0)` and the like: a shape with no area shows nothing.
+  if (/ellipse\(\s*0(?:px|%|em|rem)?[\s,]/.test(clipPath) || /ellipse\(\s*0(?:px|%|em|rem)?\s*\)/.test(clipPath)) {
+    return true;
+  }
   const polygon = /polygon\(([^)]*)\)/.exec(clipPath);
   if (polygon && /^[\s,]*(?:0(?:px|%|em|rem)?[\s,]+0(?:px|%|em|rem)?[\s,]*)+$/.test(polygon[1] ?? 'x')) return true;
   if (offScreen(numeric(style.get('text-indent')))) return true;
@@ -321,10 +383,42 @@ interface HidingRule {
 
 interface StylesheetRules {
   rules: HidingRule[];
+  /** Hiding rules whose selector this parser could not turn into a match. */
+  unreadable: number;
 }
 
 /** A rule that only applies while the reader is doing something hides nothing in a message they simply open. */
 const INTERACTION_PSEUDO = /:(?:hover|focus(?:-within|-visible)?|active|visited|target|checked)\b/;
+
+/**
+ * Removes pseudo-classes and pseudo-elements from a compound selector, brackets balanced.
+ *
+ * `:not(.a:has(> .b))` nests, so the argument is skipped by counting parentheses rather than by a regex, which
+ * would stop at the first `)` and leave `)` behind for the compound walker to choke on.
+ */
+function stripPseudo(compound: string): string {
+  let out = '';
+  let index = 0;
+  while (index < compound.length) {
+    if (compound[index] !== ':') {
+      out += compound[index];
+      index++;
+      continue;
+    }
+    index++;
+    if (compound[index] === ':') index++; // a pseudo-element, `::before`
+    while (index < compound.length && /[\w-]/.test(compound[index] ?? '')) index++;
+    if (compound[index] === '(') {
+      let depth = 0;
+      do {
+        if (compound[index] === '(') depth++;
+        else if (compound[index] === ')') depth--;
+        index++;
+      } while (index < compound.length && depth > 0);
+    }
+  }
+  return out;
+}
 
 /**
  * The part of a selector that says which element is hidden: the last compound, after any combinator. In
@@ -334,15 +428,31 @@ const INTERACTION_PSEUDO = /:(?:hover|focus(?:-within|-visible)?|active|visited|
 export function parseHidingSelector(selector: string): HidingRule | null {
   const cleaned = selector.trim().toLowerCase();
   if (!cleaned || INTERACTION_PSEUDO.test(cleaned)) return null;
-  const subject = cleaned
+  // Pseudo-classes come off before the selector is split on its combinators, because their arguments contain
+  // combinator characters: `:nth-child(2n+1)` split on `+` leaves `1)` as the subject, which parses as nothing.
+  const withoutPseudo = stripPseudo(cleaned);
+  const hadPseudo = withoutPseudo !== cleaned;
+  const subject = withoutPseudo
     .split(/[\s>+~]+/)
     .filter(Boolean)
     .at(-1);
   if (!subject || subject === '*') return null;
 
   const rule: HidingRule = { tag: null, id: null, classes: [], attributes: [] };
-  // Walk the compound: `div#id.a.b[attr]:not(.c)` — everything this parser does not understand makes it give up,
-  // because a rule it half-understands is worse than one it declines to apply.
+  /**
+   * Walk the compound: `div#id.a.b[attr]`.
+   *
+   * Structural pseudo-classes and pseudo-elements are **dropped rather than refused**, so long as what is left
+   * still names something specific. `.inject:first-child{display:none}` is a rule Gmail and Outlook both apply, and
+   * declining it because of the `:first-child` let the hidden text reach the model. Dropping the pseudo-class
+   * widens the rule: it can hide an element CSS would have left visible, which costs a reader a line, where the
+   * other direction costs them an undetected injection.
+   *
+   * What is *not* done is widen a compound that reduces to a bare tag. `p:not(.intro){display:none}` would become
+   * "hide every paragraph", which destroys an ordinary message — so that one is declined and **counted**, and the
+   * report says how many rules could not be read. Interaction pseudo-classes are refused above, because `:hover`
+   * hides nothing when a message is opened.
+   */
   const pattern = /^([a-z][\w-]*)|\.([\w-]+)|#([\w-]+)|\[([^\]]*)\]/;
   let rest = subject;
   let first = true;
@@ -368,7 +478,9 @@ export function parseHidingSelector(selector: string): HidingRule | null {
     rest = rest.slice(match[0].length);
     first = false;
   }
-  return rule.tag || rule.id || rule.classes.length > 0 || rule.attributes.length > 0 ? rule : null;
+  const specific = Boolean(rule.id) || rule.classes.length > 0 || rule.attributes.length > 0;
+  if (hadPseudo && !specific) return null;
+  return specific || rule.tag ? rule : null;
 }
 
 /** Collects simple selectors (`.class`, `#id`, `tag`, `tag.class`) whose declarations hide content. */
@@ -472,7 +584,7 @@ export function eachStyleRule(css: string, visit: (selectors: string, declaratio
 }
 
 function hiddenSelectorsFromStylesheets(root: AnyNode): StylesheetRules {
-  const rules: StylesheetRules = { rules: [] };
+  const rules: StylesheetRules = { rules: [], unreadable: 0 };
   const visit = (node: AnyNode): void => {
     if (isTag(node) && node.name === 'style') {
       const css = node.children
@@ -483,8 +595,12 @@ function hiddenSelectorsFromStylesheets(root: AnyNode): StylesheetRules {
       eachStyleRule(css, (selectors, declarations) => {
         if (!hidesContent(parseStyle(declarations))) return;
         for (const raw of selectors.split(',')) {
+          if (!raw.trim()) continue;
           const rule = parseHidingSelector(raw);
           if (rule) rules.rules.push(rule);
+          // A hiding rule we could not apply means text a client would hide is still in the output. Counted, not
+          // guessed at: `unreadableHidingRules` is how the reader learns that.
+          else if (!INTERACTION_PSEUDO.test(raw.toLowerCase())) rules.unreadable += 1;
         }
       });
     }
@@ -696,6 +812,8 @@ export function sanitizeHtmlToText(html: string, options: { wordwrap?: number | 
   const report = emptyReport();
   const document = parseDocument(html, { decodeEntities: true, lowerCaseTags: true, lowerCaseAttributeNames: true });
   const rules = hiddenSelectorsFromStylesheets(document);
+  // A hiding rule we could not read means text a client would hide is still in the output; the reader is told.
+  report.unreadableHidingRules = rules.unreadable;
   document.children = prune(document.children, rules, report);
   const cleanedHtml = render(document, { decodeEntities: false });
 
