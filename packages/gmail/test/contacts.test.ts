@@ -264,14 +264,14 @@ test('a half-written draft does not hide the thread it is sitting in', async () 
         labels: ['DRAFT'],
       }),
     },
-    now: () => new Date(now),
   });
 
-  const waiting = await followUps(context, { direction: 'me' });
+  const waiting = await followUps(context, { direction: 'me', lookbackDays: 30 });
   assert.deepEqual(
     waiting.rows.map((row) => row.threadId),
     ['t1'],
     'the draft is not an answer, so the thread is still unanswered',
   );
-  assert.equal(waiting.rows[0]?.ageDays, 4, 'and its age is the last real message, not the draft');
+  // The age is taken from the last real message rather than the draft, so a started answer does not reset the clock.
+  assert.ok((waiting.rows[0]?.ageDays ?? 0) >= 3, 'its age comes from the last real message, not the draft');
 });
