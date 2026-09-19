@@ -525,7 +525,15 @@ test('doctor exits non-zero when a check is broken, and zero when only warnings 
   // and `--json` promises exactly one on stdout.
   const envelope = broken.json<Envelope<{ healthy: boolean; summary: { fail: number } }>>();
   assert.equal(envelope.ok, true, 'the report is still the payload');
-  assert.equal(envelope.data.healthy, false);
-  assert.ok(envelope.data.summary.fail > 0, 'and it says what was broken');
-  assert.equal(broken.stdout.trimEnd().split('\n').filter((l) => l.startsWith('{')).length, 1, 'one document only');
+  assert.ok(envelope.data, 'the report is present');
+  assert.equal(envelope.data?.healthy, false);
+  assert.ok((envelope.data?.summary.fail ?? 0) > 0, 'and it says what was broken');
+  assert.equal(
+    broken.stdout
+      .trimEnd()
+      .split('\n')
+      .filter((l) => l.startsWith('{')).length,
+    1,
+    'one document only',
+  );
 });
