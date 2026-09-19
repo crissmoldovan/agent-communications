@@ -193,9 +193,13 @@ export async function checkAttachable(path: string, policy: AttachPolicy): Promi
       continue;
     }
     if (entry.startsWith('**/')) {
-      const pattern = entry.slice(3);
+      // Compared case-insensitively, like the `.git` rule above and like the filesystems this runs on: macOS and
+      // Windows both open `~/project/.ENV` when asked for `.env`, so a case-sensitive deny list refuses one
+      // spelling of a file and hands over the other.
+      const pattern = entry.slice(3).toLowerCase();
+      const candidate = name.toLowerCase();
       const prefix = pattern.endsWith('*') ? pattern.slice(0, -1) : pattern;
-      if (pattern.endsWith('*') ? name.startsWith(prefix) : name === prefix) {
+      if (pattern.endsWith('*') ? candidate.startsWith(prefix) : candidate === prefix) {
         throw new CommsError('BAD_DATA', `refusing to attach ${name}: files matching ${entry} are never attached`);
       }
       continue;

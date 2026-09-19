@@ -92,9 +92,8 @@ export class PlanStore {
           hint: 'Run the operation with --dry-run again.',
         });
       }
-      // Single use: the plan is gone whether or not it matches.
-      await rm(path, { force: true });
       if (this.#now() >= new Date(record.expiresAt)) {
+        await rm(path, { force: true });
         throw new CommsError('APPROVAL_EXPIRED', 'that plan expired', {
           hint: 'Run the operation with --dry-run again.',
         });
@@ -105,10 +104,15 @@ export class PlanStore {
       else if (record.paramsDigest !== paramsDigest(expected.params)) mismatch = 'different changes';
       else if (record.idsDigest !== idsDigest(expected.ids)) mismatch = 'a different set of messages';
       if (mismatch) {
+        // The plan is left alive. It only ever authorises its own recorded change, so keeping it costs nothing —
+        // and burning it here punished a caller for a typo by making them re-run the dry run for a plan that was
+        // perfectly good.
         throw new CommsError('APPROVAL_VOID', `that plan was made for ${mismatch}`, {
-          hint: 'Run the operation with --dry-run again and use the new plan.',
+          hint: 'Run the operation again with the parameters the plan was made for, or --dry-run for a new plan.',
         });
       }
+      // Single use, on the one path that used it.
+      await rm(path, { force: true });
       return record;
     });
   }

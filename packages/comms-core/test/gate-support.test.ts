@@ -117,7 +117,11 @@ test('plans are single use and bound to inbox, operation, parameters and the exa
   for (const [name, change] of mismatches) {
     const p = await plans.create({ inboxId: INBOX, operation: 'modify', params, ids });
     await assert.rejects(plans.consume(p.token, { ...expected, ...change }), /was made for/, name);
-    await assert.rejects(plans.consume(p.token, expected), /already used/, `${name}: consumed even on mismatch`);
+    // A mismatch does not burn the plan. It only ever authorises its own recorded change, so keeping it costs
+    // nothing — and burning it made a caller who mistyped one id re-run a dry run for a plan that was perfectly
+    // good. Using it for what it was made for still works, once.
+    assert.equal((await plans.consume(p.token, expected)).token, p.token, `${name}: still usable as intended`);
+    await assert.rejects(plans.consume(p.token, expected), /already used/, `${name}: and then spent`);
   }
   const late = await plans.create({ inboxId: INBOX, operation: 'modify', params, ids });
   time.advance(10 * 60 * 1000);
