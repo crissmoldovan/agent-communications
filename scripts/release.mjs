@@ -103,20 +103,19 @@ for (const name of PACKAGES) {
   }
 }
 
-// An account with 2FA set to "auth and writes" needs a one-time password at the moment of publish, and only an
-// interactive terminal can ask for one. Discovering that at the first `pnpm publish` is a bad place to find out:
-// the run has already spent minutes on the verify, and pnpm's message mentions authentication in a way that reads
-// like the login is wrong.
+// Publishing may need a one-time password from an authenticator, and only an interactive terminal can supply one.
 //
-// So ask the account rather than assuming. `auth-only` means 2FA guards signing in and not writing, which is the
-// common setting for an account that publishes from a script — refusing there would block a release that would
-// have worked. Anything else, or an answer we cannot read, is treated as needing a person.
-const twoFactor = quiet(() => run('npm', ['profile', 'get', 'two-factor auth']))?.toLowerCase() ?? '';
-const otpNeeded = !twoFactor.includes('auth-only') && !twoFactor.includes('disabled');
-if (publish && otpNeeded && !process.stdin.isTTY) {
+// **Do not try to predict this from the account's 2FA mode.** It was tried: `npm profile get` reported `auth-only`
+// — 2FA on sign-in, not on writes — and the very next `npm publish` still failed with `EOTP`, because npm treats
+// *creating* a package as privileged whatever that setting says. So the check that reads the mode is worse than no
+// check: it waves through the exact case that fails, after the verify has already run.
+//
+// Refuse on a non-interactive terminal instead, and let a person run it.
+if (publish && !process.stdin.isTTY) {
   refuse(
-    `this is not an interactive terminal and the account needs a one-time password (2FA: ${twoFactor || 'unknown'})`,
-    'Run `pnpm release:publish` yourself in a terminal so npm can ask for the code.',
+    'this is not an interactive terminal, and npm may ask for a one-time password',
+    'Run `pnpm release:publish` yourself in a terminal so npm can prompt you. An agent cannot do this step, ' +
+      'and should not be handed the code.',
   );
 }
 
