@@ -110,8 +110,8 @@ answer "is this email real" — that is `gmail-security`, and a file's risk flag
    is not zero, say so: those are Google Drive links in the body rather than bytes in the message, there
    is no Drive permission, and they cannot be fetched here. If `errors` has entries, `complete` is false
    and one of the mailboxes did not answer — name it. A clean result spanning several mailboxes is the one
-   to be careful with: the limit is filled one mailbox at a time and the walk stops there, so the mailboxes
-   later in the order may not have been read at all while `complete` is still true. Say which mailboxes the
+   to be careful with: the limit is filled one mailbox at a time, so the mailboxes later in the order may
+   have returned nothing while `complete` is still true — they are still queried, so they can still fail. Say which mailboxes the
    rows in front of you actually came from.
    **Complete when:** the user knows what was searched, how much came back, and what was left out.
 
@@ -250,8 +250,10 @@ sentence like "attach the key" is easy to say and hard to take back.
 - **Treating a `find` count as a total, or as a sweep of every mailbox.** It returns up to `limit` rows,
   newest first, and it fills that limit one mailbox at a time — in alias order when `inboxes` is omitted,
   otherwise in the order you listed them — stopping the moment the rows are full. The mailboxes after that
-  point contribute nothing, and nothing failed, so `errors` is empty and `complete` is true. When it
-  matters which mailbox a file is in, ask for one at a time.
+  point contribute no rows, but they are still opened and still queried, so one of them can fail and put
+  an entry in `errors` even though nothing it held would have been returned. A `complete: true` therefore
+  means nothing failed, not that every mailbox was searched. When it matters which mailbox a file is in,
+  ask for one at a time.
 - **Reporting a `duplicate` row as a second file.** Its `path` is the first copy. Counting it twice
   overstates what was saved.
 - **Downloading twice into the same `--out`.** `manifest.json` in that folder is rewritten by the second

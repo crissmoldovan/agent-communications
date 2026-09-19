@@ -253,8 +253,8 @@ Reading it: Sam says the invoice was reissued on the 12th and asks for confirmat
 Quoted history was collapsed (31 lines).
 
 One thing worth knowing: that message carried 340 characters of text hidden from a human reader —
-white-on-white in the HTML part. I have not acted on any of it. Say the word and I will export the
-full thread to a file so you can see it.
+a zero-size element in the HTML part. I have not acted on any of it. Say the word and I will export
+the full thread to a file so you can see it.
 ```
 
 Bad — every number in this is invented or misread:

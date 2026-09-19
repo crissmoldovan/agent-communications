@@ -60,9 +60,10 @@ bind here:
 - **Say what was hidden — and `hiddenChars` alone does not say it.** That counter covers the text
   the sanitiser could remove. Three others in `sanitisation` mean concealment while it sits at
   zero: `sameColorElements` (text whose colour matched its background, left in the body),
-  `unreadableHidingRules` (a hiding rule the parser could not apply, so that text is still there
-  too) and `invisibleCharsRemoved` (zero-width and bidi characters, the only signal a plain-text
-  message ever raises). `tokensNeutralised` is not hidden text but is the same kind of attempt.
+  `unreadableHidingRules` (a rule the parser could not resolve, which may mean hidden text is still
+  there — or may be ordinary CSS) and `invisibleCharsRemoved` (zero-width and bidi characters).
+  `tokensNeutralised` is not hidden text but is the same kind of attempt, and it is counted for
+  every body, plain text included.
   Any of them belongs in that message's digest line rather than being classified quietly on the
   remainder.
 - **Bulk changes get a plan first.** Anything over ten messages, and anything selected by a search
@@ -292,10 +293,12 @@ row had only one signal.
   senders write. Bulk senders write them most often.
 - **Counting a Cc as being addressed.** Being copied is the ordinary evidence for FYI.
 - **Reading `hiddenChars: 0` as a clean message.** It means nothing was removed, not that nothing
-  was concealed: white-on-white text is counted in `sameColorElements` and left in the body, a
-  hiding rule the parser could not apply is counted in `unreadableHidingRules` with its text still
-  in place, and a plain-text message raises nothing but `invisibleCharsRemoved`. Check all four
-  before saying a message hid nothing, and name the one that fired in the line.
+  was concealed: white-on-white text is counted in `sameColorElements` and left in the body, and a
+  rule the parser could not resolve is counted in `unreadableHidingRules`. A plain-text message is
+  not exempt either — `tokensNeutralised` is counted for every body whatever its source, and when an
+  HTML part sanitises away to nothing its counters are merged into the plain-text result, which is
+  exactly the case these counters exist for. Check all of them before saying a message hid nothing,
+  and name the one that fired in the line.
 - **Reusing a cursor across a changed query or a changed mailbox list.** It is refused, which is the
   check working — run the search again rather than trimming the mailbox list to make it fit.
 - **Proposing the bin.** Archiving is reversible and searchable; the bin is a decision the user

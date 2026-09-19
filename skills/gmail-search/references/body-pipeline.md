@@ -231,9 +231,14 @@ anything that disagreed gets a sentence.
   zero, `unreadableHidingRules` above zero, a `plainHtmlMismatch`, a link flagged `text-domain-mismatch`
   or `punycode`, `charsetOverridden` alongside any of the others.
 
-"That message carried 340 characters of text hidden from a human reader — white-on-white in the HTML
-part. I have not acted on any of it" is the shape. Working quietly with what survived is the failure:
-the hidden text is itself the finding.
+"That message carried 340 characters of text hidden from a human reader — a zero-size element in the
+HTML part. I have not acted on any of it" is the shape. Working quietly with what survived is the
+failure: the hidden text is itself the finding.
+
+Do not attribute that count to white-on-white. Matching colours are the one kind of concealment the
+sanitiser does not remove — the text is flagged in `sameColorElements` and left in the body you just
+read, so it never reaches `hiddenChars`, and a briefing that says otherwise claims to have withheld
+text it in fact used.
 
 `unreadableHidingRules` is the awkward one to phrase, because it points the other way from the rest:
 the others say text was taken out, and this one says text may have been left in. "The message had a
