@@ -134,7 +134,12 @@ const FONT_SIZE_BASIS_PX = 16;
  */
 function numeric(value: string | undefined, percentBasis: number = VIEWPORT_WIDTH_PX): number | null {
   if (value === undefined) return null;
-  const match = /^(-?\d*\.?\d+)\s*(px|pt|pc|in|cm|mm|q|em|rem|ex|ch|%|vw|vh|vmin|vmax)?$/i.exec(value.trim());
+  // `calc()` first, and for the same reason it was handled for opacity: `font-size: calc(0px)` and
+  // `text-indent: calc(-9999px)` hide text in every mail client, and a parser that gives up on the expression
+  // reads them as "no size given" and keeps the element. Fixing one property and not the rest left the same
+  // bypass standing behind a different declaration.
+  const resolved = resolveCalc(value.trim(), percentBasis);
+  const match = /^(-?\d*\.?\d+)\s*(px|pt|pc|in|cm|mm|q|em|rem|ex|ch|%|vw|vh|vmin|vmax)?$/i.exec(resolved);
   if (!match) return null;
   const amount = Number(match[1]);
   switch ((match[2] ?? '').toLowerCase()) {
@@ -259,6 +264,40 @@ export function usesUnresolvedVariable(style: Map<string, string>): boolean {
   return HIDING_PROPERTIES.some((property) => /var\(/i.test(style.get(property) ?? ''));
 }
 
+/**
+ * Evaluates a `calc()` simple enough to be sure of, and hands back a plain length for `numeric` to read.
+ *
+ * Two operands and one operator, both in the same unit — which is what mail actually contains. Anything else is
+ * returned unchanged, so it falls through to the ordinary parse and, failing that, reads as "no value", which
+ * keeps the element. Guessing in the other direction removes text a reader can see.
+ */
+function resolveCalc(value: string, percentBasis: number): string {
+  const calc = /^calc\(([^()]*)\)$/i.exec(value);
+  if (!calc) return value;
+  const body = (calc[1] ?? '').trim();
+  const single = /^(-?\d*\.?\d+)\s*([a-z%]*)$/i.exec(body);
+  if (single) return body;
+  const pair = /^(-?\d*\.?\d+)\s*([a-z%]*)\s*([-+*/])\s*(-?\d*\.?\d+)\s*([a-z%]*)$/i.exec(body);
+  if (!pair) return value;
+  const [, leftAmount, leftUnit, operator, rightAmount, rightUnit] = pair;
+  const left = numeric(`${leftAmount}${leftUnit}`, percentBasis);
+  const right = numeric(`${rightAmount}${rightUnit}`, percentBasis);
+  if (left === null || right === null) return value;
+  switch (operator) {
+    case '+':
+      return `${left + right}px`;
+    case '-':
+      return `${left - right}px`;
+    case '*':
+      // A multiplication has one unitless side in valid CSS; either way the pixel product is what matters here.
+      return `${(leftUnit ? left : Number(leftAmount)) * (rightUnit ? right : Number(rightAmount))}px`;
+    case '/':
+      return Number(rightAmount) === 0 ? value : `${left / Number(rightAmount)}px`;
+    default:
+      return value;
+  }
+}
+
 /** True when a set of declarations hides the element from a human reader. */
 export function hidesContent(style: Map<string, string>): boolean {
   const display = style.get('display');
@@ -307,7 +346,9 @@ export function hidesContent(style: Map<string, string>): boolean {
   }
   const transform = style.get('transform') ?? '';
   if (/scale[xy]?\(\s*0(\.0+)?\s*[,)]/.test(transform)) return true;
-  for (const match of transform.matchAll(/translate[xy3d]*\(([^)]*)\)/g)) {
+  // `[^)]*` stops at the first `)`, which is inside the argument when it is a `calc()` — so `translateX(calc(-9999px))`
+  // yielded `calc(-9999px` and parsed as nothing. Balanced to one level, which is as deep as a transform goes.
+  for (const match of transform.matchAll(/translate[xy3d]*\(((?:[^()]|\([^()]*\))*)\)/g)) {
     if ((match[1] ?? '').split(',').some((part) => offScreen(numeric(part)))) return true;
   }
   return false;
@@ -336,10 +377,10 @@ export function colorAlpha(value: string | undefined): number {
     const slash = lastTopLevelSlash(inner);
     const alpha = slash >= 0 ? inner.slice(slash + 1).trim() : inner.split(',').map((part) => part.trim())[3];
     if (alpha === undefined || alpha === '') return 1;
-    const percentage = alpha.endsWith('%');
-    const amount = Number.parseFloat(percentage ? alpha.slice(0, -1) : alpha);
-    if (!Number.isFinite(amount)) return 1;
-    return percentage ? amount / 100 : amount;
+    // Through the same reader the `opacity` property uses, so `rgba(0,0,0,calc(0))` and `rgb(0 0 0 / 0%)` are read
+    // the same way. Anything it cannot evaluate still reads as opaque.
+    const amount = alphaValue(alpha);
+    return amount === null ? 1 : amount;
   }
   const hex = /^#([0-9a-f]{4}|[0-9a-f]{8})$/.exec(text);
   if (hex) {
@@ -622,7 +663,11 @@ function isPrintOnly(prelude: string): boolean {
  * `@media screen` or `@supports` block is ignored, and text hidden by one of them reaches the reader. Only a
  * print-only block is genuinely irrelevant: what it hides is still visible on screen, which is where mail is read.
  */
-export function eachStyleRule(css: string, visit: (selectors: string, declarations: string) => void): void {
+export function eachStyleRule(
+  css: string,
+  visit: (selectors: string, declarations: string) => void,
+  unreadable: { count: number } = { count: 0 },
+): void {
   let index = 0;
   while (index < css.length) {
     // Find where this rule's prelude ends. A `;` before the `{` ends a statement that has no block at all — `@import`,
@@ -631,6 +676,11 @@ export function eachStyleRule(css: string, visit: (selectors: string, declaratio
     // `@import` would be skipped as though it were an at-rule. A browser discards the statement and applies the rule.
     const statementEnd = endOfStatement(css, index);
     if (statementEnd !== null) {
+      // An `@import` pulls in a stylesheet this never fetches, and that stylesheet may hold the rule that hides
+      // the injected text. Counted, for the same reason a selector we cannot read is counted: the reader is told
+      // the sanitiser did not see everything. It is caught here rather than in the at-rule branch below, because
+      // an `@import` ends in a semicolon and never reaches one.
+      if (/^\s*@import\b/i.test(css.slice(index, statementEnd))) unreadable.count += 1;
       index = statementEnd;
       continue;
     }
@@ -661,7 +711,7 @@ export function eachStyleRule(css: string, visit: (selectors: string, declaratio
 
     if (prelude.startsWith('@')) {
       const printOnly = isPrintOnly(prelude);
-      if (NESTING_AT_RULES.test(prelude) && !printOnly) eachStyleRule(body, visit);
+      if (NESTING_AT_RULES.test(prelude) && !printOnly) eachStyleRule(body, visit, unreadable);
       // @font-face, @keyframes, @import and the rest hide nothing.
     } else if (prelude) {
       visit(prelude, body);
@@ -679,21 +729,27 @@ function hiddenSelectorsFromStylesheets(root: AnyNode): StylesheetRules {
         .map((t) => t.data)
         .join('')
         .replace(/\/\*[\s\S]*?\*\//g, '');
-      eachStyleRule(css, (selectors, declarations) => {
-        const parsed = parseStyle(declarations);
-        if (!hidesContent(parsed)) {
-          if (usesUnresolvedVariable(parsed)) rules.unreadable += 1;
-          return;
-        }
-        for (const raw of selectors.split(',')) {
-          if (!raw.trim()) continue;
-          const rule = parseHidingSelector(raw);
-          if (rule) rules.rules.push(rule);
-          // A hiding rule we could not apply means text a client would hide is still in the output. Counted, not
-          // guessed at: `unreadableHidingRules` is how the reader learns that.
-          else if (!INTERACTION_PSEUDO.test(raw.toLowerCase())) rules.unreadable += 1;
-        }
-      });
+      const counter = { count: 0 };
+      eachStyleRule(
+        css,
+        (selectors, declarations) => {
+          const parsed = parseStyle(declarations);
+          if (!hidesContent(parsed)) {
+            if (usesUnresolvedVariable(parsed)) rules.unreadable += 1;
+            return;
+          }
+          for (const raw of selectors.split(',')) {
+            if (!raw.trim()) continue;
+            const rule = parseHidingSelector(raw);
+            if (rule) rules.rules.push(rule);
+            // A hiding rule we could not apply means text a client would hide is still in the output. Counted,
+            // not guessed at: `unreadableHidingRules` is how the reader learns that.
+            else if (!INTERACTION_PSEUDO.test(raw.toLowerCase())) rules.unreadable += 1;
+          }
+        },
+        counter,
+      );
+      rules.unreadable += counter.count;
     }
     if ('children' in node) for (const child of (node as Element).children) visit(child);
   };
