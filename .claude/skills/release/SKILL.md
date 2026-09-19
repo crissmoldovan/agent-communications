@@ -56,7 +56,13 @@ worse trade than the missing attestation.
    script must never do it on their behalf.
    **Complete when:** `npm whoami` names the right account.
 
-7. **Publish.** `pnpm release:publish`.
+7. **Publish — and a person runs this one, in a real terminal.** `pnpm release:publish`.
+
+   If the account has two-factor authentication on, npm asks for a one-time password at the moment of publish, and
+   only an interactive terminal can answer. An agent cannot do this step and should not be given the code: the
+   script refuses up front when it is not on a TTY rather than discovering it after a five-minute verify. This is
+   the same conclusion the "releases are local" decision reached, arrived at independently by npm.
+
    **Complete when:** the script's own registry check reports all three at the new version. It asks npm what
    arrived rather than trusting the publish command's exit code, because `pnpm --filter` exits 0 when it matches
    nothing — a renamed package would publish fewer than the list claims and still look green.

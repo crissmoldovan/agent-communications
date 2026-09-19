@@ -103,6 +103,16 @@ for (const name of PACKAGES) {
   }
 }
 
+// Publishing with 2FA on the account needs a one-time password, and only an interactive terminal can ask for one.
+// Discovering that at the first `pnpm publish` is a bad place to find out: the run has already spent several
+// minutes on the verify, and the failure text mentions authentication in a way that reads like the login is wrong.
+if (publish && !process.stdin.isTTY) {
+  refuse(
+    'this is not an interactive terminal, and publishing may need a 2FA one-time password',
+    'Run `pnpm release:publish` yourself in a terminal so npm can ask for the code.',
+  );
+}
+
 if (failures.length > 0) {
   console.error('\nRefusing to release:\n');
   for (const { what, fix } of failures) console.error(`  ✗ ${what}\n    ${fix}\n`);
@@ -135,9 +145,16 @@ try {
     console.log(`  ${SCOPE}/${name} sent`);
   }
 } catch (error) {
-  console.error(`\nA publish failed after sending: ${sent.length ? sent.join(', ') : 'nothing'}.`);
-  console.error('Those versions are on the registry for good. Bump the version and release again rather than');
-  console.error('retrying this one — the packages that did go out cannot be replaced.\n');
+  // What to say depends entirely on whether anything got out, and saying the wrong one is its own harm: telling
+  // someone a version is permanent when nothing was sent invites them to burn a version number for no reason.
+  if (sent.length === 0) {
+    console.error('\nNothing was published. The registry is untouched, so fix the cause and run this again at the');
+    console.error('same version.\n');
+  } else {
+    console.error(`\nA publish failed after sending: ${sent.join(', ')}.`);
+    console.error('Those versions are on the registry for good. Bump the version and release again rather than');
+    console.error('retrying this one — the packages that did go out cannot be replaced.\n');
+  }
   throw error;
 }
 
