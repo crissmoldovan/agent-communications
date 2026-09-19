@@ -17,7 +17,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const check = process.argv.includes('--check');
@@ -29,7 +29,9 @@ const GROUPS = new Set(['client', 'inbox', 'attachments', 'draft', 'send']);
 
 // The source, not the bundle: `dist/cli.mjs` is a bin that runs on import, and neither bundle re-exports `run`.
 // This file is therefore executed with `--experimental-strip-types`, the same way the test suite runs TypeScript.
-const { run } = await import(join(root, 'packages/gmail/src/cli/program.ts'));
+// `pathToFileURL`, not the bare path: on Windows an absolute path is `D:\\…`, and ESM rejects it as an unknown
+// URL scheme. This only shows up on Windows, so a dynamic import of a path must always go through a file:// URL.
+const { run } = await import(pathToFileURL(join(root, 'packages/gmail/src/cli/program.ts')).href);
 
 /** Runs `--help` for a command through the real CLI, capturing what a person would see. */
 async function help(argv) {
