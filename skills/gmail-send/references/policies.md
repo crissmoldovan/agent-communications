@@ -31,8 +31,10 @@ content and produced an approval record, and then only:
   filename, type, size and SHA-256 of every attachment's **bytes**;
 - with recipients and subject that match what the draft says, because the send call must pass them
   back and `sameExpectation` compares them;
-- from the same mailbox, and the same Google account: the record stores the account id (`sub`) and a
-  claim that names a different one, or none at all, is refused rather than trusted;
+- from the same mailbox, and the same Google account: the record stores the account id (`sub`), and
+  a claim naming a different one — or naming none at all — is refused rather than trusted. A mailbox
+  imported from a legacy setup has no account id until its first re-consent, so for those the check
+  has nothing to compare and only the inbox id is enforced;
 - under the rate caps (§4);
 - with a line in the audit log naming the approval, the draft, the sent message id and the
   canonical recipients.

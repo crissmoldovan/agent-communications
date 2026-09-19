@@ -370,3 +370,23 @@ test('updating a draft keeps the body and the files that were not restated', asy
   assert.equal(stripped.attachments.length, 0);
   assert.match(stripped.preview, /Never mind\./);
 });
+
+test('an update does not add a second signature to a body it kept', async () => {
+  const { context } = await connected();
+  const draft = await createDraft(context, 'work', {
+    to: ['sam@partner.test'],
+    subject: 'Tuesday',
+    text: 'Tuesday works.',
+  });
+  // The draft was composed with the mailbox signature, so the body kept from it already ends with one. Passing it
+  // back through compose with the signature appended again gave two, and the next update three.
+  const once = (draft.preview.match(/Head of Things/g) ?? []).length;
+  assert.equal(once, 1);
+
+  const retitled = await updateDraft(context, 'work', draft.draftId, { subject: 'Tuesday, then' });
+  assert.equal((retitled.preview.match(/Head of Things/g) ?? []).length, 1, 'still one signature');
+
+  const again = await updateDraft(context, 'work', draft.draftId, { subject: 'Tuesday, finally' });
+  assert.equal((again.preview.match(/Head of Things/g) ?? []).length, 1, 'and still one after a second edit');
+  assert.match(again.preview, /Tuesday works\./, 'with the body intact');
+});

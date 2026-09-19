@@ -272,6 +272,14 @@ function quoteOf(original: RawMessage, mode: 'reply' | 'reply_all' | 'forward'):
   };
 }
 
+/** Removes a trailing block from a body, if it is there. Used to take the signature off before it is re-added. */
+function stripTrailing(text: string, trailing: string | undefined): string {
+  if (!trailing?.trim()) return text;
+  const trimmed = text.replace(/\s+$/, '');
+  const block = trailing.replace(/\s+$/, '');
+  return trimmed.endsWith(block) ? trimmed.slice(0, -block.length).replace(/\s+$/, '') : text;
+}
+
 /** How much of an original is quoted. Long enough for context, short enough not to dominate the message. */
 const QUOTE_MAX_CHARS = 4000;
 
@@ -504,7 +512,11 @@ export async function updateDraft(
   const from = resolved.inbox.email;
 
   const existingParts = readParts(existing.message?.payload);
-  const text = input.text ?? existingParts.plain[0]?.text ?? '';
+  // The body kept from the draft already ends with the signature, because the draft was composed with it. Passing
+  // it back through `composeMessage` with a signature would append a second copy, and the next update a third.
+  const existingText = existingParts.plain[0]?.text ?? '';
+  const keptSignature = await signatureFor(context, alias, resolved.inbox.email);
+  const text = input.text ?? stripTrailing(existingText, keptSignature?.text);
   if (!input.text && !text.trim()) {
     throw new CommsError('USAGE', 'this draft has no body, and none was given', {
       hint: 'Pass `text` with what the message should say.',
@@ -523,7 +535,7 @@ export async function updateDraft(
   } = await attachmentsFor(context, input.attach ?? []);
   const attachments = [...carried.attachments, ...added];
   const described = [...carried.described, ...describedAdded];
-  const signature = input.signature === false ? undefined : await signatureFor(context, alias, from);
+  const signature = input.signature === false ? undefined : keptSignature;
   const inReplyTo = headerValue(headers, 'In-Reply-To');
   const references = (headerValue(headers, 'References') ?? '').split(/\s+/).filter(Boolean);
 

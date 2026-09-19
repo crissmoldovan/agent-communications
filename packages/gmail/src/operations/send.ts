@@ -117,6 +117,33 @@ async function ownAddresses(transport: GmailTransport, inbox: ResolvedInbox): Pr
 }
 
 /**
+ * The domains this mailbox has written to recently.
+ *
+ * One list per prepare, from the last two hundred sent messages. It is the yardstick a lookalike is measured
+ * against, so it has to come from the mailbox's history rather than from the draft under examination.
+ */
+async function correspondentDomains(transport: GmailTransport): Promise<Set<string>> {
+  const domains = new Set<string>();
+  try {
+    const page = await transport.listMessages({ query: 'in:sent', maxResults: 200 });
+    for (const { id } of page.ids.slice(0, 200)) {
+      const message = await transport.getMessageMetadata(id);
+      for (const header of message.payload?.headers ?? []) {
+        if (!/^(to|cc|bcc)$/i.test(header.name ?? '')) continue;
+        for (const entry of (header.value ?? '').split(',')) {
+          const domain = domainOf(canonicalAddress(entry.replace(/^.*<|>.*$/g, '').trim()));
+          if (domain) domains.add(domain);
+        }
+      }
+    }
+  } catch {
+    // A mailbox that will not answer leaves the set empty, which fires no lookalike flags — a quieter preview, not
+    // a wrong one, and every other check still runs.
+  }
+  return domains;
+}
+
+/**
  * Has this mailbox written to this address before?
  *
  * Gmail's `to:` matching is fuzzy — it matches display names and partial addresses — so a hit is confirmed by
@@ -163,7 +190,15 @@ async function studyRecipients(
   const own = await ownAddresses(transport, inbox);
   const internal = new Set(inbox.inbox.internalDomains.map((domain) => domain.toLowerCase()));
   const everyone = [...new Set([...analysis.to, ...analysis.cc, ...analysis.bcc])];
-  const knownDomains = new Set<string>();
+  // The domains this mailbox actually corresponds with, read from Sent rather than assembled from this draft's own
+  // recipients. Built the latter way, a message addressed *only* to a lookalike had nothing to compare against and
+  // the check never fired — which is precisely the message the check exists for.
+  const knownDomains = await correspondentDomains(transport);
+  for (const address of own) {
+    const domain = domainOf(address);
+    if (domain) knownDomains.add(domain);
+  }
+  for (const domain of internal) knownDomains.add(domain);
   const facts: RecipientFacts[] = [];
 
   for (const address of everyone) {
@@ -172,7 +207,6 @@ async function studyRecipients(
     const external = !own.has(canonical) && !internal.has(domain);
     const seen = await context.core.taint.check(canonical);
     const written = own.has(canonical) ? true : await hasWrittenTo(transport, canonical);
-    if (written) knownDomains.add(domain);
     // A domain in the taint store taints only when it is not a public mailbox provider — the store already decides
     // that; here, either kind of sighting counts, because both mean the address reached us through mail we read.
     const tainted = seen.address || seen.domain;
@@ -188,7 +222,7 @@ async function studyRecipients(
   }
 
   for (const fact of facts) {
-    const domain = domainOf(fact.address) ?? '';
+    const domain = domainOf(canonicalAddress(fact.address)) ?? '';
     if (!fact.firstTime) continue;
     for (const known of knownDomains) {
       if (known !== domain && distance(known, domain) <= LOOKALIKE_DISTANCE) {

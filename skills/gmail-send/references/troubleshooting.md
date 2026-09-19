@@ -45,7 +45,7 @@ process exit status plus the same fields under `--json`.
 | `UNEXPECTED` | 1 | Something that was not classified | Report it with the message | Do not retry blindly |
 
 Three codes exist in the registry but a send cannot produce them, so do not branch on them here:
-`DRAFT_CHANGED` and `REPLY_INVALID` belong to the draft operations, and `CURSOR_MISMATCH` to search.
+`REPLY_INVALID` belongs to the draft operations, and `CURSOR_MISMATCH` to search.
 
 ### What the challenge does under `confirm`
 

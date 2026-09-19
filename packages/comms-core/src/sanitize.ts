@@ -759,7 +759,15 @@ function isHiddenElement(element: Element, rules: StylesheetRules): boolean {
 function prune(nodes: ChildNode[], rules: StylesheetRules, report: SanitizeReport): ChildNode[] {
   const kept: ChildNode[] = [];
   for (const node of nodes) {
-    if (isComment(node)) continue;
+    if (isComment(node)) {
+      // A comment is content a reader never sees, and an injection hidden in one used to leave no trace at all:
+      // removed before the counting branch, so `hiddenElements` stayed at zero and the reader was told nothing.
+      if (node.data.trim()) {
+        report.hiddenElements += 1;
+        report.hiddenChars += node.data.trim().length;
+      }
+      continue;
+    }
     if (isText(node)) {
       // Strip before conversion: the converter treats a zero-width space as a word break.
       const stripped = stripInvisible(node.data);
@@ -767,7 +775,17 @@ function prune(nodes: ChildNode[], rules: StylesheetRules, report: SanitizeRepor
       node.data = stripped.text;
     }
     if (isTag(node)) {
-      if (DROP_TAGS.has(node.name)) continue;
+      // `<template>`, `<noscript>`, `<title>` and the rest are never shown, and counted for the same reason a
+      // comment is. A `<style>` block is the exception: its text is a stylesheet, not something anybody was meant
+      // to read, and counting every message's CSS as "hidden content" would make the number meaningless.
+      if (DROP_TAGS.has(node.name)) {
+        const length = node.name === 'style' ? 0 : textLength(node);
+        if (length > 0) {
+          report.hiddenElements += 1;
+          report.hiddenChars += length;
+        }
+        continue;
+      }
       if (isHiddenElement(node, rules)) {
         report.hiddenElements += 1;
         report.hiddenChars += textLength(node);

@@ -815,7 +815,7 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
   |---|---|
   | `APPROVAL_REQUIRED`, `APPROVAL_PENDING`, `APPROVAL_EXPIRED`, `APPROVAL_VOID`, `POLICY_NEVER`, `RATE_CAPPED`, `UNSENDABLE_HTML`, `LOOSENING_REFUSED` | 10 |
   | `USAGE`, `CURSOR_MISMATCH` (bad flags, a cursor from another query, malformed ids) | 64 |
-  | `BAD_DATA`, `DRAFT_CHANGED` (`expectedMessageId` mismatch), `REPLY_INVALID` | 65 |
+  | `BAD_DATA`, `REPLY_INVALID` | 65 |
   | `NOT_FOUND` | 66 |
   | `PROVIDER_UNAVAILABLE`, `SECRET_STORE_UNAVAILABLE` | 69 |
   | `TRANSIENT`, `KEYCHAIN_APPROVAL_PENDING`, `LOCK_TIMEOUT` | 75 |
@@ -864,7 +864,7 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
 | `gmail_attachment_download`, `gmail_export` | local write | destructive:false, openWorld:false |
 | `gmail_draft_create`, `gmail_draft_reply` (mode reply / reply_all / forward), `gmail_draft_update` | mailbox write | destructive:false |
 | `gmail_draft_delete` | mailbox write | destructive |
-| `gmail_modify`, `gmail_label_create` | mailbox write | destructive:false |
+| `gmail_organise`, `gmail_label_create` | mailbox write | destructive:false |
 | `gmail_trash`, `gmail_untrash` | mailbox write | destructive (trash) |
 | `gmail_send_prepare` | prepare | destructive:false |
 | `gmail_draft_send` | **send** | destructive, openWorld, not idempotent, requiresUserInteraction under `confirm` |
@@ -973,7 +973,7 @@ tool verbs, are updated to the new tool names in the same rollout that disconnec
 | `gmail-compose` | new drafts, reply, reply-all, forward, attachments, signatures, choosing the inbox/alias, iterating on the same draft | `gmail_draft_*`, `gmail_sendas_list`, `gmail_contacts_search` |
 | `gmail-send` | the approval protocol under each policy; what `chat` guarantees; readback | `gmail_send_prepare`, `gmail_draft_send`; CLI `approve` |
 | `gmail-contacts` | "what's X's email", "who is this", last interaction, disambiguation | `gmail_contacts_search` |
-| `gmail-organize` | labels, archive, star, read state, trash with dry-run plans and undo | `gmail_modify`, `gmail_label_create`, `gmail_trash` |
+| `gmail-organize` | labels, archive, star, read state, trash with dry-run plans and undo | `gmail_organise`, `gmail_label_create`, `gmail_trash` |
 | `gmail-triage` | cross-inbox digest: Reply needed / Review / FYI / Noise; proposes actions, applies after one batched approval via `gmail-organize` | `gmail_search`, `gmail_message_get` |
 | `gmail-follow-ups` | awaiting-them and awaiting-me, nudge drafts | `gmail_followups` |
 | `gmail-export` | save a thread or message as md/eml/json for sharing or archiving | `gmail_export` |

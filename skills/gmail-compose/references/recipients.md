@@ -175,6 +175,20 @@ Three consequences to say out loud when they apply:
 with it. If the user needs the attachment forwarded, it has to be downloaded and attached — which is a
 different skill and a jail check, not something the reply path does.
 
+### What an update does to the quote
+
+`gmail_draft_update` rebuilds the message from what it is given plus what the draft already had. It has
+no `quote` argument and it does not look at the original message, so:
+
+- **Pass new `text` and the quote is gone.** The draft is rebuilt from your text alone. If the reply is
+  meant to keep the original below it, the new `text` has to contain it, or the revision has to be made
+  as a fresh `gmail_draft_reply`.
+- **Omit `text` and the old body is reused verbatim** — quote and signature included — and the
+  mailbox's signature is then appended to it a second time, because the rebuild adds a signature to
+  whatever text it is handed. Check the preview after an update that only changed a recipient.
+
+Recipients, subject and attachments survive an update untouched when they are not restated.
+
 ## What the preview proves
 
 The draft result carries the computed `to`, `cc` and `bcc` as arrays, and a rendered `preview` that
@@ -201,9 +215,13 @@ decision; one that is summarised instead of shown is yours.
 `quoteOf`, raises the warnings and writes the draft. `ownAddresses` in
 `packages/gmail/src/operations/analyse.ts` is the list of addresses treated as the user's own.
 
-**One correction to the procedure that points here:** the SKILL text says a forward "carries only the
+**Two corrections to the procedure that points here.** The SKILL text says a forward "carries only the
 body you wrote — not the original text". That was true before quoting existed. It quotes the original's
-sanitised text by default now, and a forward sent with `quote: false` is the case that carries nothing.
-The half that still holds is attachments: those never travel.
+sanitised text by default now, and a forward sent with `quote: false` is the case that carries nothing;
+the half that still holds is attachments, which never travel. The SKILL text also says `text` is
+required on every update and that an update without `attach` comes back with nothing attached. Neither
+is true any more: `text` is optional, and attachments are carried over by their bytes unless `attach`
+replaces them. Restating them does no harm, so the procedure is safe to follow — it is just no longer
+the reason.
 
 See also `references/profile.md` for how the message itself should read.

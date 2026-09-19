@@ -178,10 +178,26 @@ function matchesQuery(
 }
 
 /** Undoes the quoted-printable encoding MailComposer applies, so the body reads back as it was written. */
+/**
+ * Decodes quoted-printable into a string, reassembling the **bytes** before decoding them as UTF-8.
+ *
+ * Turning each `=XX` straight into a character code decodes UTF-8 as latin-1, so an em dash came back as `â` and
+ * every test involving a non-ASCII signature, subject or name compared two different strings without saying so.
+ */
 function decodeQuotedPrintable(text: string): string {
-  return text
-    .replace(/=\r?\n/g, '')
-    .replace(/=([0-9A-F]{2})/g, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+  const unfolded = text.replace(/=\r?\n/g, '');
+  const bytes: number[] = [];
+  for (let index = 0; index < unfolded.length; index++) {
+    const char = unfolded[index] ?? '';
+    const hex = char === '=' ? unfolded.slice(index + 1, index + 3) : '';
+    if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
+      bytes.push(Number.parseInt(hex, 16));
+      index += 2;
+      continue;
+    }
+    for (const byte of Buffer.from(char, 'utf8')) bytes.push(byte);
+  }
+  return Buffer.from(bytes).toString('utf8');
 }
 
 /** Parses the raw message a client saved into the shape Gmail returns when the draft is read back. */

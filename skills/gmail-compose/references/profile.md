@@ -105,7 +105,7 @@ professional" gives a writer nothing to check against.
 - Open with the first name, no greeting word: "Sam — " not "Hi Sam,".
 - Sign off with "Criss" alone. No "Best", no "Regards", no job title.
 - Two or three short paragraphs. If it needs more, it needs a call, and say so.
-- British spelling. "Organise", "recognise", "whilst" never.
+- British spelling throughout: "organise", "recognise". Never "whilst" or "amongst".
 - Never "just", "quickly", "circle back", "reach out", "touch base", "no worries".
 - Dates in full: "Thursday 24 September", not "24/09" and not "next Thursday".
 - If I am saying no, say it in the first line and give one reason. No sandwich.

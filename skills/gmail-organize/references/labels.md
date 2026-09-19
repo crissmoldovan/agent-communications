@@ -8,8 +8,9 @@ Open it when a label name was refused, when a resolved id looks unfamiliar, or b
 
 ## The resolution rule
 
-`resolveLabelIds` fetches the mailbox's label list once per call and tries three things per name, in order.
-The first that matches wins.
+Resolution fetches the mailbox's label list and tries three things per name, in order. The first that matches
+wins. An empty list of names is resolved without any call at all, so a change that only sets flags — archive,
+star, mark read — never fetches labels.
 
 | Order | Test | Matches |
 |---|---|---|

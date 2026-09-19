@@ -87,8 +87,8 @@ The HTML is parsed, pruned and converted to text. What it removes, in the order 
 
 "Hidden by style" covers what a mail client would genuinely not show: `display:none`,
 `visibility:hidden`, `mso-hide:all`, opacity at or below 0.05, a font size of a pixel or less, a
-transparent or zero-alpha text colour, a zero-sized box with `overflow` clipped on the matching axis, a
-zeroed `clip` or `clip-path`, a `text-indent` or margin or absolute offset far enough off-screen, and a
+transparent or zero-alpha text colour, a box of a pixel or less with `overflow` clipped on the matching
+axis, a zeroed `clip` or `clip-path`, a `text-indent`, margin or absolute offset far enough off-screen, and a
 `transform` that scales to nothing or translates off-screen. Stylesheet rules are read out of `<style>`
 blocks, including inside `@media`, `@supports`, `@layer`, `@container` and `@scope`; a print-only
 `@media` block is skipped, because what it hides is still visible on screen, which is where mail is

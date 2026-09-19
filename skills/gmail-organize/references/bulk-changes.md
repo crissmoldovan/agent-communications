@@ -45,8 +45,8 @@ The fields that matter in that result:
 
 Two practical notes. The expansion is what produces the number worth reporting: twenty threads from a chatty
 list can be three hundred messages, including the user's own replies, which they never pictured as "mail from
-this sender". And the dry run is not free — it costs one label listing plus one thread fetch per thread id —
-so dry-running forty threads is about forty-one calls. That is the right price; it is just not zero, and it is
+this sender". And the dry run is not free — one thread fetch per thread id, plus a label listing for each of
+the add and remove lists that is not empty — so dry-running forty threads is about forty-one calls. That is the right price; it is just not zero, and it is
 a reason to dry-run the selection you mean rather than a wider one "to see".
 
 `gmail_trash` has its own dry run. It expands threads the same way and returns `messages` as the **list of

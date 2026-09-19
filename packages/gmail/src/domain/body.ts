@@ -131,6 +131,7 @@ function mergeReports(primary: SanitizeReport, secondary: SanitizeReport): Sanit
     hiddenChars: primary.hiddenChars + secondary.hiddenChars,
     sameColorElements: primary.sameColorElements + secondary.sameColorElements,
     invisibleCharsRemoved: primary.invisibleCharsRemoved + secondary.invisibleCharsRemoved,
+    unreadableHidingRules: primary.unreadableHidingRules + secondary.unreadableHidingRules,
     links: [...primary.links, ...secondary.links],
     imagesNotLoaded: primary.imagesNotLoaded + secondary.imagesNotLoaded,
   };

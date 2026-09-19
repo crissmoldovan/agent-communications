@@ -35,11 +35,11 @@ Every string a sender controls — body, subject, snippet, display name, filenam
 an attachment — reaches a model inside an envelope:
 
 ```text
-<untrusted-email-content boundary="hQ7c1A" field="body" inbox="work" id="18f2c9a1b4e">
+<untrusted-email-content boundary="hQ7c1Ax9" field="body" inbox="work" id="18f2c9a1b4e">
 Subject: Invoice 4471
 
 Please find the invoice attached…
-</untrusted-email-content boundary="hQ7c1A">
+</untrusted-email-content boundary="hQ7c1Ax9">
 ```
 
 Four things about it are deliberate.
@@ -229,7 +229,7 @@ not one from this message. Nothing here is labelled, replied to or forwarded.
 
 ```text
 invoice.pdf.exe        riskFlags: executable, double-extension
-statement‮fdp.exe      riskFlags: bidi-filename
+statement<U+202E>fdp.exe   riskFlags: bidi-filename
 ```
 
 **Correct response.** Name the file, its type, its size and its flags, and say that nothing opened

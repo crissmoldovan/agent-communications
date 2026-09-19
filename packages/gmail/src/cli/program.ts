@@ -255,7 +255,11 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     command
       .option('--email <address>', 'the address this must turn out to be; refused if it is not')
       .addOption(new Option('--tier <tier>', 'how much access to ask for').choices([...TIERS]))
+      // Both forms, because `grantHint` tells a user to run `--contacts` when a contacts search is refused, and
+      // Commander does not create the positive form from `--no-contacts`. A hint naming a flag that does not exist
+      // is worse than no hint: the user runs it, Commander rejects it, and the real fix stays hidden.
       .option('--no-contacts', 'do not ask for contacts access')
+      .option('--contacts', 'ask for contacts access (the default)')
       .option('--client <name>', 'sign in through this OAuth client')
       .option('--port <number>', 'use this loopback port for the redirect', (value) => Number.parseInt(value, 10))
       .option('--no-browser', 'do not open the link, just print it')
