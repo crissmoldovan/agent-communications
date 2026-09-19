@@ -168,15 +168,44 @@ try {
 // `pnpm --filter` exits 0 when it matches nothing, so a renamed package would publish fewer than this list claims
 // and still finish green. Trust the registry, not the loop's exit code.
 console.log('\nConfirming what reached the registry:');
-let missing = 0;
-for (const name of PACKAGES) {
-  const found = quiet(() => run('npm', ['view', `${SCOPE}/${name}@${version}`, 'version']));
-  const ok = found === version;
-  if (!ok) missing += 1;
-  console.log(`  ${ok ? '✓' : '✗'} ${SCOPE}/${name}@${version}${ok ? '' : ` — not there (got ${found ?? 'nothing'})`}`);
+
+/**
+ * Asks whether a version is really published, and asks the right endpoint.
+ *
+ * `npm view` reads the public packument, which is CDN-cached and can lag minutes behind a successful publish —
+ * badly so just after npm maintenance. The first version of this check used it, ran immediately, and announced
+ * that a publish which had in fact succeeded had "not arrived". That is the worst way to be wrong: it invites
+ * someone to burn the version number and publish 0.1.1 over a perfectly good 0.1.0.
+ *
+ * `npm dist-tag ls` goes to the authenticated registry path instead and was accurate within seconds of the same
+ * publish. It is tried first; the packument is a fallback, and the whole thing retries before giving up.
+ */
+function publishedVersion(name) {
+  const tags = quiet(() => run('npm', ['dist-tag', 'ls', `${SCOPE}/${name}`]));
+  const tagged = tags?.split('\n').find((line) => line.startsWith('latest:'));
+  if (tagged) return tagged.slice('latest:'.length).trim();
+  return quiet(() => run('npm', ['view', `${SCOPE}/${name}@${version}`, 'version']));
 }
-if (missing > 0) {
-  console.error(`\n${missing} package(s) did not arrive. The publish step reported success, which is the bug.`);
+
+const pending = new Set(PACKAGES);
+for (let attempt = 1; attempt <= 10 && pending.size > 0; attempt += 1) {
+  for (const name of [...pending]) {
+    if (publishedVersion(name) === version) {
+      pending.delete(name);
+      console.log(`  ✓ ${SCOPE}/${name}@${version}`);
+    }
+  }
+  if (pending.size > 0 && attempt < 10) {
+    console.log(`  … waiting for ${[...pending].join(', ')} (attempt ${attempt})`);
+    execFileSync(process.execPath, ['-e', 'setTimeout(()=>{},6000)']);
+  }
+}
+
+if (pending.size > 0) {
+  console.error(`\n${pending.size} package(s) are not visible yet: ${[...pending].join(', ')}.`);
+  console.error('That may still be the read path lagging rather than a failed publish. Before doing anything');
+  console.error(`about it, check \`npm dist-tag ls ${SCOPE}/<name>\` — if it says ${version}, the publish landed`);
+  console.error('and there is nothing to fix. Do NOT bump the version on the strength of this message alone.\n');
   process.exit(1);
 }
 

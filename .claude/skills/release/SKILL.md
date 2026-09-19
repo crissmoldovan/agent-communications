@@ -67,6 +67,12 @@ worse trade than the missing attestation.
    arrived rather than trusting the publish command's exit code, because `pnpm --filter` exits 0 when it matches
    nothing — a renamed package would publish fewer than the list claims and still look green.
 
+   **If it says a package "is not visible yet", do not bump the version.** `npm view` reads a CDN-cached document
+   that can lag minutes behind a successful publish, badly so just after npm maintenance. This happened on the
+   first real release: all three published, and the check announced that none had arrived. Run
+   `npm dist-tag ls @cloudpixel/<name>` — it goes to the authenticated path and was accurate within seconds. If it
+   reports the version, the publish landed and there is nothing to fix.
+
 8. **Tag afterwards, not before.** `git tag vX.Y.Z && git push origin vX.Y.Z`. The tag records what was published;
    it does not cause it. Tagging first means a tag that may name a release that never happened.
    **Complete when:** the tag is on the server.
