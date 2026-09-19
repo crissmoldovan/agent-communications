@@ -1,16 +1,30 @@
-name: Release checks
+name: Release
 
-# **This workflow does not publish.** Releases are run from a person's machine by `scripts/release.mjs`, so that the
-# irreversible step happens where someone can watch it rather than when a tag appears. See .claude/skills/release/.
+# Pushing a `v*` tag verifies the tagged commit on every platform the packages claim to support, then waits for a
+# human to approve the publish in GitHub before anything is sent.
 #
-# What it does instead is prove a tagged commit is green on every platform the packages claim to support, so the tag
-# carries a public record rather than only somebody's word. Nothing here needs a credential, and nothing here should
-# be given one: an npm token in the secrets of a public repository is a worse trade than the provenance a local
-# release gives up.
+# **No credential lives here.** npm trusted publishing mints a short-lived one from this workflow's own identity, so
+# there is no token to leak and none to rotate. Do not add one: a long-lived npm token in a public repository is a
+# standing risk, and it would also remove the only reason this is allowed to publish at all.
+#
+# It could not always work this way. npm will not configure a trusted publisher for a package that does not exist,
+# so the first release of each package had to happen from a maintainer's machine. That is done; from 0.1.1 the
+# registry knows these three and this workflow is the publisher it trusts.
+#
+# What stops this from publishing on its own: the `release` environment requires a named reviewer, and the job sits
+# waiting until that person approves it. Pushing a tag is not a release — approving one is. That matters here more
+# than it would elsewhere, because an agent can push a tag, and the package this publishes is the one promising an
+# agent cannot act alone.
+
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Verify and pack, but publish nothing'
+        type: boolean
+        default: true
 
 permissions: {}
 
@@ -36,3 +50,90 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
+
+  publish:
+    name: publish to npm
+    needs: verify
+    if: ${{ inputs.dry-run != true }}
+    # The human gate. Configured with a required reviewer, so this job waits rather than runs.
+    environment: release
+    # Trusted publishing needs a GitHub-hosted runner: a self-hosted one cannot issue an OIDC token npm accepts.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # What authenticates the publish, on its own: no registry credential is set anywhere in this workflow, and
+      # none should be added. A grep for one should find nothing, which is why this comment does not name it.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.18.0
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: the tag must be the version the repository declares
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          declared=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$declared" ]; then
+            echo "::error::tag v$tag does not match package.json $declared. Run \`pnpm sync:versions\` and commit." >&2
+            exit 1
+          fi
+          node scripts/sync-versions.mjs --check
+
+      # Provenance is attested against a public source repository; npm refuses it for a private one with a 422 that
+      # arrives only after the tarball has been uploaded. Cheaper to find out here.
+      - name: provenance needs a public repository
+        if: ${{ github.event.repository.private }}
+        run: |
+          echo "::error::This repository is private, so npm will reject the provenance attestation." >&2
+          exit 1
+
+      - run: pnpm build
+      - run: pnpm verify:packages
+
+      # In dependency order: a consumer installing gmail must find the exact core it pins already on the registry.
+      - name: publish
+        run: |
+          set -euo pipefail
+          for package in core gmail gmail-mcp; do
+            echo "::group::@agentcomms/$package"
+            pnpm --filter "@agentcomms/$package" publish --access public --no-git-checks --provenance
+            echo "::endgroup::"
+          done
+
+      # `pnpm --filter` exits 0 when it matches nothing, so a renamed package would publish fewer than this list
+      # claims and still finish green. Ask the registry. It is read through a CDN that lags a successful publish by
+      # minutes, so this retries rather than concluding from one empty answer — a check that gave up immediately
+      # once reported a release that had in fact landed as a total failure.
+      - name: confirm what reached the registry
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          missing="core gmail gmail-mcp"
+          for attempt in $(seq 1 20); do
+            still=""
+            for package in $missing; do
+              found=$(npm view "@agentcomms/$package@$version" version 2>/dev/null || true)
+              if [ "$found" = "$version" ]; then
+                echo "  ✓ @agentcomms/$package@$version"
+              else
+                still="$still $package"
+              fi
+            done
+            missing=$(echo "$still" | xargs || true)
+            [ -z "$missing" ] && break
+            echo "  … not visible yet:$missing (attempt $attempt)"
+            sleep 15
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::not visible after retrying:$missing — check \`npm dist-tag ls\` before assuming it failed" >&2
+            exit 1
+          fi
+          echo "All three confirmed at $version."

@@ -6,27 +6,40 @@ rediscover it.
 The mechanism is `scripts/release.mjs`; the working instructions are `.claude/skills/release/SKILL.md`. This page is
 the why.
 
-## Releases are run from a person's machine
+## Releases run in CI, and a person approves them
 
-Not from CI. Pushing a tag runs the checks and nothing else: `.github/workflows/release.yml` has no publish step and
-no credential, and should not be given one.
+Pushing a `v*` tag verifies the tagged commit on six platform legs, then **waits**. The `release` environment
+requires a named reviewer, so the publish job sits there until somebody approves it in GitHub. Pushing a tag is not
+a release; approving one is.
 
-The reason is that publishing cannot be undone. npm keeps a version for ever — the 72-hour unpublish window is not a
-fix once somebody has installed it, and the name and version are burned either way. A step like that belongs where a
-person can watch it happen, not in something that fires when a tag appears.
+That distinction carries weight here. An agent can push a tag. The package being published is the one promising
+that an agent cannot act without the person, and it would be a poor advertisement if the thing making that promise
+could ship itself.
 
-**What this costs: provenance.** npm can only attest a package published by a supported CI runner, so versions
-released this way carry no attestation. Nobody installing can cryptographically verify which commit and which
-workflow built the tarball; they have the repository and the maintainer's word. That is a real loss for a package
-whose central claim is that an agent cannot send mail without approval, and it is given up knowingly rather than
-overlooked.
+**No credential exists in this repository.** npm trusted publishing mints a short-lived one from the workflow's own
+identity, so there is nothing to leak and nothing to rotate. **Do not replace it with a token.** A long-lived npm
+token in a public repository is a standing risk nobody rotates, and it would also remove the reason CI is allowed
+to publish at all.
 
-The tempting fix — put an npm token in repository secrets and publish from Actions — is a worse trade. A long-lived
-credential in a public repository is a standing risk that nobody rotates, and it buys an attestation *about*
-supply-chain integrity at the cost of a real hole *in* it. If this is ever revisited, the route is npm **trusted
-publishing**, which mints a short-lived credential from the workflow's own identity and stores no secret at all. It
-has one catch worth writing down, because learning it cost a wasted release attempt: npm will not configure a
-trusted publisher for a package that does not exist yet, so it can never perform a package's *first* publish.
+### Why this was not always so
+
+The first release of each package happened from a maintainer's laptop, because npm will not configure a trusted
+publisher for a package that does not exist — so no CI workflow could have performed a first publish. That
+chicken-and-egg is spent: the registry now knows all three, each names this workflow as its trusted publisher, and
+from 0.1.1 onward this is the publisher.
+
+The local path still exists in `scripts/release.mjs` and still works. It is the fallback, for the day GitHub is
+down or a release cannot wait. What it gives up is provenance: npm attests only what a supported CI runner
+published, so anything released from a laptop carries no attestation, and 0.1.0 does not.
+
+### What has to be true
+
+| | |
+|---|---|
+| The repository is public | npm refuses a provenance attestation for a private source repository, with a 422 that arrives only after the tarball is uploaded |
+| A GitHub-hosted runner | a self-hosted one cannot issue an OIDC token npm accepts |
+| Each package names this workflow | npmjs.com → the package → Settings → Trusted publishing: repository, workflow file, environment. npm does not validate those strings when you save them, so read them back |
+| `id-token: write` on the publish job | without it there is no OIDC token to exchange |
 
 ## The order, and why it is that order
 
@@ -39,23 +52,24 @@ pnpm licenses               # third-party notices that ship inside the bundles
 
 # 3. Commit and push. What is published must be what anyone else can read.
 
-# 4. Rehearse, then publish.
+# 4. Rehearse locally. Finding a problem here costs a minute; finding it in CI costs ten.
 pnpm release                # every check, then stops before sending anything
-npm login                   # a credential action: a person does this, never a script
-pnpm release:publish
 
-# 5. Tag AFTER the publish succeeded.
+# 5. Tag. This starts the workflow; it does not publish.
 git tag vX.Y.Z && git push origin vX.Y.Z
+
+# 6. Approve the waiting job in GitHub. That is the publish.
 ```
 
-**The tag comes last.** A tag is a claim that a version was released. Tagging first produces a tag that may name a
-release which never happened — and since the checks workflow keys on tags, it would advertise a green build for
-something nobody can install.
+**The tag now comes before the publish, because it is what starts it** — the reverse of the local flow, where the
+tag recorded something already done. The claim a tag makes is still only made true by the approval that follows, so
+a tag whose job was never approved names a release that did not happen. If that occurs, delete the tag rather than
+leaving it to imply otherwise.
 
-**The packages publish in dependency order** — `comms-core`, then `gmail`, then `gmail-mcp` — because a consumer
-installing `@agentcomms/gmail` must find the exact `comms-core` it pins already on the registry.
+**The packages publish in dependency order** — `core`, then `gmail`, then `gmail-mcp` — because a consumer
+installing `@agentcomms/gmail` must find the exact `core` it pins already on the registry.
 
-**`pnpm verify` runs build before typecheck, deliberately.** The `gmail` package typechecks against `comms-core`'s
+**`pnpm verify` runs build before typecheck, deliberately.** The `gmail` package typechecks against `core`'s
 emitted declarations. For a long time this ran the other way round, which passed on every machine that already had a
 `dist` lying about and failed on a clean checkout with 235 `Cannot find module` errors. If you reorder it, you will
 reintroduce that.
