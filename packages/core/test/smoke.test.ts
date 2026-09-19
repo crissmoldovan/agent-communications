@@ -3,5 +3,5 @@ import { test } from 'node:test';
 import { PACKAGE_NAME } from '../src/index.ts';
 
 test('package name', () => {
-  assert.equal(PACKAGE_NAME, '@cloudpixel/comms-core');
+  assert.equal(PACKAGE_NAME, '@agent-communications/core');
 });

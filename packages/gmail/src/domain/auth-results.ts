@@ -1,4 +1,4 @@
-import { parseAddressList } from '@cloudpixel/comms-core';
+import { parseAddressList } from '@agent-communications/core';
 import { headerValues } from './mime.ts';
 
 /**

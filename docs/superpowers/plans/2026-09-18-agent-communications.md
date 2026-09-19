@@ -3,8 +3,8 @@
 - **Goal:** ship v0.1.0 of Gmail for coding agents — twelve skills, the `agent-gmail` CLI and an MCP server over one
   core — with sending gated by approval, as specified in
   [the design](../specs/2026-09-18-agent-communications-design.md).
-- **Architecture:** `@cloudpixel/comms-core` (provider-neutral: config, secrets, approvals, envelopes, jails) →
-  `@cloudpixel/gmail` (Gmail provider, operations, CLI, MCP server factory) → `@cloudpixel/gmail-mcp` (the server as
+- **Architecture:** `@agent-communications/core` (provider-neutral: config, secrets, approvals, envelopes, jails) →
+  `@agent-communications/gmail` (Gmail provider, operations, CLI, MCP server factory) → `@agent-communications/gmail-mcp` (the server as
   its own package). CLI and MCP are thin adapters over one `operations/` layer.
 - **Tech stack:** TypeScript 7, ESM, Node ≥ 22.12, pnpm 11 workspaces, tsdown, Biome, `node:test`;
   `@googleapis/gmail` 22, `@googleapis/people` 12, `google-auth-library` 11, `@modelcontextprotocol/server` 2.0,
@@ -50,7 +50,7 @@ Still to do before the PR:
 
 ## Phase 2 — auth, inbox lifecycle, surfaces (`feat/gmail-auth`)
 
-- [x] `@cloudpixel/gmail` package skeleton (tsdown: bundled `cli.mjs`, library `index.mjs`).
+- [x] `@agent-communications/gmail` package skeleton (tsdown: bundled `cli.mjs`, library `index.mjs`).
 - [x] Local fake Google server for tests (consent, token, revoke, Gmail profile/labels/sendAs), used through
       `AGENT_COMMS_GOOGLE_ROOT_URL` so the real bundled Google libraries are exercised.
 - [x] Transport over `@googleapis/gmail`/`people` with the retry layer (§7.11) and `AGENT_COMMS_GOOGLE_ROOT_URL`
@@ -63,7 +63,7 @@ Still to do before the PR:
 - [x] MCP server skeleton on SDK v2: `gmail_inboxes_list`, `gmail_whoami`, `gmail_doctor`; per-call config re-check;
       tool list independent of the inboxes present; structuredContent mirrored in one text block.
 - [x] `mcp install --client …` (managed, npx and local launchers; proves the server starts),
-      `@cloudpixel/gmail-mcp`, packed-tarball consumer checks for both.
+      `@agent-communications/gmail-mcp`, packed-tarball consumer checks for both.
 - [ ] Elicitation round trip with the SDK v2 client (`gmail_confirm_probe` + `confirm-clients`) — moved to P5 with
       the rest of the `confirm` channel, which is where the allowlist it feeds is used.
 - [ ] Handshake checked against Claude Code and Codex themselves (needs the author's machine).
@@ -185,7 +185,7 @@ which were applied.
 | `multi-process-state` | mcp-untrusted | P2/P3 | Compute caps at execute time from the audit log or a locked counter file. Read taint from the state file at prepare and execute, append under a lock, and move approvals t… |
 | `all-reserved-alias` | mcp-untrusted | P2/P3 | Reserve `all`, and any other keywords, in alias validation; `inbox add all` and `inbox rename x all` exit 64.… |
 | `unscoped-bin-squat` | packaging-oss | P2/P7 | (1) Before the flip to public in P6, publish placeholder packages for the unscoped names `agent-gmail`, `agentcomms` and `agent-gmail-mcp`, next to the 0.0.0 stubs. Each … |
-| `main-pins-unpublished-version` | packaging-oss | P2/P7 | Publish before the pins reach `main`. Tag and publish from the release branch, and fast-forward `main` only after `npm view @cloudpixel/gmail-mcp@X.Y.Z version` succeeds … |
+| `main-pins-unpublished-version` | packaging-oss | P2/P7 | Publish before the pins reach `main`. Tag and publish from the release branch, and fast-forward `main` only after `npm view @agent-communications/gmail-mcp@X.Y.Z version` succeeds … |
 | `library-entry-dependency-contract` | packaging-oss | P2/P7 | For v0.1, make the library entry minimal and self-typed. It exports only `createGmailMcpServer(options): { connectStdio(): Promise<void>; close(): Promise<void> }`, and n… |
 | `plugin-launcher-portability` | packaging-oss | P2/P7 | Move the launcher to `scripts/agent-gmail-launch`, plus `scripts/agent-gmail-launch.cmd` with CRLF endings set in `.gitattributes`. Declare it as `"command": "sh", "args"… |
 | `client-env-strips-config-dir` | packaging-oss | P2/P7 | `mcp install` always writes the resolved absolute config dir into the client entry, as `env.AGENT_COMMS_CONFIG_DIR` or a `--config-dir` arg, for every client. For the sta… |

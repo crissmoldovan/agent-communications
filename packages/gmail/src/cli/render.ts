@@ -1,4 +1,4 @@
-import { paint } from '@cloudpixel/comms-core';
+import { paint } from '@agent-communications/core';
 import type { InstallResult } from '../mcp/install.ts';
 import type { LabelSummary, SendAsSummary } from '../operations/analyse.ts';
 import type { DownloadResult, FindAttachmentsResult } from '../operations/attachments.ts';

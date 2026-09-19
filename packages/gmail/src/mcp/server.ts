@@ -1,4 +1,4 @@
-import { CommsError, stricterPolicy, toCommsError } from '@cloudpixel/comms-core';
+import { CommsError, stricterPolicy, toCommsError } from '@agent-communications/core';
 import { acceptedContent, inputRequired, inputResponse, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { GmailContext, type GmailContextOptions } from '../context.ts';

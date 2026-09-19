@@ -1,4 +1,4 @@
-import { canonicalAddress } from '@cloudpixel/comms-core';
+import { canonicalAddress } from '@agent-communications/core';
 import type { ReadMessageResult } from '../operations/read.ts';
 
 /**

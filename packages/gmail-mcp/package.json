@@ -1,5 +1,5 @@
 {
-  "name": "@cloudpixel/gmail-mcp",
+  "name": "@agent-communications/gmail-mcp",
   "version": "0.1.0",
   "description": "The Gmail MCP server for coding agents: search, read, analyse and draft across inboxes, with sending gated by approval.",
   "type": "module",
@@ -39,7 +39,7 @@
     "test": "node --experimental-strip-types --test \"test/**/*.test.ts\""
   },
   "dependencies": {
-    "@cloudpixel/gmail": "workspace:*"
+    "@agent-communications/gmail": "workspace:*"
   },
   "optionalDependencies": {
     "@napi-rs/keyring": "2.1.0"

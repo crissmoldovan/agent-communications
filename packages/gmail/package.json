@@ -1,5 +1,5 @@
 {
-  "name": "@cloudpixel/gmail",
+  "name": "@agent-communications/gmail",
   "version": "0.1.0",
   "description": "Gmail for coding agents: the agent-gmail CLI, an MCP server and a library — search, read, analyse and draft across many inboxes, with sending gated by approval.",
   "type": "module",
@@ -42,7 +42,7 @@
     "@napi-rs/keyring": "2.1.0"
   },
   "devDependencies": {
-    "@cloudpixel/comms-core": "workspace:*",
+    "@agent-communications/core": "workspace:*",
     "@googleapis/gmail": "^22.0.0",
     "@googleapis/people": "^12.0.0",
     "@modelcontextprotocol/client": "2.0.0",

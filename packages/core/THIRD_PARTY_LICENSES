@@ -1,4 +1,4 @@
-Third-party licences bundled into @cloudpixel/comms-core
+Third-party licences bundled into @agent-communications/core
 
 This package is published as a bundle: the code below is compiled into its published files rather than
 installed beside them, so these notices travel here instead of in node_modules. They are reproduced in

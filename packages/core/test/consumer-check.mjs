@@ -10,7 +10,7 @@ import {
   sanitizeHtmlToText,
   VERSION,
   wrapUntrusted,
-} from '@cloudpixel/comms-core';
+} from '@agent-communications/core';
 
 assert.match(VERSION, /^\d+\.\d+\.\d+/);
 assert.equal(emptyConfig().defaults.sendPolicy, 'chat');
@@ -40,4 +40,4 @@ assert.equal(run('--version').trim(), VERSION);
 const paths = JSON.parse(run('paths', '--json'));
 assert.equal(paths.ok, true);
 assert.equal(paths.data.configDir, process.env.AGENT_COMMS_CONFIG_DIR);
-console.log('comms-core consumer check: imports, sanitiser, digest, core wiring and the agentcomms bin OK');
+console.log('core consumer check: imports, sanitiser, digest, core wiring and the agentcomms bin OK');

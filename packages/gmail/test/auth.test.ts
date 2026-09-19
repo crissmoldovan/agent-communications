@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { type ClientConfig, CommsError } from '@cloudpixel/comms-core';
+import { type ClientConfig, CommsError } from '@agent-communications/core';
 import { GOOGLE_ENDPOINTS, isLoopbackHost, resolveEndpoints } from '../src/auth/endpoints.ts';
 import { buildAuthUrl, exchangeCode, newPkce, newState, parseClientJson, revokeToken } from '../src/auth/oauth.ts';
 import { capabilitiesOf, grantHint, parseGrantedScopes, SCOPES, scopesFor, tierOf } from '../src/auth/scopes.ts';

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { CommsError } from '@cloudpixel/comms-core';
+import { CommsError } from '@agent-communications/core';
 import type { GoogleEndpoints } from './endpoints.ts';
 import { parseGrantedScopes } from './scopes.ts';
 

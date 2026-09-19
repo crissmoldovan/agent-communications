@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { CommsError } from '@cloudpixel/comms-core';
+import { CommsError } from '@agent-communications/core';
 import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { GmailContext } from '../src/context.ts';

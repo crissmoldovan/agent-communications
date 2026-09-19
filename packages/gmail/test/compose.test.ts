@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CommsError } from '@cloudpixel/comms-core';
+import { CommsError } from '@agent-communications/core';
 import { composeMessage, formatAddress, planReply, textToHtml } from '../src/domain/compose.ts';
 
 const OWN = ['jo@example.test', 'jo.alias@example.test'];

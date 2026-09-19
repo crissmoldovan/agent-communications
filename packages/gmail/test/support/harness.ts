@@ -9,7 +9,7 @@ import {
   type InboxConfig,
   newInboxId,
   openCore,
-} from '@cloudpixel/comms-core';
+} from '@agent-communications/core';
 import type { GoogleEndpoints } from '../../src/auth/endpoints.ts';
 import { resolveEndpoints } from '../../src/auth/endpoints.ts';
 import { buildAuthUrl, exchangeCode, newPkce } from '../../src/auth/oauth.ts';

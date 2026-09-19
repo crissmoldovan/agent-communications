@@ -1,4 +1,4 @@
-# @cloudpixel/gmail
+# @agent-communications/gmail
 
 Gmail for coding agents: search, read, analyse and draft across several mailboxes — with **sending gated by an
 approval the user gives at that moment**.
@@ -18,7 +18,7 @@ reaches Gmail's send endpoints, and it refuses without an approval that matches 
 ## Install
 
 ```sh
-npm install -g @cloudpixel/gmail    # or run it with npx @cloudpixel/gmail <command>
+npm install -g @agent-communications/gmail    # or run it with npx @agent-communications/gmail <command>
 ```
 
 Node 22.12 or newer. Nothing else: the command ships as a single bundle.
@@ -77,7 +77,7 @@ agent-gmail mcp install --client claude-code
 Or embed it:
 
 ```js
-import { createGmailMcpServer } from '@cloudpixel/gmail';
+import { createGmailMcpServer } from '@agent-communications/gmail';
 
 const server = await createGmailMcpServer({ inbox: 'work' });
 await server.connectStdio();

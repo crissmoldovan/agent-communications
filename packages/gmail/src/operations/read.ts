@@ -8,7 +8,7 @@ import {
   safeFilename,
   TaintCollector,
   wrapUntrusted,
-} from '@cloudpixel/comms-core';
+} from '@agent-communications/core';
 import type { GmailContext } from '../context.ts';
 import { type AuthResults, readAuthResults, readSenderWarnings, type SenderWarnings } from '../domain/auth-results.ts';
 import { type BodyOptions, buildBody, DEFAULT_MAX_CHARS, type MessageBody } from '../domain/body.ts';
@@ -192,10 +192,8 @@ export function buildMessageResult(
     auth: readAuthResults(headers, headerValue(headers, 'From')),
     sender: readSenderWarnings(headerValue(headers, 'From'), headerValue(headers, 'Reply-To')),
     attachments: parts.attachments.map((part) => {
-      // Flagged on the name the file is actually written under, not the one the sender sent. `invoice.exe ` is
-      // stripped to `invoice.exe` on the way to disk, and the `$`-anchored extension checks did not match the
-      // trailing space — so the executable was written and the flag was not raised.
-      const safe = safeFilename(part.filename ?? '');
+      // Risk is judged by `attachmentRisks` itself, from the raw name: it needs both the written-to-disk form and the
+      // untouched header, and deciding that in one place is what stopped each surface flagging the same file differently.
       return {
         partId: part.partId,
         attachmentId: part.attachmentId,

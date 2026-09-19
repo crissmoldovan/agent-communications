@@ -1,4 +1,10 @@
-import { type ClientConfig, CommsError, type Core, type InboxConfig, type SecretStore } from '@cloudpixel/comms-core';
+import {
+  type ClientConfig,
+  CommsError,
+  type Core,
+  type InboxConfig,
+  type SecretStore,
+} from '@agent-communications/core';
 import type { GoogleEndpoints } from './endpoints.ts';
 import { oauthError } from './oauth.ts';
 import { parseGrantedScopes } from './scopes.ts';

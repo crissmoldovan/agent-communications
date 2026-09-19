@@ -161,7 +161,7 @@ the user pick. That is cheaper than a message that reads like neither of them.
 
 ## Where this lives in the code
 
-`packages/comms-core/src/compose-profile.ts` holds the layer order, the file names, the built-in
+`packages/core/src/compose-profile.ts` holds the layer order, the file names, the built-in
 default and the joining; `profileFor` in `packages/gmail/src/operations/drafts.ts` is what calls it,
 with the platform fixed to `gmail` and the inbox set to the alias being drafted in.
 

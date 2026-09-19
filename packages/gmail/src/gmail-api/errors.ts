@@ -1,4 +1,4 @@
-import { CommsError } from '@cloudpixel/comms-core';
+import { CommsError } from '@agent-communications/core';
 
 /** The parts of a Google API error this package reads, however the transport surfaced them. */
 export interface GoogleErrorShape {

@@ -1,5 +1,12 @@
 import { createInterface } from 'node:readline/promises';
-import { CommsError, challengeMatches, hashChallenge, newChallenge, paint, type Streams } from '@cloudpixel/comms-core';
+import {
+  CommsError,
+  challengeMatches,
+  hashChallenge,
+  newChallenge,
+  paint,
+  type Streams,
+} from '@agent-communications/core';
 
 export interface ChallengeOptions {
   /** One line saying what is about to change. */

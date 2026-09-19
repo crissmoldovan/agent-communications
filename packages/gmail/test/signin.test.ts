@@ -3,7 +3,7 @@ import { readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { CommsError } from '@cloudpixel/comms-core';
+import { CommsError } from '@agent-communications/core';
 import { FLOW_ID_PATTERN } from '../src/auth/flows.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { renderSignInStarted } from '../src/cli/render.ts';

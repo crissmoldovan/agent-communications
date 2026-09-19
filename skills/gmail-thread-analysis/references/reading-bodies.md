@@ -206,6 +206,6 @@ what was in it.
 `packages/gmail/src/domain/body.ts` holds the per-message budget, the collapse and the truncation
 fields; `packages/gmail/src/operations/read.ts` holds the thread budget and the oldest-first spending;
 `packages/gmail/src/operations/export.ts` holds the raised budgets, the file layout and the Markdown
-rendering; `packages/comms-core/src/sanitize.ts` is what removed anything the body no longer has.
+rendering; `packages/core/src/sanitize.ts` is what removed anything the body no longer has.
 
 See also `references/timeline.md` for the fields a timeline gives you before any of this reading starts.

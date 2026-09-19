@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const version = JSON.parse(
-  readFileSync(join('node_modules', '@cloudpixel', 'gmail-mcp', 'package.json'), 'utf8'),
+  readFileSync(join('node_modules', '@agent-communications', 'gmail-mcp', 'package.json'), 'utf8'),
 ).version;
 const bin = join('node_modules', '.bin', process.platform === 'win32' ? 'agent-gmail-mcp.cmd' : 'agent-gmail-mcp');
 

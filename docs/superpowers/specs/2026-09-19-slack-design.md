@@ -9,12 +9,12 @@ rather than true.
 
 ## 1. What this is
 
-Slack as a second platform beside Gmail, reusing `@cloudpixel/comms-core` unchanged where it already fits and
+Slack as a second platform beside Gmail, reusing `@agent-communications/core` unchanged where it already fits and
 extending it where a mail-shaped assumption does not survive contact with a chat platform.
 
 The same promise: **an agent can read, search, analyse and draft, and cannot post without the person's approval.**
 
-The same shape: `@cloudpixel/slack` (CLI `agent-slack`, library, MCP factory), `@cloudpixel/slack-mcp` (thin),
+The same shape: `@agent-communications/slack` (CLI `agent-slack`, library, MCP factory), `@agent-communications/slack-mcp` (thin),
 skills that teach an agent how to use it and where to stop.
 
 ## 2. The one big difference, and what to do with it
@@ -40,7 +40,7 @@ That produces the central design decision:
 `agent-slack workspace add --mode read` is the default and what the setup skill recommends. Moving a workspace
 from `read` to `send` is a **re-installation** — a new OAuth grant a person must approve in Slack's own UI, which
 is a better gate than anything we could write, and it is also a config loosening in the sense
-`comms-core/config.ts` already understands, so it needs the typed challenge too.
+`core/config.ts` already understands, so it needs the typed challenge too.
 
 **`send` mode is not a lesser product with a worse guarantee.** It is the same guarantee Gmail gives, and the
 documentation must say which is which rather than implying one number covers both.
@@ -188,7 +188,7 @@ body, in the same position the recipient list occupies for mail.
 | Phase | Branch | What |
 |---|---|---|
 | S1 | `feat/slack-core` | `comms-core` changes: the canonical-message union, `accounts` config with migration, the channel preview renderer, taint for ids |
-| S2 | `feat/slack-auth` | `@cloudpixel/slack`: the two manifests, OAuth with token rotation, `workspace add/list/show/remove/reauth`, `doctor`, the transport with its method allowlist |
+| S2 | `feat/slack-auth` | `@agent-communications/slack`: the two manifests, OAuth with token rotation, `workspace add/list/show/remove/reauth`, `doctor`, the transport with its method allowlist |
 | S3 | `feat/slack-read` | Conversations, history, threads, search, users, files; the body pipeline with unfurl labelling and text/blocks reconciliation |
 | S4 | `feat/slack-compose` | Local drafts, the block composer, the preview with its notification count |
 | S5 | `feat/slack-send` | The gate: prepare, approve, post; the four guarded doors; reactions at lower ceremony |

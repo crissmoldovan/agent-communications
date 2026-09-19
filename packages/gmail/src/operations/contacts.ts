@@ -1,4 +1,10 @@
-import { CommsError, canonicalAddress, decodeHeaderWords, neutralise, parseAddressList } from '@cloudpixel/comms-core';
+import {
+  CommsError,
+  canonicalAddress,
+  decodeHeaderWords,
+  neutralise,
+  parseAddressList,
+} from '@agent-communications/core';
 import type { GmailContext } from '../context.ts';
 import { headerValue } from '../domain/mime.ts';
 import { resolveInboxes } from './search.ts';

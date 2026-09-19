@@ -1,4 +1,4 @@
-import { neutralise, type SanitizeReport, sanitizeHtmlToText, sanitizePlainText } from '@cloudpixel/comms-core';
+import { neutralise, type SanitizeReport, sanitizeHtmlToText, sanitizePlainText } from '@agent-communications/core';
 import type { MessageParts } from './mime.ts';
 
 /**

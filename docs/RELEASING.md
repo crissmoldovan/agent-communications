@@ -53,7 +53,7 @@ release which never happened — and since the checks workflow keys on tags, it 
 something nobody can install.
 
 **The packages publish in dependency order** — `comms-core`, then `gmail`, then `gmail-mcp` — because a consumer
-installing `@cloudpixel/gmail` must find the exact `comms-core` it pins already on the registry.
+installing `@agent-communications/gmail` must find the exact `comms-core` it pins already on the registry.
 
 **`pnpm verify` runs build before typecheck, deliberately.** The `gmail` package typechecks against `comms-core`'s
 emitted declarations. For a long time this ran the other way round, which passed on every machine that already had a
@@ -82,8 +82,8 @@ they import from `src/`.
 
 ## After publishing
 
-- `npm view @cloudpixel/gmail version` — confirm what actually went out.
-- `npx -y @cloudpixel/gmail@X.Y.Z --version`, then `doctor`, somewhere that is not this repository.
+- `npm view @agent-communications/gmail version` — confirm what actually went out.
+- `npx -y @agent-communications/gmail@X.Y.Z --version`, then `doctor`, somewhere that is not this repository.
 - `npx skills add crissmoldovan/agent-communications --skill '*'` in a scratch directory; check a skill brought its
   `references/` with it.
 - Cut the GitHub release from the tag, with the changelog section as its body.

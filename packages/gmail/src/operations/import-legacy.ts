@@ -12,7 +12,7 @@ import {
   newInboxId,
   PUBLIC_MAILBOX_DOMAINS,
   type StoreKind,
-} from '@cloudpixel/comms-core';
+} from '@agent-communications/core';
 import { parseClientJson } from '../auth/oauth.ts';
 import { capabilitiesOf, parseGrantedScopes, tierOf } from '../auth/scopes.ts';
 import { clientSecretRef, refreshTokenRef } from '../auth/session.ts';

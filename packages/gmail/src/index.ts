@@ -1,5 +1,5 @@
 /**
- * The library entry of `@cloudpixel/gmail`.
+ * The library entry of `@agent-communications/gmail`.
  *
  * It is deliberately small. Everything else in this package is reached through the `agent-gmail` command or through
  * the MCP server, and both are shipped as a bundle with no runtime dependencies — so the public API here stays a
@@ -10,7 +10,7 @@ import { redirectConsoleToStderr } from './mcp/stdio-entry.ts';
 import { VERSION } from './version.ts';
 
 export { VERSION };
-export const PACKAGE_NAME = '@cloudpixel/gmail';
+export const PACKAGE_NAME = '@agent-communications/gmail';
 
 /** What a host gets back: enough to serve the tools and to stop again, and nothing that ties it to an SDK version. */
 export interface GmailMcpHandle {
@@ -29,7 +29,7 @@ export interface CreateGmailMcpServerOptions {
 }
 
 /**
- * Builds the Gmail MCP server. The `@cloudpixel/gmail-mcp` package is one call to this, and a host embedding the
+ * Builds the Gmail MCP server. The `@agent-communications/gmail-mcp` package is one call to this, and a host embedding the
  * server should use it the same way:
  *
  * ```js

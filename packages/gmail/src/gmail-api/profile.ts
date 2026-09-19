@@ -1,4 +1,4 @@
-import { CommsError } from '@cloudpixel/comms-core';
+import { CommsError } from '@agent-communications/core';
 import type { GoogleEndpoints } from '../auth/endpoints.ts';
 import { describeGoogleError, mapGoogleError } from './errors.ts';
 

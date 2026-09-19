@@ -7,7 +7,7 @@ import {
   resolveInsideRoot,
   safeFilename,
   slug,
-} from '@cloudpixel/comms-core';
+} from '@agent-communications/core';
 import type { GmailContext } from '../context.ts';
 import { downloadsRoot } from './attachments.ts';
 import { type ReadMessageResult, type ReadThreadResult, readMessage, readThread } from './read.ts';

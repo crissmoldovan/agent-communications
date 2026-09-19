@@ -48,7 +48,7 @@ test('the launcher is executable, runnable by sh, and pins the released version'
   const source = await readFile(path, 'utf8');
   const root = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
   assert.match(source, new RegExp(`VERSION="${root.version.replace(/\./g, '\\.')}"`));
-  assert.match(source, /@cloudpixel\/gmail-mcp@\$VERSION/, 'the pinned target uses the version it declares');
+  assert.match(source, /@agent-communications\/gmail-mcp@\$VERSION/, 'the pinned target uses the version it declares');
 
   // `sh -n` parses without running: a syntax error here is a server that never starts, on a machine that is not
   // this one. Skipped on Windows, which has no `/bin/sh` — the launcher is the POSIX half of the pair, and the
@@ -84,7 +84,7 @@ test('the Gemini extension launches the version it declares', async () => {
   const root = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
   assert.equal(extension.version, root.version);
   assert.ok(
-    extension.mcpServers.gmail.args.includes(`@cloudpixel/gmail-mcp@${root.version}`),
+    extension.mcpServers.gmail.args.includes(`@agent-communications/gmail-mcp@${root.version}`),
     'the extension should start the version it says it is',
   );
 });

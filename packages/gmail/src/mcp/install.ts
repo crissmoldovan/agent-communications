@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { access, constants, mkdir, readFile, stat } from 'node:fs/promises';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CommsError, writeFileAtomic } from '@cloudpixel/comms-core';
+import { CommsError, writeFileAtomic } from '@agent-communications/core';
 import type { GmailContext } from '../context.ts';
 import { findUngatedGmailServers, knownClientConfigs, listRegisteredServers } from '../operations/client-configs.ts';
 import { VERSION } from '../version.ts';
@@ -100,7 +100,7 @@ function minimalEnv(context: GmailContext, node: string): Record<string, string>
 /** Installs the exact running version into its own directory, so an upgrade elsewhere cannot change what clients run. */
 async function installManagedRuntime(context: GmailContext, version: string): Promise<string> {
   const root = join(context.core.paths.dataDir, 'runtime', version);
-  const entry = join(root, 'node_modules', '@cloudpixel', 'gmail', 'dist', 'cli.mjs');
+  const entry = join(root, 'node_modules', '@agent-communications', 'gmail', 'dist', 'cli.mjs');
   try {
     await stat(entry);
     return entry;
@@ -121,7 +121,7 @@ async function installManagedRuntime(context: GmailContext, version: string): Pr
     '--save-exact',
     '--no-audit',
     '--no-fund',
-    `@cloudpixel/gmail@${version}`,
+    `@agent-communications/gmail@${version}`,
   ]);
   await stat(entry);
   return entry;
@@ -175,7 +175,7 @@ async function buildEntry(
   if (launcher === 'npx') {
     const npx = (await whichExecutable('npx', context.env)) ?? 'npx';
     return {
-      entry: { command: npx, args: ['-y', `@cloudpixel/gmail-mcp@${VERSION}`, ...serverArgs.slice(1)], env },
+      entry: { command: npx, args: ['-y', `@agent-communications/gmail-mcp@${VERSION}`, ...serverArgs.slice(1)], env },
       launcher,
     };
   }
