@@ -77,8 +77,16 @@ jobs:
       - run: pnpm verify:packages
 
       # In lockstep and in dependency order: a consumer that installs gmail must find the core it pins already there.
+      #
+      # `NODE_AUTH_TOKEN` is a bootstrap and is meant to be deleted. npm refuses to configure a trusted publisher for a
+      # package that does not exist, so the *first* publish of each of these three has to authenticate with a token —
+      # which is what the v0.1.0 attempt discovered, as an OIDC exchange that 404ed against a package that was not
+      # there yet. Once they exist, configure trusted publishing against them, delete this `env:` block, and revoke the
+      # secret. Provenance does not depend on it either way: that comes from `id-token: write` above.
       - name: publish
         if: ${{ inputs.dry-run != true }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           for package in comms-core gmail gmail-mcp; do
             pnpm --filter "@cloudpixel/$package" publish --access public --no-git-checks --provenance

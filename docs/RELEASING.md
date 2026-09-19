@@ -20,15 +20,30 @@ reintroduce that.
 
 ## One-time setup, per package
 
-Only needed before the first publish of each package.
+Only needed before the first publish of each package — and it does **not** run in the order you would guess.
 
-1. On npmjs.com, create the **`@cloudpixel`** organisation if it does not exist.
-2. For each of `@cloudpixel/comms-core`, `@cloudpixel/gmail`, `@cloudpixel/gmail-mcp`, configure **trusted
-   publishing**: repository `crissmoldovan/agent-communications`, workflow `release.yml`, environment `release`.
+The steady state is trusted publishing: npm mints a short-lived credential from the workflow's own identity, so no
+long-lived token sits in repository secrets to leak or to go unrotated. But a trusted publisher is configured *on a
+package*, and npm will not configure one for a package that does not exist yet. A brand-new scope therefore cannot
+start at the steady state. The v0.1.0 attempt found this out the expensive way: the run reported
+`Skipped OIDC: ERR_PNPM_AUTH_TOKEN_EXCHANGE … 404`, then `E404 PUT /@cloudpixel%2fcomms-core`, which reads like a
+misconfigured publisher and is in fact npm saying there is nothing here to publish *to*.
 
-Trusted publishing rather than a token, because a long-lived npm token in repository secrets is a credential that
-can leak and that nobody rotates. With this, npm mints a short-lived one from the workflow's own identity and every
-published version carries provenance back to the run that built it.
+So the first publish is a bootstrap, and the token that does it is meant to be thrown away:
+
+1. On npmjs.com, create the **`@cloudpixel`** organisation. Free tier covers unlimited public packages.
+2. Generate a **granular access token** scoped to the `@cloudpixel` scope, permission *read and write*, with the
+   shortest expiry offered. It has one job.
+3. Add it as the repository secret **`NPM_TOKEN`** (Settings → Secrets and variables → Actions). The publish step
+   already maps it to `NODE_AUTH_TOKEN`, and `setup-node`'s `registry-url` has already written the `.npmrc` that
+   reads it.
+4. Release as below. Provenance is unaffected by authenticating with a token — it comes from `id-token: write`.
+5. **Now** configure trusted publishing on each of `@cloudpixel/comms-core`, `@cloudpixel/gmail`,
+   `@cloudpixel/gmail-mcp`: repository `crissmoldovan/agent-communications`, workflow `release.yml`, environment
+   `release`. npm does not validate any of those four strings when you save them — a typo surfaces only as a failed
+   publish months later, so read them back.
+6. Delete the `env:` block from the publish step and revoke the token. From the next version on there is no npm
+   credential in this repository at all.
 
 ## The release
 
@@ -51,6 +66,18 @@ The workflow then: verifies on six matrix legs (Ubuntu, macOS and Windows × Nod
 does not match the version the repository declares or if `sync-versions --check` fails, builds, runs the
 packed-tarball consumer checks, and publishes the three packages **in dependency order** — a consumer installing
 `@cloudpixel/gmail` must find the exact `comms-core` it pins already on the registry.
+
+### When the publish fails and the fix is in `release.yml`
+
+`gh run rerun` is the wrong tool, and it fails in the quiet direction: a re-run deliberately reuses the commit and
+ref of the original event, so it re-reads the workflow file *from the tag*, not from `main`. Fix the workflow, watch
+the re-run reproduce the identical failure, and the natural conclusion is that the fix was wrong.
+
+Move the tag onto the commit that carries the fix instead — `git tag -f vX.Y.Z && git push --force origin vX.Y.Z` —
+which is a fresh `push: tags` event and reads the new file. Force-moving a tag is only acceptable while nothing has
+consumed it: before the first successful publish, with the GitHub release still a draft, nothing has. After a
+version is on npm the tag is immutable evidence of what produced it; from then on, a broken release is fixed by
+releasing X.Y.Z+1, never by moving X.Y.Z.
 
 ## Rehearsing without publishing
 
