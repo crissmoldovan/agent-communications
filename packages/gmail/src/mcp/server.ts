@@ -1257,6 +1257,18 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       },
       async ({ approvalId }) => {
         try {
+          // Pinned means pinned. Every other tool in this file forces `pinned` or refuses a mismatch; `send_list`
+          // and this one were the exceptions, so a server started with `--inbox work` could enumerate and then void
+          // approvals standing against a mailbox it was explicitly not given — and an approval voided is a send the
+          // person who prepared it has to notice and redo.
+          if (pinned) {
+            const mine = await listApprovals(context, { inbox: pinned });
+            if (!mine.some((record) => record.approvalId === approvalId)) {
+              throw new CommsError('NOT_FOUND', `no approval "${approvalId}" for the "${pinned}" mailbox`, {
+                hint: `This server only serves "${pinned}".`,
+              });
+            }
+          }
           const record = await revokeApproval(context, approvalId);
           return reply({ approvalId: record.approvalId, state: record.state });
         } catch (error) {
@@ -1289,7 +1301,10 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     },
     async ({ inbox }) => {
       try {
-        const records = await listApprovals(context, { inbox });
+        // Pinned means pinned. Every other tool in this file forces `pinned` or refuses a mismatch; these two were
+        // the exceptions, so a server started with `--inbox work` could still enumerate — and cancel — approvals
+        // standing against a mailbox it was explicitly not given.
+        const records = await listApprovals(context, { inbox: pinned ?? inbox });
         return reply({
           approvals: records.map((record) => ({
             approvalId: record.approvalId,

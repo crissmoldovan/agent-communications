@@ -237,9 +237,15 @@ export async function main(
         const inboxId = inboxIdFor(config, values.inbox);
         const limit = values.limit ? Number.parseInt(values.limit, 10) : 50;
         if (!Number.isInteger(limit) || limit < 1) throw usage('--limit must be a positive whole number');
-        const records = (await core.audit.tail({ limit, ...(values.since ? { since: values.since } : {}) })).filter(
-          (r) => !inboxId || r.inboxId === inboxId,
-        );
+        // The inbox filter goes INTO the scan, not after it. `tail` applies it while counting toward `limit`;
+        // filtering the returned array instead meant a quiet inbox's history was read as empty whenever a
+        // busier one had produced `limit` records since — and raising `--limit` changed the answer, which is
+        // the tell. This is the command someone runs to ask what was sent from a mailbox.
+        const records = await core.audit.tail({
+          limit,
+          ...(inboxId ? { inbox: inboxId } : {}),
+          ...(values.since ? { since: values.since } : {}),
+        });
         writeResult(records, output, (rs) =>
           rs.length
             ? rs

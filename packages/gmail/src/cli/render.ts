@@ -549,10 +549,15 @@ export function renderModify(result: ModifyResult, color: boolean): string {
 
 export function renderTrash(result: TrashResult, color: boolean): string {
   const count = `${result.messages.length} message${result.messages.length === 1 ? '' : 's'}`;
-  if (result.dryRun)
-    return `Would move ${count} to the bin in ${result.inbox}.\n${paint(color, 'dim', 'Nothing was moved.')}`;
   const verb = result.action === 'trash' ? 'Moved' : 'Restored';
   const where = result.action === 'trash' ? 'to the bin' : 'from the bin';
+  // The preview has to name the operation it is previewing. This branch hard-coded "to the bin" while `result.action`
+  // already said `untrash`, so someone recovering from a bad bulk bin — exactly the person who runs a dry run first —
+  // was told their restore would bin forty more messages. The preview is the one place that claim gets checked.
+  if (result.dryRun) {
+    const would = result.action === 'trash' ? 'move' : 'restore';
+    return `Would ${would} ${count} ${where} in ${result.inbox}.\n${paint(color, 'dim', 'Nothing was changed.')}`;
+  }
   return [
     `${verb} ${count} ${where} in ${result.inbox}.`,
     paint(color, 'dim', 'Gmail keeps a binned message for thirty days; nothing is deleted outright.'),

@@ -218,76 +218,96 @@ export async function downloadAttachments(
   let totalBytes = 0;
 
   for (const target of targets) {
-    if (files.length >= maxFiles) {
-      skipped.push({ messageId: target.messageId, partId: target.partId ?? '', reason: `more than ${maxFiles} files` });
-      continue;
-    }
     const message = await transport.getMessage(target.messageId);
     const parts = readParts(message.payload);
     const headers = message.payload?.headers ?? [];
-    const part = target.partId
-      ? parts.attachments.find((candidate) => candidate.partId === target.partId)
-      : parts.attachments.find((candidate) => candidate.filename === target.filename);
+    // Which attachments this target names. `partId` picks exactly one; a `filename` picks the one with that name;
+    // naming neither means every attachment on the message. That last case used to fall through to
+    // `find(c => c.filename === target.filename)` with `filename` undefined — which matches an unnamed inline part,
+    // a signature image say, and otherwise nothing at all. So the MCP tool, whose `partId` is optional and
+    // documented as *narrowing* to one attachment, downloaded the one thing nobody asked for, or reported "no such
+    // attachment" for a message plainly carrying one.
+    const chosen = target.partId
+      ? parts.attachments.filter((candidate) => candidate.partId === target.partId)
+      : target.filename !== undefined
+        ? parts.attachments.filter((candidate) => candidate.filename === target.filename)
+        : parts.attachments;
 
-    if (!part?.attachmentId) {
-      skipped.push({
-        messageId: target.messageId,
-        partId: target.partId ?? '',
-        reason: part ? 'this part holds no downloadable bytes (a Drive link, perhaps)' : 'no such attachment',
-      });
-      continue;
-    }
-    if (totalBytes + part.size > maxBytes) {
-      skipped.push({
-        messageId: target.messageId,
-        partId: part.partId,
-        reason: `more than ${maxBytes} bytes in one batch`,
-      });
+    if (chosen.length === 0) {
+      skipped.push({ messageId: target.messageId, partId: target.partId ?? '', reason: 'no such attachment' });
       continue;
     }
 
-    const bytes = await transport.getAttachment(target.messageId, part.attachmentId);
-    const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const existing = seenHashes.get(sha256);
-    if (existing) {
+    for (const part of chosen) {
+      if (files.length >= maxFiles) {
+        skipped.push({
+          messageId: target.messageId,
+          partId: part.partId,
+          reason: `more than ${maxFiles} files`,
+        });
+        continue;
+      }
+
+      if (!part?.attachmentId) {
+        skipped.push({
+          messageId: target.messageId,
+          partId: target.partId ?? '',
+          reason: part ? 'this part holds no downloadable bytes (a Drive link, perhaps)' : 'no such attachment',
+        });
+        continue;
+      }
+      if (totalBytes + part.size > maxBytes) {
+        skipped.push({
+          messageId: target.messageId,
+          partId: part.partId,
+          reason: `more than ${maxBytes} bytes in one batch`,
+        });
+        continue;
+      }
+
+      const bytes = await transport.getAttachment(target.messageId, part.attachmentId);
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      const existing = seenHashes.get(sha256);
+      if (existing) {
+        files.push({
+          path: existing,
+          filename: safeFilename(part.filename ?? 'attachment'),
+          size: bytes.byteLength,
+          sha256,
+          mimeType: part.mimeType,
+          messageId: target.messageId,
+          duplicate: true,
+          riskFlags: attachmentRisks(part.filename ?? '', part.mimeType),
+        });
+        continue;
+      }
+
+      // One folder per message, named from facts about it — never from anything the sender controls directly.
+      const date = message.internalDate ? new Date(Number(message.internalDate)).toISOString().slice(0, 10) : 'undated';
+      const sender = slug(parseAddressList(headerValue(headers, 'From'))[0]?.address ?? 'unknown', 30, 'unknown');
+      const subject = slug(headerValue(headers, 'Subject') ?? '', 40, 'no-subject');
+      const folder = await resolveInsideRoot(root, join(alias, options.out ?? '', `${date}_${sender}_${subject}`));
+      await mkdir(folder, { recursive: true, mode: 0o700 });
+
+      const { path, handle } = await createUniqueFile(folder, safeFilename(part.filename ?? 'attachment'));
+      try {
+        await handle.writeFile(bytes);
+      } finally {
+        await handle.close();
+      }
+      seenHashes.set(sha256, path);
+      totalBytes += bytes.byteLength;
       files.push({
-        path: existing,
+        path,
         filename: safeFilename(part.filename ?? 'attachment'),
         size: bytes.byteLength,
         sha256,
         mimeType: part.mimeType,
         messageId: target.messageId,
-        duplicate: true,
+        duplicate: false,
         riskFlags: attachmentRisks(part.filename ?? '', part.mimeType),
       });
-      continue;
     }
-
-    // One folder per message, named from facts about it — never from anything the sender controls directly.
-    const date = message.internalDate ? new Date(Number(message.internalDate)).toISOString().slice(0, 10) : 'undated';
-    const sender = slug(parseAddressList(headerValue(headers, 'From'))[0]?.address ?? 'unknown', 30, 'unknown');
-    const subject = slug(headerValue(headers, 'Subject') ?? '', 40, 'no-subject');
-    const folder = await resolveInsideRoot(root, join(alias, options.out ?? '', `${date}_${sender}_${subject}`));
-    await mkdir(folder, { recursive: true, mode: 0o700 });
-
-    const { path, handle } = await createUniqueFile(folder, safeFilename(part.filename ?? 'attachment'));
-    try {
-      await handle.writeFile(bytes);
-    } finally {
-      await handle.close();
-    }
-    seenHashes.set(sha256, path);
-    totalBytes += bytes.byteLength;
-    files.push({
-      path,
-      filename: safeFilename(part.filename ?? 'attachment'),
-      size: bytes.byteLength,
-      sha256,
-      mimeType: part.mimeType,
-      messageId: target.messageId,
-      duplicate: false,
-      riskFlags: attachmentRisks(part.filename ?? '', part.mimeType),
-    });
   }
 
   const manifestPath = join(directory, 'manifest.json');

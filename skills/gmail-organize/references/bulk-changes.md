@@ -74,38 +74,46 @@ failed bulk change.
 
 ## The undo, exactly
 
-The undo returned is the same change with the two label lists swapped, pinned to the exact message ids that
-changed:
+The undo is computed **per message, from what that message actually held** — not by swapping the two label lists
+over the whole selection. For each message that could be read before the change, the undo records only the labels
+it really had and only the ones it really lacked:
 
 ```text
-change: add []            remove [INBOX]   over 314 ids
-undo:   add [INBOX]       remove []        over the same 314 ids
+change: add []  remove [INBOX]   over 314 ids
+
+m1 was in the inbox      -> undo for m1: add [INBOX]  remove []
+m2 was already archived  -> undo for m2: add []       remove []      (nothing to put back)
 ```
 
-For a bin, the reverse is the same call with `undo: true` (CLI: `--undo`) over the ids in the result's
-`messages`.
+So applying the undo to a mixed selection restores the state, message by message. The three messages that were
+already out of the inbox stay out. This is pinned by a test — "the undo puts back what each message had, not what
+the selection had in common" — so you can rely on it.
 
-That is a genuine reverse of the *change*. It is not a restore of the *state*, and the difference bites in
-exactly the cases bulk changes are used for:
+A message that could not be read before the change is **still changed**, because Gmail's batch does not take
+exceptions, but the undo does not claim it. Those ids are the gap.
 
-- **Archiving a mixed selection.** Archive fifty messages of which three were already out of the inbox, then
-  apply the undo, and all fifty get `INBOX` — including the three, which are now in the inbox for the first
-  time in months.
-- **Marking a mixed selection read.** The undo adds `UNREAD` to every id, so messages that were already read
-  before you started come back unread.
-- **Removing a label.** The undo adds it to every id in the selection, including any that never carried it.
-- **Time.** The undo is a change, not a snapshot. If the user has starred, archived or filed some of those
-  messages in between, applying the undo overwrites their work on those ids.
+For a bin, the reverse is the same call with `undo: true` (CLI: `--undo`) over the ids in the result's `messages`.
 
-None of that makes the undo useless — it is the only durable handle on what you changed, and for a handful of
-named messages it is exactly right. It means the undo for a wide selection needs one sentence of honesty when
-you offer it:
+### What the undo still cannot do
+
+It is a record of your change, not a snapshot of the mailbox, and time is the part that bites:
+
+- **Later edits win.** If the user has starred, archived or filed some of those messages since, applying the undo
+  overwrites that work on those ids. The undo does not know anything happened after it was computed.
+- **Unreadable messages are not covered.** See above.
+- **It lives only in the conversation.** Nothing on disk records the selection.
+
+So offer it as what it is:
 
 ```text
-To put it back: agent-gmail organise --inbox work --add INBOX --message 18f2c… --message 18f2d… …
+To put it back: agent-gmail organise --inbox work --undo <the undo from that result>
 
-That adds INBOX to all 314, so any that were already archived before today would come back to the inbox.
+That restores each message to the labels it had before the change. Anything you have changed since — starred,
+filed, archived — would be overwritten on those ids.
 ```
+
+**Do not hand-build an inverse** such as `--add INBOX` over every id. That is the blanket swap this section exists
+to warn against, and it is what re-inboxes the messages the user had archived themselves.
 
 Keep the ids in the conversation. Once they are gone, so is the undo: nothing on disk records the selection,
 and reconstructing it from the query gives a different set.
