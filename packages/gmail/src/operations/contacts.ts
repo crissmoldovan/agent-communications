@@ -97,6 +97,15 @@ export async function searchContacts(
             const failure = error as CommsError;
             errors.push({ inbox: alias, code: failure.code ?? 'UNEXPECTED', message: failure.message });
           }
+        } else {
+          // Two of the three sources were not looked in, and saying nothing made the result read as a search of all
+          // three that found nothing there — which is how a person concludes an address does not exist when it is
+          // in their address book.
+          errors.push({
+            inbox: alias,
+            code: 'SCOPE_MISSING',
+            message: `${alias} was not granted access to contacts, so only past mail was searched`,
+          });
         }
       }
 
@@ -157,10 +166,21 @@ export interface FollowUpOptions {
   inboxes?: string[] | 'all' | undefined;
   /** `them` = we wrote and nobody replied; `me` = they wrote and we have not. */
   direction?: 'them' | 'me' | undefined;
-  /** Only threads older than this many days. */
+  /**
+   * Only threads whose last real message is at least this old, in either direction.
+   *
+   * Defaults to 3 days for `them` and 0 for `me`: nagging somebody the day after you wrote is rude, and hiding
+   * this morning's unanswered mail is unhelpful.
+   */
   olderThanDays?: number | undefined;
-  /** How far back to look. */
+  /** How far back to look. Default 30 days, and never less than `olderThanDays + 1`. */
   lookbackDays?: number | undefined;
+  /**
+   * How many rows to return in total.
+   *
+   * One budget across every mailbox, spent in the order they resolve — so a small limit over several mailboxes can
+   * return nothing from the last of them. Raise it, or name one inbox, when the answer has to be complete.
+   */
   limit?: number | undefined;
 }
 
@@ -171,7 +191,10 @@ export interface FollowUpOptions {
 export async function followUps(context: GmailContext, options: FollowUpOptions = {}): Promise<FollowUpsResult> {
   const aliases = await resolveInboxes(context, options.inboxes);
   const direction = options.direction ?? 'them';
-  const olderThan = Math.max(0, options.olderThanDays ?? 3);
+  // The default differs by direction, because the question does. "Who has not replied to me" should not nag
+  // somebody after a day; "what have I not answered" should show this morning's mail, which is precisely the mail
+  // most likely to be forgotten. An explicit threshold applies to both.
+  const olderThan = Math.max(0, options.olderThanDays ?? (direction === 'me' ? 0 : 3));
   const lookback = Math.max(olderThan + 1, options.lookbackDays ?? 30);
   const limit = Math.min(Math.max(1, options.limit ?? 20), 50);
 
@@ -200,15 +223,22 @@ export async function followUps(context: GmailContext, options: FollowUpOptions 
         const last = messages.at(-1);
         if (!last) continue;
         const labels = last.labelIds ?? [];
-        if (labels.includes('DRAFT')) continue;
-        const weSentLast = labels.includes('SENT');
+        // A draft at the end of a thread means a half-written answer. Skipping the thread hid exactly the ones the
+        // user most needs to see under "awaiting me", so the message before the draft decides instead.
+        const lastSent = labels.includes('DRAFT')
+          ? messages.filter((m) => !(m.labelIds ?? []).includes('DRAFT')).at(-1)
+          : last;
+        if (!lastSent) continue;
+        const weSentLast = (lastSent.labelIds ?? []).includes('SENT');
         // The last word decides who is waiting: if we spoke last, they owe a reply, and the other way round.
         if (direction === 'them' ? !weSentLast : weSentLast) continue;
 
-        const headers = last.payload?.headers ?? [];
-        const at = last.internalDate ? new Date(Number(last.internalDate)) : null;
+        const headers = lastSent.payload?.headers ?? [];
+        const at = lastSent.internalDate ? new Date(Number(lastSent.internalDate)) : null;
         const ageDays = at ? Math.floor((context.now().getTime() - at.getTime()) / 86_400_000) : 0;
-        if (direction === 'them' && ageDays < olderThan) continue;
+        // The quiet threshold applies in both directions. It only filtered `them`, so asking for "anything I have
+        // not answered in a fortnight" quietly returned everything from today as well.
+        if (ageDays < olderThan) continue;
 
         const counterpart = weSentLast
           ? (parseAddressList(headerValue(headers, 'To'))[0]?.address ?? 'unknown')
@@ -217,7 +247,7 @@ export async function followUps(context: GmailContext, options: FollowUpOptions 
         rows.push({
           inbox: alias,
           threadId: thread.id ?? entry.id,
-          messageId: last.id ?? '',
+          messageId: lastSent.id ?? '',
           subject: (headerValue(headers, 'Subject') ?? '').slice(0, 120),
           with: counterpart,
           lastAt: at?.toISOString() ?? null,

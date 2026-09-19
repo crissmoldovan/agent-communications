@@ -4,6 +4,7 @@ import { CommsError } from '@cloudpixel/comms-core';
 import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { GmailContext } from '../src/context.ts';
+import { threadTimeline } from '../src/operations/analyse.ts';
 import { attachmentRisks, readMessage, readThread } from '../src/operations/read.ts';
 import type { FakeMessage } from './support/fake-google.ts';
 import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET } from './support/harness.ts';
@@ -293,4 +294,36 @@ test('a thread longer than the budget stops, and says it stopped', async () => {
   assert.ok(thread.totalChars <= 6000 + 5400, 'the budget bounds what comes back');
   assert.equal(thread.messageCount, 3, 'the count is of the thread, not of what fitted');
   assert.ok(thread.messages.length >= 1);
+});
+
+test('a timeline covers every message in a long thread, and says so when it cannot', async () => {
+  // Twelve messages, each long enough that the old accounting — spending each body's full length against the
+  // thread budget even when one character was asked for — ran out five messages in and said nothing.
+  const long = 'x '.repeat(3000);
+  const messages: Record<string, FakeMessage> = {};
+  for (let index = 0; index < 12; index++) {
+    messages[`m${index}`] = {
+      id: `m${index}`,
+      threadId: 't-long',
+      labelIds: ['INBOX'],
+      internalDate: String(Date.parse('2026-09-10T09:00:00Z') + index * 3_600_000),
+      payload: {
+        partId: '',
+        mimeType: 'text/plain',
+        headers: [
+          { name: 'From', value: index % 2 === 0 ? 'Sam Lee <sam@partner.test>' : 'Jo <jo@example.test>' },
+          { name: 'To', value: index % 2 === 0 ? 'Jo <jo@example.test>' : 'Sam Lee <sam@partner.test>' },
+          { name: 'Subject', value: 'Long one' },
+          { name: 'Message-ID', value: `<${index}@mail.test>` },
+        ],
+        body: { size: long.length, data: Buffer.from(long, 'utf8').toString('base64url') },
+      },
+    };
+  }
+  const { context } = await inboxWith(messages);
+
+  const result = await threadTimeline(context, 'work', 't-long');
+  assert.equal(result.messageCount, 12);
+  assert.equal(result.timeline.events.length, 12, 'every message is in the timeline');
+  assert.equal(result.truncated, false);
 });

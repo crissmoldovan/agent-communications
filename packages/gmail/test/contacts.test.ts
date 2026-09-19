@@ -239,3 +239,39 @@ test('follow-ups the other way: what has arrived and is still unanswered', async
   assert.equal(result.rows[0]?.with, 'sam@partner.test');
   assert.match(result.query, /-category:promotions/);
 });
+
+test('a half-written draft does not hide the thread it is sitting in', async () => {
+  const now = Date.parse('2026-09-18T12:00:00Z');
+  const daysAgo = (days: number) => new Date(now - days * 86_400_000).toISOString();
+  const { context } = await connected({
+    messages: {
+      in1: message({
+        id: 'in1',
+        threadId: 't1',
+        at: daysAgo(4),
+        from: 'Sam Lee <sam@partner.test>',
+        subject: 'Can you confirm?',
+        labels: ['INBOX'],
+      }),
+      // The user started an answer and never finished it. That is the thread they most need to see.
+      d1: message({
+        id: 'd1',
+        threadId: 't1',
+        at: daysAgo(3),
+        from: 'Jo Example <jo@example.test>',
+        to: 'sam@partner.test',
+        subject: 'Re: Can you confirm?',
+        labels: ['DRAFT'],
+      }),
+    },
+    now: () => new Date(now),
+  });
+
+  const waiting = await followUps(context, { direction: 'me' });
+  assert.deepEqual(
+    waiting.rows.map((row) => row.threadId),
+    ['t1'],
+    'the draft is not an answer, so the thread is still unanswered',
+  );
+  assert.equal(waiting.rows[0]?.ageDays, 4, 'and its age is the last real message, not the draft');
+});

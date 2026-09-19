@@ -13,6 +13,10 @@ export interface TimelineResult {
   /** Renderings, so a caller need not rebuild them: JSON is the timeline itself. */
   markdown: string;
   mermaid: string;
+  /** How many messages the thread holds, against how many this timeline covers. */
+  messageCount: number;
+  /** True when the thread was longer than could be read: the timeline is a prefix, not the whole conversation. */
+  truncated: boolean;
 }
 
 /** The addresses that count as "us" for this mailbox: its own, plus every verified send-as alias. */
@@ -46,6 +50,13 @@ export async function threadTimeline(
     timeline,
     markdown: renderTimelineMarkdown(timeline),
     mermaid: renderTimelineMermaid(timeline),
+    // Carried through rather than dropped: a timeline that silently covers the first nine of forty messages reads
+    // exactly like one that covers all of them, and every conclusion drawn from it is about a different thread.
+    //
+    // Messages missing, not bodies truncated: a timeline asks for one character of each body on purpose, so the
+    // per-message truncation flag is always set here and means nothing.
+    messageCount: thread.messageCount,
+    truncated: thread.messages.length < thread.messageCount,
   };
 }
 

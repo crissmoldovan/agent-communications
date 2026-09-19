@@ -150,6 +150,8 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     capabilities: z.array(z.string()),
     sendPolicy: z.string(),
     health: z.string(),
+    /** Whether the address book was included in this grant. Without it, a contact search sees only past mail. */
+    contacts: z.boolean(),
   });
 
   server.registerTool(
@@ -175,6 +177,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
               capabilities: inbox.capabilities,
               sendPolicy: inbox.sendPolicy,
               health: inbox.health,
+              contacts: inbox.contacts,
             })),
         });
       } catch (error) {
@@ -399,13 +402,27 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         threadId: z.string().min(1),
         businessHours: mcpBoolean().optional().describe('count waiting time in working hours only'),
       }),
-      outputSchema: z.object({ timeline: z.looseObject({}), markdown: z.string(), mermaid: z.string() }),
+      outputSchema: z.object({
+        timeline: z.looseObject({}),
+        markdown: z.string(),
+        mermaid: z.string(),
+        messageCount: z.number().describe('how many messages the thread holds'),
+        truncated: z
+          .boolean()
+          .describe('true when the timeline covers only the start of the thread — say so before drawing conclusions'),
+      }),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ inbox, threadId, businessHours }) => {
       try {
         const result = await threadTimeline(context, targetInbox(inbox), threadId, { businessHours });
-        return reply({ timeline: result.timeline, markdown: result.markdown, mermaid: result.mermaid });
+        return reply({
+          timeline: result.timeline,
+          markdown: result.markdown,
+          mermaid: result.mermaid,
+          messageCount: result.messageCount,
+          truncated: result.truncated,
+        });
       } catch (error) {
         return fail(error);
       }

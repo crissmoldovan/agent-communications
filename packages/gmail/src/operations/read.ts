@@ -238,7 +238,10 @@ export async function readThread(
       collector,
       body: { ...options, maxChars: Math.min(options.maxChars ?? DEFAULT_MAX_CHARS, remaining) },
     });
-    spent += result.body.totalChars;
+    // What was actually kept, not what the message contains. The budget exists to cap the conversation, so spending
+    // a 40,000-character message against it when one character was returned ended a timeline five messages in — and
+    // the timeline is exactly the caller that asks for one character.
+    spent += result.body.enveloped.length;
     if (result.body.truncated) truncated = true;
     messages.push(result);
   }
