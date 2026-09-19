@@ -8,8 +8,11 @@ lets it send one, so "may draft, may not send" cannot be enforced by the permiss
 enforced here instead: there is exactly one code path to Gmail's send endpoints, it runs the
 approval checks, and a test fails the build if a second one ever appears.
 
-> **Status: not released.** v0.1.0 is being built and reviewed. The npm packages are not published
-> yet, so nothing below installs.
+[![npm](https://img.shields.io/npm/v/@agentcomms/gmail?color=1f883d&label=%40agentcomms%2Fgmail)](https://www.npmjs.com/package/@agentcomms/gmail)
+[![provenance](https://img.shields.io/badge/provenance-attested-1f883d)](https://docs.npmjs.com/generating-provenance-statements/)
+
+Published, and every version from 0.1.1 carries an npm provenance attestation — `npm audit signatures`
+verifies the tarball you installed was built from this repository by the workflow that published it.
 
 ## What you get
 
@@ -64,8 +67,17 @@ npx -y @agentcomms/gmail inbox add work
 npx -y @agentcomms/gmail mcp install --client claude-code
 ```
 
+**Already using another Gmail MCP server?** `npx -y @agentcomms/gmail inbox import --dry-run` reads its
+credentials directory and says what it would bring over; without `--dry-run` it imports every mailbox,
+reusing the OAuth client and tokens you already have. No browser, no re-consent.
+
 `agent-gmail doctor` checks everything that has to work and prints the one command that fixes each
 thing that does not.
+
+> **Remove the other Gmail server once you have migrated.** Everything here assumes it owns the only
+> route to Gmail's send endpoints. A second server with an ungated `send_email` tool does not break that
+> guarantee so much as stand beside it — an agent simply uses the other one, and no approval is asked
+> for. `doctor` lists any it finds, in every MCP client configuration it can read.
 
 ## The skills
 
