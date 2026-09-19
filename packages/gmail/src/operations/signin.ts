@@ -29,6 +29,13 @@ export interface StartedSignIn {
   authUrl: string;
   redirectUri: string;
   expiresAt: string;
+  /**
+   * The address this sign-in is bound to, when one was named.
+   *
+   * Absent means nothing checks which account consents, and the caller is told so — the link is a one-time
+   * capability that has just been printed somewhere.
+   */
+  expectedEmail?: string | undefined;
   /** Present only for an in-process flow: resolves when the browser comes back. */
   listener?: { result: Promise<ConsentResult>; close(): Promise<void> } | undefined;
 }
@@ -53,6 +60,11 @@ export async function startSignIn(context: GmailContext, options: StartOptions):
 
   let tier = parseTier(options.tier);
   let contacts = options.contacts ?? true;
+  // Without `--email` nothing binds the consent to an intended account, and the consent URL is printed — into an
+  // agent's transcript, among other places. Anyone who reads it can open it, consent with **their own** Google
+  // account, and the listener will accept the code: the `state` and the PKCE challenge are the ones we issued.
+  // The result names the address that was actually connected, which is the only thing standing between that and a
+  // silently wrong mailbox, so the caller is told to pass `--email` when it can.
   let expect: OAuthFlow['expect'] = { email: options.email };
   if (options.mode === 'reauth') {
     const inbox = requireInbox(config, options.alias);
@@ -103,6 +115,7 @@ export async function startSignIn(context: GmailContext, options: StartOptions):
 
   return {
     flowId: flow.flowId,
+    expectedEmail: expect.email,
     authUrl,
     redirectUri: started.redirectUri,
     expiresAt: flow.expiresAt,
@@ -295,6 +308,11 @@ function codeFromUrl(pasted: string, flow: OAuthFlow): string {
 /** Best effort: the detached listener has done its job and would otherwise sit until the flow expires. */
 function stopListener(flow: OAuthFlow): void {
   if (!flow.listenerPid || flow.listenerPid === process.pid) return;
+  // A flow lives ten minutes. If the listener died early and the operating system reused its number, this would
+  // signal an unrelated process of the user's — so the number is only trusted while the flow that recorded it is
+  // still within its own window. It times out on its own regardless, which is the real backstop.
+  const expiresAt = new Date(flow.expiresAt).getTime();
+  if (!Number.isFinite(expiresAt) || Date.now() >= expiresAt) return;
   try {
     process.kill(flow.listenerPid, 'SIGTERM');
   } catch {

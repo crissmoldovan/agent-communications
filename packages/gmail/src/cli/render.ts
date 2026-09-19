@@ -79,6 +79,18 @@ export function renderSignInStarted(started: StartedSignIn, mode: 'add' | 'reaut
     '',
     `Then run: ${finish}`,
     paint(color, 'dim', `The link works for ten minutes (until ${started.expiresAt}).`),
+    // The link is a one-time capability and it has just been printed — into a terminal, a transcript, a log. Whoever
+    // opens it decides which Google account gets connected, and without `--email` nothing checks that afterwards.
+    ...(started.expectedEmail
+      ? []
+      : [
+          paint(
+            color,
+            'yellow',
+            'This link connects whichever Google account opens it. Keep it to yourself, and check the address ' +
+              'reported when it finishes — or pass --email <address> next time, which refuses anything else.',
+          ),
+        ]),
   ].join('\n');
 }
 

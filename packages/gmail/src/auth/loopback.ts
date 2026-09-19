@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -41,16 +42,32 @@ export async function startLoopback(options: LoopbackOptions): Promise<LoopbackL
     settle = resolve;
   });
 
+  /** Constant-time comparison of two values that may be absent. */
+  const sameSecret = (given: string | null, expected: string): boolean => {
+    if (given === null) return false;
+    const a = Buffer.from(given, 'utf8');
+    const b = Buffer.from(expected, 'utf8');
+    return a.length === b.length && timingSafeEqual(a, b);
+  };
+
   const server: Server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     if (url.pathname === '/favicon.ico') {
       response.writeHead(404).end();
       return;
     }
+    // Google's redirect is a GET. Anything else is not the browser coming back, whatever it carries.
+    if (request.method !== 'GET') {
+      response.writeHead(405).end();
+      return;
+    }
     const state = url.searchParams.get('state');
     const code = url.searchParams.get('code');
     const error = url.searchParams.get('error');
-    if (state !== options.state || (!code && !error)) {
+    // Compared in constant time, like every other secret comparison here. The state is 192 bits and the attacker
+    // would be on this machine already, so this is tidiness rather than a fix — but a plain `!==` on a secret is
+    // the kind of thing that is right until the secret gets shorter.
+    if (!sameSecret(state, options.state) || (!code && !error)) {
       response.writeHead(400, { 'content-type': 'text/html; charset=utf-8' }).end(PAGE_ERROR);
       return;
     }

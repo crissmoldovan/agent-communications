@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFile, rm } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CommsError } from './errors.ts';
 import { writeFileAtomic } from './fs.ts';
@@ -45,7 +46,17 @@ export class FileSecretStore implements SecretStore {
 
   async get(ref: string): Promise<string | null> {
     try {
-      const parsed = JSON.parse(await readFile(this.#path(ref), 'utf8')) as { ref?: string; value?: unknown };
+      // `O_NOFOLLOW`, because `readFile` follows a symlink and this file holds a refresh token. Anything able to
+      // drop a link into the secrets directory could otherwise have this process open a file of its choosing and
+      // report what it found — and the attachment jail two files over already knows to do this.
+      const handle = await open(this.#path(ref), constants.O_RDONLY | constants.O_NOFOLLOW);
+      let raw: string;
+      try {
+        raw = await handle.readFile('utf8');
+      } finally {
+        await handle.close();
+      }
+      const parsed = JSON.parse(raw) as { ref?: string; value?: unknown };
       if (parsed.ref !== ref || typeof parsed.value !== 'string') return null;
       return parsed.value;
     } catch (error) {

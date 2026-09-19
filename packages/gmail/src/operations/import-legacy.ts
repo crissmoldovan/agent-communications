@@ -125,7 +125,9 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
     await secrets.set(clientSecretRef(clientKey), parsedClient.clientSecret);
     await context.core.config.update((current) => ({
       ...current,
-      secrets: { store: current.secrets?.store ?? options.store ?? 'file' },
+      // The same default `client add` uses. Defaulting to `file` here meant an import into a fresh configuration
+      // silently chose the weaker backend, and said nothing about having done so.
+      secrets: { store: current.secrets?.store ?? options.store ?? 'keychain' },
       clients: {
         ...current.clients,
         [clientKey]: {

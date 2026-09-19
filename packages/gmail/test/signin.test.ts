@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { CommsError } from '@cloudpixel/comms-core';
 import { FLOW_ID_PATTERN } from '../src/auth/flows.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
+import { renderSignInStarted } from '../src/cli/render.ts';
 import { GmailContext } from '../src/context.ts';
 import { clientAdd } from '../src/operations/clients.ts';
 import { inboxList } from '../src/operations/inboxes.ts';
@@ -241,4 +242,21 @@ test('reauth renews the grant only for the same account, and records what change
   assert.equal(reauthorised.reauthorised, true);
   assert.equal(reauthorised.inbox.id, added.inbox.id);
   assert.equal(reauthorised.inbox.tier, 'organize');
+});
+
+test('a sign-in with no expected address says that anyone who opens the link decides the account', () => {
+  // The link is a one-time capability, and `inbox add --start` prints it — into a terminal, a transcript, a log.
+  // Whoever opens it decides which Google account gets connected, and without `--email` nothing checks afterwards.
+  const base = {
+    flowId: 'fl_aaaaaaaaaaaaaaaaaaaaaa',
+    authUrl: 'https://accounts.google.com/o/oauth2/v2/auth?state=x',
+    redirectUri: 'http://127.0.0.1:5123/',
+    expiresAt: '2026-09-19T10:10:00.000Z',
+  };
+  assert.match(renderSignInStarted(base, 'add', false), /connects whichever Google account opens it/);
+
+  // With an expected address the warning is unnecessary, because the check is real: `finishSignIn` refuses any
+  // other account outright, which the test above this one proves.
+  const bound = { ...base, expectedEmail: 'jo@example.test' };
+  assert.doesNotMatch(renderSignInStarted(bound, 'add', false), /whichever Google account/);
 });

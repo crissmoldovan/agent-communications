@@ -108,6 +108,9 @@ async function directoryChecks(context: GmailContext): Promise<Check[]> {
   for (const [id, path] of [
     ['config-dir', context.core.paths.configDir],
     ['state-dir', context.core.paths.stateDir],
+    // The one that actually holds refresh tokens, and the one that was not checked. It sits inside the config
+    // directory today, so its mode was right by inheritance rather than by anybody having looked.
+    ['secrets-dir', context.core.paths.secretsDir],
   ] as const) {
     try {
       await stat(path);
