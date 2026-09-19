@@ -55,29 +55,71 @@ know.
 
 ## Install
 
+Three independent things ship. Take one, or all of them.
+
+### A Gmail CLI
+
+No agent, no MCP server, nothing else required.
+
 ```bash
-# The skills (works with or without the MCP server)
-npx skills add crissmoldovan/agent-communications --skill '*'
+npm i -g @agentcomms/gmail
+agent-gmail client add ~/Downloads/client_secret_*.json
+agent-gmail inbox add work --start
+agent-gmail search 'newer_than:7d' --inbox work
+```
 
-# Connect a mailbox — this walks you through the Google Cloud part
-npx -y @agentcomms/gmail client add ~/Downloads/client_secret.json
-npx -y @agentcomms/gmail inbox add work
+23 commands, `--json` on all of them, documented exit codes. [CLI reference](docs/reference/cli.md).
 
-# Wire it into your agent
+### An MCP server, for agents
+
+```bash
 npx -y @agentcomms/gmail mcp install --client claude-code
 ```
 
-**Already using another Gmail MCP server?** `npx -y @agentcomms/gmail inbox import --dry-run` reads its
-credentials directory and says what it would bring over; without `--dry-run` it imports every mailbox,
-reusing the OAuth client and tokens you already have. No browser, no re-consent.
+29 tools over stdio — the same operations the CLI runs. Works with Claude Code, Codex, Cursor, Claude Desktop,
+Gemini CLI and anything else that speaks MCP. [MCP tool reference](docs/reference/mcp-tools.md).
 
-`agent-gmail doctor` checks everything that has to work and prints the one command that fixes each
-thing that does not.
+### Skills, so an agent uses it well
 
-> **Remove the other Gmail server once you have migrated.** Everything here assumes it owns the only
-> route to Gmail's send endpoints. A second server with an ungated `send_email` tool does not break that
-> guarantee so much as stand beside it — an agent simply uses the other one, and no approval is asked
-> for. `doctor` lists any it finds, in every MCP client configuration it can read.
+```bash
+npx skills add crissmoldovan/agent-communications --skill '*'
+```
+
+Twelve skills: which tool to reach for, what a result means, and when to stop and ask. They work with the MCP
+server and without it, falling back to the CLI. [The skills](docs/skills.md).
+
+### Already running another Gmail MCP server?
+
+```bash
+npx -y @agentcomms/gmail inbox import --dry-run   # what it would bring over
+npx -y @agentcomms/gmail inbox import             # do it
+```
+
+Reuses the OAuth client and refresh tokens you already have. No browser, no re-consent.
+
+`agent-gmail doctor` checks everything that has to work and prints the one command that fixes each thing that does
+not. It exits `78` when something is broken, so CI can gate on it.
+
+> **Remove the other Gmail server once you have migrated.** Everything here assumes it owns the only route to
+> Gmail's send endpoints. A second server with an ungated `send_email` tool does not break that guarantee so much
+> as stand beside it — an agent simply uses the other one, and no approval is asked for. `doctor` lists any it
+> finds.
+
+## Documentation
+
+| | |
+|---|---|
+| [Getting started](docs/getting-started.md) | nothing to reading mail, including the Google Cloud part |
+| [What is where](docs/architecture.md) | CLI, MCP server, library, skills — and why the CLI needs none of the others |
+| [Sending and approvals](docs/sending.md) | how the gate works, and what it does not cover |
+| [CLI reference](docs/reference/cli.md) | every command, option and exit code |
+| [MCP tool reference](docs/reference/mcp-tools.md) | every tool and argument |
+| [The skills](docs/skills.md) | what each is for, and when it fires |
+| [Troubleshooting](docs/troubleshooting.md) | by symptom |
+| [Releasing](docs/RELEASING.md) | for maintainers |
+
+The reference pages are generated from the code by `pnpm sync:reference` and checked by `pnpm verify`, so they
+cannot drift from what the software does.
 
 ## The skills
 
