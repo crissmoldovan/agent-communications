@@ -38,7 +38,7 @@ workflow could have done the first publish. That is spent; from 0.1.1 CI is the 
    **Complete when:** `npm view @agentcomms/gmail@<version> version` returns nothing for the version you intend.
 
 2. **Get the version right everywhere.** Edit the root `package.json`, then `pnpm sync:versions` — it writes three
-   manifests, two plugin files, the launcher and twelve skills. `pnpm licenses` regenerates the third-party notices
+   manifests, two plugin files, the launcher and twelve skills. `pnpm run licenses` regenerates the third-party notices
    that ship inside the bundles.
    **Complete when:** `pnpm verify:versions` and `pnpm verify:licenses` both pass.
 

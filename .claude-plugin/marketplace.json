@@ -10,7 +10,7 @@
       "name": "gmail",
       "source": "./",
       "description": "Gmail for coding agents: search, read, analyse, draft and organise mail across several mailboxes. Sending needs your approval.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "crissmoldovan"
       },

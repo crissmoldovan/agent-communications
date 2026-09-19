@@ -5,6 +5,29 @@ together under one version.
 
 ## Unreleased
 
+## 0.1.1
+
+**If you followed the migration instructions in 0.1.0, they could not work.** `agent-gmail inbox import` — the
+documented route off another Gmail MCP server — skipped every mailbox with "this grant cannot read the mailbox",
+on grants that could read perfectly well.
+
+The other server records which permissions it was granted using Google's shorthand, `gmail.readonly`, while
+Google's own token responses use the full URL, `https://www.googleapis.com/auth/gmail.readonly`. This package
+compared one against the other, matched nothing, and concluded the mailbox had no permissions at all. A real
+six-mailbox migration imported none of them. Shorthand is now expanded before anything is compared, and a test
+uses the exact shape the other server writes.
+
+Nothing else about your mailboxes changes, and nothing needs re-authorising.
+
+### Under the hood
+
+- **Releases are published by CI now, and carry provenance.** A tag starts the workflow and a named reviewer
+  approves the publish, so nothing reaches the registry without a person. npm attests only what a supported CI
+  runner published, so **0.1.0 has no provenance and every version from here does**. No credential is stored
+  anywhere: the workflow authenticates with a short-lived token minted from its own identity.
+- The release script now asks the registry what actually arrived, retrying rather than concluding from one empty
+  answer — the first release's check declared a publish that had in fact succeeded a total failure.
+
 ## 0.1.0
 
 > **Published under `@agentcomms/*`.** For a few minutes on 19 September 2026 these same packages were

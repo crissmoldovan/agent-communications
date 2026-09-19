@@ -46,7 +46,7 @@ published, so anything released from a laptop carries no attestation, and 0.1.0 
 ```bash
 # 1. The version, everywhere it is written down.
 pnpm sync:versions          # three manifests, two plugin files, the launcher, twelve skills
-pnpm licenses               # third-party notices that ship inside the bundles
+pnpm run licenses               # third-party notices that ship inside the bundles
 
 # 2. The changelog entry, written by a person. `## Unreleased` becomes `## X.Y.Z`.
 

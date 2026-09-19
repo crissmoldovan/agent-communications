@@ -1,6 +1,6 @@
 {
   "name": "agent-communications",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Agent Skills, a CLI and an MCP server that let coding agents work with Gmail safely across many inboxes.",
   "type": "module",
