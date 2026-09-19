@@ -305,3 +305,37 @@ test('the transport refuses a send endpoint reached without an approval', async 
     },
   );
 });
+
+test('while a send is in flight, nothing else may touch the draft it is standing on', async () => {
+  const { context, harness } = await connected({ riskEscalation: false });
+  const draftId = await draftTo(context, ['sam@partner.test']);
+  const prepared = await prepareSend(context, 'work', draftId);
+
+  // Put the approval in `sending`, which is the window `executeSend` holds open around the final read.
+  const record = await harness.core.approvals.get(prepared.approvalId);
+  assert.ok(record);
+  await harness.core.approvals.claimForSend(prepared.approvalId, {
+    draftMessageId: record.draftMessageId,
+    digest: record.digest,
+    inboxId: record.inboxId,
+    inboxSub: record.inboxSub,
+    policy: 'chat',
+    expect: record.expect,
+  });
+
+  const { modify, trash } = await import('../src/operations/organise.ts');
+  const { updateDraft, deleteDraft } = await import('../src/operations/drafts.ts');
+  const refuses = (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_PENDING';
+
+  // The draft itself, which was already guarded.
+  await assert.rejects(updateDraft(context, 'work', draftId, { text: 'changed' }), refuses);
+  await assert.rejects(deleteDraft(context, 'work', draftId), refuses);
+  // And the draft's *message*, reached through the organising tools — the same act one operation along.
+  await assert.rejects(modify(context, 'work', { messageIds: [record.draftMessageId], addLabels: ['INBOX'] }), refuses);
+  await assert.rejects(trash(context, 'work', { messageIds: [record.draftMessageId] }), refuses);
+
+  // An unrelated message is not affected: the guard names one message, not the mailbox.
+  const other = await draftTo(context, ['ana@partner.test'], 'Separate.');
+  const otherDraft = await (await import('../src/operations/drafts.ts')).getDraft(context, 'work', other);
+  await modify(context, 'work', { messageIds: [otherDraft.messageId], addLabels: ['INBOX'], dryRun: true });
+});

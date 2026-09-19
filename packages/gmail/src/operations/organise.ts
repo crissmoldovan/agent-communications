@@ -115,6 +115,33 @@ export async function applyUndo(
   return { inbox: alias, messages: entries.length, groups: groups.size };
 }
 
+/**
+ * Refuses to touch a message that a send is standing on.
+ *
+ * `draft update` and `draft delete` already refuse while an approval for that draft is sending. Labelling or
+ * binning the draft's *message* is the same act reached through a different operation — and it was not guarded,
+ * which is the shape of bug this project keeps finding: a rule applied to one operation and not its sibling.
+ *
+ * The send would survive it: the final re-read compares the message id and the digest, so a changed draft aborts.
+ * But it aborts with a confusing error about a draft that changed, when the truth is that another tool moved it.
+ */
+async function refuseWhileSending(
+  context: GmailContext,
+  inboxId: string,
+  messageIds: readonly string[],
+): Promise<void> {
+  if (messageIds.length === 0) return;
+  const sending = await context.core.approvals.list({ inboxId, states: ['sending'] });
+  const held = new Set(sending.map((record) => record.draftMessageId));
+  const clash = messageIds.find((id) => held.has(id));
+  if (clash) {
+    throw new CommsError('APPROVAL_PENDING', 'that message is a draft being sent right now, so it cannot be changed', {
+      hint: 'Wait for the send to finish, then look at the message in Sent.',
+      details: { messageId: clash },
+    });
+  }
+}
+
 export async function modify(context: GmailContext, alias: string, options: ModifyOptions): Promise<ModifyResult> {
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'organize');
@@ -155,6 +182,7 @@ export async function modify(context: GmailContext, alias: string, options: Modi
     for (const message of thread.messages ?? []) if (message.id) expanded.push(message.id);
   }
   const unique = [...new Set(expanded)];
+  await refuseWhileSending(context, resolved.inbox.id, unique);
 
   // What each message carries now, so the undo can restore exactly that. One metadata read per message, which is
   // the price of an undo that is actually an undo; a dry run pays it too, so the user can see the reverse before
@@ -236,6 +264,7 @@ export async function trash(
   if (unique.length === 0) {
     throw new CommsError('USAGE', 'name the messages or threads to move', { hint: 'Pass messageIds or threadIds.' });
   }
+  await refuseWhileSending(context, resolved.inbox.id, unique);
 
   const action = options.undo ? 'untrash' : 'trash';
   if (options.dryRun) return { inbox: alias, dryRun: true, messages: unique, action };
