@@ -6,6 +6,7 @@ import {
   defaultInternalDomains,
   duplicateInbox,
   expandHome,
+  homeDirectory,
   type InboxConfig,
   isValidAlias,
   newInboxId,
@@ -91,7 +92,7 @@ export function aliasFromCredentialsFile(file: string): string {
 }
 
 export async function importLegacy(context: GmailContext, options: ImportOptions = {}): Promise<ImportResult> {
-  const directory = expandHome(options.dir ?? '~/.gmail-mcp', context.env.HOME ?? '');
+  const directory = expandHome(options.dir ?? '~/.gmail-mcp', homeDirectory(context.env));
   const clientName = options.clientName ?? 'imported';
   const dryRun = options.dryRun ?? false;
 

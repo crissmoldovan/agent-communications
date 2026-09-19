@@ -6,6 +6,7 @@ import {
   checkAttachable,
   defaultAttachDeny,
   expandHome,
+  homeDirectory,
   parseAddressList,
   readComposeProfile,
   recipientDomains,
@@ -81,7 +82,7 @@ async function attachmentsFor(
 }> {
   if (paths.length === 0) return { attachments: [], described: [], warnings: [] };
   const config = await context.config();
-  const home = context.env.HOME ?? '';
+  const home = homeDirectory(context.env);
   const policy: AttachPolicy = {
     roots: config.defaults.attachRoots.map((root) => expandHome(root, home)),
     deny: [...defaultAttachDeny(context.core.paths.configDir, context.env), ...config.defaults.attachDeny],

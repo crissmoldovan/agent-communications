@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { stripInvisible } from './chars.ts';
 import type { TaintCollector } from './taint.ts';
 
 /**
@@ -36,10 +37,22 @@ export interface NeutraliseResult {
   tokensNeutralised: number;
 }
 
-/** Neutralises chat-template control tokens, role markers, and anything shaped like our own envelope tag. */
+/**
+ * Neutralises chat-template control tokens, role markers, and anything shaped like our own envelope tag.
+ *
+ * **Strips invisible characters first, and that ordering is the whole point.** Every pattern below is written in
+ * visible characters, and none of them can see through a zero-width space: `\s` in `TAG_LIKE` does not match U+200B,
+ * so `<​/untrusted-email-content>` passed straight through while rendering, to a model, as a closing tag on the
+ * line. The same trick splits `<|im_start|>` and `Human:`. Bodies were safe because `buildBody` happened to strip
+ * before calling here; every header-derived field — subject, display name, attachment filename, the quote attribution
+ * in a reply — went the other way round and was not. Stripping inside `neutralise` means a caller cannot get the
+ * order wrong, and the fields that never called `stripInvisible` at all are covered by the same change.
+ */
 export function neutralise(text: string): NeutraliseResult {
   let tokensNeutralised = 0;
-  let out = text.replace(SPECIAL_TOKENS, () => {
+  const { text: visible, removed } = stripInvisible(text);
+  tokensNeutralised += removed;
+  let out = visible.replace(SPECIAL_TOKENS, () => {
     tokensNeutralised += 1;
     return '[control token removed]';
   });

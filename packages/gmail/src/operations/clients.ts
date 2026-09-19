@@ -4,6 +4,7 @@ import {
   type ClientConfig,
   CommsError,
   expandHome,
+  homeDirectory,
   probeKeychain,
   type StoreKind,
   secretsStoreOf,
@@ -47,7 +48,7 @@ export interface ClientAddResult extends ClientView {
  */
 export async function clientAdd(context: GmailContext, options: ClientAddOptions): Promise<ClientAddResult> {
   const name = options.name ?? 'default';
-  const path = resolve(expandHome(options.path, context.env.HOME ?? ''));
+  const path = resolve(expandHome(options.path, homeDirectory(context.env)));
   let text: string;
   try {
     text = await readFile(path, 'utf8');

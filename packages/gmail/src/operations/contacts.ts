@@ -1,4 +1,4 @@
-import { CommsError, canonicalAddress, parseAddressList } from '@cloudpixel/comms-core';
+import { CommsError, canonicalAddress, neutralise, parseAddressList } from '@cloudpixel/comms-core';
 import type { GmailContext } from '../context.ts';
 import { headerValue } from '../domain/mime.ts';
 import { resolveInboxes } from './search.ts';
@@ -65,17 +65,23 @@ export async function searchContacts(
     // domain to punycode — so `josé@compañía.es` arrived twice, as two people, and neither row knew about the
     // other's evidence.
     const email = canonicalAddress(entry.email);
+    // A display name is sender-controlled and, through RFC 2047, can hold arbitrary bytes — and neither source here
+    // is one the user curated: Google auto-populates "other contacts" from the display names of whoever has mailed
+    // them, and the history source reads them straight out of message headers. A contact row leaves this function as
+    // a bare string in a structured result, outside any envelope, so it is neutralised here at the one place both
+    // sources funnel through rather than at each call site, where the next source added would miss it.
+    const name = neutralise(entry.name).text;
     const key = `${alias}:${email}`;
     const existing = found.get(key);
     if (existing) {
       if (!existing.sources.includes(entry.source)) existing.sources.push(entry.source);
       if (entry.source === 'history') existing.messages += 1;
       if (entry.at && (!existing.lastSeen || entry.at > existing.lastSeen)) existing.lastSeen = entry.at;
-      if (!existing.name && entry.name) existing.name = entry.name;
+      if (!existing.name && name) existing.name = name;
       return;
     }
     found.set(key, {
-      name: entry.name,
+      name,
       // Recorded canonically too, so what a caller sees is what a later lookup will match.
       email,
       inbox: alias,
@@ -254,7 +260,10 @@ export async function followUps(context: GmailContext, options: FollowUpOptions 
           inbox: alias,
           threadId: thread.id ?? entry.id,
           messageId: lastSent.id ?? '',
-          subject: (headerValue(headers, 'Subject') ?? '').slice(0, 120),
+          // Sender-controlled and outside any envelope. `followUps` is a tool an agent calls on its own
+          // initiative when triaging, so leaving a message unanswered is enough to put a payload in front of
+          // the model — the user never has to open it.
+          subject: neutralise((headerValue(headers, 'Subject') ?? '').slice(0, 120)).text,
           with: counterpart,
           lastAt: at?.toISOString() ?? null,
           ageDays,

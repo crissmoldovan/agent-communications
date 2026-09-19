@@ -6,6 +6,8 @@ import {
   createUniqueFile,
   ensurePrivateDir,
   expandHome,
+  homeDirectory,
+  neutralise,
   parseAddressList,
   resolveInsideRoot,
   safeFilename,
@@ -121,13 +123,20 @@ export async function findAttachments(
             threadId: message.threadId ?? entry.threadId ?? '',
             partId: part.partId,
             attachmentId: part.attachmentId,
-            filename,
+            // Sender-controlled, and neutralised for the same reason `read.ts` neutralises them: a row leaves this
+            // function as a bare string in a structured result, outside any envelope, and an attachment name or a
+            // subject can hold arbitrary bytes. This path is reached by an agent triaging mail on its own
+            // initiative, so the sender does not need the user to open anything.
+            filename: neutralise(filename).text,
             mimeType: part.mimeType,
             size: part.size,
             date,
             from,
-            subject: subject.slice(0, 120),
-            riskFlags: attachmentRisks(filename, part.mimeType),
+            subject: neutralise(subject.slice(0, 120)).text,
+            // Flagged on the name the file would actually be written under, not the one the sender sent:
+            // `invoice.exe ` is stripped to `invoice.exe` on the way to disk, and the `$`-anchored extension checks
+            // do not match the trailing space, so the executable was written and the flag was not raised.
+            riskFlags: attachmentRisks(safeFilename(filename), part.mimeType),
           });
         }
       }
@@ -175,7 +184,7 @@ export const DEFAULT_MAX_BYTES: number = 500 * 1024 * 1024;
 export async function downloadsRoot(context: GmailContext): Promise<string> {
   const config = await context.config();
   const configured = config.defaults.downloadsDir;
-  const root = configured ? expandHome(configured, context.env.HOME ?? '') : context.core.paths.downloadsDir;
+  const root = configured ? expandHome(configured, homeDirectory(context.env)) : context.core.paths.downloadsDir;
   await ensurePrivateDir(root);
   return root;
 }
