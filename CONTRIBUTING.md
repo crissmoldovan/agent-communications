@@ -56,3 +56,7 @@ relative and inside the skill directory; the README must list each skill's exact
   that does not exist.
 - Follow the [Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities through [SECURITY.md](SECURITY.md), never
   in a public issue.
+
+## Releasing
+
+See [`docs/RELEASING.md`](docs/RELEASING.md) — the order, the one-time npm setup, and what the dry run is for.
