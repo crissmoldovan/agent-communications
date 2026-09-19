@@ -136,7 +136,12 @@ async function migrateSecrets(
   if (from === to) return { from, to, moved: 0 };
   const source = await core.secrets(from);
   const target = await openSecretStore(to, {
-    secretsDir: `${core.paths.configDir}/secrets`,
+    // `paths.secretsDir`, never a path rebuilt from `configDir`. On Windows the two are deliberately different:
+    // `resolvePaths` puts the file secret store under `%LOCALAPPDATA%` while config stays in `%APPDATA%`, because
+    // the roaming profile is copied between machines by a domain and refresh tokens are exactly what must not
+    // travel that way. Rebuilding the path here sent every migrated token into the roaming profile, deleted the
+    // originals, and left the runtime — which reads `paths.secretsDir` — finding nothing at all.
+    secretsDir: core.paths.secretsDir,
     namespace: keychainNamespace(core.paths.configDir),
   });
   const refs = [
