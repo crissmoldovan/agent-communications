@@ -305,6 +305,16 @@ export function hidesContent(style: Map<string, string>): boolean {
   const visibility = style.get('visibility');
   if (visibility === 'hidden' || visibility === 'collapse') return true;
   if (style.get('mso-hide') === 'all') return true;
+  // `content-visibility: hidden` skips the element's contents entirely in Chromium — which is Gmail's web client
+  // and Apple Mail — and is not a variation on `display` or `visibility`, so neither check above sees it.
+  if (style.get('content-visibility') === 'hidden') return true;
+  // `filter: opacity(0)` is the same erasure as `opacity: 0` wearing a function. The filter chain can hold several
+  // things; only the opacity one is read, because a blur or a brightness is a matter of degree and this is not.
+  for (const filter of [style.get('filter'), style.get('-webkit-filter')]) {
+    const amount = /opacity\(\s*([^)]*)\)/i.exec(filter ?? '');
+    const value = amount ? alphaValue(amount[1] ?? '') : null;
+    if (value !== null && value <= 0.05) return true;
+  }
   const opacity = alphaValue(style.get('opacity'));
   if (opacity !== null && opacity <= 0.05) return true;
   const fontSize = numeric(style.get('font-size'), FONT_SIZE_BASIS_PX);
@@ -335,18 +345,33 @@ export function hidesContent(style: Map<string, string>): boolean {
   const polygon = /polygon\(([^)]*)\)/.exec(clipPath);
   if (polygon && /^[\s,]*(?:0(?:px|%|em|rem)?[\s,]+0(?:px|%|em|rem)?[\s,]*)+$/.test(polygon[1] ?? 'x')) return true;
   if (offScreen(numeric(style.get('text-indent')))) return true;
-  for (const side of ['margin-left', 'margin-top']) {
-    if (offScreen(numeric(style.get(side), side.endsWith('top') ? VIEWPORT_HEIGHT_PX : VIEWPORT_WIDTH_PX))) return true;
+  // All four sides, and the shorthand. Only `margin-left` and `margin-top` were read, so `margin-right:-9999px` and
+  // `margin:-9999px` pushed content off the screen without being seen — the same idea one property along.
+  for (const side of ['margin-left', 'margin-top', 'margin-right', 'margin-bottom']) {
+    const vertical = side.endsWith('top') || side.endsWith('bottom');
+    if (offScreen(numeric(style.get(side), vertical ? VIEWPORT_HEIGHT_PX : VIEWPORT_WIDTH_PX))) return true;
   }
+  if (shorthandOffScreen(style.get('margin'))) return true;
+
   const position = style.get('position');
-  if (position === 'absolute' || position === 'fixed' || position === 'relative') {
+  // `sticky` as well: it positions against a scroll container, and a large offset moves content out of view there
+  // exactly as it does under `absolute`.
+  if (position === 'absolute' || position === 'fixed' || position === 'relative' || position === 'sticky') {
     // Far in either direction: a large positive left/top pushes content past the right or bottom edge just as a
     // large negative one pushes it past the left or top, and the same holds for right/bottom mirrored.
     for (const side of ['left', 'top', 'right', 'bottom']) {
       const vertical = side === 'top' || side === 'bottom';
       if (offScreen(numeric(style.get(side), vertical ? VIEWPORT_HEIGHT_PX : VIEWPORT_WIDTH_PX))) return true;
     }
+    // `inset` sets all four at once, and setting all four is exactly how somebody writes this in one line.
+    if (shorthandOffScreen(style.get('inset'))) return true;
   }
+
+  // The individual transform properties, which are not the `transform` property and are not covered by reading it.
+  // `scale: 0` and `translate: -9999px` are CSS Transforms 2, shipped in every Chromium-based client.
+  const standaloneScale = style.get('scale');
+  if (standaloneScale !== undefined && /^\s*0(\.0+)?(\s|$)/.test(standaloneScale)) return true;
+  if (shorthandOffScreen(style.get('translate'))) return true;
   const transform = style.get('transform') ?? '';
   if (/scale[xy]?\(\s*0(\.0+)?\s*[,)]/.test(transform)) return true;
   // `[^)]*` stops at the first `)`, which is inside the argument when it is a `calc()` — so `translateX(calc(-9999px))`
@@ -354,7 +379,28 @@ export function hidesContent(style: Map<string, string>): boolean {
   for (const match of transform.matchAll(/translate[xy3d]*\(((?:[^()]|\([^()]*\))*)\)/g)) {
     if ((match[1] ?? '').split(',').some((part) => offScreen(numeric(part)))) return true;
   }
+  // `matrix(a, b, c, d, tx, ty)` and `matrix3d(…)` translate through their last values, which is the same journey
+  // off the screen written in the form a design tool emits.
+  for (const match of transform.matchAll(/matrix3?d?\(([^)]*)\)/g)) {
+    const parts = (match[1] ?? '').split(',').map((part) => part.trim());
+    const translations = parts.length >= 16 ? parts.slice(12, 14) : parts.slice(4, 6);
+    if (translations.some((part) => offScreen(numeric(part)))) return true;
+    // A zero scale in either form shows nothing, just as `scale(0)` does.
+    const scales = parts.length >= 16 ? [parts[0], parts[5]] : [parts[0], parts[3]];
+    if (scales.every((part) => part !== undefined && Number(part) === 0)) return true;
+  }
   return false;
+}
+
+/** Any component of a shorthand — `margin: 0 -9999px`, `inset: -9999px`, `translate: -9999px 0` — off the screen. */
+function shorthandOffScreen(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  // A shorthand's first value is vertical for `margin`/`inset` and horizontal for `translate`; both bases are
+  // checked, because being wrong in the lenient direction here is how the check gets missed.
+  return parts.some(
+    (part) => offScreen(numeric(part, VIEWPORT_WIDTH_PX)) && offScreen(numeric(part, VIEWPORT_HEIGHT_PX)),
+  );
 }
 
 /** How far content must be pushed before no mail client shows it: past the start edge, or past the far edge. */
