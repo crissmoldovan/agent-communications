@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "Brief the user on one Gmail conversation: a computed timeline of who wrote what and when, then your own labelled reading of decisions, asks, commitments, whose turn it is and how urgent it looks."
+}

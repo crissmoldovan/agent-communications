@@ -315,3 +315,58 @@ test('updating a draft replaces its content and gives it a new message id', asyn
   assert.match(read.preview, /Wednesday is better/);
   assert.equal((await listDrafts(context, 'work')).length, 1, 'no orphan draft was left behind');
 });
+
+test('a forward carries the original, and a reply quotes it', async () => {
+  const { context } = await connected({
+    m1: incoming({ id: 'm1', from: 'Sam Lee <sam@partner.test>', cc: 'Ana <ana@partner.test>' }),
+  });
+
+  const forwarded = await replyDraft(context, 'work', 'm1', {
+    mode: 'forward',
+    to: ['new@third.test'],
+    text: 'Passing this on.',
+  });
+  // Without the original this is a new message *about* a message, and the recipient cannot know what.
+  assert.match(forwarded.preview, /Forwarded message/);
+  assert.match(forwarded.preview, /From: .*sam@partner\.test/);
+  assert.match(forwarded.preview, /Subject: /);
+  assert.match(forwarded.preview, /Passing this on\./);
+
+  const replied = await replyDraft(context, 'work', 'm1', { text: 'Tuesday works.' });
+  assert.match(replied.preview, /wrote:/, 'a reply attributes what it quotes');
+  assert.match(replied.preview, /^> /m, 'and quotes it');
+
+  // A short reply can leave the quote off; a forward should not, but that is the caller's call to make.
+  const bare = await replyDraft(context, 'work', 'm1', { text: 'Yes.', quote: false });
+  assert.doesNotMatch(bare.preview, /wrote:/);
+});
+
+test('updating a draft keeps the body and the files that were not restated', async () => {
+  const { harness } = await connected();
+  const home = tempDir('agent-gmail-home-');
+  await harness.core.config.update((config) => ({ ...config, defaults: { ...config.defaults, attachRoots: [home] } }), {
+    consent: { kind: 'loosening-consent', paths: ['defaults.attachRoots'] },
+  });
+  const withHome = new GmailContext({ core: harness.core, env: { ...harness.env, HOME: home } });
+  const file = join(home, 'plan.pdf');
+  await writeFile(file, '%PDF-1.4 fake');
+
+  const draft = await createDraft(withHome, 'work', {
+    to: ['sam@partner.test'],
+    subject: 'Tuesday',
+    text: 'Tuesday works for me.',
+    attach: [file],
+  });
+  assert.equal(draft.attachments.length, 1);
+
+  // Changing only the subject must not empty the message or throw its attachment away.
+  const retitled = await updateDraft(withHome, 'work', draft.draftId, { subject: 'Tuesday, then' });
+  assert.equal(retitled.subject, 'Tuesday, then');
+  assert.match(retitled.preview, /Tuesday works for me\./, 'the body survived');
+  assert.equal(retitled.attachments.length, 1, 'and so did the attachment');
+
+  // Restating the attachments replaces the set, which is what passing them means.
+  const stripped = await updateDraft(withHome, 'work', draft.draftId, { text: 'Never mind.', attach: [] });
+  assert.equal(stripped.attachments.length, 0);
+  assert.match(stripped.preview, /Never mind\./);
+});

@@ -200,25 +200,88 @@ function messageFromRaw(id: string, raw: string, threadId?: string): FakeMessage
     })
     .filter((header): header is { name: string; value: string } => header !== null);
 
-  // The body is kept as one text part, quoted-printable decoded, so a draft reads back as the author wrote it.
-  const plain = decodeQuotedPrintable(
-    bodyBlock
-      .replace(/^--.*$/gm, '')
-      .replace(/Content-[^\n]*\n/g, '')
-      .trim(),
-  );
-  return {
-    id,
-    threadId: threadId ?? id,
-    labelIds: ['DRAFT'],
-    internalDate: String(Date.now()),
-    payload: {
-      partId: '',
-      mimeType: 'text/plain',
-      headers,
-      body: { size: plain.length, data: Buffer.from(plain, 'utf8').toString('base64url') },
-    },
-  };
+  const contentType = headers.find((header) => header.name.toLowerCase() === 'content-type')?.value ?? '';
+  const boundary = /boundary="?([^";]+)"?/i.exec(contentType)?.[1];
+  const payload = boundary
+    ? {
+        partId: '',
+        mimeType: contentType.split(';')[0]?.trim() ?? 'multipart/mixed',
+        headers,
+        parts: splitParts(bodyBlock, boundary, ''),
+      }
+    : {
+        partId: '',
+        mimeType: contentType.split(';')[0]?.trim() || 'text/plain',
+        headers,
+        body: bodyFor(decodeBodyBlock(bodyBlock, headers)),
+      };
+  return { id, threadId: threadId ?? id, labelIds: ['DRAFT'], internalDate: String(Date.now()), payload };
+}
+
+function bodyFor(content: Buffer): { size: number; data: string; attachmentId?: string } {
+  return { size: content.length, data: content.toString('base64url') };
+}
+
+function headerLine(headers: Array<{ name: string; value: string }>, name: string): string {
+  return headers.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value ?? '';
+}
+
+/** Decodes one part's body according to its transfer encoding — quoted-printable, base64, or neither. */
+function decodeBodyBlock(block: string, headers: Array<{ name: string; value: string }>): Buffer {
+  const encoding = headerLine(headers, 'Content-Transfer-Encoding').toLowerCase();
+  if (encoding === 'base64') return Buffer.from(block.replace(/\s+/g, ''), 'base64');
+  if (encoding === 'quoted-printable') return Buffer.from(decodeQuotedPrintable(block.trimEnd()), 'utf8');
+  return Buffer.from(block.trimEnd(), 'utf8');
+}
+
+/**
+ * Splits a multipart body into the part tree Gmail returns.
+ *
+ * The fake used to flatten every draft into one text part, which meant a draft with an attachment read back without
+ * it — and a test asserting that attachments survive an edit passed while the product dropped them. A fake that is
+ * wrong in the same direction as the bug proves nothing.
+ */
+function splitParts(body: string, boundary: string, parentPartId: string): Array<Record<string, unknown>> {
+  const sections = body.split(new RegExp(`--${boundary.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(--)?\r?\n`));
+  const parts: Array<Record<string, unknown>> = [];
+  for (const section of sections.slice(1)) {
+    if (!section || section === '--' || !section.trim()) continue;
+    const split = section.indexOf('\r\n\r\n');
+    if (split < 0) continue;
+    const partHeaders = section
+      .slice(0, split)
+      .replace(/\r\n[ \t]+/g, ' ')
+      .split(/\r\n/)
+      .map((line) => {
+        const colon = line.indexOf(':');
+        return colon > 0 ? { name: line.slice(0, colon).trim(), value: line.slice(colon + 1).trim() } : null;
+      })
+      .filter((header): header is { name: string; value: string } => header !== null);
+    const partBody = section.slice(split + 4);
+    const partId = parentPartId ? `${parentPartId}.${parts.length}` : String(parts.length);
+    const type = headerLine(partHeaders, 'Content-Type');
+    const mimeType = type.split(';')[0]?.trim() || 'text/plain';
+    const nested = /boundary="?([^";]+)"?/i.exec(type)?.[1];
+    const disposition = headerLine(partHeaders, 'Content-Disposition');
+    const filename = /filename="?([^";]+)"?/i.exec(`${disposition};${type}`)?.[1];
+
+    if (nested) {
+      parts.push({ partId, mimeType, headers: partHeaders, parts: splitParts(partBody, nested, partId) });
+      continue;
+    }
+    const content = decodeBodyBlock(partBody, partHeaders);
+    parts.push({
+      partId,
+      mimeType,
+      filename: filename ?? '',
+      headers: partHeaders,
+      // An attachment is fetched by id, exactly as Gmail does it; the id encodes the bytes so the fetch can serve them.
+      body: /attachment/i.test(disposition)
+        ? { size: content.length, attachmentId: `att_${content.toString('base64url')}` }
+        : bodyFor(content),
+    });
+  }
+  return parts;
 }
 
 /** An account's labels: whatever the test gave it, or the two every mailbox has. */
@@ -447,7 +510,15 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
 
       const attachment = /^\/gmail\/v1\/users\/me\/messages\/([^/]+)\/attachments\/([^/]+)$/.exec(url.pathname);
       if (attachment) {
-        const bytes = account?.attachments?.[decodeURIComponent(attachment[2] ?? '')];
+        const attachmentId = decodeURIComponent(attachment[2] ?? '');
+        // An id this fake minted while parsing a saved draft carries its own bytes, so a draft read back can be
+        // fetched part by part exactly as Gmail allows.
+        if (attachmentId.startsWith('att_')) {
+          const content = Buffer.from(attachmentId.slice(4), 'base64url');
+          json(response, 200, { size: content.length, data: content.toString('base64url') });
+          return;
+        }
+        const bytes = account?.attachments?.[attachmentId];
         if (bytes === undefined) {
           json(response, 404, { error: { code: 404, message: 'Not Found', errors: [{ reason: 'notFound' }] } });
           return;

@@ -12,14 +12,17 @@ import {
   renderMessagePreview,
 } from '@cloudpixel/comms-core';
 import type { GmailContext } from '../context.ts';
+import { buildBody } from '../domain/body.ts';
 import {
   type ComposeAttachment,
   composeMessage,
   formatAddress,
   planReply,
+  type QuotedOriginal,
   WARN_ATTACHMENT_BYTES,
 } from '../domain/compose.ts';
 import { headerValue, readParts } from '../domain/mime.ts';
+import type { GmailTransport, RawMessage } from '../gmail-api/transport.ts';
 import { ownAddresses } from './analyse.ts';
 
 /**
@@ -46,6 +49,11 @@ export interface DraftResult {
   warnings: string[];
   /** What this mailbox's writing profile says, for whoever revises the draft. */
   profile?: string | undefined;
+}
+
+export interface UpdateDraftInput extends Omit<DraftInput, 'text'> {
+  /** What the message should say. Omit it to keep the body the draft already has. */
+  text?: string | undefined;
 }
 
 export interface DraftInput {
@@ -222,6 +230,73 @@ export async function createDraft(context: GmailContext, alias: string, input: D
 
 export interface ReplyInput extends DraftInput {
   mode?: 'reply' | 'reply_all' | 'forward' | undefined;
+  /**
+   * Quote the original below the new text. On by default, and a forward without it is not a forward.
+   *
+   * Turn it off for a reply so short that the quote is longer than the answer — never for a forward, where the
+   * recipient has no other way to know what is being forwarded.
+   */
+  quote?: boolean | undefined;
+}
+
+/**
+ * The original as a quote: its sanitised text, never its HTML.
+ *
+ * The original's markup belongs to whoever sent it and can carry a tracking image, hidden text or a form.
+ * Forwarding that would put the user's name on somebody else's beacon, and the outbound analyser would refuse the
+ * draft anyway. Quoting the text loses the original's formatting, which is the right trade.
+ */
+function quoteOf(original: RawMessage, mode: 'reply' | 'reply_all' | 'forward'): QuotedOriginal | undefined {
+  const headers = original.payload?.headers ?? [];
+  const body = buildBody(readParts(original.payload), { maxChars: QUOTE_MAX_CHARS, includeQuoted: false });
+  if (!body.text.trim()) return undefined;
+  const sender = headerValue(headers, 'From') ?? 'someone';
+  const date = headerValue(headers, 'Date');
+  const when = date ? new Date(date) : null;
+  const stamp = when && !Number.isNaN(when.getTime()) ? when.toUTCString() : (date ?? 'an earlier date');
+
+  if (mode !== 'forward') {
+    return { attribution: `On ${stamp}, ${sender} wrote:`, text: body.text };
+  }
+  // A forward restates who it was from, when, to whom and about what: without those the quote is orphaned text.
+  return {
+    attribution: '---------- Forwarded message ----------',
+    text: body.text,
+    headerLines: [
+      `From: ${sender}`,
+      `Date: ${stamp}`,
+      `Subject: ${headerValue(headers, 'Subject') ?? '(no subject)'}`,
+      `To: ${headerValue(headers, 'To') ?? '(undisclosed)'}`,
+      ...(headerValue(headers, 'Cc') ? [`Cc: ${headerValue(headers, 'Cc')}`] : []),
+    ],
+  };
+}
+
+/** How much of an original is quoted. Long enough for context, short enough not to dominate the message. */
+const QUOTE_MAX_CHARS = 4000;
+
+/** The attachments already on a draft, fetched by their bytes so an update can put them back. */
+async function carriedAttachments(
+  transport: GmailTransport,
+  messageId: string,
+  parts: ReturnType<typeof readParts>,
+): Promise<{ attachments: ComposeAttachment[]; described: DraftResult['attachments']; warnings: string[] }> {
+  const attachments: ComposeAttachment[] = [];
+  const described: DraftResult['attachments'] = [];
+  const warnings: string[] = [];
+  for (const part of parts.attachments) {
+    if (!part.attachmentId || !messageId) continue;
+    try {
+      const content = await transport.getAttachment(messageId, part.attachmentId);
+      const filename = part.filename ?? 'attachment';
+      attachments.push({ filename, content, contentType: part.mimeType });
+      described.push({ filename, size: content.length, mimeType: part.mimeType, source: 'kept from the draft' });
+    } catch {
+      // Better to say a file was lost than to save a draft that quietly no longer has it.
+      warnings.push(`could not keep the attachment "${part.filename ?? 'attachment'}"; it is no longer on the draft`);
+    }
+  }
+  return { attachments, described, warnings };
 }
 
 /** Replies to a message, or forwards it. The recipients are computed, then shown, never assumed. */
@@ -266,6 +341,7 @@ export async function replyDraft(
   const { attachments, described, warnings: attachmentWarnings } = await attachmentsFor(context, input.attach ?? []);
   const signature = input.signature === false ? undefined : await signatureFor(context, alias, from);
   const subject = input.subject ?? plan.subject;
+  const quoted = input.quote === false ? undefined : quoteOf(original, mode);
 
   const composed = await composeMessage({
     from: formatAddress({ name: '', address: from }),
@@ -276,6 +352,7 @@ export async function replyDraft(
     text: input.text,
     signature,
     attachments,
+    quoted,
     inReplyTo: plan.inReplyTo,
     references: plan.references,
   });
@@ -408,7 +485,7 @@ export async function updateDraft(
   context: GmailContext,
   alias: string,
   draftId: string,
-  input: DraftInput,
+  input: UpdateDraftInput,
 ): Promise<DraftResult> {
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'draft');
@@ -417,14 +494,35 @@ export async function updateDraft(
 
   const existing = await transport.getDraft(draftId);
   const headers = existing.message?.payload?.headers ?? [];
-  // Anything the caller does not restate keeps what the draft already had.
+  // Anything the caller does not restate keeps what the draft already had — and that has to include the body and
+  // the attachments, not only the headers. An update that silently emptied a draft of its files was a quiet way to
+  // lose work: the caller asked to change one thing and got a different message back.
   const to = input.to ?? parseAddressList(headerValue(headers, 'To')).map((entry) => entry.address);
   const cc = input.cc ?? parseAddressList(headerValue(headers, 'Cc')).map((entry) => entry.address);
   const bcc = input.bcc ?? parseAddressList(headerValue(headers, 'Bcc')).map((entry) => entry.address);
   const subject = input.subject ?? headerValue(headers, 'Subject') ?? '';
   const from = resolved.inbox.email;
 
-  const { attachments, described, warnings: attachmentWarnings } = await attachmentsFor(context, input.attach ?? []);
+  const existingParts = readParts(existing.message?.payload);
+  const text = input.text ?? existingParts.plain[0]?.text ?? '';
+  if (!input.text && !text.trim()) {
+    throw new CommsError('USAGE', 'this draft has no body, and none was given', {
+      hint: 'Pass `text` with what the message should say.',
+    });
+  }
+
+  // Attachments are carried over by their bytes, because a draft rebuilt from scratch has no other way to keep
+  // them. Passing `attach` replaces the set; passing nothing keeps it.
+  const carried = input.attach
+    ? { attachments: [], described: [], warnings: [] }
+    : await carriedAttachments(transport, existing.message?.id ?? '', existingParts);
+  const {
+    attachments: added,
+    described: describedAdded,
+    warnings: attachmentWarnings,
+  } = await attachmentsFor(context, input.attach ?? []);
+  const attachments = [...carried.attachments, ...added];
+  const described = [...carried.described, ...describedAdded];
   const signature = input.signature === false ? undefined : await signatureFor(context, alias, from);
   const inReplyTo = headerValue(headers, 'In-Reply-To');
   const references = (headerValue(headers, 'References') ?? '').split(/\s+/).filter(Boolean);
@@ -435,7 +533,7 @@ export async function updateDraft(
     cc,
     bcc,
     subject,
-    text: input.text,
+    text,
     signature,
     attachments,
     inReplyTo,

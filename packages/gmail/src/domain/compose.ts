@@ -28,9 +28,26 @@ export interface ComposeInput {
   /** Appended to both parts, exactly as Gmail stores it for the sending address. */
   signature?: { text: string; html: string } | undefined;
   attachments?: ComposeAttachment[] | undefined;
+  /**
+   * The message being answered or forwarded, as sanitised text, to quote below what the author wrote.
+   *
+   * A forward without the original is not a forward — it is a new message about one, and the recipient has no idea
+   * what was meant. It is quoted rather than re-attached because the original's HTML is somebody else's markup: it
+   * may carry a beacon, hidden text, or a form, none of which an agent may put its name to.
+   */
+  quoted?: QuotedOriginal | undefined;
   inReplyTo?: string | undefined;
   references?: string[] | undefined;
   headers?: Record<string, string> | undefined;
+}
+
+export interface QuotedOriginal {
+  /** How the quote is introduced: "On 17 Sep 2026 at 16:02, Sam Lee <sam@…> wrote:". */
+  attribution: string;
+  /** The original's text, already sanitised — never its HTML. */
+  text: string;
+  /** A forward names the original's recipients and subject; a reply does not need to. */
+  headerLines?: string[] | undefined;
 }
 
 export interface ComposedMessage {
@@ -104,16 +121,48 @@ export function formatAddress(entry: ParsedAddress | string): string {
  * Builds the message. Returns the raw bytes for Gmail, and the two body parts for a preview and for the digest the
  * approval is bound to.
  */
+/**
+ * The original, quoted below what the author wrote, in both parts.
+ *
+ * It is built from the **sanitised text** of the original, never its HTML: the original's markup belongs to
+ * whoever sent it and can carry a tracking image or hidden text, and forwarding that would put the user's name on
+ * somebody else's beacon. Quoting the text loses the original's formatting, which is the right trade — a forward
+ * that is safe to send beats one that renders prettily.
+ */
+function renderQuote(quoted: QuotedOriginal): { text: string; html: string } {
+  const headerLines = quoted.headerLines ?? [];
+  const plain = [
+    quoted.attribution,
+    ...headerLines,
+    '',
+    ...quoted.text.split('\n').map((line) => `> ${line}`.trimEnd()),
+  ].join('\n');
+  // `gmail_quote` is the class Gmail's own editor uses, so the block collapses the way a reader expects.
+  const html = [
+    `<div class="gmail_quote">`,
+    `<div dir="ltr" class="gmail_attr">${escapeHtml(quoted.attribution)}</div>`,
+    ...headerLines.map((line) => `<div class="gmail_attr">${escapeHtml(line)}</div>`),
+    `<blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex">`,
+    textToHtml(quoted.text),
+    `</blockquote>`,
+    `</div>`,
+  ].join('\n');
+  return { text: plain, html };
+}
+
 export async function composeMessage(input: ComposeInput): Promise<ComposedMessage> {
   if (input.to.length === 0 && (input.cc?.length ?? 0) === 0 && (input.bcc?.length ?? 0) === 0) {
     throw new CommsError('BAD_DATA', 'a message needs at least one recipient');
   }
 
-  const text = input.signature ? `${input.text.replace(/\s+$/, '')}\n\n${input.signature.text}` : input.text;
+  const quote = input.quoted ? renderQuote(input.quoted) : null;
+  const written = quote ? `${input.text.replace(/\s+$/, '')}\n\n${quote.text}` : input.text;
+  const text = input.signature ? `${written.replace(/\s+$/, '')}\n\n${input.signature.text}` : written;
   // Gmail wraps a signature in its own element so its editor recognises it; the wrapper is kept byte-for-byte.
+  const body = quote ? `${textToHtml(input.text)}\n${quote.html}` : textToHtml(input.text);
   const html = input.signature
-    ? `${textToHtml(input.text)}\n<div class="gmail_signature" data-smartmail="gmail_signature">${input.signature.html}</div>`
-    : textToHtml(input.text);
+    ? `${body}\n<div class="gmail_signature" data-smartmail="gmail_signature">${input.signature.html}</div>`
+    : body;
 
   const report = analyseOutboundHtml(html);
   const problems = [

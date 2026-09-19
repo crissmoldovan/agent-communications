@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "Find mail across one or more mailboxes and read what you find, honestly about how much you read."
+}

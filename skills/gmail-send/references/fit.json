@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "Send a Gmail draft the user has approved, under the approval policy their mailbox is set to."
+}

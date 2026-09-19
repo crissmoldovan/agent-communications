@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "Move mail around inside a mailbox — labels, archive, read state, stars, the bin — dry-running anything bulk and keeping the change that reverses it."
+}

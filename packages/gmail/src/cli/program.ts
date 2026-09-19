@@ -141,13 +141,15 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
    * Standard input matters more than it looks: a body is prose with newlines and quotes in it, and an agent that has
    * to fit one into a shell argument will mangle it. Piping it in is the way that always works.
    */
-  const bodyText = async (options: Options): Promise<string> => {
+  const bodyText = async (options: Options, behaviour: { bodyOptional?: boolean } = {}): Promise<string> => {
     if (typeof options.text === 'string') return options.text;
     if (typeof options.file === 'string') {
       const { readFile } = await import('node:fs/promises');
       return readFile(String(options.file), 'utf8');
     }
     const stdin = streams.stdin as NodeJS.ReadableStream & { isTTY?: boolean };
+    // On an update, no body means "keep the one that is there" rather than an error.
+    if (behaviour.bodyOptional && stdin.isTTY) return undefined as unknown as string;
     if (stdin.isTTY) {
       throw new CommsError('USAGE', 'no message body', {
         hint: 'Pass --text "…", or --file <path>, or pipe the body in on standard input.',
@@ -185,14 +187,18 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       .option('--bcc <address...>', 'blind-copy these people')
       .option('--attach <path...>', 'attach these local files')
       .option('--no-signature', 'leave the mailbox signature off')
+      .option('--no-quote', 'do not quote the original (a reply only; a forward needs it)')
       .option('--profile', 'include the mailbox writing profile in the result', false);
 
-  const draftInput = async (options: Options): Promise<Parameters<typeof createDraft>[2]> => ({
+  const draftInput = async (
+    options: Options,
+    behaviour: { bodyOptional?: boolean } = {},
+  ): Promise<Parameters<typeof createDraft>[2]> => ({
     to: options.to as string[] | undefined,
     cc: options.cc as string[] | undefined,
     bcc: options.bcc as string[] | undefined,
     subject: options.subject === undefined ? undefined : String(options.subject),
-    text: await bodyText(options),
+    text: await bodyText(options, behaviour),
     attach: options.attach as string[] | undefined,
     signature: options.signature !== false,
     includeProfile: Boolean(options.profile),
@@ -643,6 +649,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         const result = await replyDraft(context, String(options.inbox), messageId, {
           ...(await draftInput(options)),
           mode: options.mode as 'reply' | 'reply_all' | 'forward' | undefined,
+          quote: options.quote !== false,
         });
         writeResult(result, output(), (data) => renderDraft(data, globalOptions.color), streams);
       }),
@@ -675,13 +682,18 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       }),
     );
 
-  withDraftOptions(draft.command('update <draftId>').description('rewrite a draft, keeping what is not restated'))
+  withDraftOptions(
+    draft
+      .command('update <draftId>')
+      .description('change a draft — the body, files and headers you do not restate are kept'),
+  )
     .requiredOption('--inbox <alias>', 'which mailbox')
     .option('--to <address...>', 'replace the recipients')
     .option('--subject <subject>', 'replace the subject line')
     .action(
       act(async (context, globalOptions, draftId: string, options: Options) => {
-        const result = await updateDraft(context, String(options.inbox), draftId, await draftInput(options));
+        const input = await draftInput(options, { bodyOptional: true });
+        const result = await updateDraft(context, String(options.inbox), draftId, input);
         writeResult(result, output(), (data) => renderDraft(data, globalOptions.color), streams);
       }),
     );

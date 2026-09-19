@@ -801,11 +801,14 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       {
         title: 'Draft a reply or forward',
         description:
-          'Draft an answer to a message, or forward it. The recipients are computed from the original — Reply-To wins, reply-all drops your own addresses — and returned so they can be checked before anything is sent. A forward starts a new conversation and needs `to`. Nothing is sent by this tool.',
+          'Draft an answer to a message, or forward it. The recipients are computed from the original — Reply-To wins, reply-all drops your own addresses — and returned so they can be checked before anything is sent. The original is quoted below your text as sanitised plain text, never its own HTML. A forward starts a new conversation and needs `to`. Nothing is sent by this tool.',
         inputSchema: z.object({
           inbox: inboxArgument(Boolean(pinned)),
           messageId: z.string().min(1).describe('the message being answered'),
           mode: z.enum(['reply', 'reply_all', 'forward']).optional().describe('default: reply'),
+          quote: mcpBoolean()
+            .optional()
+            .describe('quote the original below your text (default true); a forward without it is not a forward'),
           to: mcpStringArray().optional().describe('required for a forward; computed for a reply'),
           cc: mcpStringArray().optional(),
           bcc: mcpStringArray().optional(),
@@ -831,7 +834,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       {
         title: 'Rewrite a draft',
         description:
-          'Replace a draft’s body, and optionally its recipients or subject. Anything not restated is kept. Gmail gives the draft a new message id on every save, which is what makes an edit detectable later.',
+          'Change a draft: its body, recipients, subject or attachments. Anything not restated is kept — the body and the attachments included — so an update that only changes the subject keeps the message and its files. Gmail gives the draft a new message id on every save, which is what makes an edit detectable later.',
         inputSchema: z.object({
           inbox: inboxArgument(Boolean(pinned)),
           draftId: z.string().min(1),
@@ -839,8 +842,10 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           cc: mcpStringArray().optional(),
           bcc: mcpStringArray().optional(),
           subject: z.string().optional(),
-          text: bodyArgument,
-          attach: mcpStringArray().optional(),
+          text: bodyArgument.optional().describe('the new body; omit it to keep the one the draft already has'),
+          attach: mcpStringArray()
+            .optional()
+            .describe('replaces the attachments; omit it to keep the ones already on the draft'),
           signature: mcpBoolean().optional(),
           includeProfile: mcpBoolean().optional(),
         }),
