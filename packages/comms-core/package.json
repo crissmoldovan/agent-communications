@@ -4,6 +4,7 @@
   "description": "Provider-neutral core for agent-communications: config, secret store, approvals, audit log and untrusted-content handling.",
   "type": "module",
   "license": "MIT",
+  "author": "Criss Moldovan",
   "engines": {
     "node": ">=22.12.0"
   },
