@@ -327,3 +327,27 @@ test('the endpoint override is a test facility, and a released build ignores it'
   assert.match(source, /RUNNING_FROM_SOURCE = import\.meta\.url\.endsWith\('\.ts'\)/);
   assert.match(source, /!override \|\| !RUNNING_FROM_SOURCE/, 'and the gate is on the early return');
 });
+
+test('a legacy credentials file recording scope shorthand still grants its capabilities', () => {
+  // `@artymclabin/gmail-mcp` writes `["gmail.readonly","gmail.compose"]` — the shorthand, not the full URLs Google's
+  // own token responses use. `inbox import` reads exactly those files, and comparing shorthand against
+  // `https://www.googleapis.com/auth/gmail.readonly` matches nothing: a real six-mailbox migration skipped every
+  // one of them as "this grant cannot read the mailbox" when all six could read. No fixture here had ever held a
+  // real legacy file, which is why the suite was green.
+  const legacy = parseGrantedScopes(['gmail.readonly', 'gmail.compose'].join(' '));
+  assert.deepEqual(legacy, [SCOPES.gmailReadonly, SCOPES.gmailCompose]);
+  assert.deepEqual([...capabilitiesOf(legacy)].sort(), ['draft', 'read']);
+  assert.equal(tierOf(legacy), 'draft');
+
+  // Full URLs, which is what a token response carries, are unchanged.
+  const full = parseGrantedScopes(`openid ${SCOPES.gmailModify} ${SCOPES.email}`);
+  assert.deepEqual(full, [SCOPES.openid, SCOPES.gmailModify, SCOPES.email]);
+  assert.deepEqual([...capabilitiesOf(full)].sort(), ['draft', 'organize', 'read']);
+
+  // `openid` is a bare token by specification and must not be expanded into a URL.
+  assert.deepEqual(parseGrantedScopes('openid'), ['openid']);
+  // `email` and `profile` are aliases Google itself accepts.
+  assert.deepEqual(parseGrantedScopes('email'), [SCOPES.email]);
+  // The shorthand for contacts resolves too, so an imported grant keeps its address-book access.
+  assert.ok([...capabilitiesOf(parseGrantedScopes('gmail.readonly contacts.readonly'))].includes('contacts'));
+});
