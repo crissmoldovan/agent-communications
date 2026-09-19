@@ -3,6 +3,7 @@ import {
   CommsError,
   canPrompt,
   colorEnabled,
+  EXIT_CODES,
   type LooseningConsent,
   type OutputOptions,
   paint,
@@ -127,12 +128,21 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
   const output = (): OutputOptions => ({ json: globals().json, color: globals().color });
 
   /** Wraps a command body so every failure becomes the documented envelope and exit code. */
+  /**
+   * A command that succeeded but wants a non-zero exit code — `doctor` finding something broken, where the findings
+   * *are* the output and the envelope must still be the normal one. Throwing instead would print a second envelope
+   * after the first, and `--json` promises exactly one document on stdout.
+   */
+  let softExit: number | null = null;
+
   const act =
     <A extends unknown[]>(body: (context: GmailContext, options: GlobalOptions, ...args: A) => Promise<void>) =>
     async (...args: A): Promise<void> => {
       ran = true;
+      softExit = null;
       const context = new GmailContext({ ...deps, env, surface: 'cli' });
       exitCode = await runCommand(output(), () => body(context, globals(), ...args), streams);
+      if (exitCode === 0 && softExit !== null) exitCode = softExit;
     };
 
   /**
@@ -1123,7 +1133,15 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       act(async (context, globalOptions, options: Options) => {
         const result = await doctor(context, { inbox: options.inbox ? String(options.inbox) : undefined });
         writeResult(result, output(), (data) => renderDoctor(data, globalOptions.color), streams);
-        // A failing check is a finding, not a crash: the envelope stays ok and the checks carry the detail.
+        // A failing check is a finding rather than a crash, so the envelope stays `ok` and the checks carry the
+        // detail — but the **exit code** has to say something went wrong, or nothing can gate on this. It printed
+        // "1 broken" and exited 0, which is what a script reads as a healthy install; `agentcomms doctor` has
+        // always exited non-zero on the same condition, so the two disagreed about the same word.
+        // The findings are the output, so the envelope stays the normal one and only the exit code carries the
+        // verdict. It reported "1 broken" and exited 0 — which a script reads as a healthy install, and which
+        // disagreed with `agentcomms doctor`, the other half of the same product, on the meaning of the same word.
+        // A warning is not a failure: `healthy` is false only when something is actually broken.
+        if (!result.healthy) softExit = EXIT_CODES.CONFIG;
       }),
     );
 

@@ -17,3 +17,4 @@ tokens/
 # Written by .blocks/post-clone.sh when the sandbox Node is too old
 .blocks/.node/
 .blocks/env.sh
+.tmp-reference-config/
