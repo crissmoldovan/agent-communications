@@ -1,8 +1,9 @@
 # Slack for agent-communications — design
 
-**Status:** specified and decided, not started. **No Slack code is written until Gmail v0.1.0 is published**, which
-is the sequence the author asked for. The decisions in §8 exist so that implementation can begin the hour it is,
-rather than with another round of questions.
+**Status:** specified and decided, not started. Gmail v0.1.0 is published (`@agentcomms/gmail`, 19 September 2026),
+which was the condition the author set for starting this. The decisions in §8 exist so implementation can begin
+without another round of questions; §10 folds in what the Gmail release's audits found, most of which applies
+here with the details changed.
 **Research:** [`docs/research/2026-09-19-slack-platform.md`](../../research/2026-09-19-slack-platform.md) — every
 platform claim below is sourced there, and where the research says "not verified" this spec treats it as unknown
 rather than true.
@@ -27,6 +28,11 @@ what that buys is narrow.
 and `*:read` cannot call `chat.postMessage` at all, and the consent screen says so. So Slack can offer something
 Gmail cannot — an installation where the promise is enforced by Slack rather than by us, and where a bug in our
 code cannot post.
+
+That guarantee is about *this package's* token, not about the machine. A second Slack MCP server holding a write
+token for the same workspace lets an agent post without going near ours, and the Gmail release found exactly that
+shape on the author's own machine. §10 says what `doctor` does about it; the documentation must never state the
+`read` guarantee more broadly than "this package cannot post".
 
 That produces the central design decision:
 
@@ -93,17 +99,25 @@ So, exactly as the Gmail composer generates the HTML part from the author's plai
   tool accepts caller-supplied `blocks`, for the same reason no Gmail tool accepts caller-supplied HTML.
 - **`text` is derived from the same source**, so the notification and the message cannot disagree.
 - The preview renders **from the payload that will be posted**, not from the input that produced it.
+- **The preview shows what the recipient's client will show — decoded, and deliberately not neutralised.** The
+  Gmail release's most serious defect was here: the approver was shown `=?UTF-8?Q?Caf=C3=A9_plan?=` for a subject the
+  recipient read as `Café plan`, because nothing decoded what the composer itself had encoded. A person cannot
+  approve what they cannot read. For Slack the same rule means `<@U123>` is shown as the name it will render as and
+  `&amp;` as `&`. And it is not neutralised, because this is the person's own outgoing text and defusing a
+  `Human:` in it would make the preview differ from the post again — the same bug wearing a safety hat. The
+  terminal is protected by `escapeForDisplay` instead, and the digest is taken over the decoded form so the
+  approval binds what was actually read.
 
 When *reading*, a message whose `text` and rendered `blocks` differ beyond whitespace is **reported as a
 mismatch**, the same way the Gmail body pipeline reports a plain/HTML mismatch. That is a signal, not an error.
 
-### D5 — Everything the Gmail sanitiser does, minus HTML, plus three Slack-shaped things
+### D5 — Everything the Gmail sanitiser does, minus HTML, plus five Slack-shaped things
 
-`comms-core`'s sanitiser is provider-neutral in the parts that matter: invisible-character stripping, the
+The core package's sanitiser is provider-neutral in the parts that matter: invisible-character stripping, the
 untrusted-content envelope with its per-call boundary, chat-template token neutralisation, link analysis,
 punycode and lookalike-domain detection. All of it applies.
 
-Three additions:
+Five additions:
 
 1. **Unfurls are third-party content inside somebody else's message.** An unfurl attaches Block Kit content that
    the message author never wrote. When reading, unfurled content is **labelled as unfurled** and attributed to
@@ -111,7 +125,24 @@ Three additions:
 2. **`unfurl_links: false` and `unfurl_media: false` on everything we post.** They default to `true`. Slack's own
    security guidance says to disable them when an LLM may have generated the URL, and that is exactly our case.
 3. **Invisible characters in `mrkdwn`.** Slack is not documented to normalise them. We do, on the way in, and
-   count what we removed — the existing `stripInvisible` does this already.
+   count what we removed. Since the Gmail release this happens *inside* `neutralise` rather than beside it, so a
+   caller cannot run the two in the wrong order — the Gmail build found `<​/untrusted-email-content>` passing a
+   pattern that `\s` could not see through, on every path that neutralised a header without stripping first.
+4. **Decode Slack's escaping before neutralising, never after.** Slack escapes `&`, `<` and `>` as `&amp;`,
+   `&lt;` and `&gt;` in message text, and encodes mentions and links as `<@U123>`, `<#C123|name>` and
+   `<https://url|label>`. A `neutralise` run on the escaped form sees nothing to defuse in
+   `&lt;/untrusted-email-content&gt;`, and the decode that follows hands a live closing tag to whatever reads it.
+   This is exactly the RFC 2047 bug the Gmail audit found in subject lines, in a different encoding, and the fix is
+   the same order: **decode, then cut, then neutralise.** Cutting before decoding can split an entity or a
+   `<…|…>` span in half.
+5. **Every sender-controlled field, not only the message text.** The Gmail audit's worst cluster was three read
+   paths — attachments, contacts, follow-ups — that returned a subject, a filename or a display name as a bare
+   string beside a carefully enveloped body, with no `neutralise` at all. Slack has more such fields than mail
+   does, and several are editable by anyone in the workspace at any time: display name, real name, **status text
+   and status emoji**, channel name and **topic and purpose**, file names, bot names, and the label half of a
+   `<url|label>` link. Each is neutralised at the one place its values funnel through, not at each call site where
+   the next field added would miss it. A test feeds a hostile value through every tool that returns one — the
+   Gmail suite was green precisely because that test did not exist for the three paths that were wrong.
 
 ### D6 — Reactions are a post, with less ceremony
 
@@ -165,7 +196,7 @@ has no API and the alternative is polling, which is expensive. The research flag
 building on it: whether user-perspective subscriptions deliver the person's own DMs over Socket Mode. Until
 someone has verified that end to end, no feature depends on it.
 
-## 6. What `comms-core` needs
+## 6. What `@agentcomms/core` needs
 
 Most of it already fits. The parts that do not:
 
@@ -187,15 +218,18 @@ body, in the same position the recipient list occupies for mail.
 
 | Phase | Branch | What |
 |---|---|---|
-| S1 | `feat/slack-core` | `comms-core` changes: the canonical-message union, `accounts` config with migration, the channel preview renderer, taint for ids |
+| S1 | `feat/slack-core` | `@agentcomms/core` changes: the canonical-message union, `accounts` config with migration, the channel preview renderer, taint for ids |
 | S2 | `feat/slack-auth` | `@agentcomms/slack`: the two manifests, OAuth with token rotation, `workspace add/list/show/remove/reauth`, `doctor`, the transport with its method allowlist |
 | S3 | `feat/slack-read` | Conversations, history, threads, search, users, files; the body pipeline with unfurl labelling and text/blocks reconciliation |
 | S4 | `feat/slack-compose` | Local drafts, the block composer, the preview with its notification count |
 | S5 | `feat/slack-send` | The gate: prepare, approve, post; the four guarded doors; reactions at lower ceremony |
-| S6 | `feat/slack-skills` | The skills, sharing the contract; the drift test extended |
-| S7 | `release/slack` | Packaging, manifests, release |
+| S6 | `feat/slack-skills` | The skills, sharing the contract; the drift test extended; and **an audit of every skill document against the code it describes** before merge (§10) |
+| S7 | `release/slack` | Packaging and manifests, then the release through `scripts/release.mjs` and the repo's `release` skill — from a person's machine, not CI (§10) |
 
-Each phase follows the Gmail pattern: a branch, tests, a review round, a squash-merge.
+Each phase follows the Gmail pattern: a branch, tests, a review round, a squash-merge. One change to that pattern,
+learned the hard way: **reviewers and auditors that are agents run in their own git worktree.** They share the
+working tree otherwise, and during the Gmail release one of them ran `git checkout` and moved the branch under a
+release that was in progress.
 
 ## 8. Decisions, and the unknowns designed around
 
@@ -267,3 +301,42 @@ The same list as Gmail's, plus:
 - **Retraction is not a gate.** `chat.update` and `chat.delete` exist, but the edit window is a workspace setting
   an owner controls and deletion may be restricted to admins. The notification has already fired regardless.
 - **Unfurled content** is written by whoever controls the URL, not by the message author.
+
+## 10. What the Gmail release taught, and where it lands here
+
+Before Gmail v0.1.0 went out, three audits of the tagged tree found 74 defects in the code and 68 places where a
+shipped skill contradicted the code it described. Almost every one is a pattern, not a one-off, and a second
+provider is the place a pattern repeats. This section maps each to its Slack form, so the lesson is designed in
+rather than rediscovered by the next audit.
+
+| What went wrong in Gmail | What it would be in Slack | Where it is handled |
+|---|---|---|
+| `neutralise` could be split by one zero-width space, because every pattern it uses is written in visible characters | A display name or status text carrying U+200B inside `<\|im_start\|>` | Fixed inside `neutralise` in the core package; inherited unchanged (D5.3) |
+| Three read paths returned a subject, a filename or a display name with no `neutralise` at all | Slack has more such fields, and several — status, topic, purpose — anyone can edit at any time | Every sender-controlled field neutralised where its values funnel through, with a hostile-value test per tool (D5.5) |
+| Decoding happened after neutralising, so an RFC 2047 encoded-word could carry a live closing envelope tag | Slack's `&lt;` / `&gt;` escaping and `<@U…>` / `<url\|label>` syntax | Decode, then cut, then neutralise (D5.4) |
+| The approval preview showed an encoded subject the recipient would read decoded | A preview showing `<@U123>` or `&amp;` where the client shows a name and `&` | The preview renders what the client will render, decoded and not neutralised (D4) |
+| `out` was joined to the alias with `path.join`, which cancelled the alias on `../other` and swallowed absolute paths | File downloads per workspace | `relativeSubpath` from the core package, refusing both before any join |
+| `env.HOME ?? ''` resolved the attachment jail to the working directory on Windows | Any path the Slack package builds | `homeDirectory()` from the core package; nothing reads `HOME` directly |
+| Risk flags came from different strings on different surfaces, and an encoded filename suppressed them all | Slack file names, which users set freely | `attachmentRisks`, which now normalises its own input |
+| The transport cache was keyed by alias, so a reused alias was served by the previous mailbox | D11 makes this likelier: several workspaces, each with an alias a person can move | Transports keyed by workspace id, never alias |
+| A reauth used the first OAuth client in config, not the inbox's own, and then did not record which it used | D8 means **one Slack app per workspace**, so "the first app" is wrong far more often | A reauth goes through the workspace's own app and records the one the token was issued to |
+| `send_list` and `send_cancel` ignored the server's `--inbox` pin | An MCP server pinned to one workspace | Every tool honours the pin, list and cancel included, with a test that walks all of them |
+| The Reply-To warning compared only the first address, while every address became a recipient | "Who will be notified" sampled rather than counted | The preview counts **all** of them — `@here`, `@channel`, each mention, and the thread's participants (§6) |
+| A mailbox without contacts scope was reported as having *failed* | A `read`-mode workspace asked to do something only `send` mode can | A capability the install lacks is reported as that, never as a failure; `complete` and `errors` keep the two apart |
+| Six other Gmail MCP servers on the author's own machine could send with no approval step | **Another Slack MCP server holding a write token** | `doctor` looks for them — see below |
+| 68 skill documents contradicted the code, one telling an agent to re-inbox mail the user had archived | The Slack skills | An audit of every skill against the code before S6 merges |
+| The release's own check read a CDN-cached page and reported a successful publish as failed | The Slack release | S7 goes through `scripts/release.mjs`, which asks the authenticated registry path |
+
+### The one that changes a promise
+
+D1 says a `read`-mode workspace is one where "a bug in our code cannot post", because the token cannot. That is
+true, and it is less than it sounds. **It says nothing about other software.** `doctor` found six Gmail MCP servers
+on the author's own machine, each with an ungated `send_email`, which quietly voided every guarantee the Gmail
+package makes — not by breaking it, but by standing beside it. The Slack equivalent is a second Slack MCP server
+holding a `chat:write` token for the same workspace. While one is connected, an agent can post through it without
+going near ours, and a `read` install protects nothing.
+
+So `agent-slack doctor` looks for other Slack MCP servers in every client configuration it can read, reports any
+that expose a posting tool, and the setup skill treats removing them as a step rather than a suggestion. The
+documentation states `read` mode's guarantee as what it is: *this package* cannot post. Whether *nothing* can
+depends on what else is installed.
