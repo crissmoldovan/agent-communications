@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "Write a message into Gmail Drafts — new, reply, reply-all or forward — and hand the draft id to gmail-send."
+}

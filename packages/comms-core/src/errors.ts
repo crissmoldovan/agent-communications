@@ -28,6 +28,7 @@ export type ErrorCode =
   | 'APPROVAL_PENDING'
   | 'APPROVAL_EXPIRED'
   | 'APPROVAL_VOID'
+  | 'SEND_REFUSED'
   | 'POLICY_NEVER'
   | 'RATE_CAPPED'
   | 'UNSENDABLE_HTML'
@@ -35,7 +36,6 @@ export type ErrorCode =
   | 'USAGE'
   | 'CURSOR_MISMATCH'
   | 'BAD_DATA'
-  | 'DRAFT_CHANGED'
   | 'REPLY_INVALID'
   | 'NOT_FOUND'
   | 'PROVIDER_UNAVAILABLE'
@@ -65,6 +65,11 @@ export const ERROR_REGISTRY: Readonly<Record<ErrorCode, ErrorSpec>> = {
     summary: 'the approval window passed; prepare again',
   },
   APPROVAL_VOID: { exit: EXIT_CODES.APPROVAL, retryable: false, summary: 'the approval was voided; prepare again' },
+  SEND_REFUSED: {
+    exit: EXIT_CODES.APPROVAL,
+    retryable: false,
+    summary: 'a send was attempted outside the one approved path',
+  },
   POLICY_NEVER: { exit: EXIT_CODES.APPROVAL, retryable: false, summary: 'sending is turned off for this inbox' },
   RATE_CAPPED: { exit: EXIT_CODES.APPROVAL, retryable: true, summary: 'the send limit for this inbox is reached' },
   UNSENDABLE_HTML: { exit: EXIT_CODES.APPROVAL, retryable: false, summary: 'the draft has HTML an agent may not send' },
@@ -76,7 +81,6 @@ export const ERROR_REGISTRY: Readonly<Record<ErrorCode, ErrorSpec>> = {
   USAGE: { exit: EXIT_CODES.USAGE, retryable: false, summary: 'the command or arguments are wrong' },
   CURSOR_MISMATCH: { exit: EXIT_CODES.USAGE, retryable: false, summary: 'the cursor belongs to a different query' },
   BAD_DATA: { exit: EXIT_CODES.BAD_DATA, retryable: false, summary: 'the input is not acceptable' },
-  DRAFT_CHANGED: { exit: EXIT_CODES.BAD_DATA, retryable: false, summary: 'the draft changed since it was last read' },
   REPLY_INVALID: { exit: EXIT_CODES.BAD_DATA, retryable: false, summary: 'the reply would not thread correctly' },
   NOT_FOUND: { exit: EXIT_CODES.NOT_FOUND, retryable: false, summary: 'not found' },
   PROVIDER_UNAVAILABLE: { exit: EXIT_CODES.UNAVAILABLE, retryable: true, summary: 'the mail provider is unavailable' },

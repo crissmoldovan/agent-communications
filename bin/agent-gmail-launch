@@ -1,0 +1,86 @@
+#!/bin/sh
+# Starts the Gmail MCP server, finding a usable Node first.
+#
+# A plugin host launches this with whatever environment it happens to have, and on a Mac started from the Dock that
+# is often little more than `/usr/bin:/bin`. Every version manager puts Node somewhere else, none of them are on
+# that PATH, and the failure a user sees is "server failed to start" with nothing to act on. So this looks in the
+# places Node actually lives, in the order a person would expect their own `node` to win, and says something useful
+# when it finds none.
+#
+# POSIX sh on purpose: bash is not guaranteed, and this has to run before anything else does.
+
+set -eu
+
+VERSION="0.1.0"
+
+# A directory holding an executable `node`, or nothing.
+node_in() {
+  if [ -x "$1/node" ]; then
+    printf '%s' "$1"
+  fi
+}
+
+find_node_dir() {
+  # 1. Whatever the caller's own PATH resolves, when it resolves anything. Their choice wins.
+  #
+  # The directory is taken with parameter expansion rather than `dirname`, because this whole script exists for the
+  # case where PATH is nearly empty — and a launcher that needs `dirname` to find Node fails exactly there.
+  if command -v node >/dev/null 2>&1; then
+    resolved=$(command -v node)
+    printf '%s' "${resolved%/node}"
+    return 0
+  fi
+
+  # 2. The version managers, newest-style first. Each keeps its current version behind a stable path.
+  for candidate in \
+    "${VOLTA_HOME:-$HOME/.volta}/bin" \
+    "${FNM_DIR:-$HOME/.local/share/fnm}/aliases/default/bin" \
+    "$HOME/.local/state/fnm_multishells" \
+    "${ASDF_DATA_DIR:-$HOME/.asdf}/shims" \
+    "$HOME/.bun/bin"; do
+    found=$(node_in "$candidate" 2>/dev/null || true)
+    [ -n "$found" ] && { printf '%s' "$found"; return 0; }
+  done
+
+  # nvm keeps one directory per version and no stable "current" outside a shell. Globbed rather than piped through
+  # `ls | sort | tail`, for the same reason: those are not builtins.
+  nvm_root="${NVM_DIR:-$HOME/.nvm}/versions/node"
+  if [ -d "$nvm_root" ]; then
+    newest=""
+    for candidate in "$nvm_root"/*/bin; do
+      [ -x "$candidate/node" ] && newest="$candidate"
+    done
+    [ -n "$newest" ] && { printf '%s' "$newest"; return 0; }
+  fi
+
+  # 3. The system and package-manager locations.
+  for candidate in /opt/homebrew/bin /usr/local/bin /usr/bin /snap/bin; do
+    found=$(node_in "$candidate" 2>/dev/null || true)
+    [ -n "$found" ] && { printf '%s' "$found"; return 0; }
+  done
+
+  return 1
+}
+
+if ! NODE_DIR=$(find_node_dir); then
+  # `printf` is a builtin in every POSIX shell; `cat` is not, and this is the one message that has to survive an
+  # environment with nothing on PATH.
+  printf '%s\n' >&2 \
+"agent-gmail: could not find Node." \
+
+"" \
+"This launcher looked on PATH, then in Volta, fnm, asdf, nvm, Homebrew and the usual system" \
+"directories, and found no node in any of them. Node 22.12 or newer is required." \
+"" \
+"If Node is installed somewhere else, add its directory to the PATH this client starts with, or" \
+"register the server directly with an absolute path:" \
+"" \
+"  agent-gmail mcp install --client <your client>"
+  exit 127
+fi
+
+PATH="$NODE_DIR:$PATH"
+export PATH
+
+# `npx -y` with an exact version: the same server every time, and no prompt in a context with no terminal.
+exec "$NODE_DIR/npx" -y "@cloudpixel/gmail-mcp@$VERSION" "$@"

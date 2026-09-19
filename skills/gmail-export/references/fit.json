@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "Write a message or a whole thread to a file — Markdown, JSON, or the original .eml — instead of pulling it through the conversation."
+}

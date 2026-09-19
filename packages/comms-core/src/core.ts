@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import { ApprovalStore } from './approvals.ts';
 import { AuditLog } from './audit.ts';
 import { ConfigStore, secretsStoreOf } from './config.ts';
@@ -45,7 +44,7 @@ export function openCore(options: OpenCoreOptions = {}): Core {
       const chosen = kind ?? secretsStoreOf(await config.load());
       if (cached?.kind === chosen) return cached.store;
       const store = await openSecretStore(chosen, {
-        secretsDir: join(paths.configDir, 'secrets'),
+        secretsDir: paths.secretsDir,
         namespace: keychainNamespace(paths.configDir),
       });
       cached = { kind: chosen, store };

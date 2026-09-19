@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "Judge whether a message is what it claims to be — Google's authentication verdict, the sender warnings, the link flags and what the sanitiser removed."
+}

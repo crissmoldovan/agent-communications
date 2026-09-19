@@ -1,0 +1,35 @@
+name: CodeQL
+
+# A second pair of eyes that never gets tired. This package parses HTML and CSS written by strangers, builds MIME,
+# and holds OAuth tokens — the three places where a mistake is somebody else's problem rather than a failed build.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, because a new query can find an old bug: the code need not change for the answer to.
+    - cron: '41 5 * * 1'
+
+permissions: {}
+
+jobs:
+  analyse:
+    name: analyse
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          # `security-extended` over the default set: the cost is a slower run once a week, and the queries it adds
+          # are exactly the ones this code is exposed to — injection, path traversal, unsafe deserialisation.
+          queries: security-extended
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:javascript-typescript

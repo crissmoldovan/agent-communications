@@ -1,6 +1,6 @@
 {
   "name": "@cloudpixel/comms-core",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Provider-neutral core for agent-communications: config, secret store, approvals, audit log and untrusted-content handling.",
   "type": "module",
   "license": "MIT",
@@ -26,7 +26,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_LICENSES"
   ],
   "publishConfig": {
     "access": "public"

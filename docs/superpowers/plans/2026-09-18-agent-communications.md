@@ -50,29 +50,55 @@ Still to do before the PR:
 
 ## Phase 2 — auth, inbox lifecycle, surfaces (`feat/gmail-auth`)
 
-- [ ] `@cloudpixel/gmail` package skeleton (tsdown: bundled `cli.mjs`, library `index.mjs`).
-- [ ] Local fake Google server for tests (token endpoint, userinfo, Gmail profile/labels/list/get, People search).
-- [ ] Transport over `@googleapis/gmail`/`people` with the retry layer (§7.11) and `AGENT_COMMS_GOOGLE_ROOT_URL`
-      (loopback only).
-- [ ] OAuth: loopback + PKCE + state; detached two-step flow (`--start`/`--finish --wait`); post-consent checks
+- [x] `@cloudpixel/gmail` package skeleton (tsdown: bundled `cli.mjs`, library `index.mjs`).
+- [x] Local fake Google server for tests (consent, token, revoke, Gmail profile/labels/sendAs), used through
+      `AGENT_COMMS_GOOGLE_ROOT_URL` so the real bundled Google libraries are exercised.
+- [x] Transport over `@googleapis/gmail`/`people` with the retry layer (§7.11) and `AGENT_COMMS_GOOGLE_ROOT_URL`
+      (loopback only). `forceRefreshOnFailure` is deliberately off; a 401 is retried once in our own layer.
+- [x] OAuth: loopback + PKCE + state; detached two-step flow (`--start`/`--finish --wait`); post-consent checks
       (scopes, identity); reauth identity binding; token refresh persistence.
-- [ ] `client add|list|remove`, `inbox add|list|show|reauth|rename|policy|remove`, `inbox import artymclabin`
+- [x] `client add|list|remove`, `inbox add|list|show|reauth|rename|policy|remove`, `inbox import`
       (with the legacy-server scan), `whoami`, `doctor`.
-- [ ] CLI skeleton (commander), shared envelope and exit codes, coercion rules.
-- [ ] MCP server skeleton on SDK v2: handshake verified with Claude Code and Codex; `gmail_inboxes_list`,
-      `gmail_whoami`, `gmail_doctor`; per-call config re-check; elicitation round trip with the SDK v2 client.
-- [ ] `mcp install --client …` (managed launcher), `@cloudpixel/gmail-mcp`, package checks for both.
+- [x] CLI skeleton (commander), shared envelope and exit codes, coercion rules.
+- [x] MCP server skeleton on SDK v2: `gmail_inboxes_list`, `gmail_whoami`, `gmail_doctor`; per-call config re-check;
+      tool list independent of the inboxes present; structuredContent mirrored in one text block.
+- [x] `mcp install --client …` (managed, npx and local launchers; proves the server starts),
+      `@cloudpixel/gmail-mcp`, packed-tarball consumer checks for both.
+- [ ] Elicitation round trip with the SDK v2 client (`gmail_confirm_probe` + `confirm-clients`) — moved to P5 with
+      the rest of the `confirm` channel, which is where the allowlist it feeds is used.
+- [ ] Handshake checked against Claude Code and Codex themselves (needs the author's machine).
 - [ ] **Live check (needs the author):** fresh two-step `inbox add` of one inbox; doctor; whoami;
-      `import artymclabin --dry-run`.
+      `import --dry-run`.
 
 ## Phase 3 — read and analyse (`feat/gmail-read`)
 
-- [ ] Search with the validated cross-inbox cursor; message and thread read with the body pipeline (HTML
-      authoritative, plain/HTML mismatch); timeline; attachments find/download; export; contacts; follow-ups;
-      labels/sendAs/drafts list — operations, CLI, MCP, tests.
+- [x] Search with the validated cross-inbox cursor (bound to query and mailbox set, lazy merge by date).
+- [x] Message and thread read with the body pipeline: HTML authoritative, text present only in the plain part
+      reported as a mismatch and counted as hidden, quoted history collapsed, truncation with a continuation offset.
+- [x] Timeline computed from headers and dates, with business-hours gaps and who is waited on; Markdown and Mermaid.
+- [x] Attachments: find with risk flags, download under the jail with safe names, dedupe and a manifest.
+- [x] Export to md, json or eml.
+- [x] Contacts across the address book, other contacts and past mail; follow-ups in both directions.
+- [x] labels and sendAs lists; everything above on both the CLI and the MCP server (fourteen tools).
+- [ ] Drafts list — moved to Phase 4, where drafts are created.
 - [ ] **Live check:** read-only calls on the P2 inbox.
 
 ## Phase 4 — compose and organise (`feat/gmail-compose`)
+
+**Composition profile and message preview** (added 2026-09-18 at the user's request, from the existing user-level
+skill `drafting-criss-emails`, which carries both a voice and a send protocol and is written around the old Gmail
+MCP tool names):
+
+- [ ] One preview renderer in `comms-core`, used by every surface (chat, CLI, MCP): fenced with `fenceFor` so a body
+      containing backticks cannot break out of its own preview, control and invisible characters shown as
+      `<U+XXXX>`, and the recipients repeated *after* the body so a long message cannot scroll them out of view.
+- [ ] A composition profile resolved in order — built-in defaults → user profile → platform (`gmail`) → per-inbox —
+      so platform specifics (subject conventions, signature handling, reply threading) extend the generic voice
+      rules rather than forking them. Stored as files under the config directory, editable by hand.
+- [ ] `draft create|reply|update` render the preview in their result, so "show it verbatim before asking" is what
+      the tool returns rather than something a skill has to remember to do.
+- [ ] Phase 6: a generic `compose-message` skill plus `gmail-compose`, both pointing at the same contract; the
+      user's existing `drafting-criss-emails` becomes a voice profile rather than a second send protocol.
 
 - [ ] MIME (multipart, markdown without raw HTML or images), reply/reply-all/forward composition and validation,
       signatures with the Gmail marker, draft update read-modify-write, media-upload transport, outbound HTML analyser,

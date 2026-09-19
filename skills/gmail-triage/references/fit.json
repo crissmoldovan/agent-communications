@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "Sort a window of mail across every connected mailbox into Reply needed, Review, FYI and Noise, and propose archive and label changes for the user to approve as one batch."
+}

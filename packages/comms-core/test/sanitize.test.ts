@@ -182,6 +182,22 @@ for (const [name, hiddenHtml] of HIDDEN_CASES) {
   });
 }
 
+test('an injection in a comment or a template leaves a count behind', () => {
+  // These were removed before the counting branch, so an instruction hidden in a comment vanished with no trace —
+  // the reader was told the message was clean.
+  const commented = sanitizeHtmlToText(`<p>Hi</p><!-- ${INJECTION} -->`);
+  assert.doesNotMatch(commented.text, /IGNORE PREVIOUS/);
+  assert.equal(commented.report.hiddenElements, 1);
+  assert.ok(commented.report.hiddenChars >= INJECTION.length);
+
+  const templated = sanitizeHtmlToText(`<p>Hi</p><template>${INJECTION}</template>`);
+  assert.equal(templated.report.hiddenElements, 1);
+
+  // A stylesheet is machinery, not content: counting every message's CSS would make the number meaningless.
+  const styled = sanitizeHtmlToText('<style>.a{color:red}</style><p>Hi</p>');
+  assert.equal(styled.report.hiddenElements, 0);
+});
+
 test('hidden content is counted, not silently dropped', () => {
   const { report } = sanitizeHtmlToText(
     `<p>Visible</p><div style="display:none">${INJECTION}</div><span hidden>two</span>`,

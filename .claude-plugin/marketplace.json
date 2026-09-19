@@ -1,0 +1,43 @@
+{
+  "name": "agent-communications",
+  "description": "Communication tools for coding agents. Gmail today: search, read, analyse, draft and organise mail across several mailboxes \u2014 and nothing is sent without your approval.",
+  "owner": {
+    "name": "crissmoldovan",
+    "url": "https://github.com/crissmoldovan/agent-communications"
+  },
+  "plugins": [
+    {
+      "name": "gmail",
+      "source": "./",
+      "description": "Gmail for coding agents: search, read, analyse, draft and organise mail across several mailboxes. Sending needs your approval.",
+      "version": "0.1.0",
+      "author": {
+        "name": "crissmoldovan"
+      },
+      "homepage": "https://github.com/crissmoldovan/agent-communications",
+      "license": "MIT",
+      "keywords": ["gmail", "email", "mcp", "communications"],
+      "strict": false,
+      "skills": [
+        "./skills/gmail-setup",
+        "./skills/gmail-search",
+        "./skills/gmail-thread-analysis",
+        "./skills/gmail-attachments",
+        "./skills/gmail-compose",
+        "./skills/gmail-send",
+        "./skills/gmail-contacts",
+        "./skills/gmail-organize",
+        "./skills/gmail-triage",
+        "./skills/gmail-follow-ups",
+        "./skills/gmail-export",
+        "./skills/gmail-security"
+      ],
+      "mcpServers": {
+        "gmail": {
+          "command": "${CLAUDE_PLUGIN_ROOT}/bin/agent-gmail-launch",
+          "args": []
+        }
+      }
+    }
+  ]
+}

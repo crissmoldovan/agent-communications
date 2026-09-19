@@ -1,0 +1,244 @@
+import assert from 'node:assert/strict';
+import { readdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { CommsError } from '@cloudpixel/comms-core';
+import { FLOW_ID_PATTERN } from '../src/auth/flows.ts';
+import { SCOPES } from '../src/auth/scopes.ts';
+import { GmailContext } from '../src/context.ts';
+import { clientAdd } from '../src/operations/clients.ts';
+import { inboxList } from '../src/operations/inboxes.ts';
+import { finishSignIn, startSignIn } from '../src/operations/signin.ts';
+import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
+
+const CLI_ENTRY = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
+const LISTENER = {
+  command: process.execPath,
+  args: ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', CLI_ENTRY],
+};
+
+/** Writes a Desktop client JSON and registers it, as `client add` would. */
+async function withClient(harness: Harness): Promise<GmailContext> {
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const path = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    path,
+    JSON.stringify({ installed: { client_id: TEST_CLIENT_ID, client_secret: TEST_CLIENT_SECRET, project_id: 'proj' } }),
+  );
+  await clientAdd(context, { path, store: 'file' });
+  return context;
+}
+
+test('the two-step sign-in: start returns a link, the browser answers, finish connects the inbox', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+
+  const started = await startSignIn(context, {
+    mode: 'add',
+    alias: 'work',
+    email: 'jo@example.test',
+    listenerCommand: LISTENER,
+  });
+  assert.match(started.flowId, FLOW_ID_PATTERN);
+  assert.match(started.redirectUri, /^http:\/\/127\.0\.0\.1:\d+\/$/);
+  const authUrl = new URL(started.authUrl);
+  assert.equal(authUrl.searchParams.get('login_hint'), 'jo@example.test');
+  assert.equal(authUrl.searchParams.get('redirect_uri'), started.redirectUri);
+
+  // The browser goes to Google and is redirected back to the detached listener.
+  const redirect = harness.google.consent(started.authUrl);
+  const response = await fetch(redirect);
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /Signed in/);
+
+  const result = await finishSignIn(context, { flowId: started.flowId, waitSeconds: 10, pollMs: 50 });
+  assert.equal(result.alias, 'work');
+  assert.equal(result.inbox.email, 'jo@example.test');
+  assert.equal(result.inbox.sub, 'sub-1');
+  assert.equal(result.inbox.identity, 'oidc');
+  assert.equal(result.reauthorised, false);
+  assert.deepEqual(result.missingScopes, []);
+
+  const inboxes = await inboxList(context);
+  assert.deepEqual(
+    inboxes.map((inbox) => `${inbox.alias}:${inbox.email}:${inbox.tier}:${inbox.sendPolicy}`),
+    ['work:jo@example.test:organize:chat'],
+  );
+
+  // The flow file, which holds the PKCE verifier, is gone once the sign-in completes.
+  assert.deepEqual(await readdir(join(harness.core.paths.stateDir, 'flows')), []);
+
+  // And it cannot be finished twice.
+  await assert.rejects(
+    finishSignIn(context, { flowId: started.flowId, waitSeconds: 0, pollMs: 10 }),
+    (error: unknown) => error instanceof CommsError && error.code === 'NOT_FOUND',
+  );
+});
+
+test('finish waits, and says so without consuming the sign-in when nobody has answered yet', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const started = await startSignIn(context, { mode: 'add', alias: 'work', listenerCommand: LISTENER });
+
+  await assert.rejects(
+    finishSignIn(context, { flowId: started.flowId, waitSeconds: 0, pollMs: 10 }),
+    (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_PENDING' && error.exitCode === 10,
+  );
+
+  // Still usable: the user simply had not finished yet.
+  await fetch(harness.google.consent(started.authUrl));
+  const result = await finishSignIn(context, { flowId: started.flowId, waitSeconds: 10, pollMs: 50 });
+  assert.equal(result.inbox.email, 'jo@example.test');
+});
+
+test('a pasted redirect URL finishes a sign-in on a machine with no browser', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const started = await startSignIn(context, { mode: 'add', alias: 'work', listenerCommand: LISTENER });
+  const redirect = harness.google.consent(started.authUrl);
+
+  // A URL from another sign-in, or with no code, is refused.
+  await assert.rejects(
+    finishSignIn(context, { flowId: started.flowId, url: 'http://127.0.0.1:1/?code=x&state=someone-else' }),
+    (error: unknown) => error instanceof CommsError && error.code === 'AUTH_REQUIRED',
+  );
+  await assert.rejects(
+    finishSignIn(context, { flowId: started.flowId, url: 'not a url' }),
+    (error: unknown) => error instanceof CommsError && error.code === 'USAGE',
+  );
+
+  const result = await finishSignIn(context, { flowId: started.flowId, url: redirect });
+  assert.equal(result.inbox.email, 'jo@example.test');
+});
+
+test('a refused consent is reported with the fix, and nothing is saved', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const started = await startSignIn(context, { mode: 'add', alias: 'work', listenerCommand: LISTENER });
+  await fetch(harness.google.consent(started.authUrl, { deny: 'access_denied' }));
+
+  await assert.rejects(
+    finishSignIn(context, { flowId: started.flowId, waitSeconds: 10, pollMs: 50 }),
+    (error: unknown) =>
+      error instanceof CommsError &&
+      error.code === 'AUTH_REQUIRED' &&
+      /not verified|Access blocked|publish/i.test(error.hint ?? ''),
+  );
+  assert.deepEqual(await inboxList(context), []);
+});
+
+test('signing in as the wrong account saves nothing and says which account it was', async () => {
+  const harness = await newHarness({
+    accounts: [
+      { sub: 'sub-1', email: 'jo@example.test' },
+      { sub: 'sub-2', email: 'someone.else@example.test' },
+    ],
+  });
+  const context = await withClient(harness);
+  const started = await startSignIn(context, {
+    mode: 'add',
+    alias: 'work',
+    email: 'jo@example.test',
+    listenerCommand: LISTENER,
+  });
+  // The account chooser hands back the account that happened to be signed in.
+  await fetch(harness.google.consent(started.authUrl, { sub: 'sub-2' }));
+
+  await assert.rejects(
+    finishSignIn(context, { flowId: started.flowId, waitSeconds: 10, pollMs: 50 }),
+    (error: unknown) => {
+      assert.ok(error instanceof CommsError);
+      assert.equal(error.code, 'AUTH_REQUIRED');
+      assert.match(error.message, /someone\.else@example\.test/);
+      assert.match(error.message, /jo@example\.test/);
+      return true;
+    },
+  );
+  assert.deepEqual(await inboxList(context), []);
+});
+
+test('an account granted no read access is refused, and unticked extras are reported', async () => {
+  const harness = await newHarness({
+    accounts: [{ sub: 'sub-1', email: 'jo@example.test', grantScopes: [SCOPES.openid, SCOPES.email] }],
+  });
+  const context = await withClient(harness);
+  const started = await startSignIn(context, { mode: 'add', alias: 'work', listenerCommand: LISTENER });
+  await fetch(harness.google.consent(started.authUrl));
+  await assert.rejects(
+    finishSignIn(context, { flowId: started.flowId, waitSeconds: 10, pollMs: 50 }),
+    (error: unknown) => error instanceof CommsError && error.code === 'SCOPE_MISSING',
+  );
+  assert.deepEqual(await inboxList(context), []);
+
+  // Reading granted but contacts unticked: connected, with the shortfall named.
+  const partial = await newHarness({
+    accounts: [
+      { sub: 'sub-3', email: 'sam@example.test', grantScopes: [SCOPES.openid, SCOPES.email, SCOPES.gmailReadonly] },
+    ],
+  });
+  const partialContext = await withClient(partial);
+  const secondStart = await startSignIn(partialContext, { mode: 'add', alias: 'sam', listenerCommand: LISTENER });
+  await fetch(partial.google.consent(secondStart.authUrl));
+  const result = await finishSignIn(partialContext, { flowId: secondStart.flowId, waitSeconds: 10, pollMs: 50 });
+  assert.equal(result.inbox.tier, 'read');
+  assert.equal(result.inbox.contacts, false);
+  assert.ok(result.missingScopes.includes(SCOPES.contacts));
+});
+
+test('the same mailbox cannot be connected twice, under any name', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const first = await startSignIn(context, { mode: 'add', alias: 'work', listenerCommand: LISTENER });
+  await fetch(harness.google.consent(first.authUrl));
+  await finishSignIn(context, { flowId: first.flowId, waitSeconds: 10, pollMs: 50 });
+
+  const second = await startSignIn(context, { mode: 'add', alias: 'work-again', listenerCommand: LISTENER });
+  await fetch(harness.google.consent(second.authUrl));
+  await assert.rejects(
+    finishSignIn(context, { flowId: second.flowId, waitSeconds: 10, pollMs: 50 }),
+    (error: unknown) => error instanceof CommsError && /already connected as "work"/.test(error.message),
+  );
+
+  // And the same alias cannot be started twice.
+  await assert.rejects(
+    startSignIn(context, { mode: 'add', alias: 'work', listenerCommand: LISTENER }),
+    (error: unknown) => error instanceof CommsError && error.code === 'CONFIG',
+  );
+});
+
+test('reauth renews the grant only for the same account, and records what changed', async () => {
+  const harness = await newHarness({
+    accounts: [
+      { sub: 'sub-1', email: 'jo@example.test' },
+      { sub: 'sub-2', email: 'other@example.test' },
+    ],
+  });
+  const context = await withClient(harness);
+  const first = await startSignIn(context, { mode: 'add', alias: 'work', tier: 'read', listenerCommand: LISTENER });
+  await fetch(harness.google.consent(first.authUrl, { sub: 'sub-1' }));
+  const added = await finishSignIn(context, { flowId: first.flowId, waitSeconds: 10, pollMs: 50 });
+  assert.equal(added.inbox.tier, 'read');
+
+  // Another account signing in to the same alias is refused, and the inbox is untouched.
+  const wrong = await startSignIn(context, { mode: 'reauth', alias: 'work', listenerCommand: LISTENER });
+  await fetch(harness.google.consent(wrong.authUrl, { sub: 'sub-2' }));
+  await assert.rejects(
+    finishSignIn(context, { flowId: wrong.flowId, waitSeconds: 10, pollMs: 50 }),
+    (error: unknown) => error instanceof CommsError && error.code === 'AUTH_REQUIRED',
+  );
+  assert.equal((await inboxList(context))[0]?.tier, 'read');
+
+  // The same account, asking for more: the inbox keeps its id and gains the access.
+  const upgrade = await startSignIn(context, {
+    mode: 'reauth',
+    alias: 'work',
+    tier: 'organize',
+    listenerCommand: LISTENER,
+  });
+  await fetch(harness.google.consent(upgrade.authUrl, { sub: 'sub-1' }));
+  const reauthorised = await finishSignIn(context, { flowId: upgrade.flowId, waitSeconds: 10, pollMs: 50 });
+  assert.equal(reauthorised.reauthorised, true);
+  assert.equal(reauthorised.inbox.id, added.inbox.id);
+  assert.equal(reauthorised.inbox.tier, 'organize');
+});

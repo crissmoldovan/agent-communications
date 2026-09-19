@@ -68,6 +68,14 @@ export interface SanitizeReport {
   sameColorElements: number;
   /** Zero-width, bidi-control and Unicode tag characters stripped from the text. */
   invisibleCharsRemoved: number;
+  /**
+   * Chat-template control tokens and role markers that were defused.
+   *
+   * Computed and then thrown away, which was the opposite of how hidden text and unreadable CSS rules are handled
+   * two functions over: a message that tried a template injection was quietly disarmed and nobody was told. Not
+   * zero means somebody was trying.
+   */
+  tokensNeutralised: number;
   links: SanitizedLink[];
   imagesNotLoaded: number;
   /**
@@ -92,6 +100,7 @@ function emptyReport(): SanitizeReport {
     hiddenChars: 0,
     sameColorElements: 0,
     invisibleCharsRemoved: 0,
+    tokensNeutralised: 0,
     links: [],
     imagesNotLoaded: 0,
   };
@@ -864,7 +873,15 @@ function isHiddenElement(element: Element, rules: StylesheetRules): boolean {
 function prune(nodes: ChildNode[], rules: StylesheetRules, report: SanitizeReport): ChildNode[] {
   const kept: ChildNode[] = [];
   for (const node of nodes) {
-    if (isComment(node)) continue;
+    if (isComment(node)) {
+      // A comment is content a reader never sees, and an injection hidden in one used to leave no trace at all:
+      // removed before the counting branch, so `hiddenElements` stayed at zero and the reader was told nothing.
+      if (node.data.trim()) {
+        report.hiddenElements += 1;
+        report.hiddenChars += node.data.trim().length;
+      }
+      continue;
+    }
     if (isText(node)) {
       // Strip before conversion: the converter treats a zero-width space as a word break.
       const stripped = stripInvisible(node.data);
@@ -872,7 +889,17 @@ function prune(nodes: ChildNode[], rules: StylesheetRules, report: SanitizeRepor
       node.data = stripped.text;
     }
     if (isTag(node)) {
-      if (DROP_TAGS.has(node.name)) continue;
+      // `<template>`, `<noscript>`, `<title>` and the rest are never shown, and counted for the same reason a
+      // comment is. A `<style>` block is the exception: its text is a stylesheet, not something anybody was meant
+      // to read, and counting every message's CSS as "hidden content" would make the number meaningless.
+      if (DROP_TAGS.has(node.name)) {
+        const length = node.name === 'style' ? 0 : textLength(node);
+        if (length > 0) {
+          report.hiddenElements += 1;
+          report.hiddenChars += length;
+        }
+        continue;
+      }
       if (isHiddenElement(node, rules)) {
         report.hiddenElements += 1;
         report.hiddenChars += textLength(node);
@@ -1008,7 +1035,21 @@ export function stripInvisible(text: string): { text: string; removed: number } 
  * Converts email HTML to plain text for a model to read: hidden content removed, links rendered as
  * `text [domain]`, images never loaded, invisible characters stripped — with a report of everything removed.
  */
-export function sanitizeHtmlToText(html: string, options: { wordwrap?: number | false } = {}): SanitizedText {
+export function sanitizeHtmlToText(
+  html: string,
+  options: {
+    wordwrap?: number | false;
+    /**
+     * Leave out the `[domain]` after a link and the `[image not loaded]` placeholder.
+     *
+     * Those annotations exist for a reader: they say where a link really goes. They are wrong when the output is
+     * being *compared* with the plain-text twin of the same message, because the plain part has no such
+     * annotations — and comparing the two then reports a mismatch on every message containing a link, which is
+     * how a check meant to catch a mismatched message ends up refusing ordinary ones.
+     */
+    plain?: boolean;
+  } = {},
+): SanitizedText {
   const report = emptyReport();
   const document = parseDocument(html, { decodeEntities: true, lowerCaseTags: true, lowerCaseAttributeNames: true });
   const rules = hiddenSelectorsFromStylesheets(document);
@@ -1034,12 +1075,14 @@ export function sanitizeHtmlToText(html: string, options: { wordwrap?: number | 
         if (href) {
           const link = analyseLink(textOf(elem), href);
           report.links.push(link);
+          if (options.plain) return;
           const flagText = link.flags.length ? ` ${link.flags.join(' ')}` : '';
           builder.addInline(` [${link.domain ?? 'link'}${flagText}]`, { noWordTransform: true });
         }
       },
       agentImage: (elem, _walk, builder) => {
         report.imagesNotLoaded += 1;
+        if (options.plain) return;
         const alt = (elem.attribs?.alt ?? '').trim();
         builder.addInline(alt ? `[image: ${alt}, not loaded]` : '[image not loaded]', { noWordTransform: true });
       },
@@ -1074,6 +1117,8 @@ export function sanitizePlainText(text: string): SanitizedText {
 export interface OutboundHtmlReport {
   /** What a recipient sees, as text (hidden content removed) — compared with the draft's text part. */
   visibleText: string;
+  /** The same text with link and image annotations left out, for comparing against a plain-text part. */
+  comparableText: string;
   /** Content a recipient would not see, with why; shown to the approver, never silently dropped. */
   hidden: { reason: string; text: string }[];
   /** Every URL in the HTML with its full query string, and where it appears. */
@@ -1118,6 +1163,7 @@ export function analyseOutboundHtml(html: string): OutboundHtmlReport {
   const rules = hiddenSelectorsFromStylesheets(document);
   const report: OutboundHtmlReport = {
     visibleText: '',
+    comparableText: '',
     hidden: [],
     urls: [],
     remoteResources: [],
@@ -1179,6 +1225,7 @@ export function analyseOutboundHtml(html: string): OutboundHtmlReport {
   };
   visit(document.children, false);
   report.visibleText = sanitizeHtmlToText(html).text;
+  report.comparableText = sanitizeHtmlToText(html, { plain: true }).text;
   return report;
 }
 

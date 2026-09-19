@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "Find somebody's address and who they are, across saved contacts, people written to before, and past mail — showing every candidate with where it came from so the user chooses."
+}

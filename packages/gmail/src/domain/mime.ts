@@ -1,0 +1,149 @@
+/**
+ * Reading Gmail's part tree. Pure: it takes the JSON of `users.messages.get(format=full)` and returns decoded parts,
+ * so every decision about what a reader would see can be tested without a network.
+ */
+
+export interface GmailHeader {
+  name?: string | null;
+  value?: string | null;
+}
+
+export interface GmailPart {
+  partId?: string | null;
+  mimeType?: string | null;
+  filename?: string | null;
+  headers?: GmailHeader[] | null;
+  body?: { attachmentId?: string | null; size?: number | null; data?: string | null } | null;
+  parts?: GmailPart[] | null;
+}
+
+export interface DecodedPart {
+  partId: string;
+  mimeType: string;
+  charset: string | undefined;
+  disposition: 'inline' | 'attachment' | undefined;
+  filename: string | undefined;
+  contentId: string | undefined;
+  size: number;
+  /** Present for body parts; attachments carry an id to fetch instead. */
+  text: string | undefined;
+  attachmentId: string | undefined;
+  /** True when the declared charset had to be overridden to decode the bytes sensibly. */
+  charsetOverridden: boolean;
+}
+
+export interface MessageParts {
+  /** Every part, depth-first, in the order Gmail returned them. */
+  parts: DecodedPart[];
+  html: DecodedPart[];
+  plain: DecodedPart[];
+  attachments: DecodedPart[];
+}
+
+/** Case-insensitive header lookup; Gmail preserves the sender's capitalisation. */
+export function headerValue(headers: readonly GmailHeader[] | null | undefined, name: string): string | undefined {
+  const wanted = name.toLowerCase();
+  for (const header of headers ?? []) {
+    if ((header.name ?? '').toLowerCase() === wanted) return header.value ?? undefined;
+  }
+  return undefined;
+}
+
+/** Every value of a repeated header, topmost first — `Received` and `Authentication-Results` both repeat. */
+export function headerValues(headers: readonly GmailHeader[] | null | undefined, name: string): string[] {
+  const wanted = name.toLowerCase();
+  const found: string[] = [];
+  for (const header of headers ?? []) {
+    if ((header.name ?? '').toLowerCase() === wanted && header.value) found.push(header.value);
+  }
+  return found;
+}
+
+function parameterOf(header: string | undefined, name: string): string | undefined {
+  if (!header) return undefined;
+  const match = new RegExp(`${name}\\s*=\\s*("([^"]*)"|[^;\\s]+)`, 'i').exec(header);
+  return (match?.[2] ?? match?.[1])?.trim();
+}
+
+/**
+ * Decodes a part's bytes to text. UTF-8 first, then the declared charset: a message that declares one charset and
+ * carries another is common, and a stateful 7-bit encoding (ISO-2022-JP, UTF-7) is a known way to smuggle text past
+ * a scanner that trusted the declaration. Anything undecodable degrades to replacement characters rather than
+ * throwing, because a body that cannot be read still has to be reported.
+ */
+function hasNonAscii(text: string): boolean {
+  for (const character of text) {
+    if ((character.codePointAt(0) ?? 0) > 0x7f) return true;
+  }
+  return false;
+}
+
+export function decodeBody(data: string, charset: string | undefined): { text: string; overridden: boolean } {
+  const bytes = Buffer.from(data, 'base64url');
+  const declared = (charset ?? '').toLowerCase().replace(/^["']|["']$/g, '');
+  const utf8 = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+  const replacementCount = (utf8.match(/�/g) ?? []).length;
+
+  if (!declared || declared === 'utf-8' || declared === 'utf8' || declared === 'us-ascii' || declared === 'ascii') {
+    return { text: utf8, overridden: false };
+  }
+  // The bytes decode cleanly as UTF-8: believe the bytes, not the label.
+  if (replacementCount === 0 && hasNonAscii(utf8)) return { text: utf8, overridden: true };
+  try {
+    return { text: new TextDecoder(declared, { fatal: false }).decode(bytes), overridden: false };
+  } catch {
+    return { text: utf8, overridden: true };
+  }
+}
+
+/** Flattens the part tree, decoding the text parts. Attachments keep their ids instead of their bytes. */
+export function readParts(payload: GmailPart | null | undefined): MessageParts {
+  const parts: DecodedPart[] = [];
+
+  const visit = (part: GmailPart, path: string): void => {
+    const mimeType = (part.mimeType ?? 'application/octet-stream').toLowerCase();
+    const contentType = headerValue(part.headers, 'content-type');
+    const disposition = headerValue(part.headers, 'content-disposition');
+    const filename =
+      part.filename && part.filename.length > 0
+        ? part.filename
+        : (parameterOf(disposition, 'filename') ?? parameterOf(contentType, 'name'));
+    const data = part.body?.data;
+    const decoded = data ? decodeBody(data, parameterOf(contentType, 'charset')) : undefined;
+
+    parts.push({
+      partId: part.partId ?? path,
+      mimeType,
+      charset: parameterOf(contentType, 'charset'),
+      disposition: disposition?.toLowerCase().startsWith('attachment')
+        ? 'attachment'
+        : disposition?.toLowerCase().startsWith('inline')
+          ? 'inline'
+          : undefined,
+      filename: filename || undefined,
+      contentId: headerValue(part.headers, 'content-id')?.replace(/^<|>$/g, ''),
+      size: part.body?.size ?? 0,
+      text: decoded?.text,
+      attachmentId: part.body?.attachmentId ?? undefined,
+      charsetOverridden: decoded?.overridden ?? false,
+    });
+
+    for (const [index, child] of (part.parts ?? []).entries()) {
+      visit(child, path ? `${path}.${index}` : String(index));
+    }
+  };
+
+  if (payload) visit(payload, '0');
+
+  // A part is an attachment when it has bytes to fetch and a name, or a disposition that says so — not merely
+  // because it is not text: an inline image referenced by the HTML is still an attachment for listing purposes.
+  const isAttachment = (part: DecodedPart): boolean =>
+    Boolean(part.attachmentId) || (part.disposition === 'attachment' && Boolean(part.filename));
+
+  return {
+    parts,
+    html: parts.filter((part) => part.mimeType === 'text/html' && !isAttachment(part) && part.text !== undefined),
+    plain: parts.filter((part) => part.mimeType === 'text/plain' && !isAttachment(part) && part.text !== undefined),
+    attachments: parts.filter(isAttachment),
+  };
+}

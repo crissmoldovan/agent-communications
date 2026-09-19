@@ -9,11 +9,12 @@ import { withFileLock } from './lock.ts';
  * server could otherwise silently undo a policy the user just tightened.
  */
 export interface InboxRuntimeState {
-  lastRefreshOkAt?: string;
-  lastUsedAt?: string;
-  lastError?: { code: string; message: string; at: string };
-  grantedScopes?: string[];
-  refreshTokenExpiresAt?: string;
+  lastRefreshOkAt?: string | undefined;
+  lastUsedAt?: string | undefined;
+  /** Set to `undefined` to clear it: the merged value is dropped when the file is written. */
+  lastError?: { code: string; message: string; at: string } | undefined;
+  grantedScopes?: string[] | undefined;
+  refreshTokenExpiresAt?: string | undefined;
 }
 
 export class InboxStateStore {

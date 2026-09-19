@@ -10,10 +10,12 @@ export interface PathEnvironment {
 }
 
 export interface ResolvedPaths {
-  /** config.json, the file secret store and everything a user edits. */
+  /** config.json and everything a user edits. */
   configDir: string;
   /** Approvals, pending OAuth flows, audit log, rate-cap counters, taint set. */
   stateDir: string;
+  /** The file secret store: refresh tokens, client secrets, the approval key. */
+  secretsDir: string;
   /** Managed runtime installs for MCP clients. */
   dataDir: string;
   /** Default root for attachment downloads and exports. */
@@ -23,6 +25,11 @@ export interface ResolvedPaths {
 /**
  * Where everything lives. `AGENT_COMMS_CONFIG_DIR` wins; then `XDG_CONFIG_HOME` (honoured on macOS too, because that is
  * where agents and people look first); then `~/.config` on macOS and Linux, `%APPDATA%` on Windows.
+ *
+ * On Windows, state and the file secret store go under `%LOCALAPPDATA%` rather than beside the config: `%APPDATA%` is
+ * the roaming profile, which a domain copies between machines — and refresh tokens, approvals and audit records are
+ * exactly what should not travel that way. An explicit `AGENT_COMMS_CONFIG_DIR` keeps everything together, because
+ * someone who names a directory means that directory.
  */
 export function resolvePaths(options: PathEnvironment = {}): ResolvedPaths {
   const env = options.env ?? process.env;
@@ -37,7 +44,13 @@ export function resolvePaths(options: PathEnvironment = {}): ResolvedPaths {
           ? join(env.APPDATA || join(home, 'AppData', 'Roaming'), APP_DIR_NAME)
           : join(home, '.config', APP_DIR_NAME)),
   );
-  const stateDir = resolve(env.AGENT_COMMS_STATE_DIR || join(configDir, 'state'));
+  const explicitConfigDir = Boolean(env.AGENT_COMMS_CONFIG_DIR);
+  const localRoot =
+    platform === 'win32' && !explicitConfigDir
+      ? join(env.LOCALAPPDATA || join(home, 'AppData', 'Local'), APP_DIR_NAME)
+      : configDir;
+  const stateDir = resolve(env.AGENT_COMMS_STATE_DIR || join(localRoot, 'state'));
+  const secretsDir = resolve(join(localRoot, 'secrets'));
   const dataDir = resolve(
     env.AGENT_COMMS_DATA_DIR ||
       (platform === 'win32'
@@ -47,7 +60,7 @@ export function resolvePaths(options: PathEnvironment = {}): ResolvedPaths {
           : join(home, '.local', 'share', APP_DIR_NAME)),
   );
   const downloadsDir = resolve(join(home, 'Downloads', APP_DIR_NAME));
-  return { configDir, stateDir, dataDir, downloadsDir };
+  return { configDir, stateDir, secretsDir, dataDir, downloadsDir };
 }
 
 /** Expands a leading `~` to the home directory. Nothing else is expanded. */

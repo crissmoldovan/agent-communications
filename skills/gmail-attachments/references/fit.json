@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "Find files people sent, save them to disk with a manifest of what came from where, and attach a local file to a draft."
+}

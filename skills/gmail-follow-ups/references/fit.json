@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "What a mailbox shows as waiting: threads the user spoke last in that nobody answered, and threads that arrived and were never answered."
+}
