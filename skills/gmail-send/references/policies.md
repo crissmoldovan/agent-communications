@@ -13,8 +13,14 @@ entirely in this package's own code.
 ## 1. The three policies
 
 The policy that applies to a mailbox is its own `sendPolicy`, or `defaults.sendPolicy` when the
-mailbox has none. The shipped default is `chat`. `gmail_inboxes_list` (CLI: `agent-gmail inbox list
---json`) reports the one in force, and whether it is inherited.
+mailbox has none. The shipped default is `chat`. `gmail_inboxes_list` reports the one in force, but
+not where it came from: its `sendPolicy` is already the resolved value, and the tool returns no
+field saying whether the mailbox set it or inherited it. The CLI does distinguish them —
+`agent-gmail inbox list` prints `chat (default)` in its SENDING column for an inherited policy and a
+bare `chat` for one the mailbox owns, `agent-gmail inbox show <alias>` writes `chat (from defaults)`
+on its `sending:` line, and `--json` on either carries `sendPolicyInherited`. So when the question
+is *where do I change this*, ask the user to run one of those rather than inferring it from the
+effective value, which reads identically either way.
 
 ### `chat`
 

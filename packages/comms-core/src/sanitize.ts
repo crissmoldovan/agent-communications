@@ -2,7 +2,7 @@ import render from 'dom-serializer';
 import { type AnyNode, type ChildNode, type Element, isComment, isTag, isText } from 'domhandler';
 import { convert } from 'html-to-text';
 import { parseDocument } from 'htmlparser2';
-import { isDangerous } from './chars.ts';
+import { stripInvisible } from './chars.ts';
 
 /**
  * Email HTML is attacker-controlled. Before any of it becomes text a model reads, this removes what a human reading
@@ -1017,19 +1017,9 @@ export function analyseLink(text: string, href: string): SanitizedLink {
   return { text, domain: host, flags };
 }
 
-/**
- * Strips control characters (ESC, CSI, OSC and the rest), DEL, lone carriage returns, zero-width, bidi-control and tag
- * characters from sender-controlled text; returns the text and how many were removed. CRLF becomes LF first.
- */
-export function stripInvisible(text: string): { text: string; removed: number } {
-  let removed = 0;
-  let out = '';
-  for (const char of text.replace(/\r\n/g, '\n')) {
-    if (isDangerous(char.codePointAt(0) ?? 0)) removed += 1;
-    else out += char;
-  }
-  return { text: out, removed };
-}
+// Moved to ./chars.ts, beside the character table, because `neutralise` needs it too. Re-exported here so the
+// sanitiser's own callers and tests keep their import path.
+export { stripInvisible } from './chars.ts';
 
 /**
  * Converts email HTML to plain text for a model to read: hidden content removed, links rendered as

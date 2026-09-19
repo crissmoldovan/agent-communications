@@ -6,6 +6,7 @@ import {
   defaultInternalDomains,
   duplicateInbox,
   expandHome,
+  homeDirectory,
   type InboxConfig,
   isValidAlias,
   newInboxId,
@@ -91,7 +92,7 @@ export function aliasFromCredentialsFile(file: string): string {
 }
 
 export async function importLegacy(context: GmailContext, options: ImportOptions = {}): Promise<ImportResult> {
-  const directory = expandHome(options.dir ?? '~/.gmail-mcp', context.env.HOME ?? '');
+  const directory = expandHome(options.dir ?? '~/.gmail-mcp', homeDirectory(context.env));
   const clientName = options.clientName ?? 'imported';
   const dryRun = options.dryRun ?? false;
 
@@ -120,14 +121,18 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
   const imported: ImportCandidate[] = [];
   const skipped: ImportCandidate[] = [];
 
-  const secrets = dryRun ? null : await context.core.secrets(config.secrets?.store ?? options.store ?? 'file');
+  // One backend, decided once. This opened the **file** store and then recorded **keychain** in config, so an
+  // import into a fresh configuration wrote the refresh token to disk and left the registry pointing at a
+  // keychain entry that was never created — a mailbox that looks connected and cannot read its own token. The
+  // skill's own procedure runs `inbox import` before `client add`, which is exactly the case with no store set.
+  const store = config.secrets?.store ?? options.store ?? 'keychain';
+  const secrets = dryRun ? null : await context.core.secrets(store);
   if (!dryRun && secrets && !existingClient) {
     await secrets.set(clientSecretRef(clientKey), parsedClient.clientSecret);
     await context.core.config.update((current) => ({
       ...current,
-      // The same default `client add` uses. Defaulting to `file` here meant an import into a fresh configuration
-      // silently chose the weaker backend, and said nothing about having done so.
-      secrets: { store: current.secrets?.store ?? options.store ?? 'keychain' },
+      // The same value the store above was opened with, so the two can never disagree.
+      secrets: { store: current.secrets?.store ?? store },
       clients: {
         ...current.clients,
         [clientKey]: {

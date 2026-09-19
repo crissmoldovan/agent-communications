@@ -391,3 +391,34 @@ test('settings a newer version wrote survive an older reader, instead of being s
   assert.equal((after.inboxes?.work as Record<string, unknown>)?.futureInboxField, 'keep');
   assert.equal(after.defaults?.timezone, 'Europe/London');
 });
+
+test('a zero-byte or corrupt lock is taken over by its age, not left to wedge the file for ever', async () => {
+  // `withFileLock` creates the lock file and writes its body in two separate awaits with no fsync between them, so a
+  // SIGKILL, an OOM kill or a power cut in between leaves a zero-byte lock behind. `isStale` read "no body" as "not
+  // stale", so that file blocked config, the approval ledger and the send ledger permanently, for every process,
+  // with no way out but finding and deleting it by hand.
+  const dir = tempDir();
+
+  const empty = join(dir, 'empty.lock');
+  writeFileSync(empty, '');
+  assert.equal(
+    await withFileLock(empty, async () => 'ran', { staleMs: 1, timeoutMs: 2000 }),
+    'ran',
+    'a zero-byte lock must be taken over once it is older than staleMs',
+  );
+
+  // Same trap, different hat: a readable body whose timestamp does not parse gives `Date.now() - NaN > staleMs`,
+  // which is false for ever.
+  const corrupt = join(dir, 'corrupt.lock');
+  writeFileSync(corrupt, JSON.stringify({ pid: 1, at: 'not a date', token: 'x' }));
+  assert.equal(await withFileLock(corrupt, async () => 'ran', { staleMs: 1, timeoutMs: 2000 }), 'ran');
+
+  // And a fresh empty lock is still respected: age is what decides, exactly as for a readable one.
+  const fresh = join(dir, 'fresh.lock');
+  writeFileSync(fresh, '');
+  await assert.rejects(
+    withFileLock(fresh, async () => 'ran', { staleMs: 60_000, timeoutMs: 300 }),
+    (error: unknown) => error instanceof CommsError && error.code === 'LOCK_TIMEOUT',
+    'a lock younger than staleMs is never taken over, body or no body',
+  );
+});

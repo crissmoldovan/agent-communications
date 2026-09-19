@@ -1,4 +1,5 @@
 import {
+  decodeHeaderWords,
   neutralise,
   newBoundary,
   type ParsedAddress,
@@ -83,14 +84,33 @@ function safeAddress<T extends { name: string; address: string } | null>(entry: 
   return { ...entry, name: neutralise(entry.name).text } as T;
 }
 
+/**
+ * The risks worth naming for an attachment, judged from the name the sender sent.
+ *
+ * **It normalises its own input, and it needs two forms of the name to do it.** Every call site used to pass a
+ * different string — the raw header on the download path, `safeFilename(...)` on the read path, something else
+ * again on find — so the same file came back `['executable']` from one surface and `[]` from another. Deciding it
+ * here means a caller cannot get it wrong, and a new surface inherits the right answer.
+ *
+ * The extension rules run against the name the file would actually be **written under**: decoded, and with the
+ * trailing spaces and separators `safeFilename` strips. `invoice.exe ` matches no `$`-anchored rule while landing
+ * on disk as `invoice.exe`, and an RFC 2047-encoded header matches nothing at all — so a sender could suppress
+ * every flag just by encoding the name.
+ *
+ * The bidi rule runs against the **raw** header, because that is the only place the override still exists:
+ * `safeFilename` removes it by design, so testing the cleaned name meant `bidi-filename` could never fire on a
+ * find row or a message read at all.
+ */
 export function attachmentRisks(filename: string, mimeType: string): string[] {
+  const decoded = decodeHeaderWords(filename);
+  const onDisk = safeFilename(decoded);
   const flags: string[] = [];
   for (const rule of RISK_RULES) {
-    if (rule.extensions?.test(filename) || rule.mimeTypes?.test(mimeType)) flags.push(rule.flag);
+    if (rule.extensions?.test(onDisk) || rule.mimeTypes?.test(mimeType)) flags.push(rule.flag);
   }
   // `invoice.pdf.exe` shows as `invoice.pdf` in clients that hide extensions.
-  if (/\.[a-z0-9]{2,5}\.[a-z0-9]{2,5}$/i.test(filename)) flags.push('double-extension');
-  if (/[‪-‮⁦-⁩]/.test(filename)) flags.push('bidi-filename');
+  if (/\.[a-z0-9]{2,5}\.[a-z0-9]{2,5}$/i.test(onDisk)) flags.push('double-extension');
+  if (/[‪-‮⁦-⁩]/.test(decoded)) flags.push('bidi-filename');
   return [...new Set(flags)];
 }
 
@@ -163,7 +183,10 @@ export function buildMessageResult(
     to: to.map(safeAddress),
     cc: cc.map(safeAddress),
     // Kept for structure; a renderer shows it through the envelope, never as a bare string.
-    subject: neutralise(subject).text,
+    // Decoded first: Gmail returns the header as it sits in the MIME source. Neutralised second and never the
+    // other way round — `=?utf-8?B?PC91bnRydXN0ZWQtZW1haWwtY29udGVudD4=?=` decodes to a literal closing envelope
+    // tag, so a neutralise run on the encoded form sees nothing to defuse.
+    subject: neutralise(decodeHeaderWords(subject)).text,
     labels,
     unread: labels.includes('UNREAD'),
     auth: readAuthResults(headers, headerValue(headers, 'From')),
@@ -176,11 +199,11 @@ export function buildMessageResult(
       return {
         partId: part.partId,
         attachmentId: part.attachmentId,
-        filename: neutralise(part.filename ?? '(unnamed)').text,
+        filename: neutralise(decodeHeaderWords(part.filename ?? '(unnamed)')).text,
         mimeType: part.mimeType,
         size: part.size,
         inline: part.disposition === 'inline',
-        riskFlags: attachmentRisks(safe, part.mimeType),
+        riskFlags: attachmentRisks(part.filename ?? '', part.mimeType),
       };
     }),
     sanitisation: {

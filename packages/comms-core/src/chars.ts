@@ -40,3 +40,21 @@ export function isControl(codePoint: number): boolean {
 export function isDangerous(codePoint: number): boolean {
   return isControl(codePoint) || isInvisible(codePoint);
 }
+
+/**
+ * Strips control characters (ESC, CSI, OSC and the rest), DEL, lone carriage returns, zero-width, bidi-control and tag
+ * characters from sender-controlled text; returns the text and how many were removed. CRLF becomes LF first.
+ *
+ * This lives beside the table rather than in the sanitiser because `neutralise` needs it too, and the two must not
+ * drift: a pattern that looks for `</untrusted-email-content` cannot see it through a zero-width space, so stripping
+ * has to happen before any such pattern runs, on every path, not only on the ones that render a body.
+ */
+export function stripInvisible(text: string): { text: string; removed: number } {
+  let removed = 0;
+  let out = '';
+  for (const char of text.replace(/\r\n/g, '\n')) {
+    if (isDangerous(char.codePointAt(0) ?? 0)) removed += 1;
+    else out += char;
+  }
+  return { text: out, removed };
+}

@@ -142,17 +142,24 @@ What that command does, in order:
 1. Reads and validates the file: only an `installed` client is accepted, its client id must end in
    `.apps.googleusercontent.com`, and it must carry a secret. A missing secret is refused with the
    hint that Google shows it only at creation.
-2. Checks the credentials with Google before storing them, by redeeming a code that cannot work. A
+2. Chooses the secret store, once per configuration directory: the system keychain by default,
+   probed first; `--store file` keeps owner-only files instead, which is what a headless Linux box
+   needs. Both stores cannot be mixed — changing later is `agentcomms secrets migrate --to …`.
+3. Checks the credentials with Google before storing them, by redeeming a code that cannot work. A
    live client answers `invalid_grant` ("that code is not real"), which counts as success; a deleted
    client or a wrong secret answers `invalid_client`, and the command refuses to store it. With no
    network, the check is skipped and the command says so. `--no-probe` skips it deliberately.
-3. Chooses the secret store, once per configuration directory: the system keychain by default,
-   probed first; `--store file` keeps owner-only files instead, which is what a headless Linux box
-   needs. Both stores cannot be mixed — changing later is `agentcomms secrets migrate --to …`.
 4. Writes the secret to the store, reads it back, and refuses if the two differ.
 5. Writes the client id (and project id) into `config.json`. **The secret is never written to
    config, and never printed.**
 6. With `--move`, and only after all of the above, deletes the downloaded file.
+
+That the store comes before the probe has a consequence worth knowing. On a machine where the
+keychain cannot be reached, `client add` fails with `SECRET_STORE_UNAVAILABLE` before it has asked
+Google anything, so a deleted client or a stale secret stays hidden behind the store error. Run it
+again with `--store file` and the probe finally happens — which is when `invalid_client` appears, a
+step later than it looks as though it should. Read the first failure as being about the store alone,
+and do not reach for `--no-probe`: the probe had not run.
 
 Useful variants:
 

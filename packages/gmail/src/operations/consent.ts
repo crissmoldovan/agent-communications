@@ -219,6 +219,12 @@ async function reauthorise(
     email: identity.email,
     sub: identity.sub ?? existing.inbox.sub,
     identity: identity.sub ? 'oidc' : existing.inbox.identity,
+    // The client the token was actually issued to. `completeConsent` exchanged the code with `flow.clientName`, so
+    // after `inbox reauth <alias> --client desktop` the stored refresh token belongs to `desktop` while the row
+    // still said whatever it said before — and every later refresh then presented the new token to the old client.
+    // That breaks the one recovery the shipped troubleshooting guide prescribes for a deleted or mismatched OAuth
+    // client, which is this exact command.
+    client: flow.clientName,
     tier: tierOf(granted) ?? existing.inbox.tier,
     contacts: capabilitiesOf(granted).has('contacts'),
     grantedScopes: granted,

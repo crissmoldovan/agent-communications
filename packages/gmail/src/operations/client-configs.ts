@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { homeDirectory } from '@cloudpixel/comms-core';
 
 /**
  * Where the MCP clients on this machine keep their server lists. Read to answer two questions: is our own server
@@ -72,7 +72,7 @@ export function knownClientConfigs(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): ClientConfigFile[] {
-  const home = env.HOME ?? env.USERPROFILE ?? homedir();
+  const home = homeDirectory(env);
   const files: ClientConfigFile[] = [
     { client: 'claude-code', path: join(home, '.claude.json') },
     { client: 'cursor', path: join(home, '.cursor', 'mcp.json') },

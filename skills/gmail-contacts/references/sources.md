@@ -54,16 +54,16 @@ source that carries behaviour:
 
 | Field | How it is set |
 |---|---|
-| `email` | Lower-cased. History addresses additionally have their domain converted to ASCII — see *What the search does not do* |
+| `email` | Lower-cased, with an internationalised domain converted to its ASCII (punycode) form, whichever source it came from — see *What the search does not do* |
 | `name` | The display name from the address book, or from the header. Whichever arrived first and was non-empty wins; a later source does not overwrite it |
 | `inbox` | The alias that found it |
 | `sources` | Every source that produced this address in this mailbox, in the order they ran |
 | `messages` | Incremented once per history sighting; `0` for a row that came only from the address book |
 | `lastSeen` | The latest history sighting, or `null` |
 
-Rows are merged on `<alias>:<lower-cased address>`. So one person with two addresses is two rows, the same
-address in two mailboxes is two rows, and the same address from two sources in one mailbox is one row with two
-entries in `sources`.
+Rows are merged on `<alias>:<canonical address>`, the `email` above. So one person with two addresses is two
+rows, the same address in two mailboxes is two rows, and the same address from two sources in one mailbox is
+one row with two entries in `sources`.
 
 ## The ordering
 
@@ -86,12 +86,13 @@ This is the section that prevents the expensive mistake.
 
 - **No dot folding.** `j.smith@gmail.com` and `jsmith@gmail.com` are one Gmail mailbox and two rows here.
 - **No plus folding.** `sam+invoices@acme.test` and `sam@acme.test` are two rows.
-- **Punycode, inconsistently.** History addresses are parsed through the package's address parser, which
-  lower-cases and converts an internationalised domain to its ASCII (punycode) form. Address-book and
-  other-contacts addresses are only lower-cased. So an internationalised address can appear twice — once in
-  Unicode from the address book, once in punycode from history — and the merge will not join them, because the
-  strings differ. For the same reason, searching for a domain in its Unicode spelling will not substring-match
-  the punycode form in history.
+- **Punycode, on every row.** Every address is canonicalised on the way in — lower-cased, and an
+  internationalised domain converted to its ASCII (punycode) form — whichever source produced it, and before
+  the merge key is built. So `josé@compañía.es` from the address book and the same address from history are
+  one row, not two people. What that costs is the spelling: `email` is the canonical form, not the string that
+  arrived, so an internationalised domain reaches the user as `xn--…` and they cannot recognise it as theirs
+  unless you say the row was rewritten. The query itself is only lower-cased, so a domain searched in its own
+  script will not substring-match the punycode form in history; search the ASCII form, or search a name.
 - **No lookalike comparison.** Nothing measures the distance between two domains here. The automatic check
   lives in the send preview, where a first-time external recipient is compared against the domains this mailbox
   actually writes to, read from the last two hundred messages in Sent. It is real but bounded: a lookalike of
@@ -107,7 +108,7 @@ Two different silences, and only one of them is reported.
 
 | What happened | How it shows | What to say |
 |---|---|---|
-| The mailbox is not connected with address-book access | `contacts` and `other-contacts` are skipped, **no error is raised**, and `complete` stays `true` | "Two of the three sources were switched off for this mailbox" — check the mailbox's `contacts` flag with `agent-gmail inbox list --json`; `gmail_inboxes_list` does not carry it |
+| The mailbox is not connected with address-book access | `contacts` and `other-contacts` are skipped, **no error is raised**, and `complete` stays `true` | "Two of the three sources were switched off for this mailbox" — the mailbox's `contacts` flag says so before you search, and both paths carry it: it is on every row of `gmail_inboxes_list` and of `agent-gmail inbox list --json` |
 | The mailbox has the flag but not the scope, or Google refused | The People call throws; the failure is recorded in `errors` for that inbox and `complete` becomes `false` | Name the inbox and the code. `SCOPE_MISSING` is resolved by the user with `agent-gmail inbox reauth <alias> --contacts` |
 | The People API is not enabled on the Google Cloud project | `CONFIG` in `errors`, naming the People API | A person enables it in the Cloud console; nothing here can |
 | The whole mailbox could not be read | `errors` for that inbox, `complete` false, and it contributed nothing at all | Say the mailbox is missing from the answer, not that the person was not found |

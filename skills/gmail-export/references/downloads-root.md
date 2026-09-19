@@ -22,10 +22,13 @@ The root is created before use with owner-only permissions, and an existing dire
 looser is **tightened** rather than accepted. Every directory created beneath it is `0700`; every file written
 into it is `0600`.
 
-One environment caveat, because it produces paths that look wrong: the configured value is expanded against
-the process's `HOME`. Where that is unset and the value starts with `~`, the expansion has nothing to join to
-and the root resolves relative to the working directory instead. If exports are appearing somewhere
-unexpected, that is the thing to check before assuming the setting is wrong.
+One caveat about the configured value, because it produces paths that look wrong: only a leading `~` is
+expanded, and it is expanded against `HOME`, then `USERPROFILE`, then the home directory the operating system
+reports — so a `~` always lands under a real home, on Windows too. Everything else is taken exactly as
+written, which means a **relative** value is resolved against the process's working directory: wherever the
+MCP client or the shell happened to start the package, and not necessarily the same place twice. If exports
+are appearing somewhere unexpected, read `defaults.downloadsDir` first and check that it is absolute or
+starts with `~`; then check the alias and `out` segments in the layout below.
 
 ## The layout
 

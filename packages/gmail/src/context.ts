@@ -92,14 +92,24 @@ export class GmailContext {
     });
   }
 
-  /** The transport for an inbox, built once per context: each carries its own token cache and concurrency budget. */
+  /**
+   * The transport for an inbox, built once per context: each carries its own token cache and concurrency budget.
+   *
+   * **Keyed by the inbox id, not the alias.** An alias is a name a person chose and can move; the id is the mailbox.
+   * Keyed by alias, a long-lived process served the *previous* mailbox's transport after an alias was reused — and
+   * `forgetTransports()` does not help, because it only runs in the process that made the change, while an MCP
+   * server holds one context for a whole client session and never sees a rename made at a terminal. Every operation
+   * resolves the inbox freshly and then asks for a transport, so the two would disagree: the gates (send policy,
+   * granted scopes, internal domains) ran against the new inbox's config while the Google calls went to the old
+   * mailbox. Resolving first costs a config read that the operation has already done anyway.
+   */
   async transport(alias: string): Promise<GmailTransport> {
-    const existing = this.#transports.get(alias);
-    if (existing) return existing;
     const resolved = await this.inbox(alias);
+    const existing = this.#transports.get(resolved.inbox.id);
+    if (existing) return existing;
     const client = await this.client(resolved.inbox.client);
     const transport = this.#createTransport({ resolved, client, context: this });
-    this.#transports.set(alias, transport);
+    this.#transports.set(resolved.inbox.id, transport);
     return transport;
   }
 

@@ -123,17 +123,27 @@ exists.
    **Complete when:** the user knows the message id, and whether it landed in the thread it was
    meant for.
 
-7. **If anything refused, report the refusal and its next step.** Each code means one thing:
+7. **If anything refused, report the refusal and its next step.** The code narrows it; the message
+   that comes with the code says which case actually fired:
 
    | Code | What happened | What to tell the user |
    |---|---|---|
-   | `APPROVAL_REQUIRED` | This mailbox needs approval outside the chat, and this client cannot give it | Run `agent-gmail approve <approvalId>` in a terminal, or send the draft from Gmail |
+   | `APPROVAL_REQUIRED` | This mailbox needs approval outside the chat, and this client cannot give it — or the ten minutes already ran out, because this check reads the policy and not the clock | Run `agent-gmail approve <approvalId>` in a terminal, or send the draft from Gmail — unless the record reads `expired`, in which case prepare again |
    | `APPROVAL_PENDING` | Same, and the approval has not happened yet | The same, and the approval is still waiting — it has not been thrown away |
-   | `APPROVAL_VOID` | The draft changed, or the recipients did not match, or the approval was already used | Prepare again; the preview will show what it says now |
-   | `APPROVAL_EXPIRED` | More than ten minutes passed between the preview and the send | Prepare again and show the new preview — the old one is no longer what the draft says |
+   | `APPROVAL_VOID` | The draft changed, or the recipients did not match, or the approval was already used, or the ten minutes ran out. The message says which | Prepare again; the preview will show what it says now |
+   | `APPROVAL_EXPIRED` | The ten minutes passed, said by the *approve* side — `agent-gmail approve`, or a trusted client's form. A send never uses this code: it reports expiry as `APPROVAL_VOID`, or as `APPROVAL_REQUIRED` under `confirm` | Prepare again and show the new preview — the old one is no longer what the draft says |
    | `POLICY_NEVER` | This mailbox does not send through agents at all | The draft is in Gmail Drafts; send it from there |
    | `RATE_CAPPED` | The hourly or daily cap is reached | When it lifts, from the error |
-   | `UNSENDABLE_HTML` | The draft carries HTML an agent could not have written — a tracking image, hidden text, a form | Review it and send it from Gmail |
+   | `UNSENDABLE_HTML` | Something in the draft cannot be bound to an approval. Usually HTML an agent could not have written — a tracking image, hidden text, a form — but also a missing plain-text part, more than one body part of a kind, or an attachment whose bytes will not read | Read `details.refusals` and name what actually fired; then review it and send it from Gmail |
+
+   An approval that ran out never announces itself by name here. Where the effective policy is
+   `chat`, the send refuses with `APPROVAL_VOID` and the message *nothing was sent: this approval
+   has expired*. Where it is `confirm` — set on the mailbox, or raised there by escalation — the
+   confirmation check runs first and looks at the policy rather than the clock, so it refuses with
+   `APPROVAL_REQUIRED` and points the user at a terminal for a record that can no longer be approved
+   there. Read the message and not only the code — and when `gmail_send_list` (CLI: `agent-gmail
+   send list`) shows the record as `expired`, the answer is the simple one every time: prepare
+   again, and show the new preview.
 
    **Complete when:** the user has the reason and the one thing that would resolve it.
 
@@ -161,8 +171,15 @@ plainly and stop.
 If the user would rather approve sends here than in a terminal, that list is something they add to
 themselves, and it takes evidence: `gmail_confirm_probe` raises a test form carrying a code, they
 type it back, and then they run `agent-gmail confirm-clients add <name>` in a terminal within ten
-minutes. You can run the probe when they ask for it; you cannot complete the second half, and a
-client that answers the probe without showing it to anybody fails it.
+minutes. You can run the probe when they ask for it; you cannot complete the second half.
+
+Be straight with them about what the probe proves, because it is narrower than it sounds. The code
+is written into the form itself, and the only check is that the same four characters come back — so
+a client that answers its own forms from the model passes exactly as cleanly as a person typing.
+What the probe establishes is that a form raised here reaches something able to read it; that the
+something is a human is what the *user* attests to by running the `add`. If they did not see the
+form with their own eyes, a passing probe is evidence of nothing. And the list is the only gate left
+on this path: once a name is on it, a form is all that `confirm` asks for from that client.
 
 **`never`.** This mailbox does not send through agents. Prepare refuses. The draft is in Gmail and
 the user sends it from there.

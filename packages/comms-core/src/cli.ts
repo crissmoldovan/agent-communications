@@ -136,7 +136,12 @@ async function migrateSecrets(
   if (from === to) return { from, to, moved: 0 };
   const source = await core.secrets(from);
   const target = await openSecretStore(to, {
-    secretsDir: `${core.paths.configDir}/secrets`,
+    // `paths.secretsDir`, never a path rebuilt from `configDir`. On Windows the two are deliberately different:
+    // `resolvePaths` puts the file secret store under `%LOCALAPPDATA%` while config stays in `%APPDATA%`, because
+    // the roaming profile is copied between machines by a domain and refresh tokens are exactly what must not
+    // travel that way. Rebuilding the path here sent every migrated token into the roaming profile, deleted the
+    // originals, and left the runtime — which reads `paths.secretsDir` — finding nothing at all.
+    secretsDir: core.paths.secretsDir,
     namespace: keychainNamespace(core.paths.configDir),
   });
   const refs = [
@@ -232,9 +237,15 @@ export async function main(
         const inboxId = inboxIdFor(config, values.inbox);
         const limit = values.limit ? Number.parseInt(values.limit, 10) : 50;
         if (!Number.isInteger(limit) || limit < 1) throw usage('--limit must be a positive whole number');
-        const records = (await core.audit.tail({ limit, ...(values.since ? { since: values.since } : {}) })).filter(
-          (r) => !inboxId || r.inboxId === inboxId,
-        );
+        // The inbox filter goes INTO the scan, not after it. `tail` applies it while counting toward `limit`;
+        // filtering the returned array instead meant a quiet inbox's history was read as empty whenever a
+        // busier one had produced `limit` records since — and raising `--limit` changed the answer, which is
+        // the tell. This is the command someone runs to ask what was sent from a mailbox.
+        const records = await core.audit.tail({
+          limit,
+          ...(inboxId ? { inbox: inboxId } : {}),
+          ...(values.since ? { since: values.since } : {}),
+        });
         writeResult(records, output, (rs) =>
           rs.length
             ? rs

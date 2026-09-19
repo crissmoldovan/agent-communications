@@ -55,8 +55,9 @@ function parseTier(value: string | undefined, fallback: Tier = 'organize'): Tier
  */
 export async function startSignIn(context: GmailContext, options: StartOptions): Promise<StartedSignIn> {
   const config = await context.config();
-  const clientName = options.client ?? Object.keys(config.clients)[0] ?? 'default';
-  const client = await context.client(clientName);
+  // Resolved per mode, below, and deliberately not before: adding an inbox has no inbox to ask, but re-authorising
+  // one does, and `Object.keys(config.clients)[0]` is insertion order rather than an answer to the question.
+  let clientName = options.client ?? Object.keys(config.clients)[0] ?? 'default';
 
   let tier = parseTier(options.tier);
   let contacts = options.contacts ?? true;
@@ -68,6 +69,13 @@ export async function startSignIn(context: GmailContext, options: StartOptions):
   let expect: OAuthFlow['expect'] = { email: options.email };
   if (options.mode === 'reauth') {
     const inbox = requireInbox(config, options.alias);
+    // **The inbox's own client, not the first one in the file.** A re-consent has to go through the OAuth client the
+    // inbox was registered against, or the code is exchanged with the wrong client's secret and the refresh token
+    // that comes back is issued to a client the registry row does not name. The tool prints the path into this
+    // itself: `import-legacy` registers the legacy client as `imported` and then tells the user to run
+    // `agent-gmail inbox reauth <alias> --start`, so anyone who already had a `default` client re-consented through
+    // `default` — which is first by insertion order — while the inbox said `imported`.
+    clientName = options.client ?? inbox.client;
     tier = parseTier(
       options.tier,
       (TIERS as readonly string[]).includes(inbox.tier) ? (inbox.tier as Tier) : 'organize',
@@ -80,6 +88,7 @@ export async function startSignIn(context: GmailContext, options: StartOptions):
     });
   }
 
+  const client = await context.client(clientName);
   const pkce = newPkce();
   const scopes = scopesFor(tier, contacts);
   const flow = await context.flows.create({

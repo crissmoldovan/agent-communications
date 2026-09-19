@@ -186,7 +186,9 @@ to archive it.
 
 Under the covers these are all the same thing: labels added and labels removed. The flags are
 shorthand for label ids, which is why the reverse of every one of them is another `gmail_organise`
-call.
+call. The last column is the opposite operation, applied to a whole selection alike; to put a
+particular change back, use that change's `undo` instead, which restores each message to what it held
+rather than imposing one swap on all of them.
 
 | What it does | MCP field / CLI flag | What actually changes | What reverses it |
 |---|---|---|---|
@@ -228,11 +230,14 @@ the rows are not the thing you are about to change. Four ways the gap opens:
   the query to "refresh" the selection quietly changes what you agreed with the user, so apply the
   ids you dry-ran and nothing else.
 
-One more caveat about the undo, and it matters for wide selections: the reverse returned is the same
-change inverted, not a record of each message's prior state. Archiving fifty messages of which three
-were already out of the inbox and then applying the undo adds `INBOX` to all fifty, putting those
-three back where they never were. For a handful of messages that is nothing; for a bulk archive it is
-worth a line when you offer it.
+One more caveat about the undo, and it matters for wide selections: it is a record of your change,
+not a snapshot of the mailbox. Each entry restores what that message held a moment before you touched
+it — archive fifty of which three were already out of the inbox, and those three get no entry at all
+— but it knows nothing about what happens after it was computed. Anything the user stars, files or
+archives on those ids in the meantime is overwritten when the undo is applied, and a message that
+could not be read while the undo was being built was still changed and simply is not claimed by it.
+For a handful of messages that is nothing; for a bulk archive, or an undo offered an hour later, it
+is worth a line when you offer it.
 
 ## Usage Examples
 
@@ -255,10 +260,12 @@ And after the user says yes:
 ```text
 Archived 314 messages in work (-INBOX). Nothing was deleted; they are all still searchable.
 
-To put it back: agent-gmail organise --inbox work --add INBOX --message 18f2c… --message 18f2d… …
+The change came back with an undo — 302 entries, one for each message that was actually in the inbox
+beforehand. To put it back: agent-gmail organise-undo --inbox work, with that array piped in.
 
-That undo adds INBOX to all 314, so a few that were already archived would come back to the inbox.
-Say the word and I will keep the id list for the rest of this session.
+Each message goes back to the labels it held, so the twelve that were already archived stay archived.
+The array lives only in this conversation, and anything you file or star on those messages between
+now and then would be overwritten by it.
 ```
 
 Bad — the count never existed, so neither did the choice:

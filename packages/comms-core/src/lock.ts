@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { link, open, readFile, rename, rm } from 'node:fs/promises';
+import { link, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { CommsError } from './errors.ts';
@@ -35,10 +35,25 @@ async function readLock(path: string): Promise<LockBody | null> {
   }
 }
 
-function isStale(body: LockBody | null, staleMs: number): boolean {
-  // An unreadable or half-written lock counts as stale only through its age, which a fresh one cannot have.
-  if (!body) return false;
-  return Date.now() - new Date(body.at).getTime() > staleMs;
+/**
+ * An unreadable or half-written lock counts as stale only through its age — and when the body cannot be read, that
+ * age has to come from the file itself.
+ *
+ * `withFileLock` creates the lock file and writes its body in two separate awaits with no fsync between them, so a
+ * SIGKILL, an OOM kill or a power cut in between leaves a zero-byte lock on disk. Reading "no body" as "not stale"
+ * meant that file wedged config, the approval ledger and the send ledger permanently, for every process, with no
+ * way out but finding and deleting it by hand. A corrupt timestamp inside an otherwise readable body is the same
+ * trap wearing a different hat: `Date.now() - NaN > staleMs` is false, forever.
+ */
+async function isStale(path: string, body: LockBody | null, staleMs: number): Promise<boolean> {
+  const declared = body ? new Date(body.at).getTime() : Number.NaN;
+  if (Number.isFinite(declared)) return Date.now() - declared > staleMs;
+  try {
+    return Date.now() - (await stat(path)).mtimeMs > staleMs;
+  } catch {
+    // The lock is gone; whoever is waiting will simply create their own.
+    return false;
+  }
 }
 
 /**
@@ -53,7 +68,7 @@ async function takeOverStale(lockPath: string, staleMs: number): Promise<void> {
     return; // someone else moved it first
   }
   const moved = await readLock(aside);
-  if (!isStale(moved, staleMs)) {
+  if (!(await isStale(aside, moved, staleMs))) {
     // Not stale after all: put it back. `link` leaves the copy in place to clean up, but some file systems (overlay
     // mounts in containers) have no hard links, so fall back to renaming it back — losing the holder's lock would
     // leave no mutual exclusion at all.
@@ -100,7 +115,7 @@ export async function withFileLock<T>(lockPath: string, fn: () => Promise<T>, op
       lastCode = code ?? lastCode;
       // Only EEXIST tells us the file is really there and can be read; under the Windows codes there is nothing to
       // read yet, so back off and look again rather than deciding it is abandoned.
-      if (code === 'EEXIST' && isStale(await readLock(lockPath), staleMs)) {
+      if (code === 'EEXIST' && (await isStale(lockPath, await readLock(lockPath), staleMs))) {
         await takeOverStale(lockPath, staleMs);
         continue;
       }

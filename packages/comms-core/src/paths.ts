@@ -69,3 +69,19 @@ export function expandHome(path: string, home: string = homedir()): string {
   if (path.startsWith('~/') || path.startsWith('~\\')) return join(home, path.slice(2));
   return path;
 }
+
+/**
+ * The user's home directory, read from an environment.
+ *
+ * Windows does not set `HOME`; it sets `USERPROFILE`. Call sites that wrote `env.HOME ?? ''` and handed the result to
+ * `expandHome` were therefore broken on Windows in a way that reads as safe: `''` is not nullish, so `expandHome`'s
+ * own `homedir()` default never fires, `~` expands to the empty string, and `resolve('')` is the process's current
+ * working directory. An attachment jail whose root is `['~']` then permits whatever directory the server was started
+ * in, and the `~/.*` deny rule tests for dot-folders under that directory instead of under the real home — so
+ * `~/.ssh` and `~/.aws` stopped being denied and started being attachable.
+ *
+ * `||` rather than `??` deliberately: `HOME=''` is exactly as broken as `HOME` unset, and was the shape of the bug.
+ */
+export function homeDirectory(env: NodeJS.ProcessEnv = process.env): string {
+  return env.HOME || env.USERPROFILE || homedir();
+}

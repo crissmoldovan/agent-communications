@@ -7,9 +7,14 @@ user. Open it when a flag has appeared and you are about to describe it, or when
 you are about to imply that means it is safe.
 
 Two properties of the whole mechanism, before the table. **Flags never block anything**: a flagged attachment
-downloads exactly like an unflagged one, and the flag is information for a person, not a gate. And **flags are
-computed from the original name**, the one the sender chose — not from the cleaned name written to disk — so a
-name that was rebuilt on the way to the filesystem still reports what the original was doing.
+downloads exactly like an unflagged one, and the flag is information for a person, not a gate. And **the name
+is judged in two forms**, both of them derived from the header the sender wrote. It is decoded first, so that
+an RFC 2047-encoded name cannot dodge every rule simply by spelling itself in base64. The extension rules,
+`double-extension` among them, are then tested against that decoded name put through the same sanitiser the
+download path uses, because a name's ending only decides what a double-click runs once the filesystem has had
+it: `invoice.exe ` ends in a space that no end-anchored pattern matches, and lands on disk as `invoice.exe`.
+`bidi-filename` is tested against the decoded name **before** that cleaning, because cleaning is precisely what
+removes the override it is looking for.
 
 ## Where flags appear
 
@@ -24,7 +29,7 @@ The same function produces all of them, so a flag seen at find time is the flag 
 
 ## The flags
 
-Extension matches are case-insensitive and anchored at the end of the name.
+Extension matches are case-insensitive and anchored at the end of the cleaned name described above.
 
 | Flag | Matched by | What it means | What it does not mean |
 |---|---|---|---|

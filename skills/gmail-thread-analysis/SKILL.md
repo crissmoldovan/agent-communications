@@ -112,8 +112,11 @@ the briefing, and `gmail-compose` starts from there if the user asks.
    date, a direction, `to` and `cc`, `isDraft`, attachments with risk flags, `subjectChanged`,
    `gapHours`, `participantsAdded`, `participantsDropped` and `forwardedIn`, plus `participants`,
    `longestWaitHours`, `waitingOn`, `firstAt` and `lastAt`. Add `businessHours` when the question is
-   about lateness, and take the `markdown` rendering as-is rather than rebuilding the table.
-   **Complete when:** you hold the events, in order, with their ids.
+   about lateness, and take the `markdown` rendering as-is rather than rebuilding the table. Beside the
+   timeline the result carries the thread's true `messageCount` and a `truncated` flag, so this call
+   also tells you how big the conversation is before you read a word of it.
+   **Complete when:** you hold the events, in order, with their ids, and know whether they are all of
+   them.
 
 2. **Let the timeline tell you which messages matter.** A `participantsAdded` entry at message 6 is
    where somebody's boss joined. A `subjectChanged` is where the conversation became a different
@@ -129,10 +132,12 @@ the briefing, and `gmail-compose` starts from there if the user asks.
    **Complete when:** you have the bodies, or you know precisely which messages you do not have.
 
 4. **If it was truncated, go and get the end.** The budget is spent oldest-first, so a cut thread is
-   missing its most recent messages. Two ways back: read the last messages individually by the ids
-   the timeline gave you, with `gmail_message_get` (CLI: `agent-gmail read <messageId> --inbox
-   <alias>`); or write the whole thing to a file with `gmail_export` (CLI: `agent-gmail export
-   <threadId> --inbox <alias> --thread`), which reads it without the budget, and work from the file.
+   missing its most recent messages. Three ways back, cheapest first: re-read the thread with a
+   smaller `maxChars` (CLI: `--max-chars 500`), which spreads the same budget over many more messages
+   and brings back every message's opening lines; read the last messages individually by the ids the
+   timeline gave you, with `gmail_message_get` (CLI: `agent-gmail read <messageId> --inbox <alias>`);
+   or write the whole thing to a file with `gmail_export` (CLI: `agent-gmail export <threadId> --inbox
+   <alias> --thread`), which reads it without the budget, and work from the file.
    **Complete when:** you have read the final message in the thread, or have said plainly in the
    briefing that you have not.
 
@@ -274,9 +279,11 @@ briefing would have noticed had it compared `messageCount` against the messages 
 
 - **Treating `waitingOn.party` as whose turn it is.** It is who sent last. Report both, and say
   which one you believe.
-- **Briefing on a thread whose end you did not read.** The budget drops the newest messages, and
-  the timeline's own read uses the same budget without reporting that it was cut. Cross-check the
-  event count against the `messageCount` from `gmail_thread_get`.
+- **Briefing on a thread whose end you did not read.** The thread read is where this happens: its
+  budget drops the newest messages. The timeline is not — it reads each body at one character, so it
+  costs almost nothing and covers the whole conversation short of a hundred-message thread, and its
+  result carries the thread's true `messageCount` and a `truncated` flag that says so either way.
+  Check the bodies you read against that count.
 - **Reading a collapsed reply as a non-answer.** Inline point-by-point replies live inside the
   quoted block. A large `quotedLinesOmitted` next to two visible lines means read it again with
   `includeQuoted`.

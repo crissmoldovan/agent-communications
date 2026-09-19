@@ -149,7 +149,9 @@ parts. What goes in:
   `---------- Forwarded message ----------` followed by `From:`, `Date:`, `Subject:`, `To:` and, when
   present, `Cc:` — restated because a forwarded quote without them is orphaned text.
 - The original's body as **sanitised text**, up to 4,000 characters, with the original's own quoted
-  history collapsed.
+  history left in. Collapsing it would be wrong here: on a forward the chain is frequently the thing
+  being passed on, and replacing it with a line naming one of our own options hands the new reader a
+  message about a message.
 
 It is the sanitised text rather than the original's HTML for one reason and it is not aesthetic: the
 original's markup belongs to whoever sent it. It can carry a tracking pixel, a form, or text hidden
@@ -160,12 +162,18 @@ loses the original's formatting, and that is the right trade.
 
 Three consequences to say out loud when they apply:
 
-1. **The collapse marker is sent.** If the original had quoted history of its own, the quote contains a
-   line reading `[quoted: N lines omitted — pass includeQuoted to see them]`, prefixed with `>` like
-   the rest. The recipient sees it. On a long chain where that would read as noise, turn the quote off
-   and paste the part that matters into your own text instead.
-2. **The 4,000-character cut is silent.** A long original is simply shorter in the quote, with no
-   marker where it stops.
+1. **The whole chain is quoted, not just the message in front of you.** If the original was itself a
+   reply, everything it was carrying is in its body and so goes out in the quote, with nothing
+   marking where the message you read ends and the history beneath it begins. On a forward that is
+   the sharp edge of the whole operation: the new recipient gets every earlier turn of a conversation
+   they were never on, up to the character budget. When only part of it is meant to travel, turn the
+   quote off with `quote: false` and paste that part into your own text instead — and either way,
+   read the quote in the preview before handing the draft over.
+2. **The cut says so, in the message.** When the original is longer than 4,000 characters the quote
+   ends with `[the original continues — N more characters not quoted]`, and that line is part of the
+   body that is sent. It is there so a quote does not simply stop mid-sentence, but it is our note
+   inside somebody else's message, so name it when you show the preview: the user is approving that
+   line too.
 3. **An original with no quotable text produces no quote at all** — a message that was entirely an
    image, or whose body sanitised to nothing. A forward in that state carries only what you wrote, and
    the recipient has no idea what is being forwarded. Check the preview for the quote before handing a
@@ -183,9 +191,14 @@ no `quote` argument and it does not look at the original message, so:
 - **Pass new `text` and the quote is gone.** The draft is rebuilt from your text alone. If the reply is
   meant to keep the original below it, the new `text` has to contain it, or the revision has to be made
   as a fresh `gmail_draft_reply`.
-- **Omit `text` and the old body is reused verbatim** — quote and signature included — and the
-  mailbox's signature is then appended to it a second time, because the rebuild adds a signature to
-  whatever text it is handed. Check the preview after an update that only changed a recipient.
+- **Omit `text` and the old body is reused** — the quote with it — with the mailbox's signature taken
+  off the end before the message is rebuilt and put back on afterwards, so an update that only
+  changed a recipient does not leave the draft signed twice. Two things can still put a second
+  signature there, and both show in the preview: the strip is an exact match against the signature
+  Gmail holds for the mailbox *now*, so one that has been edited since the draft was written is not
+  recognised and stays in the body with the new one below it; and `signature: false` is not
+  remembered, so a draft deliberately written without a signature gets one from the next update that
+  does not say so again.
 
 Recipients, subject and attachments survive an update untouched when they are not restated.
 
@@ -201,9 +214,18 @@ The `warnings` array is the tool's own reading of the recipient list:
 | Warning | Raised when |
 |---|---|
 | the sender asked for replies to go elsewhere | `Reply-To` differs from `From` |
-| goes outside your organisation | any recipient's domain is not one of the mailbox's internal domains |
+| goes outside your organisation | whatever follows the last `@` in a recipient, as it was passed, is not one of the mailbox's internal domains |
 | blind recipients, who the others cannot see | `bcc` is not empty |
 | an attachment total over 25 MB | some recipients will not receive it |
+
+The second of those is a string comparison rather than an address parse, and it reads the recipients in
+the form they were given to the call. `jo@example.com`, in a mailbox whose internal domain is
+`example.com`, is internal; `Jo <jo@example.com>` is not, because what follows the last `@` is
+`example.com>`. Nothing else objects to the display-name form — it goes into the header as written, and
+the preview parses it before showing it — so the only casualty is the warning, and it fails towards
+noise: an internal colleague is announced as an outside recipient, and the warning that most needs to be
+taken seriously becomes the one the user learns to wave through. Pass bare addresses. A recipient list
+computed by a reply is already bare, so this is about the ones you pass yourself.
 
 Name each of them in plain words. A recipient list that survives the preview unchallenged is the user's
 decision; one that is summarised instead of shown is yours.
@@ -214,14 +236,5 @@ decision; one that is summarised instead of shown is yours.
 `replyDraft` in `packages/gmail/src/operations/drafts.ts` applies the overrides, builds the quote with
 `quoteOf`, raises the warnings and writes the draft. `ownAddresses` in
 `packages/gmail/src/operations/analyse.ts` is the list of addresses treated as the user's own.
-
-**Two corrections to the procedure that points here.** The SKILL text says a forward "carries only the
-body you wrote — not the original text". That was true before quoting existed. It quotes the original's
-sanitised text by default now, and a forward sent with `quote: false` is the case that carries nothing;
-the half that still holds is attachments, which never travel. The SKILL text also says `text` is
-required on every update and that an update without `attach` comes back with nothing attached. Neither
-is true any more: `text` is optional, and attachments are carried over by their bytes unless `attach`
-replaces them. Restating them does no harm, so the procedure is safe to follow — it is just no longer
-the reason.
 
 See also `references/profile.md` for how the message itself should read.

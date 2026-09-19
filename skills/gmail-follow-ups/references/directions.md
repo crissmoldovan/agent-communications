@@ -7,17 +7,24 @@ choosing `direction`, `olderThanDays` or `lookbackDays`, or when a row is presen
 say why.
 
 Nothing here reads a message body. The direction of a thread is decided by one fact: whether the **last**
-message in it carries Gmail's `SENT` label.
+message in it carries Gmail's `SENT` label — and when a draft sits at the end, by the last message that is
+not one, because a half-written reply is not something anybody said.
 
 ## The numbers, before anything runs
 
 | Option | Default | What happens to it |
 |---|---|---|
 | `direction` | `them` | Chooses the query and the filter below |
-| `olderThanDays` | `3` | Floored at 0 |
+| `olderThanDays` | `3` for `them`, `0` for `me` | Floored at 0, then applied as a row filter in **both** directions |
 | `lookbackDays` | `30` | Raised to at least `olderThanDays + 1`, always, in **both** directions |
 | `limit` | `20` | Clamped to 1–50. One budget for the whole run, shared across every mailbox |
 | `inboxes` | all | Named aliases in order, or every connected mailbox, sorted |
+
+The split default is deliberate, because the two questions want different starting points. "Who has not
+replied to me" should not nag somebody the day after they were written to, so `them` starts at three days;
+"what have I not answered" should show this morning's mail, which is precisely the mail most likely to be
+forgotten, so `me` starts at zero. A threshold you pass yourself replaces the default and filters whichever
+direction you passed it in.
 
 The lookback floor is the first quirk. Ask for a 30-day quiet threshold with a 7-day lookback and you get 31
 days of lookback, silently — the search would otherwise be guaranteed to return nothing, since no thread can
@@ -34,7 +41,8 @@ in:sent older_than:<olderThanDays>d newer_than:<lookbackDays>d
 **The filters, in order, per thread returned:**
 
 1. Fetch the thread; sort its messages oldest first; take the last one. A thread with no messages is skipped.
-2. Skip if that message carries `DRAFT`.
+2. If that message carries `DRAFT`, step back to the newest message that does not, and read every step below
+   from that one instead. A thread with nothing in it but drafts is skipped.
 3. Skip unless it carries `SENT`. The user must have spoken last.
 4. Compute `ageDays` and skip if it is **less than** `olderThanDays`.
 
@@ -62,12 +70,15 @@ in:inbox newer_than:<lookbackDays>d -category:promotions -category:social -categ
 **The filters, in order, per thread returned:**
 
 1. Fetch the thread; sort oldest first; take the last message.
-2. Skip if it carries `DRAFT`.
+2. If it carries `DRAFT`, step back to the newest message that does not. A started reply is not an answer, so
+   the thread is judged on the last thing that was really said. A thread of nothing but drafts is skipped.
 3. Skip if it carries `SENT`. Somebody else must have spoken last.
-4. **No age filter at all.**
+4. Compute `ageDays` and skip if it is **less than** `olderThanDays` — which is `0` here unless you pass one,
+   so by default nothing is dropped and this morning's mail appears.
 
-**What a row means:** something arrived in the inbox within the lookback, it is not from the user, it is not a
-draft, it is outside the four excluded Gmail categories, and no reply followed it in that thread.
+**What a row means:** something arrived in the inbox within the lookback, the newest message in the thread
+that is not a draft is not from the user, it is outside the four excluded Gmail categories, it has been
+sitting for at least `olderThanDays`, and no reply followed it in that thread.
 
 **What it does not mean:** that the user owes an answer. Everything a no-reply address drops into the Primary
 tab qualifies — receipts, build failures, calendar notices, a newsletter that arrived like ordinary mail. So
@@ -76,13 +87,19 @@ directly.
 
 ## The three quirks
 
-### `olderThanDays` does not filter in the `me` direction
+### `olderThanDays` filters both directions, from a different starting number in each
 
-It is used twice in that direction and neither use is a filter: it floors at zero, and it raises the lookback
-to at least `olderThanDays + 1`. The row-level age check runs only for `them`. So asking for "things I have
-not answered in more than a week" by setting `olderThanDays: 7` returns everything that arrived in the last
-eight days, most of it from this morning. If the user wants only the old ones, filter the rows yourself on
-`ageDays` and say that you did.
+It does three things, not one: it floors at zero, it raises the lookback to at least `olderThanDays + 1`, and
+it drops every row whose `ageDays` is below it. That last one runs in both directions. What differs between
+them is only where each starts from — `3` for `them`, `0` for `me` — which is why a default `me` run shows
+this morning's mail and a `me` run with `olderThanDays: 7` shows nothing that arrived in the last week.
+
+That makes the threshold a real filter in the direction where it is least expected, and the sharp edge is
+where it gets applied. The `me` query carries no age term at all, so the whole check happens here, after the
+page has come back. Rows it drops are not replaced, so a threshold in that direction shortens the list twice
+over: once by excluding recent mail, and once by spending the one-page read on threads that were then thrown
+away. Pass it only when the user asked for old mail specifically, say that you did, and do not filter the
+rows again on `ageDays` afterwards — the operation has already done it.
 
 ### `limit` is one budget shared across mailboxes
 
@@ -97,22 +114,33 @@ and rows that fail the direction or age filter are dropped and not replaced, so 
 page" and "few exist" look the same from here. And a mailbox absent from the rows is not necessarily a
 mailbox with nothing waiting.
 
-### A thread whose last message is a draft is skipped
+### A draft at the end of a thread is stepped over, not skipped
 
-Before anything else, a last message carrying `DRAFT` removes the thread from the run — in both directions.
-The effect is worst in `me`: a half-written reply sitting in Drafts makes the thread disappear from the list
-of things not yet answered. The work looks done because it looks answered.
+A last message carrying `DRAFT` does not remove the thread from the run. The operation steps back to the
+newest message that is not a draft and judges the thread on that, in both directions, because a half-written
+reply is not an answer — and a thread the user started answering and abandoned is exactly the one they most
+need to see under `awaiting-me`. The clock does not restart either: `ageDays` counts from that last real
+message, so an unfinished draft cannot make a stale thread look fresh.
+
+The edge is that nothing in the row says the draft is there. A thread half-answered on Tuesday and one never
+opened produce identical rows, and `messageId` points at the message before the draft rather than at the
+draft itself — so handing the row straight to `gmail-compose` starts a **second** unsent reply beside the
+first. Open the thread before offering to draft, and where an answer is already in progress, say so and let
+the user finish the one they started.
 
 ## How each field of a row is computed
+
+Every field below is read from the message that decided the direction: the thread's last message, or the last
+one that is not a draft when a draft sits at the end.
 
 | Field | Derivation | What to watch |
 |---|---|---|
 | `inbox` | The alias that produced it | A thread id means nothing in another mailbox |
 | `threadId` | The thread's own id, falling back to the id the list returned | The handle to quote |
-| `messageId` | The **last** message's id | This is what a reply is threaded onto |
-| `subject` | The last message's `Subject`, **cut to 120 characters** | Sender-controlled text, quoted not obeyed |
+| `messageId` | That message's id | This is what a reply is threaded onto — past a draft it is the message before it, never the draft |
+| `subject` | That message's `Subject`, **cut to 120 characters** | Sender-controlled text, quoted not obeyed |
 | `with` | The **first** address of `To` when the user sent last, or the first address of `From` when they did not; `unknown` if neither parses | One counterpart, even on a thread with six people, and an address rather than a name |
-| `lastAt` | The last message's internal date, as an ISO timestamp, or `null` | — |
+| `lastAt` | That message's internal date, as an ISO timestamp, or `null` | — |
 | `ageDays` | Whole days from `lastAt` to now, floor-rounded. `0` when there is no internal date | Calendar days, not working days |
 | `direction` | `awaiting-them` or `awaiting-me`, from the run's direction | Every row in one run has the same value |
 

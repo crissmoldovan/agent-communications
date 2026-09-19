@@ -14,12 +14,12 @@ than any property of the mail does.
 
 | Why | How to confirm | What to do |
 |---|---|---|
-| **The last message is not the one you think.** `awaiting-them` needs the thread's newest message to carry `SENT`; `awaiting-me` needs it not to | Open the thread and look at who sent the newest message | If their auto-reply, their "thanks", or a later note from the user is the newest message, the thread is genuinely in the other direction |
-| **The last message is a draft.** A thread whose newest message carries `DRAFT` is skipped in both directions | Open the thread, or look in Gmail's Drafts | Tell the user: a half-written reply hides the thread from `awaiting-me` exactly when it should surface it |
+| **The last message is not the one you think.** `awaiting-them` needs the thread's newest real message to carry `SENT`; `awaiting-me` needs it not to | Open the thread and look at who sent the newest message | If their auto-reply, their "thanks", or a later note from the user is the newest message, the thread is genuinely in the other direction |
+| **The thread is nothing but drafts.** A draft at the end is stepped over in favour of the newest message that is not one, so a thread with no real message in it has nothing to judge and is skipped | Open the thread, or look in Gmail's Drafts | A composed but unsent message is not waiting on anybody. Drafts are Gmail's own list and this operation cannot show them |
 | **The cap was spent.** `limit` is one budget across every mailbox, filled in mailbox order | Compare the row count against the limit. A full list is a suspicious list | Re-run for that one mailbox, or raise the limit to at most 50 |
 | **The mailbox was read one page deep.** Each mailbox contributes at most `limit` candidate threads *before* filtering, and rows dropped by the filters are not replaced | The row count is below the limit and the list still looks thin | Narrow the run — one mailbox, a shorter lookback — rather than assuming the mailbox is quiet |
 | **The window is too short.** `lookbackDays` defaults to 30, and the thread's last message may be older | Search for the thread directly: `agent-gmail search "subject:<words>" --inbox <alias>` | Re-run with a longer `lookbackDays` |
-| **The age threshold excluded it**, in `them` only. `olderThanDays` defaults to 3, and it is applied to the thread's newest message | The thread's last message is newer than the threshold | Lower `olderThanDays`, or accept that it has not been quiet long enough |
+| **The age threshold excluded it**, in either direction. `olderThanDays` is applied to the thread's newest real message, and defaults to 3 in `them` and 0 in `me` | The thread's last message is newer than the threshold | Lower `olderThanDays`, or drop it entirely in `me`, where any value at all hides what arrived today |
 | **It is not in the inbox**, in `me` only. The query is `in:inbox`, so archived mail — including mail a filter archived on arrival — is invisible | Search without the inbox restriction | Say that the direction only sees the inbox. Nothing here can look at archived mail |
 | **Gmail filed it under an excluded category**, in `me` only: promotions, social, updates, forums | Look at the thread's labels with `agent-gmail read <messageId> --inbox <alias>` | The exclusion is deliberate. If the user wants that mail, this operation is the wrong tool for it |
 | **It is in spam or trash.** Neither direction searches either | `gmail_search` with `includeSpamTrash` | This is the right way to check one specific thread that "never arrived" |
@@ -32,6 +32,7 @@ than any property of the mail does.
 | Why | How to confirm | What to say |
 |---|---|---|
 | **It was answered somewhere else** — a call, a meeting, a chat thread, a document comment | Nothing in the mailbox can confirm it. The user knows | This is the single most common false row. Say in one line that the list only sees the mailbox |
+| **The user already started answering it.** A draft at the end of a thread is stepped over, so the thread is judged on the last real message and stays in `awaiting-me` | Open the thread, or look in Gmail's Drafts | The row is doing its job — an abandoned reply is unfinished work, not a reply. Say the draft is there and let the user finish that one, rather than drafting a second beside it |
 | **Nothing was ever owed.** The user's last message was an acknowledgement, a forward, or an FYI | Open the thread and read the last message | `ageDays` measures silence, and silence is frequently correct. Never describe a row as somebody ignoring the user |
 | **Automated mail in `awaiting-me`.** Only four Gmail categories are excluded; anything automated that lands in Primary looks exactly like a question | The sender is a no-reply address, or the body has no ask | Drop the no-reply senders before showing the list, and say you did |
 | **The thread closed itself.** "No need to reply", "sending for your records" | Open the thread | One of the two cheap disqualifiers worth checking before promoting a row |
@@ -71,9 +72,10 @@ produces exactly that shape. Four checks, in order, before saying it:
    those, in that order. A list of one is a list about one life.
 3. **Which direction ran?** `them` and `me` answer different questions, and one run answers one of them. An
    empty `awaiting-them` says nothing about what the user has not answered.
-4. **Are the numbers the user's?** `olderThanDays` of 3 and `lookbackDays` of 30 are defaults, not a
-   description of what the user asked for. A quiet threshold larger than the lookback silently raises the
-   lookback rather than returning nothing.
+4. **Are the numbers the user's?** `olderThanDays` of 3 in `them`, of 0 in `me`, and `lookbackDays` of 30 are
+   defaults, not a description of what the user asked for. A quiet threshold larger than the lookback silently
+   raises the lookback rather than returning nothing, and a threshold passed in `me` removes every arrival
+   newer than it — the usual reason an `awaiting-me` list comes back empty on a morning that was not quiet.
 
 Then say the true sentence, which is longer than the tempting one:
 

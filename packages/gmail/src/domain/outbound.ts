@@ -3,6 +3,7 @@ import {
   type CanonicalMessage,
   CommsError,
   collapseWhitespace,
+  decodeHeaderWords,
   messageDigest,
   normaliseAddress,
   parseAddressList,
@@ -212,7 +213,7 @@ export async function analyseDraft(options: {
       });
     }
     attachments.push({
-      filename: attachment.filename ?? '(unnamed)',
+      filename: decodeHeaderWords(attachment.filename ?? '(unnamed)'),
       mimeType: attachment.mimeType ?? 'application/octet-stream',
       size: bytes.length || (attachment.size ?? 0),
       sha256: sha256Hex(bytes),
@@ -225,7 +226,16 @@ export async function analyseDraft(options: {
     cc: mergedAddresses(headers, 'Cc'),
     bcc: mergedAddresses(headers, 'Bcc'),
     replyTo: [...new Set([...mergedAddresses(headers, 'Reply-To'), ...mergedAddresses(headers, 'Sender')])],
-    subject: headerValue(headers, 'Subject') ?? '',
+    // **Decoded, and deliberately not neutralised.** Gmail hands back the header exactly as it sits in the MIME
+    // source, and this package's own composer RFC 2047-encodes anything with an accent, a curly quote or an em
+    // dash — so the approver was shown `=?UTF-8?Q?Caf=C3=A9_plan?=` for a subject the recipient would read as
+    // `Café plan`. Approving a message you cannot read is not approving it.
+    //
+    // Not neutralised because this string is what the human is asked to check against what will be sent: defusing a
+    // `Human:` or a `<|im_start|>` here would make the preview differ from the message again, which is the very bug
+    // above wearing a safety hat. The terminal is protected by `escapeForDisplay` in the renderer instead, and the
+    // digest below is computed over this decoded form, so the approval binds what was actually read.
+    subject: decodeHeaderWords(headerValue(headers, 'Subject') ?? ''),
     threadId: options.threadId,
     inReplyTo: headerValue(headers, 'In-Reply-To'),
     references: (headerValue(headers, 'References') ?? '').split(/\s+/).filter(Boolean),

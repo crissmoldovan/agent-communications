@@ -4,9 +4,13 @@ import { join } from 'node:path';
 import {
   type CommsError,
   createUniqueFile,
+  decodeHeaderWords,
   ensurePrivateDir,
   expandHome,
+  homeDirectory,
+  neutralise,
   parseAddressList,
+  relativeSubpath,
   resolveInsideRoot,
   safeFilename,
   slug,
@@ -121,12 +125,19 @@ export async function findAttachments(
             threadId: message.threadId ?? entry.threadId ?? '',
             partId: part.partId,
             attachmentId: part.attachmentId,
-            filename,
+            // Sender-controlled, and neutralised for the same reason `read.ts` neutralises them: a row leaves this
+            // function as a bare string in a structured result, outside any envelope, and an attachment name or a
+            // subject can hold arbitrary bytes. This path is reached by an agent triaging mail on its own
+            // initiative, so the sender does not need the user to open anything.
+            filename: neutralise(decodeHeaderWords(filename)).text,
             mimeType: part.mimeType,
             size: part.size,
             date,
             from,
-            subject: subject.slice(0, 120),
+            subject: neutralise(decodeHeaderWords(subject).slice(0, 120)).text,
+            // Flagged on the name the file would actually be written under, not the one the sender sent:
+            // `invoice.exe ` is stripped to `invoice.exe` on the way to disk, and the `$`-anchored extension checks
+            // do not match the trailing space, so the executable was written and the flag was not raised.
             riskFlags: attachmentRisks(filename, part.mimeType),
           });
         }
@@ -175,7 +186,7 @@ export const DEFAULT_MAX_BYTES: number = 500 * 1024 * 1024;
 export async function downloadsRoot(context: GmailContext): Promise<string> {
   const config = await context.config();
   const configured = config.defaults.downloadsDir;
-  const root = configured ? expandHome(configured, context.env.HOME ?? '') : context.core.paths.downloadsDir;
+  const root = configured ? expandHome(configured, homeDirectory(context.env)) : context.core.paths.downloadsDir;
   await ensurePrivateDir(root);
   return root;
 }
@@ -196,7 +207,7 @@ export async function downloadAttachments(
 
   const root = await downloadsRoot(context);
   // Over MCP `out` is a relative subpath and nothing else; the jail check below is what enforces that.
-  const directory = await resolveInsideRoot(root, join(alias, options.out ?? ''));
+  const directory = await resolveInsideRoot(root, join(alias, relativeSubpath(options.out)));
   await mkdir(directory, { recursive: true, mode: 0o700 });
 
   const maxFiles = Math.min(options.maxFiles ?? DEFAULT_MAX_FILES, 200);
@@ -208,76 +219,99 @@ export async function downloadAttachments(
   let totalBytes = 0;
 
   for (const target of targets) {
-    if (files.length >= maxFiles) {
-      skipped.push({ messageId: target.messageId, partId: target.partId ?? '', reason: `more than ${maxFiles} files` });
-      continue;
-    }
     const message = await transport.getMessage(target.messageId);
     const parts = readParts(message.payload);
     const headers = message.payload?.headers ?? [];
-    const part = target.partId
-      ? parts.attachments.find((candidate) => candidate.partId === target.partId)
-      : parts.attachments.find((candidate) => candidate.filename === target.filename);
+    // Which attachments this target names. `partId` picks exactly one; a `filename` picks the one with that name;
+    // naming neither means every attachment on the message. That last case used to fall through to
+    // `find(c => c.filename === target.filename)` with `filename` undefined — which matches an unnamed inline part,
+    // a signature image say, and otherwise nothing at all. So the MCP tool, whose `partId` is optional and
+    // documented as *narrowing* to one attachment, downloaded the one thing nobody asked for, or reported "no such
+    // attachment" for a message plainly carrying one.
+    const chosen = target.partId
+      ? parts.attachments.filter((candidate) => candidate.partId === target.partId)
+      : target.filename !== undefined
+        ? parts.attachments.filter((candidate) => candidate.filename === target.filename)
+        : parts.attachments;
 
-    if (!part?.attachmentId) {
-      skipped.push({
-        messageId: target.messageId,
-        partId: target.partId ?? '',
-        reason: part ? 'this part holds no downloadable bytes (a Drive link, perhaps)' : 'no such attachment',
-      });
-      continue;
-    }
-    if (totalBytes + part.size > maxBytes) {
-      skipped.push({
-        messageId: target.messageId,
-        partId: part.partId,
-        reason: `more than ${maxBytes} bytes in one batch`,
-      });
+    if (chosen.length === 0) {
+      skipped.push({ messageId: target.messageId, partId: target.partId ?? '', reason: 'no such attachment' });
       continue;
     }
 
-    const bytes = await transport.getAttachment(target.messageId, part.attachmentId);
-    const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const existing = seenHashes.get(sha256);
-    if (existing) {
+    for (const part of chosen) {
+      if (files.length >= maxFiles) {
+        skipped.push({
+          messageId: target.messageId,
+          partId: part.partId,
+          reason: `more than ${maxFiles} files`,
+        });
+        continue;
+      }
+
+      if (!part?.attachmentId) {
+        skipped.push({
+          messageId: target.messageId,
+          partId: target.partId ?? '',
+          reason: part ? 'this part holds no downloadable bytes (a Drive link, perhaps)' : 'no such attachment',
+        });
+        continue;
+      }
+      if (totalBytes + part.size > maxBytes) {
+        skipped.push({
+          messageId: target.messageId,
+          partId: part.partId,
+          reason: `more than ${maxBytes} bytes in one batch`,
+        });
+        continue;
+      }
+
+      const bytes = await transport.getAttachment(target.messageId, part.attachmentId);
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      const existing = seenHashes.get(sha256);
+      if (existing) {
+        files.push({
+          path: existing,
+          filename: safeFilename(part.filename ?? 'attachment'),
+          size: bytes.byteLength,
+          sha256,
+          mimeType: part.mimeType,
+          messageId: target.messageId,
+          duplicate: true,
+          riskFlags: attachmentRisks(part.filename ?? '', part.mimeType),
+        });
+        continue;
+      }
+
+      // One folder per message, named from facts about it — never from anything the sender controls directly.
+      const date = message.internalDate ? new Date(Number(message.internalDate)).toISOString().slice(0, 10) : 'undated';
+      const sender = slug(parseAddressList(headerValue(headers, 'From'))[0]?.address ?? 'unknown', 30, 'unknown');
+      const subject = slug(headerValue(headers, 'Subject') ?? '', 40, 'no-subject');
+      const folder = await resolveInsideRoot(
+        root,
+        join(alias, relativeSubpath(options.out), `${date}_${sender}_${subject}`),
+      );
+      await mkdir(folder, { recursive: true, mode: 0o700 });
+
+      const { path, handle } = await createUniqueFile(folder, safeFilename(part.filename ?? 'attachment'));
+      try {
+        await handle.writeFile(bytes);
+      } finally {
+        await handle.close();
+      }
+      seenHashes.set(sha256, path);
+      totalBytes += bytes.byteLength;
       files.push({
-        path: existing,
+        path,
         filename: safeFilename(part.filename ?? 'attachment'),
         size: bytes.byteLength,
         sha256,
         mimeType: part.mimeType,
         messageId: target.messageId,
-        duplicate: true,
+        duplicate: false,
         riskFlags: attachmentRisks(part.filename ?? '', part.mimeType),
       });
-      continue;
     }
-
-    // One folder per message, named from facts about it — never from anything the sender controls directly.
-    const date = message.internalDate ? new Date(Number(message.internalDate)).toISOString().slice(0, 10) : 'undated';
-    const sender = slug(parseAddressList(headerValue(headers, 'From'))[0]?.address ?? 'unknown', 30, 'unknown');
-    const subject = slug(headerValue(headers, 'Subject') ?? '', 40, 'no-subject');
-    const folder = await resolveInsideRoot(root, join(alias, options.out ?? '', `${date}_${sender}_${subject}`));
-    await mkdir(folder, { recursive: true, mode: 0o700 });
-
-    const { path, handle } = await createUniqueFile(folder, safeFilename(part.filename ?? 'attachment'));
-    try {
-      await handle.writeFile(bytes);
-    } finally {
-      await handle.close();
-    }
-    seenHashes.set(sha256, path);
-    totalBytes += bytes.byteLength;
-    files.push({
-      path,
-      filename: safeFilename(part.filename ?? 'attachment'),
-      size: bytes.byteLength,
-      sha256,
-      mimeType: part.mimeType,
-      messageId: target.messageId,
-      duplicate: false,
-      riskFlags: attachmentRisks(part.filename ?? '', part.mimeType),
-    });
   }
 
   const manifestPath = join(directory, 'manifest.json');

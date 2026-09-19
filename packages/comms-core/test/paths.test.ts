@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { expandHome, resolvePaths } from '../src/paths.ts';
+import { expandHome, homeDirectory, resolvePaths } from '../src/paths.ts';
 
 const home = join('/', 'h', 'jo');
 
@@ -60,4 +60,27 @@ test('expandHome expands only a leading tilde', () => {
   assert.equal(expandHome('~/Documents', home), join(home, 'Documents'));
   assert.equal(expandHome('/abs/~/x', home), '/abs/~/x');
   assert.equal(expandHome('~other/x', home), '~other/x');
+});
+
+test('homeDirectory falls back the way Windows needs, and never yields an empty string', () => {
+  // The bug this replaces: `env.HOME ?? ''`. Windows sets USERPROFILE, not HOME, so `home` became `''`, which is not
+  // nullish — `expandHome`'s own default never fired, `~` expanded to `''`, and `resolve('')` is the process's
+  // current working directory. An attachment jail rooted at `['~']` then allowed whatever directory the server was
+  // started in, and the `~/.*` deny rule stopped covering the real home.
+  const posixHome = join('/', 'h', 'jo');
+  const windowsHome = join('/', 'u', 'jo');
+  assert.equal(homeDirectory({ HOME: posixHome } as NodeJS.ProcessEnv), posixHome);
+  assert.equal(homeDirectory({ USERPROFILE: windowsHome } as NodeJS.ProcessEnv), windowsHome);
+  assert.equal(homeDirectory({ HOME: posixHome, USERPROFILE: windowsHome } as NodeJS.ProcessEnv), posixHome);
+
+  // `||` not `??`: an empty HOME is exactly as broken as an absent one, and was the shape of the bug.
+  assert.equal(homeDirectory({ HOME: '', USERPROFILE: windowsHome } as NodeJS.ProcessEnv), windowsHome);
+
+  // With neither set it falls back to the OS, never to the empty string.
+  const fallback = homeDirectory({} as NodeJS.ProcessEnv);
+  assert.ok(fallback.length > 0);
+  assert.notEqual(fallback, '');
+
+  // And the whole point: `~` never expands to something `resolve` turns into the cwd.
+  assert.notEqual(expandHome('~', homeDirectory({} as NodeJS.ProcessEnv)), '');
 });
