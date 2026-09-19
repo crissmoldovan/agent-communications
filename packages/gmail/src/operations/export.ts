@@ -1,6 +1,13 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { CommsError, createUniqueFile, resolveInsideRoot, safeFilename, slug } from '@cloudpixel/comms-core';
+import {
+  CommsError,
+  createUniqueFile,
+  relativeSubpath,
+  resolveInsideRoot,
+  safeFilename,
+  slug,
+} from '@cloudpixel/comms-core';
 import type { GmailContext } from '../context.ts';
 import { downloadsRoot } from './attachments.ts';
 import { type ReadMessageResult, type ReadThreadResult, readMessage, readThread } from './read.ts';
@@ -80,7 +87,7 @@ export async function exportMail(
   await context.requireCapability(resolved, 'read');
 
   const root = await downloadsRoot(context);
-  const directory = await resolveInsideRoot(root, join(alias, options.out ?? 'exports'));
+  const directory = await resolveInsideRoot(root, join(alias, relativeSubpath(options.out) || 'exports'));
   await mkdir(directory, { recursive: true, mode: 0o700 });
 
   let content: Buffer;

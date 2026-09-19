@@ -289,10 +289,25 @@ test('a download cannot be steered outside the downloads root', async () => {
     { a1: 'bytes' },
   );
 
-  await assert.rejects(
-    downloadAttachments(context, 'work', [{ messageId: 'm1', partId: '1' }], { out: '../../../tmp/escape' }),
-    (error: unknown) => error instanceof CommsError && /refusing to write outside/.test(error.message),
-  );
+  // `out` is refused on the caller's own string, before it is joined to anything. `path.join` is not a boundary:
+  // `join('work', '../personal')` is `'personal'`, which still resolves inside the downloads root — so the alias
+  // segment was cancelled, the jail saw nothing wrong, and one mailbox's files were written into another mailbox's
+  // folder, over the manifest that is its record of where its own attachments came from. `join('work', '/tmp/x')`
+  // is `'work/tmp/x'`: the leading separator is dropped and an absolute path is quietly accepted under a name the
+  // caller never asked for. Only the first of these three ever failed.
+  for (const out of ['../../../tmp/escape', '../personal', '/tmp/escape']) {
+    await assert.rejects(
+      downloadAttachments(context, 'work', [{ messageId: 'm1', partId: '1' }], { out }),
+      (error: unknown) => error instanceof CommsError && error.code === 'BAD_DATA',
+      `out ${JSON.stringify(out)} must be refused`,
+    );
+  }
+
+  // A nested subpath is what the option is for, and still works.
+  const ok = await downloadAttachments(context, 'work', [{ messageId: 'm1', partId: '1' }], {
+    out: 'reports/august',
+  });
+  assert.ok(ok.directory.includes(join('reports', 'august')));
 });
 
 test('an attachment that is not there is skipped with a reason, not a crash', async () => {

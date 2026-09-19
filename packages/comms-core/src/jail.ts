@@ -212,3 +212,36 @@ export async function checkAttachable(path: string, policy: AttachPolicy): Promi
   }
   return real;
 }
+
+/**
+ * A caller-supplied subdirectory, checked before it is joined to anything.
+ *
+ * `path.join` is not a boundary, and it was being used as one. `join('work', '../personal')` is `'personal'`: the
+ * alias segment is cancelled, the result still resolves inside the downloads root, so `resolveInsideRoot` allows it
+ * — and one mailbox's files are written into another mailbox's folder, over the `manifest.json` that is that
+ * mailbox's own record of where its attachments came from. `join('work', '/etc/cron.d')` is `'work/etc/cron.d'`:
+ * the leading separator is simply dropped, so an absolute path that every document describes as refused is quietly
+ * accepted under a name the caller never asked for.
+ *
+ * Neither is an escape from the root, which is why neither showed up as a jail failure. In one respect they are
+ * worse than an escape: they succeed, and report a path the caller was never told about.
+ *
+ * So the check happens here, on the caller's own string, before any join — absolute paths and `..` are refused
+ * rather than normalised away. A nested `reports/august` is fine; that is what the option is for.
+ */
+export function relativeSubpath(out: string | undefined, field = 'out'): string {
+  const value = (out ?? '').trim();
+  if (!value) return '';
+  const refuse = (why: string): never => {
+    throw new CommsError('BAD_DATA', `${field} must be a relative subpath: ${why}`, {
+      hint: `Pass something like "reports/august". It is always placed inside the mailbox's own folder.`,
+      details: { value },
+    });
+  };
+  if (isAbsolute(value) || /^[A-Za-z]:/.test(value) || value.startsWith('/') || value.startsWith('\\')) {
+    refuse('it is an absolute path');
+  }
+  const segments = value.split(/[/\\]+/);
+  if (segments.includes('..')) refuse('it climbs out with ".."');
+  return segments.filter((segment) => segment && segment !== '.').join('/');
+}

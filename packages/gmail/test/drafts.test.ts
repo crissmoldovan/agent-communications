@@ -439,3 +439,23 @@ test('a reply to an encoded subject goes out readable, not as Re: =?UTF-8?...', 
   assert.equal(reply.subject, 'Re: Café plan');
   assert.ok(!reply.subject.includes('=?'), 'no encoded-word may survive into an outgoing subject');
 });
+
+test('a Reply-To that adds an address is named, even when it also contains the sender', async () => {
+  // `planReply` makes the whole Reply-To list the recipients. Comparing only the FIRST entry against `From` found
+  // them equal and said nothing, so a header of `Reply-To: sam@partner.test, collector@evil.test` produced a draft
+  // addressed to both with no warning at all — the quietest possible way to add a recipient to someone's reply.
+  const { context } = await connected({
+    m1: incoming({
+      id: 'm1',
+      from: 'Sam Lee <sam@partner.test>',
+      replyTo: 'sam@partner.test, collector@evil.test',
+    }),
+  });
+
+  const reply = await replyDraft(context, 'work', 'm1', { text: 'Tuesday works.' });
+  assert.ok(reply.to.includes('collector@evil.test'), 'the added address really does become a recipient');
+  assert.ok(
+    reply.warnings.some((warning) => warning.includes('collector@evil.test')),
+    `the added address must be named; got ${JSON.stringify(reply.warnings)}`,
+  );
+});

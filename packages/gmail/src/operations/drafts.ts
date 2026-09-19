@@ -420,7 +420,11 @@ export async function replyDraft(
   const created = await transport.createDraft(composed.raw, plan.threadId);
   const senderWarnings: string[] = [];
   const replyTo = parseAddressList(headerValue(headers, 'Reply-To'));
-  if (replyTo.length > 0 && replyTo[0]?.address !== parseAddressList(headerValue(headers, 'From'))[0]?.address) {
+  // **Every** Reply-To address, not just the first. `planReply` makes the whole list the recipients, so an original
+  // carrying `Reply-To: sam@partner.test, collector@evil.test` addresses the draft to both — and comparing only the
+  // first entry found it equal to `From` and said nothing at all. The added address is the one worth naming.
+  const fromAddress = parseAddressList(headerValue(headers, 'From'))[0]?.address;
+  if (replyTo.length > 0 && replyTo.some((entry) => entry.address !== fromAddress)) {
     senderWarnings.push(
       `the sender asked for replies to go to ${replyTo.map((entry) => entry.address).join(', ')}, not to the address it came from`,
     );

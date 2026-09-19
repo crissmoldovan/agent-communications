@@ -10,6 +10,7 @@ import {
   homeDirectory,
   neutralise,
   parseAddressList,
+  relativeSubpath,
   resolveInsideRoot,
   safeFilename,
   slug,
@@ -137,7 +138,7 @@ export async function findAttachments(
             // Flagged on the name the file would actually be written under, not the one the sender sent:
             // `invoice.exe ` is stripped to `invoice.exe` on the way to disk, and the `$`-anchored extension checks
             // do not match the trailing space, so the executable was written and the flag was not raised.
-            riskFlags: attachmentRisks(safeFilename(filename), part.mimeType),
+            riskFlags: attachmentRisks(filename, part.mimeType),
           });
         }
       }
@@ -206,7 +207,7 @@ export async function downloadAttachments(
 
   const root = await downloadsRoot(context);
   // Over MCP `out` is a relative subpath and nothing else; the jail check below is what enforces that.
-  const directory = await resolveInsideRoot(root, join(alias, options.out ?? ''));
+  const directory = await resolveInsideRoot(root, join(alias, relativeSubpath(options.out)));
   await mkdir(directory, { recursive: true, mode: 0o700 });
 
   const maxFiles = Math.min(options.maxFiles ?? DEFAULT_MAX_FILES, 200);
@@ -286,7 +287,10 @@ export async function downloadAttachments(
       const date = message.internalDate ? new Date(Number(message.internalDate)).toISOString().slice(0, 10) : 'undated';
       const sender = slug(parseAddressList(headerValue(headers, 'From'))[0]?.address ?? 'unknown', 30, 'unknown');
       const subject = slug(headerValue(headers, 'Subject') ?? '', 40, 'no-subject');
-      const folder = await resolveInsideRoot(root, join(alias, options.out ?? '', `${date}_${sender}_${subject}`));
+      const folder = await resolveInsideRoot(
+        root,
+        join(alias, relativeSubpath(options.out), `${date}_${sender}_${subject}`),
+      );
       await mkdir(folder, { recursive: true, mode: 0o700 });
 
       const { path, handle } = await createUniqueFile(folder, safeFilename(part.filename ?? 'attachment'));
