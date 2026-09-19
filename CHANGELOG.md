@@ -33,9 +33,11 @@ also lets it send one. So "may draft, may not send" is enforced in code rather t
 
 Everything a mailbox returns is treated as data. Message bodies arrive inside an untrusted-content envelope with a
 per-call random boundary; the sanitiser removes what a human reader would not see — hidden text, off-screen
-elements, white-on-white, zero-size fonts, CSS that hides through a stylesheet, an at-rule, a pseudo-class, a
-percentage opacity or a `calc()` — and **reports what it removed and what it could not read**, so a message that
-was trying something says so rather than arriving clean.
+elements, zero-size fonts, CSS that hides through a stylesheet, an at-rule, a pseudo-class, a percentage opacity
+or a `calc()` — and **reports what it removed and what it could not read**, so a message that was trying something
+says so rather than arriving clean. Text whose colour merely matches its background is counted and *kept*, because
+it may be perfectly visible against a different backdrop; the count says it is worth mentioning, not that the text
+was withheld.
 
 ### What you get
 
