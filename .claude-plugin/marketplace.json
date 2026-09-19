@@ -1,5 +1,6 @@
 {
   "name": "agent-communications",
+  "description": "Communication tools for coding agents. Gmail today: search, read, analyse, draft and organise mail across several mailboxes \u2014 and nothing is sent without your approval.",
   "owner": {
     "name": "crissmoldovan",
     "url": "https://github.com/crissmoldovan/agent-communications"

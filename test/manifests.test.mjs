@@ -21,6 +21,9 @@ test('the plugin manifest lists every skill that exists, and only those', async 
   const manifest = JSON.parse(await readFile(join(ROOT, '.claude-plugin', 'marketplace.json'), 'utf8'));
   const plugin = manifest.plugins?.[0];
   assert.ok(plugin, 'the marketplace should carry one plugin');
+  // `claude plugin validate` warns without it, and the description is what a person reads before installing.
+  assert.ok(manifest.description?.length > 40, 'the marketplace needs a description');
+  assert.ok(plugin.description?.length > 40, 'and so does the plugin');
 
   const onDisk = (await readdir(join(ROOT, 'skills'), { withFileTypes: true }))
     .filter((entry) => entry.isDirectory() && entry.name.startsWith('gmail-'))
