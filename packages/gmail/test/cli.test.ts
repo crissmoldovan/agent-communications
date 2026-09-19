@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -225,8 +225,9 @@ test('mcp install writes an entry that really starts the server', async () => {
 
   assert.equal(data.applied, true);
   assert.equal(data.configPath, join(home, '.cursor', 'mcp.json'));
-  // The entry must not rely on the client's PATH, which is minimal when it starts a server.
-  assert.ok(data.entry.command.includes('/'), 'an absolute interpreter path');
+  // The entry must not rely on the client's PATH, which is minimal when it starts a server. Tested with
+  // `isAbsolute` rather than by looking for a `/`, which is what it meant to ask and is also true on Windows.
+  assert.ok(isAbsolute(data.entry.command), `an absolute interpreter path, got ${data.entry.command}`);
   assert.equal(data.entry.env.AGENT_COMMS_CONFIG_DIR, harness.configDir);
   assert.ok((data.entry.env.PATH ?? '').length > 0);
   assert.ok(data.entry.args.includes('mcp'));
