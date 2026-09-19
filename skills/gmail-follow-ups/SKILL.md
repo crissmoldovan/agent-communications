@@ -13,9 +13,10 @@ metadata:
 # What is waiting
 
 `gmail_followups` does one small arithmetic job. It takes the threads Gmail returns for a query,
-looks at the **last message** in each, and asks two questions: does that message carry the `SENT`
-label, and how many whole days ago did it arrive. If the user spoke last, the thread is
-`awaiting-them`. If somebody else spoke last and it is still in the inbox, it is `awaiting-me`.
+looks at the **last message** in each — the last one that is not a draft, when a half-written reply
+sits at the end — and asks two questions: does that message carry the `SENT` label, and how many
+whole days ago did it arrive. If the user spoke last, the thread is `awaiting-them`. If somebody
+else spoke last and it is still in the inbox, it is `awaiting-me`.
 Nothing reads the text. Nothing decides whether a reply was wanted. That narrowness is deliberate —
 a follow-up list that invents obligations is worse than no list — and it is the whole reason this
 skill needs writing down, because the output reads like a list of people who are ignoring the user
@@ -96,8 +97,9 @@ does `gmail-compose` get involved.
 3. **A direction the user meant.** `them` and `me` are different questions and one run answers one
    of them. "What is waiting" is ambiguous; ask, or run both and label each list.
    **Complete when:** you can say in a sentence which question this run answers.
-4. **A window the user would recognise.** The defaults are a 3-day quiet threshold and a 30-day
-   lookback. If the user said "this quarter" or "since Monday", the defaults are wrong.
+4. **A window the user would recognise.** The defaults are a 30-day lookback and a quiet threshold
+   that differs by direction — three days for `them`, none at all for `me`. If the user said "this
+   quarter" or "since Monday", the defaults are wrong.
    **Complete when:** `olderThanDays` and `lookbackDays` match what the user asked for.
 
 ## Procedure
@@ -107,11 +109,14 @@ does `gmail-compose` get involved.
    since you last looked, which would otherwise produce a plausible list about the wrong life.
    **Complete when:** the alias you are about to use resolves to the address you expect.
 
-2. **Set the window and the threshold deliberately, and know what they do.** `olderThanDays`
-   (default 3) is the quiet threshold: how long a thread must have been silent to count.
-   `lookbackDays` (default 30) is how far back the search reaches, and it is raised automatically to
-   at least `olderThanDays + 1` — ask for a 30-day threshold with a 7-day lookback and you get 31
-   days of lookback without being told. `limit` defaults to 20 and is clamped to 50.
+2. **Set the window and the threshold deliberately, and know what they do.** `olderThanDays` is the
+   quiet threshold: how long a thread must have been silent to count. It filters rows in both
+   directions, and it starts from a different number in each — three days for `them`, zero for `me`.
+   So a default `me` run shows this morning's mail, and a `me` run carrying a threshold over from a
+   previous question silently drops everything newer than it. `lookbackDays` (default 30) is how far
+   back the search reaches, and it is raised automatically to at least `olderThanDays + 1` — ask for
+   a 30-day threshold with a 7-day lookback and you get 31 days of lookback without being told.
+   `limit` defaults to 20 and is clamped to 50.
    **Complete when:** you can state both numbers and what the user would call them.
 
 3. **Run one direction.** `gmail_followups` with `inboxes`, `direction`, `olderThanDays`,
@@ -155,7 +160,7 @@ does `gmail-compose` get involved.
 | Direction | What it means | What it does not prove | The good next step |
 |---|---|---|---|
 | `them` → `awaiting-them` | The last message in the thread carries `SENT`, it is at least `olderThanDays` old, and the thread was found by `in:sent older_than:<N>d newer_than:<M>d`. The user spoke last, in this mailbox, and nothing has landed in the thread since. | That nobody answered. An answer may have come by phone, in a meeting, over Slack, in a new thread with a fresh subject, to a different mailbox, or into spam. Nor that an answer was ever due — a thread that ended with "thanks, all sorted" looks identical. | Open the thread. If the last message actually asked for something and nothing closed it, tell the user and ask whether to nudge. |
-| `me` → `awaiting-me` | The last message is in the inbox, is not from the user, is not a draft, and is outside the promotions, social, updates and forums categories, within `lookbackDays`. Something arrived and no reply followed it in this thread. | That the user owes an answer. Automated mail in the Primary tab qualifies. So does mail answered in person, answered from another account, or handed to a colleague who replied directly. `olderThanDays` is **not** applied in this direction, so recent arrivals appear too. | Group the rows by what they ask for, drop the no-reply senders, and let the user pick what to answer. |
+| `me` → `awaiting-me` | The newest message that is not a draft is in the inbox, is not from the user, and is outside the promotions, social, updates and forums categories, within `lookbackDays`. Something arrived and no reply followed it in this thread. | That the user owes an answer. Automated mail in the Primary tab qualifies. So does mail answered in person, answered from another account, or handed to a colleague who replied directly. `olderThanDays` defaults to zero here, so recent arrivals appear too — but it is a real filter, and any value you pass removes everything newer than it. | Group the rows by what they ask for, drop the no-reply senders, and let the user pick what to answer. |
 
 ## What the mailbox cannot see
 
@@ -171,9 +176,11 @@ that looks exactly like a real one:
   The old one still shows the user speaking last, forever.
 - **Anything outside the mailboxes in the run.** A reply to the user's other address is not
   missing; it is somewhere this run did not look.
-- **Threads whose last message is a draft.** Those are skipped outright. A half-written answer
-  sitting in Drafts removes the thread from `awaiting-me` — the work looks done because it looks
-  answered.
+- **The half-written answer itself.** A draft at the end of a thread is stepped over rather than
+  skipped: the thread is judged on the last real message and still counts as unanswered, which is
+  right, since an abandoned reply is unfinished work. But no field in the row says a draft is
+  waiting there, and `messageId` points at the message before it, so drafting from the row starts a
+  second reply beside the first. Open the thread before offering one.
 - **Anything not in the inbox, for `awaiting-me`.** Archived mail, and mail a filter labelled and
   archived on arrival, is invisible in this direction however long it has gone unanswered.
 - **Intent.** No field in a row says a reply was wanted. `ageDays` measures silence, and silence is
@@ -252,10 +259,13 @@ statement, and it is a different thing to tell somebody.
   resolved. Later mailboxes can look empty because the budget ran out, not because they are quiet.
 - **Reading a short list as good news.** Each mailbox is read one page deep and filtered after;
   the rows that survive are not a count of what exists.
-- **Passing `olderThanDays` in the `me` direction and expecting it to filter.** It does not; it only
-  raises the lookback floor. Recent arrivals appear in that list whatever you set.
-- **Missing a thread you already half-answered.** A thread whose last message is a draft is skipped,
-  so unfinished work is invisible in exactly the direction that should surface it.
+- **Passing `olderThanDays` in the `me` direction without meaning to.** It filters there exactly as
+  it does in `them`, and it defaults to zero, so a threshold carried over from the previous question
+  quietly removes every unanswered message newer than it — from the one list whose job is this
+  morning's forgotten mail.
+- **Reporting a half-answered thread as untouched.** A draft at the end of a thread neither removes
+  it from the list nor shows up anywhere in the row, so a thread the user started answering looks
+  exactly like one they have not opened.
 - **Ignoring `errors` because `rows` looked fine.** A per-inbox failure produces a shorter list, not
   a visible failure. `complete: false` is the only thing that says so.
 - **Drafting on your own initiative.** "What is waiting" is a question. It is not a request to

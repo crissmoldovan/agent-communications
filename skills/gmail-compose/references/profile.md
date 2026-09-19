@@ -56,9 +56,14 @@ That marker is why contradiction is workable rather than confusing: when the use
 greeting" and the inbox layer says "always open with a name", you can see which file said which, and
 the later one — the inbox — is the more specific instruction and wins.
 
-The result also carries the list of **candidate** paths: every file that would have been read, whether
-or not it exists. That is the answer to "where do I put this?", and it is worth quoting to the user
-verbatim rather than describing, because the configuration directory varies by machine.
+What comes back to a draft call is that joined text and nothing else, so those markers are the only
+paths in it — and they name only the files that exist. The layer a user is asking about is usually
+the one that does not exist yet, and a file looked for and not found leaves no trace at all. To
+answer "where do I put this?", take the configuration directory from `gmail_doctor` (CLI:
+`agent-gmail doctor`), which checks it like any other directory and titles that check with the path,
+then add `compose/` and the file name from the table above. Give the user the whole path rather than
+a description of it: the configuration directory varies by machine, and "your config directory" is an
+instruction they will follow into the wrong one.
 
 Nothing in the CLI writes these files for you. The package ships the built-in default and a library
 helper that can drop a starter `default.md` into the directory; there is no command that creates

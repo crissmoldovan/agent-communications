@@ -153,13 +153,18 @@ judgement, and judgement gets its own skill so that it can be labelled as judgem
    history collapsed so the same text is not repeated for each reply. The budget is 20,000 characters
    across the whole thread, spent oldest first, so a reader who runs out of room has still seen how it
    started. Note the asymmetry: `messageCount` counts the thread's messages, while `messages` holds
-   the ones that fitted — when `truncated` is true those are different numbers.
-   **Complete when:** you can say how many messages the thread has and how many you actually read.
+   the ones that fitted. `truncated` is set for either of two reasons and does not say which — the
+   thread budget ran out before the last messages, so `messages` is shorter than `messageCount`; or
+   every message came back and one of them had its own body clipped at `maxChars`. Compare the two
+   counts yourself, and check each message's `body.truncated`, before you say which happened.
+   **Complete when:** you can say how many messages the thread has, how many you read, and whether any
+   message you did read was cut short.
 
 8. **Say what the body pipeline did.** Before briefing, look at `sanitisation` and at
    `body.quotedLinesOmitted`. Quoted history collapsed is routine and worth one clause. Hidden
-   elements, invisible characters, a same-colour element or a plain/HTML mismatch are not routine, and
-   the user should hear about them in plain words.
+   elements, invisible characters, a same-colour element, a hiding rule the sanitiser could not
+   evaluate (`unreadableHidingRules`) or a plain/HTML mismatch are not routine, and the user should
+   hear about them in plain words.
    **Complete when:** anything removed or disagreeing has been named, or all the counters were zero.
 
 9. **Brief, with ids, and stop.** Quote what the message says, attribute it to the message, and give
@@ -281,7 +286,11 @@ world. If `complete` was false, this sentence is also hiding a mailbox that fail
   another timezone: all return zero rows and none of them mean the mail does not exist. Report the
   query you actually ran.
 - **Ignoring `complete: false`.** A partial search reads exactly like a whole one. The failed mailbox
-  is in `errors`, with a code and a hint.
+  is in `errors`, with a code and a message — name both. The remedy does not travel as far as the
+  error: the operation attaches a hint to each failure ("Sign in again: `agent-gmail inbox reauth
+  work`") and `agent-gmail search … --json` carries it, but `gmail_search` maps its errors down to the
+  inbox, the code and the message, so over the MCP tool there is no hint to read. Report what came
+  back rather than inventing the fix from the code.
 - **Replaying a cursor against a changed query.** It fails with `CURSOR_MISMATCH` rather than
   silently mixing two result sets — that is the check working. Start the search again.
 - **Using a thread id in the wrong mailbox.** Ids are per-account. The same conversation read from a
@@ -305,8 +314,8 @@ world. If `complete` was false, this sentence is also hiding a mailbox that fail
 - [ ] `returned`, the estimate and `hasMore` were reported as three different things, with the
       estimate labelled a guess.
 - [ ] Every claim carries an id and its `inbox` alias.
-- [ ] Anything the sanitiser removed or flagged — hidden elements, invisible characters, a plain/HTML
-      mismatch — was named in plain words.
+- [ ] Anything the sanitiser removed, flagged or could not evaluate — hidden elements, invisible
+      characters, a plain/HTML mismatch, an unreadable hiding rule — was named in plain words.
 - [ ] Collapsed quoted history was mentioned when it mattered, rather than being reported as the whole
       message.
 - [ ] A truncated body or thread was reported as truncated, with how much was read.

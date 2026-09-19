@@ -142,12 +142,17 @@ hint says exactly this.
 **Symptom.** The user opens the link, completes consent, and the terminal or the agent is still
 waiting — or the command died long ago.
 
-**Cause, most often.** The command was run without `--start`. In that form it holds the loopback
-port open for up to ten minutes waiting for the redirect, which is right for a person at their own
-terminal and wrong for anything an agent runs: an agent's shell is killed first (Claude Code's Bash
-tool gives up at 120 seconds), the command never reports, and the flow is left half-finished.
+**The cause people reach for, and when it is real.** Without `--start`, `inbox add` holds
+the loopback port open for up to ten minutes itself, and an agent's shell is killed long before that
+(Claude Code's Bash tool gives up at 120 seconds). But the command only takes that path when stdin and
+stdout are both terminals, and never under `--json` or in CI. Anywhere else — most agent shells
+included — it pushes the listener into a background process and returns the link, the flow id and the
+`--finish` command in about a second, exactly as `--start` would. So this is a real fault on a
+terminal and rarely the fault in an agent, and a user reporting a bare `inbox add` has not thereby
+told you what went wrong. Ask where the command ran before believing it.
 
-**Fix.** Always use the two-step form from an agent:
+**Fix.** Always use the two-step form from an agent, which settles the question rather than leaving it
+to the shell:
 
 ```bash
 agent-gmail inbox add <alias> --email <address> --tier organize --start --json
@@ -158,11 +163,12 @@ agent-gmail inbox add --finish <flowId> --wait 60
 browser yet. The flow lives ten minutes from `--start`; run `--finish` again. A flow is single-use
 and claimed atomically, so two `--finish` calls cannot both consume it.
 
-**Other causes.**
+**The causes that actually strand a sign-in started from an agent.**
 
 - *The listener could not start.* `--start` waits ten seconds for the detached listener to report
   the port it bound; if it does not, the flow is discarded and the error suggests running the
-  sign-in on a terminal instead.
+  sign-in on a terminal instead. This is the answer when the command came back quickly with an error
+  rather than hanging.
 - *The port is blocked.* A network or firewall that refuses loopback binds on random ports:
   `--port <number>` pins one that is allowed.
 
@@ -255,15 +261,22 @@ agent-gmail inbox reauth <alias> --tier organize --start
 agent-gmail inbox reauth --finish <flowId> --wait 60
 ```
 
-Contacts access is asked for by default; a re-consent reuses whatever the mailbox is currently set
-to unless `--no-contacts` turns it off. There is no incremental grant for an installed app: each
-re-consent asks for the whole union again.
+A re-consent keeps the contacts setting the mailbox already had, unless you say otherwise. Naming
+neither flag leaves it alone, `--no-contacts` turns it off, `--contacts` turns it on — so re-authorising
+a mailbox that was connected without contacts does not quietly put `contacts.readonly` and
+`contacts.other.readonly` back on the consent screen, where the standing advice to leave every box
+ticked would have handed back access the user declined.
 
-One wrinkle to know rather than to repeat: a `SCOPE_MISSING` about contacts prints a hint naming a
-`--contacts` flag, and the CLI only declares `--no-contacts`. Re-consenting a mailbox that already
-has contacts on is enough; if it was turned off, say so and let the user decide.
+Adding a mailbox is the other default: contacts are asked for unless `--no-contacts` says not to.
+Either way there is no incremental grant for an installed app, so each consent screen asks for the
+whole union again — a re-consent that widens the tier re-asks for everything the mailbox already had,
+which is normal and not a sign anything went wrong.
 
-The same applies to a mailbox carried over from another server. An imported `readonly`+`compose`
+The other direction is one flag. A `SCOPE_MISSING` about contacts prints the hint `agent-gmail inbox
+reauth <alias> --contacts`, and that command is real: the CLI declares `--contacts` alongside
+`--no-contacts` so the hint names something that exists. Pass it on as it came.
+
+A mailbox carried over from another server needs the same treatment. An imported `readonly`+`compose`
 grant can read and draft but cannot label or archive, and it carries no account id at all — one
 `inbox reauth` per mailbox fixes both. The import saves the setup, not the consent.
 
@@ -283,7 +296,10 @@ agent-gmail mcp install --client claude-code --print   # see what would be writt
 
 Supported clients are `claude-code`, `claude-desktop`, `codex`, `cursor`, `gemini`, `vscode`, and
 `json` to print the snippet for anything else. Add `--inbox <alias>` to pin the server to one
-mailbox, and `--read-only` to register only the tools that cannot change anything.
+mailbox, and `--read-only` to leave out every tool that changes the mailbox. It gates the mailbox and
+not the disk: `gmail_attachment_download` and `gmail_export` are registered either way, so a
+read-only server can still write files — attachments from strangers among them — under the downloads
+root.
 
 **Then, the usual causes.**
 

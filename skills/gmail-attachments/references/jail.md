@@ -135,11 +135,15 @@ it. So `~` being a root means any ordinary file in the home tree passes step 4, 
 carve the dangerous parts back out. This is why the deny list, not the root list, is where the safety lives —
 and why shortening it is treated as a loosening.
 
-One environment caveat, because it produces refusals that look wrong. The policy's `home` is the process's
-`HOME`. Where that is unset, the `~` root and the `~/.*` rule resolve against the working directory instead of
-the user's home, so files that ought to pass are refused and the message mentions a `~/…` folder that is not
-where the user thinks. If a refusal makes no sense against the paths on screen, that is the thing to check
-before assuming the file is the problem.
+One environment caveat, because it produces refusals that look wrong. The policy's `home` is `HOME`, or
+`USERPROFILE` where that is unset — Windows sets only the second — or, failing both, the home directory of the
+account the process runs as. It is never empty, so `~` never quietly resolves to the working directory. What
+it resolves to is *that process's* home, which is not always the home the user has in mind: a server started
+by a launch agent, a container, or a different account carries that account's `HOME`, and the `~` root and the
+`~/.*` rule are anchored to it. The out-of-roots message quotes the path you passed, not the home it was
+compared against, so it will not show you this. If a file plainly inside the user's own home is refused as
+outside every root, the environment the process inherited is the thing to check before assuming the file is
+the problem.
 
 ## The other jail: where downloads land
 

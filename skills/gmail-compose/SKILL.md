@@ -147,10 +147,14 @@ is not a request to draft: offer, and stop.
    --to <address...> --subject "<subject>" --text "<body>"`, or `--file <path>`, or the body piped
    in). An answer to something: `gmail_draft_reply` with `messageId` and `mode` of `reply`,
    `reply_all` or `forward` (CLI: `agent-gmail draft reply <messageId> --inbox <alias> --mode
-   reply_all --text "<body>"`). Attach local files with `attach` (CLI: `--attach <path...>`); each
-   is checked against the jail, goes on under its own file name, and anything over 25 MB raises a
-   warning because some recipients will simply not receive it. Leave the mailbox signature off
-   with `signature: false` (CLI: `--no-signature`).
+   reply_all --text "<body>"`). Pass recipients as bare addresses: `sam@partner.test`, not
+   `Sam Lee <sam@partner.test>`. Both forms reach the same person, but the outside-the-organisation
+   warning is read off the string you handed over, and a display name in front of an address is
+   enough to make a colleague on the mailbox's own domain come back as an outside recipient. Attach
+   local files with `attach` (CLI: `--attach <path...>`); each is checked against the jail, goes on
+   under its own file name, and anything over 25 MB raises a warning because some recipients will
+   simply not receive it. Leave the mailbox signature off with `signature: false` (CLI:
+   `--no-signature`).
    **Complete when:** the call returned a `draftId` and a `preview`.
 
 6. **Show the preview verbatim, and read the warnings out.** Paste the returned `preview` into the
@@ -215,14 +219,16 @@ thread would file your message alongside a conversation its new readers cannot s
 the original recipients would send it back to the people it came from.
 
 What a forward does carry is the original, **quoted below what you wrote**: a `Forwarded message`
-block with the original's From, Date, Subject and To, then its text. That text is the sanitised
-plain text, never the original's own HTML — that markup belongs to whoever sent it and can carry a
-tracking image or hidden text, and putting the user's name on somebody else's beacon is not
-something a forward should do. Two consequences worth saying out loud: the original's **attachments
-do not travel** (re-attach them from `gmail-attachments` if they are the point of the forward), and
-the quote is cut at 4,000 characters, so a long original is forwarded in part. A reply is quoted the
-same way, under an attribution line; `quote: false` (CLI `--no-quote`) leaves it off for an answer
-short enough not to want one.
+block with the original's From, Date, Subject, To and, where there is one, Cc, then its text. That
+text is the sanitised plain text, never the original's own HTML — that markup belongs to whoever
+sent it and can carry a tracking image or hidden text, and putting the user's name on somebody
+else's beacon is not something a forward should do. Two consequences worth saying out loud: the
+original's **attachments do not travel** (re-attach them from `gmail-attachments` if they are the
+point of the forward), and what is quoted is the original's body as it stands — the chain it was
+already carrying included — cut at 4,000 characters, with a bracketed line where it stops saying how
+much was left out. That line is part of the message, so the recipient reads it too. A reply is
+quoted the same way, under an attribution line; `quote: false` (CLI `--no-quote`) leaves it off for
+an answer short enough not to want one.
 
 **Subjects do not accumulate.** Existing `Re:`, `Fwd:`, `Aw:`, `Sv:`, `Vs:` and `Rv:` prefixes are
 stripped before one is added, so a long chain stays `Re: Phase 2 plan` rather than growing a
@@ -316,11 +322,18 @@ to disambiguate a mess you made is not a safety check.
   Asterisks, backticks and tags arrive as themselves. Write sentences.
 - **A second draft instead of an update.** Two drafts mean two previews, and the user approves
   whichever id you happen to quote next.
-- **Updating without restating the attachments.** Recipients and subject survive an update; the
-  body and the attachment list do not. A draft updated with only new `text` comes back with
-  nothing attached.
-- **Forwarding and assuming the original goes with it.** It does not. The forward carries what you
-  wrote and nothing else, and its `to` is required because nothing can be computed.
+- **Updating a reply with new `text` and expecting the quote to survive.** An update rebuilds the
+  message from what the draft already holds — recipients, subject, attachments, and the body itself
+  when you pass no `text` — but it never looks back at the message being answered. New `text`
+  therefore replaces the quoted original along with the words above it. If the reply is meant to
+  keep the original underneath, include it in the text you pass, or make the revision as a fresh
+  `gmail_draft_reply`.
+- **Forwarding without reading what travels with it.** The original goes too, quoted under your
+  text: its From, Date, Subject and recipient lines, then its body, earlier messages in the chain
+  included. The question before a forward is therefore not what to add but what is already there —
+  read the quote in the preview before sending a thread to somebody who was never on it, and do not
+  paste the original into your own `text` as well, or it arrives twice. Its `to` is still required,
+  because nobody can be computed.
 - **Replying from the wrong mailbox.** A message id from one inbox means nothing in another, but
   an alias typo can name a real different mailbox, and the reply-all filter then keeps the user's
   own address because it belongs to a mailbox you are not in.
@@ -340,7 +353,8 @@ to disambiguate a mess you made is not a safety check.
 - [ ] Every entry in `warnings` was named in plain words, the `Reply-To` one included.
 - [ ] Revisions went to `gmail_draft_update` on the same draft id; Drafts holds one draft for this
       message, not several.
-- [ ] Attachments and body were restated on every update that was meant to keep them.
+- [ ] The preview after each update showed the body, the attachments and — on a reply — the quoted
+      original that the update was meant to leave alone.
 - [ ] The body is plain text, with no markup expected to render.
 - [ ] The handover named the draft id and the inbox alias.
 - [ ] **No send was attempted from this skill** — no `gmail_send_prepare`, no `gmail_draft_send`,

@@ -15,7 +15,7 @@ The shared contract sets the rule and both halves of it matter:
   few rows came back.
 
 The second half is the one people skip. Six threads found by a query are still a query's idea of what the user
-meant, and the dry run is where the difference shows up for the price of one call.
+meant, and the dry run is where the difference shows up, for the price of reads and no writes.
 
 ## What the dry run computes
 
@@ -31,7 +31,10 @@ meant, and the dry run is where the difference shows up for the price of one cal
 6. Refuses a change that changes nothing: both sets empty is a `USAGE` error.
 7. **Expands every thread id into its message ids**, by fetching each thread, then de-duplicates the whole
    selection.
-8. Returns the result, including the undo, and writes nothing.
+8. **Reads the current labels of every message in that expanded selection**, one metadata call per message, in
+   order — this is where the undo comes from, and the dry run pays for it deliberately so you can show the
+   reverse before the user agrees.
+9. Returns the result, including the undo, and writes nothing.
 
 The fields that matter in that result:
 
@@ -40,14 +43,18 @@ The fields that matter in that result:
 | `messages` | The number of distinct message ids that would change, after expansion | The number of rows your search returned |
 | `threads` | How many thread ids you passed | A count of anything that will change |
 | `addLabelIds`, `removeLabelIds` | The resolved ids, flags included | The names you typed |
-| `undo` | The reverse change, pinned to those ids — present on the dry run too | A record of each message's prior state |
+| `undo` | The reverse change, pinned to those ids, one entry per message — present on the dry run too | A snapshot of the mailbox: only the labels this change touches are in it |
 | `dryRun` | `true` | — |
 
 Two practical notes. The expansion is what produces the number worth reporting: twenty threads from a chatty
 list can be three hundred messages, including the user's own replies, which they never pictured as "mail from
-this sender". And the dry run is not free — one thread fetch per thread id, plus a label listing for each of
-the add and remove lists that is not empty — so dry-running forty threads is about forty-one calls. That is the right price; it is just not zero, and it is
-a reason to dry-run the selection you mean rather than a wider one "to see".
+this sender". And the dry run is not free — one thread fetch per thread id, a label listing for each of the
+add and remove lists that is not empty, and then one metadata read per message in the expanded selection, sent
+one after another. Forty threads that expand to three hundred and fourteen messages is therefore about three
+hundred and fifty-five calls, not forty-one: the metadata reads dominate, and they scale with the messages you
+uncovered rather than with the threads you asked about. That is the right price for an undo that is actually an
+undo, but it is a real charge against the account's rate limit, so dry-run the selection you mean rather than a
+wider one "to see", and on a very wide one expect `TRANSIENT` mid-plan rather than being surprised by it.
 
 `gmail_trash` has its own dry run. It expands threads the same way and returns `messages` as the **list of
 ids** it would move, plus `action: "trash"` or `"untrash"`.
@@ -106,11 +113,17 @@ It is a record of your change, not a snapshot of the mailbox, and time is the pa
 So offer it as what it is:
 
 ```text
-To put it back: agent-gmail organise --inbox work --undo <the undo from that result>
+To put it back: agent-gmail organise-undo --inbox work, with the undo from that result piped in.
 
 That restores each message to the labels it had before the change. Anything you have changed since — starred,
 filed, archived — would be overwritten on those ids.
 ```
+
+Putting it back is a command of its own. `agent-gmail organise-undo --inbox <alias>` reads the array from
+standard input, or from `--from <path>`; `organise` has no `--undo` flag and takes no positional argument, so a
+line built that way fails as a usage error, exit 64, and nothing is put back. (`--undo` does exist on `trash`,
+where it means take these out of the bin.) Over MCP the same array goes to `gmail_organise_undo` with `inbox`,
+unchanged.
 
 **Do not hand-build an inverse** such as `--add INBOX` over every id. That is the blanket swap this section exists
 to warn against, and it is what re-inboxes the messages the user had archived themselves.

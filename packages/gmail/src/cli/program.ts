@@ -258,7 +258,12 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       // Both forms, because `grantHint` tells a user to run `--contacts` when a contacts search is refused, and
       // Commander does not create the positive form from `--no-contacts`. A hint naming a flag that does not exist
       // is worse than no hint: the user runs it, Commander rejects it, and the real fix stays hidden.
-      .option('--no-contacts', 'do not ask for contacts access')
+      // An explicit `undefined` default, so "not given" is distinguishable from "given as yes". Commander's
+      // implicit default for a `--no-x` flag is `true`, which made `options.contacts` a boolean in every case —
+      // so `signin.ts`'s `options.contacts ?? inbox.contacts` could never reach its fallback, and re-authorising
+      // a mailbox connected with `--no-contacts` put the address-book scopes back on the consent screen. The
+      // standing advice is to leave every box ticked, so the access a person deliberately declined got granted.
+      .option('--no-contacts', 'do not ask for contacts access', undefined)
       .option('--contacts', 'ask for contacts access (the default)')
       .option('--client <name>', 'sign in through this OAuth client')
       .option('--port <number>', 'use this loopback port for the redirect', (value) => Number.parseInt(value, 10))
@@ -298,7 +303,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       mode,
       alias,
       tier: options.tier ? String(options.tier) : undefined,
-      contacts: options.contacts !== false,
+      contacts: options.contacts === undefined ? undefined : options.contacts !== false,
       client: options.client ? String(options.client) : undefined,
       email: options.email ? String(options.email) : undefined,
       hostedDomain: options.hd ? String(options.hd) : undefined,
@@ -1054,7 +1059,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .command('mcp')
     .description('run the MCP server on stdio, for a client to connect to')
     .option('--inbox <alias>', 'serve only this mailbox')
-    .option('--read-only', 'register only the tools that cannot change anything', false)
+    .option('--read-only', 'leave out every tool that changes the mailbox', false)
     .action(
       act(async (_context, _globalOptions, options: Options) => {
         ran = true;
@@ -1085,7 +1090,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     )
     .option('--name <name>', 'the name the client will show', 'gmail')
     .option('--inbox <alias>', 'serve only this mailbox')
-    .option('--read-only', 'register only the tools that cannot change anything', false)
+    .option('--read-only', 'leave out every tool that changes the mailbox', false)
     .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
     .option('--no-verify', 'do not start the server to check the entry works')
     .option('--print', 'only print what would be written', false)

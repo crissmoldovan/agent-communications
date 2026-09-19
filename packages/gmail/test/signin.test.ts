@@ -307,3 +307,46 @@ test('a reauth goes through the inbox own client, and records the one the token 
   assert.equal(done.inbox.client, 'desktop');
   assert.equal(done.inbox.id, added.inbox.id);
 });
+
+test('a reauth keeps the mailbox contacts setting when no flag names it', async () => {
+  // Commander's implicit default for a `--no-x` flag is `true`, so `options.contacts` was a boolean in every case
+  // and `startSignIn`'s `options.contacts ?? inbox.contacts` could never reach its fallback. A mailbox connected
+  // with `--no-contacts` therefore had the address-book scopes put back on the consent screen at its next reauth,
+  // where the standing "leave every box ticked" advice hands back access the user deliberately declined.
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+
+  const add = await startSignIn(context, {
+    mode: 'add',
+    alias: 'work',
+    tier: 'read',
+    contacts: false,
+    listenerCommand: LISTENER,
+  });
+  await fetch(harness.google.consent(add.authUrl, { sub: 'sub-1' }));
+  const added = await finishSignIn(context, { flowId: add.flowId, waitSeconds: 10, pollMs: 50 });
+  assert.equal(added.inbox.contacts, false);
+
+  // No flag named: the stored setting stands, so no contacts scope is requested. Each flow is finished rather than
+  // abandoned — `startSignIn` spawns a *detached* listener that waits for Google, and a flow left open keeps that
+  // child alive, which keeps the test runner's process alive long after the last assertion has passed.
+  const again = await startSignIn(context, { mode: 'reauth', alias: 'work', listenerCommand: LISTENER });
+  assert.ok(
+    !again.authUrl.includes('contacts'),
+    `a bare reauth must not re-request contacts; got ${decodeURIComponent(again.authUrl)}`,
+  );
+  await fetch(harness.google.consent(again.authUrl, { sub: 'sub-1' }));
+  const kept = await finishSignIn(context, { flowId: again.flowId, waitSeconds: 10, pollMs: 50 });
+  assert.equal(kept.inbox.contacts, false, 'and the setting is still off afterwards');
+
+  // Naming it explicitly still turns it on.
+  const widen = await startSignIn(context, {
+    mode: 'reauth',
+    alias: 'work',
+    contacts: true,
+    listenerCommand: LISTENER,
+  });
+  assert.ok(widen.authUrl.includes('contacts'), 'an explicit --contacts must ask for it');
+  await fetch(harness.google.consent(widen.authUrl, { sub: 'sub-1' }));
+  await finishSignIn(context, { flowId: widen.flowId, waitSeconds: 10, pollMs: 50 });
+});

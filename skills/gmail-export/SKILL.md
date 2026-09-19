@@ -21,10 +21,13 @@ conversation.
 
 The first failure mode is reading the thread in order to decide whether to export it. By the time you
 know it is long you have already paid for it. The decision is made from what you already hold — the
-message count on a search row, the `totalChars` from a read that hit its cap — and not from the body.
-The second is exporting and then pasting the file back, which is the same cost with an extra step.
-The file exists so it can be read in pieces, and only the lines that answer the question come into the
-conversation.
+`totalChars` from a read that hit its cap, the user's own "this is too long" — and not from the body.
+A search row will not settle it: beyond the ids it carries a subject, a snippet, labels and an
+attachment count, and nothing at all about how many messages the thread holds. When the length itself
+is the deciding fact, `gmail_thread_timeline` reports the thread's `messageCount` while reading every
+body at a single character, so the count arrives and the thread does not. The second is exporting and
+then pasting the file back, which is the same cost with an extra step. The file exists so it can be
+read in pieces, and only the lines that answer the question come into the conversation.
 
 The third is choosing the wrong format and not noticing what went missing. The Markdown export is the
 sanitised, quote-collapsed reading of the message — the body a person would have seen, with hidden
@@ -83,7 +86,8 @@ bind here:
 **The rule other skills follow.** Export rather than paste when any one of these is true:
 
 - the thread runs to more messages than you would read aloud to someone — past about five, a file is
-  simply the better artefact;
+  simply the better artefact. Nothing on a search row says how many that is, so this is a rule you
+  apply when a timeline or an earlier read has already told you, or when the user has;
 - a read came back `truncated`, or you are about to ask for a second page with an offset. The read
   path caps a body at 8,000 characters and a thread at 20,000; anything hitting those caps is already
   too long for the conversation, and the export budgets are 100,000 per message and 1,000,000 per
@@ -214,8 +218,10 @@ Every export is recorded in the audit log with the inbox, the id, the format and
 Good — the decision made before reading, the path quoted, nothing pasted:
 
 ```text
-That thread has 38 messages, so I have written it to a file rather than reading it in here.
+The timeline puts that thread at 38 messages, so I have written it to a file rather than reading
+it in here.
 
+    agent-gmail timeline 18f2c9a0b1d4e5f6 --inbox work
     agent-gmail export 18f2c9a0b1d4e5f6 --inbox work --thread --format md
 
 Wrote 38 messages to
@@ -257,7 +263,9 @@ move it, or change the root themselves at a terminal.
 ## Pitfalls
 
 - **Reading the thread to decide whether to export it.** The cost is paid on the way in. Decide from
-  the message count and from whether a read came back truncated.
+  whether a read came back truncated, from what the user has told you, or from
+  `gmail_thread_timeline`, which counts the messages without their bodies — and even that is a
+  forty-row table for a forty-message thread: cheap beside the thread rather than free.
 - **Exporting and then pasting the file.** The most common way this skill is wasted. Read the file in
   pieces and quote the lines that matter.
 - **A message id with `--thread`.** The id is passed straight to the thread read. Take `threadId`

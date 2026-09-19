@@ -21,9 +21,11 @@ Each of those looks like a bug in the tool when it arrives.
 
 The second family of failures belongs to agents specifically. `agent-gmail inbox add work` on a human
 terminal opens a browser and waits up to ten minutes for the redirect. An agent's shell does not live that
-long — Claude Code's Bash tool gives up at 120 seconds — so the command run that way appears to hang and
-then die, leaving a flow that nobody finished. The two-step form (`--start`, then `--finish`) exists
-precisely because the waiting has to happen somewhere the agent is not.
+long — Claude Code's Bash tool gives up at 120 seconds. The command tries to tell the two apart by itself
+and only waits when stdin and stdout are both terminals, so an agent usually gets the detached behaviour
+for free; but "usually" turns on whatever allocated the shell, and anything holding a pseudo terminal puts
+the ten-minute wait back. The two-step form (`--start`, then `--finish`) makes that choice yours rather
+than the environment's, and the waiting then always happens somewhere the agent is not.
 
 The third is quieter and worse: Google's account chooser hands back whichever account is already signed in
 that browser. Without `--email`, a sign-in meant for the work mailbox can connect a personal one under the
@@ -144,6 +146,8 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    `missingScopes` lists what was asked for and not given, and the inbox is saved at whatever tier the
    granted scopes support. A mailbox that cannot label or archive got `read` or `draft`, not `organize`.
    Fix with `agent-gmail inbox reauth <alias> --tier organize --start` and the same two-step finish.
+   A re-consent keeps the mailbox's contacts setting unless you name a flag: `--contacts` turns it on,
+   `--no-contacts` turns it off, neither leaves it as it was.
    **Complete when:** `missingScopes` is empty, or the user has decided to live with the narrower grant.
 
 7. **Set the send policy if the user wants it stricter than the default.**
@@ -160,10 +164,12 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
 
 9. **Wire the MCP clients.** `agent-gmail mcp install --client claude-code` (also `claude-desktop`,
    `codex`, `cursor`, `gemini`, `vscode`, or `json` to print the snippet). Add `--inbox <alias>` to pin
-   the server to one mailbox, `--read-only` to register only the tools that cannot change anything, and
-   `--print` to see what would be written without writing it. The command starts the server through the
-   entry it just wrote and completes a handshake, so a registration that looks right but does not run is
-   caught here. Tell the user to restart the client afterwards.
+   the server to one mailbox, `--read-only` to leave out every tool that changes the mailbox, and
+   `--print` to see what would be written without writing it. `--read-only` gates the mailbox and not the
+   disk — `gmail_attachment_download` and `gmail_export` are registered either way — so say it can write
+   files, including attachments from strangers, under the downloads root. The command starts the server
+   through the entry it just wrote and completes a handshake, so a registration that looks right but does
+   not run is caught here. Tell the user to restart the client afterwards.
    **Complete when:** the result says `verified` with the tool count, and you have passed on any warning
    about another Gmail server registered with the same client.
 
@@ -238,17 +244,22 @@ Open that link and sign in as jo@example.com — if the chooser offers another a
 one, or the sign-in will be refused rather than saved. Tell me when the browser has finished and I
 will run the second command.
 
-Bad — the shape that wastes ten minutes and connects nothing:
+Bad — the shape whose behaviour depends on the shell it lands in:
 
 ```text
 $ agent-gmail inbox add work
-(waiting for the browser…)
+Open this link to connect the mailbox:
+https://accounts.google.com/o/oauth2/v2/auth?client_id=…
+…
+(the command is still holding the port, nine minutes later)
 ```
 
-Run without `--start`, this holds the port open for up to ten minutes waiting for a redirect. The agent's
-shell is killed at 120 seconds, the command never reports, and the user is left with a half-finished flow
-and no idea whether it worked. It is the right command for a person at their own terminal and the wrong
-one for anything an agent runs.
+Without `--start`, the command asks the shell what it is. With stdin and stdout both terminals — and no
+`--json`, and not CI — it keeps the listener in-process and waits up to ten minutes for the redirect,
+which is what happened here. Anywhere else, most agent shells included, it detaches the listener and
+returns the link and the `--finish` command in about a second, exactly as `--start` would. So the same
+line either finishes immediately or outlives the agent's 120-second shell and leaves a flow nobody
+finished, and nothing in the command itself says which. `--start` decides it instead.
 
 Bad in a way that looks like progress:
 
@@ -262,8 +273,10 @@ declines, the seven-day expiry is something to say plainly, not to discover late
 
 ## Pitfalls
 
-- **Running `inbox add` without `--start` from an agent.** The most common setup failure by a distance:
-  the flow needs someone to wait ten minutes, and the agent's shell has two.
+- **Running `inbox add` without `--start`.** The command chooses between waiting for the browser and
+  detaching by whether it is attached to a terminal, so the same line behaves one way in an agent's shell
+  and another under a pseudo terminal — where the flow needs someone to wait ten minutes and the shell
+  has two. `--start` makes the choice yours rather than the environment's.
 - **Omitting `--email`.** The account chooser picks whoever is already signed in. With the expected
   address given, a wrong pick is refused and nothing is saved; without it, the wrong mailbox is connected
   under the right name and reads correctly everywhere afterwards.

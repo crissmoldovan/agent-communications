@@ -93,8 +93,9 @@ or to decide that an address is safe. It never sends, and it never decides.
 2. **The mailboxes to search, by alias.** The search runs across the ones you name, or all of them.
    **Complete when:** `gmail_inboxes_list` has given you the aliases, or the user has named one.
 3. **Whether each mailbox can see its address book at all.** This is the field that makes a silent
-   answer honest. The CLI reports it per mailbox as `contacts`; `gmail_inboxes_list` does not carry
-   it, so on the MCP path run `agent-gmail inbox list --json` or treat the question as open.
+   answer honest. Both paths report it per mailbox as `contacts`: it is on every row
+   `gmail_inboxes_list` returns, and `agent-gmail inbox list --json` prints the same field. The
+   listing you took the aliases from already carries it, so read it there rather than ask again.
    **Complete when:** you know which mailboxes can answer from the address book and which can only
    answer from mail history.
 4. **What the answer is for.** An address going into a draft needs the disambiguation below; an
@@ -129,12 +130,14 @@ or to decide that an address is safe. It never sends, and it never decides.
    **Complete when:** the user knows why one row outranks another, and why that is not a verdict.
 
 5. **Name the near-matches out loud.** If two rows differ by a character or two in the domain, by a
-   hyphen, by a `.co` against a `.com`, or by a script that renders alike, say so plainly: "these
-   two differ by one character in the domain — one of them is not who you think". This is the point
-   of showing rather than filtering. Nothing in this search performs that comparison for you; the
-   automatic lookalike check lives in `gmail_send_prepare` and fires only for a first-time external
-   recipient whose domain is within two characters of one this mailbox has written to, so a
-   lookalike that is already a saved contact reaches the preview unflagged.
+   hyphen, by a `.co` against a `.com`, or by letters that read alike — `rn` for `m` — say so
+   plainly: "these two differ by one character in the domain — one of them is not who you think".
+   This is the point of showing rather than filtering. Nothing in this search performs that
+   comparison for you; the automatic lookalike check lives in `gmail_send_prepare` and fires only
+   for an external recipient this mailbox has never written to, whose domain is within two
+   characters of one it does write to. Whether the address is saved in the address book counts for
+   nothing there: a lookalike saved as a contact but never written to is still flagged, and one the
+   user has written to before is not.
    **Complete when:** every pair of rows a careless reader could confuse has been pointed at.
 
 6. **Narrow with evidence, not with judgement.** If the user needs help choosing, fetch more facts
@@ -248,14 +251,17 @@ that. Filtering also trains them to believe that whatever you show is what exist
   the messages it sampled — at most 25 — which is very different.
 - **Reading `complete: true` as "all three sources ran".** A mailbox without address-book access
   skips `contacts` and `other-contacts` without raising an error. Check the mailbox, not the flag.
-- **Assuming two rows that look identical are the same address.** This path lower-cases and nothing
-  else: no dot folding, no plus folding, and no conversion of an internationalised domain to
-  punycode. `j.smith@` and `jsmith@` are one Gmail mailbox shown as two rows, and two domains that
-  render alike in different scripts are two different destinations shown as what looks like a
-  duplicate. Copy the address you were given; do not normalise it yourself.
-- **Expecting the send preview to catch a bad pick.** Its lookalike flag only fires for a first-time
-  external recipient whose domain is within two characters of a domain this mailbox has written to.
-  A saved-contact lookalike, or one that resembles nothing known, arrives unflagged.
+- **Assuming two rows that look identical are the same address.** This path lower-cases and converts
+  an internationalised domain to its ASCII (punycode) form, and does nothing else: no dot folding,
+  no plus folding. `j.smith@` and `jsmith@` are one Gmail mailbox shown as two rows, and `acme.test`
+  against `acrne.test` is two destinations that read as one. The punycode step cuts both ways: an
+  internationalised domain reaches the user as `xn--…` rather than the spelling they know, so say
+  that the row has been rewritten rather than leave them unable to recognise their own
+  correspondent. Copy the address you were given; do not normalise it yourself.
+- **Expecting the send preview to catch a bad pick.** Its lookalike flag only fires for an external
+  recipient this mailbox has never written to, whose domain is within two characters of a domain it
+  does write to. A lookalike the user has written to once before, or one that resembles nothing
+  known, arrives unflagged; whether it sits in the address book changes nothing either way.
 - **Searching one mailbox because the user named one.** A person often lives in the personal mailbox
   and writes from the work one. If the first search is thin, widen it and say that you did.
 - **Volunteering the address into a draft.** Reading is not a request to act. Offer and stop.

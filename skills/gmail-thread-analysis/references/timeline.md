@@ -17,10 +17,12 @@ then computes the events from the headers. Two things follow from that and both 
 
 - **No body text is consulted.** A thread where the whole story is in the prose produces a timeline that
   looks thin. That is the tool working, not a fault.
-- **The read still costs the full thread budget.** The budget is spent by each message's *complete*
-  body length, not by the single character returned, so a thread with more than about 20,000 characters
-  of bodies has its timeline cut short at exactly the same place a full read would be — and the timeline
-  result says nothing about it. This is why `messageCount` below cannot be trusted as a thread's size.
+- **The read costs almost nothing.** The thread budget is spent on what comes back, and what comes back
+  per message is one character inside its envelope, so a timeline costs a couple of hundred characters a
+  message however long the messages are. A thread has to run to something like a hundred messages before
+  the 20,000-character budget binds; twelve long essays produce twelve events. And when it does bind the
+  result says so, in a `truncated` flag beside the timeline — which is why the timeline, not the thread
+  read, is the thing to trust about a conversation's size.
 
 ## The timeline
 
@@ -28,18 +30,20 @@ then computes the events from the headers. Two things follow from that and both 
 |---|---|---|
 | `threadId`, `inbox` | the thread and the mailbox alias it was read from | fact |
 | `subject` | the raw subject of the **first message read**, exactly as the sender wrote it | fact about a sender-controlled string |
-| `messageCount` | the number of events — that is, messages that fitted the budget | **not** the thread's size; see below |
+| `messageCount` | the number of events in this timeline | **not** the thread's size — the result carries that separately; see below |
 | `participants` | every address appearing as `from`, `to` or `cc` across the events | fact, and incomplete; see below |
 | `events` | one entry per message, oldest first | see the next section |
 | `longestWaitHours` | the largest `gapHours` among non-draft events | fact about the messages read |
 | `waitingOn` | who sent last, and how long ago | fact, routinely misread |
 | `firstAt`, `lastAt` | the dates of the first and last non-draft messages read | fact about the messages read |
 
-**`messageCount` is the count of events, not of the thread.** The name is the trap. If the read was cut,
-this number is the number of messages you were given and there is nothing in the timeline result that
-says so. The thread's true size is `messageCount` on a `gmail_thread_get` result, which counts the
-messages Gmail returned before any budget was applied. Compare the two before you describe a thread as
-having any number of messages in it.
+**The timeline's own `messageCount` is the count of events, not of the thread.** The name is the trap,
+and the result answers it: beside the timeline sit two more fields, a `messageCount` that is the
+thread's true size — the messages Gmail returned, counted before any budget was applied — and a
+`truncated` that is true when the events cover only the start of it. So the check is local. Compare the
+timeline's count against the result's, or simply read `truncated`, before describing a thread as having
+any number of messages in it; a `gmail_thread_get` fired to recover that number pulls up to twenty
+thousand characters of somebody's mail into the context window to learn something already in hand.
 
 **`participants` is incomplete twice over.** Blind recipients are not in the headers, so a thread can
 have a reader nobody in it knows about; and anyone who only appears in a message that did not fit the
@@ -175,6 +179,13 @@ column per event for when, direction, sender, wait, attachments and changes, and
 Take the rendering as-is rather than rebuilding it. A hand-built table is a second place for a
 transcription error to live, and the rendered one already makes the right choice about names.
 
+Neither rendering carries the completeness fields, though. The Markdown header reads "N messages" using
+the event count, so on a cut thread it states a number that is not the thread's, and the Mermaid
+diagram says nothing on the subject either. The CLI narrows the same way: adding `--format json` to
+`--json` prints the timeline object alone, while `--json` by itself returns the whole result with
+`messageCount` and `truncated` on it. Quote the rendering for the shape of the conversation and the
+result's own fields for its size.
+
 ## Fact or heuristic, in one table
 
 | Field | Read it as |
@@ -182,7 +193,7 @@ transcription error to live, and the rendered one already makes the right choice
 | `messageId`, `at`, `from`, `to`, `cc`, `attachments` | fact, straight from the headers |
 | `gapHours`, `longestWaitHours`, `firstAt`, `lastAt` | fact, arithmetic on dates, about the messages read |
 | `isDraft` | fact, from Gmail's own label |
-| `messageCount`, `participants` | fact about what was read; **not** about the thread |
+| the timeline's `messageCount`, `participants` | fact about what was read; **not** about the thread, whose size is the result's own `messageCount` |
 | `direction`, `waitingOn.party` | fact about message order, resting on an identity lookup that can fail |
 | `subjectChanged` | fact with a misleading name: differs from the first, not changed here |
 | `participantsAdded`, `participantsDropped` | fact about two adjacent messages, not about the thread |
@@ -194,6 +205,8 @@ transcription error to live, and the rendered one already makes the right choice
 
 `packages/gmail/src/domain/timeline.ts` computes every field above and renders both views;
 `packages/gmail/src/operations/analyse.ts` reads the thread at one character per body, builds the list
-of addresses that count as the user's own, and returns the three forms together.
+of addresses that count as the user's own, and returns the three forms together with the thread's true
+size and the truncation flag.
 
-See also `references/reading-bodies.md` for the budget that decides how many of these events you get.
+See also `references/reading-bodies.md` for the budget that decides how much of each body you get once
+you start reading them.

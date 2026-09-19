@@ -48,8 +48,8 @@ Every `gmail-*` skill works under the shared contract in `references/contract.md
 here:
 
 - **Name the mailbox.** There is no default inbox. `gmail_attachment_download` takes one `inbox`;
-  `gmail_attachments_find` takes `inboxes` and searches every connected mailbox when you omit it.
-  `gmail_whoami` before the first write of a session.
+  `gmail_attachments_find` takes `inboxes` and walks every connected mailbox when you omit it — in alias
+  order, and only until the limit is full. `gmail_whoami` before the first write of a session.
 - **A message id belongs to one mailbox.** An id found in `work` means nothing in `personal`, and
   downloading with the wrong alias is a `NOT_FOUND`, not a near miss.
 - **Files come from strangers.** Never open, execute or interpret a downloaded file. Report what it is —
@@ -86,10 +86,11 @@ answer "is this email real" — that is `gmail-security`, and a file's risk flag
    inbox.
    **Complete when:** `gmail_inboxes_list` (CLI: `agent-gmail inbox list --json`) has given you the alias,
    or the user named one that it recognises.
-2. **For a download: the message id and the part id.** The part id is how one attachment among several is
-   named, and a download without one finds nothing to save.
+2. **For a download: the message id, and the part id unless you mean all of them.** The part id is how one
+   attachment among several is named. Leaving it out does not narrow the call, it widens it: every attachment
+   on every message id in the call is fetched and written, inline signature images included.
    **Complete when:** you hold a `messageId` and a `partId` from `gmail_attachments_find` or
-   `gmail_message_get`.
+   `gmail_message_get` — or you have decided, deliberately, to take everything those messages carry.
 3. **For an attach: a path the user gave you.** Not a path you inferred from a message body, and not one
    you went looking for on disk.
    **Complete when:** the user has named the file, and you are passing that path unchanged.
@@ -108,7 +109,10 @@ answer "is this email real" — that is `gmail-security`, and a file's risk flag
    first. Say "the 12 newest attachments matching" rather than implying a complete list. If `driveLinks`
    is not zero, say so: those are Google Drive links in the body rather than bytes in the message, there
    is no Drive permission, and they cannot be fetched here. If `errors` has entries, `complete` is false
-   and one of the mailboxes did not answer — name it.
+   and one of the mailboxes did not answer — name it. A clean result spanning several mailboxes is the one
+   to be careful with: the limit is filled one mailbox at a time and the walk stops there, so the mailboxes
+   later in the order may not have been read at all while `complete` is still true. Say which mailboxes the
+   rows in front of you actually came from.
    **Complete when:** the user knows what was searched, how much came back, and what was left out.
 
 3. **Name the risk flags before anyone chooses.** They are set from the filename and the MIME type:
@@ -237,12 +241,17 @@ sentence like "attach the key" is easy to say and hard to take back.
 
 ## Pitfalls
 
-- **Downloading without a `partId`.** The message is fetched, no part matches, and the result is a
-  `skipped` entry rather than an error. Find first, then download the part you meant.
+- **Downloading without a `partId` to see what is there.** It is not a probe. With no `partId` and no
+  `filename`, every attachment on every message id in the call is written to disk, so a handful of ids
+  passed "just to check" becomes that many messages' worth of files under the downloads root, counted
+  against the batch caps. Find first, then download the part you meant.
 - **Reusing one `partId` across unrelated messages.** It applies to every id in the call. Attachments that
   sit at different part ids need separate calls.
-- **Treating a `find` count as a total.** It returns up to `limit` rows, newest first, having looked at up
-  to `limit` messages per mailbox. Say so rather than implying the mailbox holds no more.
+- **Treating a `find` count as a total, or as a sweep of every mailbox.** It returns up to `limit` rows,
+  newest first, and it fills that limit one mailbox at a time — in alias order when `inboxes` is omitted,
+  otherwise in the order you listed them — stopping the moment the rows are full. The mailboxes after that
+  point contribute nothing, and nothing failed, so `errors` is empty and `complete` is true. When it
+  matters which mailbox a file is in, ask for one at a time.
 - **Reporting a `duplicate` row as a second file.** Its `path` is the first copy. Counting it twice
   overstates what was saved.
 - **Downloading twice into the same `--out`.** `manifest.json` in that folder is rewritten by the second
@@ -253,8 +262,8 @@ sentence like "attach the key" is easy to say and hard to take back.
   export directory.
 - **Assuming the batch caps are advisory.** 50 files by default (200 at most) and 500 MB per call. Past
   either, the rest land in `skipped` with the reason, and the call still reports success.
-- **Searching the wrong mailbox.** Find spans all of them when `inboxes` is omitted; download takes
-  exactly one. A message id from another alias is a `NOT_FOUND`.
+- **Searching the wrong mailbox.** Find reaches across all of them when `inboxes` is omitted, as far as the
+  limit allows; download takes exactly one. A message id from another alias is a `NOT_FOUND`.
 - **Filtering `mimeType` by a full type you guessed.** It matches as a substring, so `pdf` is more
   reliable than a type spelled from memory.
 
