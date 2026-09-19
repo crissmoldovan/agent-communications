@@ -260,3 +260,50 @@ test('a sign-in with no expected address says that anyone who opens the link dec
   const bound = { ...base, expectedEmail: 'jo@example.test' };
   assert.doesNotMatch(renderSignInStarted(bound, 'add', false), /whichever Google account/);
 });
+
+test('a reauth goes through the inbox own client, and records the one the token was issued to', async () => {
+  // Both halves of one bug. `startSignIn` resolved the client as `Object.keys(config.clients)[0]` — insertion order,
+  // not an answer — before the branch that knows which inbox this is, so a reauth of an inbox registered against a
+  // second client consented through the first and exchanged the code with the wrong secret. And `reauthorise` then
+  // spread the existing row without overwriting `client`, so even `--client <name>` left the registry naming the old
+  // one while the stored refresh token belonged to the new. That is the exact recovery the troubleshooting guide
+  // prescribes after a `deleted_client`, so it failed precisely when it was needed.
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+
+  // A second client, added after the default, so it is not first by insertion order.
+  const secondPath = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    secondPath,
+    JSON.stringify({ installed: { client_id: TEST_CLIENT_ID, client_secret: TEST_CLIENT_SECRET, project_id: 'p2' } }),
+  );
+  await clientAdd(context, { path: secondPath, store: 'file', name: 'desktop' });
+
+  const config = await context.config();
+  const names = Object.keys(config.clients);
+  assert.ok(names.length >= 2, `expected two clients, got ${JSON.stringify(names)}`);
+  assert.notEqual(names[0], 'desktop', 'the test is meaningless unless desktop is not first');
+
+  // Add the inbox explicitly against the second client.
+  const add = await startSignIn(context, {
+    mode: 'add',
+    alias: 'work',
+    tier: 'read',
+    client: 'desktop',
+    listenerCommand: LISTENER,
+  });
+  await fetch(harness.google.consent(add.authUrl, { sub: 'sub-1' }));
+  const added = await finishSignIn(context, { flowId: add.flowId, waitSeconds: 10, pollMs: 50 });
+  assert.equal(added.inbox.client, 'desktop');
+
+  // A reauth with no `--client` must still use the inbox's own client, not the first in the file. The end state is
+  // enough to tell: `reauthorise` now records `flow.clientName`, so if `startSignIn` had picked `default` the row
+  // below would say `default`. Both halves of the bug fail this one assertion.
+  const again = await startSignIn(context, { mode: 'reauth', alias: 'work', listenerCommand: LISTENER });
+  await fetch(harness.google.consent(again.authUrl, { sub: 'sub-1' }));
+  const done = await finishSignIn(context, { flowId: again.flowId, waitSeconds: 10, pollMs: 50 });
+  assert.equal(done.reauthorised, true);
+  // And the row still names the client the token was actually issued to.
+  assert.equal(done.inbox.client, 'desktop');
+  assert.equal(done.inbox.id, added.inbox.id);
+});
