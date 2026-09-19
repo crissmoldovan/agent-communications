@@ -96,8 +96,8 @@ initiative, however obvious the next step looks. Offer it and stop.
 work goes through the CLI with `--json`:
 
 ```bash
-npx -y @cloudpixel/gmail@<version> inbox list --json
-npx -y @cloudpixel/gmail@<version> search "from:sam newer_than:7d" --inbox work --json
+npx -y @agentcomms/gmail@<version> inbox list --json
+npx -y @agentcomms/gmail@<version> search "from:sam newer_than:7d" --inbox work --json
 ```
 
 Exit codes are stable and documented in `--help`: `0` ok, `10` a send was refused or needs

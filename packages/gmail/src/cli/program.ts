@@ -11,7 +11,7 @@ import {
   type StoreKind,
   type Streams,
   writeResult,
-} from '@cloudpixel/comms-core';
+} from '@agentcomms/core';
 import { Command, CommanderError, Option } from 'commander';
 import { TIERS } from '../auth/scopes.ts';
 import { GmailContext, type GmailContextOptions } from '../context.ts';

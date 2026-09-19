@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { CommsError, requireInbox } from '@cloudpixel/comms-core';
+import { CommsError, requireInbox } from '@agentcomms/core';
 import type { OAuthFlow } from '../auth/flows.ts';
 import { startLoopback } from '../auth/loopback.ts';
 import { buildAuthUrl, newPkce, newState, oauthError } from '../auth/oauth.ts';

@@ -1,4 +1,4 @@
-import { CommsError } from '@cloudpixel/comms-core';
+import { CommsError } from '@agentcomms/core';
 import { type gmail_v1, gmail as gmailApi } from '@googleapis/gmail';
 import { type people_v1, people as peopleApi } from '@googleapis/people';
 import { OAuth2Client } from 'google-auth-library';

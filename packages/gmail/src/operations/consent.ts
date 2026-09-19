@@ -8,7 +8,7 @@ import {
   type InboxConfig,
   newInboxId,
   PUBLIC_MAILBOX_DOMAINS,
-} from '@cloudpixel/comms-core';
+} from '@agentcomms/core';
 import type { OAuthFlow } from '../auth/flows.ts';
 import { exchangeCode, type TokenResponse } from '../auth/oauth.ts';
 import { capabilitiesOf, tierOf } from '../auth/scopes.ts';

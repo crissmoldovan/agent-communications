@@ -1,4 +1,4 @@
-import { analyseOutboundHtml, CommsError, type ParsedAddress } from '@cloudpixel/comms-core';
+import { analyseOutboundHtml, CommsError, type ParsedAddress } from '@agentcomms/core';
 import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 
 /**

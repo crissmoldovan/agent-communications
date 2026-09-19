@@ -4,7 +4,7 @@ import { isAbsolute, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { EXIT_CODES } from '@cloudpixel/comms-core';
+import { EXIT_CODES } from '@agentcomms/core';
 import { run } from '../src/cli/program.ts';
 import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
 

@@ -5,7 +5,7 @@
  * `test/consumer-check.mjs` inside that consumer. Catches missing files, wrong exports, undeclared dependencies and
  * broken bins — none of which the source tests can see.
  *
- *   node scripts/verify-package.mjs packages/comms-core
+ *   node scripts/verify-package.mjs packages/core
  */
 import { execFileSync } from 'node:child_process';
 import { copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';

@@ -68,7 +68,7 @@
 | # | Decision | Chosen | Why |
 |---|---|---|---|
 | D1 | Default send rule | **`chat`**: the agent may send after the user approves the exact, server-rendered preview in the conversation. Stricter per-inbox policies `confirm` (out-of-band approval) and `never` (drafts only) are built in | The user chose it (2026-09-18). §8 shows what `chat` does and does not guarantee |
-| D2 | npm scope | **`@cloudpixel`** | The user's npm scope |
+| D2 | npm scope | **`@agentcomms`** | The user's npm scope |
 | D3 | Repo visibility | Private until v0.1.0 passes both reviews, then public | The user chose it |
 | D4 | Server topology | **One MCP server process for all inboxes**, `inbox` argument on every tool; optional pinned mode `--inbox <alias>` | 84 → ~25 tool definitions; one refresh loop; policy in one place. Pinned mode keeps the author's "one server per account" habit available |
 | D5 | Credentials | **Bring your own Desktop OAuth client**, one client for all inboxes | Google policy forbids shipping client credentials in public code; restricted-scope verification plus a security assessment is out of reach for an OSS project; personal use under 100 users is exempt **[V]** |
@@ -90,13 +90,13 @@
 
 ```
 packages/
-  comms-core/   @cloudpixel/comms-core   provider-neutral library + bin `agentcomms`
-  gmail/        @cloudpixel/gmail        Gmail library + bin `agent-gmail` (CLI, includes `mcp` subcommand)
-  gmail-mcp/    @cloudpixel/gmail-mcp    bin `agent-gmail-mcp`: starts the stdio MCP server directly
+  comms-core/   @agentcomms/core   provider-neutral library + bin `agentcomms`
+  gmail/        @agentcomms/gmail        Gmail library + bin `agent-gmail` (CLI, includes `mcp` subcommand)
+  gmail-mcp/    @agentcomms/gmail-mcp    bin `agent-gmail-mcp`: starts the stdio MCP server directly
 skills/         gmail-* skills (Agent Skills format), one directory each
 ```
 
-- **`@cloudpixel/comms-core`** — nothing Gmail-specific, but everything email-specific that providers share: the
+- **`@agentcomms/core`** — nothing Gmail-specific, but everything email-specific that providers share: the
   canonical message form and its digest, the inbound sanitiser and the outbound HTML analyser (one traversal, one
   "hidden" predicate, two views), address-list parsing and canonical addresses, the dangerous-character table.
   Runtime deps: `zod`, `htmlparser2`, `domhandler`, `dom-serializer`, `html-to-text`, `postal-mime`, optional
@@ -106,19 +106,19 @@ skills/         gmail-* skills (Agent Skills format), one directory each
   (digests, approval records, policies, rate caps, taint store, loosening classification). Bin `agentcomms` (not `agent-comms`: an
   unrelated npm package of that name could ship a clashing bin): `paths`, `doctor`
   (environment-level), `audit tail`, `approvals list|revoke`, `secrets migrate`, `uninstall`. 
-- **`@cloudpixel/gmail`** — the Gmail provider and both user-facing surfaces. OAuth (loopback + PKCE, manual
+- **`@agentcomms/gmail`** — the Gmail provider and both user-facing surfaces. OAuth (loopback + PKCE, manual
   and two-step modes), Gmail and People API adapters with a retry layer, MIME compose and parse, the body
   pipeline, threads/timeline, attachments, export, contacts, follow-ups, drafts, organise, the send gate, the
   CLI (commander) and the MCP server factory. Published with its CLI **fully bundled** (`dist/cli.mjs`, zero
   runtime `dependencies` except the optional keyring) and a library entry (`dist/index.mjs`) for embedding.
-- **`@cloudpixel/gmail-mcp`** — a thin package whose single bin starts the stdio server
-  (`createGmailMcpServer()` from `@cloudpixel/gmail`, pinned exact). Exists so client configs can say
-  `npx -y @cloudpixel/gmail-mcp@X.Y.Z` and so the MCP server has an obvious package name.
+- **`@agentcomms/gmail-mcp`** — a thin package whose single bin starts the stdio server
+  (`createGmailMcpServer()` from `@agentcomms/gmail`, pinned exact). Exists so client configs can say
+  `npx -y @agentcomms/gmail-mcp@X.Y.Z` and so the MCP server has an obvious package name.
 
-"`npx` for each package" means: `npx @cloudpixel/comms-core doctor`, `npx @cloudpixel/gmail <command>`,
-`npx @cloudpixel/gmail-mcp`. Each package has exactly one `bin`, which is what `npx` requires **[V]**.
+"`npx` for each package" means: `npx @agentcomms/core doctor`, `npx @agentcomms/gmail <command>`,
+`npx @agentcomms/gmail-mcp`. Each package has exactly one `bin`, which is what `npx` requires **[V]**.
 
-### 4.2 Layering inside `@cloudpixel/gmail`
+### 4.2 Layering inside `@agentcomms/gmail`
 
 ```
 cli/  (commander)        mcp/  (tool registry, schemas, annotations, instructions)
@@ -714,7 +714,7 @@ TTL); execution requires that token. Trash always requires a plan token. Every w
   approval (b), TTY `send` and policy loosening therefore refuse when well-known agent markers are set
   (`CLAUDECODE`, `CODEX_*`, `CURSOR_*` and similar) — a speed bump, documented as such, not a boundary.
   `mcp install --client claude-code` offers `ask` rules for `Bash(agent-gmail approve*)`,
-  `Bash(agent-gmail inbox policy*)`, `Bash(agent-gmail send*)` and their `npx * @cloudpixel/gmail*` forms, and the pty wrappers (`script`,
+  `Bash(agent-gmail inbox policy*)`, `Bash(agent-gmail send*)` and their `npx * @agentcomms/gmail*` forms, and the pty wrappers (`script`,
   `expect`, `unbuffer`), and `Edit`/`Write` deny rules for the config and state directories. SECURITY.md and
   `gmail-send` state that terminal approval does not stop an agent with a shell, and recommend `confirm` with an
   allowlisted client, or `never` and sending from the Gmail UI, for coding agents. Because readers re-check config on every call, a
@@ -886,7 +886,7 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
 
 ### 12.1 npm
 
-- `@cloudpixel/comms-core`, `@cloudpixel/gmail`, `@cloudpixel/gmail-mcp`; lockstep versions; ESM;
+- `@agentcomms/core`, `@agentcomms/gmail`, `@agentcomms/gmail-mcp`; lockstep versions; ESM;
   `engines.node >= 22.12`; `files: ["dist", "README.md", "LICENSE", "THIRD_PARTY_LICENSES"]`;
   `repository.directory` set; `publishConfig.access: public`.
 - `THIRD_PARTY_LICENSES` generated at build time for the bundled packages (they inline Apache-2.0 Google
@@ -900,7 +900,7 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
 - `skills/<name>/SKILL.md` only (no root SKILL.md, house rule). Install: `npx skills add
   crissmoldovan/agent-communications --skill '*'` (the skills CLI scans `skills/` **[V]**).
 - Every skill works through the MCP tools when connected **or** through the CLI
-  (`npx -y @cloudpixel/gmail@<version> … --json`) — `npx skills add` installs skills, not servers **[V]**.
+  (`npx -y @agentcomms/gmail@<version> … --json`) — `npx skills add` installs skills, not servers **[V]**.
 
 ### 12.3 Client wiring — `agent-gmail mcp install`
 
@@ -908,14 +908,14 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
   `<dataDir>/runtime/<version>/` (`dataDir` per §5.1: `$XDG_DATA_HOME` or `~/.local/share/agent-communications`,
   `%LOCALAPPDATA%` on Windows) by running npm through `process.execPath` + npm's own `npm-cli.js` (spawning
   `npm.cmd` without a shell throws on current Node on Windows), with exact versions for everything including the
-  optional keyring (`npm install --prefix … --save-exact @cloudpixel/gmail@<version>`, which brings the
+  optional keyring (`npm install --prefix … --save-exact @agentcomms/gmail@<version>`, which brings the
   optional native keyring alongside the single-file bundle — the npx cache is pruned and cannot be pointed
   at). Registers `command` = the absolute path of the **PATH-visible** `node` the user runs (resolved like
   `command -v node`; `process.execPath` only when they agree — on the author's machine `process.execPath` is a
   private runtime bundled with another app), `args = [<runtime>/<version>/…/dist/cli.mjs, "mcp"]`, and an
   explicit `PATH` env. Fixes the observed minimal-PATH failure and starts in ~0.1 s. `doctor` flags a
   registered node path that no longer exists.
-  `--launcher npx`: absolute path of `npx` + pinned `@cloudpixel/gmail-mcp@<version>`.
+  `--launcher npx`: absolute path of `npx` + pinned `@agentcomms/gmail-mcp@<version>`.
 - `claude-code`: runs `claude mcp add-json <name> '<json>' --scope user` when the `claude` binary is found,
   else prints the JSON. `codex`: `codex mcp add`. Like `doctor`, `mcp install` scans for legacy Gmail servers with send tools and warns. `claude-desktop`, `cursor`, `gemini`, `vscode`, `json`: print the exact
   snippet and the file it belongs in (Claude Desktop: `claude_desktop_config.json`; it lacks elicitation
@@ -927,7 +927,7 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
 - `.claude-plugin/marketplace.json` at the root (marketplace `agent-communications`, plugin `gmail`,
   `source: "./"`, `strict: false`, explicit `skills` list, `mcpServers.gmail` launching through a committed
   POSIX launcher `bin/agent-gmail-launch` that resolves node/npx from PATH, Volta, nvm, fnm, Homebrew and
-  `/usr/local/bin`, then execs the pinned `npx -y @cloudpixel/gmail-mcp@X.Y.Z`). Validated in CI with
+  `/usr/local/bin`, then execs the pinned `npx -y @agentcomms/gmail-mcp@X.Y.Z`). Validated in CI with
   `claude plugin validate .` when available.
 - `gemini-extension.json` at the root (Gemini CLI requires the root **[V]**).
 - A `scripts/sync-versions.mjs` step keeps every pinned version (plugin, launcher, extension, skills'
@@ -943,7 +943,7 @@ Agent Skills spec defines it — **not** the house single string: Codex 0.145 re
 string … expected struct SkillFrontmatterMetadata"). The ported verifier parses the map form. No
 client-specific gating fields. Skills are **not** hidden when the MCP server
 is absent: each skill's Prerequisites check for the MCP tools and otherwise use the CLI
-(`npx -y @cloudpixel/gmail@<version> … --json`), because `npx skills add` installs skills without servers. Every skill: frontmatter (`name`, quoted `description`, `license: MIT`,
+(`npx -y @agentcomms/gmail@<version> … --json`), because `npx skills add` installs skills without servers. Every skill: frontmatter (`name`, quoted `description`, `license: MIT`,
 `compatibility`, `metadata` as a map — `group: communications`, `lifecycle: release`, `version: "1.0.0"`,
 `author: crissmoldovan` — and **no `allowed-tools`**: in Claude Code, `allowed-tools` pre-approves tools for the
 turn that invokes the skill, so a Gmail skill listing `Bash` would let the CLI send path run without a prompt. The
@@ -1062,8 +1062,8 @@ where it touches Gmail.
 
 | Phase | Branch | Delivers | Depends on |
 |---|---|---|---|
-| **P1 Foundation + core** | `feat/foundation` | This spec and the plan; pnpm workspace, TypeScript 7, tsdown, Biome, CI (Linux, macOS, Windows); OSS files; `.blocks/`; ported and extended skill verifier; `@cloudpixel/comms-core` complete: paths, config (user intent only, locked writes, immutable inbox ids), runtime state, secret store (one backend, keychain with JS timeout and cache, file), audit log, envelope and exit codes, untrusted envelope **with taint recording**, HTML sanitiser, path jails, **approval engine with its full interface** (records, state machine, CAS transitions, digests, challenges, plan tokens), send ledger and rate caps, taint store, the `agentcomms` bin; a tarball-consumer test for `comms-core` so packaging is exercised from the first phase | — |
-| **P2 Auth + lifecycle + surfaces** | `feat/gmail-auth` | `@cloudpixel/gmail` skeleton; Gmail/People transport + retry; the local fake Google server used by tests; OAuth (loopback, detached two-step flow); client/inbox commands incl. reauth identity binding; import from artymclabin with the legacy-server scan; doctor; whoami; CLI skeleton (envelope, exit codes, coercion rules); MCP server skeleton on SDK v2 (handshake verified with Claude Code and Codex, `inboxes_list`, `whoami`, `doctor`); an elicitation round-trip test with the SDK v2 client; `mcp install`; `@cloudpixel/gmail-mcp`; live check | P1 |
+| **P1 Foundation + core** | `feat/foundation` | This spec and the plan; pnpm workspace, TypeScript 7, tsdown, Biome, CI (Linux, macOS, Windows); OSS files; `.blocks/`; ported and extended skill verifier; `@agentcomms/core` complete: paths, config (user intent only, locked writes, immutable inbox ids), runtime state, secret store (one backend, keychain with JS timeout and cache, file), audit log, envelope and exit codes, untrusted envelope **with taint recording**, HTML sanitiser, path jails, **approval engine with its full interface** (records, state machine, CAS transitions, digests, challenges, plan tokens), send ledger and rate caps, taint store, the `agentcomms` bin; a tarball-consumer test for `comms-core` so packaging is exercised from the first phase | — |
+| **P2 Auth + lifecycle + surfaces** | `feat/gmail-auth` | `@agentcomms/gmail` skeleton; Gmail/People transport + retry; the local fake Google server used by tests; OAuth (loopback, detached two-step flow); client/inbox commands incl. reauth identity binding; import from artymclabin with the legacy-server scan; doctor; whoami; CLI skeleton (envelope, exit codes, coercion rules); MCP server skeleton on SDK v2 (handshake verified with Claude Code and Codex, `inboxes_list`, `whoami`, `doctor`); an elicitation round-trip test with the SDK v2 client; `mcp install`; `@agentcomms/gmail-mcp`; live check | P1 |
 | **P3 Read + analyse** | `feat/gmail-read` | search (cross-inbox cursor), message/thread read with the body pipeline, timeline, attachments find/download, export, contacts, follow-ups, labels/sendAs/drafts list — operations, CLI and MCP; live check | P2 |
 | **P4 Compose + organise** | `feat/gmail-compose` | MIME compose (multipart, markdown), drafts create/reply/reply-all/forward/update/get/delete with attachments and signatures, outbound HTML analyser, organise with plans and undo, label create, trash/untrash; live check | P3 |
 | **P5 Send gate** | `feat/gmail-send` | prepare/approve/execute under `chat`/`confirm`/`never`, preview renderer (§8.5), MRTR elicitation with the allowlist, terminal approval, risk escalation, caps, readback; the `drafts.send`-with-raw spike; live check after the legacy servers are disconnected | P4 |

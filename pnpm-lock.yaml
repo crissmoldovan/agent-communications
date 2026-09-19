@@ -39,7 +39,7 @@ importers:
         specifier: 'catalog:'
         version: 7.0.2
 
-  packages/comms-core:
+  packages/core:
     dependencies:
       dom-serializer:
         specifier: ^2.0.0
@@ -70,9 +70,9 @@ importers:
 
   packages/gmail:
     devDependencies:
-      '@cloudpixel/comms-core':
+      '@agentcomms/core':
         specifier: workspace:*
-        version: link:../comms-core
+        version: link:../core
       '@googleapis/gmail':
         specifier: ^22.0.0
         version: 22.0.0
@@ -110,7 +110,7 @@ importers:
 
   packages/gmail-mcp:
     dependencies:
-      '@cloudpixel/gmail':
+      '@agentcomms/gmail':
         specifier: workspace:*
         version: link:../gmail
     optionalDependencies:

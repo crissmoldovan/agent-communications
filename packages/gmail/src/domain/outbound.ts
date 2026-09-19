@@ -8,7 +8,7 @@ import {
   normaliseAddress,
   parseAddressList,
   sha256Hex,
-} from '@cloudpixel/comms-core';
+} from '@agentcomms/core';
 import type { RawMessage, SendAsAddress } from '../gmail-api/transport.ts';
 import { type GmailHeader, headerValue, headerValues, readParts } from './mime.ts';
 

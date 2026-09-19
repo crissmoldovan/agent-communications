@@ -1,13 +1,6 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import {
-  CommsError,
-  createUniqueFile,
-  relativeSubpath,
-  resolveInsideRoot,
-  safeFilename,
-  slug,
-} from '@cloudpixel/comms-core';
+import { CommsError, createUniqueFile, relativeSubpath, resolveInsideRoot, safeFilename, slug } from '@agentcomms/core';
 import type { GmailContext } from '../context.ts';
 import { downloadsRoot } from './attachments.ts';
 import { type ReadMessageResult, type ReadThreadResult, readMessage, readThread } from './read.ts';

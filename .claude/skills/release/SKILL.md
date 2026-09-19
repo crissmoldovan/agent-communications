@@ -5,7 +5,7 @@ description: Use when publishing this repository's packages to npm, cutting a ve
 
 # Releasing agent-communications
 
-Three packages go to npm together: `@cloudpixel/comms-core`, `@cloudpixel/gmail`, `@cloudpixel/gmail-mcp`. They
+Three packages go to npm together: `@agentcomms/core`, `@agentcomms/gmail`, `@agentcomms/gmail-mcp`. They
 are published **from a person's machine**, in dependency order, by `scripts/release.mjs`.
 
 ## The one thing to understand first
@@ -35,7 +35,7 @@ worse trade than the missing attestation.
 
 1. **Check nothing is already published at this version.** `scripts/release.mjs` does it, but knowing early is
    worth more than being told late.
-   **Complete when:** `npm view @cloudpixel/gmail@<version> version` returns nothing for the version you intend.
+   **Complete when:** `npm view @agentcomms/gmail@<version> version` returns nothing for the version you intend.
 
 2. **Get the version right everywhere.** Edit the root `package.json`, then `pnpm sync:versions` — it writes three
    manifests, two plugin files, the launcher and twelve skills. `pnpm licenses` regenerates the third-party notices
@@ -70,14 +70,14 @@ worse trade than the missing attestation.
    **If it says a package "is not visible yet", do not bump the version.** `npm view` reads a CDN-cached document
    that can lag minutes behind a successful publish, badly so just after npm maintenance. This happened on the
    first real release: all three published, and the check announced that none had arrived. Run
-   `npm dist-tag ls @cloudpixel/<name>` — it goes to the authenticated path and was accurate within seconds. If it
+   `npm dist-tag ls @agentcomms/<name>` — it goes to the authenticated path and was accurate within seconds. If it
    reports the version, the publish landed and there is nothing to fix.
 
 8. **Tag afterwards, not before.** `git tag vX.Y.Z && git push origin vX.Y.Z`. The tag records what was published;
    it does not cause it. Tagging first means a tag that may name a release that never happened.
    **Complete when:** the tag is on the server.
 
-9. **Prove it from outside.** `npx -y @cloudpixel/gmail@X.Y.Z --version`, then `doctor`, in a directory that is not
+9. **Prove it from outside.** `npx -y @agentcomms/gmail@X.Y.Z --version`, then `doctor`, in a directory that is not
    this repository. Then `npx skills add crissmoldovan/agent-communications --skill '*'` in a scratch directory and
    check a skill brought its `references/` with it.
    **Complete when:** the published artefact has been run by something that did not build it.

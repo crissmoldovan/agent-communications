@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CommsError } from '@cloudpixel/comms-core';
+import { CommsError } from '@agentcomms/core';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { GmailContext } from '../src/context.ts';
 import { applyUndo, createLabel, modify, resolveLabelIds, trash } from '../src/operations/organise.ts';

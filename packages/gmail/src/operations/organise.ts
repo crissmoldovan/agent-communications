@@ -1,4 +1,4 @@
-import { CommsError, recipientDomains } from '@cloudpixel/comms-core';
+import { CommsError, recipientDomains } from '@agentcomms/core';
 import type { GmailContext } from '../context.ts';
 
 /**

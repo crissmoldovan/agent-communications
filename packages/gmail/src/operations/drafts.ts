@@ -13,7 +13,7 @@ import {
   readComposeProfile,
   recipientDomains,
   renderMessagePreview,
-} from '@cloudpixel/comms-core';
+} from '@agentcomms/core';
 import type { GmailContext } from '../context.ts';
 import { buildBody } from '../domain/body.ts';
 import {

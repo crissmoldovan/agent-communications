@@ -36,7 +36,7 @@ if (!/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version)) {
 }
 
 // The published packages, in lockstep. They depend on each other by exact version, so a mismatch is a broken install.
-const packages = ['comms-core', 'gmail', 'gmail-mcp'];
+const packages = ['core', 'gmail', 'gmail-mcp'];
 for (const name of packages) {
   const path = join(ROOT, 'packages', name, 'package.json');
   const manifest = JSON.parse(await readFile(path, 'utf8'));
@@ -44,7 +44,7 @@ for (const name of packages) {
   for (const field of ['dependencies', 'devDependencies', 'peerDependencies']) {
     for (const [dependency, range] of Object.entries(manifest[field] ?? {})) {
       // Workspace ranges stay as they are: pnpm rewrites them at pack time.
-      if (dependency.startsWith('@cloudpixel/') && !String(range).startsWith('workspace:')) {
+      if (dependency.startsWith('@agentcomms/') && !String(range).startsWith('workspace:')) {
         manifest[field][dependency] = version;
       }
     }
@@ -59,8 +59,8 @@ for (const entry of await readdir(skills, { withFileTypes: true })) {
   const path = join(skills, entry.name, 'SKILL.md');
   const source = await readFile(path, 'utf8');
   const updated = source.replace(
-    /^compatibility: "@cloudpixel\/gmail@[^"]+"$/m,
-    `compatibility: "@cloudpixel/gmail@${version}"`,
+    /^compatibility: "@agentcomms\/gmail@[^"]+"$/m,
+    `compatibility: "@agentcomms/gmail@${version}"`,
   );
   if (!/^compatibility: /m.test(source)) {
     problems.push(`skills/${entry.name}/SKILL.md: no compatibility line to keep in step`);
@@ -86,7 +86,7 @@ for (const [path, what] of [
     path,
     source
       .replace(/"version":\s*"[\w.-]+"/g, `"version": "${version}"`)
-      .replace(/@cloudpixel\/gmail-mcp@[\w.-]+/g, `@cloudpixel/gmail-mcp@${version}`),
+      .replace(/@agentcomms\/gmail-mcp@[\w.-]+/g, `@agentcomms/gmail-mcp@${version}`),
     what,
   );
 }
@@ -98,7 +98,7 @@ if (script !== null) {
     launcher,
     script
       .replace(/^VERSION="[\w.-]+"$/m, `VERSION="${version}"`)
-      .replace(/@cloudpixel\/gmail-mcp@[\w.-]+/g, `@cloudpixel/gmail-mcp@${version}`),
+      .replace(/@agentcomms\/gmail-mcp@[\w.-]+/g, `@agentcomms/gmail-mcp@${version}`),
     'the pinned launcher version',
   );
   if (!/^VERSION="/m.test(script)) {

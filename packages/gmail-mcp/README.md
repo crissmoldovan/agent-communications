@@ -1,16 +1,16 @@
-# @cloudpixel/gmail-mcp
+# @agentcomms/gmail-mcp
 
 The Gmail MCP server for coding agents, as its own command — so a client configuration can pin it:
 
 ```json
 {
   "mcpServers": {
-    "gmail": { "command": "npx", "args": ["-y", "@cloudpixel/gmail-mcp@0.1.0"] }
+    "gmail": { "command": "npx", "args": ["-y", "@agentcomms/gmail-mcp@0.1.0"] }
   }
 }
 ```
 
-It is one call into [`@cloudpixel/gmail`](https://www.npmjs.com/package/@cloudpixel/gmail), which is where the server
+It is one call into [`@agentcomms/gmail`](https://www.npmjs.com/package/@agentcomms/gmail), which is where the server
 and the `agent-gmail` command live. Part of
 [agent-communications](https://github.com/crissmoldovan/agent-communications).
 
@@ -18,17 +18,17 @@ and the `agent-gmail` command live. Part of
 
 ## Set up mailboxes first
 
-This package only serves; it does not connect anything. Use the command from `@cloudpixel/gmail`:
+This package only serves; it does not connect anything. Use the command from `@agentcomms/gmail`:
 
 ```sh
-npx @cloudpixel/gmail client add ~/Downloads/client_secret_*.json --move
-npx @cloudpixel/gmail inbox add work --start
+npx @agentcomms/gmail client add ~/Downloads/client_secret_*.json --move
+npx @agentcomms/gmail inbox add work --start
 ```
 
 Then let it write the client configuration for you, which also proves the server starts:
 
 ```sh
-npx @cloudpixel/gmail mcp install --client claude-code --launcher npx
+npx @agentcomms/gmail mcp install --client claude-code --launcher npx
 ```
 
 ## Options

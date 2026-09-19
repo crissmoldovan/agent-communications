@@ -248,7 +248,7 @@ sentence for it, and it belongs next to the quote it qualifies rather than at th
 ## Where this lives in the code
 
 `packages/gmail/src/domain/mime.ts` builds and decodes the part tree;
-`packages/comms-core/src/sanitize.ts` prunes the HTML, analyses the links and counts what it removed;
+`packages/core/src/sanitize.ts` prunes the HTML, analyses the links and counts what it removed;
 `packages/gmail/src/domain/body.ts` chooses the part, compares plain with HTML, collapses quotes and
 applies the budget; `packages/gmail/src/operations/read.ts` assembles the result, adds the attachment
 risk flags and wraps everything in the envelope.

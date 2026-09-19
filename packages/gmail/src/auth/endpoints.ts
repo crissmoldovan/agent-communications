@@ -1,4 +1,4 @@
-import { CommsError } from '@cloudpixel/comms-core';
+import { CommsError } from '@agentcomms/core';
 
 /** Where Google lives. Tests point everything at a local fake server; nothing else may redirect it. */
 export interface GoogleEndpoints {

@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homeDirectory } from '@cloudpixel/comms-core';
+import { homeDirectory } from '@agentcomms/core';
 
 /**
  * Where the MCP clients on this machine keep their server lists. Read to answer two questions: is our own server

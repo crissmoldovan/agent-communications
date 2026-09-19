@@ -17,9 +17,9 @@ Thanks for helping make email safe to hand to an agent.
 ## Layout
 
 ```text
-packages/comms-core   @cloudpixel/comms-core   provider-neutral core (config, secrets, approvals, envelopes)
-packages/gmail        @cloudpixel/gmail        Gmail provider, CLI (agent-gmail) and MCP server factory
-packages/gmail-mcp    @cloudpixel/gmail-mcp    the MCP server as its own package (agent-gmail-mcp)
+packages/core   @agentcomms/core   provider-neutral core (config, secrets, approvals, envelopes)
+packages/gmail        @agentcomms/gmail        Gmail provider, CLI (agent-gmail) and MCP server factory
+packages/gmail-mcp    @agentcomms/gmail-mcp    the MCP server as its own package (agent-gmail-mcp)
 skills/<name>/        Agent Skills (SKILL.md + references/)
 docs/                 user and design documentation
 scripts/              repository checks

@@ -25,4 +25,4 @@ export * from './taint.ts';
 export * from './untrusted.ts';
 export { VERSION } from './version.ts';
 
-export const PACKAGE_NAME = '@cloudpixel/comms-core';
+export const PACKAGE_NAME = '@agentcomms/core';

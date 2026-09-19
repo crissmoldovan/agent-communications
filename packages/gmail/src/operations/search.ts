@@ -7,7 +7,7 @@ import {
   parseAddressList,
   TaintCollector,
   wrapUntrusted,
-} from '@cloudpixel/comms-core';
+} from '@agentcomms/core';
 import type { GmailContext } from '../context.ts';
 import { headerValue, readParts } from '../domain/mime.ts';
 import { compileQuery } from '../domain/query.ts';

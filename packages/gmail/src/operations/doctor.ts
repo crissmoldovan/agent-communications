@@ -1,5 +1,5 @@
 import { access, constants, readFile, stat } from 'node:fs/promises';
-import { type CommsError, isGroupOrWorldAccessible, probeKeychain, secretsStoreOf } from '@cloudpixel/comms-core';
+import { type CommsError, isGroupOrWorldAccessible, probeKeychain, secretsStoreOf } from '@agentcomms/core';
 import { capabilitiesOf, scopesFor, TIERS, type Tier } from '../auth/scopes.ts';
 import { TokenSource } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';
