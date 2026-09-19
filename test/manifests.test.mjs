@@ -42,15 +42,18 @@ test('the plugin manifest lists every skill that exists, and only those', async 
 
 test('the launcher is executable, runnable by sh, and pins the released version', async () => {
   const path = join(ROOT, 'bin', 'agent-gmail-launch');
-  await access(path, constants.X_OK);
+  // The executable bit is a POSIX concept; git on Windows checks out without it and the file is not used there.
+  if (process.platform !== 'win32') await access(path, constants.X_OK);
 
   const source = await readFile(path, 'utf8');
   const root = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
   assert.match(source, new RegExp(`VERSION="${root.version.replace(/\./g, '\\.')}"`));
   assert.match(source, /@cloudpixel\/gmail-mcp@\$VERSION/, 'the pinned target uses the version it declares');
 
-  // `sh -n` parses without running: a syntax error here is a server that never starts, on a machine that is not this one.
-  await run('/bin/sh', ['-n', path]);
+  // `sh -n` parses without running: a syntax error here is a server that never starts, on a machine that is not
+  // this one. Skipped on Windows, which has no `/bin/sh` — the launcher is the POSIX half of the pair, and the
+  // plugin manifest points Windows hosts at `npx` directly.
+  if (process.platform !== 'win32') await run('/bin/sh', ['-n', path]);
 });
 
 test('the launcher needs no external command to say it cannot find Node', async () => {
