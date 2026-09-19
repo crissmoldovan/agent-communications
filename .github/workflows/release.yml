@@ -1,0 +1,93 @@
+name: Release
+
+# Publishing is the one thing in this repository that cannot be undone: npm keeps a published version for ever, and
+# an unpublish window of 72 hours is not a fix once somebody has installed it. So the trigger is a tag a person
+# pushes deliberately, every check runs again from a clean checkout before anything is sent, and the packages that
+# go out are the ones the tarball-consumer tests just installed and ran.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Pack and verify without publishing'
+        type: boolean
+        default: true
+
+permissions: {}
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [22.18.0, 24]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify
+
+  publish:
+    name: publish to npm
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      # Trusted publishing: npm mints a short-lived credential from this token, so no long-lived npm secret exists
+      # in this repository to leak, and every published version carries provenance back to this workflow run.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.18.0
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: the tag must be the version the repository says it is
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          declared=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$declared" ]; then
+            echo "tag v$tag does not match package.json $declared" >&2
+            echo "Run \`pnpm sync:versions\` and commit before tagging." >&2
+            exit 1
+          fi
+          node scripts/sync-versions.mjs --check
+
+      - run: pnpm build
+      - run: pnpm verify:packages
+
+      # In lockstep and in dependency order: a consumer that installs gmail must find the core it pins already there.
+      - name: publish
+        if: ${{ inputs.dry-run != true }}
+        run: |
+          for package in comms-core gmail gmail-mcp; do
+            pnpm --filter "@cloudpixel/$package" publish --access public --no-git-checks --provenance
+          done
+
+      - name: what would have been published
+        if: ${{ inputs.dry-run == true }}
+        run: |
+          for package in comms-core gmail gmail-mcp; do
+            pnpm --filter "@cloudpixel/$package" pack --pack-destination "$RUNNER_TEMP"
+          done
+          ls -l "$RUNNER_TEMP"

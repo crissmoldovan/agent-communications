@@ -5,6 +5,49 @@ together under one version.
 
 ## Unreleased
 
+## 0.1.0
+
+The first release. Email for coding agents, across as many mailboxes as you connect — and an agent cannot send
+anything without your approval.
+
+### The send gate
+
+Sending is the one thing here that cannot be undone, and every Gmail permission that lets an agent write a draft
+also lets it send one. So "may draft, may not send" is enforced in code rather than by the grant:
+
+- **one path.** `send prepare` reads the draft, refuses it outright if an agent could not have written it, and
+  records an approval bound to a digest of everything a recipient would see and to the draft's Gmail message id,
+  which changes on every save. `send execute` re-reads the draft, checks it against that record, and calls Gmail
+  once — never retried at any layer, because a retried send may deliver twice and nothing here could tell;
+- **two guards on that path.** A test fails the build if `transport.sendDraft` is called from anywhere but
+  `operations/send.ts`, and the auth client refuses any request to a path ending in `/send` that is not inside that
+  one call — so a `messages.send` added anywhere in the package fails at the request rather than at review;
+- **three policies per mailbox.** `chat` (the default) needs your yes in the conversation, and the guarantee is
+  stated narrowly because the server cannot see that conversation. `confirm` needs a code typed at a terminal, or
+  into a form from a client that has proved its forms reach a person. `never` means the draft waits in Gmail;
+- **risk escalation** raises a `chat` send to `confirm` by itself when a recipient's address arrived in mail read
+  this week and has never been written to, when an attachment is going to a first-time external recipient, or when
+  a domain is within two characters of one this mailbox writes to.
+
+### Reading mail safely
+
+Everything a mailbox returns is treated as data. Message bodies arrive inside an untrusted-content envelope with a
+per-call random boundary; the sanitiser removes what a human reader would not see — hidden text, off-screen
+elements, white-on-white, zero-size fonts, CSS that hides through a stylesheet, an at-rule, a pseudo-class, a
+percentage opacity or a `calc()` — and **reports what it removed and what it could not read**, so a message that
+was trying something says so rather than arriving clean.
+
+### What you get
+
+- `@cloudpixel/gmail` — the `agent-gmail` CLI and the library: search across mailboxes, read messages and threads,
+  thread timelines, attachments, contacts, follow-ups, export, drafts, labels and the bin;
+- `@cloudpixel/gmail-mcp` — the MCP server, 29 tools, for Claude Code, Codex, Cursor, Claude Desktop and Gemini CLI;
+- `@cloudpixel/comms-core` — config, secrets, the approval engine, the sanitiser. Provider-neutral;
+- **twelve skills** teaching an agent how to use all of it and where to stop, each with the depth behind it in
+  `references/`, sharing one contract;
+- a plugin manifest, a Gemini extension, and a launcher that finds Node where Node actually lives.
+
+
 ### Phase 2 — signing in, the inbox lifecycle, and both surfaces
 
 **What.** `@cloudpixel/gmail` — the `agent-gmail` command and the MCP server — and
