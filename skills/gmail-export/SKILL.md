@@ -2,7 +2,7 @@
 name: gmail-export
 description: "Write a message or a whole thread to a file — Markdown, JSON, or the original .eml — instead of pulling it through the conversation. Symptoms: 'save that thread', 'export this email', 'give me the whole conversation as a file', 'this thread is too long to read here'. Not for finding or reading a short message — gmail-search does that."
 license: MIT
-compatibility: "@agentcomms/gmail@0.1.1"
+compatibility: "@agentcomms/gmail@0.1.2"
 metadata:
   group: communications
   lifecycle: release

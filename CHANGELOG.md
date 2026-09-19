@@ -5,6 +5,36 @@ together under one version.
 
 ## Unreleased
 
+## 0.1.2
+
+**`agent-gmail doctor` now exits non-zero when something is broken.** It printed "1 broken" and exited `0`, so
+anything gating on it — a setup script, CI, a shell `&&` — read a broken install as a healthy one. It now exits
+`78`, the documented code for a configuration problem, and `agentcomms doctor` has always behaved that way, so the
+two halves of the product no longer disagree about the same word.
+
+Warnings are not failures: a setup with six things to look at and nothing broken still exits `0`.
+
+If you script around `doctor` and relied on it always succeeding, this will change behaviour — which is the point.
+
+### Documentation
+
+Seven pages, at [`docs/`](https://github.com/crissmoldovan/agent-communications/tree/main/docs):
+
+- **[Getting started](https://github.com/crissmoldovan/agent-communications/blob/main/docs/getting-started.md)** —
+  nothing to reading mail, including the Google Cloud part, and the import path if you already run another Gmail
+  MCP server.
+- **[What is where](https://github.com/crissmoldovan/agent-communications/blob/main/docs/architecture.md)** — the
+  CLI needs no MCP server, no agent and no skills. That was not written down anywhere before.
+- **[Sending and approvals](https://github.com/crissmoldovan/agent-communications/blob/main/docs/sending.md)**,
+  **[CLI reference](https://github.com/crissmoldovan/agent-communications/blob/main/docs/reference/cli.md)** (23
+  commands), **[MCP tools](https://github.com/crissmoldovan/agent-communications/blob/main/docs/reference/mcp-tools.md)**
+  (29 tools), **[the skills](https://github.com/crissmoldovan/agent-communications/blob/main/docs/skills.md)**, and
+  **[troubleshooting](https://github.com/crissmoldovan/agent-communications/blob/main/docs/troubleshooting.md)** by
+  symptom.
+
+The three reference pages are generated from the code and checked by `pnpm verify`, so they cannot describe a
+command or a tool that does not exist.
+
 ## 0.1.1
 
 **If you followed the migration instructions in 0.1.0, they could not work.** `agent-gmail inbox import` — the
