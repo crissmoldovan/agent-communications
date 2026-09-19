@@ -103,12 +103,19 @@ for (const name of PACKAGES) {
   }
 }
 
-// Publishing with 2FA on the account needs a one-time password, and only an interactive terminal can ask for one.
-// Discovering that at the first `pnpm publish` is a bad place to find out: the run has already spent several
-// minutes on the verify, and the failure text mentions authentication in a way that reads like the login is wrong.
-if (publish && !process.stdin.isTTY) {
+// An account with 2FA set to "auth and writes" needs a one-time password at the moment of publish, and only an
+// interactive terminal can ask for one. Discovering that at the first `pnpm publish` is a bad place to find out:
+// the run has already spent minutes on the verify, and pnpm's message mentions authentication in a way that reads
+// like the login is wrong.
+//
+// So ask the account rather than assuming. `auth-only` means 2FA guards signing in and not writing, which is the
+// common setting for an account that publishes from a script — refusing there would block a release that would
+// have worked. Anything else, or an answer we cannot read, is treated as needing a person.
+const twoFactor = quiet(() => run('npm', ['profile', 'get', 'two-factor auth']))?.toLowerCase() ?? '';
+const otpNeeded = !twoFactor.includes('auth-only') && !twoFactor.includes('disabled');
+if (publish && otpNeeded && !process.stdin.isTTY) {
   refuse(
-    'this is not an interactive terminal, and publishing may need a 2FA one-time password',
+    `this is not an interactive terminal and the account needs a one-time password (2FA: ${twoFactor || 'unknown'})`,
     'Run `pnpm release:publish` yourself in a terminal so npm can ask for the code.',
   );
 }
