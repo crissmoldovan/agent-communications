@@ -235,7 +235,7 @@ Classifying four hundred threads by reading four hundred bodies is not a triage,
 Good — the window stated, counts honest, one line per thread, the proposal separate:
 
 ```text
-Triage · in:inbox newer_than:2d (from 2026-09-17 00:00 Europe/London) · mailboxes work, personal
+Triage · in:inbox after:2026/09/17 (from 2026-09-17 00:00 Europe/London) · mailboxes work, personal
 40 of an estimated 310 threads · more remain (hasMore) · read 6 bodies · all mailboxes returned
 
 REPLY NEEDED (3)

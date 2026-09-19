@@ -186,7 +186,7 @@ Subject "Phase 2 pricing", 7 messages in `work`, 12 Sep – 19 Sep, 4 participan
 | m7 | 19 Sep 11:20 | ana@partner.test | "any update?" — unanswered |
 
 Computed: last non-draft message inbound, so the timeline puts the waiting on us, 26.4h so far.
-Longest gap in the thread: 86.3h (m5 → m6). A draft reply exists in the thread and has not been
+Longest gap in the thread: 87.3h (m5 → m6). A draft reply exists in the thread and has not been
 sent — nobody on the other side has seen it.
 
 ## What I make of it — my reading, not the thread's words

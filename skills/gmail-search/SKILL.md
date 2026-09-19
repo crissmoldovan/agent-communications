@@ -231,7 +231,7 @@ Three fields describe the size of a result, and they mean three different things
   statement about whether something was left behind, and it is the one to act on.
 
 `nextCursor` is present exactly when `hasMore` is true. A cursor carries the compiled query, the kind
-(`threads` or `messages`) and the sorted list of mailboxes it was made for, so it cannot be replayed
+(`threads` or `messages`) and the list of mailboxes it was made for, so it cannot be replayed
 against a different search: doing so fails with `CURSOR_MISMATCH` rather than quietly interleaving two
 result sets. If you change the query, the mailbox set or the kind, start again without a cursor.
 

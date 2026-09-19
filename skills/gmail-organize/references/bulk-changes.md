@@ -43,7 +43,7 @@ The fields that matter in that result:
 | `messages` | The number of distinct message ids that would change, after expansion | The number of rows your search returned |
 | `threads` | How many thread ids you passed | A count of anything that will change |
 | `addLabelIds`, `removeLabelIds` | The resolved ids, flags included | The names you typed |
-| `undo` | The reverse change, pinned to those ids, one entry per message — present on the dry run too | A snapshot of the mailbox: only the labels this change touches are in it |
+| `undo` | The reverse change, pinned to those ids — one entry per message that has something to put back, present on the dry run too | A snapshot of the mailbox: only the labels this change touches are in it, and messages needing nothing are absent rather than listed empty |
 | `dryRun` | `true` | — |
 
 Two practical notes. The expansion is what produces the number worth reporting: twenty threads from a chatty

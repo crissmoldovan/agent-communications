@@ -108,7 +108,7 @@ Two different silences, and only one of them is reported.
 
 | What happened | How it shows | What to say |
 |---|---|---|
-| The mailbox is not connected with address-book access | `contacts` and `other-contacts` are skipped, **no error is raised**, and `complete` stays `true` | "Two of the three sources were switched off for this mailbox" — the mailbox's `contacts` flag says so before you search, and both paths carry it: it is on every row of `gmail_inboxes_list` and of `agent-gmail inbox list --json` |
+| The mailbox is not connected with address-book access | `contacts` and `other-contacts` are skipped and a `SCOPE_MISSING` entry names the mailbox, so `complete` is **false** — a result that worked, not one that broke | "Two of the three sources were switched off for this mailbox" — the mailbox's `contacts` flag says so before you search, and both paths carry it: it is on every row of `gmail_inboxes_list` and of `agent-gmail inbox list --json` |
 | The mailbox has the flag but not the scope, or Google refused | The People call throws; the failure is recorded in `errors` for that inbox and `complete` becomes `false` | Name the inbox and the code. `SCOPE_MISSING` is resolved by the user with `agent-gmail inbox reauth <alias> --contacts` |
 | The People API is not enabled on the Google Cloud project | `CONFIG` in `errors`, naming the People API | A person enables it in the Cloud console; nothing here can |
 | The whole mailbox could not be read | `errors` for that inbox, `complete` false, and it contributed nothing at all | Say the mailbox is missing from the answer, not that the person was not found |

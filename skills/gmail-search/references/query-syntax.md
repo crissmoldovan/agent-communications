@@ -160,7 +160,9 @@ you say it. Two other arguments shape the result rather than the match: `kind` (
 or `messages`) and `limit` (default 20, capped at 50).
 
 One consequence of the rewrite worth knowing when paging: the cursor is bound to a hash of the
-**compiled** query and the kind, and to the sorted list of mailboxes. An absolute date compiles to the
+**compiled** query and the kind, and to the list of mailboxes — compared in order, and only sorted when
+`inboxes` was omitted or `all`, so naming the same mailboxes in a different order is a different cursor. An
+absolute date compiles to the
 same epoch tomorrow as it did today, so a cursor keeps working; changing the timezone configuration
 between pages does not, and the cursor is refused with `CURSOR_MISMATCH` rather than quietly mixing
 two result sets.

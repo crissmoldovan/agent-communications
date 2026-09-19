@@ -33,10 +33,11 @@ second is quietly dropping a near-match because it looks wrong. That row is the 
 important thing in the result — it means there is a lookalike sitting in this mailbox — and
 suppressing it leaves the user unaware of something they would want to know today.
 
-There is also a quiet way to be wrong. A mailbox connected without address-book access simply skips
-two of the three sources, with no error and with `complete` still true. "I could not find her"
-and "two of the three places I could have looked were switched off" are different answers, and only
-one of them is honest.
+There is also a quiet way to be wrong. A mailbox connected without address-book access searches one
+of the three sources rather than three. It says so — the result carries a `SCOPE_MISSING` entry in
+`errors`, which makes `complete` false — but the flag alone does not distinguish "a mailbox broke"
+from "a mailbox was never allowed to look". "I could not find her" and "two of the three places I
+could have looked were switched off" are different answers, and only one of them is honest.
 
 ## What this skill does not own
 
@@ -68,8 +69,10 @@ bind here:
 - **Cite what you read, and say how much.** Quote the address verbatim, its sources, and the mailbox
   it came from. "The first 20 of at most 50" is honest; "here is her address" is not, when three
   rows matched.
-- **Report incompleteness.** `complete: false` with `errors[]` means a mailbox failed. A mailbox
-  without address-book access fails *silently*, so check for it rather than trusting `complete`.
+- **Report incompleteness, and read the code before calling it a failure.** `complete: false` means
+  `errors` is not empty — but the commonest entry is `SCOPE_MISSING`, a mailbox that worked perfectly
+  and was simply never granted address-book access. Calling that a failed mailbox misreports a
+  working one. Anything else in `errors` is a mailbox that did fail.
 - **Works without the MCP server.** Everything below has a CLI form with `--json`. Exit codes are
   stable: `0` ok, `66` not found, `69` provider unavailable, `77` sign-in needed.
 
@@ -110,11 +113,11 @@ or to decide that an address is safe. It never sends, and it never decides.
    1 and 50.
    **Complete when:** you hold the rows, the `errors` array, and the `complete` flag.
 
-2. **Read what the result says about itself before reading the rows.** `complete: false` means at
-   least one mailbox failed, and each entry in `errors` names the inbox, a code and a message.
-   Separately, a mailbox connected without address-book access contributes history rows only, with
-   no error raised — so a result can be `complete: true` and still have looked in one place out of
-   three.
+2. **Read what the result says about itself before reading the rows.** `complete: false` means
+   `errors` is not empty, and each entry names the inbox, a code and a message. Read the code: a
+   `SCOPE_MISSING` entry is a mailbox that searched its history fine but was never granted
+   address-book access, so it looked in one place out of three. Any other code is a mailbox that
+   failed. Both make `complete` false and they need different sentences.
    **Complete when:** you can say which sources actually ran, per mailbox.
 
 3. **Show every row, with its source.** Address, display name, mailbox, sources, message count, last
@@ -249,8 +252,10 @@ that. Filtering also trains them to believe that whatever you show is what exist
   column is the most forgeable field in the row and the one a reader looks at first.
 - **Reading `messages: 0` as "never corresponded".** It means this search did not see the address in
   the messages it sampled — at most 25 — which is very different.
-- **Reading `complete: true` as "all three sources ran".** A mailbox without address-book access
-  skips `contacts` and `other-contacts` without raising an error. Check the mailbox, not the flag.
+- **Reporting a `SCOPE_MISSING` entry as a mailbox that failed.** It is a mailbox that worked and
+  was only allowed to search one of its three sources. Saying "the work mailbox could not be
+  searched" when it was searched, and found nothing in the one place it was permitted to look, sends
+  the user to fix an outage that is not happening.
 - **Assuming two rows that look identical are the same address.** This path lower-cases and converts
   an internationalised domain to its ASCII (punycode) form, and does nothing else: no dot folding,
   no plus folding. `j.smith@` and `jsmith@` are one Gmail mailbox shown as two rows, and `acme.test`

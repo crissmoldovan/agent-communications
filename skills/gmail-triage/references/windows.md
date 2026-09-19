@@ -115,7 +115,7 @@ Plus:
 A header that does all of that:
 
 ```text
-Triage · in:inbox newer_than:2d (from 2026-09-17 00:00 Europe/London) · mailboxes work, personal
+Triage · in:inbox after:2026/09/17 (from 2026-09-17 00:00 Europe/London) · mailboxes work, personal
 40 of an estimated 310 threads · more remain · read 6 bodies · all mailboxes returned
 ```
 

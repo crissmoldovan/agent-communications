@@ -90,7 +90,7 @@ For a thread, the top level is `inbox`, `threadId`, `subject`, `messageCount`, `
 **For:** another program. Diffing, counting, feeding a script, anything mechanical — and for answering "was
 this complete" precisely, because it is the only format that carries the truncation flags.
 
-**Loses:** readability, and it is the largest of the three for the same content.
+**Loses:** readability. It is the largest of the three *as text* — but not on disk when there are attachments, because `eml` carries their bytes base64-encoded inline while `json` records only each attachment's name, type, size and ids.
 
 ## Truncation, per format
 
