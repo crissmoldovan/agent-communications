@@ -222,6 +222,43 @@ function evaluateSimpleCalc(expression: string): number | null {
   }
 }
 
+/** The properties whose value decides whether an element is seen at all. */
+const HIDING_PROPERTIES = [
+  'display',
+  'visibility',
+  'opacity',
+  'font-size',
+  'color',
+  '-webkit-text-fill-color',
+  'width',
+  'height',
+  'max-width',
+  'max-height',
+  'clip',
+  'clip-path',
+  'text-indent',
+  'transform',
+  'position',
+  'left',
+  'top',
+  'right',
+  'bottom',
+  'margin-left',
+  'margin-top',
+] as const;
+
+/**
+ * Whether a declaration hides the element through a custom property this cannot resolve.
+ *
+ * `<style>:root{--h:none}</style><div style="display:var(--h)">…</div>` renders as hidden in Gmail, Outlook 365 and
+ * Apple Mail, and read as a plain string `display: var(--h)` is simply not `none` — so the element was kept and the
+ * text inside it reached the model with nothing said. Resolving custom properties would mean implementing the
+ * cascade; counting them does not, and it turns a silent miss into a number the reader can see.
+ */
+export function usesUnresolvedVariable(style: Map<string, string>): boolean {
+  return HIDING_PROPERTIES.some((property) => /var\(/i.test(style.get(property) ?? ''));
+}
+
 /** True when a set of declarations hides the element from a human reader. */
 export function hidesContent(style: Map<string, string>): boolean {
   const display = style.get('display');
@@ -352,6 +389,56 @@ const NAMED_COLORS: Record<string, string> = {
   beige: '#f5f5dc',
   lavenderblush: '#fff0f5',
   cornsilk: '#fff8dc',
+  // The rest of the CSS named colours. Same-colour-on-same-colour is flagged rather than removed, so the cost of a
+  // name missing from this table is a warning the reader never sees — `cornsilk` on `cornsilk` reading as ordinary
+  // text. The list is finite; carrying it is cheaper than explaining which names are covered.
+  aqua: '#00ffff',
+  aquamarine: '#7fffd4',
+  bisque: '#ffe4c4',
+  blanchedalmond: '#ffebcd',
+  blue: '#0000ff',
+  chartreuse: '#7fff00',
+  coral: '#ff7f50',
+  cyan: '#00ffff',
+  darkgray: '#a9a9a9',
+  darkgrey: '#a9a9a9',
+  fuchsia: '#ff00ff',
+  gainsboro: '#dcdcdc',
+  gold: '#ffd700',
+  gray: '#808080',
+  green: '#008000',
+  grey: '#808080',
+  khaki: '#f0e68c',
+  lavender: '#e6e6fa',
+  lemonchiffon: '#fffacd',
+  lightcyan: '#e0ffff',
+  lightgoldenrodyellow: '#fafad2',
+  lightgray: '#d3d3d3',
+  lightgrey: '#d3d3d3',
+  lightpink: '#ffb6c1',
+  lightskyblue: '#87cefa',
+  lightsteelblue: '#b0c4de',
+  lightyellow: '#ffffe0',
+  lime: '#00ff00',
+  magenta: '#ff00ff',
+  mistyrose: '#ffe4e1',
+  moccasin: '#ffe4b5',
+  navajowhite: '#ffdead',
+  orange: '#ffa500',
+  orchid: '#da70d6',
+  palegoldenrod: '#eee8aa',
+  paleturquoise: '#afeeee',
+  papayawhip: '#ffefd5',
+  peachpuff: '#ffdab9',
+  pink: '#ffc0cb',
+  plum: '#dda0dd',
+  powderblue: '#b0e0e6',
+  red: '#ff0000',
+  silver: '#c0c0c0',
+  skyblue: '#87ceeb',
+  thistle: '#d8bfd8',
+  wheat: '#f5deb3',
+  yellow: '#ffff00',
   black: '#000000',
   transparent: '#00000000',
 };
@@ -593,7 +680,11 @@ function hiddenSelectorsFromStylesheets(root: AnyNode): StylesheetRules {
         .join('')
         .replace(/\/\*[\s\S]*?\*\//g, '');
       eachStyleRule(css, (selectors, declarations) => {
-        if (!hidesContent(parseStyle(declarations))) return;
+        const parsed = parseStyle(declarations);
+        if (!hidesContent(parsed)) {
+          if (usesUnresolvedVariable(parsed)) rules.unreadable += 1;
+          return;
+        }
         for (const raw of selectors.split(',')) {
           if (!raw.trim()) continue;
           const rule = parseHidingSelector(raw);
@@ -654,7 +745,11 @@ function isHiddenElement(element: Element, rules: StylesheetRules): boolean {
     if (rule.attributes.some((attribute) => !attributeMatches(attribs[attribute.name], attribute))) continue;
     return true;
   }
-  if (hidesContent(parseStyle(attribs.style))) return true;
+  const style = parseStyle(attribs.style);
+  if (hidesContent(style)) return true;
+  // A custom property in a hiding-relevant place cannot be read without the cascade. The element is kept — removing
+  // it on a guess would eat text a reader can see — and counted, so the reader is told the sanitiser was unsure.
+  if (usesUnresolvedVariable(style)) rules.unreadable += 1;
   // <font size="1"> and smaller is still readable; only an explicit zero is hidden.
   if (element.name === 'font' && attribs.size !== undefined && Number(attribs.size) <= 0) return true;
   return false;
@@ -812,9 +907,10 @@ export function sanitizeHtmlToText(html: string, options: { wordwrap?: number | 
   const report = emptyReport();
   const document = parseDocument(html, { decodeEntities: true, lowerCaseTags: true, lowerCaseAttributeNames: true });
   const rules = hiddenSelectorsFromStylesheets(document);
-  // A hiding rule we could not read means text a client would hide is still in the output; the reader is told.
-  report.unreadableHidingRules = rules.unreadable;
   document.children = prune(document.children, rules, report);
+  // Counted after pruning, because the element walk adds to it too: anything hidden through a custom property this
+  // cannot resolve is kept in the output and reported here rather than passed off as visible.
+  report.unreadableHidingRules = rules.unreadable;
   const cleanedHtml = render(document, { decodeEntities: false });
 
   const text = convert(cleanedHtml, {

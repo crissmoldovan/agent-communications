@@ -128,6 +128,12 @@ test('the default deny list covers every hidden folder in home, git folders and 
   mkdirSync(join(home, 'other', '.GIT'), { recursive: true });
   writeFileSync(join(home, 'other', '.GIT', 'config'), 'x');
   await assert.rejects(checkAttachable('~/other/.GIT/config', policy), /\.git folder/);
+  // And the same for the pattern rules: macOS and Windows both open `.ENV` when asked for `.env`, so a
+  // case-sensitive deny list refuses one spelling of a file and hands over the other.
+  writeFileSync(join(home, 'docs', '.ENV'), 'SECRET=1');
+  writeFileSync(join(home, 'docs', '.Env.local'), 'SECRET=1');
+  await assert.rejects(checkAttachable('~/docs/.ENV', policy), /never attached/);
+  await assert.rejects(checkAttachable('~/docs/.Env.local', policy), /never attached/);
   await assert.rejects(checkAttachable('~/Library/Cookies/c', policy), /from ~\/Library/);
 });
 

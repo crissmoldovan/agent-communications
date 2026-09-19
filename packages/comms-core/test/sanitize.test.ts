@@ -279,6 +279,36 @@ test('a pseudo-class widens a hiding rule rather than cancelling it', () => {
   assert.match(bare.text, /kept anyway/);
 });
 
+test('a custom property in a hiding property is counted, not read as visible', () => {
+  // `display: var(--h)` renders as hidden in Gmail, Outlook 365 and Apple Mail. Read as a string it is simply not
+  // `none`, so the element was kept and the text inside it reached the model with nothing said.
+  const inline = sanitizeHtmlToText(
+    `<style>:root{--h:none}</style><p>kept</p><div style="display:var(--h)">${INJECTION}</div>`,
+  );
+  assert.match(inline.text, /kept/);
+  assert.ok(inline.report.unreadableHidingRules >= 1, 'the reader is told the sanitiser could not read it');
+
+  // Resolving the cascade is out of scope, so the element stays: removing it on a guess would eat visible text.
+  assert.match(inline.text, /IGNORE PREVIOUS/, 'kept, but no longer silently');
+
+  // A stylesheet rule using one is counted the same way.
+  const styled = sanitizeHtmlToText('<style>:root{--d:none}.v{display:var(--d)}</style><div class="v">text</div>');
+  assert.ok(styled.report.unreadableHidingRules >= 1);
+
+  // An ordinary variable that has nothing to do with hiding is not counted.
+  const benign = sanitizeHtmlToText('<style>:root{--b:#fff}</style><div style="background:var(--b)">text</div>');
+  assert.equal(benign.report.unreadableHidingRules, 0);
+});
+
+test('same-colour text is flagged whatever the colour is called', () => {
+  const uncommon = sanitizeHtmlToText('<p style="color:cornsilk;background-color:cornsilk">invisible</p>');
+  assert.equal(uncommon.report.sameColorElements, 1);
+  const named = sanitizeHtmlToText('<p style="color:wheat;background-color:wheat">invisible</p>');
+  assert.equal(named.report.sameColorElements, 1);
+  const visible = sanitizeHtmlToText('<p style="color:black;background-color:wheat">readable</p>');
+  assert.equal(visible.report.sameColorElements, 0);
+});
+
 test('opacity is read in every form a mail client accepts', () => {
   assert.equal(alphaValue('0'), 0);
   assert.equal(alphaValue('0%'), 0);
