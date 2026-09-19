@@ -59,6 +59,13 @@ was withheld.
 - a plugin manifest, a Gemini extension, and a launcher that finds Node where Node actually lives.
 
 
+### How 0.1.0 was built
+
+The two entries below were written during development, one per phase, and are kept as a record of the order
+things were built in and why. They describe the repository at the time: their test counts predate the fixes that
+landed before release, `comms-core` is what the core package was called then, and "nothing to install yet" was
+true when it was written and is not now.
+
 ### Phase 2 — signing in, the inbox lifecycle, and both surfaces
 
 **What.** `@agentcomms/gmail` — the `agent-gmail` command and the MCP server — and
