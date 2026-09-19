@@ -93,10 +93,9 @@ This is the section that prevents the expensive mistake.
   strings differ. For the same reason, searching for a domain in its Unicode spelling will not substring-match
   the punycode form in history.
 - **No lookalike comparison.** Nothing measures the distance between two domains here. The automatic check
-  lives in the send preview, and it is narrower than it sounds: it flags a recipient only when that recipient
-  is external, has never been written to, and another recipient **on the same message** has a domain within
-  two characters of theirs. A lookalike sent on its own, or one that is already a saved contact and so not a
-  first-time recipient, reaches the preview unflagged.
+  lives in the send preview, where a first-time external recipient is compared against the domains this mailbox
+  actually writes to, read from the last two hundred messages in Sent. It is real but bounded: a lookalike of
+  somebody outside that window, or one already saved and written to before, reaches the preview unflagged.
 - **No verification of any kind.** No DNS, no MX check, no reputation, no ownership. A domain that does not
   exist looks exactly like one that does.
 - **No filtering.** Similar addresses are shown rather than removed, and the CLI prints that line under every

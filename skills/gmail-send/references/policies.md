@@ -134,7 +134,7 @@ Then the three flags:
 |---|---|---|
 | `recipient-tainted` | Any recipient is tainted | The address, or its non-public domain, was seen in the headers or body of a message read, exported or downloaded through this package in the last seven days — from **any** connected mailbox, because a message read in one inbox can ask for a send from another. The mailbox's own addresses and its internal domains are never recorded |
 | `attachment-to-first-time-recipient` | The draft has at least one attachment **and** at least one recipient is first-time | Attachment presence comes from the draft's parts; first-time from the `in:sent` check above. The two do not have to be the same recipient |
-| `lookalike-domain` | A first-time recipient's domain is within a Levenshtein distance of 2 of a domain already known in this draft | "Known" means: the domain of another recipient of **this same draft** that the mailbox has written to before, or the domain of one of its own addresses |
+| `lookalike-domain` | A first-time recipient's domain is within a Levenshtein distance of 2 of a domain this mailbox writes to | "Writes to" means: a domain seen in the recipients of the last two hundred messages in Sent, plus this mailbox's own addresses and its internal domains |
 
 Any flag sets `requiredPolicy` to `confirm`. All three together set it to `confirm` once — there is
 no higher level.
@@ -148,11 +148,11 @@ bill of health.
 - **Taint expires after seven days**, and public mailbox providers (`gmail.com`, `outlook.com`,
   `proton.me` and about thirty others) are never tainted at the domain level — only the exact
   address is. An address seen eight days ago escalates nothing.
-- **The lookalike check is narrower than it sounds.** It compares a first-time recipient only
-  against domains present among the *other recipients of the same draft* that this mailbox has
-  corresponded with, plus its own. A message sent to one lookalike address and nobody else has
-  nothing to compare against, and the flag does not fire. Comparing the domain with the one the user
-  expects is work done by eye, in the preview.
+- **The lookalike check has a horizon.** It compares a first-time recipient against the domains found
+  in the last two hundred sent messages, so a correspondent the user has not written to recently is
+  not in the comparison set and a lookalike of them will not fire. It is also distance-2 only:
+  `acme-invoices.test` against `acme.test` is nine characters away and passes. Comparing the domain
+  with the one the user expects is still work done by eye, in the preview.
 - **The written-to check reads five messages.** Somebody written to once, long ago, behind five more
   recent messages to the same address, is still recognised; somebody whose only correspondence is
   outside those five results may read as first-time. The error is in the safe direction.

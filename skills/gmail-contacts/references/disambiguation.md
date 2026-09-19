@@ -84,14 +84,15 @@ Do not rely on a later step to correct a bad pick here. The preview's lookalike 
 these hold for a recipient:
 
 - the address is external to the mailbox (not one of its own, not an internal domain);
-- the mailbox has never written to it before;
-- and **another recipient on the same message** has a domain the mailbox has written to, within two characters
-  of the suspect domain.
+- the mailbox has never written to that address before;
+- and its domain is within two characters of a domain the mailbox **does** write to, taken from the last two
+  hundred messages in Sent.
 
-So a lookalike sent on its own, a lookalike that is already a saved contact the user has written to, and a
-lookalike resembling nothing else on the message all reach the preview with no flag. The preview will still
-show the recipient as external and first-time, which is worth something — but the moment to catch this is
-here, with the rows on screen, not there.
+So it will catch `acrne.test` when the user corresponds with `acme.test`, including on a message addressed to
+nobody else. What it will not catch: a lookalike of a correspondent the user has not written to in the last two
+hundred messages, a lookalike already saved as a contact and written to before (not a first-time recipient),
+and anything more than two characters away. The preview will still show the recipient as external and
+first-time, which is worth something — but the moment to catch this is here, with the rows on screen.
 
 ## Handing the chosen address on
 

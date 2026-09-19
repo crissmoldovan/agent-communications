@@ -189,7 +189,7 @@ test('a forward needs somewhere to go, and starts its own conversation', async (
 });
 
 test('a file is attached by path, and only from where attaching is allowed', async () => {
-  const { context, harness } = await connected();
+  const { harness } = await connected();
   const home = tempDir('agent-gmail-home-');
   // Widening where files may be attached from is a safety setting, so the change carries consent, as a person's
   // would.
@@ -274,7 +274,7 @@ test('drafting needs the permission to draft, checked before Google is called', 
 });
 
 test('a message going outside the organisation says so, and blind copies are named', async () => {
-  const { harness, context } = await connected();
+  const { harness } = await connected();
   const config = await harness.core.config.load();
   const inbox = config.inboxes.work;
   assert.ok(inbox);

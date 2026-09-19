@@ -1166,7 +1166,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
             if (answered.kind !== 'elicit' || answered.action !== 'accept') {
               throw new CommsError(
                 'APPROVAL_REQUIRED',
-                `nothing was sent: the approval was ${answered.kind === 'elicit' ? answered.action + 'ed' : 'not given'}`,
+                `nothing was sent: the approval was ${answered.kind === 'elicit' ? `${answered.action}ed` : 'not given'}`,
                 {
                   hint: 'Prepare the send again if it should still go.',
                 },

@@ -197,7 +197,7 @@ test('a token that could not be deleted is remembered and reported, not forgotte
   const removed = await inboxRemove(context, 'work');
   secrets.delete = original;
 
-  assert.equal(removed.orphanedSecret, 'gmail:refresh:' + removed.id);
+  assert.equal(removed.orphanedSecret, `gmail:refresh:${removed.id}`);
   assert.deepEqual(await inboxList(context), []);
   const recorded = await readFile(orphanedSecretsPath(context), 'utf8');
   assert.match(recorded, /the keychain is locked/);

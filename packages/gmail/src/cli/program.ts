@@ -610,7 +610,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .option('--out <subpath>', 'a folder inside the downloads root')
     .option('--quoted', 'keep quoted history', false)
     .action(
-      act(async (context, globalOptions, id: string, options: Options) => {
+      act(async (context, _globalOptions, id: string, options: Options) => {
         const result = await exportMail(context, String(options.inbox), id, {
           thread: Boolean(options.thread),
           format: options.format as 'md' | 'json' | 'eml' | undefined,

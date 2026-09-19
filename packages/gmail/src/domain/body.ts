@@ -155,7 +155,7 @@ export function buildBody(parts: MessageParts, options: BodyOptions = {}): Messa
 
   let report = (htmlHasText ? html?.report : plain?.report) ?? sanitizePlainText('').report;
   let mismatch: BodyMismatch | undefined;
-  if (htmlHasText && plain && plain.text.trim()) {
+  if (htmlHasText && plain?.text.trim()) {
     mismatch = compareParts(html?.text ?? '', plain.text);
     if (mismatch) {
       // Text only a model would ever read is hidden text, and is counted as such.

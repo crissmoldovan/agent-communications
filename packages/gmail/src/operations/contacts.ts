@@ -1,4 +1,4 @@
-import { CommsError, parseAddressList } from '@cloudpixel/comms-core';
+import { CommsError, canonicalAddress, parseAddressList } from '@cloudpixel/comms-core';
 import type { GmailContext } from '../context.ts';
 import { headerValue } from '../domain/mime.ts';
 import { resolveInboxes } from './search.ts';
@@ -60,7 +60,12 @@ export async function searchContacts(
     alias: string,
     entry: { name: string; email: string; source: ContactSource; at?: string | null },
   ): void => {
-    const key = `${alias}:${entry.email.toLowerCase()}`;
+    // Canonical on the way in, so the same address from two sources is one row. The People API rows were only
+    // lower-cased while the history rows went through `canonicalAddress`, which converts an internationalised
+    // domain to punycode — so `josé@compañía.es` arrived twice, as two people, and neither row knew about the
+    // other's evidence.
+    const email = canonicalAddress(entry.email);
+    const key = `${alias}:${email}`;
     const existing = found.get(key);
     if (existing) {
       if (!existing.sources.includes(entry.source)) existing.sources.push(entry.source);
@@ -71,7 +76,8 @@ export async function searchContacts(
     }
     found.set(key, {
       name: entry.name,
-      email: entry.email.toLowerCase(),
+      // Recorded canonically too, so what a caller sees is what a later lookup will match.
+      email,
       inbox: alias,
       sources: [entry.source],
       messages: entry.source === 'history' ? 1 : 0,
