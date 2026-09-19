@@ -141,6 +141,42 @@ test('an escalated chat send needs a human approval; a looser live policy never 
   assert.equal((await store.claimForSend(record.approvalId, live())).state, 'sending');
 });
 
+test('a record that requires "never" is refused, whatever the live policy says', async () => {
+  // The gap this closes: the effective policy was only compared against `confirm`, so a record carrying
+  // `requiredPolicy: never` — a policy that was tightened after the preview, or an escalation that decided this
+  // must not go at all — fell straight through to being claimed from `pending`.
+  const time = clock();
+  const store = new ApprovalStore(tempDir(), { now: time.now });
+  const record = await store.create({
+    inboxId: INBOX,
+    inboxSub: 'sub-1',
+    draftId: 'r-draft-1',
+    draftMessageId: 'msg-v1',
+    digest: 'digest-A',
+    policy: 'chat',
+    requiredPolicy: 'never',
+    riskFlags: ['policy-tightened'],
+    expect: EXPECT,
+  });
+  await assert.rejects(store.claimForSend(record.approvalId, live()), isRefusal(/turned off/, 'POLICY_NEVER'));
+  assert.equal((await store.get(record.approvalId))?.state, 'revoked');
+
+  // And a human approval does not rescue it either: `never` means never.
+  const second = await store.create({
+    inboxId: INBOX,
+    inboxSub: 'sub-1',
+    draftId: 'r-draft-2',
+    draftMessageId: 'msg-v1',
+    digest: 'digest-A',
+    policy: 'chat',
+    requiredPolicy: 'never',
+    riskFlags: [],
+    expect: EXPECT,
+  });
+  await humanApproves(store, second.approvalId);
+  await assert.rejects(store.claimForSend(second.approvalId, live()), isRefusal(/turned off/, 'POLICY_NEVER'));
+});
+
 test('approving content that changed since prepare voids the record (the human would see something else)', async () => {
   const { store, record } = await setup('confirm');
   const challenge = await store.issueChallenge(record.approvalId);

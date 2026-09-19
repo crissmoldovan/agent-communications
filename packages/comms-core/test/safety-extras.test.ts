@@ -192,6 +192,42 @@ test('classifyChange: an inbox added with a looser policy than the default needs
   assert.deepEqual(classifyChange(ordinary, added).loosened, []);
 });
 
+test('classifyChange: a path that climbs back out is not inside the directory it starts in', () => {
+  // The bypass: `isInsideDirectory` compares by prefix, so without resolving `..` this reads as a move *into* the
+  // downloads directory — and moving downloads somewhere world-readable would then need nobody's consent.
+  const before = emptyConfig();
+  before.defaults.downloadsDir = '/var/empty/downloads';
+  const escaped = structuredClone(before);
+  escaped.defaults.downloadsDir = '/var/empty/downloads/../../../tmp';
+  assert.deepEqual(classifyChange(before, escaped).loosened, ['defaults.downloadsDir']);
+
+  // A path that climbs out and back in again is genuinely inside it.
+  const roundabout = structuredClone(before);
+  roundabout.defaults.downloadsDir = '/var/empty/downloads/work/../work';
+  assert.deepEqual(classifyChange(before, roundabout).loosened, []);
+});
+
+test('classifyChange: naming a file store where secrets already exist is the same downgrade', () => {
+  // With no `secrets` block the effective store is the keychain, so this moves real secrets out of it.
+  const before = emptyConfig();
+  before.clients.default = {
+    provider: 'gmail',
+    clientId: 'x.apps.googleusercontent.com',
+    secretRef: 'client:default',
+    addedAt: new Date().toISOString(),
+  };
+  const toFiles = structuredClone(before);
+  toFiles.secrets = { store: 'file' };
+  assert.deepEqual(classifyChange(before, toFiles).loosened, ['secrets.store']);
+
+  // On a configuration holding nothing yet, choosing a store is setup — and on a machine with no keychain it is the
+  // only thing that works.
+  const empty = emptyConfig();
+  const chosen = structuredClone(empty);
+  chosen.secrets = { store: 'file' };
+  assert.deepEqual(classifyChange(empty, chosen).loosened, []);
+});
+
 test('classifyChange: narrowing the downloads directory is not a loosening', () => {
   const before = emptyConfig();
   before.defaults.downloadsDir = '/var/empty/downloads/mail';
