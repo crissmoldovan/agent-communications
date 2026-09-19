@@ -8,7 +8,7 @@ import {
   probeKeychain,
   type StoreKind,
   secretsStoreOf,
-} from '@agent-communications/core';
+} from '@agentcomms/core';
 import { parseClientJson, probeClientCredentials } from '../auth/oauth.ts';
 import { clientSecretRef } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';

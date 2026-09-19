@@ -2,7 +2,7 @@
 name: gmail-export
 description: "Write a message or a whole thread to a file — Markdown, JSON, or the original .eml — instead of pulling it through the conversation. Symptoms: 'save that thread', 'export this email', 'give me the whole conversation as a file', 'this thread is too long to read here'. Not for finding or reading a short message — gmail-search does that."
 license: MIT
-compatibility: "@agent-communications/gmail@0.1.0"
+compatibility: "@agentcomms/gmail@0.1.0"
 metadata:
   group: communications
   lifecycle: release
@@ -113,7 +113,7 @@ writes a file to the user's disk every time.
    **Complete when:** you can name which of the rules above applies, or the user asked outright.
 
 If the `gmail_*` tools are not available, everything here works through the CLI: `npx -y
-@agent-communications/gmail@<version> export <id> --inbox <alias> --json`.
+@agentcomms/gmail@<version> export <id> --inbox <alias> --json`.
 
 ## Procedure
 

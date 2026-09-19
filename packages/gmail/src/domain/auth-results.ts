@@ -1,4 +1,4 @@
-import { parseAddressList } from '@agent-communications/core';
+import { parseAddressList } from '@agentcomms/core';
 import { headerValues } from './mime.ts';
 
 /**

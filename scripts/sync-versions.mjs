@@ -44,7 +44,7 @@ for (const name of packages) {
   for (const field of ['dependencies', 'devDependencies', 'peerDependencies']) {
     for (const [dependency, range] of Object.entries(manifest[field] ?? {})) {
       // Workspace ranges stay as they are: pnpm rewrites them at pack time.
-      if (dependency.startsWith('@agent-communications/') && !String(range).startsWith('workspace:')) {
+      if (dependency.startsWith('@agentcomms/') && !String(range).startsWith('workspace:')) {
         manifest[field][dependency] = version;
       }
     }
@@ -59,8 +59,8 @@ for (const entry of await readdir(skills, { withFileTypes: true })) {
   const path = join(skills, entry.name, 'SKILL.md');
   const source = await readFile(path, 'utf8');
   const updated = source.replace(
-    /^compatibility: "@agent-communications\/gmail@[^"]+"$/m,
-    `compatibility: "@agent-communications/gmail@${version}"`,
+    /^compatibility: "@agentcomms\/gmail@[^"]+"$/m,
+    `compatibility: "@agentcomms/gmail@${version}"`,
   );
   if (!/^compatibility: /m.test(source)) {
     problems.push(`skills/${entry.name}/SKILL.md: no compatibility line to keep in step`);
@@ -86,7 +86,7 @@ for (const [path, what] of [
     path,
     source
       .replace(/"version":\s*"[\w.-]+"/g, `"version": "${version}"`)
-      .replace(/@agent-communications\/gmail-mcp@[\w.-]+/g, `@agent-communications/gmail-mcp@${version}`),
+      .replace(/@agentcomms\/gmail-mcp@[\w.-]+/g, `@agentcomms/gmail-mcp@${version}`),
     what,
   );
 }
@@ -98,7 +98,7 @@ if (script !== null) {
     launcher,
     script
       .replace(/^VERSION="[\w.-]+"$/m, `VERSION="${version}"`)
-      .replace(/@agent-communications\/gmail-mcp@[\w.-]+/g, `@agent-communications/gmail-mcp@${version}`),
+      .replace(/@agentcomms\/gmail-mcp@[\w.-]+/g, `@agentcomms/gmail-mcp@${version}`),
     'the pinned launcher version',
   );
   if (!/^VERSION="/m.test(script)) {

@@ -2,13 +2,13 @@
 /**
  * The Gmail MCP server as its own command, so a client configuration can name it directly:
  *
- *     npx -y @agent-communications/gmail-mcp@<version>
+ *     npx -y @agentcomms/gmail-mcp@<version>
  *
- * It is one call into `@agent-communications/gmail`; everything the server does lives there, and `agent-gmail mcp` starts the
+ * It is one call into `@agentcomms/gmail`; everything the server does lives there, and `agent-gmail mcp` starts the
  * same server. Options mirror that command: `--inbox <alias>` serves one mailbox, `--read-only` registers only the
  * tools that cannot change anything.
  */
-import { createGmailMcpServer } from '@agent-communications/gmail';
+import { createGmailMcpServer } from '@agentcomms/gmail';
 
 const argv = process.argv.slice(2);
 
@@ -28,7 +28,7 @@ if (argv.includes('--help') || argv.includes('-h')) {
       '  --inbox <alias>   serve only this mailbox',
       '  --read-only       register only the tools that cannot change anything',
       '',
-      'Set up mailboxes with the `agent-gmail` command from @agent-communications/gmail.',
+      'Set up mailboxes with the `agent-gmail` command from @agentcomms/gmail.',
       '',
     ].join('\n'),
   );

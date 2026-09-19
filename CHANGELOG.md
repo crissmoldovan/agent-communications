@@ -7,13 +7,14 @@ together under one version.
 
 ## 0.1.0
 
-> **Published under `@agent-communications/*`.** For a few minutes on 19 September 2026 these same packages were
+> **Published under `@agentcomms/*`.** For a few minutes on 19 September 2026 these same packages were
 > live as `@cloudpixel/comms-core`, `@cloudpixel/gmail` and `@cloudpixel/gmail-mcp`. Those names were withdrawn
 > inside npm's unpublish window, before anything depended on them, because they did not say what they belonged
 > to: `@cloudpixel/gmail` reads as a general-purpose Gmail library, not as one provider inside a larger tool — and
 > Slack, the next provider, would have arrived as an unrelated-looking `@cloudpixel/slack`. Under one product scope
-> the providers are plainly siblings. Install from `@agent-communications/*`; the `@cloudpixel` names will not
-> return.
+> the providers are plainly siblings, and the scope matches the `agentcomms` command the core package already
+> installs — so what you type to install it is what you type to run it. Install from `@agentcomms/*`; the
+> `@cloudpixel` names will not return.
 
 The first release. Email for coding agents, across as many mailboxes as you connect — and an agent cannot send
 anything without your approval.
@@ -49,10 +50,10 @@ was withheld.
 
 ### What you get
 
-- `@agent-communications/gmail` — the `agent-gmail` CLI and the library: search across mailboxes, read messages and threads,
+- `@agentcomms/gmail` — the `agent-gmail` CLI and the library: search across mailboxes, read messages and threads,
   thread timelines, attachments, contacts, follow-ups, export, drafts, labels and the bin;
-- `@agent-communications/gmail-mcp` — the MCP server, 29 tools, for Claude Code, Codex, Cursor, Claude Desktop and Gemini CLI;
-- `@agent-communications/core` — config, secrets, the approval engine, the sanitiser. Provider-neutral;
+- `@agentcomms/gmail-mcp` — the MCP server, 29 tools, for Claude Code, Codex, Cursor, Claude Desktop and Gemini CLI;
+- `@agentcomms/core` — config, secrets, the approval engine, the sanitiser. Provider-neutral;
 - **twelve skills** teaching an agent how to use all of it and where to stop, each with the depth behind it in
   `references/`, sharing one contract;
 - a plugin manifest, a Gemini extension, and a launcher that finds Node where Node actually lives.
@@ -60,8 +61,8 @@ was withheld.
 
 ### Phase 2 — signing in, the inbox lifecycle, and both surfaces
 
-**What.** `@agent-communications/gmail` — the `agent-gmail` command and the MCP server — and
-`@agent-communications/gmail-mcp`, the server as its own package:
+**What.** `@agentcomms/gmail` — the `agent-gmail` command and the MCP server — and
+`@agentcomms/gmail-mcp`, the server as its own package:
 
 - signing a mailbox in: loopback redirect on 127.0.0.1 with PKCE, and a **two-step flow** (`inbox add --start`
   prints the link and leaves a detached listener; `inbox add --finish` collects the result) because consent takes
@@ -99,7 +100,7 @@ newer; the packages themselves will run on 22.12 or newer.
 **What.** The foundation for 0.1.0: the design (`docs/superpowers/specs/2026-09-18-agent-communications-design.md`)
 and the implementation plan, the repository scaffolding (pnpm workspace, TypeScript 7, tsdown, Biome, CI on Linux,
 macOS and Windows, security policy, contribution guide, issue forms, Blocks review config), a skill verifier, and
-`@agent-communications/core` — the provider-neutral core every other package builds on:
+`@agentcomms/core` — the provider-neutral core every other package builds on:
 
 - config with immutable inbox ids, locked writes and user intent kept apart from runtime state;
 - one secret backend per config directory: the OS keychain (Linux pinned to Secret Service; a call that an OS

@@ -8,7 +8,7 @@ import {
   safeFilename,
   TaintCollector,
   wrapUntrusted,
-} from '@agent-communications/core';
+} from '@agentcomms/core';
 import type { GmailContext } from '../context.ts';
 import { type AuthResults, readAuthResults, readSenderWarnings, type SenderWarnings } from '../domain/auth-results.ts';
 import { type BodyOptions, buildBody, DEFAULT_MAX_CHARS, type MessageBody } from '../domain/body.ts';

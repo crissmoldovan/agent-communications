@@ -6,7 +6,7 @@ import {
   type InboxConfig,
   openCore,
   requireInbox,
-} from '@agent-communications/core';
+} from '@agentcomms/core';
 import { type GoogleEndpoints, resolveEndpoints } from './auth/endpoints.ts';
 import { FlowStore } from './auth/flows.ts';
 import { type Capability, capabilitiesOf, grantHint } from './auth/scopes.ts';

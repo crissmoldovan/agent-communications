@@ -21,7 +21,7 @@ import { join } from 'node:path';
 
 /** Packages in dependency order: a consumer installing gmail must find the core it pins already on the registry. */
 const PACKAGES = ['core', 'gmail', 'gmail-mcp'];
-const SCOPE = '@agent-communications';
+const SCOPE = '@agentcomms';
 
 const args = new Set(process.argv.slice(2));
 const publish = args.has('--publish');

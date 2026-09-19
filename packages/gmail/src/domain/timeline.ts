@@ -1,4 +1,4 @@
-import { canonicalAddress } from '@agent-communications/core';
+import { canonicalAddress } from '@agentcomms/core';
 import type { ReadMessageResult } from '../operations/read.ts';
 
 /**

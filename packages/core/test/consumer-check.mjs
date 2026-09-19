@@ -10,7 +10,7 @@ import {
   sanitizeHtmlToText,
   VERSION,
   wrapUntrusted,
-} from '@agent-communications/core';
+} from '@agentcomms/core';
 
 assert.match(VERSION, /^\d+\.\d+\.\d+/);
 assert.equal(emptyConfig().defaults.sendPolicy, 'chat');

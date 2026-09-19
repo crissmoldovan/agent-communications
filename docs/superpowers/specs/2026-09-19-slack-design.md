@@ -9,12 +9,12 @@ rather than true.
 
 ## 1. What this is
 
-Slack as a second platform beside Gmail, reusing `@agent-communications/core` unchanged where it already fits and
+Slack as a second platform beside Gmail, reusing `@agentcomms/core` unchanged where it already fits and
 extending it where a mail-shaped assumption does not survive contact with a chat platform.
 
 The same promise: **an agent can read, search, analyse and draft, and cannot post without the person's approval.**
 
-The same shape: `@agent-communications/slack` (CLI `agent-slack`, library, MCP factory), `@agent-communications/slack-mcp` (thin),
+The same shape: `@agentcomms/slack` (CLI `agent-slack`, library, MCP factory), `@agentcomms/slack-mcp` (thin),
 skills that teach an agent how to use it and where to stop.
 
 ## 2. The one big difference, and what to do with it
@@ -188,7 +188,7 @@ body, in the same position the recipient list occupies for mail.
 | Phase | Branch | What |
 |---|---|---|
 | S1 | `feat/slack-core` | `comms-core` changes: the canonical-message union, `accounts` config with migration, the channel preview renderer, taint for ids |
-| S2 | `feat/slack-auth` | `@agent-communications/slack`: the two manifests, OAuth with token rotation, `workspace add/list/show/remove/reauth`, `doctor`, the transport with its method allowlist |
+| S2 | `feat/slack-auth` | `@agentcomms/slack`: the two manifests, OAuth with token rotation, `workspace add/list/show/remove/reauth`, `doctor`, the transport with its method allowlist |
 | S3 | `feat/slack-read` | Conversations, history, threads, search, users, files; the body pipeline with unfurl labelling and text/blocks reconciliation |
 | S4 | `feat/slack-compose` | Local drafts, the block composer, the preview with its notification count |
 | S5 | `feat/slack-send` | The gate: prepare, approve, post; the four guarded doors; reactions at lower ceremony |

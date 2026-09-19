@@ -9,7 +9,7 @@ import {
   type LooseningConsent,
   RESERVED_ALIASES,
   type SendPolicy,
-} from '@agent-communications/core';
+} from '@agentcomms/core';
 import { revokeToken } from '../auth/oauth.ts';
 import { type Capability, capabilitiesOf, tierOf } from '../auth/scopes.ts';
 import type { GmailContext } from '../context.ts';

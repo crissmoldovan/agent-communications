@@ -70,7 +70,7 @@ importers:
 
   packages/gmail:
     devDependencies:
-      '@agent-communications/core':
+      '@agentcomms/core':
         specifier: workspace:*
         version: link:../core
       '@googleapis/gmail':
@@ -110,7 +110,7 @@ importers:
 
   packages/gmail-mcp:
     dependencies:
-      '@agent-communications/gmail':
+      '@agentcomms/gmail':
         specifier: workspace:*
         version: link:../gmail
     optionalDependencies:

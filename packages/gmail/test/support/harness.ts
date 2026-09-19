@@ -2,14 +2,7 @@ import { mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after } from 'node:test';
-import {
-  type ClientConfig,
-  type Config,
-  type Core,
-  type InboxConfig,
-  newInboxId,
-  openCore,
-} from '@agent-communications/core';
+import { type ClientConfig, type Config, type Core, type InboxConfig, newInboxId, openCore } from '@agentcomms/core';
 import type { GoogleEndpoints } from '../../src/auth/endpoints.ts';
 import { resolveEndpoints } from '../../src/auth/endpoints.ts';
 import { buildAuthUrl, exchangeCode, newPkce } from '../../src/auth/oauth.ts';

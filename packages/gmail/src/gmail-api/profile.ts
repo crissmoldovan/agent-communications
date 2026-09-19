@@ -1,4 +1,4 @@
-import { CommsError } from '@agent-communications/core';
+import { CommsError } from '@agentcomms/core';
 import type { GoogleEndpoints } from '../auth/endpoints.ts';
 import { describeGoogleError, mapGoogleError } from './errors.ts';
 

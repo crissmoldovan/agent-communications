@@ -10,7 +10,7 @@ import {
   renderMessagePreview,
   type SendPolicy,
   stricterPolicy,
-} from '@agent-communications/core';
+} from '@agentcomms/core';
 import type { GmailContext, ResolvedInbox } from '../context.ts';
 import { analyseDraft, type DraftAnalysis, type Unsendable, unsendable } from '../domain/outbound.ts';
 import type { GmailTransport } from '../gmail-api/transport.ts';

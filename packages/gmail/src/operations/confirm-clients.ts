@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { CommsError, ensurePrivateDir, type LooseningConsent, writeFileAtomic } from '@agent-communications/core';
+import { CommsError, ensurePrivateDir, type LooseningConsent, writeFileAtomic } from '@agentcomms/core';
 import type { GmailContext } from '../context.ts';
 
 /**

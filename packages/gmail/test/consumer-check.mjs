@@ -2,9 +2,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { createGmailMcpServer, PACKAGE_NAME, VERSION } from '@agent-communications/gmail';
+import { createGmailMcpServer, PACKAGE_NAME, VERSION } from '@agentcomms/gmail';
 
-assert.equal(PACKAGE_NAME, '@agent-communications/gmail');
+assert.equal(PACKAGE_NAME, '@agentcomms/gmail');
 assert.match(VERSION, /^\d+\.\d+\.\d+/);
 
 // The library entry must build a server without a configured mailbox, and without pulling in anything else.

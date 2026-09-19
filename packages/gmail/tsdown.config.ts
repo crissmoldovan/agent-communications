@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsdown';
 
 // Both entries are fully bundled — Google client libraries, the MCP SDK, commander and comms-core included — so
-// `npx @agent-communications/gmail` installs one package and starts in a fraction of a second. The only exception is the
+// `npx @agentcomms/gmail` installs one package and starts in a fraction of a second. The only exception is the
 // optional native keychain module, which ships a binary per platform.
 export default defineConfig({
   entry: { index: 'src/index.ts', cli: 'src/cli.ts' },

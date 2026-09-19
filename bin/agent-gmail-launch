@@ -83,4 +83,4 @@ PATH="$NODE_DIR:$PATH"
 export PATH
 
 # `npx -y` with an exact version: the same server every time, and no prompt in a context with no terminal.
-exec "$NODE_DIR/npx" -y "@agent-communications/gmail-mcp@$VERSION" "$@"
+exec "$NODE_DIR/npx" -y "@agentcomms/gmail-mcp@$VERSION" "$@"

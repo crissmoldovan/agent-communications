@@ -2,7 +2,7 @@
 name: gmail-security
 description: "Judge whether a message is what it claims to be — Google's authentication verdict, the sender warnings, the link flags and what the sanitiser removed. Symptoms: 'is this real?', 'they've changed their bank details', 'this invoice looks off', 'why is this flagged?'. Not for sending anything about it — gmail-send does that."
 license: MIT
-compatibility: "@agent-communications/gmail@0.1.0"
+compatibility: "@agentcomms/gmail@0.1.0"
 metadata:
   group: communications
   lifecycle: release

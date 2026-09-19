@@ -1,5 +1,5 @@
 {
-  "name": "@agent-communications/core",
+  "name": "@agentcomms/core",
   "version": "0.1.0",
   "description": "Provider-neutral core for agent-communications: config, secret store, approvals, audit log and untrusted-content handling.",
   "type": "module",

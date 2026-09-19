@@ -15,11 +15,11 @@ approval checks, and a test fails the build if a second one ever appears.
 
 Three packages and twelve skills.
 
-- **`@agent-communications/gmail`** — the CLI (`agent-gmail`) and the library. Everything works from a
+- **`@agentcomms/gmail`** — the CLI (`agent-gmail`) and the library. Everything works from a
   terminal, with `--json` for anything that consumes it.
-- **`@agent-communications/gmail-mcp`** — the MCP server (`agent-gmail-mcp`), for Claude Code, Codex, Cursor,
+- **`@agentcomms/gmail-mcp`** — the MCP server (`agent-gmail-mcp`), for Claude Code, Codex, Cursor,
   Claude Desktop, Gemini CLI and anything else that speaks MCP.
-- **`@agent-communications/core`** — the shared core: config, secrets, the approval engine, the
+- **`@agentcomms/core`** — the shared core: config, secrets, the approval engine, the
   sanitiser. Provider-neutral, so the next platform reuses it.
 - **Twelve skills** that teach an agent how to use all of it well, and where to stop.
 
@@ -57,11 +57,11 @@ know.
 npx skills add crissmoldovan/agent-communications --skill '*'
 
 # Connect a mailbox — this walks you through the Google Cloud part
-npx -y @agent-communications/gmail client add ~/Downloads/client_secret.json
-npx -y @agent-communications/gmail inbox add work
+npx -y @agentcomms/gmail client add ~/Downloads/client_secret.json
+npx -y @agentcomms/gmail inbox add work
 
 # Wire it into your agent
-npx -y @agent-communications/gmail mcp install --client claude-code
+npx -y @agentcomms/gmail mcp install --client claude-code
 ```
 
 `agent-gmail doctor` checks everything that has to work and prints the one command that fixes each

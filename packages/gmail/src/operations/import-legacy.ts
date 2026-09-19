@@ -12,7 +12,7 @@ import {
   newInboxId,
   PUBLIC_MAILBOX_DOMAINS,
   type StoreKind,
-} from '@agent-communications/core';
+} from '@agentcomms/core';
 import { parseClientJson } from '../auth/oauth.ts';
 import { capabilitiesOf, parseGrantedScopes, tierOf } from '../auth/scopes.ts';
 import { clientSecretRef, refreshTokenRef } from '../auth/session.ts';

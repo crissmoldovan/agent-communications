@@ -14,7 +14,7 @@ import {
   resolveInsideRoot,
   safeFilename,
   slug,
-} from '@agent-communications/core';
+} from '@agentcomms/core';
 import type { GmailContext } from '../context.ts';
 import { headerValue, readParts } from '../domain/mime.ts';
 import { compileQuery } from '../domain/query.ts';

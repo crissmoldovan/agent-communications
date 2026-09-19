@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { open, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { CommsError, ensurePrivateDir, writeFileAtomic } from '@agent-communications/core';
+import { CommsError, ensurePrivateDir, writeFileAtomic } from '@agentcomms/core';
 
 /**
  * A sign-in in progress. It is written to disk because the two halves run in different processes: an agent's shell

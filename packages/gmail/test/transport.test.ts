@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { type ClientConfig, CommsError } from '@agent-communications/core';
+import { type ClientConfig, CommsError } from '@agentcomms/core';
 import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import { SCOPES, scopesFor } from '../src/auth/scopes.ts';
 import { TokenSource } from '../src/auth/session.ts';

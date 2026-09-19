@@ -1,10 +1,4 @@
-import {
-  type ClientConfig,
-  CommsError,
-  type Core,
-  type InboxConfig,
-  type SecretStore,
-} from '@agent-communications/core';
+import { type ClientConfig, CommsError, type Core, type InboxConfig, type SecretStore } from '@agentcomms/core';
 import type { GoogleEndpoints } from './endpoints.ts';
 import { oauthError } from './oauth.ts';
 import { parseGrantedScopes } from './scopes.ts';
