@@ -509,3 +509,23 @@ test('approving a send refuses an agent, and refuses a pipe', async () => {
   assert.equal(piped.code, EXIT_CODES.APPROVAL);
   assert.match(piped.json<Envelope<never>>().error?.message ?? '', /interactive terminal/);
 });
+
+test('doctor exits non-zero when a check is broken, and zero when only warnings remain', async () => {
+  // It printed "1 broken" and exited 0, which is exactly what a script reads as a healthy install — and
+  // `agentcomms doctor` had always exited non-zero on the same condition, so the two CLIs in one product
+  // disagreed about the meaning of the same word. Found by walking a first install from an empty directory.
+  const harness = await newHarness();
+
+  // Nothing connected: no OAuth client is a broken check, not a warning.
+  const broken = await cli(harness, ['doctor', '--json']);
+  assert.equal(broken.code, EXIT_CODES.CONFIG, 'a broken check must fail the command');
+
+  // **One envelope, and the normal one.** The findings are the output, so the verdict rides on the exit code
+  // rather than replacing the report with an error — throwing would print a second JSON document after the first,
+  // and `--json` promises exactly one on stdout.
+  const envelope = broken.json<Envelope<{ healthy: boolean; summary: { fail: number } }>>();
+  assert.equal(envelope.ok, true, 'the report is still the payload');
+  assert.equal(envelope.data.healthy, false);
+  assert.ok(envelope.data.summary.fail > 0, 'and it says what was broken');
+  assert.equal(broken.stdout.trimEnd().split('\n').filter((l) => l.startsWith('{')).length, 1, 'one document only');
+});
