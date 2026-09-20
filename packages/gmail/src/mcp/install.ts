@@ -282,7 +282,14 @@ export async function mcpInstall(context: GmailContext, options: InstallOptions)
                     'mcp',
                     'add-json',
                     name,
-                    JSON.stringify({ command: previous.command, args: previous.args }),
+                    // The env too: ours carries AGENT_COMMS_CONFIG_DIR, and an entry restored without it points the
+                    // client at the wrong directory — a server that starts, finds no mailboxes, and says nothing
+                    // about why. A silent wrong answer is worse than the missing entry it was replacing.
+                    JSON.stringify({
+                      command: previous.command,
+                      args: previous.args,
+                      ...(previous.env ? { env: previous.env } : {}),
+                    }),
                     '--scope',
                     'user',
                   ]

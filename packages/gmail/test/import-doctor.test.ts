@@ -322,3 +322,32 @@ test('doctor’s repair for a stale server preserves what that server was, not t
     assert.ok(fix.includes(flag), `the repair dropped ${flag}: ${fix}`);
   }
 });
+
+test('a registered entry’s env is read back, because --force has to be able to put it back', async () => {
+  const home = tempDir();
+  await writeFile(
+    join(home, '.claude.json'),
+    JSON.stringify({
+      mcpServers: {
+        gmail: {
+          command: 'node',
+          args: ['/somewhere/cli.mjs', 'mcp'],
+          env: { AGENT_COMMS_CONFIG_DIR: '/cfg/agent-communications', PATH: '/usr/bin' },
+        },
+        plain: { command: 'node', args: ['other.js'] },
+      },
+    }),
+  );
+
+  const servers = await listRegisteredServers({ HOME: home }, 'linux');
+  const gmail = servers.find((server) => server.name === 'gmail');
+
+  // `--force` removes an entry before adding its replacement, and restores this one if the add fails. Restoring
+  // command and args alone would hand back a server pointed at the wrong config directory: it starts, finds no
+  // mailboxes, and explains nothing. That is worse than the missing entry it was replacing.
+  assert.deepEqual(gmail?.env, {
+    AGENT_COMMS_CONFIG_DIR: '/cfg/agent-communications',
+    PATH: '/usr/bin',
+  });
+  assert.equal(servers.find((server) => server.name === 'plain')?.env, undefined, 'and absent when there is none');
+});

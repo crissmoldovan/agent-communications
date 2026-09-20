@@ -23,6 +23,14 @@ export interface RegisteredServer {
   args: string[];
   /** The npm package the entry launches, when one can be read from the command line. */
   packageName?: string | undefined;
+  /**
+   * The entry's own environment, when it declares one.
+   *
+   * Carried because an entry cannot be put back without it: ours sets `AGENT_COMMS_CONFIG_DIR`, and a server
+   * restored without that looks in the wrong directory and reports no mailboxes — a silent wrong answer where the
+   * missing entry it replaced was at least an obvious one.
+   */
+  env?: Record<string, string> | undefined;
 }
 
 export interface LegacyServerFinding extends RegisteredServer {
@@ -105,6 +113,7 @@ export function knownClientConfigs(
 interface ServerEntry {
   command?: unknown;
   args?: unknown;
+  env?: unknown;
 }
 
 function collectFromJson(text: string, client: string, path: string): RegisteredServer[] {
@@ -129,6 +138,13 @@ function collectFromJson(text: string, client: string, path: string): Registered
             name,
             command: typeof entry.command === 'string' ? entry.command : '',
             args: Array.isArray(entry.args) ? entry.args.map(String) : [],
+            ...(entry.env && typeof entry.env === 'object'
+              ? {
+                  env: Object.fromEntries(
+                    Object.entries(entry.env as Record<string, unknown>).map(([key, value]) => [key, String(value)]),
+                  ),
+                }
+              : {}),
           });
         }
       }
