@@ -52,6 +52,13 @@ There are twelve, one per job — searching, triage, composing, sending, organis
 thread analysis, follow-ups, export, security, setup. Each is a `SKILL.md` plus reference pages.
 See [the skills index](skills.md).
 
+They are named `gmail-*` because a skill states one platform's truth and has no other branch to fall into. When
+Slack arrives it ships its own `slack-*` pack rather than the twelve becoming platform-neutral, and the reason is
+that the guarantees genuinely differ: on some accounts the credential itself cannot send, on others only this
+software stops it. A skill that had to say "depending on the platform" is one an agent under pressure resolves in
+the reassuring direction. [The skills architecture across platforms](superpowers/specs/2026-09-20-skills-architecture.md)
+is the full design, including what adding an IMAP pack later would take.
+
 ## `@agentcomms/core` is shared, not Gmail
 
 Config, the secret store, the approval engine, the sanitiser, the untrusted-content envelope, path jails, the audit

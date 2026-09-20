@@ -10,14 +10,54 @@ Gmail's API needs credentials that belong to you. There is no way around this an
 Google OAuth client is tied to a Google Cloud project, and using somebody else's would put your mail behind their
 consent screen.
 
-1. Open the [Google Cloud console](https://console.cloud.google.com/), create a project, and enable the **Gmail
-   API** under *APIs & Services → Library*. Enable the **People API** too if you want contact search.
-2. Under *APIs & Services → OAuth consent screen*, choose **External** and add yourself as a **test user**. You do
-   not need to publish the app or pass verification — a test user can use it indefinitely.
-3. Under *Credentials*, create an **OAuth client ID** of type **Desktop app**, and download the JSON.
+**One client covers every mailbox you connect, and everyone you share it with.** This is a once-per-person job, and
+for a team it is a once-per-team job — see [one client, many people](#one-client-many-people) below.
+
+Google renamed these screens in 2025. What used to be *APIs & Services → OAuth consent screen* is now **Google Auth
+Platform**, with *Branding*, *Audience*, *Data access* and *Clients*. The links below go straight to the right page.
+
+1. **Create a project** at [console.cloud.google.com/projectcreate](https://console.cloud.google.com/projectcreate).
+2. **Enable the Gmail API** —
+   [console.cloud.google.com/apis/library/gmail.googleapis.com](https://console.cloud.google.com/apis/library/gmail.googleapis.com).
+   Enable the [People API](https://console.cloud.google.com/apis/library/people.googleapis.com) too if you want
+   contact search.
+3. **Branding** — [console.cloud.google.com/auth/branding](https://console.cloud.google.com/auth/branding). An app
+   name and your own address as the support email is enough.
+4. **Audience** — [console.cloud.google.com/auth/audience](https://console.cloud.google.com/auth/audience). Choose
+   **External**, then press **Publish app** so the status reads **In production**.
+5. **Clients** — [console.cloud.google.com/auth/clients](https://console.cloud.google.com/auth/clients) → *Create
+   client* → application type **Desktop app** → **Download JSON**.
+
+> ### Do not leave it in *Testing*
+>
+> This is the one step people get wrong, and it fails a week later rather than immediately.
+>
+> While the audience is **Testing**, Google says: *"Authorizations by a test user will expire seven days from the
+> time of consent. If your OAuth client requests an `offline` access type and receives a refresh token, that token
+> will also expire."* Every mailbox you connect would stop working after seven days with `invalid_grant`, and you
+> would reconnect them every week forever.
+>
+> **In production** with no verification is the right setting for personal use. You are not publishing anything to
+> anyone: it means your own grants stop expiring. The costs are a one-off warning screen the first time you sign in
+> (*Advanced → "Go to … (unsafe)"*, expected for a client you made yourself) and a ceiling of 100 Google accounts
+> that may ever authorise this client — irrelevant unless you are handing it to a large team.
+>
+> Verification and its security assessment are only needed to go **beyond** those 100 accounts. Nothing here asks
+> you to do that.
 
 `references/google-cloud-setup.md` in the `gmail-setup` skill walks through the same screens with more detail if
 any of that is unfamiliar.
+
+### One client, many people
+
+The client you just made is not per-mailbox and not per-person. The same `client_secret.json` authorises as many
+Gmail accounts as you like, and can be handed to colleagues, who each sign in as themselves — their mail never
+touches your account, only your *client registration*.
+
+**If everyone is on the same Google Workspace domain**, set the audience to **Internal** rather than External at
+step 4. An internal app has no seven-day expiry, no 100-account ceiling, and no unverified-app warning, because
+Google already trusts it within your own organisation. One admin does steps 1–5 once, shares the JSON, and nobody
+else opens the console at all.
 
 ## 2. Register the client
 
@@ -55,6 +95,17 @@ npx -y @agentcomms/gmail inbox import             # do it
 ```
 
 Every mailbox comes across with its existing OAuth client and refresh token. No browser, no re-consent.
+
+One thing an import cannot bring is a permission the other server never asked for. Most legacy servers do not
+request `openid` or `userinfo.email`, so `doctor` will report those as missing on every imported mailbox. Nothing
+is broken — the address is still resolved from the mailbox profile — but if you want a clean `doctor`, re-consent
+each one, which takes the scopes the import could not:
+
+```bash
+agent-gmail inbox reauth <alias> --start
+```
+
+A re-consent keeps the mailbox's existing access tier. It does not widen anything.
 
 ## 4. Check it
 

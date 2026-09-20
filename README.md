@@ -57,14 +57,33 @@ know.
 
 Three independent things ship. Take one, or all of them.
 
+First, the part everyone hits: **Gmail's API only accepts calls from a registered OAuth client, and
+you have to be the one who registers it.** There is no shared client to borrow — using somebody
+else's would put your mail behind their consent screen. Which of the three routes below you take
+decides how much of that you actually do.
+
+| You are | What you do | Console work |
+|---|---|---|
+| **on a Google Workspace domain** | one admin registers **one Internal client** and shares the JSON | once, by one person, ever |
+| **migrating from another Gmail MCP server** | `inbox import` reuses the client and tokens you already have | **none** |
+| **an individual on consumer Gmail** | register your own client — [10-minute walkthrough](docs/getting-started.md#1-a-google-oauth-client) | once |
+
+One client authorises as many mailboxes and as many people as you like. It is not per-mailbox and
+not per-person.
+
+> **If you register your own, set the audience to *In production*, not *Testing*.** A Testing app's
+> refresh tokens expire **seven days** after consent, so every mailbox would stop working after a
+> week. [Getting started](docs/getting-started.md#1-a-google-oauth-client) explains the setting and
+> what it costs (one warning screen; a ceiling of 100 accounts you will never reach).
+
 ### A Gmail CLI
 
 No agent, no MCP server, nothing else required.
 
 ```bash
 npm i -g @agentcomms/gmail
-agent-gmail client add ~/Downloads/client_secret_*.json
-agent-gmail inbox add work --start
+agent-gmail client add ~/Downloads/client_secret_*.json   # ← the JSON from above
+agent-gmail inbox add work --email you@example.com --start
 agent-gmail search 'newer_than:7d' --inbox work
 ```
 
@@ -99,6 +118,19 @@ Reuses the OAuth client and refresh tokens you already have. No browser, no re-c
 
 `agent-gmail doctor` checks everything that has to work and prints the one command that fixes each thing that does
 not. It exits `78` when something is broken, so CI can gate on it.
+
+### Upgrading
+
+`mcp install` pins the exact version into the entry it registers, so upgrading the package elsewhere
+on your machine cannot change what your agents run underneath you. The cost is that a new release
+reaches an already-registered client only when you re-register it:
+
+```bash
+npx -y @agentcomms/gmail@latest mcp install --client claude-code --force
+```
+
+`--force` is required because the client CLIs refuse to overwrite an existing entry. Restart the
+client afterwards. `agent-gmail doctor` warns when what is registered is older than what you have.
 
 > **Remove the other Gmail server once you have migrated.** Everything here assumes it owns the only route to
 > Gmail's send endpoints. A second server with an ungated `send_email` tool does not break that guarantee so much
@@ -161,7 +193,41 @@ Stated plainly, because a security tool that overstates itself is worse than one
 - **A message asking you to reply to its own sender** with something private is caught only by you
   reading the preview, under `chat`. `confirm` covers it.
 
+### Which guarantee you actually have
+
+Two different things are called "it cannot send", and only one of them is ours.
+
+| Access tier | Scopes | Who stops a send |
+|---|---|---|
+| `read` | `gmail.readonly` | **Google.** The token has no write capability at all, so no bug of ours can send from it |
+| `draft` | `gmail.readonly` + `gmail.compose` | **This software only** |
+| `organize` | `gmail.modify` | **This software only** |
+
+`gmail.compose` and `gmail.modify` both permit `drafts.send`. There is no Gmail scope meaning "may
+write, may not send", so above the `read` tier the guarantee is code we wrote — one send path, a
+build-failing test if a second appears, and a transport guard beneath both. That is a real
+guarantee and the rest of this section is about its limits, but it is not the same kind of thing as
+a token that physically cannot send.
+
+If you want the stronger one, connect the mailbox at `read` and accept that drafting is not
+available from it: `agent-gmail inbox add archive --tier read --start`.
+
 [`SECURITY.md`](SECURITY.md) has the full threat model.
+
+### Why not IMAP and an app password?
+
+It would remove the console step entirely — no OAuth client, no project, no consent screen. Other
+tools do exactly this and it is a reasonable product. It is not this one, for two reasons worth
+stating rather than leaving you to wonder:
+
+- **An app password cannot be scoped.** It grants IMAP *and* SMTP, always. The `read` tier above —
+  the one configuration where Google itself guarantees nothing can be sent — could not exist.
+- **It cannot be revoked per application** the way an OAuth grant can, and it carries no scope list
+  for you to inspect.
+
+An `@agentcomms/imap` sibling may come later for providers that have no API worth using — Fastmail,
+Proton Bridge, self-hosted. That would be a different provider family with an honestly weaker
+guarantee, not a shortcut around this one.
 
 ## Development
 

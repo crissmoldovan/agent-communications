@@ -23,6 +23,22 @@ export interface RegisteredServer {
   args: string[];
   /** The npm package the entry launches, when one can be read from the command line. */
   packageName?: string | undefined;
+  /**
+   * The entry's own environment, when it declares one.
+   *
+   * Carried because an entry cannot be put back without it: ours sets `AGENT_COMMS_CONFIG_DIR`, and a server
+   * restored without that looks in the wrong directory and reports no mailboxes — a silent wrong answer where the
+   * missing entry it replaced was at least an obvious one.
+   */
+  env?: Record<string, string> | undefined;
+  /**
+   * `project` for an entry Claude Code keeps under `projects`, `user` otherwise.
+   *
+   * Every command this package issues targets user scope. Without knowing the difference, a repair aimed at a
+   * project-scoped entry removes nothing, adds a second entry at user scope, and reports success — leaving the
+   * stale one still in force for that project.
+   */
+  scope?: 'user' | 'project' | undefined;
 }
 
 export interface LegacyServerFinding extends RegisteredServer {
@@ -105,6 +121,7 @@ export function knownClientConfigs(
 interface ServerEntry {
   command?: unknown;
   args?: unknown;
+  env?: unknown;
 }
 
 function collectFromJson(text: string, client: string, path: string): RegisteredServer[] {
@@ -115,7 +132,7 @@ function collectFromJson(text: string, client: string, path: string): Registered
     return [];
   }
   const found: RegisteredServer[] = [];
-  const visit = (node: unknown): void => {
+  const visit = (node: unknown, scope: 'user' | 'project'): void => {
     if (!node || typeof node !== 'object') return;
     const record = node as Record<string, unknown>;
     for (const key of ['mcpServers', 'servers']) {
@@ -127,18 +144,28 @@ function collectFromJson(text: string, client: string, path: string): Registered
             client,
             path,
             name,
+            scope,
             command: typeof entry.command === 'string' ? entry.command : '',
             args: Array.isArray(entry.args) ? entry.args.map(String) : [],
+            ...(entry.env && typeof entry.env === 'object'
+              ? {
+                  env: Object.fromEntries(
+                    Object.entries(entry.env as Record<string, unknown>).map(([key, value]) => [key, String(value)]),
+                  ),
+                }
+              : {}),
           });
         }
       }
     }
     // Claude Code keeps per-project server lists under `projects`; the same shape, one level down.
-    for (const value of Object.values(record)) {
-      if (value && typeof value === 'object' && !Array.isArray(value)) visit(value);
+    for (const [key, value] of Object.entries(record)) {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        visit(value, key === 'projects' ? 'project' : scope);
+      }
     }
   };
-  visit(parsed);
+  visit(parsed, 'user');
   return dedupe(found);
 }
 
@@ -146,16 +173,32 @@ function collectFromJson(text: string, client: string, path: string): Registered
 function collectFromToml(text: string, client: string, path: string): RegisteredServer[] {
   const found: RegisteredServer[] = [];
   let current: RegisteredServer | null = null;
+  let inEnv = false;
   for (const line of text.split(/\r?\n/)) {
+    // Checked before the server-section pattern, which would otherwise match `[mcp_servers.x.env]` and invent a
+    // server called `x.env`. A subsection belongs to the server above it; without reading it a codex entry's env
+    // is invisible, and an entry cannot be restored without its env.
+    const envSection = /^\s*\[mcp_servers\.(.+)\.env\]\s*$/.exec(line);
+    if (envSection) {
+      inEnv = current !== null && (envSection[1] ?? '').replace(/^"|"$/g, '') === current.name;
+      continue;
+    }
     const section = /^\s*\[mcp_servers\.([^\]]+)\]\s*$/.exec(line);
     if (section) {
       if (current) found.push(current);
       current = { client, path, name: (section[1] ?? '').replace(/^"|"$/g, ''), command: '', args: [] };
+      inEnv = false;
       continue;
     }
     if (/^\s*\[/.test(line)) {
       if (current) found.push(current);
       current = null;
+      inEnv = false;
+      continue;
+    }
+    if (inEnv && current) {
+      const pair = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([^"]*)"/.exec(line);
+      if (pair?.[1] !== undefined) current.env = { ...current.env, [pair[1]]: pair[2] ?? '' };
       continue;
     }
     if (!current) continue;
@@ -164,6 +207,13 @@ function collectFromToml(text: string, client: string, path: string): Registered
     const args = /^\s*args\s*=\s*\[(.*)\]/.exec(line);
     if (args?.[1] !== undefined) {
       current.args = [...args[1].matchAll(/"([^"]*)"/g)].map((match) => match[1] ?? '');
+    }
+    const inlineEnv = /^\s*env\s*=\s*\{(.*)\}/.exec(line);
+    if (inlineEnv?.[1] !== undefined) {
+      const pairs = [...inlineEnv[1].matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([^"]*)"/g)];
+      if (pairs.length > 0) {
+        current.env = Object.fromEntries(pairs.map((match) => [match[1] ?? '', match[2] ?? '']));
+      }
     }
   }
   if (current) found.push(current);

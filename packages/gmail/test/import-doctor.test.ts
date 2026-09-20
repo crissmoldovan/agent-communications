@@ -10,6 +10,7 @@ import { findUngatedGmailServers, listRegisteredServers } from '../src/operation
 import { doctor } from '../src/operations/doctor.ts';
 import { aliasFromCredentialsFile, importLegacy, parseLegacyCredentials } from '../src/operations/import-legacy.ts';
 import { inboxList, inboxRemove, orphanedSecretsPath } from '../src/operations/inboxes.ts';
+import { VERSION } from '../src/version.ts';
 import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
 
 const CLIENT = { clientId: TEST_CLIENT_ID, clientSecret: TEST_CLIENT_SECRET };
@@ -246,4 +247,144 @@ test('doctor reports what is missing with the command that fixes it, and finds u
   assert.equal(others?.status, 'fail');
   assert.match(others?.detail ?? '', /@artymclabin\/gmail-mcp/);
   assert.match(others?.fix ?? '', /claude mcp remove old/);
+});
+
+test('doctor says when the registered MCP server is an older version than this one', async () => {
+  const harness = await newHarness({ accounts: [] });
+  const env = { ...harness.env, HOME: harness.configDir };
+  const byId = <T extends { id: string }>(checks: readonly T[], id: string) => checks.find((check) => check.id === id);
+
+  // `mcp install` pins an exact version into the path, so that upgrading the package elsewhere cannot change what
+  // an agent runs. The silent half of that trade is what this check exists to say out loud.
+  // Built with `join` for both versions, never by string-replacing a separator into an existing path: on Windows
+  // these are backslashes, so a replace of `/runtime/0.0.1/` silently matches nothing and the "current" case
+  // quietly re-tests the stale one.
+  const runtimeEntry = (version: string) =>
+    join(harness.core.paths.dataDir, 'runtime', version, 'node_modules', '@agentcomms', 'gmail', 'dist', 'cli.mjs');
+  const stalePath = runtimeEntry('0.0.1');
+  await writeFile(
+    join(harness.configDir, '.claude.json'),
+    JSON.stringify({ mcpServers: { gmail: { command: 'node', args: [stalePath, 'mcp'] } } }),
+  );
+
+  const stale = await doctor(new GmailContext({ core: harness.core, env }));
+  const check = byId(stale.checks, 'registered-server-version');
+  assert.equal(check?.status, 'warn', 'an old registered runtime is worth saying');
+  assert.match(check?.detail ?? '', /runs 0\.0\.1/);
+  // A plain substring, not a RegExp built by escaping VERSION: that escape handled dots and not backslashes,
+  // which is the incomplete-sanitisation shape even where the input happens to be a semver string.
+  assert.ok(check?.detail?.includes(`this release is ${VERSION}`), check?.detail);
+  // Remove-then-install: the client CLIs refuse to overwrite an entry that already exists, so --force is the fix.
+  assert.match(check?.fix ?? '', /mcp install --client claude-code --force/);
+  // A warning, not a failure: an old server still works, it just is not the one that was published.
+  assert.notEqual(check?.status, 'fail');
+
+  // The current version is not reported as stale.
+  await writeFile(
+    join(harness.configDir, '.claude.json'),
+    JSON.stringify({ mcpServers: { gmail: { command: 'node', args: [runtimeEntry(VERSION), 'mcp'] } } }),
+  );
+  const current = await doctor(new GmailContext({ core: harness.core, env }));
+  assert.equal(byId(current.checks, 'registered-server-version')?.status, 'ok');
+});
+
+test('doctor’s repair for a stale server preserves what that server was, not the defaults', async () => {
+  const harness = await newHarness({ accounts: [] });
+  const env = { ...harness.env, HOME: harness.configDir };
+  const byId = <T extends { id: string }>(checks: readonly T[], id: string) => checks.find((check) => check.id === id);
+
+  // A server someone deliberately narrowed: its own name, one mailbox, read-only, and pinned through npx rather
+  // than the managed runtime. A generic `mcp install --client claude-code --force` would replace all four with
+  // the defaults — every mailbox, every tool, under another name. That is a widening, not a repair.
+  await writeFile(
+    join(harness.configDir, '.claude.json'),
+    JSON.stringify({
+      mcpServers: {
+        work: {
+          command: 'npx',
+          args: ['-y', '@agentcomms/gmail-mcp@0.0.1', '--inbox', 'personal', '--read-only'],
+        },
+      },
+    }),
+  );
+
+  const result = await doctor(new GmailContext({ core: harness.core, env }));
+  const check = byId(result.checks, 'registered-server-version');
+  assert.equal(
+    check?.status,
+    'warn',
+    'an npx-pinned old version is stale too; only the managed path was checked before',
+  );
+  assert.match(check?.detail ?? '', /runs 0\.0\.1 as "work"/);
+
+  const fix = check?.fix ?? '';
+  for (const flag of ['--name work', '--inbox personal', '--read-only', '--launcher npx', '--force']) {
+    assert.ok(fix.includes(flag), `the repair dropped ${flag}: ${fix}`);
+  }
+});
+
+test('a registered entry’s env is read back, because --force has to be able to put it back', async () => {
+  const home = tempDir();
+  await writeFile(
+    join(home, '.claude.json'),
+    JSON.stringify({
+      mcpServers: {
+        gmail: {
+          command: 'node',
+          args: ['/somewhere/cli.mjs', 'mcp'],
+          env: { AGENT_COMMS_CONFIG_DIR: '/cfg/agent-communications', PATH: '/usr/bin' },
+        },
+        plain: { command: 'node', args: ['other.js'] },
+      },
+    }),
+  );
+
+  const servers = await listRegisteredServers({ HOME: home }, 'linux');
+  const gmail = servers.find((server) => server.name === 'gmail');
+
+  // `--force` removes an entry before adding its replacement, and restores this one if the add fails. Restoring
+  // command and args alone would hand back a server pointed at the wrong config directory: it starts, finds no
+  // mailboxes, and explains nothing. That is worse than the missing entry it was replacing.
+  assert.deepEqual(gmail?.env, {
+    AGENT_COMMS_CONFIG_DIR: '/cfg/agent-communications',
+    PATH: '/usr/bin',
+  });
+  assert.equal(servers.find((server) => server.name === 'plain')?.env, undefined, 'and absent when there is none');
+});
+
+test('a codex entry’s env is read back too, from both TOML spellings', async () => {
+  const home = tempDir();
+  await mkdir(join(home, '.codex'), { recursive: true });
+  await writeFile(
+    join(home, '.codex', 'config.toml'),
+    [
+      '[mcp_servers.sectioned]',
+      'command = "node"',
+      'args = ["a.mjs", "mcp"]',
+      '',
+      '[mcp_servers.sectioned.env]',
+      'AGENT_COMMS_CONFIG_DIR = "/cfg/one"',
+      'PATH = "/usr/bin"',
+      '',
+      '[mcp_servers.inline]',
+      'command = "node"',
+      'args = ["b.mjs"]',
+      'env = { AGENT_COMMS_CONFIG_DIR = "/cfg/two" }',
+      '',
+      '[mcp_servers.bare]',
+      'command = "node"',
+      'args = ["c.mjs"]',
+    ].join('\n'),
+  );
+
+  const servers = await listRegisteredServers({ HOME: home }, 'linux');
+  const by = (name: string) => servers.find((server) => server.name === name);
+
+  // The env subsection belongs to the server above it, not to a new one — and `--force` restores a codex entry
+  // with `--env KEY=VALUE`, so an env it cannot see is an env it cannot put back.
+  assert.deepEqual(by('sectioned')?.env, { AGENT_COMMS_CONFIG_DIR: '/cfg/one', PATH: '/usr/bin' });
+  assert.deepEqual(by('inline')?.env, { AGENT_COMMS_CONFIG_DIR: '/cfg/two' });
+  assert.equal(by('bare')?.env, undefined);
+  // And the subsection did not become a fourth server.
+  assert.deepEqual(servers.map((server) => server.name).sort(), ['bare', 'inline', 'sectioned']);
 });

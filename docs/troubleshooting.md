@@ -61,6 +61,14 @@ being deleted. `doctor` says which mailbox and why.
 agent-gmail inbox reauth <alias> --start
 ```
 
+### `doctor` says `missing: openid, …/userinfo.email` on every mailbox
+
+Those two come from a sign-in this tool performed. A mailbox brought over by `inbox import` carries whatever the
+previous server asked for, and most legacy servers never asked for these. Nothing is broken: the mailbox still
+resolves its own address from the Gmail profile, which is why every `Mailbox <alias>` check passes.
+
+`agent-gmail inbox reauth <alias> --start` takes them, keeping the existing access tier.
+
 ### `SCOPE_MISSING`
 
 The grant does not cover what was asked. The error names the scope and the fix. A mailbox connected without
@@ -131,6 +139,47 @@ Restart it. MCP clients read their server list at startup.
 agent-gmail mcp install --client claude-code   # re-register
 agent-gmail mcp install --list                 # which clients were found
 ```
+
+### `mcp install` fails on Windows
+
+`agent-gmail mcp install --client claude-code` (and `--client codex`) appears not to work on Windows at all, for
+any version. Both CLIs install there as `.cmd` files, and this package launches them without a shell, which
+current Node refuses to do for a `.cmd`.
+
+Register the server by hand instead — `mcp install --print` writes no config and prints exactly what to add:
+
+```bash
+agent-gmail mcp install --client claude-code --print
+```
+
+Then paste that entry into the client's own config, keeping the `env` block: it carries
+`AGENT_COMMS_CONFIG_DIR`, and a server without it looks in the wrong directory and reports no mailboxes.
+
+The `--client json` output is the same entry with no client assumed, if your client stores servers somewhere
+else.
+
+### The server is running an old version
+
+`mcp install` pins the exact version into the path it registers, deliberately: upgrading the package elsewhere on
+the machine cannot then change what your agents run underneath you. The cost is that publishing a new version does
+nothing for an already-registered client until you re-register it.
+
+Check what is registered against what you have:
+
+```bash
+agent-gmail doctor --json | jq '.data.checks[] | select(.name | test("Registered server"))'
+```
+
+Re-registering is remove-then-install. `mcp install` refuses to overwrite an existing entry, so the remove is not
+optional:
+
+```bash
+claude mcp remove gmail                                    # or the equivalent for your client
+npx -y @agentcomms/gmail@latest mcp install --client claude-code
+```
+
+Restart the client afterwards. The old runtime stays on disk under `<data dir>/runtime/<version>/`; nothing
+depends on it once the entry points elsewhere, and it can be deleted.
 
 ### The server starts but every call fails
 

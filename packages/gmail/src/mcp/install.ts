@@ -30,6 +30,8 @@ export interface InstallOptions {
   noVerify?: boolean | undefined;
   /** Write the file or run the client's CLI; false only prints what would be done. */
   apply?: boolean | undefined;
+  /** Replace an existing entry of the same name. Needed to upgrade, because the entry pins an exact version. */
+  force?: boolean | undefined;
 }
 
 export interface ServerEntry {
@@ -239,13 +241,108 @@ export async function mcpInstall(context: GmailContext, options: InstallOptions)
     const cliName = options.client === 'claude-code' ? 'claude' : 'codex';
     const binary = await whichExecutable(cliName, context.env);
     if (binary && apply) {
+      const codexEnv = (values: Record<string, string> | undefined) =>
+        Object.entries(values ?? {}).flatMap(([key, value]) => ['--env', `${key}=${value}`]);
       const args =
         options.client === 'claude-code'
           ? ['mcp', 'add-json', name, JSON.stringify(entry), '--scope', 'user']
-          : ['mcp', 'add', name, '--', entry.command, ...entry.args];
-      await run(binary, args);
-      method = 'cli';
-      applied = true;
+          : ['mcp', 'add', name, ...codexEnv(entry.env), '--', entry.command, ...entry.args];
+
+      /*
+       * These CLIs refuse to overwrite an entry that already exists, and the entry records an exact version —
+       * `runtime/<version>/…`, pinned on purpose so an upgrade elsewhere cannot change what a client runs. The two
+       * together mean a published upgrade reaches nobody until someone re-registers, and the obvious command for
+       * that fails with "already exists" and no route forward. A release sat unused on a machine for exactly this
+       * reason.
+       *
+       * So `--force` removes first. Not the default: replacing a working server entry is the sort of thing to ask
+       * for, and the failure without it now says how.
+       */
+      if (options.force) {
+        // What is there now, so it can go back if the replacement does not land. `--force` otherwise removes a
+        // working entry and, on any failure after that, leaves the client with no server at all — strictly worse
+        // than the stale one it was asked to replace.
+        // User scope only: every command below targets it, so a project-scoped entry of the same name is not the
+        // one being replaced and must not be treated as the thing to restore.
+        const previous = existing.find(
+          (server) => server.client === options.client && server.name === name && server.scope !== 'project',
+        );
+        const removal =
+          options.client === 'claude-code' ? ['mcp', 'remove', name, '--scope', 'user'] : ['mcp', 'remove', name];
+        try {
+          await run(binary, removal);
+        } catch (error) {
+          // Nothing registered under that name is the state we wanted anyway. Anything else is a real failure and
+          // must not be swallowed: proceeding would add beside an entry we failed to remove.
+          const message = error instanceof CommsError ? error.message : String(error);
+          if (!/no (mcp )?server|not found|does not exist/i.test(message)) throw error;
+        }
+
+        if (previous) {
+          try {
+            await run(binary, args);
+          } catch (error) {
+            const restore =
+              options.client === 'claude-code'
+                ? [
+                    'mcp',
+                    'add-json',
+                    name,
+                    // The env too: ours carries AGENT_COMMS_CONFIG_DIR, and an entry restored without it points the
+                    // client at the wrong directory — a server that starts, finds no mailboxes, and says nothing
+                    // about why. A silent wrong answer is worse than the missing entry it was replacing.
+                    JSON.stringify({
+                      command: previous.command,
+                      args: previous.args,
+                      ...(previous.env ? { env: previous.env } : {}),
+                    }),
+                    '--scope',
+                    'user',
+                  ]
+                : ['mcp', 'add', name, ...codexEnv(previous.env), '--', previous.command, ...previous.args];
+
+            // Only claim the entry is back if it is. Saying so after a failed restore leaves somebody believing
+            // their working server survived, when in fact nothing is registered at all.
+            let restored = true;
+            try {
+              await run(binary, restore);
+            } catch {
+              restored = false;
+            }
+            throw new CommsError(
+              'CONFIG',
+              restored
+                ? `could not register "${name}"; the previous entry was put back`
+                : `could not register "${name}", and the previous entry could not be put back either — ${cliName} now has no server called "${name}"`,
+              {
+                hint: restored
+                  ? 'Check the client is not running, then try again.'
+                  : `Re-register it with \`agent-gmail mcp install --client ${options.client}\`.`,
+                cause: error,
+              },
+            );
+          }
+          method = 'cli';
+          applied = true;
+        }
+      }
+
+      if (!applied) {
+        try {
+          await run(binary, args);
+        } catch (error) {
+          const message = error instanceof CommsError ? error.message : String(error);
+          if (/already exists/i.test(message)) {
+            throw new CommsError('CONFIG', `${cliName} already has an MCP server called "${name}"`, {
+              hint: `Pass --force to replace it, or remove it first: \`${cliName} mcp remove ${name}\`.`,
+              cause: error,
+            });
+          }
+          throw error;
+        }
+        method = 'cli';
+        applied = true;
+      }
     }
   } else if (options.client !== 'json') {
     const file = knownClientConfigs(context.env).find((candidate) => candidate.client === options.client);
