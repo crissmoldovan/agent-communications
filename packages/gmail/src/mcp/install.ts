@@ -257,26 +257,63 @@ export async function mcpInstall(context: GmailContext, options: InstallOptions)
        * for, and the failure without it now says how.
        */
       if (options.force) {
+        // What is there now, so it can go back if the replacement does not land. `--force` otherwise removes a
+        // working entry and, on any failure after that, leaves the client with no server at all — strictly worse
+        // than the stale one it was asked to replace.
+        const previous = existing.find((server) => server.client === options.client && server.name === name);
         const removal =
           options.client === 'claude-code' ? ['mcp', 'remove', name, '--scope', 'user'] : ['mcp', 'remove', name];
-        // A missing entry is the state we want, so a failure to remove one is not a failure.
-        await run(binary, removal).catch(() => undefined);
+        try {
+          await run(binary, removal);
+        } catch (error) {
+          // Nothing registered under that name is the state we wanted anyway. Anything else is a real failure and
+          // must not be swallowed: proceeding would add beside an entry we failed to remove.
+          const message = error instanceof CommsError ? error.message : String(error);
+          if (!/no (mcp )?server|not found|does not exist/i.test(message)) throw error;
+        }
+
+        if (previous) {
+          try {
+            await run(binary, args);
+          } catch (error) {
+            const restore =
+              options.client === 'claude-code'
+                ? [
+                    'mcp',
+                    'add-json',
+                    name,
+                    JSON.stringify({ command: previous.command, args: previous.args }),
+                    '--scope',
+                    'user',
+                  ]
+                : ['mcp', 'add', name, '--', previous.command, ...previous.args];
+            await run(binary, restore).catch(() => undefined);
+            throw new CommsError('CONFIG', `could not register "${name}"; the previous entry was put back`, {
+              hint: 'Check the client is not running, then try again.',
+              cause: error,
+            });
+          }
+          method = 'cli';
+          applied = true;
+        }
       }
 
-      try {
-        await run(binary, args);
-      } catch (error) {
-        const message = error instanceof CommsError ? error.message : String(error);
-        if (/already exists/i.test(message)) {
-          throw new CommsError('CONFIG', `${cliName} already has an MCP server called "${name}"`, {
-            hint: `Pass --force to replace it, or remove it first: \`${cliName} mcp remove ${name}\`.`,
-            cause: error,
-          });
+      if (!applied) {
+        try {
+          await run(binary, args);
+        } catch (error) {
+          const message = error instanceof CommsError ? error.message : String(error);
+          if (/already exists/i.test(message)) {
+            throw new CommsError('CONFIG', `${cliName} already has an MCP server called "${name}"`, {
+              hint: `Pass --force to replace it, or remove it first: \`${cliName} mcp remove ${name}\`.`,
+              cause: error,
+            });
+          }
+          throw error;
         }
-        throw error;
+        method = 'cli';
+        applied = true;
       }
-      method = 'cli';
-      applied = true;
     }
   } else if (options.client !== 'json') {
     const file = knownClientConfigs(context.env).find((candidate) => candidate.client === options.client);

@@ -6,8 +6,39 @@ import type { GmailContext } from '../context.ts';
 import { VERSION } from '../version.ts';
 import { findUngatedGmailServers, listRegisteredServers, type RegisteredServer } from './client-configs.ts';
 
-/** `…/runtime/<version>/node_modules/@agentcomms/gmail/dist/cli.mjs` — the path `mcp install` writes. */
-const PINNED_RUNTIME = /[/\\]runtime[/\\]([^/\\]+)[/\\]node_modules[/\\]@agentcomms[/\\]gmail[/\\]/;
+/**
+ * The version an argument pins, or null when it pins none.
+ *
+ * Two launchers pin, and they look nothing alike. `managed` writes a path —
+ * `…/runtime/<version>/node_modules/@agentcomms/gmail/dist/cli.mjs`, matched with either separator and allowed to
+ * start the string, so a relative path is not missed. `npx` writes a package spec, `@agentcomms/gmail-mcp@<version>`.
+ * Reading only the first reported an `npx`-pinned install as current forever, which is the failure this check
+ * exists to prevent wearing the other launcher's clothes. `local` pins nothing and is correctly ignored.
+ */
+const PINNED_RUNTIME = /(?:^|[/\\])runtime[/\\]([^/\\]+)[/\\]node_modules[/\\]@agentcomms[/\\]gmail[/\\]/;
+const PINNED_SPEC = /^@agentcomms\/gmail(?:-mcp)?@(\d[^\s]*)$/;
+
+function pinnedVersion(argument: string): string | null {
+  return PINNED_RUNTIME.exec(argument)?.[1] ?? PINNED_SPEC.exec(argument)?.[1] ?? null;
+}
+
+/**
+ * The command that re-registers *this* entry, not a default one.
+ *
+ * A generic `mcp install --client <c> --force` would rewrite a server registered as `work`, or scoped to one
+ * mailbox, or installed `--read-only`, into the default: every mailbox, every tool, under another name. That
+ * turns a staleness warning into a widening of what an agent may reach — the opposite of a repair. So the flags
+ * are read back off the entry that is actually there.
+ */
+function repairCommand(server: RegisteredServer): string {
+  const flags = [`--client ${server.client}`];
+  if (server.name && server.name !== 'gmail') flags.push(`--name ${server.name}`);
+  const inbox = server.args[server.args.indexOf('--inbox') + 1];
+  if (server.args.includes('--inbox') && inbox) flags.push(`--inbox ${inbox}`);
+  if (server.args.includes('--read-only')) flags.push('--read-only');
+  if (server.args.some((argument) => PINNED_SPEC.test(argument))) flags.push('--launcher npx');
+  return `agent-gmail mcp install ${flags.join(' ')} --force`;
+}
 
 import { orphanedSecretsPath } from './inboxes.ts';
 
@@ -317,8 +348,8 @@ async function mcpChecks(context: GmailContext): Promise<Check[]> {
    */
   const stale = servers
     .map((server) => {
-      const pinned = server.args.map((arg) => PINNED_RUNTIME.exec(arg)).find((match) => match !== null);
-      return pinned ? { server, version: pinned[1] as string } : null;
+      const pin = server.args.map((arg) => pinnedVersion(arg)).find((version) => version !== null);
+      return pin ? { server, version: pin } : null;
     })
     .filter((entry): entry is { server: RegisteredServer; version: string } => entry !== null)
     .filter((entry) => entry.version !== VERSION);
@@ -330,12 +361,13 @@ async function mcpChecks(context: GmailContext): Promise<Check[]> {
     detail:
       stale.length === 0
         ? `this release, ${VERSION}`
-        : stale.map((entry) => `${entry.server.client} runs ${entry.version}; this release is ${VERSION}`).join('; '),
-    // Remove-then-install, because the client CLIs refuse to overwrite an entry that already exists.
-    fix:
-      stale.length === 0
-        ? undefined
-        : stale.map((entry) => `agent-gmail mcp install --client ${entry.server.client} --force`).join(' && '),
+        : stale
+            .map(
+              (entry) =>
+                `${entry.server.client} runs ${entry.version} as "${entry.server.name}"; this release is ${VERSION}`,
+            )
+            .join('; '),
+    fix: stale.length === 0 ? undefined : stale.map((entry) => repairCommand(entry.server)).join(' && '),
   });
 
   const ours = servers.filter((server) => [server.command, ...server.args].join(' ').includes('agent-gmail'));

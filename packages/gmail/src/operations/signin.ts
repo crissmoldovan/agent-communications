@@ -187,21 +187,32 @@ async function startDetached(
    * and `doctor` can point at the file.
    */
   const logPath = join(context.core.paths.stateDir, 'flows', `${flow.flowId}.log`);
-  await mkdir(dirname(logPath), { recursive: true });
-  const log = await open(logPath, 'a');
 
   let child: ReturnType<typeof spawn>;
   try {
-    child = spawn(entry.command, [...entry.args, 'oauth-listen', flow.flowId], {
-      detached: true,
-      // An IPC channel only for the "ready" message: nothing else passes between the processes.
-      stdio: ['ignore', 'ignore', log.fd, 'ipc'],
-      env: { ...process.env, ...listenerEnv(context, options.port) },
+    await mkdir(dirname(logPath), { recursive: true });
+    const log = await open(logPath, 'a');
+    try {
+      child = spawn(entry.command, [...entry.args, 'oauth-listen', flow.flowId], {
+        detached: true,
+        // An IPC channel only for the "ready" message: nothing else passes between the processes.
+        stdio: ['ignore', 'ignore', log.fd, 'ipc'],
+        env: { ...process.env, ...listenerEnv(context, options.port) },
+      });
+    } finally {
+      // The child holds its own duplicate of the descriptor; ours would otherwise keep the file open for this
+      // process's lifetime, which is the same class of leak this whole change is about.
+      await log.close();
+    }
+  } catch (error) {
+    // The flow record, with its PKCE verifier, was written before any of this. A failure here — no permission to
+    // create the log, no descriptors left, a spawn that throws outright — would otherwise leave it on disk with
+    // no listener and no command that can finish it, and the next run would not know it was dead.
+    await context.flows.discard(flow.flowId);
+    throw new CommsError('UNEXPECTED', `the sign-in listener could not be started: ${(error as Error).message}`, {
+      hint: 'Run the sign-in on a terminal instead: `agent-gmail inbox add <alias>`.',
+      cause: error,
     });
-  } finally {
-    // The child holds its own duplicate of the descriptor; ours would otherwise keep the file open for this
-    // process's lifetime, which is the same class of leak this whole change is about.
-    await log.close();
   }
 
   try {

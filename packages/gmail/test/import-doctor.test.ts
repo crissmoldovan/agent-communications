@@ -287,3 +287,38 @@ test('doctor says when the registered MCP server is an older version than this o
   const current = await doctor(new GmailContext({ core: harness.core, env }));
   assert.equal(byId(current.checks, 'registered-server-version')?.status, 'ok');
 });
+
+test('doctor’s repair for a stale server preserves what that server was, not the defaults', async () => {
+  const harness = await newHarness({ accounts: [] });
+  const env = { ...harness.env, HOME: harness.configDir };
+  const byId = <T extends { id: string }>(checks: readonly T[], id: string) => checks.find((check) => check.id === id);
+
+  // A server someone deliberately narrowed: its own name, one mailbox, read-only, and pinned through npx rather
+  // than the managed runtime. A generic `mcp install --client claude-code --force` would replace all four with
+  // the defaults — every mailbox, every tool, under another name. That is a widening, not a repair.
+  await writeFile(
+    join(harness.configDir, '.claude.json'),
+    JSON.stringify({
+      mcpServers: {
+        work: {
+          command: 'npx',
+          args: ['-y', '@agentcomms/gmail-mcp@0.0.1', '--inbox', 'personal', '--read-only'],
+        },
+      },
+    }),
+  );
+
+  const result = await doctor(new GmailContext({ core: harness.core, env }));
+  const check = byId(result.checks, 'registered-server-version');
+  assert.equal(
+    check?.status,
+    'warn',
+    'an npx-pinned old version is stale too; only the managed path was checked before',
+  );
+  assert.match(check?.detail ?? '', /runs 0\.0\.1 as "work"/);
+
+  const fix = check?.fix ?? '';
+  for (const flag of ['--name work', '--inbox personal', '--read-only', '--launcher npx', '--force']) {
+    assert.ok(fix.includes(flag), `the repair dropped ${flag}: ${fix}`);
+  }
+});

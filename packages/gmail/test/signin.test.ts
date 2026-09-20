@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { readdir, stat, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -351,22 +352,52 @@ test('a reauth keeps the mailbox contacts setting when no flag names it', async 
   await finishSignIn(context, { flowId: widen.flowId, waitSeconds: 10, pollMs: 50 });
 });
 
-test('the detached listener does not hold the caller’s stderr open', async () => {
+test('a piped `--start` returns immediately: the listener does not hold the caller’s stderr open', async () => {
   const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
-  const context = await withClient(harness);
-  const started = await startSignIn(context, { mode: 'add', alias: 'work', listenerCommand: LISTENER });
+  await withClient(harness);
 
-  // Inheriting stderr meant this child held the parent's open for as long as it waited for the browser — up to ten
-  // minutes. `inbox add --start | tee setup.log` then hung on a command that had already printed everything and
-  // exited. Its stderr goes to a file instead, and the file's existence is what says so.
-  const log = join(context.core.paths.stateDir, 'flows', `${started.flowId}.log`);
-  await assert.doesNotReject(stat(log), `the listener's stderr should be redirected to ${log}`);
+  // The real CLI, with its stderr on a pipe — which is what a caller doing `... --start | tee log` has.
+  const child = spawn(process.execPath, [...LISTENER.args, 'inbox', 'add', 'work', '--start'], {
+    env: { ...process.env, ...harness.env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
 
-  // Redirected, not discarded: a listener that fails after reporting ready must still leave a trace.
-  const handle = await stat(log);
-  assert.ok(handle.isFile());
+  let stderr = '';
+  let stdout = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk;
+  });
 
-  await fetch(harness.google.consent(started.authUrl));
-  const result = await finishSignIn(context, { flowId: started.flowId, waitSeconds: 10, pollMs: 50 });
-  assert.equal(result.inbox.email, 'jo@example.test');
+  // The assertion that matters: the pipe reaches EOF. With the listener inheriting stderr it does not, because
+  // the detached child holds the write end for as long as it waits for a browser — ten minutes. Everything the
+  // command was going to print has already been printed either way, so only EOF distinguishes the two.
+  const eof = new Promise<'eof'>((resolve) => child.stderr.once('end', () => resolve('eof')));
+  const raced = await Promise.race([eof, new Promise<'held'>((resolve) => setTimeout(() => resolve('held'), 15_000))]);
+  assert.equal(raced, 'eof', `stderr was still open after 15s; it printed: ${stdout}${stderr}`);
+
+  const exit = await new Promise<number | null>((resolve) => child.once('close', (code) => resolve(code)));
+  assert.equal(exit, 0);
+  // `--start` prints its instructions on stdout; stderr is what the listener used to inherit, which is why a
+  // caller merging the two (`--start 2>&1 | tail`) is the one that hung.
+  const printed = `${stdout}${stderr}`;
+  assert.match(printed, /--finish/, 'and it did print the finish command before closing');
+
+  // The listener really is still waiting — otherwise EOF would prove nothing, since a dead listener closes the
+  // pipe too. Its flow record is still on disk, and so is the log its stderr was redirected into.
+  const flowId = /--finish (fl_[A-Za-z0-9]{22})/.exec(printed)?.[1];
+  assert.ok(flowId, 'the start command named a flow');
+  const flows = join(harness.core.paths.stateDir, 'flows');
+  assert.ok((await readdir(flows)).includes(`${flowId}.json`), 'the flow is still open');
+  assert.ok((await readdir(flows)).includes(`${flowId}.log`), 'and its stderr went to a file');
+
+  // Let the listener finish, rather than leaving a detached process waiting ten minutes for a browser that will
+  // never come. One left running slowed the rest of this file enough that an unrelated sign-in timed out.
+  const authUrl = /\bhttps?:\/\/\S*[?&]client_id=\S+/.exec(printed)?.[0];
+  assert.ok(authUrl, 'the start command printed a sign-in link');
+  await fetch(harness.google.consent(authUrl));
 });
