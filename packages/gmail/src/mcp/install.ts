@@ -262,7 +262,11 @@ export async function mcpInstall(context: GmailContext, options: InstallOptions)
         // What is there now, so it can go back if the replacement does not land. `--force` otherwise removes a
         // working entry and, on any failure after that, leaves the client with no server at all — strictly worse
         // than the stale one it was asked to replace.
-        const previous = existing.find((server) => server.client === options.client && server.name === name);
+        // User scope only: every command below targets it, so a project-scoped entry of the same name is not the
+        // one being replaced and must not be treated as the thing to restore.
+        const previous = existing.find(
+          (server) => server.client === options.client && server.name === name && server.scope !== 'project',
+        );
         const removal =
           options.client === 'claude-code' ? ['mcp', 'remove', name, '--scope', 'user'] : ['mcp', 'remove', name];
         try {

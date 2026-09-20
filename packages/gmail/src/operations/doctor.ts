@@ -31,6 +31,12 @@ function pinnedVersion(argument: string): string | null {
  * are read back off the entry that is actually there.
  */
 function repairCommand(server: RegisteredServer): string {
+  // Every command this package issues targets user scope. Pointing one at a project-scoped entry would remove
+  // nothing, add a second entry at user scope, and report success — with the stale one still in force for that
+  // project. There is no flag that reaches it, so the honest answer is the manual one.
+  if (server.scope === 'project') {
+    return `remove "${server.name}" from the project entry in ${server.path} by hand, then re-run mcp install`;
+  }
   const flags = [`--client ${server.client}`];
   if (server.name && server.name !== 'gmail') flags.push(`--name ${server.name}`);
   const inbox = server.args[server.args.indexOf('--inbox') + 1];
