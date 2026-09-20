@@ -38,9 +38,17 @@ async function fakeClaude(options: { failAdd?: boolean; failRestore?: boolean; f
     '}',
     'process.exit(0);',
   ].join('\n');
-  const path = join(dir, 'claude');
-  await writeFile(path, script);
-  await chmod(path, 0o755);
+  // Two spellings, because `whichExecutable` looks the way a shell does: an extensionless file with a shebang on
+  // POSIX, and a `.cmd` shim on Windows, where PATHEXT decides what counts as executable and a shebang does not
+  // run at all. Written as the wrong one the binary is simply not found, the whole CLI branch is skipped, and
+  // every test here passes without exercising anything — which is what it did on the Windows leg.
+  await writeFile(join(dir, 'claude.js'), script.replace('#!/usr/bin/env node\n', ''));
+  const posix = join(dir, 'claude');
+  await writeFile(posix, script);
+  await chmod(posix, 0o755);
+  const cmd = join(dir, 'claude.cmd');
+  await writeFile(cmd, '@echo off\r\nnode "%~dp0claude.js" %*\r\n');
+  await chmod(cmd, 0o755);
   return {
     dir,
     log,
@@ -73,6 +81,9 @@ test('--force restores the previous entry, with its env, when the replacement fa
   );
 
   const calls = await fake.calls();
+  // A binary that is not found skips the whole branch in silence, which is how these passed on Windows while
+  // testing nothing at all.
+  assert.ok(calls.length > 0, 'the fake CLI was found and run');
   assert.ok(
     calls.some((call) => call.startsWith('mcp remove gmail')),
     'it removed first',
