@@ -195,10 +195,10 @@ Good — the whole preview, the flag named, nothing added that competes with it:
 Here is exactly what would be sent. Nothing has gone yet.
 
     SEND PREVIEW · inbox work · approval ap_7K2Q… · draft r_88… · nothing has been sent
-    From:    Jo Example <jo@example.com>
-    To:      sam@partner.test     EXTERNAL
-             ana@partner.test     EXTERNAL · FIRST-TIME
-    Subject: Re: Phase 2 plan
+    From:     Jo Example <jo@example.com>
+    To:       sam@partner.test     EXTERNAL
+              ana@partner.test     EXTERNAL · FIRST-TIME
+    Subject:  Re: Phase 2 plan
     Body (142 words, 812 characters):
     ```text
     Tuesday works for me…

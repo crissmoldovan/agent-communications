@@ -92,8 +92,13 @@ export interface MessagePreview {
   warnings?: string[] | undefined;
 }
 
+// One past the longest label there is (`Reply-To:`, `Notifies:`), because `padEnd` at exactly that width adds
+// nothing and the value runs straight into the colon. That read as `Reply-To:accounts@evil.test` on the one line
+// an approver most needs to be able to skim.
+const LABEL_WIDTH = 10;
+
 function line(label: string, value: string): string {
-  return `${label.padEnd(9)}${value}`;
+  return `${label.padEnd(LABEL_WIDTH)}${value}`;
 }
 
 /**
@@ -171,6 +176,113 @@ export function renderMessagePreview(preview: MessagePreview): string {
     '',
     `── To ${list(preview.recipients.to)} · Cc ${list(preview.recipients.cc)} · Bcc ${list(preview.recipients.bcc)}`,
   );
+  if (preview.policy) lines.push(escapeForDisplay(preview.policy));
+  return lines.join('\n');
+}
+
+/** Who a channel message will notify, resolved to real people rather than left as syntax. */
+export interface PreviewNotifies {
+  /** `@here` — members currently online. */
+  here: boolean;
+  /** `@channel` — every member, online or not. */
+  channel: boolean;
+  /** Individually mentioned people, already resolved to display names. */
+  users: string[];
+  /**
+   * How many people the above actually reaches.
+   *
+   * The number is the point. "@channel" is four characters whether the room holds three people or four hundred, and
+   * a person approving the four-hundred case is agreeing to something quite different. A mail preview lists its
+   * recipients and the reader counts them; a channel preview has to do the counting.
+   */
+  estimated: number;
+  /** Set when the count could not be resolved — an unreadable member list, a rate limit. Never guessed at. */
+  unknown?: string | undefined;
+}
+
+export interface ChannelPreview {
+  workspace: string;
+  /** `#engineering`, or a person's name for a direct message. */
+  channel: string;
+  /** Set when this is a reply inside a thread: "in reply to Sam, 17 Sep 16:02 (6 replies)". */
+  thread?: string | undefined;
+  /** The text as the client will render it, not the payload that produces it. */
+  body: string;
+  notifies: PreviewNotifies;
+  attachments?: PreviewAttachment[] | undefined;
+  context?:
+    | {
+        workspace?: string | undefined;
+        draftId?: string | undefined;
+        approvalId?: string | undefined;
+        note?: string | undefined;
+      }
+    | undefined;
+  /** Every link, with its query string: a shortener or a tracker is only visible in full. */
+  links?: string[] | undefined;
+  /** The last line: what has to happen before this can be posted. */
+  policy?: string | undefined;
+  warnings?: string[] | undefined;
+}
+
+/** How a notification set reads to a person: "@channel — about 412 people", "2 people". */
+export function describeNotifies(notifies: PreviewNotifies): string {
+  const parts: string[] = [];
+  if (notifies.channel) parts.push('@channel');
+  if (notifies.here) parts.push('@here');
+  if (notifies.users.length > 0) parts.push(notifies.users.join(', '));
+  if (parts.length === 0) return 'nobody is notified';
+  const reach = notifies.unknown
+    ? `how many that reaches is not known — ${notifies.unknown}`
+    : `about ${notifies.estimated} ${notifies.estimated === 1 ? 'person' : 'people'}`;
+  return `${parts.join(' · ')} — ${reach}`;
+}
+
+/**
+ * The channel equivalent of `renderMessagePreview`, and deliberately the same shape: a person approving a post
+ * should not have to learn a second layout.
+ *
+ * The difference is what sits where the recipients do. Mail names the people it goes to; a channel message names
+ * one room, and the question a person actually needs answered is how far it carries. So the notification line takes
+ * the position the recipient list occupies for mail — including the repeat below the body, for the same reason a
+ * long message scrolls the header out of view.
+ */
+export function renderChannelPreview(preview: ChannelPreview): string {
+  const lines: string[] = [];
+  const context = preview.context ?? {};
+  lines.push(
+    [
+      context.approvalId ? 'POST PREVIEW' : 'MESSAGE PREVIEW',
+      `workspace ${context.workspace ?? preview.workspace}`,
+      context.approvalId ? `approval ${context.approvalId}` : '',
+      context.draftId ? `draft ${context.draftId}` : '',
+      context.note ?? '',
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  );
+
+  lines.push(line('Channel:', truncateDisplay(preview.channel, 120)));
+  if (preview.thread) lines.push(line('Thread:', truncateDisplay(preview.thread, 120)));
+  lines.push(line('Notifies:', truncateDisplay(describeNotifies(preview.notifies), 160)));
+
+  for (const attachment of preview.attachments ?? []) {
+    lines.push(
+      line(
+        'Attach:',
+        `${truncateDisplay(attachment.filename, 80)} · ${Math.round(attachment.size / 1024)} KB · ${attachment.mimeType}`,
+      ),
+    );
+  }
+  for (const url of preview.links ?? []) lines.push(line('Link:', truncateDisplay(url, 160)));
+
+  const words = preview.body.trim() ? preview.body.trim().split(/\s+/).length : 0;
+  lines.push('', `Body (${words} word${words === 1 ? '' : 's'}, ${preview.body.length} characters):`);
+  lines.push(renderFencedBody(preview.body));
+
+  for (const warning of preview.warnings ?? []) lines.push(`! ${escapeForDisplay(warning)}`);
+
+  lines.push('', `── ${truncateDisplay(preview.channel, 60)} · ${describeNotifies(preview.notifies)}`);
   if (preview.policy) lines.push(escapeForDisplay(preview.policy));
   return lines.join('\n');
 }

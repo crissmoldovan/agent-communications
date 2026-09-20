@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { open, readFile, rm } from 'node:fs/promises';
+import { open, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CommsError } from './errors.ts';
 import { writeFileAtomic } from './fs.ts';

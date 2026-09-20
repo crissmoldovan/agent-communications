@@ -210,7 +210,7 @@ test('a file is attached by path, and only from where attaching is allowed', asy
     draft.attachments.map((attachment) => attachment.filename),
     ['plan.pdf'],
   );
-  assert.match(draft.preview, /Attach: {2}plan\.pdf/);
+  assert.match(draft.preview, /Attach: {3}plan\.pdf/);
 
   // Credentials sit in dot-directories under home, and the jail refuses them whatever an agent types.
   await mkdir(join(home, '.ssh'), { recursive: true });

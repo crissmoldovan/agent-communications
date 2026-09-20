@@ -23,9 +23,9 @@ test('a preview shows the recipients before the body, and again after it', () =>
   });
 
   assert.match(preview, /MESSAGE PREVIEW · inbox work · draft r-123 · nothing has been sent/);
-  assert.match(preview, /To: {6}sam@partner\.test/);
-  assert.match(preview, /Cc: {6}ana@partner\.test/);
-  assert.match(preview, /Subject: Re: Phase 2 plan/);
+  assert.match(preview, /To: {7}sam@partner\.test/);
+  assert.match(preview, /Cc: {7}ana@partner\.test/);
+  assert.match(preview, /Subject: {2}Re: Phase 2 plan/);
   assert.match(preview, /Body \(8 words, 48 characters\)/);
   // The recipients appear again below the body: a long message scrolls the header out of view.
   assert.match(preview, /── To sam@partner\.test · Cc ana@partner\.test · Bcc none$/);
@@ -80,10 +80,10 @@ test('attachments and warnings are part of what is approved', () => {
     attachments: [{ filename: 'invoice.pdf', size: 412_000, mimeType: 'application/pdf' }],
     warnings: ['sam@partner.test has not been written to from this mailbox before'],
   });
-  assert.match(preview, /Attach: {2}invoice\.pdf · 402 KB · application\/pdf/);
+  assert.match(preview, /Attach: {3}invoice\.pdf · 402 KB · application\/pdf/);
   assert.match(preview, /! sam@partner\.test has not been written to/);
   // Bcc is shown in both places: it is the line most easily missed and the most costly to get wrong.
-  assert.match(preview, /Bcc: {5}quiet@partner\.test/);
+  assert.match(preview, /Bcc: {6}quiet@partner\.test/);
   assert.match(preview, /Bcc quiet@partner\.test$/);
 });
 
