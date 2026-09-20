@@ -271,11 +271,11 @@ Good — the preview shown whole, the warning named, and the handover made expli
 Drafted as a reply-all in the work mailbox. Nothing has been sent.
 
     MESSAGE PREVIEW · inbox work · draft r_88214 · nothing has been sent
-    From:    jo@example.com
-    To:      sam@partner.test
-    Cc:      ana@partner.test
-    Subject: Re: Phase 2 plan
-    Attach:  phase-2-scope.pdf · 412 KB · application/octet-stream
+    From:     jo@example.com
+    To:       sam@partner.test
+    Cc:       ana@partner.test
+    Subject:  Re: Phase 2 plan
+    Attach:   phase-2-scope.pdf · 412 KB · application/octet-stream
 
     Body (41 words, 233 characters):
     ```text

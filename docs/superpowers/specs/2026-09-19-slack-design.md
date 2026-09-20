@@ -208,17 +208,41 @@ Most of it already fits. The parts that do not:
 | `TaintStore` | Addresses and domains | Add Slack user ids and channel ids. An address seen in a message we read is the same idea |
 | Attachment jail | Unchanged | Unchanged |
 | `renderMessagePreview` | Recipients, subject, body | A second renderer for channel-shaped previews: workspace, channel, thread, who will be notified (`@here`, `@channel`, direct mentions), the body fenced, and the notification count — because "this will notify 240 people" is the Slack equivalent of a recipient list |
-| Config | `inboxes` | `accounts`, with a `provider` discriminator. A migration, done once, with the same loosening classification |
+| Config | `inboxes` | `accounts` added beside `inboxes`, not replacing it — see the note below. `connectedAccounts()` returns one list across both |
 
 **The one genuinely new idea:** a Slack preview must say **who will be notified**, resolved and counted. `@channel`
 in a 400-person channel is the blast radius that has no email equivalent, and it belongs in the preview beside the
 body, in the same position the recipient list occupies for mail.
 
+### Where this diverges: the config is not renamed (decided during S1)
+
+The table above originally called for `inboxes` to *become* `accounts`, as a one-off migration. It does not, and the
+reason is a constraint the spec did not account for.
+
+`config.ts` states its own invariant: within `version: 1` every change is additive, because an MCP server started
+last week and a CLI installed today read and write the same file, and a reader that discarded what it did not
+understand would silently undo the other's settings. Moving every mailbox out of `inboxes` is the opposite of
+additive — to the already-released 0.1.2 it reads as a config with no mailboxes in it, and 0.1.2 is in the field.
+
+Bumping to `version: 2` was the alternative. It fails louder rather than quieter — 0.1.2 refuses an unknown version
+with a `CONFIG` error — but it still stops a running server dead the moment someone installs the new release.
+
+So: `accounts` is a new key holding non-mail accounts, `inboxes` is untouched, and both share one alias namespace
+that the schema enforces. This was checked against the published 0.1.2 rather than assumed: a config carrying an
+unknown `accounts` key parses and round-trips through it intact, because the schema is a `looseObject`.
+
+What the rename was *for* — one list of everything connected, whatever the platform — was never really a question
+about the file. `connectedAccounts(config)` answers it, sorted by alias so which map an entry came from is not
+visible to whoever reads the list. Callers that genuinely care about the difference read the map they mean.
+
+The cost is honest: two maps, and a `SendLedger` keyed by two id shapes rather than a uniform `account id`. The
+distinct `acc_` / `ibx_` prefixes mean an id alone still says which it is.
+
 ## 7. Phases
 
 | Phase | Branch | What |
 |---|---|---|
-| S1 | `feat/slack-core` | `@agentcomms/core` changes: the canonical-message union, `accounts` config with migration, the channel preview renderer, taint for ids |
+| S1 | `feat/slack-core` | `@agentcomms/core` changes: the canonical-message union, the additive `accounts` config, the channel preview renderer, taint for ids |
 | S2 | `feat/slack-auth` | `@agentcomms/slack`: the two manifests, OAuth with token rotation, `workspace add/list/show/remove/reauth`, `doctor`, the transport with its method allowlist |
 | S3 | `feat/slack-read` | Conversations, history, threads, search, users, files; the body pipeline with unfurl labelling and text/blocks reconciliation |
 | S4 | `feat/slack-compose` | Local drafts, the block composer, the preview with its notification count |
@@ -254,8 +278,8 @@ number covers both.
 ### D11 — multi-workspace from the start
 
 The Gmail build learned this the expensive way: an alias-to-account map added later touches every operation, every
-tool schema and every skill. The config already carries `accounts` keyed by alias with a `provider` discriminator
-(§6), so the cost now is a map lookup and the cost later is a migration.
+tool schema and every skill. The config carries both maps keyed by alias, with `connectedAccounts()` over the pair
+(§6), so the cost now is a lookup and the cost later is a migration.
 
 ### D12 — reactions in v1, at lower ceremony
 

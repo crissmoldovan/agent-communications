@@ -92,8 +92,28 @@ export interface MessagePreview {
   warnings?: string[] | undefined;
 }
 
+// One past the longest label there is (`Reply-To:`, `Notifies:`), because `padEnd` at exactly that width adds
+// nothing and the value runs straight into the colon. That read as `Reply-To:accounts@evil.test` on the one line
+// an approver most needs to be able to skim.
+const LABEL_WIDTH = 10;
+
 function line(label: string, value: string): string {
-  return `${label.padEnd(9)}${value}`;
+  return `${label.padEnd(LABEL_WIDTH)}${value}`;
+}
+
+/**
+ * The `A · B · C` line at the top, with every part flattened and escaped.
+ *
+ * Escaped even where the field looks safe. An inbox alias is `[a-z0-9-]` and cannot carry a newline; a workspace
+ * name is whatever the workspace is called, and a heading assembled from raw parts put an attacker one newline away
+ * from writing a line of the preview's own. Which fields are constrained is not a property this function can see,
+ * and the next one added will not announce that it is the unconstrained one.
+ */
+function heading(parts: readonly (string | undefined)[]): string {
+  return parts
+    .filter((part): part is string => Boolean(part))
+    .map((part) => truncateDisplay(part, 120))
+    .join(' · ');
 }
 
 /**
@@ -109,16 +129,15 @@ function line(label: string, value: string): string {
 export function renderMessagePreview(preview: MessagePreview): string {
   const lines: string[] = [];
   const context = preview.context ?? {};
-  const heading = [
-    context.approvalId ? 'SEND PREVIEW' : 'MESSAGE PREVIEW',
-    context.inbox ? `inbox ${context.inbox}` : '',
-    context.approvalId ? `approval ${context.approvalId}` : '',
-    context.draftId ? `draft ${context.draftId}` : '',
-    context.note ?? '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
-  lines.push(heading);
+  lines.push(
+    heading([
+      context.approvalId ? 'SEND PREVIEW' : 'MESSAGE PREVIEW',
+      context.inbox ? `inbox ${context.inbox}` : '',
+      context.approvalId ? `approval ${context.approvalId}` : '',
+      context.draftId ? `draft ${context.draftId}` : '',
+      context.note,
+    ]),
+  );
 
   const list = (addresses: string[]) =>
     addresses.length > 0 ? addresses.map((a) => truncateDisplay(a, 120)).join(', ') : 'none';
@@ -171,6 +190,139 @@ export function renderMessagePreview(preview: MessagePreview): string {
     '',
     `── To ${list(preview.recipients.to)} · Cc ${list(preview.recipients.cc)} · Bcc ${list(preview.recipients.bcc)}`,
   );
+  if (preview.policy) lines.push(escapeForDisplay(preview.policy));
+  return lines.join('\n');
+}
+
+/** Who a channel message will notify, resolved to real people rather than left as syntax. */
+export interface PreviewNotifies {
+  /** `@here` — members currently online. */
+  here: boolean;
+  /** `@channel` — every member, online or not. */
+  channel: boolean;
+  /** Individually mentioned people, already resolved to display names. */
+  users: string[];
+  /**
+   * How many people the above actually reaches.
+   *
+   * The number is the point. "@channel" is four characters whether the room holds three people or four hundred, and
+   * a person approving the four-hundred case is agreeing to something quite different. A mail preview lists its
+   * recipients and the reader counts them; a channel preview has to do the counting.
+   */
+  estimated: number;
+  /** Set when the count could not be resolved — an unreadable member list, a rate limit. Never guessed at. */
+  unknown?: string | undefined;
+}
+
+export interface ChannelPreview {
+  workspace: string;
+  /**
+   * Who this will be posted as, as a person should read it: `Acme Bot (U024BE7LH)`.
+   *
+   * The channel counterpart of the `From:` line, and shown for the same reason — it is recipient-visible, and an
+   * approver who is not told which of their connected accounts is speaking has not been shown the message.
+   */
+  postingAs: string;
+  /** `#engineering`, or a person's name for a direct message. */
+  channel: string;
+  /** Set when this is a reply inside a thread: "in reply to Sam, 17 Sep 16:02 (6 replies)". */
+  thread?: string | undefined;
+  /** The text as the client will render it, not the payload that produces it. */
+  body: string;
+  notifies: PreviewNotifies;
+  attachments?: PreviewAttachment[] | undefined;
+  context?:
+    | {
+        workspace?: string | undefined;
+        draftId?: string | undefined;
+        approvalId?: string | undefined;
+        note?: string | undefined;
+      }
+    | undefined;
+  /** Every link, with its query string: a shortener or a tracker is only visible in full. */
+  links?: string[] | undefined;
+  /** The last line: what has to happen before this can be posted. */
+  policy?: string | undefined;
+  warnings?: string[] | undefined;
+}
+
+/** How a notification set reads to a person: "@channel — about 412 people", "2 people". */
+/**
+ * How many names are listed before the rest become a number, and how wide each may be.
+ *
+ * Both exist so the string this returns has a ceiling. The reach clause is last, and a caller that truncated the
+ * result would cut the count off the end — losing the one part of the line that cannot be inferred from the rest.
+ */
+const MAX_NAMED = 4;
+const NAME_WIDTH = 24;
+
+export function describeNotifies(notifies: PreviewNotifies): string {
+  const parts: string[] = [];
+  if (notifies.channel) parts.push('@channel');
+  if (notifies.here) parts.push('@here');
+
+  // Display names are chosen by the accounts that bear them, so they are attacker-controlled text. They are escaped
+  // here rather than at the call sites: this string is rendered in two places and one of them wrote it straight into
+  // the preview, where a name carrying a newline forged a `Policy:` line in the preview's own voice. A guarantee
+  // that depends on every caller remembering is not a guarantee — so the chokepoint holds it.
+  const named = notifies.users.map((user) => truncateDisplay(user, NAME_WIDTH));
+  if (named.length > 0) {
+    const shown = named.slice(0, MAX_NAMED);
+    const rest = named.length - shown.length;
+    parts.push(rest > 0 ? `${shown.join(', ')} and ${rest} more` : shown.join(', '));
+  }
+
+  if (parts.length === 0) return 'nobody is notified';
+  const reach = notifies.unknown
+    ? `how many that reaches is not known — ${truncateDisplay(notifies.unknown, 60)}`
+    : `about ${notifies.estimated} ${notifies.estimated === 1 ? 'person' : 'people'}`;
+  return `${parts.join(' · ')} — ${reach}`;
+}
+
+/**
+ * The channel equivalent of `renderMessagePreview`, and deliberately the same shape: a person approving a post
+ * should not have to learn a second layout.
+ *
+ * The difference is what sits where the recipients do. Mail names the people it goes to; a channel message names
+ * one room, and the question a person actually needs answered is how far it carries. So the notification line takes
+ * the position the recipient list occupies for mail — including the repeat below the body, for the same reason a
+ * long message scrolls the header out of view.
+ */
+export function renderChannelPreview(preview: ChannelPreview): string {
+  const lines: string[] = [];
+  const context = preview.context ?? {};
+  lines.push(
+    heading([
+      context.approvalId ? 'POST PREVIEW' : 'MESSAGE PREVIEW',
+      `workspace ${context.workspace ?? preview.workspace}`,
+      context.approvalId ? `approval ${context.approvalId}` : '',
+      context.draftId ? `draft ${context.draftId}` : '',
+      context.note,
+    ]),
+  );
+
+  lines.push(line('From:', truncateDisplay(preview.postingAs, 120)));
+  lines.push(line('Channel:', truncateDisplay(preview.channel, 120)));
+  if (preview.thread) lines.push(line('Thread:', truncateDisplay(preview.thread, 120)));
+  lines.push(line('Notifies:', describeNotifies(preview.notifies)));
+
+  for (const attachment of preview.attachments ?? []) {
+    lines.push(
+      line(
+        'Attach:',
+        `${truncateDisplay(attachment.filename, 80)} · ${Math.round(attachment.size / 1024)} KB · ${attachment.mimeType}`,
+      ),
+    );
+  }
+  for (const url of preview.links ?? []) lines.push(line('Link:', truncateDisplay(url, 160)));
+
+  const words = preview.body.trim() ? preview.body.trim().split(/\s+/).length : 0;
+  lines.push('', `Body (${words} word${words === 1 ? '' : 's'}, ${preview.body.length} characters):`);
+  lines.push(renderFencedBody(preview.body));
+
+  for (const warning of preview.warnings ?? []) lines.push(`! ${escapeForDisplay(warning)}`);
+
+  lines.push('', `── ${truncateDisplay(preview.channel, 60)} · ${describeNotifies(preview.notifies)}`);
   if (preview.policy) lines.push(escapeForDisplay(preview.policy));
   return lines.join('\n');
 }

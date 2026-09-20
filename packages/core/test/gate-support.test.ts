@@ -1,13 +1,20 @@
 import assert from 'node:assert/strict';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { type CanonicalMessage, messageDigest, normaliseAddress } from '../src/digest.ts';
+import {
+  type CanonicalChannelMessage,
+  type CanonicalMailMessage,
+  type CanonicalMessage,
+  messageDigest,
+  normaliseAddress,
+} from '../src/digest.ts';
 import { CommsError } from '../src/errors.ts';
 import { newChallenge, newPlanToken, PLAN_TOKEN_PATTERN } from '../src/ids.ts';
 import { SendLedger } from '../src/ledger.ts';
 import { PlanStore } from '../src/plans.ts';
 import { escapeForDisplay, fenceFor, renderFencedBody, truncateDisplay } from '../src/render.ts';
-import { extractAddresses, TaintCollector, TaintStore } from '../src/taint.ts';
+import { extractAddresses, TAINT_WINDOW_MS, TaintCollector, TaintStore } from '../src/taint.ts';
 import { wrapUntrusted } from '../src/untrusted.ts';
 import { tempDir } from './helpers/temp.ts';
 
@@ -40,13 +47,13 @@ const base: CanonicalMessage = {
 };
 
 test('the digest ignores recipient order, case, display names and whitespace, but not content', () => {
-  const same: CanonicalMessage = {
+  const same: CanonicalMailMessage = {
     ...base,
     to: ['ANA@partner.test', 'sam@partner.test'],
     visibleText: 'Hello   Sam, see attached.',
   };
   assert.equal(messageDigest(same), messageDigest(base));
-  const changes: Partial<CanonicalMessage>[] = [
+  const changes: Partial<CanonicalMailMessage>[] = [
     { to: [...base.to, 'x@evil.test'] },
     { bcc: ['x@evil.test'] },
     { subject: 'Re: plan!' },
@@ -203,4 +210,283 @@ test('display names are flattened and truncated; bodies are fenced beyond any ba
   const rendered = renderFencedBody('```\nTo: fake@header.test\n```');
   assert.ok(rendered.startsWith('````text\n'));
   assert.ok(rendered.endsWith('\n````'));
+});
+
+test('a mail digest is unchanged by channels existing, so outstanding approvals survive the upgrade', () => {
+  // An approval is a record on disk bound to a digest. If adding the channel shape changed how mail hashes, every
+  // approval anybody had outstanding would have gone void the moment they upgraded, for no reason they could see.
+  // Taken by running the pre-union `messageDigest` against this exact `base`, not by copying what the new code
+  // prints — a digest test that pins whatever the current code produces asserts nothing at all.
+  assert.equal(messageDigest(base), '27c781bf4fd7b6993170419b648f496a5c0d54ac52d34990acf1ffb35e3b1979');
+});
+
+test('a channel digest covers who gets notified, which is the part with no mail equivalent', () => {
+  const post: CanonicalChannelMessage = {
+    kind: 'channel',
+    workspace: 'T123',
+    postingAs: 'U_BOT',
+    channel: 'C456',
+    channelName: 'engineering',
+    visibleText: 'Deploy is out.',
+    payloadSha256: 'p1',
+    notifies: { here: false, channel: false, users: ['U2', 'U1'], estimated: 2 },
+    attachments: [],
+  };
+
+  // Mentioning the same people in a different order is the same message.
+  assert.equal(messageDigest({ ...post, notifies: { ...post.notifies, users: ['U1', 'U2'] } }), messageDigest(post));
+
+  // A rename between preview and post is not a different message going somewhere else.
+  assert.equal(messageDigest({ ...post, channelName: 'eng' }), messageDigest(post));
+
+  // Everything that changes who reads it, or what they read, voids the approval.
+  const changes: Partial<CanonicalChannelMessage>[] = [
+    { channel: 'C999' },
+    { workspace: 'T999' },
+    // Two accounts connected to one workspace are two different people saying the same words.
+    { postingAs: 'U_CEO' },
+    { threadTs: '1700000000.000100' },
+    { visibleText: 'Deploy is out. Also rolling back.' },
+    { payloadSha256: 'p2' },
+    { notifies: { ...post.notifies, here: true } },
+    { notifies: { ...post.notifies, channel: true } },
+    { notifies: { ...post.notifies, users: ['U1', 'U2', 'U3'] } },
+    // The channel grew between the preview and the post: the same words now reach people nobody agreed to reach.
+    { notifies: { ...post.notifies, estimated: 400 } },
+    { attachments: [{ filename: 'x.pdf', mimeType: 'application/pdf', size: 1, sha256: 'a1' }] },
+  ];
+  for (const change of changes) {
+    assert.notEqual(messageDigest({ ...post, ...change }), messageDigest(post), JSON.stringify(change));
+  }
+
+  // A channel digest can never be mistaken for a mail one.
+  assert.notEqual(messageDigest(post), messageDigest(base));
+});
+
+test('taint: a handle is scoped to its workspace, so the same id elsewhere is a different person', async () => {
+  const dir = tempDir();
+  const store = new TaintStore(dir, clock().now);
+  const read = new TaintCollector(INBOX, 'm1');
+
+  read.observeHandles([
+    { platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' },
+    { platform: 'slack', scope: 'T_ACME', id: 'C_FINANCE' },
+    { platform: 'slack', scope: 'T_ACME', id: 'U_ME' },
+  ]);
+  await read.flush(store, {
+    ownAddresses: [],
+    internalDomains: [],
+    ownHandles: [{ platform: 'slack', scope: 'T_ACME', id: 'U_ME' }],
+  });
+
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }), true);
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'C_FINANCE' }), true);
+  assert.equal(
+    await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_ME' }),
+    false,
+    'own handle never recorded, as with own addresses',
+  );
+  // An id is unique within a workspace, not across them: the store must not report the unrelated namesake.
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_OTHER', id: 'U_STRANGER' }), false);
+  assert.equal(await store.checkHandle({ platform: 'teams', scope: 'T_ACME', id: 'U_STRANGER' }), false);
+  // The platform is matched case-insensitively; the id is not, because only the platform has a canonical case here.
+  assert.equal(await store.checkHandle({ platform: 'SLACK', scope: 'T_ACME', id: 'U_STRANGER' }), true);
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'u_stranger' }), false);
+});
+
+test('taint: a scope cannot be crafted to forge another workspace’s handle key', async () => {
+  const dir = tempDir();
+  const store = new TaintStore(dir, clock().now);
+  const read = new TaintCollector(INBOX, 'm1');
+
+  // Joined raw, both of these render as `slack:T_EVIL:U_VICTIM` — the separator in one part eats the boundary of
+  // the next. Escaping each part is what keeps them apart.
+  read.observeHandles([{ platform: 'slack', scope: 'T_EVIL:U_VICTIM', id: 'X' }]);
+  await read.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_EVIL:U_VICTIM', id: 'X' }), true);
+  assert.equal(
+    await store.checkHandle({ platform: 'slack', scope: 'T_EVIL', id: 'U_VICTIM:X' }),
+    false,
+    'a crafted scope must not answer for a handle in another workspace',
+  );
+});
+
+test('taint: addresses and handles share one store, and both age out of the window together', async () => {
+  const dir = tempDir();
+  const time = clock();
+  const store = new TaintStore(dir, time.now);
+  const read = new TaintCollector(INBOX, 'm1');
+
+  // A Slack message naming an email address taints it for a later mail send: the platforms share the store, which
+  // is the whole point of "read here, sent from there".
+  read.observeText('Wire it to billing@evil.test — ask <@U_STRANGER> if you need the reference.');
+  read.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }]);
+  assert.equal(read.size, 2, 'handles are counted alongside addresses');
+  await read.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  assert.equal((await store.check('billing@evil.test')).address, true);
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }), true);
+
+  time.advance(TAINT_WINDOW_MS + 1);
+  assert.equal((await store.check('billing@evil.test')).address, false);
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }), false);
+});
+
+test('taint: handles are not stored where a released reader would erase them', async () => {
+  const dir = tempDir();
+  const store = new TaintStore(dir, clock().now);
+  const read = new TaintCollector(INBOX, 'm1');
+  read.observeText('mail from billing@evil.test');
+  read.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }]);
+  await read.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  // 0.1.2 reads taint.json into `{addresses, domains}` and writes back exactly that, so anything kept inside it is
+  // erased by the next Gmail read an old MCP server does. Simulated here by doing what that version does.
+  const path = join(store.directory, 'taint.json');
+  const asOldVersionSeesIt = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+  assert.equal(asOldVersionSeesIt.handles, undefined, 'no handles map inside the file an old version rewrites');
+  writeFileSync(path, JSON.stringify({ addresses: asOldVersionSeesIt.addresses, domains: asOldVersionSeesIt.domains }));
+
+  assert.equal(
+    await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }),
+    true,
+    'the handle survived a rewrite by a writer that predates it, because that writer never opens its file',
+  );
+});
+
+test('taint: an unknown key in either file survives a rewrite by this version', async () => {
+  const dir = tempDir();
+  const store = new TaintStore(dir, clock().now);
+  const first = new TaintCollector(INBOX, 'm1');
+  first.observeText('mail from billing@evil.test');
+  first.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }]);
+  await first.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  // A later version writes keys this one has never heard of, in both files.
+  const stamp = { at: new Date().toISOString(), source: 'body', inboxIds: [INBOX] };
+  for (const [name, extra] of [
+    ['taint.json', 'reactions'],
+    ['handles.json', 'apps'],
+  ] as const) {
+    const path = join(store.directory, name);
+    const file = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    file[extra] = { 'slack:T_ACME:x': stamp };
+    writeFileSync(path, JSON.stringify(file));
+  }
+
+  const second = new TaintCollector(INBOX, 'm2');
+  second.observeText('and from other@evil.test');
+  second.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_OTHER' }]);
+  await second.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  for (const [name, extra] of [
+    ['taint.json', 'reactions'],
+    ['handles.json', 'apps'],
+  ] as const) {
+    const after = JSON.parse(readFileSync(join(store.directory, name), 'utf8')) as Record<string, unknown>;
+    assert.ok(after[extra], `${name} kept an unknown key; taint fails open, so a dropped entry is silent`);
+  }
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_OTHER' }), true);
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }), true);
+  assert.equal((await store.check('billing@evil.test')).address, true);
+});
+
+test('taint: flooding one kind of observation cannot evict the other', async () => {
+  const dir = tempDir();
+  const store = new TaintStore(dir, clock().now);
+  const read = new TaintCollector(INBOX, 'm1');
+
+  // A body padded with addresses, well past the per-message cap, carrying one handle at the end of it.
+  read.observeText(Array.from({ length: 500 }, (_, i) => `filler${i}@noise.test`).join(' '));
+  read.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }]);
+  await read.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  assert.equal(
+    await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }),
+    true,
+    'the handle survived a body padded with addresses: the two caps are separate budgets',
+  );
+  // And the address cap still holds on its own side.
+  assert.equal((await store.check('filler0@noise.test')).address, true);
+  assert.equal((await store.check('filler499@noise.test')).address, false, 'past the cap, as designed');
+});
+
+test('taint: a repeated mention cannot spend the budget meant for every other name', async () => {
+  const dir = tempDir();
+  const store = new TaintStore(dir, clock().now);
+  const read = new TaintCollector(INBOX, 'm1');
+
+  // 250 copies of one id, then the one that matters. Capped before de-duplication, the filler took every slot.
+  const filler = { platform: 'slack', scope: 'T_ACME', id: 'U_FILLER' };
+  read.observeHandles(Array.from({ length: 250 }, () => filler));
+  read.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_TARGET' }]);
+  // The same trick on the address side: one address repeated, then the real one.
+  for (let i = 0; i < 250; i++) read.observeText('noise@filler.test');
+  read.observeText('payments@evil.test');
+  await read.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_TARGET' }), true);
+  assert.equal((await store.check('payments@evil.test')).address, true);
+});
+
+test('taint: a damaged store refuses rather than reporting nothing recorded', async () => {
+  const dir = tempDir();
+  const store = new TaintStore(dir, clock().now);
+  const read = new TaintCollector(INBOX, 'm1');
+  read.observeText('from billing@evil.test');
+  read.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }]);
+  await read.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  // Treating damaged content as "nothing recorded" makes every check answer false and lets the next write replace
+  // the evidence with that answer — a security control that switches itself off without saying so.
+  for (const [name, check] of [
+    ['taint.json', () => store.check('billing@evil.test')],
+    ['handles.json', () => store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' })],
+  ] as const) {
+    const path = join(store.directory, name);
+    const good = readFileSync(path, 'utf8');
+    writeFileSync(path, good.slice(0, Math.floor(good.length / 2)));
+    await assert.rejects(check, /not valid JSON/, `${name} damaged`);
+    writeFileSync(path, good);
+  }
+
+  // Restored, it answers again — the refusal was about the file, not a poisoned store.
+  assert.equal((await store.check('billing@evil.test')).address, true);
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }), true);
+});
+
+test('a channel digest refuses counts it could not tell apart afterwards', () => {
+  const post: CanonicalChannelMessage = {
+    kind: 'channel',
+    workspace: 'T123',
+    postingAs: 'U_BOT',
+    channel: 'C456',
+    visibleText: 'Deploy is out.',
+    payloadSha256: 'p1',
+    notifies: { here: false, channel: true, users: [], estimated: 412 },
+    attachments: [],
+  };
+
+  // JSON renders every non-finite number as `null`, so a digest over one cannot tell NaN from Infinity — two
+  // previews a person reads as saying different things, hashing to the same approval.
+  for (const estimated of [Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5]) {
+    assert.throws(
+      () => messageDigest({ ...post, notifies: { ...post.notifies, estimated } }),
+      /whole number/,
+      `estimated: ${estimated}`,
+    );
+  }
+  for (const size of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+    assert.throws(
+      () =>
+        messageDigest({
+          ...post,
+          attachments: [{ filename: 'plan.pdf', mimeType: 'application/pdf', size, sha256: 'a1' }],
+        }),
+      /whole number/,
+      `size: ${size}`,
+    );
+  }
+  assert.match(messageDigest(post), /^[0-9a-f]{64}$/, 'an ordinary count still hashes');
 });
