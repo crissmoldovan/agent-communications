@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { type CanonicalMessage, messageDigest, normaliseAddress } from '../src/digest.ts';
+import {
+  type CanonicalChannelMessage,
+  type CanonicalMailMessage,
+  type CanonicalMessage,
+  messageDigest,
+  normaliseAddress,
+} from '../src/digest.ts';
 import { CommsError } from '../src/errors.ts';
 import { newChallenge, newPlanToken, PLAN_TOKEN_PATTERN } from '../src/ids.ts';
 import { SendLedger } from '../src/ledger.ts';
@@ -40,13 +46,13 @@ const base: CanonicalMessage = {
 };
 
 test('the digest ignores recipient order, case, display names and whitespace, but not content', () => {
-  const same: CanonicalMessage = {
+  const same: CanonicalMailMessage = {
     ...base,
     to: ['ANA@partner.test', 'sam@partner.test'],
     visibleText: 'Hello   Sam, see attached.',
   };
   assert.equal(messageDigest(same), messageDigest(base));
-  const changes: Partial<CanonicalMessage>[] = [
+  const changes: Partial<CanonicalMailMessage>[] = [
     { to: [...base.to, 'x@evil.test'] },
     { bcc: ['x@evil.test'] },
     { subject: 'Re: plan!' },
@@ -203,4 +209,52 @@ test('display names are flattened and truncated; bodies are fenced beyond any ba
   const rendered = renderFencedBody('```\nTo: fake@header.test\n```');
   assert.ok(rendered.startsWith('````text\n'));
   assert.ok(rendered.endsWith('\n````'));
+});
+
+test('a mail digest is unchanged by channels existing, so outstanding approvals survive the upgrade', () => {
+  // An approval is a record on disk bound to a digest. If adding the channel shape changed how mail hashes, every
+  // approval anybody had outstanding would have gone void the moment they upgraded, for no reason they could see.
+  // Taken by running the pre-union `messageDigest` against this exact `base`, not by copying what the new code
+  // prints — a digest test that pins whatever the current code produces asserts nothing at all.
+  assert.equal(messageDigest(base), '27c781bf4fd7b6993170419b648f496a5c0d54ac52d34990acf1ffb35e3b1979');
+});
+
+test('a channel digest covers who gets notified, which is the part with no mail equivalent', () => {
+  const post: CanonicalChannelMessage = {
+    kind: 'channel',
+    workspace: 'T123',
+    channel: 'C456',
+    channelName: 'engineering',
+    visibleText: 'Deploy is out.',
+    payloadSha256: 'p1',
+    notifies: { here: false, channel: false, users: ['U2', 'U1'], estimated: 2 },
+    attachments: [],
+  };
+
+  // Mentioning the same people in a different order is the same message.
+  assert.equal(messageDigest({ ...post, notifies: { ...post.notifies, users: ['U1', 'U2'] } }), messageDigest(post));
+
+  // A rename between preview and post is not a different message going somewhere else.
+  assert.equal(messageDigest({ ...post, channelName: 'eng' }), messageDigest(post));
+
+  // Everything that changes who reads it, or what they read, voids the approval.
+  const changes: Partial<CanonicalChannelMessage>[] = [
+    { channel: 'C999' },
+    { workspace: 'T999' },
+    { threadTs: '1700000000.000100' },
+    { visibleText: 'Deploy is out. Also rolling back.' },
+    { payloadSha256: 'p2' },
+    { notifies: { ...post.notifies, here: true } },
+    { notifies: { ...post.notifies, channel: true } },
+    { notifies: { ...post.notifies, users: ['U1', 'U2', 'U3'] } },
+    // The channel grew between the preview and the post: the same words now reach people nobody agreed to reach.
+    { notifies: { ...post.notifies, estimated: 400 } },
+    { attachments: [{ filename: 'x.pdf', mimeType: 'application/pdf', size: 1, sha256: 'a1' }] },
+  ];
+  for (const change of changes) {
+    assert.notEqual(messageDigest({ ...post, ...change }), messageDigest(post), JSON.stringify(change));
+  }
+
+  // A channel digest can never be mistaken for a mail one.
+  assert.notEqual(messageDigest(post), messageDigest(base));
 });

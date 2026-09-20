@@ -1,12 +1,22 @@
 import { createHash } from 'node:crypto';
 
 /**
- * The canonical form of an outgoing message that an approval is bound to. Provider-neutral: every mail provider can
- * produce it. It covers what a recipient sees and where the message goes; it leaves out what a provider regenerates
- * on its own (Message-ID, Date, MIME boundaries, transfer encodings), so re-serialising an unchanged draft does not
- * change the digest, while any visible change does.
+ * The canonical form of an outgoing message that an approval is bound to.
+ *
+ * It covers what a recipient sees and where the message goes, and leaves out what a provider regenerates on its own
+ * — Message-ID, Date, MIME boundaries, transfer encodings — so re-serialising an unchanged draft does not change the
+ * digest while any visible change does.
+ *
+ * Two shapes, because a channel message is not a mail-shaped thing with different field names. Mail goes to a list
+ * of addresses and carries a subject; a chat message goes to one channel and its blast radius is *who gets
+ * notified*, which has no mail equivalent. Forcing one into the other would mean a digest that covers a recipient
+ * list nobody has and omits the thing a person most needs to approve.
  */
-export interface CanonicalMessage {
+export type CanonicalMessage = CanonicalMailMessage | CanonicalChannelMessage;
+
+/** A message with addressed recipients and a subject. `kind` is optional so mail callers need not state the obvious. */
+export interface CanonicalMailMessage {
+  kind?: 'mail' | undefined;
   from: string;
   to: readonly string[];
   cc: readonly string[];
@@ -22,6 +32,47 @@ export interface CanonicalMessage {
   htmlSha256?: string | undefined;
   /** SHA-256 of the exact text part. */
   textSha256?: string | undefined;
+  attachments: readonly { filename: string; mimeType: string; size: number; sha256: string }[];
+}
+
+/**
+ * A message posted into a channel or thread.
+ *
+ * `notifies` is the part with no mail equivalent and the reason this is a separate shape. A message naming
+ * `@channel` in a 400-person room is a different act from the same words in a two-person thread, and the person
+ * approving it is approving the blast radius as much as the words. It is therefore inside the digest: change who
+ * gets notified and the approval is void, exactly as adding a recipient voids a mail approval.
+ */
+export interface CanonicalChannelMessage {
+  kind: 'channel';
+  /** The workspace by its stable id, not the alias a person chose, which they can move. */
+  workspace: string;
+  /** The channel or conversation id. */
+  channel: string;
+  /** The name at the time, for the preview to show. Not part of the digest: a rename is not a different message. */
+  channelName?: string | undefined;
+  /** The parent message's timestamp when this is a threaded reply. */
+  threadTs?: string | undefined;
+  /** The text a reader sees, after the composer has rendered it. */
+  visibleText: string;
+  /** SHA-256 of the exact payload that will be posted, so a block change the text does not show still counts. */
+  payloadSha256: string;
+  notifies: {
+    /** `@here` — everyone currently online in the channel. */
+    here: boolean;
+    /** `@channel` — every member, online or not. */
+    channel: boolean;
+    /** Individually mentioned user ids, sorted and de-duplicated by the digest. */
+    users: readonly string[];
+    /**
+     * How many people the above actually reaches, resolved at preview time.
+     *
+     * Inside the digest because it is what a person is really approving. If the channel grew between the preview
+     * and the post, the message now reaches people nobody agreed to reach, and that deserves a fresh look rather
+     * than a silent send.
+     */
+    estimated: number;
+  };
   attachments: readonly { filename: string; mimeType: string; size: number; sha256: string }[];
 }
 
@@ -56,10 +107,17 @@ export function canonicalJson(value: unknown): string {
 }
 
 /**
- * The approval digest. The From header keeps its display name (a recipient sees it); recipients are compared by
- * address only, sorted and de-duplicated, so reordering them does not force a new approval but adding one does.
+ * The approval digest.
+ *
+ * For mail: the From header keeps its display name (a recipient sees it); recipients are compared by address only,
+ * sorted and de-duplicated, so reordering them does not force a new approval but adding one does.
+ *
+ * **The mail form is byte-identical to what it produced before channels existed**, `kind` deliberately absent from
+ * the canonical object. An approval is a record on disk bound to a digest; changing how mail hashes would have
+ * voided every approval anybody had outstanding at the moment they upgraded, for no reason a user could see.
  */
 export function messageDigest(message: CanonicalMessage): string {
+  if (message.kind === 'channel') return channelDigest(message);
   const canonical = {
     v: 1,
     from: collapseWhitespace(message.from),
@@ -79,4 +137,34 @@ export function messageDigest(message: CanonicalMessage): string {
       .sort((a, b) => (a.sha256 + a.filename < b.sha256 + b.filename ? -1 : 1)),
   };
   return sha256Hex(canonicalJson(canonical));
+}
+
+/**
+ * The channel form. `v: 'channel-1'` rather than a number, so a channel digest can never collide with a mail one
+ * even if every other field happened to line up — the two are answers to different questions.
+ *
+ * `channelName` is left out on purpose: a channel being renamed between the preview and the post is not a different
+ * message going to a different place, and voiding the approval for it would teach people that re-approving is
+ * routine.
+ */
+function channelDigest(message: CanonicalChannelMessage): string {
+  return sha256Hex(
+    canonicalJson({
+      v: 'channel-1',
+      workspace: message.workspace.trim(),
+      channel: message.channel.trim(),
+      threadTs: message.threadTs?.trim(),
+      visibleText: collapseWhitespace(message.visibleText),
+      payloadSha256: message.payloadSha256,
+      notifies: {
+        here: message.notifies.here,
+        channel: message.notifies.channel,
+        users: [...new Set(message.notifies.users.map((u) => u.trim()).filter(Boolean))].sort(),
+        estimated: message.notifies.estimated,
+      },
+      attachments: [...message.attachments]
+        .map((a) => ({ filename: a.filename, mimeType: a.mimeType.toLowerCase(), size: a.size, sha256: a.sha256 }))
+        .sort((a, b) => (a.sha256 + a.filename < b.sha256 + b.filename ? -1 : 1)),
+    }),
+  );
 }
