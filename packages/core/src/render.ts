@@ -226,14 +226,34 @@ export interface ChannelPreview {
 }
 
 /** How a notification set reads to a person: "@channel — about 412 people", "2 people". */
+/**
+ * How many names are listed before the rest become a number, and how wide each may be.
+ *
+ * Both exist so the string this returns has a ceiling. The reach clause is last, and a caller that truncated the
+ * result would cut the count off the end — losing the one part of the line that cannot be inferred from the rest.
+ */
+const MAX_NAMED = 4;
+const NAME_WIDTH = 24;
+
 export function describeNotifies(notifies: PreviewNotifies): string {
   const parts: string[] = [];
   if (notifies.channel) parts.push('@channel');
   if (notifies.here) parts.push('@here');
-  if (notifies.users.length > 0) parts.push(notifies.users.join(', '));
+
+  // Display names are chosen by the accounts that bear them, so they are attacker-controlled text. They are escaped
+  // here rather than at the call sites: this string is rendered in two places and one of them wrote it straight into
+  // the preview, where a name carrying a newline forged a `Policy:` line in the preview's own voice. A guarantee
+  // that depends on every caller remembering is not a guarantee — so the chokepoint holds it.
+  const named = notifies.users.map((user) => truncateDisplay(user, NAME_WIDTH));
+  if (named.length > 0) {
+    const shown = named.slice(0, MAX_NAMED);
+    const rest = named.length - shown.length;
+    parts.push(rest > 0 ? `${shown.join(', ')} and ${rest} more` : shown.join(', '));
+  }
+
   if (parts.length === 0) return 'nobody is notified';
   const reach = notifies.unknown
-    ? `how many that reaches is not known — ${notifies.unknown}`
+    ? `how many that reaches is not known — ${truncateDisplay(notifies.unknown, 60)}`
     : `about ${notifies.estimated} ${notifies.estimated === 1 ? 'person' : 'people'}`;
   return `${parts.join(' · ')} — ${reach}`;
 }
@@ -264,7 +284,7 @@ export function renderChannelPreview(preview: ChannelPreview): string {
 
   lines.push(line('Channel:', truncateDisplay(preview.channel, 120)));
   if (preview.thread) lines.push(line('Thread:', truncateDisplay(preview.thread, 120)));
-  lines.push(line('Notifies:', truncateDisplay(describeNotifies(preview.notifies), 160)));
+  lines.push(line('Notifies:', describeNotifies(preview.notifies)));
 
   for (const attachment of preview.attachments ?? []) {
     lines.push(
