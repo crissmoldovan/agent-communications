@@ -330,27 +330,63 @@ test('taint: addresses and handles share one store, and both age out of the wind
   assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }), false);
 });
 
-test('taint: a rewrite by a version that predates a key keeps what the newer one recorded', async () => {
+test('taint: handles are not stored where a released reader would erase them', async () => {
   const dir = tempDir();
   const store = new TaintStore(dir, clock().now);
   const read = new TaintCollector(INBOX, 'm1');
+  read.observeText('mail from billing@evil.test');
   read.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }]);
   await read.flush(store, { ownAddresses: [], internalDomains: [] });
 
-  // A later version writes a key this one has never heard of; an MCP server from last week shares this file.
+  // 0.1.2 reads taint.json into `{addresses, domains}` and writes back exactly that, so anything kept inside it is
+  // erased by the next Gmail read an old MCP server does. Simulated here by doing what that version does.
   const path = join(store.directory, 'taint.json');
-  const file = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
-  file.reactions = { 'slack:T_ACME:emoji': { at: new Date().toISOString(), source: 'body', inboxIds: [INBOX] } };
-  writeFileSync(path, JSON.stringify(file));
+  const asOldVersionSeesIt = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+  assert.equal(asOldVersionSeesIt.handles, undefined, 'no handles map inside the file an old version rewrites');
+  writeFileSync(path, JSON.stringify({ addresses: asOldVersionSeesIt.addresses, domains: asOldVersionSeesIt.domains }));
+
+  assert.equal(
+    await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }),
+    true,
+    'the handle survived a rewrite by a writer that predates it, because that writer never opens its file',
+  );
+});
+
+test('taint: an unknown key in either file survives a rewrite by this version', async () => {
+  const dir = tempDir();
+  const store = new TaintStore(dir, clock().now);
+  const first = new TaintCollector(INBOX, 'm1');
+  first.observeText('mail from billing@evil.test');
+  first.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }]);
+  await first.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  // A later version writes keys this one has never heard of, in both files.
+  const stamp = { at: new Date().toISOString(), source: 'body', inboxIds: [INBOX] };
+  for (const [name, extra] of [
+    ['taint.json', 'reactions'],
+    ['handles.json', 'apps'],
+  ] as const) {
+    const path = join(store.directory, name);
+    const file = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    file[extra] = { 'slack:T_ACME:x': stamp };
+    writeFileSync(path, JSON.stringify(file));
+  }
 
   const second = new TaintCollector(INBOX, 'm2');
+  second.observeText('and from other@evil.test');
   second.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_OTHER' }]);
   await second.flush(store, { ownAddresses: [], internalDomains: [] });
 
-  const after = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
-  assert.ok(after.reactions, 'an unknown key survived the rewrite; taint fails open, so a dropped entry is silent');
+  for (const [name, extra] of [
+    ['taint.json', 'reactions'],
+    ['handles.json', 'apps'],
+  ] as const) {
+    const after = JSON.parse(readFileSync(join(store.directory, name), 'utf8')) as Record<string, unknown>;
+    assert.ok(after[extra], `${name} kept an unknown key; taint fails open, so a dropped entry is silent`);
+  }
   assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_OTHER' }), true);
   assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }), true);
+  assert.equal((await store.check('billing@evil.test')).address, true);
 });
 
 test('taint: flooding one kind of observation cannot evict the other', async () => {

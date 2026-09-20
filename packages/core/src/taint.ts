@@ -156,7 +156,6 @@ interface TaintEntry {
 interface TaintFile {
   addresses: Record<string, TaintEntry>;
   domains: Record<string, TaintEntry>;
-  handles: Record<string, TaintEntry>;
   /**
    * Anything a later version wrote that this one does not know about, carried through untouched.
    *
@@ -164,6 +163,20 @@ interface TaintFile {
    * not silently drop what the newer one recorded. Taint fails open — a lost entry is a send that is not escalated,
    * which is exactly the failure nobody notices.
    */
+  [unknown: string]: unknown;
+}
+
+/**
+ * Handles live in their own file, not as a key inside `taint.json`.
+ *
+ * Preserving unknown keys, above, protects this file from every version that comes after. It does nothing about the
+ * one already installed: 0.1.2 reads `taint.json` into `{addresses, domains}` and writes back exactly that, so a
+ * handles map stored inside it is erased by the next Gmail read an old MCP server performs. Measured against the
+ * published 0.1.2, not assumed. A separate file is the only thing that survives a writer that predates the data,
+ * because it is the one thing that writer never opens.
+ */
+interface HandleFile {
+  handles: Record<string, TaintEntry>;
   [unknown: string]: unknown;
 }
 
@@ -185,22 +198,28 @@ export class TaintStore {
     return join(this.directory, 'taint.json');
   }
 
-  async #read(): Promise<TaintFile> {
-    const empty = (): TaintFile => ({ addresses: {}, domains: {}, handles: {} });
+  get #handlesPath(): string {
+    return join(this.directory, 'handles.json');
+  }
+
+  async #readJson<T extends object>(path: string, empty: () => T): Promise<T> {
     try {
-      const parsed = JSON.parse(await readFile(this.#path, 'utf8')) as Partial<TaintFile>;
-      // Spread first so the three known maps win, and anything a later version added survives the rewrite.
-      return {
-        ...parsed,
-        addresses: parsed.addresses ?? {},
-        domains: parsed.domains ?? {},
-        handles: parsed.handles ?? {},
-      };
+      const parsed = JSON.parse(await readFile(path, 'utf8')) as Partial<T>;
+      // Spread first so the known maps win, and anything a later version added survives the rewrite.
+      return { ...empty(), ...parsed } as T;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return empty();
       if (error instanceof SyntaxError) return empty();
       throw error;
     }
+  }
+
+  async #read(): Promise<TaintFile> {
+    return this.#readJson<TaintFile>(this.#path, () => ({ addresses: {}, domains: {} }));
+  }
+
+  async #readHandles(): Promise<HandleFile> {
+    return this.#readJson<HandleFile>(this.#handlesPath, () => ({ handles: {} }));
   }
 
   #prune(file: TaintFile): TaintFile {
@@ -213,7 +232,14 @@ export class TaintStore {
       fresh.sort((a, b) => new Date(b[1].at).getTime() - new Date(a[1].at).getTime());
       return Object.fromEntries(fresh.slice(0, MAX_ENTRIES));
     };
-    return { ...file, addresses: keep(file.addresses), domains: keep(file.domains), handles: keep(file.handles) };
+    return { ...file, addresses: keep(file.addresses), domains: keep(file.domains) };
+  }
+
+  #pruneHandles(file: HandleFile): HandleFile {
+    const cutoff = this.#now().getTime() - TAINT_WINDOW_MS;
+    const fresh = Object.entries(file.handles).filter(([, entry]) => new Date(entry.at).getTime() >= cutoff);
+    fresh.sort((a, b) => new Date(b[1].at).getTime() - new Date(a[1].at).getTime());
+    return { ...file, handles: Object.fromEntries(fresh.slice(0, MAX_ENTRIES)) };
   }
 
   /**
@@ -244,26 +270,39 @@ export class TaintStore {
       .sort((a, b) => (a.source === b.source ? 0 : a.source === 'header' ? -1 : 1))
       .slice(0, MAX_PER_MESSAGE);
     if (kept.length === 0 && keptHandles.length === 0) return;
-    const path = this.#path;
-    await withFileLock(`${path}.lock`, async () => {
-      const file = this.#prune(await this.#read());
-      const at = this.#now().toISOString();
-      const touch = (map: Record<string, TaintEntry>, key: string, o: { source: TaintSource; inboxId: string }) => {
-        const existing = map[key];
-        const inboxIds = [...new Set([...(existing?.inboxIds ?? []), o.inboxId])];
-        // A header sighting is kept once seen: it is the stronger signal.
-        const source: TaintSource = existing?.source === 'header' ? 'header' : o.source;
-        map[key] = { at, source, inboxIds };
-      };
-      for (const o of kept) {
-        touch(file.addresses, o.address, o);
-        const domain = domainOf(o.address);
-        if (domain && !PUBLIC_MAILBOX_DOMAINS.has(domain)) touch(file.domains, domain, o);
-      }
-      // No domain counterpart: a handle has no part that generalises to other handles the way a domain does.
-      for (const o of keptHandles) touch(file.handles, o.key, o);
-      await writeFileAtomic(path, JSON.stringify(file));
-    });
+    const at = this.#now().toISOString();
+    const touch = (map: Record<string, TaintEntry>, key: string, o: { source: TaintSource; inboxId: string }) => {
+      const existing = map[key];
+      const inboxIds = [...new Set([...(existing?.inboxIds ?? []), o.inboxId])];
+      // A header sighting is kept once seen: it is the stronger signal.
+      const source: TaintSource = existing?.source === 'header' ? 'header' : o.source;
+      map[key] = { at, source, inboxIds };
+    };
+
+    // Two files, each under its own lock — see `HandleFile`. Not one transaction across both: they are independent
+    // stores, and a crash between them loses at most one kind of tripwire rather than corrupting either.
+    if (kept.length > 0) {
+      const path = this.#path;
+      await withFileLock(`${path}.lock`, async () => {
+        const file = this.#prune(await this.#read());
+        for (const o of kept) {
+          touch(file.addresses, o.address, o);
+          const domain = domainOf(o.address);
+          if (domain && !PUBLIC_MAILBOX_DOMAINS.has(domain)) touch(file.domains, domain, o);
+        }
+        await writeFileAtomic(path, JSON.stringify(file));
+      });
+    }
+
+    if (keptHandles.length > 0) {
+      const path = this.#handlesPath;
+      await withFileLock(`${path}.lock`, async () => {
+        const file = this.#pruneHandles(await this.#readHandles());
+        // No domain counterpart: a handle has no part that generalises to others the way a domain does.
+        for (const o of keptHandles) touch(file.handles, o.key, o);
+        await writeFileAtomic(path, JSON.stringify(file));
+      });
+    }
   }
 
   /** Whether an address, or its (non-public) domain, was seen in email content in the window — from any inbox. */
@@ -284,7 +323,7 @@ export class TaintStore {
    * carries a domain: two ids sharing a workspace says nothing about either of them.
    */
   async checkHandle(handle: TaintHandle): Promise<boolean> {
-    const file = this.#prune(await this.#read());
+    const file = this.#pruneHandles(await this.#readHandles());
     return canonicalHandle(handle) in file.handles;
   }
 }
