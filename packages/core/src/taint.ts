@@ -232,8 +232,9 @@ export class TaintStore {
       .map((o) => ({ ...o, key: canonicalHandle(o.handle) }))
       .filter((o) => o.handle.id.trim() !== '' && !ownHandles.has(o.key))
       .sort((a, b) => (a.source === b.source ? 0 : a.source === 'header' ? -1 : 1))
-      // Counted against the same per-message budget as addresses, and for the same reason: one message listing
-      // every member of a large workspace must not taint all of them and escalate every later send.
+      // The same cap as addresses, and for the same reason — one message listing every member of a large workspace
+      // must not taint all of them and escalate every later send — but its own budget, not a shared one. Sharing
+      // would let a body padded with addresses push the handles out of a message that carried both.
       .slice(0, MAX_PER_MESSAGE);
     const kept = observations
       .map((o) => ({ ...o, address: canonicalAddress(o.address) }))

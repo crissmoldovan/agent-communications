@@ -352,3 +352,23 @@ test('taint: a rewrite by a version that predates a key keeps what the newer one
   assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_OTHER' }), true);
   assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }), true);
 });
+
+test('taint: flooding one kind of observation cannot evict the other', async () => {
+  const dir = tempDir();
+  const store = new TaintStore(dir, clock().now);
+  const read = new TaintCollector(INBOX, 'm1');
+
+  // A body padded with addresses, well past the per-message cap, carrying one handle at the end of it.
+  read.observeText(Array.from({ length: 500 }, (_, i) => `filler${i}@noise.test`).join(' '));
+  read.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }]);
+  await read.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  assert.equal(
+    await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }),
+    true,
+    'the handle survived a body padded with addresses: the two caps are separate budgets',
+  );
+  // And the address cap still holds on its own side.
+  assert.equal((await store.check('filler0@noise.test')).address, true);
+  assert.equal((await store.check('filler499@noise.test')).address, false, 'past the cap, as designed');
+});
