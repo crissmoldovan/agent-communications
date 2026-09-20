@@ -80,6 +80,10 @@ async function withRegistered(home: string, env: Record<string, string>) {
   );
 }
 
+// `launcher: 'local'` throughout, never the default `managed`: that one runs `npm install
+// @agentcomms/gmail@<version>` to build its pinned runtime, so these tests would only pass for a version already
+// on the registry — and the version under test during a release is by definition not. None of what they check
+// depends on which launcher builds the entry.
 test('--force restores the previous entry, with its env, when the replacement fails', NOT_ON_WINDOWS, async () => {
   const harness = await newHarness({ accounts: [] });
   const fake = await fakeClaude({ failAdd: true });
@@ -92,7 +96,7 @@ test('--force restores the previous entry, with its env, when the replacement fa
   });
 
   await assert.rejects(
-    mcpInstall(context, { client: 'claude-code', apply: true, force: true, noVerify: true }),
+    mcpInstall(context, { client: 'claude-code', apply: true, force: true, noVerify: true, launcher: 'local' }),
     (error: unknown) => error instanceof CommsError && /the previous entry was put back/.test(error.message),
   );
 
@@ -125,7 +129,7 @@ test('--force says so plainly when the restore fails too, rather than claiming i
   });
 
   await assert.rejects(
-    mcpInstall(context, { client: 'claude-code', apply: true, force: true, noVerify: true }),
+    mcpInstall(context, { client: 'claude-code', apply: true, force: true, noVerify: true, launcher: 'local' }),
     (error: unknown) =>
       error instanceof CommsError &&
       /could not be put back/.test(error.message) &&
@@ -144,7 +148,9 @@ test('--force does not swallow a removal failure that is not "no such server"', 
   });
 
   // Proceeding would add beside an entry we failed to remove.
-  await assert.rejects(mcpInstall(context, { client: 'claude-code', apply: true, force: true, noVerify: true }));
+  await assert.rejects(
+    mcpInstall(context, { client: 'claude-code', apply: true, force: true, noVerify: true, launcher: 'local' }),
+  );
   const calls = await fake.calls();
   assert.equal(calls.filter((call) => call.startsWith('mcp add-json')).length, 0, 'it did not add over it');
 });
@@ -159,7 +165,13 @@ test('--force with nothing registered is one plain add', NOT_ON_WINDOWS, async (
     env: { ...harness.env, HOME: harness.configDir, PATH: fake.dir },
   });
 
-  const result = await mcpInstall(context, { client: 'claude-code', apply: true, force: true, noVerify: true });
+  const result = await mcpInstall(context, {
+    client: 'claude-code',
+    apply: true,
+    force: true,
+    noVerify: true,
+    launcher: 'local',
+  });
   assert.equal(result.applied, true);
   assert.equal(result.method, 'cli');
   const calls = await fake.calls();

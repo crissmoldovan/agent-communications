@@ -1,11 +1,11 @@
 {
   "name": "agent-communications",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Gmail for coding agents: search, read, analyse, draft and organise mail across several mailboxes. Sending needs your approval.",
   "mcpServers": {
     "gmail": {
       "command": "npx",
-      "args": ["-y", "@agentcomms/gmail-mcp@0.1.2"]
+      "args": ["-y", "@agentcomms/gmail-mcp@0.1.3"]
     }
   },
   "contextFileName": "GEMINI.md"

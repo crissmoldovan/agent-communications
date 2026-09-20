@@ -148,7 +148,11 @@ test('searching for nothing is a usage error, not an empty list', async () => {
 });
 
 test('follow-ups: threads where we spoke last and nobody answered', async () => {
-  const now = Date.parse('2026-09-18T12:00:00Z');
+  // Real now, not a fixed date: these fixtures say "nine days ago" and the code under test asks the system clock
+  // how old that is. Anchored to a past date, "one day ago" becomes two, then three, and a thread the test calls
+  // too recent to chase silently becomes overdue — which is how this started failing on a commit that changed
+  // nothing, three days after the anchor.
+  const now = Date.now();
   const daysAgo = (days: number) => new Date(now - days * 86_400_000).toISOString();
   const { context } = await connected({
     messages: {
@@ -206,7 +210,7 @@ test('follow-ups: threads where we spoke last and nobody answered', async () => 
 });
 
 test('follow-ups the other way: what has arrived and is still unanswered', async () => {
-  const now = Date.parse('2026-09-18T12:00:00Z');
+  const now = Date.now();
   const daysAgo = (days: number) => new Date(now - days * 86_400_000).toISOString();
   const { context } = await connected({
     messages: {
@@ -241,7 +245,7 @@ test('follow-ups the other way: what has arrived and is still unanswered', async
 });
 
 test('a half-written draft does not hide the thread it is sitting in', async () => {
-  const now = Date.parse('2026-09-18T12:00:00Z');
+  const now = Date.now();
   const daysAgo = (days: number) => new Date(now - days * 86_400_000).toISOString();
   const { context } = await connected({
     messages: {

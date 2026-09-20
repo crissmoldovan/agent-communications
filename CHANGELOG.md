@@ -5,6 +5,69 @@ together under one version.
 
 ## Unreleased
 
+## 0.1.3
+
+**The setup guide broke every new install after seven days.** It told you to add yourself as a *test user* and
+said a test user could use the app indefinitely. Google's own documentation says the opposite: authorizations by
+a test user expire seven days from consent, and the refresh token with them. Anyone who followed the guide had
+every mailbox stop working after a week with `invalid_grant`, and the troubleshooting page listed four causes of
+a dead refresh token without mentioning the one that would actually hit them.
+
+The guide now says to publish the app — *Audience → Publish app*, status **In production** — and says why, and
+what it costs: one unverified-app warning screen, and a ceiling of 100 accounts that will not matter for personal
+use. Troubleshooting names the seven-day expiry as the first thing to check.
+
+Every console screen the guide named had also moved. Google reorganised in 2025: *APIs & Services → OAuth consent
+screen* and *Credentials* are now **Google Auth Platform**, with Branding, Audience and Clients. Every step is a
+direct link to the page it means.
+
+### Two bugs that predate this release
+
+**Codex registrations have never carried their environment.** `codex mcp add` takes a repeatable `--env`; this
+package never passed it. Every codex entry it has written is missing `AGENT_COMMS_CONFIG_DIR` and `PATH` — latent
+while the configuration sits in the default place, and a server that starts and finds no mailboxes as soon as it
+does not. Fixed, along with reading `env` back from codex's TOML in both spellings.
+
+**`mcp install` does not work on Windows, and is not fixed here.** Claude Code and Codex install there as `.cmd`
+files, and this package launches them without a shell, which current Node refuses to do for a `.cmd`. It appears
+never to have worked. Doing it correctly means going through `cmd.exe` and hand-escaping an argument that is a
+JSON document full of quotes — not work to do from a machine that cannot run Windows, and a subtle mistake writes
+a malformed entry into a client's configuration. Documented instead: `agent-gmail mcp install --print` writes
+nothing and prints the exact entry to paste, `env` block included.
+
+### Upgrading
+
+`mcp install` pins an exact version into the entry it registers, so that upgrading the package elsewhere cannot
+change what your agents run underneath you. The cost is that a new release reaches an already-registered client
+only when you re-register, and nothing said so — which is how an install can sit two versions behind while the bug
+it is hitting is one you fixed.
+
+```bash
+npx -y @agentcomms/gmail@latest mcp install --client claude-code --force
+```
+
+`--force` is new and required, because the client CLIs refuse to overwrite an existing entry. It captures what is
+registered before removing it and puts it back if the replacement fails; if the restore fails too it says so
+rather than claiming otherwise. `agent-gmail doctor` now warns when what is registered is older than what you have
+— for npx-pinned and managed installs alike — and its repair command preserves the name, mailbox, read-only
+status and launcher of the entry it is repairing rather than replacing them with defaults.
+
+### Also
+
+- **The README no longer implies one send guarantee.** `read` is enforced by Google — that token cannot send.
+  `draft` and `organize` are enforced only by this software, because `gmail.compose` and `gmail.modify` both
+  permit `drafts.send`. Both are real; they are not the same thing, and you can now tell which you have.
+- **Install is organised by which of three routes you are on.** Two involve no Google Cloud work at all: a
+  Workspace admin registers one *Internal* client for everyone, and a migration reuses the client it already has.
+  One client authorises many mailboxes and many people; nothing said so.
+- `inbox add --start` no longer hangs when piped. The detached listener inherited stderr and held it open for as
+  long as it waited for a browser, so `... --start | tee setup.log` hung on a command that had already printed
+  everything and exited.
+- `inbox import` cannot bring a permission the other server never asked for, which is why imported mailboxes
+  report `openid` and `userinfo.email` missing. `reauth` takes them, keeping the existing tier.
+- Why this is not IMAP with an app password: an app password cannot be scoped, so the `read` tier could not
+  exist, and it cannot be revoked per application.
+
 ## 0.1.2
 
 **`agent-gmail doctor` now exits non-zero when something is broken.** It printed "1 broken" and exited `0`, so
