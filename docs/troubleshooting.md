@@ -140,6 +140,24 @@ agent-gmail mcp install --client claude-code   # re-register
 agent-gmail mcp install --list                 # which clients were found
 ```
 
+### `mcp install` fails on Windows
+
+`agent-gmail mcp install --client claude-code` (and `--client codex`) appears not to work on Windows at all, for
+any version. Both CLIs install there as `.cmd` files, and this package launches them without a shell, which
+current Node refuses to do for a `.cmd`.
+
+Register the server by hand instead — `mcp install --print` writes no config and prints exactly what to add:
+
+```bash
+agent-gmail mcp install --client claude-code --print
+```
+
+Then paste that entry into the client's own config, keeping the `env` block: it carries
+`AGENT_COMMS_CONFIG_DIR`, and a server without it looks in the wrong directory and reports no mailboxes.
+
+The `--client json` output is the same entry with no client assumed, if your client stores servers somewhere
+else.
+
 ### The server is running an old version
 
 `mcp install` pins the exact version into the path it registers, deliberately: upgrading the package elsewhere on

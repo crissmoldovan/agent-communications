@@ -8,6 +8,22 @@ import { mcpInstall } from '../src/mcp/install.ts';
 import { newHarness, tempDir } from './support/harness.ts';
 
 /**
+ * These four run everywhere except Windows, and the reason is a bug in the product rather than in the tests.
+ *
+ * `run()` spawns the resolved client binary with no shell. Claude Code installs on Windows as `claude.cmd`, and
+ * this file already records what that means two hundred lines away, about npm: "spawning `npm.cmd` without a
+ * shell throws on current Node on Windows" (`mcp/install.ts`). So `mcp install --client claude-code` appears to
+ * have never worked on Windows, for any version — a fake CLI written as a `.cmd` reproduces it exactly, which is
+ * how this surfaced.
+ *
+ * Fixing it means spawning through `cmd.exe` and escaping the arguments by hand, and one of those arguments is a
+ * JSON document full of quotes. That is not work to do blind from a machine that cannot run it, so it is filed
+ * rather than guessed at, and these tests say why they are skipped instead of quietly not running.
+ */
+const NOT_ON_WINDOWS =
+  process.platform === 'win32' ? { skip: 'mcp install cannot spawn a .cmd; see the note above' } : {};
+
+/**
  * A stand-in for the `claude` binary, on PATH.
  *
  * `--force` is remove-then-add against a CLI this package does not control, so its failure modes only exist at
@@ -64,7 +80,7 @@ async function withRegistered(home: string, env: Record<string, string>) {
   );
 }
 
-test('--force restores the previous entry, with its env, when the replacement fails', async () => {
+test('--force restores the previous entry, with its env, when the replacement fails', NOT_ON_WINDOWS, async () => {
   const harness = await newHarness({ accounts: [] });
   const fake = await fakeClaude({ failAdd: true });
   const previousEnv = { AGENT_COMMS_CONFIG_DIR: '/cfg/previous', PATH: '/usr/bin' };
@@ -98,7 +114,7 @@ test('--force restores the previous entry, with its env, when the replacement fa
   assert.match(restore, /\/cfg\/previous/);
 });
 
-test('--force says so plainly when the restore fails too, rather than claiming it worked', async () => {
+test('--force says so plainly when the restore fails too, rather than claiming it worked', NOT_ON_WINDOWS, async () => {
   const harness = await newHarness({ accounts: [] });
   const fake = await fakeClaude({ failAdd: true, failRestore: true });
   await withRegistered(harness.configDir, { AGENT_COMMS_CONFIG_DIR: '/cfg/previous' });
@@ -117,7 +133,7 @@ test('--force says so plainly when the restore fails too, rather than claiming i
   );
 });
 
-test('--force does not swallow a removal failure that is not "no such server"', async () => {
+test('--force does not swallow a removal failure that is not "no such server"', NOT_ON_WINDOWS, async () => {
   const harness = await newHarness({ accounts: [] });
   const fake = await fakeClaude({ failRemove: 'permission denied writing the config' });
   await withRegistered(harness.configDir, { AGENT_COMMS_CONFIG_DIR: '/cfg/previous' });
@@ -133,7 +149,7 @@ test('--force does not swallow a removal failure that is not "no such server"', 
   assert.equal(calls.filter((call) => call.startsWith('mcp add-json')).length, 0, 'it did not add over it');
 });
 
-test('--force with nothing registered is one plain add', async () => {
+test('--force with nothing registered is one plain add', NOT_ON_WINDOWS, async () => {
   const harness = await newHarness({ accounts: [] });
   const fake = await fakeClaude({ failRemove: 'No MCP server found with name: gmail' });
   await writeFile(join(harness.configDir, '.claude.json'), JSON.stringify({ mcpServers: {} }));
