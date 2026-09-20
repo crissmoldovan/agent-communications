@@ -102,6 +102,21 @@ function line(label: string, value: string): string {
 }
 
 /**
+ * The `A · B · C` line at the top, with every part flattened and escaped.
+ *
+ * Escaped even where the field looks safe. An inbox alias is `[a-z0-9-]` and cannot carry a newline; a workspace
+ * name is whatever the workspace is called, and a heading assembled from raw parts put an attacker one newline away
+ * from writing a line of the preview's own. Which fields are constrained is not a property this function can see,
+ * and the next one added will not announce that it is the unconstrained one.
+ */
+function heading(parts: readonly (string | undefined)[]): string {
+  return parts
+    .filter((part): part is string => Boolean(part))
+    .map((part) => truncateDisplay(part, 120))
+    .join(' · ');
+}
+
+/**
  * The preview of a message about to be written or sent, rendered the same way everywhere: chat, terminal, an
  * approval form.
  *
@@ -114,16 +129,15 @@ function line(label: string, value: string): string {
 export function renderMessagePreview(preview: MessagePreview): string {
   const lines: string[] = [];
   const context = preview.context ?? {};
-  const heading = [
-    context.approvalId ? 'SEND PREVIEW' : 'MESSAGE PREVIEW',
-    context.inbox ? `inbox ${context.inbox}` : '',
-    context.approvalId ? `approval ${context.approvalId}` : '',
-    context.draftId ? `draft ${context.draftId}` : '',
-    context.note ?? '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
-  lines.push(heading);
+  lines.push(
+    heading([
+      context.approvalId ? 'SEND PREVIEW' : 'MESSAGE PREVIEW',
+      context.inbox ? `inbox ${context.inbox}` : '',
+      context.approvalId ? `approval ${context.approvalId}` : '',
+      context.draftId ? `draft ${context.draftId}` : '',
+      context.note,
+    ]),
+  );
 
   const list = (addresses: string[]) =>
     addresses.length > 0 ? addresses.map((a) => truncateDisplay(a, 120)).join(', ') : 'none';
@@ -202,6 +216,13 @@ export interface PreviewNotifies {
 
 export interface ChannelPreview {
   workspace: string;
+  /**
+   * Who this will be posted as, as a person should read it: `Acme Bot (U024BE7LH)`.
+   *
+   * The channel counterpart of the `From:` line, and shown for the same reason — it is recipient-visible, and an
+   * approver who is not told which of their connected accounts is speaking has not been shown the message.
+   */
+  postingAs: string;
   /** `#engineering`, or a person's name for a direct message. */
   channel: string;
   /** Set when this is a reply inside a thread: "in reply to Sam, 17 Sep 16:02 (6 replies)". */
@@ -271,17 +292,16 @@ export function renderChannelPreview(preview: ChannelPreview): string {
   const lines: string[] = [];
   const context = preview.context ?? {};
   lines.push(
-    [
+    heading([
       context.approvalId ? 'POST PREVIEW' : 'MESSAGE PREVIEW',
       `workspace ${context.workspace ?? preview.workspace}`,
       context.approvalId ? `approval ${context.approvalId}` : '',
       context.draftId ? `draft ${context.draftId}` : '',
-      context.note ?? '',
-    ]
-      .filter(Boolean)
-      .join(' · '),
+      context.note,
+    ]),
   );
 
+  lines.push(line('From:', truncateDisplay(preview.postingAs, 120)));
   lines.push(line('Channel:', truncateDisplay(preview.channel, 120)));
   if (preview.thread) lines.push(line('Thread:', truncateDisplay(preview.thread, 120)));
   lines.push(line('Notifies:', describeNotifies(preview.notifies)));

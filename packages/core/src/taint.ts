@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { domainToASCII } from 'node:url';
 import { normaliseAddress } from './digest.ts';
+import { CommsError } from './errors.ts';
 import { writeFileAtomic } from './fs.ts';
 import { withFileLock } from './lock.ts';
 
@@ -118,6 +119,25 @@ export function canonicalHandle(handle: TaintHandle): string {
   return `${part(handle.platform.toLowerCase())}:${part(handle.scope)}:${part(handle.id)}`;
 }
 
+/**
+ * Keeps the first of each key, so the cap counts distinct things rather than sightings.
+ *
+ * Applied before `MAX_PER_MESSAGE`, not after. The other way round, a message repeating one mention two hundred
+ * times spent the whole budget on it and every other name in that message went unrecorded — a cap meant to stop
+ * one message tainting everything, turned into a way to stop it tainting anything.
+ */
+function dedupeBy<T>(items: readonly T[], key: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const item of items) {
+    const k = key(item);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(item);
+  }
+  return out;
+}
+
 export type TaintSource = 'header' | 'body';
 
 export interface TaintObservation {
@@ -208,8 +228,16 @@ export class TaintStore {
       // Spread first so the known maps win, and anything a later version added survives the rewrite.
       return { ...empty(), ...parsed } as T;
     } catch (error) {
+      // A store that is not there yet is empty. A store that is there and unreadable is not: treating damaged
+      // content as "nothing recorded" makes every check answer false and lets the next write replace the evidence
+      // with the answer — a security control that disables itself quietly, which is the one way it must not fail.
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return empty();
-      if (error instanceof SyntaxError) return empty();
+      if (error instanceof SyntaxError) {
+        throw new CommsError('CONFIG', `${path} is not valid JSON`, {
+          hint: 'Delete it to start a fresh taint window. Sends will not be escalated from what it held.',
+          cause: error,
+        });
+      }
       throw error;
     }
   }
@@ -254,21 +282,26 @@ export class TaintStore {
     const own = new Set(exclusions.ownAddresses.map(canonicalAddress));
     const internal = new Set(exclusions.internalDomains.map((d) => d.toLowerCase()));
     const ownHandles = new Set((exclusions.ownHandles ?? []).map(canonicalHandle));
-    const keptHandles = handleObservations
-      .map((o) => ({ ...o, key: canonicalHandle(o.handle) }))
-      .filter((o) => o.handle.id.trim() !== '' && !ownHandles.has(o.key))
-      .sort((a, b) => (a.source === b.source ? 0 : a.source === 'header' ? -1 : 1))
+    const keptHandles = dedupeBy(
+      handleObservations
+        .map((o) => ({ ...o, key: canonicalHandle(o.handle) }))
+        .filter((o) => o.handle.id.trim() !== '' && !ownHandles.has(o.key))
+        .sort((a, b) => (a.source === b.source ? 0 : a.source === 'header' ? -1 : 1)),
+      (o) => o.key,
+    )
       // The same cap as addresses, and for the same reason — one message listing every member of a large workspace
       // must not taint all of them and escalate every later send — but its own budget, not a shared one. Sharing
       // would let a body padded with addresses push the handles out of a message that carried both.
       .slice(0, MAX_PER_MESSAGE);
-    const kept = observations
-      .map((o) => ({ ...o, address: canonicalAddress(o.address) }))
-      .filter((o) => o.address.includes('@') && !own.has(o.address) && !internal.has(domainOf(o.address) ?? ''))
-      // Headers first, then body sightings: a header address is the stronger signal, so it is the one that
-      // survives if a single message carries more addresses than this will record.
-      .sort((a, b) => (a.source === b.source ? 0 : a.source === 'header' ? -1 : 1))
-      .slice(0, MAX_PER_MESSAGE);
+    const kept = dedupeBy(
+      observations
+        .map((o) => ({ ...o, address: canonicalAddress(o.address) }))
+        .filter((o) => o.address.includes('@') && !own.has(o.address) && !internal.has(domainOf(o.address) ?? ''))
+        // Headers first, then body sightings: a header address is the stronger signal, so it is the one that
+        // survives if a single message carries more addresses than this will record.
+        .sort((a, b) => (a.source === b.source ? 0 : a.source === 'header' ? -1 : 1)),
+      (o) => o.address,
+    ).slice(0, MAX_PER_MESSAGE);
     if (kept.length === 0 && keptHandles.length === 0) return;
     const at = this.#now().toISOString();
     const touch = (map: Record<string, TaintEntry>, key: string, o: { source: TaintSource; inboxId: string }) => {

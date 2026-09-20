@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseAddressList } from '../src/addresses.ts';
 import {
+  aliasConflicts,
   ConfigStore,
   classifyChange,
   configSchema,
@@ -341,17 +342,34 @@ test('config: a config written before accounts existed reads as having none, not
   assert.equal(connectedAccounts(config).length, 1);
 });
 
-test('config: one alias namespace across both maps, and ids unique across both', () => {
-  const clash = () =>
-    parseConfig(
-      JSON.stringify({
-        version: 1,
-        inboxes: { work: inboxFixture('ibx_AAAAAAAAAAAAAAAA') },
-        accounts: { work: accountFixture('acc_BBBBBBBBBBBBBBBB') },
-      }),
-    );
-  // `--account work` cannot mean the mailbox in one command and the workspace in the next.
-  assert.throws(clash, /already used in inboxes/);
+test('config: a collision an older release could write is read, reported, and refused at the lookup', () => {
+  // 0.1.2 cannot see `accounts`, so it will happily rename a mailbox onto an account's alias. Refusing to parse the
+  // result would turn a name clash into a config that cannot be read at all — every mailbox gone, on a file the
+  // user never touched. So it parses.
+  const config = parseConfig(
+    JSON.stringify({
+      version: 1,
+      inboxes: { work: inboxFixture('ibx_AAAAAAAAAAAAAAAA') },
+      accounts: { work: accountFixture('acc_BBBBBBBBBBBBBBBB') },
+    }),
+  );
+  assert.deepEqual(aliasConflicts(config), [{ alias: 'work', ids: ['ibx_AAAAAAAAAAAAAAAA', 'acc_BBBBBBBBBBBBBBBB'] }]);
+
+  // But nothing guesses which one was meant: acting on a mailbox while believing it a workspace is the worst
+  // available answer, so the lookup says it cannot tell.
+  assert.throws(() => findConnectedAccount(config, 'work'), /names both a mailbox and an account/);
+  assert.equal(connectedAccounts(config).length, 2, 'both still exist, and both are listed');
+
+  // A configuration this version wrote has none of this.
+  const clean = parseConfig(
+    JSON.stringify({
+      version: 1,
+      inboxes: { work: inboxFixture('ibx_AAAAAAAAAAAAAAAA') },
+      accounts: { acme: accountFixture('acc_BBBBBBBBBBBBBBBB') },
+    }),
+  );
+  assert.deepEqual(aliasConflicts(clean), []);
+  assert.equal(findConnectedAccount(clean, 'work')?.kind, 'mail');
 
   assert.throws(
     () =>
@@ -414,3 +432,47 @@ function accountFixture(id: string) {
     createdAt: '2026-09-20T00:00:00.000Z',
   };
 }
+
+test('config: loosening an account’s send policy needs consent, exactly as an inbox’s does', () => {
+  const at = (policy: string) =>
+    parseConfig(
+      JSON.stringify({
+        version: 1,
+        accounts: { acme: { ...accountFixture('acc_BBBBBBBBBBBBBBBB'), sendPolicy: policy } },
+      }),
+    );
+
+  assert.deepEqual(classifyChange(at('never'), at('chat')).loosened, ['accounts.acme.sendPolicy']);
+  assert.deepEqual(classifyChange(at('never'), at('confirm')).loosened, ['accounts.acme.sendPolicy']);
+  assert.deepEqual(classifyChange(at('chat'), at('never')).loosened, [], 'tightening asks nobody');
+
+  // A new account that may send more freely than the default is the same loosening as relaxing an existing one.
+  const none = parseConfig(JSON.stringify({ version: 1, defaults: { sendPolicy: 'confirm' } }));
+  const added = parseConfig(
+    JSON.stringify({
+      version: 1,
+      defaults: { sendPolicy: 'confirm' },
+      accounts: { acme: { ...accountFixture('acc_BBBBBBBBBBBBBBBB'), sendPolicy: 'chat' } },
+    }),
+  );
+  assert.deepEqual(classifyChange(none, added).loosened, ['accounts.acme.sendPolicy']);
+});
+
+test('config: a configuration whose only secrets are accounts still counts as holding secrets', async () => {
+  const directory = tempDir();
+  const store = new ConfigStore(directory);
+  await store.update((config) => {
+    config.accounts.acme = accountFixture('acc_BBBBBBBBBBBBBBBB') as never;
+    return config;
+  });
+
+  // Moving off the keychain is a downgrade whenever there is something already stored in it. Counting only
+  // inboxes, a Slack-only configuration held nothing, and the move went through unasked.
+  await assert.rejects(
+    store.update((config) => {
+      config.secrets = { store: 'file' };
+      return config;
+    }),
+    /consent|loosen/i,
+  );
+});

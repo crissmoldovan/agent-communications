@@ -200,27 +200,53 @@ export const configSchema: z.ZodType<Config, unknown> = z
     defaults: defaultsSchema.default(defaultsSchema.parse({})),
   })
   .superRefine((config, ctx) => {
-    // One namespace across both maps, because there is one to the person typing it: `--account work` cannot mean
-    // the mailbox in one command and the workspace in the next, and an alias that resolves to two different things
-    // is worse than one that resolves to nothing.
-    const ids = new Map<string, string>();
-    const aliases = new Map<string, string>();
-    const check = (map: 'inboxes' | 'accounts', alias: string, id: string) => {
-      if (RESERVED_ALIASES.has(alias)) {
-        ctx.addIssue({ code: 'custom', path: [map, alias], message: `"${alias}" is reserved` });
+    // Within one map these are hard errors, as they always were: a reserved alias or a duplicate id inside
+    // `inboxes` is something every released version already refuses to write.
+    //
+    // Across the two maps they cannot be. A v1 invariant may not depend on old writers enforcing a rule they have
+    // never heard of: 0.1.2 can rename a mailbox onto an alias this version gave an account, and it will, because
+    // nothing in it can see the account. Refusing to parse the result would turn a name clash into a configuration
+    // that cannot be read at all — every mailbox gone, on a file the user never touched. So a persisted collision
+    // is tolerated here and reported by `aliasConflicts`, and the lookup that cannot answer refuses at the point
+    // somebody asks it something ambiguous.
+    const check = (map: 'inboxes' | 'accounts', entries: Record<string, { id: string }>) => {
+      const ids = new Map<string, string>();
+      for (const [alias, entry] of Object.entries(entries)) {
+        if (RESERVED_ALIASES.has(alias)) {
+          ctx.addIssue({ code: 'custom', path: [map, alias], message: `"${alias}" is reserved` });
+        }
+        const other = ids.get(entry.id);
+        if (other) {
+          ctx.addIssue({ code: 'custom', path: [map, alias, 'id'], message: `duplicates the id of "${other}"` });
+        }
+        ids.set(entry.id, alias);
       }
-      const sharing = aliases.get(alias);
-      if (sharing) {
-        ctx.addIssue({ code: 'custom', path: [map, alias], message: `"${alias}" is already used in ${sharing}` });
-      }
-      aliases.set(alias, map);
-      const other = ids.get(id);
-      if (other) ctx.addIssue({ code: 'custom', path: [map, alias, 'id'], message: `duplicates the id of "${other}"` });
-      ids.set(id, alias);
     };
-    for (const [alias, inbox] of Object.entries(config.inboxes)) check('inboxes', alias, inbox.id);
-    for (const [alias, account] of Object.entries(config.accounts)) check('accounts', alias, account.id);
+    check('inboxes', config.inboxes);
+    check('accounts', config.accounts);
   });
+
+/**
+ * Aliases, or ids, that name something in both maps at once.
+ *
+ * Empty for every configuration this version writes. Non-empty means an older release renamed a mailbox onto an
+ * account's name — see the note in the schema — and `doctor` should say so, because the fix is a rename and only a
+ * person can choose which one.
+ */
+export function aliasConflicts(config: Config): { alias: string; ids: string[] }[] {
+  const conflicts: { alias: string; ids: string[] }[] = [];
+  for (const [alias, inbox] of Object.entries(config.inboxes)) {
+    const account = config.accounts[alias];
+    if (account) conflicts.push({ alias, ids: [inbox.id, account.id] });
+  }
+  const byId = new Map<string, string>();
+  for (const [alias, inbox] of Object.entries(config.inboxes)) byId.set(inbox.id, alias);
+  for (const [alias, account] of Object.entries(config.accounts)) {
+    const other = byId.get(account.id);
+    if (other && other !== alias) conflicts.push({ alias, ids: [account.id] });
+  }
+  return conflicts;
+}
 
 /**
  * Everything connected, whichever map it lives in, in one list.
@@ -259,9 +285,21 @@ export function connectedAccounts(config: Config): ConnectedAccount[] {
   return [...mail, ...channel].sort((a, b) => a.alias.localeCompare(b.alias));
 }
 
-/** The one account an alias names, in either map, or null. Aliases are unique across both — the schema enforces it. */
+/**
+ * The one thing an alias names, in either map, or null when it names nothing.
+ *
+ * Throws when it names two things. That state is reachable — an older release can write it (see `aliasConflicts`) —
+ * and picking one of the two would be the worst available answer: the caller would act on a mailbox believing it
+ * had a workspace, or the reverse, with nothing in the output saying which.
+ */
 export function findConnectedAccount(config: Config, alias: string): ConnectedAccount | null {
-  return connectedAccounts(config).find((entry) => entry.alias === alias) ?? null;
+  const matches = connectedAccounts(config).filter((entry) => entry.alias === alias);
+  if (matches.length > 1) {
+    throw new CommsError('CONFIG', `"${alias}" names both a mailbox and an account`, {
+      hint: `Rename one of them. They are ${matches.map((m) => m.id).join(' and ')}.`,
+    });
+  }
+  return matches[0] ?? null;
 }
 
 /** The secret backend in use: the recorded one, or the keychain before anything has been stored. */
@@ -408,7 +446,10 @@ function normalisePath(path: string): string {
 function holdsSecrets(config: Config): boolean {
   return (
     Object.values(config.clients).some((client) => Boolean(client.secretRef)) ||
-    Object.values(config.inboxes).some((inbox) => Boolean(inbox.secretRef))
+    Object.values(config.inboxes).some((inbox) => Boolean(inbox.secretRef)) ||
+    // Accounts hold secret references too. Left out, a configuration whose only secrets were Slack tokens counted
+    // as holding none, and the silent move off the keychain that this check exists to catch was not a downgrade.
+    Object.values(config.accounts).some((account) => Boolean(account.secretRef))
   );
 }
 
@@ -439,6 +480,16 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
       loosened.push(`inboxes.${alias}.internalDomains`);
     }
   }
+  // The same rule for non-mail accounts. Without this loop, moving `accounts.acme.sendPolicy` from `never` to
+  // `chat` classified as no change at all and `ConfigStore.update` took it without asking anyone — a loosening that
+  // walks straight through the gate built to catch exactly that.
+  for (const [alias, account] of Object.entries(after.accounts)) {
+    const previous = Object.values(before.accounts).find((existing) => existing.id === account.id);
+    const was = previous ? (previous.sendPolicy ?? before.defaults.sendPolicy) : before.defaults.sendPolicy;
+    const now = account.sendPolicy ?? after.defaults.sendPolicy;
+    if (POLICY_RANK[now] < POLICY_RANK[was]) loosened.push(`accounts.${alias}.sendPolicy`);
+  }
+
   const b = before.defaults;
   const a = after.defaults;
   // Checked directly as well: with no inboxes (yet), the loop above sees nothing, and the next inbox added would

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { CommsError } from './errors.ts';
 
 /**
  * The canonical form of an outgoing message that an approval is bound to.
@@ -47,6 +48,17 @@ export interface CanonicalChannelMessage {
   kind: 'channel';
   /** The workspace by its stable id, not the alias a person chose, which they can move. */
   workspace: string;
+  /**
+   * The user id this will be posted as — the channel equivalent of `from`, and in the digest for the same reason.
+   *
+   * Every reader sees who spoke, and two accounts connected to one workspace are two different people saying the
+   * same words. Without this, a post approved for the bot and a post from the person who owns the workspace were
+   * the same message to the approval, and an agent holding both could spend one on the other.
+   *
+   * The id, not the display name: a name can be changed between the approval and the post, and the account behind
+   * it cannot.
+   */
+  postingAs: string;
   /** The channel or conversation id. */
   channel: string;
   /** The name at the time, for the preview to show. Not part of the digest: a rename is not a different message. */
@@ -147,11 +159,26 @@ export function messageDigest(message: CanonicalMessage): string {
  * message going to a different place, and voiding the approval for it would teach people that re-approving is
  * routine.
  */
+/**
+ * A count that `canonicalJson` can represent without losing it.
+ *
+ * `JSON.stringify` renders every non-finite number as `null`, so a digest taken over one cannot tell `NaN` from
+ * `Infinity` — two previews a person would read as saying different things, hashing to the same approval. Nothing
+ * should ever produce one; a digest is the wrong place to find out that something did, so it refuses instead.
+ */
+function exactCount(value: number, what: string): number {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new CommsError('BAD_DATA', `${what} must be a whole number of at least zero, not ${String(value)}`);
+  }
+  return value;
+}
+
 function channelDigest(message: CanonicalChannelMessage): string {
   return sha256Hex(
     canonicalJson({
       v: 'channel-1',
       workspace: message.workspace.trim(),
+      postingAs: message.postingAs.trim(),
       channel: message.channel.trim(),
       threadTs: message.threadTs?.trim(),
       visibleText: collapseWhitespace(message.visibleText),
@@ -160,10 +187,15 @@ function channelDigest(message: CanonicalChannelMessage): string {
         here: message.notifies.here,
         channel: message.notifies.channel,
         users: [...new Set(message.notifies.users.map((u) => u.trim()).filter(Boolean))].sort(),
-        estimated: message.notifies.estimated,
+        estimated: exactCount(message.notifies.estimated, 'the number of people notified'),
       },
       attachments: [...message.attachments]
-        .map((a) => ({ filename: a.filename, mimeType: a.mimeType.toLowerCase(), size: a.size, sha256: a.sha256 }))
+        .map((a) => ({
+          filename: a.filename,
+          mimeType: a.mimeType.toLowerCase(),
+          size: exactCount(a.size, `the size of ${a.filename}`),
+          sha256: a.sha256,
+        }))
         .sort((a, b) => (a.sha256 + a.filename < b.sha256 + b.filename ? -1 : 1)),
     }),
   );

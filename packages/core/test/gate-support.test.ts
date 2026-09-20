@@ -224,6 +224,7 @@ test('a channel digest covers who gets notified, which is the part with no mail 
   const post: CanonicalChannelMessage = {
     kind: 'channel',
     workspace: 'T123',
+    postingAs: 'U_BOT',
     channel: 'C456',
     channelName: 'engineering',
     visibleText: 'Deploy is out.',
@@ -242,6 +243,8 @@ test('a channel digest covers who gets notified, which is the part with no mail 
   const changes: Partial<CanonicalChannelMessage>[] = [
     { channel: 'C999' },
     { workspace: 'T999' },
+    // Two accounts connected to one workspace are two different people saying the same words.
+    { postingAs: 'U_CEO' },
     { threadTs: '1700000000.000100' },
     { visibleText: 'Deploy is out. Also rolling back.' },
     { payloadSha256: 'p2' },
@@ -407,4 +410,83 @@ test('taint: flooding one kind of observation cannot evict the other', async () 
   // And the address cap still holds on its own side.
   assert.equal((await store.check('filler0@noise.test')).address, true);
   assert.equal((await store.check('filler499@noise.test')).address, false, 'past the cap, as designed');
+});
+
+test('taint: a repeated mention cannot spend the budget meant for every other name', async () => {
+  const dir = tempDir();
+  const store = new TaintStore(dir, clock().now);
+  const read = new TaintCollector(INBOX, 'm1');
+
+  // 250 copies of one id, then the one that matters. Capped before de-duplication, the filler took every slot.
+  const filler = { platform: 'slack', scope: 'T_ACME', id: 'U_FILLER' };
+  read.observeHandles(Array.from({ length: 250 }, () => filler));
+  read.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_TARGET' }]);
+  // The same trick on the address side: one address repeated, then the real one.
+  for (let i = 0; i < 250; i++) read.observeText('noise@filler.test');
+  read.observeText('payments@evil.test');
+  await read.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_TARGET' }), true);
+  assert.equal((await store.check('payments@evil.test')).address, true);
+});
+
+test('taint: a damaged store refuses rather than reporting nothing recorded', async () => {
+  const dir = tempDir();
+  const store = new TaintStore(dir, clock().now);
+  const read = new TaintCollector(INBOX, 'm1');
+  read.observeText('from billing@evil.test');
+  read.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }]);
+  await read.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  // Treating damaged content as "nothing recorded" makes every check answer false and lets the next write replace
+  // the evidence with that answer — a security control that switches itself off without saying so.
+  for (const [name, check] of [
+    ['taint.json', () => store.check('billing@evil.test')],
+    ['handles.json', () => store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' })],
+  ] as const) {
+    const path = join(store.directory, name);
+    const good = readFileSync(path, 'utf8');
+    writeFileSync(path, good.slice(0, Math.floor(good.length / 2)));
+    await assert.rejects(check, /not valid JSON/, `${name} damaged`);
+    writeFileSync(path, good);
+  }
+
+  // Restored, it answers again — the refusal was about the file, not a poisoned store.
+  assert.equal((await store.check('billing@evil.test')).address, true);
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }), true);
+});
+
+test('a channel digest refuses counts it could not tell apart afterwards', () => {
+  const post: CanonicalChannelMessage = {
+    kind: 'channel',
+    workspace: 'T123',
+    postingAs: 'U_BOT',
+    channel: 'C456',
+    visibleText: 'Deploy is out.',
+    payloadSha256: 'p1',
+    notifies: { here: false, channel: true, users: [], estimated: 412 },
+    attachments: [],
+  };
+
+  // JSON renders every non-finite number as `null`, so a digest over one cannot tell NaN from Infinity — two
+  // previews a person reads as saying different things, hashing to the same approval.
+  for (const estimated of [Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5]) {
+    assert.throws(
+      () => messageDigest({ ...post, notifies: { ...post.notifies, estimated } }),
+      /whole number/,
+      `estimated: ${estimated}`,
+    );
+  }
+  for (const size of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+    assert.throws(
+      () =>
+        messageDigest({
+          ...post,
+          attachments: [{ filename: 'plan.pdf', mimeType: 'application/pdf', size, sha256: 'a1' }],
+        }),
+      /whole number/,
+      `size: ${size}`,
+    );
+  }
+  assert.match(messageDigest(post), /^[0-9a-f]{64}$/, 'an ordinary count still hashes');
 });
