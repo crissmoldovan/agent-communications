@@ -256,16 +256,12 @@ test('doctor says when the registered MCP server is an older version than this o
 
   // `mcp install` pins an exact version into the path, so that upgrading the package elsewhere cannot change what
   // an agent runs. The silent half of that trade is what this check exists to say out loud.
-  const stalePath = join(
-    harness.core.paths.dataDir,
-    'runtime',
-    '0.0.1',
-    'node_modules',
-    '@agentcomms',
-    'gmail',
-    'dist',
-    'cli.mjs',
-  );
+  // Built with `join` for both versions, never by string-replacing a separator into an existing path: on Windows
+  // these are backslashes, so a replace of `/runtime/0.0.1/` silently matches nothing and the "current" case
+  // quietly re-tests the stale one.
+  const runtimeEntry = (version: string) =>
+    join(harness.core.paths.dataDir, 'runtime', version, 'node_modules', '@agentcomms', 'gmail', 'dist', 'cli.mjs');
+  const stalePath = runtimeEntry('0.0.1');
   await writeFile(
     join(harness.configDir, '.claude.json'),
     JSON.stringify({ mcpServers: { gmail: { command: 'node', args: [stalePath, 'mcp'] } } }),
@@ -275,17 +271,18 @@ test('doctor says when the registered MCP server is an older version than this o
   const check = byId(stale.checks, 'registered-server-version');
   assert.equal(check?.status, 'warn', 'an old registered runtime is worth saying');
   assert.match(check?.detail ?? '', /runs 0\.0\.1/);
-  assert.match(check?.detail ?? '', new RegExp(`this release is ${VERSION.replace(/\./g, '\\.')}`));
+  // A plain substring, not a RegExp built by escaping VERSION: that escape handled dots and not backslashes,
+  // which is the incomplete-sanitisation shape even where the input happens to be a semver string.
+  assert.ok(check?.detail?.includes(`this release is ${VERSION}`), check?.detail);
   // Remove-then-install: the client CLIs refuse to overwrite an entry that already exists, so --force is the fix.
   assert.match(check?.fix ?? '', /mcp install --client claude-code --force/);
   // A warning, not a failure: an old server still works, it just is not the one that was published.
   assert.notEqual(check?.status, 'fail');
 
   // The current version is not reported as stale.
-  const currentPath = stalePath.replace('/runtime/0.0.1/', `/runtime/${VERSION}/`);
   await writeFile(
     join(harness.configDir, '.claude.json'),
-    JSON.stringify({ mcpServers: { gmail: { command: 'node', args: [currentPath, 'mcp'] } } }),
+    JSON.stringify({ mcpServers: { gmail: { command: 'node', args: [runtimeEntry(VERSION), 'mcp'] } } }),
   );
   const current = await doctor(new GmailContext({ core: harness.core, env }));
   assert.equal(byId(current.checks, 'registered-server-version')?.status, 'ok');
