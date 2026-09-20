@@ -162,16 +162,32 @@ function collectFromJson(text: string, client: string, path: string): Registered
 function collectFromToml(text: string, client: string, path: string): RegisteredServer[] {
   const found: RegisteredServer[] = [];
   let current: RegisteredServer | null = null;
+  let inEnv = false;
   for (const line of text.split(/\r?\n/)) {
+    // Checked before the server-section pattern, which would otherwise match `[mcp_servers.x.env]` and invent a
+    // server called `x.env`. A subsection belongs to the server above it; without reading it a codex entry's env
+    // is invisible, and an entry cannot be restored without its env.
+    const envSection = /^\s*\[mcp_servers\.(.+)\.env\]\s*$/.exec(line);
+    if (envSection) {
+      inEnv = current !== null && (envSection[1] ?? '').replace(/^"|"$/g, '') === current.name;
+      continue;
+    }
     const section = /^\s*\[mcp_servers\.([^\]]+)\]\s*$/.exec(line);
     if (section) {
       if (current) found.push(current);
       current = { client, path, name: (section[1] ?? '').replace(/^"|"$/g, ''), command: '', args: [] };
+      inEnv = false;
       continue;
     }
     if (/^\s*\[/.test(line)) {
       if (current) found.push(current);
       current = null;
+      inEnv = false;
+      continue;
+    }
+    if (inEnv && current) {
+      const pair = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([^"]*)"/.exec(line);
+      if (pair?.[1] !== undefined) current.env = { ...current.env, [pair[1]]: pair[2] ?? '' };
       continue;
     }
     if (!current) continue;
@@ -180,6 +196,13 @@ function collectFromToml(text: string, client: string, path: string): Registered
     const args = /^\s*args\s*=\s*\[(.*)\]/.exec(line);
     if (args?.[1] !== undefined) {
       current.args = [...args[1].matchAll(/"([^"]*)"/g)].map((match) => match[1] ?? '');
+    }
+    const inlineEnv = /^\s*env\s*=\s*\{(.*)\}/.exec(line);
+    if (inlineEnv?.[1] !== undefined) {
+      const pairs = [...inlineEnv[1].matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([^"]*)"/g)];
+      if (pairs.length > 0) {
+        current.env = Object.fromEntries(pairs.map((match) => [match[1] ?? '', match[2] ?? '']));
+      }
     }
   }
   if (current) found.push(current);

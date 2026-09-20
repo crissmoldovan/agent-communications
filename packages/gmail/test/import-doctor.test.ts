@@ -351,3 +351,40 @@ test('a registered entry’s env is read back, because --force has to be able to
   });
   assert.equal(servers.find((server) => server.name === 'plain')?.env, undefined, 'and absent when there is none');
 });
+
+test('a codex entry’s env is read back too, from both TOML spellings', async () => {
+  const home = tempDir();
+  await mkdir(join(home, '.codex'), { recursive: true });
+  await writeFile(
+    join(home, '.codex', 'config.toml'),
+    [
+      '[mcp_servers.sectioned]',
+      'command = "node"',
+      'args = ["a.mjs", "mcp"]',
+      '',
+      '[mcp_servers.sectioned.env]',
+      'AGENT_COMMS_CONFIG_DIR = "/cfg/one"',
+      'PATH = "/usr/bin"',
+      '',
+      '[mcp_servers.inline]',
+      'command = "node"',
+      'args = ["b.mjs"]',
+      'env = { AGENT_COMMS_CONFIG_DIR = "/cfg/two" }',
+      '',
+      '[mcp_servers.bare]',
+      'command = "node"',
+      'args = ["c.mjs"]',
+    ].join('\n'),
+  );
+
+  const servers = await listRegisteredServers({ HOME: home }, 'linux');
+  const by = (name: string) => servers.find((server) => server.name === name);
+
+  // The env subsection belongs to the server above it, not to a new one — and `--force` restores a codex entry
+  // with `--env KEY=VALUE`, so an env it cannot see is an env it cannot put back.
+  assert.deepEqual(by('sectioned')?.env, { AGENT_COMMS_CONFIG_DIR: '/cfg/one', PATH: '/usr/bin' });
+  assert.deepEqual(by('inline')?.env, { AGENT_COMMS_CONFIG_DIR: '/cfg/two' });
+  assert.equal(by('bare')?.env, undefined);
+  // And the subsection did not become a fourth server.
+  assert.deepEqual(servers.map((server) => server.name).sort(), ['bare', 'inline', 'sectioned']);
+});

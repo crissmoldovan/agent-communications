@@ -189,6 +189,7 @@ async function startDetached(
   const logPath = join(context.core.paths.stateDir, 'flows', `${flow.flowId}.log`);
 
   let child: ReturnType<typeof spawn>;
+  let spawnFailure: Error | null = null;
   try {
     await mkdir(dirname(logPath), { recursive: true });
     const log = await open(logPath, 'a');
@@ -199,11 +200,18 @@ async function startDetached(
         stdio: ['ignore', 'ignore', log.fd, 'ipc'],
         env: { ...process.env, ...listenerEnv(context, options.port) },
       });
+      // Attached before the next `await`, not after it. `spawn` reports a missing or unexecutable command on the
+      // following tick, which lands in the middle of `log.close()` — and an 'error' event with no listener is
+      // thrown by Node as an uncaught exception, past every catch here including the one that discards the flow.
+      child.once('error', (error: Error) => {
+        spawnFailure = error;
+      });
     } finally {
       // The child holds its own duplicate of the descriptor; ours would otherwise keep the file open for this
       // process's lifetime, which is the same class of leak this whole change is about.
       await log.close();
     }
+    if (spawnFailure) throw spawnFailure;
   } catch (error) {
     // The flow record, with its PKCE verifier, was written before any of this. A failure here — no permission to
     // create the log, no descriptors left, a spawn that throws outright — would otherwise leave it on disk with

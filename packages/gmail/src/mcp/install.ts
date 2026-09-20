@@ -241,10 +241,12 @@ export async function mcpInstall(context: GmailContext, options: InstallOptions)
     const cliName = options.client === 'claude-code' ? 'claude' : 'codex';
     const binary = await whichExecutable(cliName, context.env);
     if (binary && apply) {
+      const codexEnv = (values: Record<string, string> | undefined) =>
+        Object.entries(values ?? {}).flatMap(([key, value]) => ['--env', `${key}=${value}`]);
       const args =
         options.client === 'claude-code'
           ? ['mcp', 'add-json', name, JSON.stringify(entry), '--scope', 'user']
-          : ['mcp', 'add', name, '--', entry.command, ...entry.args];
+          : ['mcp', 'add', name, ...codexEnv(entry.env), '--', entry.command, ...entry.args];
 
       /*
        * These CLIs refuse to overwrite an entry that already exists, and the entry records an exact version —
@@ -293,12 +295,28 @@ export async function mcpInstall(context: GmailContext, options: InstallOptions)
                     '--scope',
                     'user',
                   ]
-                : ['mcp', 'add', name, '--', previous.command, ...previous.args];
-            await run(binary, restore).catch(() => undefined);
-            throw new CommsError('CONFIG', `could not register "${name}"; the previous entry was put back`, {
-              hint: 'Check the client is not running, then try again.',
-              cause: error,
-            });
+                : ['mcp', 'add', name, ...codexEnv(previous.env), '--', previous.command, ...previous.args];
+
+            // Only claim the entry is back if it is. Saying so after a failed restore leaves somebody believing
+            // their working server survived, when in fact nothing is registered at all.
+            let restored = true;
+            try {
+              await run(binary, restore);
+            } catch {
+              restored = false;
+            }
+            throw new CommsError(
+              'CONFIG',
+              restored
+                ? `could not register "${name}"; the previous entry was put back`
+                : `could not register "${name}", and the previous entry could not be put back either — ${cliName} now has no server called "${name}"`,
+              {
+                hint: restored
+                  ? 'Check the client is not running, then try again.'
+                  : `Re-register it with \`agent-gmail mcp install --client ${options.client}\`.`,
+                cause: error,
+              },
+            );
           }
           method = 'cli';
           applied = true;
