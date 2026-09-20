@@ -92,6 +92,32 @@ export function extractAddresses(text: string): string[] {
   return [...new Set((text.match(ADDRESS_IN_TEXT) ?? []).map(canonicalAddress))];
 }
 
+/**
+ * A platform identifier that is not an email address: a Slack user or conversation id.
+ *
+ * It carries its scope because, unlike an address, it is not globally unique — `U024BE7LH` names a different person
+ * in every workspace that happens to mint that id. The address store is deliberately cross-inbox, on the reasoning
+ * that a message read in one mailbox can ask for a send from another; that reasoning does not transfer here, and a
+ * store that matched ids across workspaces would flag an unrelated person every time two workspaces collided.
+ *
+ * The id, never the display name. `@sam` is set by the account that bears it and can be changed to `@finance-bot`
+ * between the message being read and the send being checked; the id cannot.
+ */
+export interface TaintHandle {
+  /** `slack`. Lower-cased on the way in. */
+  platform: string;
+  /** The workspace or team the id belongs to — a Slack team id. */
+  scope: string;
+  /** `U024BE7LH`, `C0123`, `D0456`. Passed in the platform's own canonical form; core does not know its shape. */
+  id: string;
+}
+
+/** The store key. Each part is escaped, so a scope containing the separator cannot forge another handle's key. */
+export function canonicalHandle(handle: TaintHandle): string {
+  const part = (value: string) => encodeURIComponent(value.trim());
+  return `${part(handle.platform.toLowerCase())}:${part(handle.scope)}:${part(handle.id)}`;
+}
+
 export type TaintSource = 'header' | 'body';
 
 export interface TaintObservation {
@@ -101,10 +127,24 @@ export interface TaintObservation {
   messageId?: string | undefined;
 }
 
+/** The same observation for a handle. `inboxId` is the account that did the reading, as it is for an address. */
+export interface TaintHandleObservation {
+  handle: TaintHandle;
+  source: TaintSource;
+  inboxId: string;
+  messageId?: string | undefined;
+}
+
 /** What is never recorded: the user's own addresses and the domains they call internal. */
 export interface TaintExclusions {
   ownAddresses: readonly string[];
   internalDomains: readonly string[];
+  /**
+   * Handles that are never recorded: the account's own user id, and whoever the caller treats as internal — the
+   * counterpart of `internalDomains`, decided per platform because "internal" means a domain for mail and
+   * workspace membership for Slack, and core should not be the thing that knows the difference.
+   */
+  ownHandles?: readonly TaintHandle[] | undefined;
 }
 
 interface TaintEntry {
@@ -116,6 +156,15 @@ interface TaintEntry {
 interface TaintFile {
   addresses: Record<string, TaintEntry>;
   domains: Record<string, TaintEntry>;
+  handles: Record<string, TaintEntry>;
+  /**
+   * Anything a later version wrote that this one does not know about, carried through untouched.
+   *
+   * An MCP server started last week and a CLI run today share this file, so the older of the two rewriting it must
+   * not silently drop what the newer one recorded. Taint fails open — a lost entry is a send that is not escalated,
+   * which is exactly the failure nobody notices.
+   */
+  [unknown: string]: unknown;
 }
 
 export interface TaintCheck {
@@ -137,12 +186,19 @@ export class TaintStore {
   }
 
   async #read(): Promise<TaintFile> {
+    const empty = (): TaintFile => ({ addresses: {}, domains: {}, handles: {} });
     try {
       const parsed = JSON.parse(await readFile(this.#path, 'utf8')) as Partial<TaintFile>;
-      return { addresses: parsed.addresses ?? {}, domains: parsed.domains ?? {} };
+      // Spread first so the three known maps win, and anything a later version added survives the rewrite.
+      return {
+        ...parsed,
+        addresses: parsed.addresses ?? {},
+        domains: parsed.domains ?? {},
+        handles: parsed.handles ?? {},
+      };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { addresses: {}, domains: {} };
-      if (error instanceof SyntaxError) return { addresses: {}, domains: {} };
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return empty();
+      if (error instanceof SyntaxError) return empty();
       throw error;
     }
   }
@@ -157,16 +213,28 @@ export class TaintStore {
       fresh.sort((a, b) => new Date(b[1].at).getTime() - new Date(a[1].at).getTime());
       return Object.fromEntries(fresh.slice(0, MAX_ENTRIES));
     };
-    return { addresses: keep(file.addresses), domains: keep(file.domains) };
+    return { ...file, addresses: keep(file.addresses), domains: keep(file.domains), handles: keep(file.handles) };
   }
 
   /**
    * Records observations. Throws if it cannot — callers must fail the read rather than return content whose taint
    * was not recorded.
    */
-  async record(observations: readonly TaintObservation[], exclusions: TaintExclusions): Promise<void> {
+  async record(
+    observations: readonly TaintObservation[],
+    exclusions: TaintExclusions,
+    handleObservations: readonly TaintHandleObservation[] = [],
+  ): Promise<void> {
     const own = new Set(exclusions.ownAddresses.map(canonicalAddress));
     const internal = new Set(exclusions.internalDomains.map((d) => d.toLowerCase()));
+    const ownHandles = new Set((exclusions.ownHandles ?? []).map(canonicalHandle));
+    const keptHandles = handleObservations
+      .map((o) => ({ ...o, key: canonicalHandle(o.handle) }))
+      .filter((o) => o.handle.id.trim() !== '' && !ownHandles.has(o.key))
+      .sort((a, b) => (a.source === b.source ? 0 : a.source === 'header' ? -1 : 1))
+      // Counted against the same per-message budget as addresses, and for the same reason: one message listing
+      // every member of a large workspace must not taint all of them and escalate every later send.
+      .slice(0, MAX_PER_MESSAGE);
     const kept = observations
       .map((o) => ({ ...o, address: canonicalAddress(o.address) }))
       .filter((o) => o.address.includes('@') && !own.has(o.address) && !internal.has(domainOf(o.address) ?? ''))
@@ -174,12 +242,12 @@ export class TaintStore {
       // survives if a single message carries more addresses than this will record.
       .sort((a, b) => (a.source === b.source ? 0 : a.source === 'header' ? -1 : 1))
       .slice(0, MAX_PER_MESSAGE);
-    if (kept.length === 0) return;
+    if (kept.length === 0 && keptHandles.length === 0) return;
     const path = this.#path;
     await withFileLock(`${path}.lock`, async () => {
       const file = this.#prune(await this.#read());
       const at = this.#now().toISOString();
-      const touch = (map: Record<string, TaintEntry>, key: string, o: TaintObservation) => {
+      const touch = (map: Record<string, TaintEntry>, key: string, o: { source: TaintSource; inboxId: string }) => {
         const existing = map[key];
         const inboxIds = [...new Set([...(existing?.inboxIds ?? []), o.inboxId])];
         // A header sighting is kept once seen: it is the stronger signal.
@@ -191,6 +259,8 @@ export class TaintStore {
         const domain = domainOf(o.address);
         if (domain && !PUBLIC_MAILBOX_DOMAINS.has(domain)) touch(file.domains, domain, o);
       }
+      // No domain counterpart: a handle has no part that generalises to other handles the way a domain does.
+      for (const o of keptHandles) touch(file.handles, o.key, o);
       await writeFileAtomic(path, JSON.stringify(file));
     });
   }
@@ -205,6 +275,17 @@ export class TaintStore {
       domain: domain !== null && !PUBLIC_MAILBOX_DOMAINS.has(domain) && domain in file.domains,
     };
   }
+
+  /**
+   * Whether a handle was seen in message content in the window.
+   *
+   * Only within its own workspace — see `TaintHandle`. There is no second answer to give, the way an address also
+   * carries a domain: two ids sharing a workspace says nothing about either of them.
+   */
+  async checkHandle(handle: TaintHandle): Promise<boolean> {
+    const file = this.#prune(await this.#read());
+    return canonicalHandle(handle) in file.handles;
+  }
 }
 
 /**
@@ -213,6 +294,7 @@ export class TaintStore {
  */
 export class TaintCollector {
   readonly #observations: TaintObservation[] = [];
+  readonly #handles: TaintHandleObservation[] = [];
   readonly #inboxId: string;
   readonly #messageId: string | undefined;
 
@@ -243,16 +325,33 @@ export class TaintCollector {
     }
   }
 
+  /**
+   * Records platform identifiers found in message content — the ids behind `<@U024BE7LH>` and `<#C0123|general>`.
+   *
+   * Parsing them out is the platform adapter's job, not core's: the markup is Slack's, and a regex here would be a
+   * second place to keep it correct. What core insists on is that the caller hands over ids rather than the display
+   * names beside them, which the account being named can change at any time.
+   */
+  observeHandles(handles: Iterable<TaintHandle>, source: TaintSource = 'body'): void {
+    for (const handle of handles) {
+      this.#handles.push({ handle, source, inboxId: this.#inboxId, messageId: this.#messageId });
+    }
+  }
+
   get size(): number {
-    return this.#observations.length;
+    return this.#observations.length + this.#handles.length;
   }
 
   observations(): TaintObservation[] {
     return [...this.#observations];
   }
 
+  handleObservations(): TaintHandleObservation[] {
+    return [...this.#handles];
+  }
+
   /** Records everything collected. Throws when it cannot, so the read fails closed. */
   async flush(store: TaintStore, exclusions: TaintExclusions): Promise<void> {
-    await store.record(this.#observations, exclusions);
+    await store.record(this.#observations, exclusions, this.#handles);
   }
 }

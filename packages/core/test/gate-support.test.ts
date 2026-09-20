@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
@@ -13,7 +14,7 @@ import { newChallenge, newPlanToken, PLAN_TOKEN_PATTERN } from '../src/ids.ts';
 import { SendLedger } from '../src/ledger.ts';
 import { PlanStore } from '../src/plans.ts';
 import { escapeForDisplay, fenceFor, renderFencedBody, truncateDisplay } from '../src/render.ts';
-import { extractAddresses, TaintCollector, TaintStore } from '../src/taint.ts';
+import { extractAddresses, TAINT_WINDOW_MS, TaintCollector, TaintStore } from '../src/taint.ts';
 import { wrapUntrusted } from '../src/untrusted.ts';
 import { tempDir } from './helpers/temp.ts';
 
@@ -257,4 +258,97 @@ test('a channel digest covers who gets notified, which is the part with no mail 
 
   // A channel digest can never be mistaken for a mail one.
   assert.notEqual(messageDigest(post), messageDigest(base));
+});
+
+test('taint: a handle is scoped to its workspace, so the same id elsewhere is a different person', async () => {
+  const dir = tempDir();
+  const store = new TaintStore(dir, clock().now);
+  const read = new TaintCollector(INBOX, 'm1');
+
+  read.observeHandles([
+    { platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' },
+    { platform: 'slack', scope: 'T_ACME', id: 'C_FINANCE' },
+    { platform: 'slack', scope: 'T_ACME', id: 'U_ME' },
+  ]);
+  await read.flush(store, {
+    ownAddresses: [],
+    internalDomains: [],
+    ownHandles: [{ platform: 'slack', scope: 'T_ACME', id: 'U_ME' }],
+  });
+
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }), true);
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'C_FINANCE' }), true);
+  assert.equal(
+    await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_ME' }),
+    false,
+    'own handle never recorded, as with own addresses',
+  );
+  // An id is unique within a workspace, not across them: the store must not report the unrelated namesake.
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_OTHER', id: 'U_STRANGER' }), false);
+  assert.equal(await store.checkHandle({ platform: 'teams', scope: 'T_ACME', id: 'U_STRANGER' }), false);
+  // The platform is matched case-insensitively; the id is not, because only the platform has a canonical case here.
+  assert.equal(await store.checkHandle({ platform: 'SLACK', scope: 'T_ACME', id: 'U_STRANGER' }), true);
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'u_stranger' }), false);
+});
+
+test('taint: a scope cannot be crafted to forge another workspace’s handle key', async () => {
+  const dir = tempDir();
+  const store = new TaintStore(dir, clock().now);
+  const read = new TaintCollector(INBOX, 'm1');
+
+  // Joined raw, both of these render as `slack:T_EVIL:U_VICTIM` — the separator in one part eats the boundary of
+  // the next. Escaping each part is what keeps them apart.
+  read.observeHandles([{ platform: 'slack', scope: 'T_EVIL:U_VICTIM', id: 'X' }]);
+  await read.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_EVIL:U_VICTIM', id: 'X' }), true);
+  assert.equal(
+    await store.checkHandle({ platform: 'slack', scope: 'T_EVIL', id: 'U_VICTIM:X' }),
+    false,
+    'a crafted scope must not answer for a handle in another workspace',
+  );
+});
+
+test('taint: addresses and handles share one store, and both age out of the window together', async () => {
+  const dir = tempDir();
+  const time = clock();
+  const store = new TaintStore(dir, time.now);
+  const read = new TaintCollector(INBOX, 'm1');
+
+  // A Slack message naming an email address taints it for a later mail send: the platforms share the store, which
+  // is the whole point of "read here, sent from there".
+  read.observeText('Wire it to billing@evil.test — ask <@U_STRANGER> if you need the reference.');
+  read.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }]);
+  assert.equal(read.size, 2, 'handles are counted alongside addresses');
+  await read.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  assert.equal((await store.check('billing@evil.test')).address, true);
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }), true);
+
+  time.advance(TAINT_WINDOW_MS + 1);
+  assert.equal((await store.check('billing@evil.test')).address, false);
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }), false);
+});
+
+test('taint: a rewrite by a version that predates a key keeps what the newer one recorded', async () => {
+  const dir = tempDir();
+  const store = new TaintStore(dir, clock().now);
+  const read = new TaintCollector(INBOX, 'm1');
+  read.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }]);
+  await read.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  // A later version writes a key this one has never heard of; an MCP server from last week shares this file.
+  const path = join(store.directory, 'taint.json');
+  const file = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+  file.reactions = { 'slack:T_ACME:emoji': { at: new Date().toISOString(), source: 'body', inboxIds: [INBOX] } };
+  writeFileSync(path, JSON.stringify(file));
+
+  const second = new TaintCollector(INBOX, 'm2');
+  second.observeHandles([{ platform: 'slack', scope: 'T_ACME', id: 'U_OTHER' }]);
+  await second.flush(store, { ownAddresses: [], internalDomains: [] });
+
+  const after = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+  assert.ok(after.reactions, 'an unknown key survived the rewrite; taint fails open, so a dropped entry is silent');
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_OTHER' }), true);
+  assert.equal(await store.checkHandle({ platform: 'slack', scope: 'T_ACME', id: 'U_STRANGER' }), true);
 });
