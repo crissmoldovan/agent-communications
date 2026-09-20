@@ -65,6 +65,33 @@ export interface Defaults {
   };
 }
 
+/**
+ * A connected account on a platform that is not mail: a Slack workspace, and whatever follows it.
+ *
+ * It sits beside `inboxes` rather than replacing it. The spec asked for one `accounts` map holding everything, and
+ * that rename is the one change this file cannot take: `version: 1` is additive precisely because an MCP server
+ * started last week and a CLI run today share the file, and a release that moved every mailbox out of `inboxes`
+ * would read, to the older of the two, as a config with no mailboxes in it. What the rename was for — one list of
+ * everything connected, whatever the platform — is a question about the shape of the answer, not the shape of the
+ * file, so `connectedAccounts()` provides it and the file grows one key.
+ */
+export interface AccountConfig {
+  id: string;
+  /** `slack`. */
+  platform: string;
+  /** The workspace or team id. Every other id this account sees is only meaningful inside it. */
+  workspace: string;
+  /** "Acme Corp" — shown to people, never matched on: a workspace can be renamed and stays the same workspace. */
+  workspaceName?: string | undefined;
+  /** This account's own user id in that workspace, so its own messages can be told from everyone else's. */
+  userId: string;
+  tier: string;
+  grantedScopes: string[];
+  secretRef: string;
+  sendPolicy?: SendPolicy | undefined;
+  createdAt: string;
+}
+
 export interface Config {
   version: typeof CONFIG_VERSION;
   /**
@@ -74,6 +101,8 @@ export interface Config {
   secrets?: { store: StoreKind } | undefined;
   clients: Record<string, ClientConfig>;
   inboxes: Record<string, InboxConfig>;
+  /** Non-mail accounts. Absent in every config written before this key existed, hence the default. */
+  accounts: Record<string, AccountConfig>;
   defaults: Defaults;
 }
 
@@ -81,12 +110,23 @@ const aliasSchema = z.string().regex(ALIAS_PATTERN, ALIAS_MESSAGE);
 const BASE32 = 'ABCDEFGHJKMNPQRSTVWXYZ0123456789';
 export const INBOX_ID_PATTERN: RegExp = /^ibx_[A-Z0-9]{16}$/;
 
-/** A new immutable inbox id: `ibx_` + 16 characters from an unambiguous alphabet (80 random bits). */
-export function newInboxId(): string {
+export const ACCOUNT_ID_PATTERN: RegExp = /^acc_[A-Z0-9]{16}$/;
+
+function newId(prefix: string): string {
   const bytes = randomBytes(16);
-  let out = 'ibx_';
+  let out = prefix;
   for (const byte of bytes) out += BASE32[byte % BASE32.length];
   return out;
+}
+
+/** A new immutable inbox id: `ibx_` + 16 characters from an unambiguous alphabet (80 random bits). */
+export function newInboxId(): string {
+  return newId('ibx_');
+}
+
+/** The same for a non-mail account. A distinct prefix, so an id alone says which map it belongs to. */
+export function newAccountId(): string {
+  return newId('acc_');
 }
 const sendPolicySchema = z.enum(['chat', 'confirm', 'never']);
 const storeKindSchema = z.enum(['keychain', 'file']);
@@ -117,6 +157,19 @@ const inboxSchema = z.looseObject({
   createdAt: z.string(),
 });
 
+const accountSchema = z.looseObject({
+  id: z.string().regex(ACCOUNT_ID_PATTERN, 'account ids look like acc_ followed by 16 characters'),
+  platform: z.string().min(1),
+  workspace: z.string().min(1),
+  workspaceName: z.string().optional(),
+  userId: z.string().min(1),
+  tier: z.string().min(1),
+  grantedScopes: z.array(z.string()).default([]),
+  secretRef: z.string().min(1),
+  sendPolicy: sendPolicySchema.optional(),
+  createdAt: z.string(),
+});
+
 const defaultsSchema = z.looseObject({
   sendPolicy: sendPolicySchema.default('chat'),
   riskEscalation: z.boolean().default(true),
@@ -143,20 +196,73 @@ export const configSchema: z.ZodType<Config, unknown> = z
     secrets: z.looseObject({ store: storeKindSchema }).optional(),
     clients: z.record(aliasSchema, clientSchema).default({}),
     inboxes: z.record(aliasSchema, inboxSchema).default({}),
+    accounts: z.record(aliasSchema, accountSchema).default({}),
     defaults: defaultsSchema.default(defaultsSchema.parse({})),
   })
   .superRefine((config, ctx) => {
-    const seen = new Map<string, string>();
-    for (const [alias, inbox] of Object.entries(config.inboxes)) {
+    // One namespace across both maps, because there is one to the person typing it: `--account work` cannot mean
+    // the mailbox in one command and the workspace in the next, and an alias that resolves to two different things
+    // is worse than one that resolves to nothing.
+    const ids = new Map<string, string>();
+    const aliases = new Map<string, string>();
+    const check = (map: 'inboxes' | 'accounts', alias: string, id: string) => {
       if (RESERVED_ALIASES.has(alias)) {
-        ctx.addIssue({ code: 'custom', path: ['inboxes', alias], message: `"${alias}" is reserved` });
+        ctx.addIssue({ code: 'custom', path: [map, alias], message: `"${alias}" is reserved` });
       }
-      const other = seen.get(inbox.id);
-      if (other)
-        ctx.addIssue({ code: 'custom', path: ['inboxes', alias, 'id'], message: `duplicates the id of "${other}"` });
-      seen.set(inbox.id, alias);
-    }
+      const sharing = aliases.get(alias);
+      if (sharing) {
+        ctx.addIssue({ code: 'custom', path: [map, alias], message: `"${alias}" is already used in ${sharing}` });
+      }
+      aliases.set(alias, map);
+      const other = ids.get(id);
+      if (other) ctx.addIssue({ code: 'custom', path: [map, alias, 'id'], message: `duplicates the id of "${other}"` });
+      ids.set(id, alias);
+    };
+    for (const [alias, inbox] of Object.entries(config.inboxes)) check('inboxes', alias, inbox.id);
+    for (const [alias, account] of Object.entries(config.accounts)) check('accounts', alias, account.id);
   });
+
+/**
+ * Everything connected, whichever map it lives in, in one list.
+ *
+ * This is what the `inboxes` → `accounts` rename was for, and it is the part worth having: callers that do not care
+ * whether something is a mailbox or a workspace — `doctor`, the secret store, `agentcomms accounts list` — ask here
+ * and get one answer. Callers that do care keep reading the map they mean, and say so by doing it.
+ */
+export type ConnectedAccount =
+  | { kind: 'mail'; alias: string; id: string; platform: string; secretRef: string; inbox: InboxConfig }
+  | { kind: 'channel'; alias: string; id: string; platform: string; secretRef: string; account: AccountConfig };
+
+export function connectedAccounts(config: Config): ConnectedAccount[] {
+  const mail = Object.entries(config.inboxes).map(
+    ([alias, inbox]): ConnectedAccount => ({
+      kind: 'mail',
+      alias,
+      id: inbox.id,
+      platform: inbox.provider,
+      secretRef: inbox.secretRef,
+      inbox,
+    }),
+  );
+  const channel = Object.entries(config.accounts).map(
+    ([alias, account]): ConnectedAccount => ({
+      kind: 'channel',
+      alias,
+      id: account.id,
+      platform: account.platform,
+      secretRef: account.secretRef,
+      account,
+    }),
+  );
+  // Sorted by alias, not concatenated: the two maps are an implementation detail of the file, and a list that put
+  // every mailbox before every workspace would make that detail visible in every `list` a person reads.
+  return [...mail, ...channel].sort((a, b) => a.alias.localeCompare(b.alias));
+}
+
+/** The one account an alias names, in either map, or null. Aliases are unique across both — the schema enforces it. */
+export function findConnectedAccount(config: Config, alias: string): ConnectedAccount | null {
+  return connectedAccounts(config).find((entry) => entry.alias === alias) ?? null;
+}
 
 /** The secret backend in use: the recorded one, or the keychain before anything has been stored. */
 export function secretsStoreOf(config: Config): StoreKind {

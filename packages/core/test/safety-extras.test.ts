@@ -5,8 +5,10 @@ import {
   ConfigStore,
   classifyChange,
   configSchema,
+  connectedAccounts,
   defaultInternalDomains,
   emptyConfig,
+  findConnectedAccount,
   type InboxConfig,
   parseConfig,
 } from '../src/config.ts';
@@ -309,3 +311,106 @@ test('default internal domains: the inbox domain, never a public mailbox provide
   assert.deepEqual(defaultInternalDomains('jo@example.com', PUBLIC_MAILBOX_DOMAINS), ['example.com']);
   assert.deepEqual(defaultInternalDomains('jo@gmail.com', PUBLIC_MAILBOX_DOMAINS), []);
 });
+
+test('config: a non-mail account sits beside the mailboxes rather than replacing them', () => {
+  const config = parseConfig(
+    JSON.stringify({
+      version: 1,
+      inboxes: { work: inboxFixture('ibx_AAAAAAAAAAAAAAAA') },
+      accounts: { acme: accountFixture('acc_BBBBBBBBBBBBBBBB') },
+    }),
+  );
+
+  assert.deepEqual(Object.keys(config.inboxes), ['work']);
+  assert.deepEqual(Object.keys(config.accounts), ['acme']);
+  assert.deepEqual(
+    connectedAccounts(config).map((entry) => [entry.alias, entry.kind, entry.platform]),
+    [
+      ['acme', 'channel', 'slack'],
+      ['work', 'mail', 'gmail'],
+    ],
+    'one list, sorted by alias: which map something lives in is the file’s business, not the reader’s',
+  );
+  assert.equal(findConnectedAccount(config, 'acme')?.id, 'acc_BBBBBBBBBBBBBBBB');
+  assert.equal(findConnectedAccount(config, 'nothing'), null);
+});
+
+test('config: a config written before accounts existed reads as having none, not as invalid', () => {
+  const config = parseConfig(JSON.stringify({ version: 1, inboxes: { work: inboxFixture('ibx_AAAAAAAAAAAAAAAA') } }));
+  assert.deepEqual(config.accounts, {});
+  assert.equal(connectedAccounts(config).length, 1);
+});
+
+test('config: one alias namespace across both maps, and ids unique across both', () => {
+  const clash = () =>
+    parseConfig(
+      JSON.stringify({
+        version: 1,
+        inboxes: { work: inboxFixture('ibx_AAAAAAAAAAAAAAAA') },
+        accounts: { work: accountFixture('acc_BBBBBBBBBBBBBBBB') },
+      }),
+    );
+  // `--account work` cannot mean the mailbox in one command and the workspace in the next.
+  assert.throws(clash, /already used in inboxes/);
+
+  assert.throws(
+    () =>
+      parseConfig(
+        JSON.stringify({
+          version: 1,
+          accounts: {
+            acme: accountFixture('acc_BBBBBBBBBBBBBBBB'),
+            other: accountFixture('acc_BBBBBBBBBBBBBBBB'),
+          },
+        }),
+      ),
+    /duplicates the id/,
+  );
+  assert.throws(
+    () => parseConfig(JSON.stringify({ version: 1, accounts: { all: accountFixture('acc_BBBBBBBBBBBBBBBB') } })),
+    /reserved/,
+  );
+});
+
+test('config: a workspace is matched by id, never by the name it shows', () => {
+  const before = parseConfig(
+    JSON.stringify({
+      version: 1,
+      accounts: { acme: { ...accountFixture('acc_BBBBBBBBBBBBBBBB'), workspaceName: 'Acme Corp' } },
+    }),
+  );
+  const renamed = parseConfig(
+    JSON.stringify({
+      version: 1,
+      accounts: { acme: { ...accountFixture('acc_BBBBBBBBBBBBBBBB'), workspaceName: 'Acme Holdings' } },
+    }),
+  );
+  // The display name changed; the thing it names did not.
+  assert.equal(before.accounts.acme?.workspace, renamed.accounts.acme?.workspace);
+  assert.notEqual(before.accounts.acme?.workspaceName, renamed.accounts.acme?.workspaceName);
+});
+
+function inboxFixture(id: string) {
+  return {
+    id,
+    provider: 'gmail',
+    identity: 'oidc',
+    email: 'jo@example.com',
+    client: 'desktop',
+    tier: 'read',
+    secretRef: 'r1',
+    createdAt: '2026-09-20T00:00:00.000Z',
+  };
+}
+
+function accountFixture(id: string) {
+  return {
+    id,
+    platform: 'slack',
+    workspace: 'T_ACME',
+    userId: 'U_ME',
+    tier: 'read',
+    secretRef: 'r2',
+    createdAt: '2026-09-20T00:00:00.000Z',
+  };
+}
