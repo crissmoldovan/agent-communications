@@ -622,3 +622,59 @@ export function renderApprovals(records: ApprovalView[], color: boolean): string
     color,
   );
 }
+
+/**
+ * The setup, written out for somebody who cannot be prompted — an agent, a pipe, `--json`.
+ *
+ * Every step here needs a person: a browser for the console, a human at the consent screen. So the answer for a
+ * non-interactive caller is the instructions rather than a refusal, and rather than half-running something that
+ * will stop at the first question.
+ */
+export function renderSetupPlan(
+  state: { next: string; clients: string[]; inboxes: string[]; registeredWith: string[]; candidates: string[] },
+  steps: readonly { title: string; url: string; detail: string }[],
+  color: boolean,
+): string {
+  const lines: string[] = [];
+  if (state.next === 'done') {
+    lines.push('Already set up.');
+    lines.push(`  mailboxes: ${state.inboxes.join(', ')}`);
+    lines.push(`  registered with: ${state.registeredWith.join(', ')}`);
+    return lines.join('\n');
+  }
+
+  lines.push(paint(color, 'bold', 'Setup, for a terminal with a person at it'));
+  lines.push('');
+  lines.push('Run `agent-gmail setup` where you can answer questions and open a browser. What it will walk you');
+  lines.push('through, in case you would rather do it by hand:');
+  lines.push('');
+
+  if (state.clients.length === 0) {
+    lines.push(paint(color, 'bold', 'A Google OAuth client — once per person, covers every mailbox'));
+    for (const [index, step] of steps.entries()) {
+      lines.push(`  ${index + 1}. ${step.title}`);
+      lines.push(`     ${step.detail}`);
+      lines.push(`     ${paint(color, 'dim', step.url)}`);
+    }
+    lines.push('  Then: agent-gmail client add <the downloaded JSON> --name desktop');
+    if (state.candidates.length > 0) {
+      lines.push(`  ${paint(color, 'dim', `(one is already in your downloads: ${state.candidates[0]})`)}`);
+    }
+    lines.push('');
+  }
+
+  if (state.inboxes.length === 0) {
+    lines.push(paint(color, 'bold', 'A mailbox'));
+    lines.push('  agent-gmail inbox add work --email you@example.com --start');
+    lines.push('  then run the --finish command it prints, after signing in.');
+    lines.push('');
+  }
+
+  if (state.registeredWith.length === 0) {
+    lines.push(paint(color, 'bold', 'The agent connection'));
+    lines.push('  agent-gmail mcp install --client claude-code');
+    lines.push('');
+  }
+
+  return lines.join('\n').trimEnd();
+}

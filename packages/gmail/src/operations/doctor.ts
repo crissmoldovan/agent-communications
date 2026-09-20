@@ -94,7 +94,10 @@ export async function doctor(
       clients.length > 0
         ? `${clients.length} registered: ${clients.map(([name]) => name).join(', ')}`
         : 'none registered',
-    fix: clients.length > 0 ? undefined : 'agent-gmail client add ~/Downloads/client_secret_*.json --move',
+    // `setup`, not `client add <a file you do not have>`. This check is the first thing a new install reports,
+    // and it used to answer with a command naming a downloaded JSON that only exists after five screens of Google
+    // Cloud nobody had mentioned — repair advice handed to somebody who had not built the thing yet.
+    fix: clients.length > 0 ? undefined : 'agent-gmail setup',
   });
 
   const aliases = options.inbox ? [options.inbox] : Object.keys(config.inboxes);
@@ -104,7 +107,7 @@ export async function doctor(
       title: 'Mailboxes',
       status: 'warn',
       detail: 'none connected yet',
-      fix: 'agent-gmail inbox add work --start',
+      fix: 'agent-gmail setup',
     });
   }
   for (const alias of aliases) {

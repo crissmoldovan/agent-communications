@@ -232,7 +232,12 @@ test('doctor reports the checks and their fixes through the tool', async () => {
     const checks = result.structuredContent?.checks as Array<{ id: string; status: string; fix: string | null }>;
     const client_ = checks.find((check) => check.id === 'oauth-client');
     assert.equal(client_?.status, 'fail');
-    assert.match(client_?.fix ?? '', /client add/);
+    // One command, and one a person can actually act on. This used to answer `client add
+    // ~/Downloads/client_secret_*.json`, naming a file that only exists after five screens of Google Cloud that
+    // nothing had mentioned — repair advice given to somebody who had not built the thing yet. An agent reading
+    // this over MCP cannot do any of it either, so what it needs is the single thing to tell the user.
+    assert.equal(client_?.fix, 'agent-gmail setup');
+    assert.equal(checks.find((check) => check.id === 'inboxes')?.fix, 'agent-gmail setup');
     assert.equal(result.structuredContent?.healthy, false);
   } finally {
     await close();
