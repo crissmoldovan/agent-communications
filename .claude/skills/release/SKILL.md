@@ -1,12 +1,12 @@
 ---
 name: release
-description: Use when publishing this repository's packages to npm, cutting a version, or asked to "do a release" — a tag starts the release in CI and a named reviewer approves the publish, which is the irreversible step
+description: Use when publishing this repository's packages to npm, cutting a version, or asked to "do a release" — pushing a v* tag publishes from CI with provenance, and that push is the irreversible step
 ---
 
 # Releasing agent-communications
 
 Three packages go to npm together: `@agentcomms/core`, `@agentcomms/gmail`, `@agentcomms/gmail-mcp`, in dependency
-order. **Pushing a `v*` tag starts the release; approving the waiting job in GitHub performs it.**
+order. **Pushing a `v*` tag publishes them.** That push is the irreversible act; there is no confirmation after it.
 
 ## The one thing to understand first
 
@@ -22,9 +22,10 @@ CI, via npm trusted publishing — a short-lived credential minted from the work
 stored anywhere, and none should be added: a long-lived npm token in a public repository is a standing risk nobody
 rotates.
 
-The publish job runs in the `release` environment, which **requires a named reviewer**. It waits until a person
-approves it. Pushing a tag is not a release; approving one is — and an agent can push a tag, while the package being
-published is the one promising an agent cannot act without the person.
+The publish job runs in the `release` environment, which accepts `v*` tags and nothing else. A required reviewer
+sat in front of it for one release and was removed: it was opened on instruction every time, and a gate that is
+always waved through reports a check nobody performs. **Anything that can push a tag here can publish to npm** —
+that is the trade, and it is written down in `docs/RELEASING.md` rather than implied.
 
 **`scripts/release.mjs` still works and is the fallback**, for when GitHub is down or a release cannot wait. What it
 gives up is provenance: npm attests only what a supported CI runner published. 0.1.0 went out that way and carries
@@ -53,20 +54,18 @@ workflow could have done the first publish. That is spent; from 0.1.1 CI is the 
    in CI.
    **Complete when:** it prints that everything a release checks has passed.
 
-6. **Tag, and push the tag.** `git tag vX.Y.Z && git push origin vX.Y.Z`. This starts the workflow; it does not
-   publish. The tag comes *before* the publish here, the reverse of the local flow — so a tag whose job is never
-   approved names a release that did not happen, and should be deleted rather than left to imply otherwise.
-   **Complete when:** the Release workflow is running and the publish job is waiting for review.
-
-7. **Approve the waiting job in GitHub.** This is the irreversible step, and the only one a person must do.
-   **Complete when:** the job's own registry check reports all three at the new version. It asks the registry what
+6. **Tag, and push the tag. This publishes.** `git tag vX.Y.Z && git push origin vX.Y.Z`. Six verify legs run
+   first and the publish is skipped if any fails, but nothing asks for confirmation after the push.
+   **Complete when:** the run's own registry check reports all three at the new version. It asks the registry what
    arrived rather than trusting the publish command, because `pnpm --filter` exits 0 when it matches nothing.
 
+   **If a leg fails, nothing is published** and the tag names a release that did not happen — move it to the fix
+   rather than leaving it. v0.1.2 did exactly this: green on macOS and Linux, broken on Windows by an absolute
+   path handed to a dynamic `import`, which only the tag workflow could catch.
+
    **If it says a package "is not visible yet", do not bump the version.** `npm view` reads a CDN-cached document
-   that can lag minutes behind a successful publish. The check retries for five minutes; if it still fails, run
-   `npm dist-tag ls @agentcomms/<name>`, which goes to the authenticated path. If that reports the version, the
-   publish landed. On the first release a check that gave up immediately declared a successful publish a total
-   failure, and the obvious response would have been to burn the version number.
+   that can lag minutes behind a successful publish. Run `npm dist-tag ls @agentcomms/<name>`, which goes to the
+   authenticated path. If that reports the version, the publish landed.
 
 8. **Prove it from outside.** `npx -y @agentcomms/gmail@X.Y.Z --version`, then `doctor`, in a directory that is not
    this repository. Then `npx skills add crissmoldovan/agent-communications --skill '*'` in a scratch directory and
@@ -125,7 +124,7 @@ thing that tells you which half of the release exists.
 
 - [ ] The changelog entry was written by a person.
 - [ ] `pnpm release` passed locally before the tag was pushed.
-- [ ] A person approved the waiting job; it did not publish on the tag alone.
+- [ ] `pnpm verify` passed locally, on this platform, before the tag was pushed — knowing that green here is not green on Windows.
 - [ ] The registry confirms all three packages at the new version.
-- [ ] The tag names a commit whose publish was actually approved.
+- [ ] The tag names the commit the workflow actually published.
 - [ ] The published package was installed and run somewhere that is not this repository.

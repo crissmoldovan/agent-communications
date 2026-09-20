@@ -8,13 +8,21 @@ the why.
 
 ## Releases run in CI, and a person approves them
 
-Pushing a `v*` tag verifies the tagged commit on six platform legs, then **waits**. The `release` environment
-requires a named reviewer, so the publish job sits there until somebody approves it in GitHub. Pushing a tag is not
-a release; approving one is.
+Pushing a `v*` tag verifies the tagged commit on six platform legs and then publishes it.
 
-That distinction carries weight here. An agent can push a tag. The package being published is the one promising
-that an agent cannot act without the person, and it would be a poor advertisement if the thing making that promise
-could ship itself.
+A required reviewer sat in front of that for one release and was removed. Not because the risk it named was
+imaginary — **anything that can push a tag to this repository can publish to npm**, and this repository's own
+software reads attacker-controlled email — but because the gate was opened on instruction every time it appeared.
+A control that is always waved through is worse than no control: it reports a check nobody is performing, and the
+documentation ends up describing a human in a loop they are not in.
+
+What guards the release instead is stated rather than implied: the environment accepts `v*` tags and nothing else,
+the tag must match the declared version, six platform legs must pass before the publish job starts, and every
+version carries provenance naming the commit and the workflow run that built it. If a bad version ever went out,
+that attestation is what makes it traceable.
+
+Restoring the reviewer is one API call, and worth doing the day this repository has more than one maintainer or the
+day an agent here starts acting on mail it did not fetch deliberately.
 
 **No credential exists in this repository.** npm trusted publishing mints a short-lived one from the workflow's own
 identity, so there is nothing to leak and nothing to rotate. **Do not replace it with a token.** A long-lived npm
@@ -58,13 +66,13 @@ pnpm release                # every check, then stops before sending anything
 # 5. Tag. This starts the workflow; it does not publish.
 git tag vX.Y.Z && git push origin vX.Y.Z
 
-# 6. Approve the waiting job in GitHub. That is the publish.
+# 6. Watch it. Six verify legs, then it publishes.
 ```
 
 **The tag now comes before the publish, because it is what starts it** — the reverse of the local flow, where the
-tag recorded something already done. The claim a tag makes is still only made true by the approval that follows, so
-a tag whose job was never approved names a release that did not happen. If that occurs, delete the tag rather than
-leaving it to imply otherwise.
+tag recorded something already done. A tag whose run failed names a release that did not happen; delete it rather
+than leave it implying otherwise. That is not hypothetical: v0.1.2 was tagged, failed on Windows, published
+nothing, and the tag had to move.
 
 **The packages publish in dependency order** — `core`, then `gmail`, then `gmail-mcp` — because a consumer
 installing `@agentcomms/gmail` must find the exact `core` it pins already on the registry.

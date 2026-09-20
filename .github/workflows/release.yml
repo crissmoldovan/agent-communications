@@ -11,10 +11,14 @@ name: Release
 # so the first release of each package had to happen from a maintainer's machine. That is done; from 0.1.1 the
 # registry knows these three and this workflow is the publisher it trusts.
 #
-# What stops this from publishing on its own: the `release` environment requires a named reviewer, and the job sits
-# waiting until that person approves it. Pushing a tag is not a release — approving one is. That matters here more
-# than it would elsewhere, because an agent can push a tag, and the package this publishes is the one promising an
-# agent cannot act alone.
+# **A pushed `v*` tag publishes.** There was a required reviewer on the `release` environment for one release; it
+# was removed, because in practice it was opened on instruction rather than as an independent check, and a gate
+# that is always opened is worse than none — it reports a control nobody is exercising.
+#
+# What remains is real rather than ceremonial: the environment accepts `v*` tags and nothing else, the tag must
+# match the version the repository declares, six verify legs must pass first, and every published version carries
+# provenance naming the commit and the run. The residual risk is stated in docs/RELEASING.md rather than papered
+# over: anything that can push a tag to this repository can publish.
 
 on:
   push:
