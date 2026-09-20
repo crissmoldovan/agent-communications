@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readdir, writeFile } from 'node:fs/promises';
+import { readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -349,4 +349,24 @@ test('a reauth keeps the mailbox contacts setting when no flag names it', async 
   assert.ok(widen.authUrl.includes('contacts'), 'an explicit --contacts must ask for it');
   await fetch(harness.google.consent(widen.authUrl, { sub: 'sub-1' }));
   await finishSignIn(context, { flowId: widen.flowId, waitSeconds: 10, pollMs: 50 });
+});
+
+test('the detached listener does not hold the caller’s stderr open', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const started = await startSignIn(context, { mode: 'add', alias: 'work', listenerCommand: LISTENER });
+
+  // Inheriting stderr meant this child held the parent's open for as long as it waited for the browser — up to ten
+  // minutes. `inbox add --start | tee setup.log` then hung on a command that had already printed everything and
+  // exited. Its stderr goes to a file instead, and the file's existence is what says so.
+  const log = join(context.core.paths.stateDir, 'flows', `${started.flowId}.log`);
+  await assert.doesNotReject(stat(log), `the listener's stderr should be redirected to ${log}`);
+
+  // Redirected, not discarded: a listener that fails after reporting ready must still leave a trace.
+  const handle = await stat(log);
+  assert.ok(handle.isFile());
+
+  await fetch(harness.google.consent(started.authUrl));
+  const result = await finishSignIn(context, { flowId: started.flowId, waitSeconds: 10, pollMs: 50 });
+  assert.equal(result.inbox.email, 'jo@example.test');
 });

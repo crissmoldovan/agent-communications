@@ -176,9 +176,12 @@ export class FlowStore {
     return flow;
   }
 
-  /** Removes every trace of a flow: the record with its verifier, the outcome and the claim marker. */
+  /**
+   * Removes every trace of a flow: the record with its verifier, the outcome, the claim marker and the detached
+   * listener's log. Every one of them, or the state directory accumulates a file per sign-in that nothing reads.
+   */
   async discard(flowId: string): Promise<void> {
-    for (const suffix of ['.json', '.outcome.json', '.claim']) {
+    for (const suffix of ['.json', '.outcome.json', '.claim', '.log']) {
       await rm(this.#path(flowId, suffix), { force: true });
     }
   }

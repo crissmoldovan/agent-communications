@@ -1103,6 +1103,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .option('--read-only', 'leave out every tool that changes the mailbox', false)
     .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
     .option('--no-verify', 'do not start the server to check the entry works')
+    .option('--force', 'replace an entry of the same name — this is how you upgrade', false)
     .option('--print', 'only print what would be written', false)
     .action(
       act(async (context, globalOptions, options: Options) => {
@@ -1120,6 +1121,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           launcher: options.launcher as Launcher | undefined,
           noVerify: options.verify === false,
           apply: options.print !== true,
+          force: Boolean(options.force),
         });
         writeResult(result, output(), (data) => renderInstall(data, globalOptions.color), streams);
       }),

@@ -3,7 +3,12 @@ import { type CommsError, isGroupOrWorldAccessible, probeKeychain, secretsStoreO
 import { capabilitiesOf, scopesFor, TIERS, type Tier } from '../auth/scopes.ts';
 import { TokenSource } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';
-import { findUngatedGmailServers, listRegisteredServers } from './client-configs.ts';
+import { VERSION } from '../version.ts';
+import { findUngatedGmailServers, listRegisteredServers, type RegisteredServer } from './client-configs.ts';
+
+/** `…/runtime/<version>/node_modules/@agentcomms/gmail/dist/cli.mjs` — the path `mcp install` writes. */
+const PINNED_RUNTIME = /[/\\]runtime[/\\]([^/\\]+)[/\\]node_modules[/\\]@agentcomms[/\\]gmail[/\\]/;
+
 import { orphanedSecretsPath } from './inboxes.ts';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'skipped';
@@ -301,6 +306,36 @@ async function mcpChecks(context: GmailContext): Promise<Check[]> {
             .map((finding) => `${finding.name} in ${finding.path} (${finding.client}): ${finding.reason}`)
             .join('; '),
     fix: ungated.length === 0 ? undefined : ungated.map((finding) => finding.removal).join(' && '),
+  });
+
+  /*
+   * A registered entry names an exact version — `runtime/<version>/…`, pinned so that upgrading the package
+   * elsewhere on the machine cannot change what an agent runs underneath you. That is the right trade, but it has
+   * a silent half: publishing a new version does nothing for an already-registered client, and nothing anywhere
+   * said so. A release once sat unused on a machine through two versions because the only symptom was a fixed bug
+   * that was still happening.
+   */
+  const stale = servers
+    .map((server) => {
+      const pinned = server.args.map((arg) => PINNED_RUNTIME.exec(arg)).find((match) => match !== null);
+      return pinned ? { server, version: pinned[1] as string } : null;
+    })
+    .filter((entry): entry is { server: RegisteredServer; version: string } => entry !== null)
+    .filter((entry) => entry.version !== VERSION);
+
+  checks.push({
+    id: 'registered-server-version',
+    title: 'Registered server version',
+    status: stale.length === 0 ? 'ok' : 'warn',
+    detail:
+      stale.length === 0
+        ? `this release, ${VERSION}`
+        : stale.map((entry) => `${entry.server.client} runs ${entry.version}; this release is ${VERSION}`).join('; '),
+    // Remove-then-install, because the client CLIs refuse to overwrite an entry that already exists.
+    fix:
+      stale.length === 0
+        ? undefined
+        : stale.map((entry) => `agent-gmail mcp install --client ${entry.server.client} --force`).join(' && '),
   });
 
   const ours = servers.filter((server) => [server.command, ...server.args].join(' ').includes('agent-gmail'));

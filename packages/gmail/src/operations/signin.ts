@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { mkdir, open } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { CommsError, requireInbox } from '@agentcomms/core';
 import type { OAuthFlow } from '../auth/flows.ts';
 import { startLoopback } from '../auth/loopback.ts';
@@ -171,12 +173,36 @@ async function startDetached(
   options: StartOptions,
 ): Promise<{ redirectUri: string; listener: undefined }> {
   const entry = options.listenerCommand ?? defaultListenerCommand();
-  const child = spawn(entry.command, [...entry.args, 'oauth-listen', flow.flowId], {
-    detached: true,
-    // An IPC channel only for the "ready" message: nothing else passes between the processes.
-    stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
-    env: { ...process.env, ...listenerEnv(context, options.port) },
-  });
+
+  /*
+   * The listener's stderr goes to a file, not to ours.
+   *
+   * Inheriting it meant this detached child held our stderr open for as long as it waited for the browser — up to
+   * ten minutes. A caller that piped the command anywhere (`inbox add --start | tee setup.log`, or any wrapper
+   * that captures output) then hung on a command that had already printed everything it was going to print and
+   * exited. The output was complete and the process was gone; only the inherited descriptor was still open.
+   *
+   * Dropping it entirely would be the smaller change, but a listener that fails after it reported ready — a port
+   * taken, a redirect that never arrives — would then fail silently. So it is redirected rather than discarded,
+   * and `doctor` can point at the file.
+   */
+  const logPath = join(context.core.paths.stateDir, 'flows', `${flow.flowId}.log`);
+  await mkdir(dirname(logPath), { recursive: true });
+  const log = await open(logPath, 'a');
+
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(entry.command, [...entry.args, 'oauth-listen', flow.flowId], {
+      detached: true,
+      // An IPC channel only for the "ready" message: nothing else passes between the processes.
+      stdio: ['ignore', 'ignore', log.fd, 'ipc'],
+      env: { ...process.env, ...listenerEnv(context, options.port) },
+    });
+  } finally {
+    // The child holds its own duplicate of the descriptor; ours would otherwise keep the file open for this
+    // process's lifetime, which is the same class of leak this whole change is about.
+    await log.close();
+  }
 
   try {
     await new Promise<void>((resolve, reject) => {

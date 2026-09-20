@@ -10,6 +10,7 @@ import { findUngatedGmailServers, listRegisteredServers } from '../src/operation
 import { doctor } from '../src/operations/doctor.ts';
 import { aliasFromCredentialsFile, importLegacy, parseLegacyCredentials } from '../src/operations/import-legacy.ts';
 import { inboxList, inboxRemove, orphanedSecretsPath } from '../src/operations/inboxes.ts';
+import { VERSION } from '../src/version.ts';
 import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
 
 const CLIENT = { clientId: TEST_CLIENT_ID, clientSecret: TEST_CLIENT_SECRET };
@@ -246,4 +247,46 @@ test('doctor reports what is missing with the command that fixes it, and finds u
   assert.equal(others?.status, 'fail');
   assert.match(others?.detail ?? '', /@artymclabin\/gmail-mcp/);
   assert.match(others?.fix ?? '', /claude mcp remove old/);
+});
+
+test('doctor says when the registered MCP server is an older version than this one', async () => {
+  const harness = await newHarness({ accounts: [] });
+  const env = { ...harness.env, HOME: harness.configDir };
+  const byId = <T extends { id: string }>(checks: readonly T[], id: string) => checks.find((check) => check.id === id);
+
+  // `mcp install` pins an exact version into the path, so that upgrading the package elsewhere cannot change what
+  // an agent runs. The silent half of that trade is what this check exists to say out loud.
+  const stalePath = join(
+    harness.core.paths.dataDir,
+    'runtime',
+    '0.0.1',
+    'node_modules',
+    '@agentcomms',
+    'gmail',
+    'dist',
+    'cli.mjs',
+  );
+  await writeFile(
+    join(harness.configDir, '.claude.json'),
+    JSON.stringify({ mcpServers: { gmail: { command: 'node', args: [stalePath, 'mcp'] } } }),
+  );
+
+  const stale = await doctor(new GmailContext({ core: harness.core, env }));
+  const check = byId(stale.checks, 'registered-server-version');
+  assert.equal(check?.status, 'warn', 'an old registered runtime is worth saying');
+  assert.match(check?.detail ?? '', /runs 0\.0\.1/);
+  assert.match(check?.detail ?? '', new RegExp(`this release is ${VERSION.replace(/\./g, '\\.')}`));
+  // Remove-then-install: the client CLIs refuse to overwrite an entry that already exists, so --force is the fix.
+  assert.match(check?.fix ?? '', /mcp install --client claude-code --force/);
+  // A warning, not a failure: an old server still works, it just is not the one that was published.
+  assert.notEqual(check?.status, 'fail');
+
+  // The current version is not reported as stale.
+  const currentPath = stalePath.replace('/runtime/0.0.1/', `/runtime/${VERSION}/`);
+  await writeFile(
+    join(harness.configDir, '.claude.json'),
+    JSON.stringify({ mcpServers: { gmail: { command: 'node', args: [currentPath, 'mcp'] } } }),
+  );
+  const current = await doctor(new GmailContext({ core: harness.core, env }));
+  assert.equal(byId(current.checks, 'registered-server-version')?.status, 'ok');
 });

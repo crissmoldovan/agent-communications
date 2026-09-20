@@ -30,6 +30,8 @@ export interface InstallOptions {
   noVerify?: boolean | undefined;
   /** Write the file or run the client's CLI; false only prints what would be done. */
   apply?: boolean | undefined;
+  /** Replace an existing entry of the same name. Needed to upgrade, because the entry pins an exact version. */
+  force?: boolean | undefined;
 }
 
 export interface ServerEntry {
@@ -243,7 +245,36 @@ export async function mcpInstall(context: GmailContext, options: InstallOptions)
         options.client === 'claude-code'
           ? ['mcp', 'add-json', name, JSON.stringify(entry), '--scope', 'user']
           : ['mcp', 'add', name, '--', entry.command, ...entry.args];
-      await run(binary, args);
+
+      /*
+       * These CLIs refuse to overwrite an entry that already exists, and the entry records an exact version —
+       * `runtime/<version>/…`, pinned on purpose so an upgrade elsewhere cannot change what a client runs. The two
+       * together mean a published upgrade reaches nobody until someone re-registers, and the obvious command for
+       * that fails with "already exists" and no route forward. A release sat unused on a machine for exactly this
+       * reason.
+       *
+       * So `--force` removes first. Not the default: replacing a working server entry is the sort of thing to ask
+       * for, and the failure without it now says how.
+       */
+      if (options.force) {
+        const removal =
+          options.client === 'claude-code' ? ['mcp', 'remove', name, '--scope', 'user'] : ['mcp', 'remove', name];
+        // A missing entry is the state we want, so a failure to remove one is not a failure.
+        await run(binary, removal).catch(() => undefined);
+      }
+
+      try {
+        await run(binary, args);
+      } catch (error) {
+        const message = error instanceof CommsError ? error.message : String(error);
+        if (/already exists/i.test(message)) {
+          throw new CommsError('CONFIG', `${cliName} already has an MCP server called "${name}"`, {
+            hint: `Pass --force to replace it, or remove it first: \`${cliName} mcp remove ${name}\`.`,
+            cause: error,
+          });
+        }
+        throw error;
+      }
       method = 'cli';
       applied = true;
     }
