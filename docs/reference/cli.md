@@ -770,6 +770,8 @@ agent-gmail setup [options]
 | Option | What it does | Default |
 |---|---|---|
 | `--client-json <path>` | the OAuth client JSON, if you already have it | — |
+| `--restart` | walk the Google Cloud steps again even if a client is | — |
+| `registered (default: false)` |  | — |
 | `--no-browser` | print the links instead of opening them | — |
 
 ### `agent-gmail doctor`

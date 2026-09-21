@@ -631,8 +631,15 @@ export function renderApprovals(records: ApprovalView[], color: boolean): string
  * will stop at the first question.
  */
 export function renderSetupPlan(
-  state: { next: string; clients: string[]; inboxes: string[]; registeredWith: string[]; candidates: string[] },
-  steps: readonly { title: string; url: string; detail: string }[],
+  state: {
+    next: string;
+    done: readonly string[];
+    clients: string[];
+    inboxes: string[];
+    registeredWith: string[];
+    candidates: { path: string; kind: string; modifiedAt: string }[];
+  },
+  steps: readonly { title: string; url: string; why: string; actions: readonly string[]; avoid: readonly string[] }[],
   color: boolean,
 ): string {
   const lines: string[] = [];
@@ -645,35 +652,41 @@ export function renderSetupPlan(
 
   lines.push(paint(color, 'bold', 'Setup, for a terminal with a person at it'));
   lines.push('');
-  lines.push('Run `agent-gmail setup` where you can answer questions and open a browser. What it will walk you');
-  lines.push('through, in case you would rather do it by hand:');
+  lines.push('Run `agent-gmail setup` where you can answer questions and open a browser. Everything below needs');
+  lines.push('one of those, which is why this printed the plan instead of doing it.');
   lines.push('');
+  if (state.done.length > 0) lines.push(`Already done: ${state.done.join(', ')}.`);
 
   if (state.clients.length === 0) {
+    lines.push('');
     lines.push(paint(color, 'bold', 'A Google OAuth client — once per person, covers every mailbox'));
     for (const [index, step] of steps.entries()) {
+      lines.push('');
       lines.push(`  ${index + 1}. ${step.title}`);
-      lines.push(`     ${step.detail}`);
+      lines.push(`     ${paint(color, 'dim', step.why)}`);
       lines.push(`     ${paint(color, 'dim', step.url)}`);
-    }
-    lines.push('  Then: agent-gmail client add <the downloaded JSON> --name desktop');
-    if (state.candidates.length > 0) {
-      lines.push(`  ${paint(color, 'dim', `(one is already in your downloads: ${state.candidates[0]})`)}`);
+      for (const action of step.actions) lines.push(`       • ${action}`);
+      for (const warning of step.avoid) lines.push(`       ! ${warning}`);
     }
     lines.push('');
+    lines.push('  Then: agent-gmail client add <the downloaded JSON> --name desktop');
+    for (const candidate of state.candidates) {
+      const note = candidate.kind === 'desktop' ? 'Desktop app' : `${candidate.kind} — not usable`;
+      lines.push(`  ${paint(color, 'dim', `found: ${candidate.path} (${note}, ${candidate.modifiedAt})`)}`);
+    }
   }
 
   if (state.inboxes.length === 0) {
+    lines.push('');
     lines.push(paint(color, 'bold', 'A mailbox'));
     lines.push('  agent-gmail inbox add work --email you@example.com --start');
     lines.push('  then run the --finish command it prints, after signing in.');
-    lines.push('');
   }
 
   if (state.registeredWith.length === 0) {
+    lines.push('');
     lines.push(paint(color, 'bold', 'The agent connection'));
     lines.push('  agent-gmail mcp install --client claude-code');
-    lines.push('');
   }
 
   return lines.join('\n').trimEnd();

@@ -1132,6 +1132,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .command('setup')
     .description('set this up from nothing: the Google client, a mailbox, and the agent connection')
     .option('--client-json <path>', 'the OAuth client JSON, if you already have it')
+    .option('--restart', 'walk the Google Cloud steps again even if a client is registered', false)
     .option('--no-browser', 'print the links instead of opening them')
     .action(
       act(async (context, globalOptions, options: Options) => {
@@ -1144,41 +1145,85 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         let state = await setupState(context);
 
         if (globalOptions.json || !interactive) {
-          // Nothing here can be done without a person: the console needs a browser and the consent screen needs a
-          // human. So the non-interactive answer is the instructions, not a refusal and not a half-run setup.
+          // Every step needs a person: a browser for the console, a human at the consent screen. So the answer for
+          // a non-interactive caller is the whole plan, not a refusal and not a half-run setup that stalls.
           writeResult(state, output(), () => renderSetupPlan(state, CONSOLE_STEPS, globalOptions.color), streams);
           return;
         }
 
-        if (state.next === 'done') {
-          out.write(`${bold('Already set up.')}\n`);
-          out.write(`  ${state.inboxes.length} mailbox(es): ${state.inboxes.join(', ')}\n`);
-          out.write(`  registered with: ${state.registeredWith.join(', ')}\n`);
-          out.write(`\nRun \`agent-gmail doctor\` if something is not behaving.\n`);
-          return;
+        // A second run says what it is resuming from, rather than silently doing something different from the
+        // first. Nothing here is destructive, so "start over" only re-walks the console; it removes nothing.
+        let walkConsole = state.next === 'client' || options.restart === true;
+        if (state.done.length > 0 && !options.restart) {
+          out.write(`${bold('Picking up where you left off.')}\n`);
+          if (state.clients.length > 0) out.write(`  done · client "${state.clients.join('", "')}" registered\n`);
+          if (state.inboxes.length > 0)
+            out.write(`  done · ${state.inboxes.length} mailbox(es): ${state.inboxes.join(', ')}\n`);
+          if (state.registeredWith.length > 0) out.write(`  done · connected to ${state.registeredWith.join(', ')}\n`);
+          if (state.next === 'done') {
+            out.write(`\nAll three steps are done. ${dim('`--restart` walks the Google Cloud steps again.')}\n`);
+            return;
+          }
+          const answer = await askFor(streams, {
+            question: `\nContinue from here, or start over? [C/s] `,
+          });
+          if (/^s/i.test(answer.trim())) walkConsole = true;
+          out.write('\n');
+        } else {
+          out.write(`${bold('Setting up agent-gmail')}\n\n`);
         }
 
-        out.write(`${bold('Setting up agent-gmail')}\n\n`);
-
         // ── 1. The Google client ──────────────────────────────────────────────────────────────────────────────
-        if (state.next === 'client') {
+        if (walkConsole) {
           out.write(
-            'Gmail only accepts calls from an OAuth client registered to a Google Cloud project, and it has to\n' +
-              'be yours — there is no shared one to borrow. This is once per person, and one client covers every\n' +
-              'mailbox you connect and anyone you share it with.\n\n',
+            'Gmail only accepts calls from an OAuth client registered to a Google Cloud project, and it has to be\n' +
+              'yours — there is no shared one to borrow. This is once per person, and one client covers every\n' +
+              'mailbox you connect and everyone you share it with.\n\n',
           );
           for (const [index, step] of CONSOLE_STEPS.entries()) {
-            out.write(`${bold(`${index + 1}. ${step.title}`)}\n   ${step.detail}\n   ${dim(step.url)}\n`);
+            out.write(`${bold(`${index + 1}/${CONSOLE_STEPS.length}  ${step.title}`)}\n`);
+            out.write(`${dim(`      ${step.why}`)}\n`);
+            out.write(`      ${dim(step.url)}\n\n`);
+            for (const action of step.actions) out.write(`      • ${action}\n`);
+            for (const warning of step.avoid)
+              out.write(`      ${paint(globalOptions.color, 'yellow', '!')} ${warning}\n`);
+            out.write('\n');
             if (options.browser !== false) openInBrowser(step.url);
-            await askFor(streams, { question: '   press Enter when that is done — ' });
+            await askFor(streams, { question: '      press Enter when that is done — ' });
             out.write('\n');
           }
+        }
 
+        if (state.next === 'client') {
           let path = options.clientJson ? String(options.clientJson) : '';
-          if (!path && state.candidates.length > 0) {
-            const suggestion = state.candidates[0] as string;
-            const answer = await askFor(streams, { question: `Found ${suggestion}\n   use it? [Y/n] ` });
-            if (!/^n/i.test(answer.trim())) path = suggestion;
+          const candidates = state.candidates;
+          if (!path && candidates.length > 0) {
+            out.write(`${bold('Client files in your downloads')}\n`);
+            for (const [index, candidate] of candidates.entries()) {
+              const kind =
+                candidate.kind === 'desktop'
+                  ? paint(globalOptions.color, 'green', 'Desktop app')
+                  : candidate.kind === 'web'
+                    ? paint(globalOptions.color, 'yellow', 'Web application — will be refused')
+                    : paint(globalOptions.color, 'yellow', 'unreadable');
+              const when = new Date(candidate.modifiedAt).toLocaleString();
+              out.write(`  ${index + 1}) ${candidate.path}\n     ${kind} · downloaded ${when}\n`);
+            }
+            const usable = candidates.findIndex((candidate) => candidate.kind === 'desktop');
+            const suggestion = usable === -1 ? '' : String(usable + 1);
+            const answer = (
+              await askFor(streams, {
+                question: suggestion
+                  ? `\n  which one? [${suggestion}] `
+                  : `\n  none of these is a Desktop client. Type a path, or press Enter to try again: `,
+              })
+            ).trim();
+            const picked = answer === '' ? suggestion : answer;
+            const index = Number(picked);
+            path =
+              Number.isInteger(index) && index >= 1 && index <= candidates.length
+                ? (candidates[index - 1] as { path: string }).path
+                : picked;
           }
           while (!path) {
             path = (await askFor(streams, { question: 'Path to the downloaded client JSON: ' })).trim();
@@ -1187,20 +1232,18 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           const { clientAdd } = await import('../operations/clients.ts');
           const added = await clientAdd(context, { path, name: 'desktop' });
           out.write(`\n${bold('Client registered')} as "${added.name}".\n`);
-          out.write(`${dim('The id is in your config; the secret went to your keychain, never to a file.')}\n\n`);
+          out.write(`${dim('The id went to your config; the secret to your keychain, never to a file.')}\n\n`);
           state = await setupState(context);
         }
 
         // ── 2. A mailbox ──────────────────────────────────────────────────────────────────────────────────────
         if (state.next === 'inbox') {
           out.write(`${bold('Connect a mailbox')}\n`);
-          out.write(
-            `${dim('Google will warn the app is not verified — expected for a client you made yourself:')}\n` +
-              `${dim('choose Advanced, then "Go to … (unsafe)", and leave every permission ticked.')}\n\n`,
-          );
-          const alias = (await askFor(streams, { question: 'A short name for it (e.g. work): ' })).trim() || 'work';
+          out.write(`${dim('Google will warn the app is not verified. That is expected for a client you made')}\n`);
+          out.write(`${dim('yourself: choose Advanced, then "Go to … (unsafe)", and leave every box ticked.')}\n\n`);
+          const alias = (await askFor(streams, { question: '  a short name for it [work]: ' })).trim() || 'work';
           const email = (
-            await askFor(streams, { question: 'The address it should be (blank to choose in the browser): ' })
+            await askFor(streams, { question: '  which address (blank to choose in the browser): ' })
           ).trim();
 
           const { startSignIn } = await import('../operations/signin.ts');
@@ -1222,25 +1265,20 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
 
         // ── 3. The agent connection ───────────────────────────────────────────────────────────────────────────
         if (state.next === 'mcp') {
-          const answer = await askFor(streams, {
-            question: `${bold('Connect this to an agent?')} [Y/n] `,
-          });
+          const answer = await askFor(streams, { question: `${bold('Connect this to an agent?')} [Y/n] ` });
           if (!/^n/i.test(answer.trim())) {
-            const which = (await askFor(streams, { question: 'Which client? [claude-code] ' })).trim() || 'claude-code';
+            const which =
+              (await askFor(streams, { question: '  which client? [claude-code] ' })).trim() || 'claude-code';
             const { mcpInstall } = await import('../mcp/install.ts');
-            const result = await mcpInstall(context, {
-              client: which as SupportedClient,
-              apply: true,
-              force: true,
-            });
+            const result = await mcpInstall(context, { client: which as SupportedClient, apply: true, force: true });
             out.write(`\n${renderInstall(result, globalOptions.color)}\n`);
           }
         }
 
         const final = await setupState(context);
-        out.write(`\n${bold('Done.')} `);
-        out.write(`${final.inboxes.length} mailbox(es) connected: ${final.inboxes.join(', ')}\n`);
-        out.write(`${dim('Try: agent-gmail search "newer_than:7d" --inbox ' + (final.inboxes[0] ?? 'work'))}\n`);
+        out.write(`\n${bold('Done.')} ${final.inboxes.length} mailbox(es): ${final.inboxes.join(', ')}\n`);
+        out.write(`${dim(`Try: agent-gmail search "newer_than:7d" --inbox ${final.inboxes[0] ?? 'work'}`)}\n`);
+        out.write(`${dim('Add another with: agent-gmail inbox add <name> --email <address>')}\n`);
       }),
     );
 
