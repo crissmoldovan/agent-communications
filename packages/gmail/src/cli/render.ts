@@ -624,6 +624,20 @@ export function renderApprovals(records: ApprovalView[], color: boolean): string
 }
 
 /**
+ * How each kind of downloaded client file is named to a person.
+ *
+ * Shared, because two surfaces show it and they had drifted: the list you choose from called a web client "will
+ * be refused" while the plan printed beside it called the same file "not usable" — two wordings for one problem,
+ * reading like two problems with two different fixes. Keyed loosely because the renderer takes a plain shape and
+ * an unknown kind is better described than dropped.
+ */
+export const CLIENT_KIND_LABEL: Record<string, string> = {
+  desktop: 'Desktop app',
+  web: 'Web application — will be refused',
+  unreadable: 'Not a client JSON — will be refused',
+};
+
+/**
  * The setup, written out for somebody who cannot be prompted — an agent, a pipe, `--json`.
  *
  * Every step here needs a person: a browser for the console, a human at the consent screen. So the answer for a
@@ -701,7 +715,7 @@ export function renderSetupPlan(
     lines.push('');
     lines.push('  Then: agent-gmail client add <the downloaded JSON> --name desktop');
     for (const candidate of state.candidates) {
-      const note = candidate.kind === 'desktop' ? 'Desktop app' : `${candidate.kind} — not usable`;
+      const note = CLIENT_KIND_LABEL[candidate.kind] ?? candidate.kind;
       lines.push(`  ${paint(color, 'dim', `found: ${candidate.path} (${note}, ${candidate.modifiedAt})`)}`);
     }
   }

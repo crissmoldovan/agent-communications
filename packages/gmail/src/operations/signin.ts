@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
-import { mkdir, open } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { constants } from 'node:fs';
+import { access, mkdir, open } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { CommsError, requireInbox } from '@agentcomms/core';
 import type { OAuthFlow } from '../auth/flows.ts';
 import { startLoopback } from '../auth/loopback.ts';
@@ -172,7 +174,7 @@ async function startDetached(
   flow: OAuthFlow,
   options: StartOptions,
 ): Promise<{ redirectUri: string; listener: undefined }> {
-  const entry = options.listenerCommand ?? defaultListenerCommand();
+  const entry = options.listenerCommand ?? (await defaultListenerCommand());
 
   /*
    * The listener's stderr goes to a file, not to ours.
@@ -270,7 +272,51 @@ function listenerEnv(context: GmailContext, port: number | undefined): NodeJS.Pr
   return env;
 }
 
-function defaultListenerCommand(): { command: string; args: string[] } {
+export interface ListenerEntry {
+  command: string;
+  args: string[];
+}
+
+/**
+ * The command that can run `oauth-listen`, resolved from this module rather than from `process.argv[1]`.
+ *
+ * `process.argv[1]` is whatever binary happens to be running, and only one of them understands the hidden
+ * listener mode. Started as `agent-gmail` it is the CLI, which does. Started as `agent-gmail-mcp` — the packaged
+ * standalone server, and how most people run it — it is a different entry with no `oauth-listen` command at all,
+ * so the sign-in failed before it could return a URL. Under a test runner it is the test file.
+ *
+ * This package's own CLI is the thing that answers, wherever it is. The same reasoning, and nearly the same code,
+ * is in `mcp/install.ts`; the lesson had been learned once already and not carried here.
+ *
+ * The search is separated from where it searches *from* so a test can put it in a layout that does not exist on
+ * this machine — the packed one, `node_modules/@agentcomms/gmail/dist/`, being the layout this got wrong.
+ */
+export async function resolveListenerEntry(here: string): Promise<ListenerEntry | null> {
+  const candidates = [
+    join(here, '..', 'cli.ts'),
+    join(here, '..', '..', 'cli.mjs'),
+    join(here, 'cli.mjs'),
+    join(here, '..', 'cli.mjs'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      await access(candidate, constants.R_OK);
+      const path = resolve(candidate);
+      // Node 22.12–22.17 needs the flag to run the TypeScript source; the bundled `.mjs` needs nothing.
+      const flags = path.endsWith('.ts') ? ['--experimental-strip-types', '--disable-warning=ExperimentalWarning'] : [];
+      return { command: process.execPath, args: [...flags, path] };
+    } catch {
+      // try the next layout
+    }
+  }
+  return null;
+}
+
+async function defaultListenerCommand(): Promise<ListenerEntry> {
+  const found = await resolveListenerEntry(dirname(fileURLToPath(import.meta.url)));
+  if (found) return found;
+  // A last resort rather than a failure: in a layout none of the above matches, the running entry is the best
+  // guess there is, and it is what this always used.
   const entry = process.argv[1];
   if (!entry) throw new CommsError('UNEXPECTED', 'cannot work out how to start the sign-in listener');
   return { command: process.execPath, args: [entry] };

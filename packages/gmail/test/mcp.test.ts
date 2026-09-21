@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { GmailContext } from '../src/context.ts';
 import { mcpBoolean, mcpInboxes, mcpInteger, mcpStringArray } from '../src/mcp/schemas.ts';
 import { buildInstructions, createGmailMcpServer } from '../src/mcp/server.ts';
-import { newHarness } from './support/harness.ts';
+import { newHarness, tempDir } from './support/harness.ts';
 
 interface ToolResult {
   isError?: boolean;
@@ -120,6 +122,10 @@ test('a read-only server does not offer the tools that would write', async () =>
       'gmail_label_create',
       'gmail_send_prepare',
       'gmail_draft_send',
+      // Connecting a mailbox is a write. A read-only server was started that way for a reason, and a tool that
+      // adds a mailbox to it would be the one write it could not refuse.
+      'gmail_inbox_add',
+      'gmail_inbox_finish',
       'gmail_send_cancel',
       'gmail_confirm_probe',
     ]) {
@@ -312,3 +318,64 @@ async function signIn(harness: Awaited<ReturnType<typeof newHarness>>): Promise<
   });
   return { refreshToken: tokens.refreshToken };
 }
+
+test('a pinned server will not connect a second mailbox', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  const { client, close } = await connect({ core: harness.core, env: harness.env, inbox: 'work' });
+  try {
+    const names = (await client.listTools()).tools.map((tool) => tool.name);
+    // A server started `--inbox work` exists to reach exactly that mailbox. A tool that adds a second one turns
+    // the pin into a suggestion, and the person who set it would have no way to know the surface had grown.
+    assert.equal(names.includes('gmail_inbox_add'), false, 'a pinned server must not add mailboxes');
+    assert.equal(names.includes('gmail_inbox_finish'), false);
+    // Saying what is missing changes nothing, so the read-only one stays.
+    assert.ok(names.includes('gmail_setup'));
+  } finally {
+    await close();
+  }
+});
+
+test('a pinned gmail_setup answers about its own mailbox and nothing else', async () => {
+  const harness = await newHarness({
+    accounts: [
+      { sub: 'sub-1', email: 'jo@example.test' },
+      { sub: 'sub-2', email: 'sam@example.test' },
+    ],
+  });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  await harness.addInbox({ alias: 'personal', email: 'sam@example.test', sub: 'sub-2', refreshToken: 'rt_y' });
+
+  // A client JSON sitting in the download directory. Unpinned this is the tool's whole point; pinned it is a
+  // path out of somebody's Downloads folder that a server narrowed to one mailbox has no business reporting.
+  const downloads = join(tempDir(), 'Downloads');
+  await mkdir(downloads, { recursive: true });
+  await writeFile(
+    join(downloads, 'client_secret_x.json'),
+    JSON.stringify({ installed: { client_id: 'cid.apps.googleusercontent.com', client_secret: 's' } }),
+  );
+  const env = { ...harness.env, XDG_DOWNLOAD_DIR: downloads };
+
+  const open = await connect({ core: harness.core, env });
+  try {
+    const all = (await open.client.callTool({ name: 'gmail_setup', arguments: {} })) as {
+      structuredContent: { inboxes: string[]; candidates: unknown[] };
+    };
+    assert.deepEqual(all.structuredContent.inboxes.sort(), ['personal', 'work']);
+    assert.equal(all.structuredContent.candidates.length, 1);
+  } finally {
+    await open.close();
+  }
+
+  const pinned = await connect({ core: harness.core, env, inbox: 'work' });
+  try {
+    const scoped = (await pinned.client.callTool({ name: 'gmail_setup', arguments: {} })) as {
+      structuredContent: { inboxes: string[]; clients: string[]; candidates: unknown[] };
+    };
+    assert.deepEqual(scoped.structuredContent.inboxes, ['work'], 'a pinned server named another mailbox');
+    assert.deepEqual(scoped.structuredContent.candidates, [], 'a pinned server listed the download directory');
+    assert.equal(scoped.structuredContent.clients.length, 1);
+  } finally {
+    await pinned.close();
+  }
+});

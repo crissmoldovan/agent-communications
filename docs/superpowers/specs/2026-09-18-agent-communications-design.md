@@ -699,15 +699,53 @@ TTL); execution requires that token. Trash always requires a plan token. Every w
 - **Rate caps** (default 20/hour, 100/day per inbox) are counted from the shared send ledger, so parallel server
   processes (e.g. Claude Desktop's chat and Cowork instances **[V: gap-5]**) cannot multiply them; over the cap
   → exit 10 with the reset time.
-- **Policy changes are CLI-only, and loosening needs a person.** No MCP tool changes policy, adds or removes inboxes
-  or clients, or edits the elicitation allowlist. The core config store classifies every change and **refuses any
+- **Policy changes are CLI-only, and loosening needs a person.** No MCP tool changes policy, removes inboxes or
+  clients, or edits the elicitation allowlist. **Adding an inbox is the one exception, added deliberately in
+  0.1.4 — see below.** The core config store classifies every change and **refuses any
   that loosens a safety setting** unless the caller passes consent for exactly those settings — obtained by the CLI
   on an interactive TTY, with a typed challenge, no agent marker, and an audit entry. Loosening covers: an effective
   send policy moving towards `chat` (including through a looser default an inbox inherits), turning
   `riskEscalation` off, raising `sendCaps`, adding `attachRoots` or removing `attachDeny` entries, changing
   `downloadsDir`, adding `internalDomains`, adding an elicitation client, and moving secrets from keychain to files.
   Tightening never needs consent. `agentcomms config get|set <path>` is the supported editor, so nobody has to
-  hand-edit around the gate. New inboxes inherit the default policy (`sendPolicy` unset) and default their
+  hand-edit around the gate.
+
+  **The exception, and why it is one.** `gmail_inbox_add` and `gmail_inbox_finish` add an inbox from MCP. The
+  original rule said no MCP tool did, and it was written before there was any way to set this up from a
+  conversation: an agent asked to connect a mailbox could only tell the person to go and run a CLI, which is where
+  most people stop. That is a real cost, paid by everyone, to close a hole these two tools do not open.
+
+  They do not open it because **an inbox cannot be added without a consent this software cannot grant itself**.
+  `gmail_inbox_add` produces a Google sign-in URL and stops; nothing is written until `gmail_inbox_finish` finds a
+  grant approved on Google's own screen. The credential is minted by Google, to whoever is signed in at that
+  browser. This code never sees a password, never chooses which account is granted, and cannot produce a token for
+  a mailbox that has not approved it.
+
+  **The limit of that claim, stated rather than implied.** This is not a human-presence check, and nothing here
+  enforces one. An agent that already drives an authenticated browser can open the link, click through the consent
+  screen and then call `gmail_inbox_finish`, with no person involved. That is outside the threat model on purpose:
+  such an agent is holding a logged-in Gmail session and can already read, send and delete through it directly,
+  without this software at all. Consent it can already grant gives it nothing it did not have.
+
+  So the guarantee is bounded — *this process cannot escalate on its own* — and it is weaker than the typed
+  challenge protecting the other settings on this list, which does test for a person at a TTY. Anyone whose threat
+  model includes an agent-controlled browser session should run the server `--read-only` or pinned, and add
+  mailboxes from the CLI.
+
+  What the exception is **not** allowed to become, and what the code enforces:
+
+  - Both tools sit inside the read-only guard: a server started `--read-only` does not register them at all.
+  - A server pinned with `--inbox <alias>` refuses both, and `gmail_setup` on that server reports only the pinned
+    mailbox, only the client behind it, and no downloaded-file paths at all. A pinned server exists to reach
+    exactly one mailbox: a tool that adds a second one makes the pin a suggestion, and an answer naming the other
+    five aliases and the contents of a Downloads folder makes it a formality.
+  - Neither tool changes a policy, a tier, or any other safety setting. A new inbox inherits the default policy,
+    exactly as one added by the CLI does, and moving it to something looser is still CLI-only with a challenge.
+  - There is still no MCP tool that registers an OAuth **client**: that reads a file of the user's choosing and
+    writes a secret, with no third party attesting to anything.
+
+  `gmail_setup` is read-only and outside the guard: saying what is missing changes nothing, and a server with no
+  mailboxes should be able to explain why. New inboxes inherit the default policy (`sendPolicy` unset) and default their
   `internalDomains` to the inbox's own domain unless it is a public mailbox provider.
 - **Shell agents are T2, and the docs say so.** Skills fall back to the CLI, so an agent that uses them has a
   shell, and `script -q /dev/null …` makes any command see a TTY (verified on the author's machine). Terminal

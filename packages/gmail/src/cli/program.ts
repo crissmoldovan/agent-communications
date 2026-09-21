@@ -44,6 +44,7 @@ import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
 import { askChallenge, askFor } from './prompt.ts';
 import {
+  CLIENT_KIND_LABEL,
   renderApprovals,
   renderAttachments,
   renderClientAdd,
@@ -1134,7 +1135,17 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .option('--client-json <path>', 'the OAuth client JSON, if you already have it')
     .option('--inbox <alias>', 'the name to connect the first mailbox under')
     .option('--email <address>', 'the address that mailbox must turn out to be')
-    .option('--mcp-client <client>', 'register with this MCP client when the mailbox is connected')
+    .addOption(
+      new Option('--mcp-client <client>', 'register with this MCP client when the mailbox is connected').choices([
+        'claude-code',
+        'claude-desktop',
+        'codex',
+        'cursor',
+        'gemini',
+        'vscode',
+      ]),
+    )
+    .option('--replace-server', 'replace an MCP entry of the same name that is already there', false)
     .option('--restart', 'walk the Google Cloud steps again even if a client is registered', false)
     .option('--no-tui', 'plain one-line prompts instead of lists and fields')
     .option('--no-browser', 'print the links instead of opening them')
@@ -1220,8 +1231,23 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             const which = options.mcpClient ? String(options.mcpClient) : '';
             if (which) {
               const { mcpInstall } = await import('../mcp/install.ts');
-              await mcpInstall(context, { client: which as SupportedClient, apply: true, force: true });
-              did.push(`registered the server with ${which}`);
+              // `force` removes an existing entry before adding its replacement. Doing that silently, from a
+              // headless run, would take somebody's working server away on the strength of a flag they passed for
+              // a different reason — so it needs asking for, exactly as `mcp install` makes you ask.
+              const result = await mcpInstall(context, {
+                client: which as SupportedClient,
+                apply: true,
+                force: options.replaceServer === true,
+              });
+              // Only what happened. Reporting "registered" for an install that did not apply, or that failed its
+              // own start-up check, is the kind of claim the `did` list exists to make impossible.
+              if (result.applied && result.verified) did.push(`registered the server with ${which}`);
+              else
+                blocked = {
+                  step: 'mcp',
+                  needs: result.applied ? 'a server that starts' : 'a client this can write to',
+                  ...(result.verifyDetail ? { hint: result.verifyDetail } : {}),
+                };
               state = await setupState(context);
             } else {
               blocked = { step: 'mcp', needs: '--mcp-client <client>' };
@@ -1318,12 +1344,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
                 ...candidates.map((candidate) => ({
                   value: candidate.path,
                   label: candidate.path.split('/').pop() ?? candidate.path,
-                  hint:
-                    (candidate.kind === 'desktop'
-                      ? 'Desktop app'
-                      : candidate.kind === 'web'
-                        ? 'Web application — will be refused'
-                        : 'unreadable') + ` · downloaded ${new Date(candidate.modifiedAt).toLocaleString()}`,
+                  hint: `${CLIENT_KIND_LABEL[candidate.kind] ?? candidate.kind} · downloaded ${new Date(candidate.modifiedAt).toLocaleString()}`,
                 })),
                 { value: '', label: 'Somewhere else…', hint: 'type a path' },
               ],
@@ -1395,7 +1416,11 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
                 initial: 'claude-code',
               }));
             const { mcpInstall } = await import('../mcp/install.ts');
-            const result = await mcpInstall(context, { client: which as SupportedClient, apply: true, force: true });
+            const result = await mcpInstall(context, {
+              client: which as SupportedClient,
+              apply: true,
+              force: options.replaceServer === true,
+            });
             out.write(`\n${renderInstall(result, globalOptions.color)}\n`);
           }
         }

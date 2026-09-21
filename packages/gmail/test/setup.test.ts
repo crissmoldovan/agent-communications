@@ -1,10 +1,27 @@
 import assert from 'node:assert/strict';
-import { mkdir, utimes, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdir, open, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import type { CommsError } from '@agentcomms/core';
 import { interactionFor } from '../src/cli/tui.ts';
+import { GmailContext } from '../src/context.ts';
+import { clientAdd } from '../src/operations/clients.ts';
 import { CONSOLE_STEPS, findClientJson } from '../src/operations/setup.ts';
-import { tempDir } from './support/harness.ts';
+import { newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
+
+/** A well-formed Desktop client, for the cases that are about something other than its contents. */
+const DESKTOP = { installed: { client_id: TEST_CLIENT_ID, client_secret: TEST_CLIENT_SECRET, project_id: 'proj' } };
+
+/** Fails rather than hanging: every case below is about a shape that used to block forever. */
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    work,
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(() => reject(new Error(`still running after ${ms}ms`)), ms).unref(),
+    ),
+  ]);
+}
 
 /** A downloads directory with client files of known kinds and known ages. */
 async function downloads(files: { name: string; body: unknown; minutesAgo: number }[]) {
@@ -134,4 +151,89 @@ test('CI gets plain prompts, because a redrawing list in a log helps nobody', ()
 
 test('--no-tui is honoured on a terminal that could manage the other kind', () => {
   assert.equal(modeFor({ noTui: true }), 'plain');
+});
+
+/*
+ * The download directory is somewhere else's software writes to, so a name matching `client_secret*.json` says
+ * nothing about what is at the end of it. These four are the shapes a plain `readFile` would have followed,
+ * blocked on, or read until the process died.
+ */
+
+test('a FIFO in the downloads directory does not hang the scan', async () => {
+  const dir = await downloads([{ name: 'client_secret_real.json', body: DESKTOP, minutesAgo: 1 }]);
+  const fifo = join(dir, 'client_secret_trap.json');
+  const made = await new Promise<boolean>((resolve) => {
+    execFile('mkfifo', [fifo], (error) => resolve(!error));
+  });
+  if (!made) return; // no mkfifo (Windows): the flag it exercises is 0 there anyway
+  // Without O_NONBLOCK this call never returns: opening a FIFO for reading blocks until a writer appears.
+  const found = await withTimeout(findClientJson({ XDG_DOWNLOAD_DIR: dir }), 5_000);
+  assert.deepEqual(
+    found.map((candidate) => candidate.path),
+    [join(dir, 'client_secret_real.json')],
+  );
+});
+
+test('a symlink wearing a client file name is not followed', async () => {
+  const dir = await downloads([]);
+  const secret = join(tempDir(), 'somewhere-else.json');
+  await writeFile(secret, JSON.stringify(DESKTOP));
+  await symlink(secret, join(dir, 'client_secret_link.json'));
+  assert.deepEqual(await findClientJson({ XDG_DOWNLOAD_DIR: dir }), []);
+});
+
+test('a huge file is listed with its date, but never read', async () => {
+  const dir = await downloads([]);
+  const path = join(dir, 'client_secret_huge.json');
+  const handle = await open(path, 'w');
+  try {
+    // Sparse: a 512MB file that costs nothing to create and would cost everything to read into a string.
+    await handle.truncate(512 * 1024 * 1024);
+  } finally {
+    await handle.close();
+  }
+  const when = new Date(Date.now() - 3 * 60_000);
+  await utimes(path, when, when);
+
+  const found = await withTimeout(findClientJson({ XDG_DOWNLOAD_DIR: dir }), 10_000);
+  assert.equal(found.length, 1);
+  assert.equal(found[0]?.kind, 'unreadable');
+  // The date survives the refusal: somebody choosing between files still needs to know which one is theirs.
+  assert.equal(found[0]?.modifiedAt, when.toISOString());
+});
+
+test('a directory named like a client file is skipped entirely', async () => {
+  const dir = await downloads([{ name: 'client_secret_real.json', body: DESKTOP, minutesAgo: 1 }]);
+  await mkdir(join(dir, 'client_secret_folder.json'));
+  const found = await findClientJson({ XDG_DOWNLOAD_DIR: dir });
+  assert.deepEqual(
+    found.map((candidate) => candidate.path),
+    [join(dir, 'client_secret_real.json')],
+  );
+});
+
+test('client add refuses a path that is not a small regular file', async () => {
+  const harness = await newHarness({});
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const directory = join(tempDir(), 'not-a-file');
+  await mkdir(directory, { recursive: true });
+  await assert.rejects(clientAdd(context, { path: directory, noProbe: true }), (error: CommsError) => {
+    assert.equal(error.code, 'USAGE');
+    assert.match(error.message, /is not a file/);
+    return true;
+  });
+
+  const huge = join(tempDir(), 'client_secret_huge.json');
+  const handle = await open(huge, 'w');
+  try {
+    await handle.truncate(512 * 1024 * 1024);
+  } finally {
+    await handle.close();
+  }
+  // `setup --client-json /dev/zero` arrives here. Reading it is what this refusal is instead of.
+  await assert.rejects(withTimeout(clientAdd(context, { path: huge, noProbe: true }), 10_000), (error: CommsError) => {
+    assert.equal(error.code, 'USAGE');
+    assert.match(error.message, /too large to be a client JSON/);
+    return true;
+  });
 });

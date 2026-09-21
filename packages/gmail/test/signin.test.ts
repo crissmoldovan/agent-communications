@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,7 @@ import { renderSignInStarted } from '../src/cli/render.ts';
 import { GmailContext } from '../src/context.ts';
 import { clientAdd } from '../src/operations/clients.ts';
 import { inboxList } from '../src/operations/inboxes.ts';
-import { finishSignIn, startSignIn } from '../src/operations/signin.ts';
+import { finishSignIn, resolveListenerEntry, startSignIn } from '../src/operations/signin.ts';
 import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
 
 const CLI_ENTRY = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
@@ -400,4 +400,63 @@ test('a piped `--start` returns immediately: the listener does not hold the call
   const authUrl = /\bhttps?:\/\/\S*[?&]client_id=\S+/.exec(printed)?.[0];
   assert.ok(authUrl, 'the start command printed a sign-in link');
   await fetch(harness.google.consent(authUrl));
+});
+
+/*
+ * The listener entry, in the layout that broke it.
+ *
+ * The sign-in listener used to be `process.argv[1]` — whatever binary was running. Under `agent-gmail` that is
+ * the CLI, which understands `oauth-listen`; under `npx @agentcomms/gmail-mcp` it is a different entry that has
+ * no such command, so `gmail_inbox_add` failed before it could hand back a URL. These two check the resolution
+ * and then check the thing the resolution is for: that what comes back actually answers `oauth-listen`.
+ */
+
+test('the listener is resolved from this package, not from whatever binary is running', async () => {
+  const root = await tempDir();
+  // The packed shape: this module compiled into `dist/` beside the `agent-gmail` bin, reached as a dependency of
+  // the standalone MCP server rather than as the running program.
+  const dist = join(root, 'node_modules', '@agentcomms', 'gmail', 'dist');
+  await mkdir(dist, { recursive: true });
+  await writeFile(join(dist, 'cli.mjs'), '// the agent-gmail bin\n');
+  await writeFile(join(dist, 'signin-abc123.mjs'), '// this module, bundled\n');
+
+  const entry = await resolveListenerEntry(dist);
+  assert.ok(entry, 'no listener entry was resolved in the packed layout');
+  assert.equal(entry.command, process.execPath);
+  assert.equal(entry.args.at(-1), join(dist, 'cli.mjs'));
+  // The bundled `.mjs` runs as it is; only the TypeScript source needs the strip-types flags.
+  assert.deepEqual(entry.args.slice(0, -1), []);
+});
+
+test('nothing resolves in a layout with no CLI beside it', async () => {
+  const root = await tempDir();
+  const empty = join(root, 'somewhere', 'else');
+  await mkdir(empty, { recursive: true });
+  assert.equal(await resolveListenerEntry(empty), null);
+});
+
+test('the resolved listener entry understands oauth-listen', async () => {
+  // Resolution is only useful if the thing it finds answers. This runs the entry the running layout resolves to
+  // — source here, `dist/cli.mjs` in a package — and asks it to listen for a flow that does not exist. A command
+  // it did not recognise would say so; a command it did recognise gets as far as looking the flow up and fails
+  // there instead. That difference is the whole finding.
+  const here = fileURLToPath(new URL('../src/operations/', import.meta.url));
+  const entry = await resolveListenerEntry(here);
+  assert.ok(entry, 'the repository layout resolved no listener entry');
+
+  const child = spawn(entry.command, [...entry.args, 'oauth-listen', 'flw_doesnotexist'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, AGENT_COMMS_CONFIG_DIR: await tempDir() },
+  });
+  let output = '';
+  child.stdout.on('data', (chunk) => {
+    output += String(chunk);
+  });
+  child.stderr.on('data', (chunk) => {
+    output += String(chunk);
+  });
+  await new Promise((resolve) => child.on('close', resolve));
+
+  assert.doesNotMatch(output, /unknown command/i, `the resolved entry does not handle oauth-listen:\n${output}`);
+  assert.match(output, /flw_doesnotexist|no such|not found|unknown flow/i, `unexpected output:\n${output}`);
 });

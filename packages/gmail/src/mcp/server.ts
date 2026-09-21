@@ -784,10 +784,23 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
    * nothing here could connect one. It had to tell the person to go and run a CLI, which is the moment most of
    * them stop. These three make the same setup drivable from a conversation.
    *
-   * What they cannot do is the part that matters. Consent happens in a browser in front of a person, so
-   * `gmail_inbox_add` goes as far as producing the link and stops. That boundary is the point, not a limitation
-   * to work around — an agent that could grant itself access to a mailbox would make every other guarantee here
-   * decorative.
+   * What they cannot do is the part that matters — but the guarantee is narrower than "a person is present", and
+   * saying the wider thing would be a lie that other decisions then lean on.
+   *
+   * What is actually enforced: `gmail_inbox_add` goes as far as producing the link and stops. The token is minted
+   * by Google, to whoever is signed in at that browser, after Google's own consent screen. This code never sees a
+   * password, never chooses which account is granted, and cannot mint a credential for a mailbox that has not
+   * approved it.
+   *
+   * What is **not** enforced, and is outside the threat model: an agent already driving an authenticated browser
+   * can open that link and click through the consent screen itself, then call `gmail_inbox_finish`. There is no
+   * human-presence check here, and none is claimed. The reason that is acceptable rather than a hole is that such
+   * an agent already has the mailbox — it is holding a logged-in Gmail session, and can read, send and delete
+   * through it directly, without this software. OAuth consent it can already grant adds nothing it did not have.
+   *
+   * So the boundary this draws is against *this* process escalating on its own, not against a compromised
+   * browser. Anyone whose threat model includes an agent-controlled browser session should run the server
+   * `--read-only`, or pinned, and add mailboxes from the CLI.
    */
   server.registerTool(
     'gmail_setup',
@@ -803,7 +816,10 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         inboxes: z.array(z.string()),
         candidates: z
           .array(z.object({ path: z.string(), kind: z.string(), modifiedAt: z.string() }))
-          .describe('downloaded client files; kind is desktop, web or unreadable — only desktop is usable'),
+          .describe(
+            'downloaded client files; kind is desktop, web or unreadable — only desktop is usable. Always empty ' +
+              'on a server pinned to one mailbox, which reports only that mailbox.',
+          ),
         consoleSteps: z.array(
           z.object({
             id: z.string(),
@@ -820,12 +836,23 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     async () => {
       try {
         const state = await setupState(context);
+        /*
+         * A pinned server answers about its own mailbox and nothing else.
+         *
+         * Unpinned, this is the whole point of the tool: every mailbox, every client, and the client JSONs
+         * sitting in the download directory, so an agent can say what is missing. Pinned, the same answer is a
+         * leak — the server was narrowed to one mailbox, and `--inbox work` would still have named the other
+         * five aliases, the clients behind them, and the paths of files in a person's Downloads folder. None of
+         * that is needed to set up the mailbox this server serves.
+         */
+        const config = await context.core.config.load();
+        const pinnedClient = pinned ? config.inboxes[pinned]?.client : undefined;
         return reply({
           next: state.next,
           done: [...state.done],
-          clients: state.clients,
-          inboxes: state.inboxes,
-          candidates: state.candidates,
+          clients: pinned ? (pinnedClient ? [pinnedClient] : []) : state.clients,
+          inboxes: pinned ? state.inboxes.filter((alias) => alias === pinned) : state.inboxes,
+          candidates: pinned ? [] : state.candidates,
           consoleSteps: CONSOLE_STEPS.map((step) => ({
             id: step.id,
             title: step.title,
@@ -854,81 +881,88 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
      * Connecting a mailbox is a write, so a read-only server does not offer it. `gmail_setup` stays outside this
      * block: saying what is missing changes nothing, and a server with no mailboxes should still be able to
      * explain why.
+     *
+     * A **pinned** server does not offer them either. One started `--inbox work` exists to reach exactly that
+     * mailbox, and a tool that adds a second one turns the pin into a suggestion — the person who pinned it
+     * would have no way to know the surface had grown. The design allows adding an inbox from MCP; it does not
+     * allow doing it to a server that was deliberately narrowed.
      */
-    server.registerTool(
-      'gmail_inbox_add',
-      {
-        title: 'Start connecting a mailbox',
-        description:
-          'Begin connecting a Gmail account. Returns a sign-in link for the person to open — it does NOT connect anything on its own, because consent happens in their browser. Show them the link, warn them Google will call the app unverified (Advanced → "Go to … (unsafe)" is expected for a client they made themselves), then call gmail_inbox_finish.',
-        inputSchema: z.object({
-          alias: z.string().min(1).describe('a short name for the mailbox, e.g. work'),
-          email: z.string().min(3).optional().describe('the address it must turn out to be; refuses any other'),
-          tier: z.string().optional().describe('read, draft or organize — how much access to ask for'),
-        }),
-        outputSchema: z.object({
-          flowId: z.string(),
-          authUrl: z.string().describe('show this to the person; it expires in ten minutes'),
-          expiresAt: z.string(),
-          nextTool: z.string().describe('call this once they say they have approved it'),
-        }),
-        annotations: { readOnlyHint: false, openWorldHint: true },
-      },
-      async ({ alias, email, tier }) => {
-        try {
-          const started = await startSignIn(context, {
-            mode: 'add',
-            alias,
-            ...(email ? { email } : {}),
-            ...(tier ? { tier } : {}),
-            detached: true,
-          });
-          return reply({
-            flowId: started.flowId,
-            authUrl: started.authUrl,
-            expiresAt: started.expiresAt,
-            nextTool: 'gmail_inbox_finish',
-          });
-        } catch (error) {
-          return fail(error);
-        }
-      },
-    );
+    if (!pinned) {
+      server.registerTool(
+        'gmail_inbox_add',
+        {
+          title: 'Start connecting a mailbox',
+          description:
+            'Begin connecting a Gmail account. Returns a sign-in link for the person to open — it does NOT connect anything on its own, because consent happens in their browser. Show them the link, warn them Google will call the app unverified (Advanced → "Go to … (unsafe)" is expected for a client they made themselves), then call gmail_inbox_finish.',
+          inputSchema: z.object({
+            alias: z.string().min(1).describe('a short name for the mailbox, e.g. work'),
+            email: z.string().min(3).optional().describe('the address it must turn out to be; refuses any other'),
+            tier: z.string().optional().describe('read, draft or organize — how much access to ask for'),
+          }),
+          outputSchema: z.object({
+            flowId: z.string(),
+            authUrl: z.string().describe('show this to the person; it expires in ten minutes'),
+            expiresAt: z.string(),
+            nextTool: z.string().describe('call this once they say they have approved it'),
+          }),
+          annotations: { readOnlyHint: false, openWorldHint: true },
+        },
+        async ({ alias, email, tier }) => {
+          try {
+            const started = await startSignIn(context, {
+              mode: 'add',
+              alias,
+              ...(email ? { email } : {}),
+              ...(tier ? { tier } : {}),
+              detached: true,
+            });
+            return reply({
+              flowId: started.flowId,
+              authUrl: started.authUrl,
+              expiresAt: started.expiresAt,
+              nextTool: 'gmail_inbox_finish',
+            });
+          } catch (error) {
+            return fail(error);
+          }
+        },
+      );
 
-    server.registerTool(
-      'gmail_inbox_finish',
-      {
-        title: 'Finish connecting a mailbox',
-        description:
-          'Complete a sign-in the person has approved in their browser. APPROVAL_PENDING means they have not finished yet and the link is still good — wait and call again, do not start a new one.',
-        inputSchema: z.object({
-          flowId: z.string().min(1),
-          waitSeconds: z.number().int().min(0).max(120).optional().describe('how long to wait for them; default 60'),
-        }),
-        outputSchema: z.object({
-          alias: z.string(),
-          email: z.string(),
-          tier: z.string(),
-          reauthorised: z.boolean(),
-          missingScopes: z.array(z.string()).describe('boxes they unticked; empty is the good case'),
-        }),
-        annotations: { readOnlyHint: false, openWorldHint: true },
-      },
-      async ({ flowId, waitSeconds }) => {
-        try {
-          const result = await finishSignIn(context, { flowId, waitSeconds: waitSeconds ?? 60 });
-          return reply({
-            alias: result.alias,
-            email: result.inbox.email,
-            tier: result.inbox.tier,
-            reauthorised: result.reauthorised,
-            missingScopes: result.missingScopes,
-          });
-        } catch (error) {
-          return fail(error);
-        }
-      },
-    );
+      server.registerTool(
+        'gmail_inbox_finish',
+        {
+          title: 'Finish connecting a mailbox',
+          description:
+            'Complete a sign-in the person has approved in their browser. APPROVAL_PENDING means they have not finished yet and the link is still good — wait and call again, do not start a new one.',
+          inputSchema: z.object({
+            flowId: z.string().min(1),
+            waitSeconds: z.number().int().min(0).max(120).optional().describe('how long to wait for them; default 60'),
+          }),
+          outputSchema: z.object({
+            alias: z.string(),
+            email: z.string(),
+            tier: z.string(),
+            reauthorised: z.boolean(),
+            missingScopes: z.array(z.string()).describe('boxes they unticked; empty is the good case'),
+          }),
+          annotations: { readOnlyHint: false, openWorldHint: true },
+        },
+        async ({ flowId, waitSeconds }) => {
+          try {
+            const result = await finishSignIn(context, { flowId, waitSeconds: waitSeconds ?? 60 });
+            return reply({
+              alias: result.alias,
+              email: result.inbox.email,
+              tier: result.inbox.tier,
+              reauthorised: result.reauthorised,
+              missingScopes: result.missingScopes,
+            });
+          } catch (error) {
+            return fail(error);
+          }
+        },
+      );
+    }
 
     server.registerTool(
       'gmail_draft_create',

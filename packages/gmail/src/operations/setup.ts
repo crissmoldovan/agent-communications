@@ -1,9 +1,9 @@
-import type { FileHandle } from 'node:fs/promises';
-import { open, readdir } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { GmailContext } from '../context.ts';
 import { listRegisteredServers } from './client-configs.ts';
+import { readSmallFile } from './small-file.ts';
 
 /**
  * What a person has to do before this software can read their mail, and how much of it they have already done.
@@ -121,6 +121,27 @@ export const CONSOLE_STEPS: readonly ConsoleStep[] = [
 /** What a downloaded client file turns out to be, read rather than guessed from its name. */
 export type ClientKind = 'desktop' | 'web' | 'unreadable';
 
+/** How many files the scan will open. A download directory can hold thousands; the answer is in the newest few. */
+const MAX_CANDIDATES = 40;
+
+/**
+ * Desktop, web, or neither — decided on the same shape `parseClientJson` requires, not on a truthy key.
+ *
+ * `{"installed": true}` satisfies a truthiness test and nothing else: it was offered as a usable Desktop client
+ * and then refused a moment later by the code that actually reads it. Saying "usable" about a file that is about
+ * to be rejected is worse than saying nothing.
+ */
+function classifyClient(json: Record<string, unknown>): ClientKind {
+  const usable = (node: unknown): boolean => {
+    if (!node || typeof node !== 'object') return false;
+    const record = node as Record<string, unknown>;
+    return typeof record.client_id === 'string' && record.client_id.length > 0;
+  };
+  if (usable(json.installed)) return 'desktop';
+  if (usable(json.web)) return 'web';
+  return 'unreadable';
+}
+
 export interface ClientCandidate {
   path: string;
   kind: ClientKind;
@@ -165,38 +186,33 @@ export async function findClientJson(env: NodeJS.ProcessEnv = process.env): Prom
   const found = await Promise.all(
     names
       .filter((name) => /^client_secret.*\.json$/i.test(name))
+      // Bounded: opening every match in a directory holding thousands exhausts descriptors for no benefit.
+      .slice(0, MAX_CANDIDATES)
       .map(async (name): Promise<(ClientCandidate & { at: number }) | null> => {
         const path = join(directory, name);
         /*
-         * Opened once, then both the date and the contents come off that handle.
+         * A bounded read, and `follow: false`.
          *
-         * Two calls by path — `stat` then `readFile` — describe whatever the name pointed at each time, which can
-         * be two different files. That matters more than usual here: this reads a client secret, and following a
-         * name to something else is exactly the substitution `O_NOFOLLOW` exists to refuse elsewhere in this
-         * package. One handle removes the gap, and costs nothing.
+         * Nothing here chose these paths: they are whatever is sitting in a directory other software writes to,
+         * matched on their names. So a match can be a symlink, a FIFO, a directory or something enormous, and a
+         * plain `readFile` on each would follow, block, throw or exhaust memory in turn. `readSmallFile` refuses
+         * all four off one handle — which also removes the gap between a `stat` and a `readFile` by path, and
+         * the file in question is a client secret.
          */
-        let handle: FileHandle;
-        try {
-          handle = await open(path, 'r');
-        } catch {
-          return null;
+        const file = await readSmallFile(path, { follow: false });
+        if (!file.ok) {
+          // A file that is the wrong shape entirely is not listed; one that is merely too big to be a client
+          // JSON is, because it is a file with the right name and saying nothing about it would be stranger.
+          if (file.problem !== 'too-large') return null;
+          return { path, kind: 'unreadable', modifiedAt: file.modifiedAt.toISOString(), at: file.modifiedMs };
         }
+        const modifiedAt = file.modifiedAt.toISOString();
         try {
-          const info = await handle.stat();
-          const at = info.mtimeMs;
-          const modifiedAt = info.mtime.toISOString();
-          try {
-            const json = JSON.parse(await handle.readFile('utf8')) as Record<string, unknown>;
-            const kind: ClientKind = json.installed ? 'desktop' : json.web ? 'web' : 'unreadable';
-            return { path, kind, modifiedAt, at };
-          } catch {
-            // Listed anyway: an unreadable file may still be the one they meant, and saying so beats hiding it.
-            return { path, kind: 'unreadable', modifiedAt, at };
-          }
+          const json = JSON.parse(file.text) as Record<string, unknown>;
+          return { path, kind: classifyClient(json), modifiedAt, at: file.modifiedMs };
         } catch {
-          return null;
-        } finally {
-          await handle.close();
+          // Listed anyway: an unreadable file may still be the one they meant, and saying so beats hiding it.
+          return { path, kind: 'unreadable', modifiedAt, at: file.modifiedMs };
         }
       }),
   );

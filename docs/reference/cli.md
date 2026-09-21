@@ -773,7 +773,10 @@ agent-gmail setup [options]
 | `--inbox <alias>` | the name to connect the first mailbox under | — |
 | `--email <address>` | the address that mailbox must turn out to be | — |
 | `--mcp-client <client>` | register with this MCP client when the mailbox is | — |
-| `connected` |  | — |
+| `connected (choices: "claude-code", "claude-desktop",` |  | — |
+| `"codex", "cursor", "gemini", "vscode")` |  | — |
+| `--replace-server` | replace an MCP entry of the same name that is already | — |
+| `there (default: false)` |  | — |
 | `--restart` | walk the Google Cloud steps again even if a client is | — |
 | `registered (default: false)` |  | — |
 | `--no-tui` | plain one-line prompts instead of lists and fields | — |
