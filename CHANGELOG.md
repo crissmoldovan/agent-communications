@@ -5,6 +5,67 @@ together under one version.
 
 ## Unreleased
 
+**Setting this up was a diagnostic, and now it is a command.** The first thing a new install told you to do was
+run `doctor` — which answers "what is broken" for a setup that used to work, and so handed somebody with an empty
+machine a repair instruction naming a downloaded file they did not have and could not get without leaving the
+terminal. Repair notes, given to somebody who had not built the thing yet.
+
+`agent-gmail setup` inverts it. It reports what is **next**, not what is wrong, and an empty machine is the
+expected starting state rather than a fault. It walks the five Google Cloud screens with a direct link to each
+and says what to type in every field — including the two where the wrong answer looks more correct than the right
+one: a "Web application" client reads as the modern choice and is refused, and leaving the app in Testing reads as
+the cautious one and stops every sign-in working seven days later.
+
+It runs the same way whoever is driving. At a terminal it draws a list you move through with the cursor keys;
+through a pipe, in CI, or behind `--no-tui` it asks the same questions one line at a time; with `--json` it asks
+nothing and prints one document. Every prompt goes to stderr, so the document on stdout stays parseable.
+
+**An agent can now drive all of it except the part that exists to require a person.** `setup --client-json <path>
+--inbox work --mcp-client claude-code --json` runs each step that has what it needs and stops at the first that
+does not, naming the flag that would have let it continue. The one step it cannot finish is consent: it produces
+the sign-in link and the command that completes it, and hands both back.
+
+**And the same onboarding is available over MCP**, so an agent asked to "set up Gmail" is no longer reduced to
+telling you to go and run a CLI. `gmail_setup` says what is missing and changes nothing. `gmail_inbox_add`
+produces the sign-in link and stops. `gmail_inbox_finish` completes a grant you approved in your browser.
+
+This is a deliberate exception to a rule this project had: no MCP tool adds an inbox. The rule was written before
+there was any way to do this from a conversation, and the cost was paid by everyone. What the exception buys is
+bounded, and the code enforces the bounds: a `--read-only` server does not offer the two writers at all; a server
+pinned with `--inbox <alias>` does not either, and its `gmail_setup` reports only that mailbox, only the client
+behind it, and no file paths; neither tool changes a policy or a tier; and there is still no MCP tool that
+registers an OAuth client.
+
+**The guarantee, stated at its real width.** This code cannot mint a credential for itself — the token comes from
+Google, to whoever is signed in at that browser, after Google's own consent screen. It is *not* a human-presence
+check, and nothing here enforces one: an agent already driving an authenticated browser can click through the
+consent screen itself. That is outside the threat model on purpose, because such an agent is holding a logged-in
+Gmail session and can already read and send through it directly. If your threat model includes that, run the
+server `--read-only` or pinned and add mailboxes from the CLI.
+
+### Fixes
+
+- **Connecting one mailbox closed the door on the rest.** `setup` treated "a mailbox" as a step in a sequence, so
+  the first one marked it done for good and a second run skipped past it — wrong for a tool whose whole shape is
+  many mailboxes at once. It now asks whether to connect another, and a setup that is already complete offers
+  what somebody running it again actually wants.
+- **`setup` offered the wrong file.** It sorted `client_secret*.json` by date without ever opening one, so it
+  suggested a *Web application* client — refused a moment later, correctly, with a complaint about a type the
+  person never chose. Files are read rather than guessed at from their names, Desktop sorts first whatever the
+  dates say, and every candidate is listed with its kind and when it was downloaded, because three files named
+  `client_secret_<digits>.apps.googleusercontent.com.json` cannot be told apart any other way.
+- **A client file is now read once, through one handle, with a ceiling.** `stat(path)` then `readFile(path)`
+  describes whatever that name pointed at each time, and what this reads is a client secret. Both readers — the
+  download scan and `client add` — go through one bounded open that refuses a symlink, refuses anything that is
+  not a regular file, does not block on a FIFO, and stops at 64KB. `agent-gmail client add /dev/zero` used to
+  read until the process died, and `setup --client-json` reaches the same code.
+- **The symlink refusal did nothing on Windows.** `O_NOFOLLOW` has no Windows equivalent, so the guard was
+  silently absent on one of the three platforms this ships to. It is now enforced everywhere.
+- **A prerelease would have become `latest`.** npm moves `latest` on every publish that does not name another tag,
+  so a `v0.1.4-rc.1` tag would have made a release candidate the version `npm i @agentcomms/gmail` installs, for
+  everybody, immediately. The release workflow reads the tag and passes `--tag next` for any version with a hyphen
+  in it.
+
 ## 0.1.3
 
 **The setup guide broke every new install after seven days.** It told you to add yourself as a *test user* and
