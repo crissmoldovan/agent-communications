@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { interactionFor } from '../src/cli/tui.ts';
 import { CONSOLE_STEPS, findClientJson } from '../src/operations/setup.ts';
 import { tempDir } from './support/harness.ts';
 
@@ -88,4 +89,49 @@ test('every console step says what to do, and the two with traps say what not to
   const client = CONSOLE_STEPS.find((step) => step.id === 'client');
   assert.match(client?.actions.join(' ') ?? '', /Desktop app/);
   assert.match(client?.avoid.join(' ') ?? '', /NOT Web application/);
+});
+
+// ── Which of the three interaction modes a run is ────────────────────────────────────────────────────────────
+
+const tty = (isTTY: boolean) => ({ isTTY, write: () => true, on: () => undefined }) as never;
+
+function modeFor(over: Partial<Parameters<typeof interactionFor>[0]> = {}) {
+  return interactionFor({
+    streams: { stdin: tty(true), stdout: tty(true), stderr: tty(true) } as never,
+    env: {},
+    json: false,
+    noInput: false,
+    noTui: false,
+    canPrompt: true,
+    ...over,
+  });
+}
+
+test('a person at a terminal gets the rich prompts', () => {
+  assert.equal(modeFor(), 'tui');
+});
+
+test('--json is never interactive, whatever the terminal says', () => {
+  // A caller asking for one document is not going to answer a question, and a prompt drawn on the way would make
+  // the document unparseable — which is the only reason the JSON surface exists.
+  assert.equal(modeFor({ json: true }), 'none');
+  assert.equal(modeFor({ noInput: true }), 'none');
+  assert.equal(modeFor({ canPrompt: false }), 'none');
+});
+
+test('a pipe at either end falls back to plain, not to nothing', () => {
+  // The list is drawn on stderr and steered from stdin. Either being a pipe breaks it in a different way, and
+  // neither means nobody is there: `setup < answers.txt` is still a setup somebody wants to happen.
+  assert.equal(modeFor({ streams: { stdin: tty(false), stdout: tty(true), stderr: tty(true) } as never }), 'plain');
+  assert.equal(modeFor({ streams: { stdin: tty(true), stdout: tty(true), stderr: tty(false) } as never }), 'plain');
+});
+
+test('CI gets plain prompts, because a redrawing list in a log helps nobody', () => {
+  for (const key of ['CI', 'GITHUB_ACTIONS', 'CONTINUOUS_INTEGRATION', 'BUILD_NUMBER']) {
+    assert.equal(modeFor({ env: { [key]: '1' } }), 'plain', key);
+  }
+});
+
+test('--no-tui is honoured on a terminal that could manage the other kind', () => {
+  assert.equal(modeFor({ noTui: true }), 'plain');
 });

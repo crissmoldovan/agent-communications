@@ -1132,7 +1132,11 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .command('setup')
     .description('set this up from nothing: the Google client, a mailbox, and the agent connection')
     .option('--client-json <path>', 'the OAuth client JSON, if you already have it')
+    .option('--inbox <alias>', 'the name to connect the first mailbox under')
+    .option('--email <address>', 'the address that mailbox must turn out to be')
+    .option('--mcp-client <client>', 'register with this MCP client when the mailbox is connected')
     .option('--restart', 'walk the Google Cloud steps again even if a client is registered', false)
+    .option('--no-tui', 'plain one-line prompts instead of lists and fields')
     .option('--no-browser', 'print the links instead of opening them')
     .action(
       act(async (context, globalOptions, options: Options) => {
@@ -1141,10 +1145,18 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         const bold = (text: string) => paint(globalOptions.color, 'bold', text);
         const dim = (text: string) => paint(globalOptions.color, 'dim', text);
 
-        const interactive = canPrompt(env, streams, { json: globalOptions.json, noInput: globalOptions.noInput });
+        const { interactionFor, askText, askChoice, askYesNo } = await import('./tui.ts');
+        const mode = interactionFor({
+          streams,
+          env,
+          json: Boolean(globalOptions.json),
+          noInput: Boolean(globalOptions.noInput),
+          noTui: options.tui === false,
+          canPrompt: canPrompt(env, streams, { json: globalOptions.json, noInput: globalOptions.noInput }),
+        });
         let state = await setupState(context);
 
-        if (globalOptions.json || !interactive) {
+        if (mode === 'none') {
           // Every step needs a person: a browser for the console, a human at the consent screen. So the answer for
           // a non-interactive caller is the whole plan, not a refusal and not a half-run setup that stalls.
           writeResult(state, output(), () => renderSetupPlan(state, CONSOLE_STEPS, globalOptions.color), streams);
@@ -1164,10 +1176,15 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             out.write(`\nAll three steps are done. ${dim('`--restart` walks the Google Cloud steps again.')}\n`);
             return;
           }
-          const answer = await askFor(streams, {
-            question: `\nContinue from here, or start over? [C/s] `,
+          const choice = await askChoice(mode, streams, {
+            message: 'Continue from here, or start over?',
+            choices: [
+              { value: 'continue', label: 'Continue', hint: 'pick up at the next unfinished step' },
+              { value: 'restart', label: 'Start over', hint: 'walk the Google Cloud steps again; removes nothing' },
+            ],
+            initial: 'continue',
           });
-          if (/^s/i.test(answer.trim())) walkConsole = true;
+          if (choice === 'restart') walkConsole = true;
           out.write('\n');
         } else {
           out.write(`${bold('Setting up agent-gmail')}\n\n`);
@@ -1198,35 +1215,31 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           let path = options.clientJson ? String(options.clientJson) : '';
           const candidates = state.candidates;
           if (!path && candidates.length > 0) {
-            out.write(`${bold('Client files in your downloads')}\n`);
-            for (const [index, candidate] of candidates.entries()) {
-              const kind =
-                candidate.kind === 'desktop'
-                  ? paint(globalOptions.color, 'green', 'Desktop app')
-                  : candidate.kind === 'web'
-                    ? paint(globalOptions.color, 'yellow', 'Web application — will be refused')
-                    : paint(globalOptions.color, 'yellow', 'unreadable');
-              const when = new Date(candidate.modifiedAt).toLocaleString();
-              out.write(`  ${index + 1}) ${candidate.path}\n     ${kind} · downloaded ${when}\n`);
-            }
-            const usable = candidates.findIndex((candidate) => candidate.kind === 'desktop');
-            const suggestion = usable === -1 ? '' : String(usable + 1);
-            const answer = (
-              await askFor(streams, {
-                question: suggestion
-                  ? `\n  which one? [${suggestion}] `
-                  : `\n  none of these is a Desktop client. Type a path, or press Enter to try again: `,
-              })
-            ).trim();
-            const picked = answer === '' ? suggestion : answer;
-            const index = Number(picked);
-            path =
-              Number.isInteger(index) && index >= 1 && index <= candidates.length
-                ? (candidates[index - 1] as { path: string }).path
-                : picked;
+            const usable = candidates.find((candidate) => candidate.kind === 'desktop');
+            const picked = await askChoice(mode, streams, {
+              message: 'Which client file?',
+              choices: [
+                ...candidates.map((candidate) => ({
+                  value: candidate.path,
+                  label: candidate.path.split('/').pop() ?? candidate.path,
+                  hint:
+                    (candidate.kind === 'desktop'
+                      ? 'Desktop app'
+                      : candidate.kind === 'web'
+                        ? 'Web application — will be refused'
+                        : 'unreadable') + ` · downloaded ${new Date(candidate.modifiedAt).toLocaleString()}`,
+                })),
+                { value: '', label: 'Somewhere else…', hint: 'type a path' },
+              ],
+              ...(usable ? { initial: usable.path } : {}),
+            });
+            path = picked;
           }
           while (!path) {
-            path = (await askFor(streams, { question: 'Path to the downloaded client JSON: ' })).trim();
+            path = await askText(mode, streams, {
+              message: 'Path to the downloaded client JSON',
+              placeholder: '~/Downloads/client_secret_….json',
+            });
           }
 
           const { clientAdd } = await import('../operations/clients.ts');
@@ -1265,10 +1278,23 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
 
         // ── 3. The agent connection ───────────────────────────────────────────────────────────────────────────
         if (state.next === 'mcp') {
-          const answer = await askFor(streams, { question: `${bold('Connect this to an agent?')} [Y/n] ` });
-          if (!/^n/i.test(answer.trim())) {
+          const named = options.mcpClient ? String(options.mcpClient) : '';
+          const wanted = named !== '' || (await askYesNo(mode, streams, { message: 'Connect this to an agent?' }));
+          if (wanted) {
             const which =
-              (await askFor(streams, { question: '  which client? [claude-code] ' })).trim() || 'claude-code';
+              named ||
+              (await askChoice(mode, streams, {
+                message: 'Which client?',
+                choices: [
+                  { value: 'claude-code', label: 'Claude Code' },
+                  { value: 'claude-desktop', label: 'Claude Desktop' },
+                  { value: 'codex', label: 'Codex' },
+                  { value: 'cursor', label: 'Cursor' },
+                  { value: 'gemini', label: 'Gemini CLI' },
+                  { value: 'vscode', label: 'VS Code' },
+                ],
+                initial: 'claude-code',
+              }));
             const { mcpInstall } = await import('../mcp/install.ts');
             const result = await mcpInstall(context, { client: which as SupportedClient, apply: true, force: true });
             out.write(`\n${renderInstall(result, globalOptions.color)}\n`);

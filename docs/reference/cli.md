@@ -770,8 +770,13 @@ agent-gmail setup [options]
 | Option | What it does | Default |
 |---|---|---|
 | `--client-json <path>` | the OAuth client JSON, if you already have it | — |
+| `--inbox <alias>` | the name to connect the first mailbox under | — |
+| `--email <address>` | the address that mailbox must turn out to be | — |
+| `--mcp-client <client>` | register with this MCP client when the mailbox is | — |
+| `connected` |  | — |
 | `--restart` | walk the Google Cloud steps again even if a client is | — |
 | `registered (default: false)` |  | — |
+| `--no-tui` | plain one-line prompts instead of lists and fields | — |
 | `--no-browser` | print the links instead of opening them | — |
 
 ### `agent-gmail doctor`
