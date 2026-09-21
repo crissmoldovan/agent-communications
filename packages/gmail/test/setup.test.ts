@@ -585,19 +585,33 @@ test('every shape the installer writes is recognised, and its neighbours are not
   /*
    * The managed launcher is not exercised through `mcpInstall` here — it runs an `npm install` — so its entry is
    * spelled out, in both separators. It is the default, and the shape that was missed.
+   *
+   * The published `agent-gmail-mcp` bin is listed separately and honestly: our installer does not emit it, but
+   * it is a real way to run this server, so it is accepted rather than called somebody else's.
    */
   const managed = ['node_modules', '@agentcomms'];
   const ours: [string, string[]][] = [
-    ['managed, posix', ['node', ['', 'opt', 'rt', ...managed, 'gmail', 'dist', 'cli.mjs'].join('/')]],
-    ['managed, windows', ['node', ['C:', 'rt', ...managed, 'gmail-mcp', 'dist', 'server.mjs'].join('\\')]],
+    ['managed, posix', ['node', ['', 'opt', 'rt', ...managed, 'gmail', 'dist', 'cli.mjs'].join('/'), 'mcp']],
+    ['managed, windows', ['node', ['C:', 'rt', ...managed, 'gmail', 'dist', 'cli.mjs'].join('\\'), 'mcp']],
+    [
+      'the published mcp bin, hand-written',
+      ['node', ['', 'g', ...managed, 'gmail-mcp', 'dist', 'server.mjs'].join('/')],
+    ],
   ];
+  /*
+   * Near misses, and most of them are combinations rather than strangers: a real scope with the wrong file, a
+   * real package with the other package's entry, a real entry one directory too deep. Checking scope, directory
+   * and filename independently accepted every one of them, which is why the matcher compares whole tuples.
+   */
   const theirs: [string, string[]][] = [
     ['a scope that contains ours', ['npx', '-y', '@notagentcomms/gmail-mcp']],
     ['a neighbour in our scope', ['node', ['', 'opt', ...managed, 'gmail-evil', 'dist', 'cli.mjs'].join('/')]],
     ['a different gmail server', ['npx', '-y', '@gongrzhe/server-gmail-autoauth-mcp']],
     ['someone else with a packages/gmail', ['node', ['', 'them', 'packages', 'gmail', 'index.js'].join('/')]],
-    // The two the previous version accepted: our own library file, and a directory that is not `src` or `dist`.
     ['our library, not our server', ['node', ['', 'opt', ...managed, 'gmail', 'dist', 'index.mjs'].join('/')]],
+    ["the other package's entry", ['node', ['', 'opt', ...managed, 'gmail', 'dist', 'server.mjs'].join('/')]],
+    ['a directory that is not dist', ['node', ['', 'opt', ...managed, 'gmail', 'not-dist', 'cli.mjs'].join('/')]],
+    ['a cli.ts one directory too deep', ['node', ['', 'r', 'packages', 'gmail', 'src', 'nested', 'cli.ts'].join('/')]],
     ['a cli.ts somewhere else in a checkout', ['node', ['', 'r', 'packages', 'gmail', 'not-src', 'cli.ts'].join('/')]],
   ];
 

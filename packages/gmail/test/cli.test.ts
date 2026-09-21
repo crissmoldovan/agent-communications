@@ -679,3 +679,25 @@ test('an interactive setup with an explicit flag does not ask what you already s
    */
   assert.match(said, /packages[/\\]+gmail[/\\]+.*cli\./, `the entry it produced was not ours:\n${said}`);
 });
+
+test('setup --launcher reaches the headless agent step, and the entry it writes proves it', async () => {
+  /*
+   * My first attempt at this used `--mcp-client codex --launcher npx`, which fetched the published server over
+   * the network and then failed identically with and without the guard, so I removed it and wrote off the path
+   * as untestable. It is not: `cursor` is configured by a file rather than by a CLI, so the registration lands
+   * on disk where it can be read, and `--launcher local` needs nothing fetched.
+   */
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  const home = tempDir();
+
+  const result = await cli(harness, ['setup', '--mcp-client', 'cursor', '--launcher', 'local', '--json'], {
+    env: { HOME: home, USERPROFILE: home },
+  });
+
+  const written = await readFile(join(home, '.cursor', 'mcp.json'), 'utf8');
+  // `local` points at the checkout; the managed default would have written a runtime path under `node_modules`,
+  // so this is the flag having arrived rather than merely having been accepted.
+  assert.match(written, /packages[/\\]+gmail[/\\]+(src|dist)[/\\]+cli\./, `${written}\n${result.stderr}`);
+  assert.doesNotMatch(written, /node_modules/, `the managed default was used instead:\n${written}`);
+});

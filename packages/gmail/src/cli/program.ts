@@ -1211,11 +1211,8 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
      * the managed runtime — an `npm install` — so somebody working from a checkout had to leave this command to
      * get `--launcher local`.
      *
-     * The interactive path's use of this flag is tested. The headless one is the same flag through the other
-     * `mcpInstall` call site and is **not**: `--json` reports what happened rather than the entry it built, so
-     * telling one launcher from another there means driving a real registration, which needs a client CLI on
-     * PATH — and the `npx` launcher fetches the published server over the network. Covered by reading, and said
-     * here rather than left as a silent gap.
+     * Both call sites are tested, the headless one through `cursor` — a client configured by a file rather than
+     * by a CLI, so the registration lands on disk where a test can read which entry was written.
      */
     .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
     .option('--restart', 'walk the Google Cloud steps again even if a client is registered', false)

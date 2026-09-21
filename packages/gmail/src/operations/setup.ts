@@ -324,27 +324,34 @@ export interface SetupStateOptions {
 export function isOurServer(server: { command: string; args: string[]; packageName?: string | undefined }): boolean {
   if (server.packageName) return OUR_PACKAGES.has(server.packageName);
   return [server.command, ...server.args].some((part) => {
-    const segments = part.split(/[\\/]+/);
-    // The file at the end has to be an entry this package actually starts. Without this,
-    // `…/@agentcomms/gmail/dist/index.mjs` — the library, not the server — counted as a registration.
-    if (!ENTRY_FILES.has(segments.at(-1) ?? '')) return false;
-    return segments.some((segment, index) => {
-      const next = segments[index + 1];
-      if (segment === '@agentcomms' && (next === 'gmail' || next === 'gmail-mcp')) return true;
-      // A checkout, which is what `--launcher local` points at: `packages/gmail/src/cli.ts` from source, or
-      // `packages/gmail/dist/cli.mjs` from a bundle. The directory in between is named, so a `packages/gmail`
-      // belonging to somebody else does not qualify by having a file called `cli.ts` somewhere beneath it.
-      const where = segments[index + 2];
-      return segment === 'packages' && next === 'gmail' && (where === 'src' || where === 'dist');
-    });
+    const segments = part.split(/[\\/]+/).filter(Boolean);
+    return OUR_ENTRIES.some(
+      (entry) =>
+        segments.length >= entry.length &&
+        entry.every((wanted, index) => segments[segments.length - entry.length + index] === wanted),
+    );
   });
 }
 
 /**
- * The files this package is started by, as `mcpEntry` writes them: `cli.mjs` bundled, `cli.ts` from source, and
- * `server.mjs` for the standalone MCP bin. Anything else under the same directory is a library file.
+ * The exact paths this package is started by, matched as a trailing run of segments.
+ *
+ * Checking the parts independently — a scope somewhere, a directory somewhere, a filename at the end — accepts
+ * combinations none of these packages contains: `@agentcomms/gmail/dist/server.mjs` (that file belongs to the
+ * other package), `@agentcomms/gmail/not-dist/cli.mjs`, `packages/gmail/src/nested/cli.ts`. None of them is a
+ * server, and each was reported as a completed registration.
+ *
+ * Whole tuples instead, so a path either ends exactly like something that runs this or it does not. The first
+ * two are what `mcpEntry` writes; the third is the published `agent-gmail-mcp` bin, which our installer does not
+ * emit but is a real way to run this server and is included so a hand-written entry is not called somebody
+ * else's.
  */
-const ENTRY_FILES = new Set(['cli.mjs', 'cli.ts', 'server.mjs']);
+const OUR_ENTRIES: readonly (readonly string[])[] = [
+  ['packages', 'gmail', 'src', 'cli.ts'],
+  ['packages', 'gmail', 'dist', 'cli.mjs'],
+  ['node_modules', '@agentcomms', 'gmail', 'dist', 'cli.mjs'],
+  ['node_modules', '@agentcomms', 'gmail-mcp', 'dist', 'server.mjs'],
+];
 
 /** The npm packages that are this server. An entry naming one of these, and no other, is ours. */
 const OUR_PACKAGES = new Set(['@agentcomms/gmail', '@agentcomms/gmail-mcp']);
