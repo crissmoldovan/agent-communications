@@ -321,15 +321,24 @@ export interface SetupStateOptions {
  * The middle one is matched on the two consecutive segments `@agentcomms` and `gmail` — exactly, so
  * `gmail-evil` is not one of ours — and the last on this package's own directory followed by the entry it runs.
  */
-function isOurServer(server: { command: string; args: string[]; packageName?: string | undefined }): boolean {
+export function isOurServer(server: { command: string; args: string[]; packageName?: string | undefined }): boolean {
   if (server.packageName) return OUR_PACKAGES.has(server.packageName);
   return [server.command, ...server.args].some((part) => {
     const segments = part.split(/[\\/]+/);
     return segments.some((segment, index) => {
       const next = segments[index + 1];
       if (segment === '@agentcomms' && (next === 'gmail' || next === 'gmail-mcp')) return true;
-      // A checkout: `…/packages/gmail/dist/cli.mjs`, which is what `--launcher local` points at.
-      return segment === 'packages' && next === 'gmail' && segments.slice(index + 2).includes('cli.mjs');
+      /*
+       * A checkout, which is what `--launcher local` points at — and it points at one of two files.
+       *
+       * `localCliEntry()` returns `src/cli.ts` when running from source and `dist/cli.mjs` when bundled, and it
+       * tries the TypeScript one first. Matching only `cli.mjs` meant a successful `--launcher local`
+       * registration from a source checkout was never recognised, and the agent step stayed unfinished forever
+       * — the same false negative as the `@agentcomms` one above, in the other branch, found by a reviewer
+       * while the test I had just written was printing `packages/gmail/src/cli.ts` at me.
+       */
+      const entry = segments.slice(index + 2);
+      return segment === 'packages' && next === 'gmail' && (entry.includes('cli.mjs') || entry.includes('cli.ts'));
     });
   });
 }

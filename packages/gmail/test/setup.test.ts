@@ -373,7 +373,13 @@ test('a registered server is what marks the agent step done, and it is matched o
     join(home, '.codex', 'config.toml'),
     ['[mcp_servers.gmail]', 'command = "node"', `args = ["${managed}", "mcp", "serve"]`].join('\n'),
   );
-  // A Windows managed path, backslash-separated, which is the case nobody exercises locally.
+  /*
+   * A Windows managed path, backslash-separated — the case nobody exercises locally.
+   *
+   * In `.cursor/mcp.json` rather than the Claude Desktop config, because that one only exists on macOS: the
+   * first version of this put it there and the test passed locally and failed on both Linux and Windows, which
+   * is a fixture written for the machine it was written on.
+   */
   const windows = [
     'C:',
     'ProgramData',
@@ -386,30 +392,25 @@ test('a registered server is what marks the agent step done, and it is matched o
     'dist',
     'server.mjs',
   ].join('\\\\');
-  await mkdir(join(home, 'Library', 'Application Support', 'Claude'), { recursive: true });
-  await writeFile(
-    join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
-    JSON.stringify({ mcpServers: { gmail: { command: 'node', args: [windows, 'mcp', 'serve'] } } }),
-  );
-  /*
-   * Not ours — and in clients of their own, which is the point.
-   *
-   * The first version of this test put the near miss in `.claude.json` beside a real entry, so the client was
-   * named either way and deleting the filter outright left the assertion green. A near miss only proves
-   * something when it is the *only* thing that could name its client.
-   */
   await mkdir(join(home, '.cursor'), { recursive: true });
   await writeFile(
     join(home, '.cursor', 'mcp.json'),
-    JSON.stringify({ mcpServers: { gmail: { command: 'npx', args: ['-y', '@notagentcomms/gmail-mcp'] } } }),
+    JSON.stringify({ mcpServers: { gmail: { command: 'node', args: [windows, 'mcp', 'serve'] } } }),
   );
+  /*
+   * Not ours, both of them, in the one client that has nothing else in it — so if either were matched, `gemini`
+   * would appear in the answer. A near miss beside a real entry proves nothing, which is how the first version
+   * of this test came to assert nothing at all.
+   */
   await mkdir(join(home, '.gemini'), { recursive: true });
   await writeFile(
     join(home, '.gemini', 'settings.json'),
     JSON.stringify({
       mcpServers: {
+        // A different scope that merely contains ours as a substring.
+        other: { command: 'npx', args: ['-y', '@notagentcomms/gmail-mcp'] },
         // A neighbour under the same scope. `startsWith('gmail')` called this ours.
-        gmail: { command: 'node', args: ['/opt/node_modules/@agentcomms/gmail-evil/dist/cli.mjs', 'serve'] },
+        evil: { command: 'node', args: ['/opt/node_modules/@agentcomms/gmail-evil/dist/cli.mjs', 'serve'] },
       },
     }),
   );
@@ -421,11 +422,10 @@ test('a registered server is what marks the agent step done, and it is matched o
   const state = await setupState(context, { scanDownloads: false });
   assert.deepEqual(
     state.registeredWith.sort(),
-    ['claude-code', 'claude-desktop', 'codex'],
+    ['claude-code', 'codex', 'cursor'],
     'the registered servers were not matched',
   );
-  assert.ok(!state.registeredWith.includes('cursor'), '@notagentcomms/gmail-mcp was counted as ours');
-  assert.ok(!state.registeredWith.includes('gemini'), '@agentcomms/gmail-evil was counted as ours');
+  assert.ok(!state.registeredWith.includes('gemini'), 'a near miss was counted as ours');
   assert.ok(state.done.includes('mcp'));
   assert.equal(state.next, 'done');
 });
@@ -544,4 +544,54 @@ test('a stream that faults mid-read is an outcome, not a crash', async () => {
     })(),
   ) as unknown as NodeJS.ReadableStream;
   assert.deepEqual(await readBoundedStream(broken, 1024), { ok: false, problem: 'unreadable' });
+});
+
+test('every shape the installer writes is recognised, and its neighbours are not', async () => {
+  /*
+   * This has now been wrong in three ways, each of which shipped:
+   *
+   *   1. a substring match, so `@notagentcomms/gmail-mcp` counted as ours;
+   *   2. a segment match for `agentcomms`, which missed the **default** managed install because the segment is
+   *      `@agentcomms` — a correctly registered install reporting nothing;
+   *   3. a checkout match for `cli.mjs` only, which missed `--launcher local` from a source checkout, where
+   *      `localCliEntry()` returns `src/cli.ts` first.
+   *
+   * Two of the three were false negatives that would have left the agent step unfinished forever after a
+   * registration that had actually worked. The integration test above proves the wiring through real client
+   * config files; this one enumerates the shapes, because that is where the mistakes were.
+   */
+  const runtime = ['node_modules', '@agentcomms'];
+  const ours: [string, string[]][] = [
+    ['npx, the published server', ['npx', '-y', '@agentcomms/gmail-mcp@0.1.4', 'mcp']],
+    ['npx, the CLI package', ['npx', '-y', '@agentcomms/gmail@0.1.4', 'mcp']],
+    ['managed, posix', ['node', ['', 'opt', 'runtime', ...runtime, 'gmail', 'dist', 'cli.mjs'].join('/'), 'mcp']],
+    ['managed, windows', ['node', ['C:', 'rt', ...runtime, 'gmail-mcp', 'dist', 'server.mjs'].join('\\')]],
+    ['checkout, bundled', ['node', ['', 'src', 'packages', 'gmail', 'dist', 'cli.mjs'].join('/'), 'mcp']],
+    [
+      'checkout, source',
+      ['node', '--experimental-strip-types', ['', 'src', 'packages', 'gmail', 'src', 'cli.ts'].join('/')],
+    ],
+  ];
+  const theirs: [string, string[]][] = [
+    ['a scope that contains ours', ['npx', '-y', '@notagentcomms/gmail-mcp']],
+    ['a neighbour in our scope', ['node', ['', 'opt', ...runtime, 'gmail-evil', 'dist', 'cli.mjs'].join('/')]],
+    ['a different gmail server', ['npx', '-y', '@gongrzhe/server-gmail-autoauth-mcp']],
+    ['someone else with a packages/gmail', ['node', ['', 'them', 'packages', 'gmail', 'index.js'].join('/')]],
+  ];
+
+  const { isOurServer } = await import('../src/operations/setup.ts');
+  const ask = (parts: string[]) => {
+    const [command, ...args] = parts;
+    // `packageName` is read off the command line by the same regex the real reader uses, so the npx cases go
+    // through the package path and the file cases through the segment path, exactly as in production.
+    const match = /(@[\w.-]+\/[\w.-]+|(?<=\s)[\w.-]+-mcp)(?=@|\s|$)/.exec(parts.join(' '));
+    return isOurServer({
+      command: command ?? '',
+      args,
+      ...(match?.[1] ? { packageName: match[1] } : {}),
+    });
+  };
+
+  for (const [what, parts] of ours) assert.equal(ask(parts), true, `not recognised: ${what} — ${parts.join(' ')}`);
+  for (const [what, parts] of theirs) assert.equal(ask(parts), false, `wrongly ours: ${what} — ${parts.join(' ')}`);
 });
