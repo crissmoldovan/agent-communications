@@ -74,6 +74,12 @@ tag recorded something already done. A tag whose run failed names a release that
 than leave it implying otherwise. That is not hypothetical: v0.1.2 was tagged, failed on Windows, published
 nothing, and the tag had to move.
 
+**A prerelease publishes under `next`, not `latest`.** npm moves `latest` on every publish that does not name
+another tag, so a `v0.1.4-rc.1` tag would have made a release candidate the version `npm i @agentcomms/gmail`
+installs — for everybody, immediately. The workflow reads the tag and passes `--tag next` for any version with a
+hyphen in it. `scripts/release.mjs` has always accepted a prerelease string, so the two used to disagree about
+what a `-rc.1` meant.
+
 **The packages publish in dependency order** — `core`, then `gmail`, then `gmail-mcp` — because a consumer
 installing `@agentcomms/gmail` must find the exact `core` it pins already on the registry.
 
