@@ -21,7 +21,13 @@ interface Captured {
 async function cli(
   harness: Harness,
   argv: string[],
-  options: { tty?: boolean; env?: NodeJS.ProcessEnv; stdin?: string } = {},
+  options: {
+    tty?: boolean;
+    env?: NodeJS.ProcessEnv;
+    stdin?: string;
+    /** Called with everything written to stdout so far, while the command is still running. */
+    onStdout?: (soFar: string) => void;
+  } = {},
 ): Promise<Captured> {
   let stdout = '';
   let stderr = '';
@@ -29,6 +35,7 @@ async function cli(
   const err = new PassThrough();
   out.on('data', (chunk) => {
     stdout += String(chunk);
+    options.onStdout?.(stdout);
   });
   err.on('data', (chunk) => {
     stderr += String(chunk);
@@ -536,4 +543,161 @@ test('doctor exits non-zero when a check is broken, and zero when only warnings 
     1,
     'one document only',
   );
+});
+
+test('setup can choose the file store, and says which store it used', async () => {
+  /*
+   * On a machine with no usable keychain — a container, an SSH session, most CI — `clientAdd` defaults to the
+   * keychain, probes it, fails, and tells you to run the command again with `--store file`. `setup` did not
+   * accept that flag, so the instruction was correct and impossible to follow, in the one command that exists to
+   * be where a new install starts.
+   */
+  const harness = await newHarness({});
+  const path = join(tempDir(), 'client_secret_desktop.json');
+  await writeFile(
+    path,
+    JSON.stringify({ installed: { client_id: TEST_CLIENT_ID, client_secret: TEST_CLIENT_SECRET, project_id: 'p' } }),
+  );
+
+  const result = await cli(harness, ['setup', '--client-json', path, '--store', 'file', '--move', '--json']);
+  assert.equal(result.code, 0, result.stderr);
+  const { data: report } = result.json<{ data: { did: string[]; clients: string[] } }>();
+  assert.deepEqual(report.clients, ['desktop']);
+  // `--move` is the other half of the pass-through, and "deleted it" is a claim worth checking against the disk
+  // rather than against the sentence that makes it.
+  await assert.rejects(readFile(path, 'utf8'), /ENOENT/, 'the downloaded client JSON is still there');
+  assert.ok(
+    report.did.some((entry) => /removed the downloaded file/.test(entry)),
+    `did not report the move: ${JSON.stringify(report.did)}`,
+  );
+  // What happened, not what usually happens: `did` used to say "registered" with no mention of where the secret
+  // went, and the interactive path claimed "your keychain, never to a file" whatever the store turned out to be.
+  assert.ok(
+    report.did.some((entry) => /secret in the file store/.test(entry)),
+    `did not report the store it used: ${JSON.stringify(report.did)}`,
+  );
+});
+
+test('setup --inbox is honoured when a mailbox already exists', async () => {
+  // The flags were read only inside the mailbox loop, which is entered on `next === 'inbox'`. With one mailbox
+  // already connected, `setup --inbox personal` went to the agent step instead — or asked somebody who had
+  // already said what they wanted.
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+
+  const result = await cli(harness, ['setup', '--inbox', 'personal', '--json']);
+  const { data: report } = result.json<{
+    data: { did: string[]; blocked: { step: string } | null; handoff?: { authUrl: string } | null };
+  }>();
+  // It reached the mailbox step for `personal` rather than skipping to the agent step.
+  assert.notEqual(report.blocked?.step, 'mcp', `it skipped past the requested mailbox: ${result.stdout}`);
+  assert.ok(
+    report.did.some((entry) => /sign-in for "personal"/.test(entry)),
+    `the requested mailbox was never started: ${JSON.stringify(report.did)}`,
+  );
+  assert.ok(report.handoff?.authUrl, 'no sign-in link came back');
+
+  // A sign-in was started, so a detached listener is waiting. Consent it rather than leaving one running for ten
+  // minutes — one left behind slowed this file enough that an unrelated sign-in timed out.
+  await fetch(harness.google.consent(report.handoff.authUrl));
+});
+
+test('an interactive setup with an explicit flag does not ask what you already said', async () => {
+  /*
+   * The headless branch reads `--inbox`/`--mcp-client` on its own, so the tests above pass whether the
+   * interactive path honours them or not. This is the path Codex named: with everything already connected,
+   * `setup` asked "what would you like to do?" of somebody who had said so on the command line.
+   *
+   * Driven with `--mcp-client` rather than `--inbox` because both go through the same two lines and this one
+   * needs no browser: an interactive `--inbox` ends in a sign-in that waits for a consent this test cannot give,
+   * since the command holds its output until it returns.
+   */
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  const home = tempDir();
+  await writeFile(
+    join(home, '.claude.json'),
+    JSON.stringify({ mcpServers: { gmail: { command: 'npx', args: ['-y', '@agentcomms/gmail-mcp'] } } }),
+  );
+
+  /*
+   * Deadlined, because the interesting failure is a hang rather than a wrong answer.
+   *
+   * Without the guard this run reaches the "what would you like to do?" choice, takes its default — connect
+   * another mailbox — and ends in a sign-in waiting for a browser nobody is going to open. That is a hang, and a
+   * hang is a CI job timeout twenty minutes later with no message attached to it. The deadline turns it into a
+   * named failure on the line that explains it.
+   */
+  const result = await Promise.race([
+    // `--launcher local` so this registers the checkout rather than running an `npm install` of a managed
+    // runtime — which is what the default does, and what made the first version of this test reach into the
+    // machine's real data directory.
+    cli(harness, ['setup', '--mcp-client', 'codex', '--launcher', 'local', '--no-browser', '--no-tui'], {
+      tty: true,
+      env: { HOME: home, USERPROFILE: home },
+      stdin: 'n\nn\nn\n',
+    }),
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(
+        () => reject(new Error('setup was still running after 30s: it went somewhere that waits for a browser')),
+        30_000,
+      ).unref(),
+    ),
+  ]);
+
+  /*
+   * Asserted against stderr, where the prompts actually go.
+   *
+   * The first version of this checked `stdout` for the question — and the prompts are deliberately written to
+   * stderr so that `--json` keeps stdout parseable, which this file's own TUI comment says. So the assertion
+   * could not fail, and what caught the mutation was the deadline underneath it rather than the claim on top.
+   */
+  assert.doesNotMatch(
+    `${result.stdout}${result.stderr}`,
+    /What would you like to do\?/,
+    'it asked what to do, of somebody who had already said',
+  );
+  // And it did the thing that was asked, rather than merely not asking about it. Dropping `|| addMcp` from the
+  // agent step skips the registration silently, and nothing above would have noticed.
+  assert.equal(result.code, 0, `${result.stdout}${result.stderr}`);
+  /*
+   * It registered, or printed exactly what to paste.
+   *
+   * `mcp install` writes through the client's own CLI when that CLI is on PATH and prints the entry when it is
+   * not; `codex` is not installed here, so the second is the honest outcome. Either way the agent step *ran*,
+   * which is the claim — dropping `|| addMcp` skips it silently and prints neither.
+   */
+  const said = `${result.stdout}${result.stderr}`;
+  assert.match(said, /MCP configuration of codex|registered/i, `the agent step never ran:\n${said}`);
+  /*
+   * The entry is this package's own CLI — `--launcher local` points at the checkout, so the marker is the package
+   * directory rather than the `@agentcomms` scope a managed install would carry.
+   *
+   * `[/\\]+` rather than `[/\\]`: this is matched against a JSON document, and a Windows path inside JSON has
+   * its separators escaped, so `packages\gmail` arrives as `packages\\gmail`. A one-character class matched the
+   * first backslash and then looked for `g`.
+   */
+  assert.match(said, /packages[/\\]+gmail[/\\]+.*cli\./, `the entry it produced was not ours:\n${said}`);
+});
+
+test('setup --launcher reaches the headless agent step, and the entry it writes proves it', async () => {
+  /*
+   * My first attempt at this used `--mcp-client codex --launcher npx`, which fetched the published server over
+   * the network and then failed identically with and without the guard, so I removed it and wrote off the path
+   * as untestable. It is not: `cursor` is configured by a file rather than by a CLI, so the registration lands
+   * on disk where it can be read, and `--launcher local` needs nothing fetched.
+   */
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  const home = tempDir();
+
+  const result = await cli(harness, ['setup', '--mcp-client', 'cursor', '--launcher', 'local', '--json'], {
+    env: { HOME: home, USERPROFILE: home },
+  });
+
+  const written = await readFile(join(home, '.cursor', 'mcp.json'), 'utf8');
+  // `local` points at the checkout; the managed default would have written a runtime path under `node_modules`,
+  // so this is the flag having arrived rather than merely having been accepted.
+  assert.match(written, /packages[/\\]+gmail[/\\]+(src|dist)[/\\]+cli\./, `${written}\n${result.stderr}`);
+  assert.doesNotMatch(written, /node_modules/, `the managed default was used instead:\n${written}`);
 });

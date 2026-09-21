@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { GmailContext } from '../src/context.ts';
 import { mcpBoolean, mcpInboxes, mcpInteger, mcpStringArray } from '../src/mcp/schemas.ts';
 import { buildInstructions, createGmailMcpServer } from '../src/mcp/server.ts';
-import { newHarness } from './support/harness.ts';
+import { newHarness, tempDir } from './support/harness.ts';
 
 interface ToolResult {
   isError?: boolean;
@@ -66,6 +68,10 @@ test('the tool list is the same whatever is configured, and every tool says what
     'gmail_draft_update',
     'gmail_export',
     'gmail_followups',
+    // Onboarding is reachable over MCP too: an agent asked to "set up Gmail" could otherwise do nothing
+    // but tell the person to go and run a CLI, which is where most of them stop.
+    'gmail_inbox_add',
+    'gmail_inbox_finish',
     'gmail_inboxes_list',
     'gmail_label_create',
     'gmail_labels_list',
@@ -77,6 +83,7 @@ test('the tool list is the same whatever is configured, and every tool says what
     'gmail_send_list',
     'gmail_send_prepare',
     'gmail_sendas_list',
+    'gmail_setup',
     'gmail_thread_get',
     'gmail_thread_timeline',
     'gmail_trash',
@@ -115,6 +122,10 @@ test('a read-only server does not offer the tools that would write', async () =>
       'gmail_label_create',
       'gmail_send_prepare',
       'gmail_draft_send',
+      // Connecting a mailbox is a write. A read-only server was started that way for a reason, and a tool that
+      // adds a mailbox to it would be the one write it could not refuse.
+      'gmail_inbox_add',
+      'gmail_inbox_finish',
       'gmail_send_cancel',
       'gmail_confirm_probe',
     ]) {
@@ -232,7 +243,12 @@ test('doctor reports the checks and their fixes through the tool', async () => {
     const checks = result.structuredContent?.checks as Array<{ id: string; status: string; fix: string | null }>;
     const client_ = checks.find((check) => check.id === 'oauth-client');
     assert.equal(client_?.status, 'fail');
-    assert.match(client_?.fix ?? '', /client add/);
+    // One command, and one a person can actually act on. This used to answer `client add
+    // ~/Downloads/client_secret_*.json`, naming a file that only exists after five screens of Google Cloud that
+    // nothing had mentioned — repair advice given to somebody who had not built the thing yet. An agent reading
+    // this over MCP cannot do any of it either, so what it needs is the single thing to tell the user.
+    assert.equal(client_?.fix, 'agent-gmail setup');
+    assert.equal(checks.find((check) => check.id === 'inboxes')?.fix, 'agent-gmail setup');
     assert.equal(result.structuredContent?.healthy, false);
   } finally {
     await close();
@@ -240,8 +256,15 @@ test('doctor reports the checks and their fixes through the tool', async () => {
 });
 
 test('the instructions tell the model the three things it must know, and stay under 2 KB', async () => {
-  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const harness = await newHarness({
+    accounts: [
+      { sub: 'sub-1', email: 'jo@example.test' },
+      { sub: 'sub-2', email: 'sam@example.test' },
+    ],
+  });
   await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  // A second mailbox, so the pinned assertion below is about something. With one inbox it passed either way.
+  await harness.addInbox({ alias: 'personal', email: 'sam@example.test', sub: 'sub-2', refreshToken: 'rt_y' });
   const context = new GmailContext({ core: harness.core, env: harness.env });
   const instructions = await buildInstructions(context, undefined);
   assert.ok(Buffer.byteLength(instructions) < 2048, 'Claude Code truncates instructions at 2 KB');
@@ -249,8 +272,12 @@ test('the instructions tell the model the three things it must know, and stay un
   assert.match(instructions, /approve/);
   assert.match(instructions, /Pass `inbox` on every call/);
   assert.match(instructions, /work/);
+  assert.match(instructions, /personal/, 'an unpinned server lists what it serves');
   const pinnedText = await buildInstructions(context, 'work');
   assert.match(pinnedText, /pinned to the "work" mailbox/);
+  // The greeting is the first thing a model reads, and it used to list every alias on the machine whatever the
+  // server was pinned to. Naming the pin is not enough: the others have to be absent.
+  assert.doesNotMatch(pinnedText, /personal/, 'a pinned server named a mailbox it does not serve');
 });
 
 test('arguments some clients send as strings are accepted exactly, never guessed', () => {
@@ -302,3 +329,155 @@ async function signIn(harness: Awaited<ReturnType<typeof newHarness>>): Promise<
   });
   return { refreshToken: tokens.refreshToken };
 }
+
+test('a pinned server will not connect a second mailbox', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  const { client, close } = await connect({ core: harness.core, env: harness.env, inbox: 'work' });
+  try {
+    const names = (await client.listTools()).tools.map((tool) => tool.name);
+    // A server started `--inbox work` exists to reach exactly that mailbox. A tool that adds a second one turns
+    // the pin into a suggestion, and the person who set it would have no way to know the surface had grown.
+    assert.equal(names.includes('gmail_inbox_add'), false, 'a pinned server must not add mailboxes');
+    assert.equal(names.includes('gmail_inbox_finish'), false);
+    // Saying what is missing changes nothing, so the read-only one stays.
+    assert.ok(names.includes('gmail_setup'));
+  } finally {
+    await close();
+  }
+});
+
+test('a pinned gmail_setup answers about its own mailbox and nothing else', async () => {
+  const harness = await newHarness({
+    accounts: [
+      { sub: 'sub-1', email: 'jo@example.test' },
+      { sub: 'sub-2', email: 'sam@example.test' },
+    ],
+  });
+  // Two clients, not one: with both mailboxes on `default` the client assertion below passes whether the filter
+  // is there or not, which is the shape of a test that reads as coverage and is not.
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  await harness.addInbox({
+    alias: 'personal',
+    email: 'sam@example.test',
+    sub: 'sub-2',
+    refreshToken: 'rt_y',
+    client: 'other',
+  });
+
+  // A client JSON sitting in the download directory. Unpinned this is the tool's whole point; pinned it is a
+  // path out of somebody's Downloads folder that a server narrowed to one mailbox has no business reporting.
+  const downloads = join(tempDir(), 'Downloads');
+  await mkdir(downloads, { recursive: true });
+  await writeFile(
+    join(downloads, 'client_secret_x.json'),
+    JSON.stringify({ installed: { client_id: 'cid.apps.googleusercontent.com', client_secret: 's' } }),
+  );
+  const env = { ...harness.env, XDG_DOWNLOAD_DIR: downloads };
+
+  const open = await connect({ core: harness.core, env });
+  try {
+    const all = (await open.client.callTool({ name: 'gmail_setup', arguments: {} })) as {
+      structuredContent: { inboxes: string[]; clients: string[]; candidates: unknown[] };
+    };
+    assert.deepEqual(all.structuredContent.inboxes.sort(), ['personal', 'work']);
+    assert.deepEqual(all.structuredContent.clients.sort(), ['default', 'other']);
+    assert.equal(all.structuredContent.candidates.length, 1);
+  } finally {
+    await open.close();
+  }
+
+  const pinned = await connect({ core: harness.core, env, inbox: 'work' });
+  try {
+    const scoped = (await pinned.client.callTool({ name: 'gmail_setup', arguments: {} })) as {
+      structuredContent: { inboxes: string[]; clients: string[]; candidates: unknown[] };
+    };
+    assert.deepEqual(scoped.structuredContent.inboxes, ['work'], 'a pinned server named another mailbox');
+    assert.deepEqual(scoped.structuredContent.candidates, [], 'a pinned server listed the download directory');
+    assert.deepEqual(scoped.structuredContent.clients, ['default'], 'a pinned server named another client');
+  } finally {
+    await pinned.close();
+  }
+});
+
+test('an MCP server cannot finish a re-authorisation somebody started at the CLI', async () => {
+  /*
+   * The bound that makes the whole MCP exception defensible.
+   *
+   * `gmail_inbox_finish` takes a flow id and nothing else, and `finishSignIn` will complete either kind of flow.
+   * A `reauth` re-points an *existing* mailbox at a possibly different client and tier — so without this, the one
+   * tool whose permission to exist is that it only ever adds could quietly finish somebody else's re-consent and
+   * change a mailbox that was already there.
+   */
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+
+  // Started the way the CLI starts one, in this process so nothing is left waiting.
+  const { startSignIn } = await import('../src/operations/signin.ts');
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', detached: false });
+
+  // Nobody is going to sign in, so the listener's promise would reject in ten minutes, long after this test is
+  // over. Claimed now so it lands here rather than as an unhandled rejection in whatever is running then.
+  reauth.listener?.result.catch(() => undefined);
+
+  const { client, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    const result = (await client.callTool({
+      name: 'gmail_inbox_finish',
+      arguments: { flowId: reauth.flowId, waitSeconds: 0 },
+    })) as ToolResult;
+    assert.equal(result.isError, true, 'a reauth flow was finished through MCP');
+    const said = (result.content ?? []).map((part) => part.text ?? '').join(' ');
+    /*
+     * The code, not the wording. Without the guard this call still fails — it waits zero seconds for a consent
+     * nobody gave and reports APPROVAL_PENDING — and that error's hint names `inbox reauth`, so a test matching
+     * on "reauth" passes whether the guard is there or not. It has to be the refusal, not any failure.
+     */
+    assert.match(said, /"code":"USAGE"/, `refused for the wrong reason: ${said}`);
+    assert.match(said, /can only finish a new mailbox/);
+  } finally {
+    await close();
+    await reauth.listener?.close();
+  }
+});
+
+test('a pinned gmail_setup does not call the setup done because some other mailbox exists', async () => {
+  /*
+   * Raised by review, at severity 7, with a scenario that cannot happen — a server pinned to a mailbox that was
+   * never connected, which refuses to start with NOT_FOUND. The bug underneath is real by another route: config
+   * is deliberately re-read on every call, so a mailbox removed from the CLI while the server runs leaves the
+   * pin dangling. With `next` and `done` computed machine-wide, the answer then said `inboxes: []` and
+   * `next: "done"` in the same breath — on the strength of somebody else's mailbox — and an agent reading that
+   * concludes the setup it was asked to finish is already finished.
+   */
+  const harness = await newHarness({
+    accounts: [
+      { sub: 'sub-1', email: 'jo@example.test' },
+      { sub: 'sub-2', email: 'sam@example.test' },
+    ],
+  });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  await harness.addInbox({ alias: 'personal', email: 'sam@example.test', sub: 'sub-2', refreshToken: 'rt_y' });
+
+  const { client, close } = await connect({ core: harness.core, env: harness.env, inbox: 'work' });
+  try {
+    // Removed after the server started, exactly as `agent-gmail inbox remove work` would while it runs.
+    await harness.core.config.update((config) => {
+      const { work: _removed, ...rest } = config.inboxes;
+      return { ...config, inboxes: rest };
+    });
+
+    const answer = (await client.callTool({ name: 'gmail_setup', arguments: {} })) as {
+      structuredContent: { next: string; done: string[]; inboxes: string[] };
+    };
+    assert.deepEqual(answer.structuredContent.inboxes, []);
+    assert.equal(answer.structuredContent.next, 'inbox', 'the pinned mailbox is gone; connecting it is what is next');
+    assert.ok(
+      !answer.structuredContent.done.includes('inbox'),
+      `"inbox" was called done on the strength of another mailbox: ${JSON.stringify(answer.structuredContent.done)}`,
+    );
+  } finally {
+    await close();
+  }
+});

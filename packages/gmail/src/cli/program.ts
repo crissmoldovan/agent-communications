@@ -44,6 +44,7 @@ import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
 import { askChallenge, askFor } from './prompt.ts';
 import {
+  CLIENT_KIND_LABEL,
   renderApprovals,
   renderAttachments,
   renderClientAdd,
@@ -65,6 +66,7 @@ import {
   renderSendAs,
   renderSendPreparation,
   renderSent,
+  renderSetupPlan,
   renderSignedIn,
   renderSignInStarted,
   renderThread,
@@ -154,8 +156,21 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
   const bodyText = async (options: Options, behaviour: { bodyOptional?: boolean } = {}): Promise<string> => {
     if (typeof options.text === 'string') return options.text;
     if (typeof options.file === 'string') {
-      const { readFile } = await import('node:fs/promises');
-      return readFile(String(options.file), 'utf8');
+      // Bounded at the size a message can be anyway: anything larger was going to be refused by `compose` a
+      // moment later, so the ceiling costs nothing — and a FIFO or a device at `--file` no longer reads until
+      // the process dies rather than failing at the point it was always going to fail.
+      const { readSmallFile } = await import('../operations/small-file.ts');
+      const { MAX_MESSAGE_BYTES } = await import('../domain/compose.ts');
+      const path = String(options.file);
+      const content = await readSmallFile(path, { follow: true, maxBytes: MAX_MESSAGE_BYTES });
+      if (!content.ok) {
+        throw new CommsError(
+          content.problem === 'missing' ? 'NOT_FOUND' : 'USAGE',
+          content.problem === 'too-large' ? `${path} is larger than a message can be` : `cannot read ${path}`,
+          { hint: 'Pass a regular file holding the message body, or use --text.' },
+        );
+      }
+      return content.text;
     }
     const stdin = streams.stdin as NodeJS.ReadableStream & { isTTY?: boolean };
     // On an update, no body means "keep the one that is there" rather than an error.
@@ -165,9 +180,26 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         hint: 'Pass --text "…", or --file <path>, or pipe the body in on standard input.',
       });
     }
-    const chunks: Buffer[] = [];
-    for await (const chunk of stdin) chunks.push(Buffer.from(chunk as Buffer));
-    const text = Buffer.concat(chunks).toString('utf8');
+    // Bounded the same way `--file` is, and at the same ceiling: a pipe is the easier of the two to point at
+    // something endless, and the size check in `compose` only runs once the whole thing is already in memory.
+    const { readBoundedStream } = await import('../operations/small-file.ts');
+    const { MAX_MESSAGE_BYTES } = await import('../domain/compose.ts');
+    const piped = await readBoundedStream(stdin, MAX_MESSAGE_BYTES);
+    if (!piped.ok) {
+      throw new CommsError(
+        'USAGE',
+        piped.problem === 'too-large'
+          ? 'the piped message body is larger than a message can be'
+          : 'the piped message body could not be read to the end',
+        {
+          hint:
+            piped.problem === 'too-large'
+              ? 'A Gmail message tops out at 35MB including attachments.'
+              : 'Whatever was piping the body stopped before it finished. Pass --text or --file instead.',
+        },
+      );
+    }
+    const text = piped.text;
     if (!text.trim()) {
       throw new CommsError('USAGE', 'the message body was empty', {
         hint: 'Pass --text "…", or --file <path>, or pipe the body in on standard input.',
@@ -949,12 +981,33 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         const raw =
           source === '-'
             ? await (async () => {
-                const chunks: Buffer[] = [];
-                for await (const chunk of streams.stdin as NodeJS.ReadableStream)
-                  chunks.push(Buffer.from(chunk as Buffer));
-                return Buffer.concat(chunks).toString('utf8');
+                const { readBoundedStream } = await import('../operations/small-file.ts');
+                const piped = await readBoundedStream(streams.stdin as NodeJS.ReadableStream, 4 * 1024 * 1024);
+                if (!piped.ok) {
+                  throw new CommsError(
+                    'USAGE',
+                    piped.problem === 'too-large'
+                      ? 'that is far larger than an undo receipt'
+                      : 'the piped undo receipt could not be read to the end',
+                    { hint: 'Pipe in the `undo` array from `agent-gmail organise … --json`.' },
+                  );
+                }
+                return piped.text;
               })()
-            : await (await import('node:fs/promises')).readFile(source, 'utf8');
+            : await (async () => {
+                // A receipt this tool wrote, so it is JSON and it is small. The bound is generous — a hundred
+                // thousand message ids — and it exists so `--from /dev/zero` fails instead of never returning.
+                const { readSmallFile } = await import('../operations/small-file.ts');
+                const content = await readSmallFile(source, { follow: true, maxBytes: 4 * 1024 * 1024 });
+                if (!content.ok) {
+                  throw new CommsError(
+                    content.problem === 'missing' ? 'NOT_FOUND' : 'USAGE',
+                    `cannot read the undo receipt at ${source}`,
+                    { hint: 'Pass the file `agent-gmail organise … --json` wrote, or pipe it in on stdin.' },
+                  );
+                }
+                return content.text;
+              })();
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw);
@@ -1124,6 +1177,388 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           force: Boolean(options.force),
         });
         writeResult(result, output(), (data) => renderInstall(data, globalOptions.color), streams);
+      }),
+    );
+
+  program
+    .command('setup')
+    .description('set this up from nothing: the Google client, a mailbox, and the agent connection')
+    .option('--client-json <path>', 'the OAuth client JSON, if you already have it')
+    .option('--inbox <alias>', 'the name to connect the first mailbox under')
+    .option('--email <address>', 'the address that mailbox must turn out to be')
+    .addOption(
+      new Option('--mcp-client <client>', 'register with this MCP client when the mailbox is connected').choices([
+        'claude-code',
+        'claude-desktop',
+        'codex',
+        'cursor',
+        'gemini',
+        'vscode',
+      ]),
+    )
+    .option('--replace-server', 'replace an MCP entry of the same name that is already there', false)
+    /*
+     * `--store` exists here because without it this command dead-ends on a machine with no keychain.
+     *
+     * `clientAdd` defaults to the keychain, probes it, and on a headless Linux box tells you to run the command
+     * again with `--store file` — a flag `setup` did not accept. The instruction was correct and impossible to
+     * follow, in the one command whose whole purpose is to be where a new install starts.
+     */
+    .addOption(new Option('--store <store>', 'where secrets are kept (first time only)').choices(['keychain', 'file']))
+    .option('--move', 'delete the downloaded client JSON once its secret is stored', false)
+    /*
+     * Parity with `mcp install`, which has had this since the start. Without it `setup` could only ever register
+     * the managed runtime — an `npm install` — so somebody working from a checkout had to leave this command to
+     * get `--launcher local`.
+     *
+     * Both call sites are tested, the headless one through `cursor` — a client configured by a file rather than
+     * by a CLI, so the registration lands on disk where a test can read which entry was written.
+     */
+    .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
+    .option('--restart', 'walk the Google Cloud steps again even if a client is registered', false)
+    .option('--no-tui', 'plain one-line prompts instead of lists and fields')
+    .option('--no-browser', 'print the links instead of opening them')
+    .action(
+      act(async (context, globalOptions, options: Options) => {
+        const { setupState, CONSOLE_STEPS } = await import('../operations/setup.ts');
+        const out = streams.stderr;
+        const bold = (text: string) => paint(globalOptions.color, 'bold', text);
+        const dim = (text: string) => paint(globalOptions.color, 'dim', text);
+
+        const { interactionFor, askText, askChoice, askYesNo } = await import('./tui.ts');
+        const mode = interactionFor({
+          streams,
+          env,
+          json: Boolean(globalOptions.json),
+          noInput: Boolean(globalOptions.noInput),
+          noTui: options.tui === false,
+          canPrompt: canPrompt(env, streams, { json: globalOptions.json, noInput: globalOptions.noInput }),
+        });
+        let state = await setupState(context);
+
+        if (mode === 'none') {
+          /*
+           * Nobody is here to answer a question — but that is not the same as nobody wanting anything done.
+           * An agent supplies the answers as flags, so each step either has what it needs and runs, or does not
+           * and the run stops there and says so. Printing the plan and doing nothing, whatever it was given, was
+           * the first version of this and it made every flag decorative.
+           *
+           * One step cannot be finished this way at all: consent is granted on Google's screen, in a browser
+           * this command does not drive. So the mailbox step goes as far as producing the link and the command
+           * that finishes it, and hands both back rather than waiting for something that is not going to happen.
+           */
+          const did: string[] = [];
+          let blocked: { step: string; needs: string; hint?: string } | null = null;
+          let handoff: { authUrl: string; finish: string } | null = null;
+
+          if (state.next === 'client') {
+            const path = options.clientJson ? String(options.clientJson) : '';
+            if (path) {
+              const { clientAdd } = await import('../operations/clients.ts');
+              const added = await clientAdd(context, {
+                path,
+                name: 'desktop',
+                ...(options.store ? { store: String(options.store) as 'keychain' | 'file' } : {}),
+                ...(options.move === true ? { move: true } : {}),
+              });
+              did.push(
+                `registered the OAuth client as "${added.name}" (secret in the ${added.store} store)` +
+                  (added.sourceRemoved ? ', and removed the downloaded file' : ''),
+              );
+              // Scanned, not skipped: this `state` is folded into the report below, and the report lists what is
+              // in the downloads directory.
+              state = await setupState(context);
+            } else {
+              const usable = state.candidates.find((candidate) => candidate.kind === 'desktop');
+              blocked = {
+                step: 'client',
+                needs: '--client-json <path>',
+                ...(usable ? { hint: `a Desktop client is already downloaded: ${usable.path}` } : {}),
+              };
+            }
+          }
+
+          // An explicit `--inbox` is a request, not a step in a sequence: most people have more than one
+          // mailbox, and the first one connected must not close the door on the rest.
+          if (!blocked && (state.next === 'inbox' || options.inbox)) {
+            const alias = options.inbox ? String(options.inbox) : '';
+            if (alias) {
+              const { startSignIn } = await import('../operations/signin.ts');
+              const started = await startSignIn(context, {
+                mode: 'add',
+                alias,
+                ...(options.email ? { email: String(options.email) } : {}),
+                detached: true,
+                ...(deps.listenerCommand ? { listenerCommand: deps.listenerCommand } : {}),
+              });
+              handoff = {
+                authUrl: started.authUrl,
+                finish: `agent-gmail inbox add --finish ${started.flowId} --wait 120`,
+              };
+              did.push(`started a sign-in for "${alias}"`);
+              blocked = {
+                step: 'inbox',
+                needs: 'the link opened and approved in a browser',
+                hint: 'This command does not open browsers or grant consent. Give the user the link, then run the finish command.',
+              };
+            } else {
+              blocked = { step: 'inbox', needs: '--inbox <alias> [--email <address>]' };
+            }
+          }
+
+          if (!blocked && (state.next === 'mcp' || options.mcpClient)) {
+            const which = options.mcpClient ? String(options.mcpClient) : '';
+            if (which) {
+              const { mcpInstall } = await import('../mcp/install.ts');
+              // `force` removes an existing entry before adding its replacement. Doing that silently, from a
+              // headless run, would take somebody's working server away on the strength of a flag they passed for
+              // a different reason — so it needs asking for, exactly as `mcp install` makes you ask.
+              const result = await mcpInstall(context, {
+                client: which as SupportedClient,
+                apply: true,
+                force: options.replaceServer === true,
+                ...(options.launcher ? { launcher: String(options.launcher) as 'managed' | 'npx' | 'local' } : {}),
+              });
+              // Only what happened. Reporting "registered" for an install that did not apply, or that failed its
+              // own start-up check, is the kind of claim the `did` list exists to make impossible.
+              if (result.applied && result.verified) did.push(`registered the server with ${which}`);
+              else
+                blocked = {
+                  step: 'mcp',
+                  needs: result.applied ? 'a server that starts' : 'a client this can write to',
+                  ...(result.verifyDetail ? { hint: result.verifyDetail } : {}),
+                };
+              state = await setupState(context);
+            } else {
+              blocked = { step: 'mcp', needs: '--mcp-client <client>' };
+            }
+          }
+
+          const report = { ...state, did, blocked, handoff };
+          writeResult(report, output(), () => renderSetupPlan(report, CONSOLE_STEPS, globalOptions.color), streams);
+          return;
+        }
+
+        // A second run says what it is resuming from, rather than silently doing something different from the
+        // first. Nothing here is destructive, so "start over" only re-walks the console; it removes nothing.
+        let walkConsole = state.next === 'client' || options.restart === true;
+        /*
+         * Set when a finished setup is asked to do more, so the steps below run for a state already past them.
+         *
+         * An explicit `--inbox` or `--mcp-client` sets it before anything is asked. Consuming the flags inside
+         * the mailbox loop was not enough: the loop is entered on `state.next === 'inbox'`, so
+         * `setup --inbox personal` on a machine that already has one mailbox never reached them — it went to the
+         * agent step, or asked "what would you like to do?" of somebody who had already said.
+         */
+        let addAnother = Boolean(options.inbox);
+        let addMcp = Boolean(options.mcpClient);
+        if (state.done.length > 0 && !options.restart && !addAnother && !addMcp) {
+          out.write(`${bold('Picking up where you left off.')}\n`);
+          if (state.clients.length > 0) out.write(`  done · client "${state.clients.join('", "')}" registered\n`);
+          if (state.inboxes.length > 0)
+            out.write(`  done · ${state.inboxes.length} mailbox(es): ${state.inboxes.join(', ')}\n`);
+          if (state.registeredWith.length > 0) out.write(`  done · connected to ${state.registeredWith.join(', ')}\n`);
+          if (state.next === 'done') {
+            // Not a dead end: "set up" is a state you pass through, not one you arrive at. Somebody running this
+            // again almost always wants another mailbox — the first one connected must not close that door.
+            const what = await askChoice(mode, streams, {
+              message: 'Everything is set up. What would you like to do?',
+              choices: [
+                { value: 'inbox', label: 'Connect another mailbox', hint: 'you can have as many as you like' },
+                {
+                  value: 'mcp',
+                  label: 'Register with another agent',
+                  hint: `already: ${state.registeredWith.join(', ')}`,
+                },
+                {
+                  value: 'console',
+                  label: 'Walk the Google Cloud steps again',
+                  hint: 'changes nothing on this machine',
+                },
+                { value: 'nothing', label: 'Nothing, thanks' },
+              ],
+              initial: 'inbox',
+            });
+            if (what === 'nothing') return;
+            if (what === 'console') walkConsole = true;
+            if (what === 'inbox') addAnother = true;
+            if (what === 'mcp') addMcp = true;
+            out.write('\n');
+          }
+          const choice = await askChoice(mode, streams, {
+            message: 'Continue from here, or start over?',
+            choices: [
+              { value: 'continue', label: 'Continue', hint: 'pick up at the next unfinished step' },
+              { value: 'restart', label: 'Start over', hint: 'walk the Google Cloud steps again; removes nothing' },
+            ],
+            initial: 'continue',
+          });
+          if (choice === 'restart') walkConsole = true;
+          out.write('\n');
+        } else {
+          out.write(`${bold('Setting up agent-gmail')}\n\n`);
+        }
+
+        // ── 1. The Google client ──────────────────────────────────────────────────────────────────────────────
+        if (walkConsole) {
+          out.write(
+            'Gmail only accepts calls from an OAuth client registered to a Google Cloud project, and it has to be\n' +
+              'yours — there is no shared one to borrow. This is once per person, and one client covers every\n' +
+              'mailbox you connect and everyone you share it with.\n\n',
+          );
+          for (const [index, step] of CONSOLE_STEPS.entries()) {
+            out.write(`${bold(`${index + 1}/${CONSOLE_STEPS.length}  ${step.title}`)}\n`);
+            out.write(`${dim(`      ${step.why}`)}\n`);
+            out.write(`      ${dim(step.url)}\n\n`);
+            for (const action of step.actions) out.write(`      • ${action}\n`);
+            for (const warning of step.avoid)
+              out.write(`      ${paint(globalOptions.color, 'yellow', '!')} ${warning}\n`);
+            out.write('\n');
+            if (options.browser !== false) openInBrowser(step.url);
+            await askFor(streams, { question: '      press Enter when that is done — ' });
+            out.write('\n');
+          }
+        }
+
+        if (state.next === 'client') {
+          let path = options.clientJson ? String(options.clientJson) : '';
+          const candidates = state.candidates;
+          if (!path && candidates.length > 0) {
+            const usable = candidates.find((candidate) => candidate.kind === 'desktop');
+            const picked = await askChoice(mode, streams, {
+              message: 'Which client file?',
+              choices: [
+                ...candidates.map((candidate) => ({
+                  value: candidate.path,
+                  label: candidate.path.split('/').pop() ?? candidate.path,
+                  hint: `${CLIENT_KIND_LABEL[candidate.kind] ?? candidate.kind} · downloaded ${new Date(candidate.modifiedAt).toLocaleString()}`,
+                })),
+                { value: '', label: 'Somewhere else…', hint: 'type a path' },
+              ],
+              ...(usable ? { initial: usable.path } : {}),
+            });
+            path = picked;
+          }
+          while (!path) {
+            path = await askText(mode, streams, {
+              message: 'Path to the downloaded client JSON',
+              placeholder: '~/Downloads/client_secret_….json',
+            });
+          }
+
+          const { clientAdd } = await import('../operations/clients.ts');
+          const added = await clientAdd(context, {
+            path,
+            name: 'desktop',
+            ...(options.store ? { store: String(options.store) as 'keychain' | 'file' } : {}),
+            ...(options.move === true ? { move: true } : {}),
+          });
+          out.write(`\n${bold('Client registered')} as "${added.name}".\n`);
+          // What happened, not what usually happens: this said "your keychain, never to a file" whatever the
+          // store turned out to be, including on the machines where the keychain is exactly what is missing.
+          out.write(
+            `${dim(
+              added.store === 'keychain'
+                ? 'The id went to your config; the secret to your keychain, never to a file.'
+                : // Not "because no keychain is available": `--store file` is a choice somebody can make on a
+                  // machine whose keychain works perfectly, and telling them otherwise is a guess reported as a fact.
+                  'The id went to your config; the secret to an owner-only file beside it, in the file store.',
+            )}\n`,
+          );
+          if (added.sourceRemoved) out.write(`${dim('The downloaded JSON has been deleted.')}\n`);
+          out.write('\n');
+          state = await setupState(context, { scanDownloads: false });
+        }
+
+        // ── 2. A mailbox ──────────────────────────────────────────────────────────────────────────────────────
+        /** Reads a flag once and forgets it, so the second mailbox is not offered the first one's name. */
+        const pending: Record<string, string> = {
+          inbox: options.inbox ? String(options.inbox).trim() : '',
+          email: options.email ? String(options.email).trim() : '',
+        };
+        const takeFlag = (name: 'inbox' | 'email'): string => {
+          const value = pending[name] ?? '';
+          pending[name] = '';
+          return value;
+        };
+
+        while (state.next === 'inbox' || addAnother) {
+          addAnother = false;
+          out.write(`${bold('Connect a mailbox')}\n`);
+          out.write(`${dim('Google will warn the app is not verified. That is expected for a client you made')}\n`);
+          out.write(`${dim('yourself: choose Advanced, then "Go to … (unsafe)", and leave every box ticked.')}\n\n`);
+          /*
+           * The flags are answers, not decoration — on this path too.
+           *
+           * `--inbox` and `--email` were advertised by `--help` and read only by the headless branch, so somebody
+           * at a terminal who passed them was asked the same two questions anyway. They are consumed once here,
+           * so the first mailbox uses them and "connect another" asks properly rather than proposing the same
+           * name a second time.
+           */
+          const alias =
+            takeFlag('inbox') ||
+            (await askText(mode, streams, {
+              message: 'A short name for it',
+              placeholder: 'work',
+              defaultValue: 'work',
+            }));
+          const email =
+            takeFlag('email') ||
+            (await askText(mode, streams, { message: 'Which address (blank to choose in the browser)' }));
+
+          const { startSignIn } = await import('../operations/signin.ts');
+          const started = await startSignIn(context, {
+            mode: 'add',
+            alias,
+            ...(email ? { email } : {}),
+            detached: false,
+            ...(deps.listenerCommand ? { listenerCommand: deps.listenerCommand } : {}),
+          });
+          out.write(`\n${renderSignInStarted(started, 'add', globalOptions.color)}\n`);
+          if (options.browser !== false) openInBrowser(started.authUrl);
+          if (started.listener) {
+            const signedIn = await started.listener.result;
+            out.write(`\n${renderSignedIn(signedIn, globalOptions.color)}\n\n`);
+          }
+          state = await setupState(context, { scanDownloads: false });
+          if (!(await askYesNo(mode, streams, { message: 'Connect another mailbox?', defaultYes: false }))) break;
+          out.write('\n');
+        }
+
+        // ── 3. The agent connection ───────────────────────────────────────────────────────────────────────────
+        if (state.next === 'mcp' || addMcp) {
+          const named = options.mcpClient ? String(options.mcpClient) : '';
+          const wanted = named !== '' || (await askYesNo(mode, streams, { message: 'Connect this to an agent?' }));
+          if (wanted) {
+            const which =
+              named ||
+              (await askChoice(mode, streams, {
+                message: 'Which client?',
+                choices: [
+                  { value: 'claude-code', label: 'Claude Code' },
+                  { value: 'claude-desktop', label: 'Claude Desktop' },
+                  { value: 'codex', label: 'Codex' },
+                  { value: 'cursor', label: 'Cursor' },
+                  { value: 'gemini', label: 'Gemini CLI' },
+                  { value: 'vscode', label: 'VS Code' },
+                ],
+                initial: 'claude-code',
+              }));
+            const { mcpInstall } = await import('../mcp/install.ts');
+            const result = await mcpInstall(context, {
+              client: which as SupportedClient,
+              apply: true,
+              force: options.replaceServer === true,
+              ...(options.launcher ? { launcher: String(options.launcher) as 'managed' | 'npx' | 'local' } : {}),
+            });
+            out.write(`\n${renderInstall(result, globalOptions.color)}\n`);
+          }
+        }
+
+        const final = await setupState(context, { scanDownloads: false });
+        out.write(`\n${bold('Done.')} ${final.inboxes.length} mailbox(es): ${final.inboxes.join(', ')}\n`);
+        out.write(`${dim(`Try: agent-gmail search "newer_than:7d" --inbox ${final.inboxes[0] ?? 'work'}`)}\n`);
+        out.write(`${dim('Add another with: agent-gmail inbox add <name> --email <address>')}\n`);
       }),
     );
 

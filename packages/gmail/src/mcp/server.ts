@@ -21,6 +21,8 @@ import {
   prepareSend,
   revokeApproval,
 } from '../operations/send.ts';
+import { CONSOLE_STEPS, setupState } from '../operations/setup.ts';
+import { finishSignIn, startSignIn } from '../operations/signin.ts';
 import { VERSION } from '../version.ts';
 import { inboxArgument, mcpBoolean, mcpInboxes, mcpInteger, mcpStringArray } from './schemas.ts';
 
@@ -52,6 +54,14 @@ export async function buildInstructions(context: GmailContext, pinned: string | 
   } catch {
     // A config that cannot be read is a problem for the tools to report, not a reason to refuse to start.
   }
+  /*
+   * A pinned server names its own mailbox and no other.
+   *
+   * These instructions are the first thing a model reads on connecting, and they used to list every alias on the
+   * machine whatever the server was pinned to — so `--inbox work` still told the model about the other five. The
+   * tools were scoped and the greeting was not, which is the leak arriving by the one route nobody scopes.
+   */
+  if (pinned) aliases = aliases.filter((alias) => alias === pinned);
   const listed = aliases.slice(0, MAX_ALIASES_IN_INSTRUCTIONS).join(', ');
   const more =
     aliases.length > MAX_ALIASES_IN_INSTRUCTIONS ? `, and ${aliases.length - MAX_ALIASES_IN_INSTRUCTIONS} more` : '';
@@ -775,6 +785,124 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     },
   );
 
+  /*
+   * Onboarding, over MCP.
+   *
+   * An agent asked to "set up Gmail" could previously do nothing at all: every tool here needed a mailbox, and
+   * nothing here could connect one. It had to tell the person to go and run a CLI, which is the moment most of
+   * them stop. These three make the same setup drivable from a conversation.
+   *
+   * What they cannot do is the part that matters — but the guarantee is narrower than "a person is present", and
+   * saying the wider thing would be a lie that other decisions then lean on.
+   *
+   * What is actually enforced: `gmail_inbox_add` goes as far as producing the link and stops. The token is minted
+   * by Google, to whoever is signed in at that browser, after Google's own consent screen. This code never sees a
+   * password, never chooses which account is granted, and cannot mint a credential for a mailbox that has not
+   * approved it.
+   *
+   * What is **not** enforced, and is outside the threat model: an agent already driving an authenticated browser
+   * can open that link and click through the consent screen itself, then call `gmail_inbox_finish`. There is no
+   * human-presence check here, and none is claimed. The reason that is acceptable rather than a hole is that such
+   * an agent already has the mailbox — it is holding a logged-in Gmail session, and can read, send and delete
+   * through it directly, without this software. OAuth consent it can already grant adds nothing it did not have.
+   *
+   * So the boundary this draws is against *this* process escalating on its own, not against a compromised
+   * browser. Anyone whose threat model includes an agent-controlled browser session should run the server
+   * `--read-only`, or pinned, and add mailboxes from the CLI.
+   */
+  server.registerTool(
+    'gmail_setup',
+    {
+      title: 'What setup still needs',
+      description:
+        'Where this machine is in connecting Gmail, and the one thing to do next: whether an OAuth client is registered, whether any mailbox is connected, and the Google Cloud steps with their links. Call this when asked to set up Gmail, before anything else. Changes nothing.',
+      inputSchema: z.object({}),
+      outputSchema: z.object({
+        next: z.string().describe('client, inbox, mcp or done — the one thing to do now'),
+        done: z.array(z.string()),
+        clients: z.array(z.string()),
+        inboxes: z.array(z.string()),
+        candidates: z
+          .array(z.object({ path: z.string(), kind: z.string(), modifiedAt: z.string() }))
+          .describe(
+            'downloaded client files; kind is desktop, web or unreadable — only desktop is usable. Always empty ' +
+              'on a server pinned to one mailbox, which reports only that mailbox.',
+          ),
+        consoleSteps: z.array(
+          z.object({
+            id: z.string(),
+            title: z.string(),
+            url: z.string(),
+            why: z.string(),
+            actions: z.array(z.string()),
+            avoid: z.array(z.string()),
+          }),
+        ),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () => {
+      try {
+        // A pinned server reports no candidates at all, so there is nothing to scan the downloads for.
+        const state = await setupState(context, { scanDownloads: !pinned });
+        /*
+         * A pinned server answers about its own mailbox and nothing else.
+         *
+         * Unpinned, this is the whole point of the tool: every mailbox, every client, and the client JSONs
+         * sitting in the download directory, so an agent can say what is missing. Pinned, the same answer is a
+         * leak — the server was narrowed to one mailbox, and `--inbox work` would still have named the other
+         * five aliases, the clients behind them, and the paths of files in a person's Downloads folder. None of
+         * that is needed to set up the mailbox this server serves.
+         */
+        // One snapshot, not two. This loaded the config again to find the pinned mailbox's client, so `inboxes`
+        // could come from `setupState`'s read and the verdict from a read a moment later — the same split this
+        // scoping exists to close.
+        const pinnedInbox = pinned ? state.inboxes.includes(pinned) : false;
+        const pinnedClient = pinned ? state.clientOf[pinned] : undefined;
+        /*
+         * `next` and `done` have to be scoped too, and this is not the same filter.
+         *
+         * The first version of this narrowed the three lists and left `next` and `done` computed from the whole
+         * machine. Usually consistent, because a pinned server refuses to start unless its mailbox exists — but
+         * config is re-read on every call, so a mailbox removed from the CLI while the server runs leaves it
+         * answering `inboxes: []` and `next: "done"` in the same breath, on the strength of *someone else's*
+         * mailbox. An agent reading that concludes the setup it was asked to finish is already finished.
+         *
+         * So a pinned server reports the pin's own state: no mailbox means the next thing to do is connect that
+         * mailbox, whatever else is on the machine.
+         */
+        const scoped = pinned
+          ? {
+              next: !pinnedInbox ? 'inbox' : state.registeredWith.length === 0 ? 'mcp' : 'done',
+              done: [
+                ...(pinnedClient && state.clients.includes(pinnedClient) ? (['client'] as const) : []),
+                ...(pinnedInbox ? (['inbox'] as const) : []),
+                ...(state.registeredWith.length > 0 ? (['mcp'] as const) : []),
+              ],
+            }
+          : { next: state.next, done: [...state.done] };
+
+        return reply({
+          next: scoped.next,
+          done: [...scoped.done],
+          clients: pinned ? (pinnedClient ? [pinnedClient] : []) : state.clients,
+          inboxes: pinned ? state.inboxes.filter((alias) => alias === pinned) : state.inboxes,
+          candidates: pinned ? [] : state.candidates,
+          consoleSteps: CONSOLE_STEPS.map((step) => ({
+            id: step.id,
+            title: step.title,
+            url: step.url,
+            why: step.why,
+            actions: [...step.actions],
+            avoid: [...step.avoid],
+          })),
+        });
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
   /**
    * Everything past here changes the mailbox, so `readOnly` decides whether it exists at all.
    *
@@ -784,6 +912,102 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
    * mailbox — but all of them write, and a server started read-only was started that way for a reason.
    */
   if (!options.readOnly) {
+    /*
+     * Connecting a mailbox is a write, so a read-only server does not offer it. `gmail_setup` stays outside this
+     * block: saying what is missing changes nothing, and a server with no mailboxes should still be able to
+     * explain why.
+     *
+     * A **pinned** server does not offer them either. One started `--inbox work` exists to reach exactly that
+     * mailbox, and a tool that adds a second one turns the pin into a suggestion — the person who pinned it
+     * would have no way to know the surface had grown. The design allows adding an inbox from MCP; it does not
+     * allow doing it to a server that was deliberately narrowed.
+     */
+    if (!pinned) {
+      server.registerTool(
+        'gmail_inbox_add',
+        {
+          title: 'Start connecting a mailbox',
+          description:
+            'Begin connecting a Gmail account. Returns a sign-in link and stops — this server does not open browsers and cannot grant the consent itself. Give the user the link, warn them Google will call the app unverified (Advanced → "Go to … (unsafe)" is expected for a client they made themselves), then call gmail_inbox_finish.',
+          inputSchema: z.object({
+            alias: z.string().min(1).describe('a short name for the mailbox, e.g. work'),
+            email: z.string().min(3).optional().describe('the address it must turn out to be; refuses any other'),
+            tier: z.string().optional().describe('read, draft or organize — how much access to ask for'),
+          }),
+          outputSchema: z.object({
+            flowId: z.string(),
+            authUrl: z.string().describe('show this to the person; it expires in ten minutes'),
+            expiresAt: z.string(),
+            nextTool: z.string().describe('call this once the user says the sign-in is done'),
+          }),
+          annotations: { readOnlyHint: false, openWorldHint: true },
+        },
+        async ({ alias, email, tier }) => {
+          try {
+            const started = await startSignIn(context, {
+              mode: 'add',
+              alias,
+              ...(email ? { email } : {}),
+              ...(tier ? { tier } : {}),
+              detached: true,
+            });
+            return reply({
+              flowId: started.flowId,
+              authUrl: started.authUrl,
+              expiresAt: started.expiresAt,
+              nextTool: 'gmail_inbox_finish',
+            });
+          } catch (error) {
+            return fail(error);
+          }
+        },
+      );
+
+      server.registerTool(
+        'gmail_inbox_finish',
+        {
+          title: 'Finish connecting a mailbox',
+          description:
+            'Complete a sign-in once Google has returned a grant for it. APPROVAL_PENDING means the browser flow has not completed yet and the link is still good — wait and call again, do not start a new one.',
+          inputSchema: z.object({
+            flowId: z.string().min(1),
+            waitSeconds: z
+              .number()
+              .int()
+              .min(0)
+              .max(120)
+              .optional()
+              .describe('how long to wait for the grant; default 60'),
+          }),
+          outputSchema: z.object({
+            alias: z.string(),
+            email: z.string(),
+            tier: z.string(),
+            reauthorised: z.boolean(),
+            missingScopes: z.array(z.string()).describe('boxes they unticked; empty is the good case'),
+          }),
+          annotations: { readOnlyHint: false, openWorldHint: true },
+        },
+        async ({ flowId, waitSeconds }) => {
+          try {
+            // `onlyMode` is the bound, not a convenience: a flow id is all this takes, and a `reauth` flow the
+            // CLI started would otherwise be finishable here — re-pointing an existing mailbox at another client
+            // and tier through a tool that is allowed to exist only because it adds.
+            const result = await finishSignIn(context, { flowId, waitSeconds: waitSeconds ?? 60, onlyMode: 'add' });
+            return reply({
+              alias: result.alias,
+              email: result.inbox.email,
+              tier: result.inbox.tier,
+              reauthorised: result.reauthorised,
+              missingScopes: result.missingScopes,
+            });
+          } catch (error) {
+            return fail(error);
+          }
+        },
+      );
+    }
+
     server.registerTool(
       'gmail_draft_create',
       {

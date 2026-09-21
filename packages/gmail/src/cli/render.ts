@@ -622,3 +622,119 @@ export function renderApprovals(records: ApprovalView[], color: boolean): string
     color,
   );
 }
+
+/**
+ * How each kind of downloaded client file is named to a person.
+ *
+ * Shared, because two surfaces show it and they had drifted: the list you choose from called a web client "will
+ * be refused" while the plan printed beside it called the same file "not usable" — two wordings for one problem,
+ * reading like two problems with two different fixes. Keyed loosely because the renderer takes a plain shape and
+ * an unknown kind is better described than dropped.
+ */
+export const CLIENT_KIND_LABEL: Record<string, string> = {
+  desktop: 'Desktop app',
+  web: 'Web application — will be refused',
+  unreadable: 'Not a client JSON — will be refused',
+};
+
+/**
+ * The setup, written out for somebody who cannot be prompted — an agent, a pipe, `--json`.
+ *
+ * Every step here needs a browser this code does not drive: the console, and Google's consent screen. So the answer for a
+ * non-interactive caller is the instructions rather than a refusal, and rather than half-running something that
+ * will stop at the first question.
+ */
+export function renderSetupPlan(
+  state: {
+    next: string;
+    done: readonly string[];
+    clients: string[];
+    inboxes: string[];
+    registeredWith: string[];
+    candidates: { path: string; kind: string; modifiedAt: string }[];
+    /** What this run changed, when it was driven by flags rather than by questions. */
+    did?: readonly string[] | undefined;
+    /** Why it stopped, if it did. */
+    blocked?: { step: string; needs: string; hint?: string | undefined } | null | undefined;
+    /** The link and the command, when the only thing left is a person approving it. */
+    handoff?: { authUrl: string; finish: string } | null | undefined;
+  },
+  steps: readonly { title: string; url: string; why: string; actions: readonly string[]; avoid: readonly string[] }[],
+  color: boolean,
+): string {
+  const lines: string[] = [];
+
+  // What this run actually changed, before anything about what is left. A caller that supplied flags did not ask
+  // for a plan and needs to know what happened first.
+  for (const action of state.did ?? []) lines.push(`${paint(color, 'green', 'done')} ${action}`);
+  if ((state.did ?? []).length > 0) lines.push('');
+
+  if (state.handoff) {
+    lines.push(paint(color, 'bold', 'This step needs a browser.'));
+    lines.push("Consent happens on Google's own screen, and this command cannot grant it. Show them this link:");
+    lines.push('');
+    lines.push(`  ${state.handoff.authUrl}`);
+    lines.push('');
+    lines.push('Then, once the browser flow has returned a grant:');
+    lines.push(`  ${state.handoff.finish}`);
+    return lines.join('\n');
+  }
+
+  if (state.next === 'done') {
+    lines.push('Already set up.');
+    lines.push(`  mailboxes: ${state.inboxes.join(', ')}`);
+    lines.push(`  registered with: ${state.registeredWith.join(', ')}`);
+    return lines.join('\n').trimStart();
+  }
+
+  if (state.blocked) {
+    lines.push(`${paint(color, 'bold', `Stopped at: ${state.blocked.step}`)}`);
+    lines.push(`Needs ${state.blocked.needs}.`);
+    if (state.blocked.hint) lines.push(paint(color, 'dim', state.blocked.hint));
+    lines.push('');
+  }
+
+  lines.push(paint(color, 'bold', 'Setup, for a terminal with a person at it'));
+  lines.push('');
+  lines.push('Run `agent-gmail setup` where you can answer questions and open a browser — or supply the answers');
+  lines.push('as flags and it will run without one, as far as the consent screen.');
+  lines.push('');
+  if (state.done.length > 0) lines.push(`Already done: ${state.done.join(', ')}.`);
+
+  if (state.clients.length === 0) {
+    lines.push('');
+    lines.push(paint(color, 'bold', 'A Google OAuth client — once per person, covers every mailbox'));
+    for (const [index, step] of steps.entries()) {
+      lines.push('');
+      lines.push(`  ${index + 1}. ${step.title}`);
+      lines.push(`     ${paint(color, 'dim', step.why)}`);
+      lines.push(`     ${paint(color, 'dim', step.url)}`);
+      for (const action of step.actions) lines.push(`       • ${action}`);
+      for (const warning of step.avoid) lines.push(`       ! ${warning}`);
+    }
+    lines.push('');
+    lines.push('  Then: agent-gmail setup --client-json <the downloaded JSON>');
+    for (const candidate of state.candidates) {
+      const note = CLIENT_KIND_LABEL[candidate.kind] ?? candidate.kind;
+      lines.push(`  ${paint(color, 'dim', `found: ${candidate.path} (${note}, ${candidate.modifiedAt})`)}`);
+    }
+  }
+
+  if (state.inboxes.length === 0) {
+    lines.push('');
+    lines.push(paint(color, 'bold', 'A mailbox'));
+    // `setup`'s own flags, because this is `setup`'s own output. It named `inbox add … --start` — a real command,
+    // but a different one, so the text told you to leave the thing you were running while `blocked.needs` beside
+    // it correctly said `--inbox <alias>`. Two answers to one question, in the same document.
+    lines.push('  agent-gmail setup --inbox work --email you@example.com');
+    lines.push('  then run the --finish command it prints, after signing in.');
+  }
+
+  if (state.registeredWith.length === 0) {
+    lines.push('');
+    lines.push(paint(color, 'bold', 'The agent connection'));
+    lines.push('  agent-gmail mcp install --client claude-code');
+  }
+
+  return lines.join('\n').trimEnd();
+}

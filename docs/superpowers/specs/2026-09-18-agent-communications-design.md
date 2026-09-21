@@ -200,9 +200,12 @@ permissions and ownership. On Windows the ACL defaults of `%APPDATA%` apply.
   moving its secret.
 - **Only user intent lives here.** Anything a running process updates (last successful refresh, last use,
   health, granted-scope drift, `refresh_token_expires_in`) lives in `<state>/inboxes/<id>.json` (§5.5).
-- **Concurrency.** Only CLI lifecycle commands write `config.json`, and every write is a read-modify-write under
-  an exclusive lock (`<state>/config.lock`: `O_EXCL`, holder pid and time, stale after 30 s), re-reading the file
-  inside the lock, then temp file + fsync + rename. **MCP servers never write `config.json`.** Readers check the
+- **Concurrency.** Lifecycle writes to `config.json` are a read-modify-write under an exclusive lock
+  (`<state>/config.lock`: `O_EXCL`, holder pid and time, stale after 30 s), re-reading the file inside the lock,
+  then temp file + fsync + rename. **The only write an MCP server may make is adding an inbox**, through
+  `gmail_inbox_finish`, under the same lock and subject to the bounds in §9 — a server that is `--read-only` or
+  pinned does not offer it, it can finish only a flow it started as an `add`, and no MCP tool writes anything
+  else. Every other lifecycle write is CLI-only. Readers check the
   file's (inode, mtime, size) on every call rather than relying on `fs.watch` (which stops firing after the first
   rename on Linux), so a tightened policy applies to the next tool call of an already-running server.
 
@@ -295,7 +298,11 @@ per-process memory.
 - **Capabilities are checked at call time** (§11). A tool or command whose scope was not granted for that inbox fails
   with `SCOPE_MISSING` (exit 77): "grant `organize`: `agent-gmail inbox reauth work --tier organize`".
 
-### 6.2 Commands (CLI; MCP gets read-only views only)
+### 6.2 Commands (CLI; MCP gets read-only views of lifecycle state, with one exception)
+
+> The exception is adding an inbox, added in 0.1.4 and specified with its reasoning and bounds in §5.2 and §9:
+> `gmail_setup` (read-only), `gmail_inbox_add` and `gmail_inbox_finish`. Everything else in this section is
+> CLI-only, and MCP sees it read-only.
 
 | Command | Behaviour |
 |---|---|
@@ -699,15 +706,58 @@ TTL); execution requires that token. Trash always requires a plan token. Every w
 - **Rate caps** (default 20/hour, 100/day per inbox) are counted from the shared send ledger, so parallel server
   processes (e.g. Claude Desktop's chat and Cowork instances **[V: gap-5]**) cannot multiply them; over the cap
   → exit 10 with the reset time.
-- **Policy changes are CLI-only, and loosening needs a person.** No MCP tool changes policy, adds or removes inboxes
-  or clients, or edits the elicitation allowlist. The core config store classifies every change and **refuses any
+- **Policy changes are CLI-only, and loosening needs a person.** No MCP tool changes policy, removes inboxes or
+  clients, or edits the elicitation allowlist. **Adding an inbox is the one exception, added deliberately in
+  0.1.4 — see below.** The core config store classifies every change and **refuses any
   that loosens a safety setting** unless the caller passes consent for exactly those settings — obtained by the CLI
   on an interactive TTY, with a typed challenge, no agent marker, and an audit entry. Loosening covers: an effective
   send policy moving towards `chat` (including through a looser default an inbox inherits), turning
   `riskEscalation` off, raising `sendCaps`, adding `attachRoots` or removing `attachDeny` entries, changing
   `downloadsDir`, adding `internalDomains`, adding an elicitation client, and moving secrets from keychain to files.
   Tightening never needs consent. `agentcomms config get|set <path>` is the supported editor, so nobody has to
-  hand-edit around the gate. New inboxes inherit the default policy (`sendPolicy` unset) and default their
+  hand-edit around the gate.
+
+  **The exception, and why it is one.** `gmail_inbox_add` and `gmail_inbox_finish` add an inbox from MCP. The
+  original rule said no MCP tool did, and it was written before there was any way to set this up from a
+  conversation: an agent asked to connect a mailbox could only tell the person to go and run a CLI, which is where
+  most people stop. That is a real cost, paid by everyone, to close a hole these two tools do not open.
+
+  They do not open it because **an inbox cannot be added without a consent this software cannot grant itself**.
+  `gmail_inbox_add` produces a Google sign-in URL and stops; nothing is written until `gmail_inbox_finish` finds a
+  grant approved on Google's own screen. The credential is minted by Google, to whoever is signed in at that
+  browser. This code never sees a password, never chooses which account is granted, and cannot produce a token for
+  a mailbox that has not approved it.
+
+  **The limit of that claim, stated rather than implied.** This is not a human-presence check, and nothing here
+  enforces one. An agent that already drives an authenticated browser can open the link, click through the consent
+  screen and then call `gmail_inbox_finish`, with no person involved. That is outside the threat model on purpose:
+  such an agent is holding a logged-in Gmail session and can already read, send and delete through it directly,
+  without this software at all. Consent it can already grant gives it nothing it did not have.
+
+  So the guarantee is bounded — *this process cannot escalate on its own* — and it is weaker than the typed
+  challenge protecting the other settings on this list, which does test for a person at a TTY. Anyone whose threat
+  model includes an agent-controlled browser session should run the server `--read-only` or pinned, and add
+  mailboxes from the CLI.
+
+  What the exception is **not** allowed to become, and what the code enforces:
+
+  - Both tools sit inside the read-only guard: a server started `--read-only` does not register them at all.
+  - A server pinned with `--inbox <alias>` refuses both, and `gmail_setup` on that server reports only the pinned
+    mailbox, only the client behind it, and no downloaded-file paths at all. A pinned server exists to reach
+    exactly one mailbox: a tool that adds a second one makes the pin a suggestion, and an answer naming the other
+    five aliases and the contents of a Downloads folder makes it a formality.
+  - Neither tool changes the policy or tier of a mailbox that already exists. A new inbox inherits the default
+    policy exactly as one added by the CLI does, and moving it to something looser is still CLI-only with a
+    challenge. `gmail_inbox_add` does take a `tier`, because a tier is the set of scopes to *request* — the person
+    reads those scopes on Google's consent screen and approves them there, so it is a proposal, not a setting.
+  - `gmail_inbox_finish` refuses any flow that is not an `add`. A flow id is all it takes, and a `reauth` flow
+    started from the CLI would otherwise be completable here, re-pointing an existing mailbox at another client
+    and tier through the one tool whose permission to exist is that it only ever adds.
+  - There is still no MCP tool that registers an OAuth **client**: that reads a file of the user's choosing and
+    writes a secret, with no third party attesting to anything.
+
+  `gmail_setup` is read-only and outside the guard: saying what is missing changes nothing, and a server with no
+  mailboxes should be able to explain why. New inboxes inherit the default policy (`sendPolicy` unset) and default their
   `internalDomains` to the inbox's own domain unless it is a public mailbox provider.
 - **Shell agents are T2, and the docs say so.** Skills fall back to the CLI, so an agent that uses them has a
   shell, and `script -q /dev/null …` makes any command see a TTY (verified on the author's machine). Terminal
@@ -868,6 +918,9 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
 | `gmail_trash`, `gmail_untrash` | mailbox write | destructive (trash) |
 | `gmail_send_prepare` | prepare | destructive:false |
 | `gmail_draft_send` | **send** | destructive, openWorld, not idempotent, requiresUserInteraction under `confirm` |
+| `gmail_setup` | read | readOnly — and on a pinned server it reports only that mailbox, its client, and no downloaded-file paths |
+| `gmail_inbox_add` | **config write** (the §5.2 exception) | openWorld; returns a sign-in URL and writes nothing; absent when `--read-only` or pinned |
+| `gmail_inbox_finish` | **config write** (the §5.2 exception) | openWorld; refuses any flow that is not an `add`; absent when `--read-only` or pinned |
 
 - **Results:** `structuredContent` conforming to a declared `outputSchema`, and the same JSON minified in one text
   block. Claude Code and Codex pass **only** `structuredContent` to the model and drop text blocks; Cursor passes

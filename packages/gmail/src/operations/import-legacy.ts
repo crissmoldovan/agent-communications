@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import {
   CommsError,
@@ -19,6 +19,7 @@ import { clientSecretRef, refreshTokenRef } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';
 import { getProfileWithToken } from '../gmail-api/profile.ts';
 import { findUngatedGmailServers, type LegacyServerFinding, listRegisteredServers } from './client-configs.ts';
+import { readSmallFile } from './small-file.ts';
 
 /**
  * Migration from `@artymclabin/gmail-mcp` (and the forks that share its layout), which keeps an OAuth client at
@@ -111,7 +112,20 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
       hint: 'That file holds the OAuth client the other server used; without it the tokens cannot be renewed.',
     });
   }
-  const parsedClient = parseClientJson(await readFile(keysFile, 'utf8'));
+  /*
+   * Bounded, and the symlink refused.
+   *
+   * These names come from reading somebody else's directory, not from this process choosing them, and what they
+   * hold is an OAuth client and a set of refresh tokens — the same payload class, and the same exposure, as the
+   * download scan that `setup` does.
+   */
+  const keysContent = await readSmallFile(keysFile, { follow: false });
+  if (!keysContent.ok) {
+    throw new CommsError('BAD_DATA', `${keysFile} is not a readable client JSON`, {
+      hint: 'It should be the small JSON the other server was given by Google Cloud.',
+    });
+  }
+  const parsedClient = parseClientJson(keysContent.text);
 
   const config = await context.config();
   const existingClient = Object.entries(config.clients).find(([, row]) => row.clientId === parsedClient.clientId);
@@ -151,7 +165,9 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
     const alias = uniqueAlias(aliasFromCredentialsFile(file), await context.config());
     let credentials: LegacyCredentials;
     try {
-      credentials = parseLegacyCredentials(await readFile(path, 'utf8'));
+      const content = await readSmallFile(path, { follow: false });
+      if (!content.ok) throw new CommsError('BAD_DATA', `${path} is not a readable credentials file`);
+      credentials = parseLegacyCredentials(content.text);
     } catch (error) {
       skipped.push({ alias, file: path, scopes: [], tier: 'read', problem: (error as CommsError).message });
       continue;

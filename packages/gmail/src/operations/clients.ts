@@ -1,4 +1,4 @@
-import { readFile, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
   type ClientConfig,
@@ -12,6 +12,7 @@ import {
 import { parseClientJson, probeClientCredentials } from '../auth/oauth.ts';
 import { clientSecretRef } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';
+import { MAX_CLIENT_BYTES, readSmallFile } from './small-file.ts';
 
 export interface ClientView {
   name: string;
@@ -49,16 +50,30 @@ export interface ClientAddResult extends ClientView {
 export async function clientAdd(context: GmailContext, options: ClientAddOptions): Promise<ClientAddResult> {
   const name = options.name ?? 'default';
   const path = resolve(expandHome(options.path, homeDirectory(context.env)));
-  let text: string;
-  try {
-    text = await readFile(path, 'utf8');
-  } catch (error) {
-    throw new CommsError('NOT_FOUND', `no file at ${path}`, {
-      hint: 'Download the client JSON from Google Cloud → Google Auth Platform → Clients, and pass its path.',
-      cause: error,
-    });
+  /*
+   * A bounded read of a path somebody typed.
+   *
+   * `readFile` on a name will read whatever is at the end of it, and this name arrives from a person or from
+   * `setup --client-json`: `/dev/zero` reads until the process dies, and a FIFO blocks until a writer appears
+   * that may never come. Neither is a client JSON, and neither should be the way this command ends. The symlink
+   * is followed here — unlike the download scan, this path is one the caller chose, so a link at it is theirs.
+   */
+  const file = await readSmallFile(path, { follow: true });
+  if (!file.ok) {
+    if (file.problem === 'missing') {
+      throw new CommsError('NOT_FOUND', `no file at ${path}`, {
+        hint: 'Download the client JSON from Google Cloud → Google Auth Platform → Clients, and pass its path.',
+      });
+    }
+    throw new CommsError(
+      'USAGE',
+      file.problem === 'not-a-file'
+        ? `${path} is not a file`
+        : `${path} is far too large to be a client JSON (over ${Math.round(MAX_CLIENT_BYTES / 1024)}KB)`,
+      { hint: 'Pass the JSON Google offered when the Desktop client was created; it is well under a kilobyte.' },
+    );
   }
-  const parsed = parseClientJson(text);
+  const parsed = parseClientJson(file.text);
   const config = await context.config();
   const existing = config.clients[name];
   if (existing && !options.replace) {

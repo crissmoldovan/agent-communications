@@ -53,5 +53,8 @@
     "nodemailer": "10.0.10",
     "p-retry": "^8.0.1",
     "zod": "catalog:"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.8.1"
   }
 }

@@ -56,6 +56,7 @@ Scripts should read these rather than parse output.
 | [`sendas`](#agent-gmail-sendas) | the addresses this mailbox can send as |
 | [`whoami`](#agent-gmail-whoami) | what Google says about an inbox, and how it is configured |
 | [`mcp`](#agent-gmail-mcp) | run the MCP server on stdio, for a client to connect to |
+| [`setup`](#agent-gmail-setup) | set this up from nothing: the Google client, a mailbox, and the agent connection |
 | [`doctor`](#agent-gmail-doctor) | check everything that has to work, and say how to fix what does not |
 
 ### `agent-gmail client`
@@ -757,6 +758,35 @@ agent-gmail mcp [options] [command]
 | `--inbox <alias>` | serve only this mailbox | — |
 | `--read-only` | leave out every tool that changes the mailbox (default: | — |
 | `false)` |  | — |
+
+### `agent-gmail setup`
+
+set this up from nothing: the Google client, a mailbox, and the agent connection
+
+```
+agent-gmail setup [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--client-json <path>` | the OAuth client JSON, if you already have it | — |
+| `--inbox <alias>` | the name to connect the first mailbox under | — |
+| `--email <address>` | the address that mailbox must turn out to be | — |
+| `--mcp-client <client>` | register with this MCP client when the mailbox is | — |
+| `connected (choices: "claude-code", "claude-desktop",` |  | — |
+| `"codex", "cursor", "gemini", "vscode")` |  | — |
+| `--replace-server` | replace an MCP entry of the same name that is already | — |
+| `there (default: false)` |  | — |
+| `--store <store>` | where secrets are kept (first time only) (choices: | — |
+| `"keychain", "file")` |  | — |
+| `--move` | delete the downloaded client JSON once its secret is | — |
+| `stored (default: false)` |  | — |
+| `--launcher <launcher>` | how the server is started (choices: "managed", "npx", | — |
+| `"local")` |  | — |
+| `--restart` | walk the Google Cloud steps again even if a client is | — |
+| `registered (default: false)` |  | — |
+| `--no-tui` | plain one-line prompts instead of lists and fields | — |
+| `--no-browser` | print the links instead of opening them | — |
 
 ### `agent-gmail doctor`
 
