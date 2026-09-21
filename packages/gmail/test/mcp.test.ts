@@ -66,6 +66,10 @@ test('the tool list is the same whatever is configured, and every tool says what
     'gmail_draft_update',
     'gmail_export',
     'gmail_followups',
+    // Onboarding is reachable over MCP too: an agent asked to "set up Gmail" could otherwise do nothing
+    // but tell the person to go and run a CLI, which is where most of them stop.
+    'gmail_inbox_add',
+    'gmail_inbox_finish',
     'gmail_inboxes_list',
     'gmail_label_create',
     'gmail_labels_list',
@@ -77,6 +81,7 @@ test('the tool list is the same whatever is configured, and every tool says what
     'gmail_send_list',
     'gmail_send_prepare',
     'gmail_sendas_list',
+    'gmail_setup',
     'gmail_thread_get',
     'gmail_thread_timeline',
     'gmail_trash',

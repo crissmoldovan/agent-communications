@@ -125,6 +125,19 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
 
    **Complete when:** you can say what `next` is and, if `blocked` is set, which flag it asked for.
 
+1a. **Over MCP, the same three steps are tools.** `gmail_setup` answers what is next and returns the
+   Google Cloud steps with their links, so you can walk somebody through the console without a shell.
+   `gmail_inbox_add` starts a sign-in and returns `authUrl` — it connects nothing on its own. Show the
+   person that link, warn them about the unverified-app screen *before* they meet it, then
+   `gmail_inbox_finish` with the `flowId`. `APPROVAL_PENDING` means they have not finished yet and the
+   link is still good: wait and call again, never start a second one.
+
+   There is no MCP tool that registers the OAuth client, and that is deliberate — it reads a file of
+   theirs and writes a secret. Ask them to run `agent-gmail client add <path>`, or `agent-gmail setup`,
+   which walks the console too.
+   **Complete when:** you have used `gmail_setup` to say what is next, or established you have a shell
+   and are using the CLI instead.
+
 1b. **Drive it with flags, and stop where a person is required.** Each step runs when you supply its
    answer and stops when you do not:
 
