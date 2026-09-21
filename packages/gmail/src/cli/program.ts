@@ -1157,9 +1157,77 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         let state = await setupState(context);
 
         if (mode === 'none') {
-          // Every step needs a person: a browser for the console, a human at the consent screen. So the answer for
-          // a non-interactive caller is the whole plan, not a refusal and not a half-run setup that stalls.
-          writeResult(state, output(), () => renderSetupPlan(state, CONSOLE_STEPS, globalOptions.color), streams);
+          /*
+           * Nobody is here to answer a question — but that is not the same as nobody wanting anything done.
+           * An agent supplies the answers as flags, so each step either has what it needs and runs, or does not
+           * and the run stops there and says so. Printing the plan and doing nothing, whatever it was given, was
+           * the first version of this and it made every flag decorative.
+           *
+           * One step cannot be finished this way at all: consent happens in a browser, in front of a person. So
+           * the mailbox step goes as far as producing the link and the command that finishes it, and hands both
+           * back rather than waiting for something that is not going to happen.
+           */
+          const did: string[] = [];
+          let blocked: { step: string; needs: string; hint?: string } | null = null;
+          let handoff: { authUrl: string; finish: string } | null = null;
+
+          if (state.next === 'client') {
+            const path = options.clientJson ? String(options.clientJson) : '';
+            if (path) {
+              const { clientAdd } = await import('../operations/clients.ts');
+              const added = await clientAdd(context, { path, name: 'desktop' });
+              did.push(`registered the OAuth client as "${added.name}"`);
+              state = await setupState(context);
+            } else {
+              const usable = state.candidates.find((candidate) => candidate.kind === 'desktop');
+              blocked = {
+                step: 'client',
+                needs: '--client-json <path>',
+                ...(usable ? { hint: `a Desktop client is already downloaded: ${usable.path}` } : {}),
+              };
+            }
+          }
+
+          if (!blocked && state.next === 'inbox') {
+            const alias = options.inbox ? String(options.inbox) : '';
+            if (alias) {
+              const { startSignIn } = await import('../operations/signin.ts');
+              const started = await startSignIn(context, {
+                mode: 'add',
+                alias,
+                ...(options.email ? { email: String(options.email) } : {}),
+                detached: true,
+                ...(deps.listenerCommand ? { listenerCommand: deps.listenerCommand } : {}),
+              });
+              handoff = {
+                authUrl: started.authUrl,
+                finish: `agent-gmail inbox add --finish ${started.flowId} --wait 120`,
+              };
+              did.push(`started a sign-in for "${alias}"`);
+              blocked = {
+                step: 'inbox',
+                needs: 'a person to open the link and approve it',
+                hint: 'Consent happens in a browser. Show them the link, then run the finish command.',
+              };
+            } else {
+              blocked = { step: 'inbox', needs: '--inbox <alias> [--email <address>]' };
+            }
+          }
+
+          if (!blocked && state.next === 'mcp') {
+            const which = options.mcpClient ? String(options.mcpClient) : '';
+            if (which) {
+              const { mcpInstall } = await import('../mcp/install.ts');
+              await mcpInstall(context, { client: which as SupportedClient, apply: true, force: true });
+              did.push(`registered the server with ${which}`);
+              state = await setupState(context);
+            } else {
+              blocked = { step: 'mcp', needs: '--mcp-client <client>' };
+            }
+          }
+
+          const report = { ...state, did, blocked, handoff };
+          writeResult(report, output(), () => renderSetupPlan(report, CONSOLE_STEPS, globalOptions.color), streams);
           return;
         }
 

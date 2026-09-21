@@ -638,22 +638,52 @@ export function renderSetupPlan(
     inboxes: string[];
     registeredWith: string[];
     candidates: { path: string; kind: string; modifiedAt: string }[];
+    /** What this run changed, when it was driven by flags rather than by questions. */
+    did?: readonly string[] | undefined;
+    /** Why it stopped, if it did. */
+    blocked?: { step: string; needs: string; hint?: string | undefined } | null | undefined;
+    /** The link and the command, when the only thing left is a person approving it. */
+    handoff?: { authUrl: string; finish: string } | null | undefined;
   },
   steps: readonly { title: string; url: string; why: string; actions: readonly string[]; avoid: readonly string[] }[],
   color: boolean,
 ): string {
   const lines: string[] = [];
+
+  // What this run actually changed, before anything about what is left. A caller that supplied flags did not ask
+  // for a plan and needs to know what happened first.
+  for (const action of state.did ?? []) lines.push(`${paint(color, 'green', 'done')} ${action}`);
+  if ((state.did ?? []).length > 0) lines.push('');
+
+  if (state.handoff) {
+    lines.push(paint(color, 'bold', 'A person has to approve this one.'));
+    lines.push('Consent happens in a browser and cannot be automated. Show them this link:');
+    lines.push('');
+    lines.push(`  ${state.handoff.authUrl}`);
+    lines.push('');
+    lines.push('Then, once they have approved it:');
+    lines.push(`  ${state.handoff.finish}`);
+    return lines.join('\n');
+  }
+
   if (state.next === 'done') {
     lines.push('Already set up.');
     lines.push(`  mailboxes: ${state.inboxes.join(', ')}`);
     lines.push(`  registered with: ${state.registeredWith.join(', ')}`);
-    return lines.join('\n');
+    return lines.join('\n').trimStart();
+  }
+
+  if (state.blocked) {
+    lines.push(`${paint(color, 'bold', `Stopped at: ${state.blocked.step}`)}`);
+    lines.push(`Needs ${state.blocked.needs}.`);
+    if (state.blocked.hint) lines.push(paint(color, 'dim', state.blocked.hint));
+    lines.push('');
   }
 
   lines.push(paint(color, 'bold', 'Setup, for a terminal with a person at it'));
   lines.push('');
-  lines.push('Run `agent-gmail setup` where you can answer questions and open a browser. Everything below needs');
-  lines.push('one of those, which is why this printed the plan instead of doing it.');
+  lines.push('Run `agent-gmail setup` where you can answer questions and open a browser — or supply the answers');
+  lines.push('as flags and it will run without one, as far as the consent screen.');
   lines.push('');
   if (state.done.length > 0) lines.push(`Already done: ${state.done.join(', ')}.`);
 
