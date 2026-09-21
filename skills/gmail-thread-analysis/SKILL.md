@@ -2,7 +2,7 @@
 name: gmail-thread-analysis
 description: "Brief the user on one Gmail conversation: a computed timeline of who wrote what and when, then your own labelled reading of decisions, asks, commitments, whose turn it is and how urgent it looks. Symptoms: 'what's going on in this thread?', 'did we agree a date?', 'who owes what here?', 'catch me up on this'. Not for finding the thread — gmail-search does that."
 license: MIT
-compatibility: "@agentcomms/gmail@0.1.3"
+compatibility: "@agentcomms/gmail@0.1.4"
 metadata:
   group: communications
   lifecycle: release

@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/gmail",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Gmail for coding agents: the agent-gmail CLI, an MCP server and a library — search, read, analyse and draft across many inboxes, with sending gated by approval.",
   "type": "module",
   "license": "MIT",

@@ -5,6 +5,8 @@ together under one version.
 
 ## Unreleased
 
+## 0.1.4
+
 **Setting this up was a diagnostic, and now it is a command.** The first thing a new install told you to do was
 run `doctor` — which answers "what is broken" for a setup that used to work, and so handed somebody with an empty
 machine a repair instruction naming a downloaded file they did not have and could not get without leaving the
@@ -62,6 +64,12 @@ server `--read-only` or pinned and add mailboxes from the CLI.
   read until the process died, and `setup --client-json` reaches the same code.
 - **The symlink refusal did nothing on Windows.** `O_NOFOLLOW` has no Windows equivalent, so the guard was
   silently absent on one of the three platforms this ships to. It is now enforced everywhere.
+- **`setup` could not finish on a machine without a keychain.** `client add` defaults to the system keychain,
+  probes it, and on a headless Linux box or a container tells you to run the command again with `--store file` —
+  a flag `setup` did not accept. Correct advice, impossible to follow, in the one command that exists to be where
+  a new install starts. `setup` now takes `--store`, `--move` and `--launcher`, the same three `client add` and
+  `mcp install` have, and reports which store the secret actually went to rather than always claiming the
+  keychain.
 - **A prerelease would have become `latest`.** npm moves `latest` on every publish that does not name another tag,
   so a `v0.1.4-rc.1` tag would have made a release candidate the version `npm i @agentcomms/gmail` installs, for
   everybody, immediately. The release workflow reads the tag and passes `--tag next` for any version with a hyphen
