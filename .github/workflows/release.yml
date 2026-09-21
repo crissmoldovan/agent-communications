@@ -103,12 +103,23 @@ jobs:
       - run: pnpm verify:packages
 
       # In dependency order: a consumer installing gmail must find the exact core it pins already on the registry.
+      #
+      # `--tag` is not optional. npm moves `latest` on every publish that does not name another tag, so a
+      # `v1.2.3-rc.1` tag would have made a release candidate the version `npm i @agentcomms/gmail` installs — for
+      # everybody, immediately. The version validator in `scripts/release.mjs` already accepts a prerelease string,
+      # so the script invited exactly the shape the workflow then mishandled.
       - name: publish
         run: |
           set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          case "$version" in
+            *-*) tag=next ;;
+            *)   tag=latest ;;
+          esac
+          echo "publishing $version under the \"$tag\" dist-tag"
           for package in core gmail gmail-mcp; do
             echo "::group::@agentcomms/$package"
-            pnpm --filter "@agentcomms/$package" publish --access public --no-git-checks --provenance
+            pnpm --filter "@agentcomms/$package" publish --access public --no-git-checks --provenance --tag "$tag"
             echo "::endgroup::"
           done
 
