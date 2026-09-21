@@ -1214,6 +1214,8 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
               const { clientAdd } = await import('../operations/clients.ts');
               const added = await clientAdd(context, { path, name: 'desktop' });
               did.push(`registered the OAuth client as "${added.name}"`);
+              // Scanned, not skipped: this `state` is folded into the report below, and the report lists what is
+              // in the downloads directory.
               state = await setupState(context);
             } else {
               const usable = state.candidates.find((candidate) => candidate.kind === 'desktop');
@@ -1389,7 +1391,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           const added = await clientAdd(context, { path, name: 'desktop' });
           out.write(`\n${bold('Client registered')} as "${added.name}".\n`);
           out.write(`${dim('The id went to your config; the secret to your keychain, never to a file.')}\n\n`);
-          state = await setupState(context);
+          state = await setupState(context, { scanDownloads: false });
         }
 
         // ── 2. A mailbox ──────────────────────────────────────────────────────────────────────────────────────
@@ -1442,7 +1444,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             const signedIn = await started.listener.result;
             out.write(`\n${renderSignedIn(signedIn, globalOptions.color)}\n\n`);
           }
-          state = await setupState(context);
+          state = await setupState(context, { scanDownloads: false });
           if (!(await askYesNo(mode, streams, { message: 'Connect another mailbox?', defaultYes: false }))) break;
           out.write('\n');
         }
@@ -1476,7 +1478,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           }
         }
 
-        const final = await setupState(context);
+        const final = await setupState(context, { scanDownloads: false });
         out.write(`\n${bold('Done.')} ${final.inboxes.length} mailbox(es): ${final.inboxes.join(', ')}\n`);
         out.write(`${dim(`Try: agent-gmail search "newer_than:7d" --inbox ${final.inboxes[0] ?? 'work'}`)}\n`);
         out.write(`${dim('Add another with: agent-gmail inbox add <name> --email <address>')}\n`);

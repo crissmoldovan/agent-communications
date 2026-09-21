@@ -262,8 +262,20 @@ export async function findClientJson(env: NodeJS.ProcessEnv = process.env): Prom
     .map(({ at: _at, ...candidate }) => candidate);
 }
 
+export interface SetupStateOptions {
+  /**
+   * Whether to scan the download directory for client files.
+   *
+   * On by default, because the answer to "what is next" usually needs it. Off where the candidates are thrown
+   * away: the setup flow re-reads this state after every step, and a pinned MCP server drops the list entirely —
+   * so both were paying for a few hundred `lstat`s and up to forty opened files to produce something nobody read.
+   * The setup command alone did it five times in a row.
+   */
+  scanDownloads?: boolean;
+}
+
 /** Where this machine is in the setup, what is already behind it, and the single next thing to do. */
-export async function setupState(context: GmailContext): Promise<SetupState> {
+export async function setupState(context: GmailContext, options: SetupStateOptions = {}): Promise<SetupState> {
   const config = await context.core.config.load();
   const clients = Object.keys(config.clients);
   const inboxes = Object.keys(config.inboxes);
@@ -289,5 +301,6 @@ export async function setupState(context: GmailContext): Promise<SetupState> {
 
   const next =
     clients.length === 0 ? 'client' : inboxes.length === 0 ? 'inbox' : registeredWith.length === 0 ? 'mcp' : 'done';
-  return { next, done, clients, inboxes, registeredWith, candidates: await findClientJson(context.env) };
+  const candidates = options.scanDownloads === false ? [] : await findClientJson(context.env);
+  return { next, done, clients, inboxes, registeredWith, candidates };
 }

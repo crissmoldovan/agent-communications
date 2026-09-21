@@ -843,7 +843,8 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     },
     async () => {
       try {
-        const state = await setupState(context);
+        // A pinned server reports no candidates at all, so there is nothing to scan the downloads for.
+        const state = await setupState(context, { scanDownloads: !pinned });
         /*
          * A pinned server answers about its own mailbox and nothing else.
          *
@@ -854,10 +855,34 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
          * that is needed to set up the mailbox this server serves.
          */
         const config = await context.core.config.load();
-        const pinnedClient = pinned ? config.inboxes[pinned]?.client : undefined;
+        const pinnedInbox = pinned ? config.inboxes[pinned] : undefined;
+        const pinnedClient = pinnedInbox?.client;
+        /*
+         * `next` and `done` have to be scoped too, and this is not the same filter.
+         *
+         * The first version of this narrowed the three lists and left `next` and `done` computed from the whole
+         * machine. Usually consistent, because a pinned server refuses to start unless its mailbox exists — but
+         * config is re-read on every call, so a mailbox removed from the CLI while the server runs leaves it
+         * answering `inboxes: []` and `next: "done"` in the same breath, on the strength of *someone else's*
+         * mailbox. An agent reading that concludes the setup it was asked to finish is already finished.
+         *
+         * So a pinned server reports the pin's own state: no mailbox means the next thing to do is connect that
+         * mailbox, whatever else is on the machine.
+         */
+        const scoped = pinned
+          ? {
+              next: !pinnedInbox ? 'inbox' : state.registeredWith.length === 0 ? 'mcp' : 'done',
+              done: [
+                ...(pinnedClient && config.clients[pinnedClient] ? (['client'] as const) : []),
+                ...(pinnedInbox ? (['inbox'] as const) : []),
+                ...(state.registeredWith.length > 0 ? (['mcp'] as const) : []),
+              ],
+            }
+          : { next: state.next, done: [...state.done] };
+
         return reply({
-          next: state.next,
-          done: [...state.done],
+          next: scoped.next,
+          done: [...scoped.done],
           clients: pinned ? (pinnedClient ? [pinnedClient] : []) : state.clients,
           inboxes: pinned ? state.inboxes.filter((alias) => alias === pinned) : state.inboxes,
           candidates: pinned ? [] : state.candidates,

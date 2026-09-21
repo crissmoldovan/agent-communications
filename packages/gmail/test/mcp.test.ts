@@ -441,3 +441,43 @@ test('an MCP server cannot finish a re-authorisation somebody started at the CLI
     await reauth.listener?.close();
   }
 });
+
+test('a pinned gmail_setup does not call the setup done because some other mailbox exists', async () => {
+  /*
+   * Raised by review, at severity 7, with a scenario that cannot happen — a server pinned to a mailbox that was
+   * never connected, which refuses to start with NOT_FOUND. The bug underneath is real by another route: config
+   * is deliberately re-read on every call, so a mailbox removed from the CLI while the server runs leaves the
+   * pin dangling. With `next` and `done` computed machine-wide, the answer then said `inboxes: []` and
+   * `next: "done"` in the same breath — on the strength of somebody else's mailbox — and an agent reading that
+   * concludes the setup it was asked to finish is already finished.
+   */
+  const harness = await newHarness({
+    accounts: [
+      { sub: 'sub-1', email: 'jo@example.test' },
+      { sub: 'sub-2', email: 'sam@example.test' },
+    ],
+  });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  await harness.addInbox({ alias: 'personal', email: 'sam@example.test', sub: 'sub-2', refreshToken: 'rt_y' });
+
+  const { client, close } = await connect({ core: harness.core, env: harness.env, inbox: 'work' });
+  try {
+    // Removed after the server started, exactly as `agent-gmail inbox remove work` would while it runs.
+    await harness.core.config.update((config) => {
+      const { work: _removed, ...rest } = config.inboxes;
+      return { ...config, inboxes: rest };
+    });
+
+    const answer = (await client.callTool({ name: 'gmail_setup', arguments: {} })) as {
+      structuredContent: { next: string; done: string[]; inboxes: string[] };
+    };
+    assert.deepEqual(answer.structuredContent.inboxes, []);
+    assert.equal(answer.structuredContent.next, 'inbox', 'the pinned mailbox is gone; connecting it is what is next');
+    assert.ok(
+      !answer.structuredContent.done.includes('inbox'),
+      `"inbox" was called done on the strength of another mailbox: ${JSON.stringify(answer.structuredContent.done)}`,
+    );
+  } finally {
+    await close();
+  }
+});

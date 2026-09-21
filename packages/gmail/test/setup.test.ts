@@ -8,7 +8,7 @@ import { canPrompt } from '@agentcomms/core';
 import { interactionFor } from '../src/cli/tui.ts';
 import { GmailContext } from '../src/context.ts';
 import { clientAdd } from '../src/operations/clients.ts';
-import { CONSOLE_STEPS, findClientJson } from '../src/operations/setup.ts';
+import { CONSOLE_STEPS, findClientJson, setupState } from '../src/operations/setup.ts';
 import { newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
 
 /** A well-formed Desktop client, for the cases that are about something other than its contents. */
@@ -326,4 +326,54 @@ test('the newest client wins even in a directory of hundreds, because dates come
   assert.match(found[0]?.path ?? '', /the_one_just_downloaded/, 'the newest file was not offered first');
   // Still bounded: hundreds of matches must not mean hundreds of opened files.
   assert.ok(found.length <= 40, `opened ${found.length} files`);
+});
+
+test('a registered server is what marks the agent step done, and it is matched on the package name', async () => {
+  /*
+   * `setupState` decides the MCP step is behind you by joining each registered server's command and args and
+   * looking for `agentcomms/gmail` in the result. That is a string match against this package's own name, with
+   * nothing tying the two together — rename or re-scope the package and every install silently reports the agent
+   * step as still to do, forever, with no test going red.
+   *
+   * So the match is pinned here, in both spellings a client config can carry it, against a near miss that must
+   * not count.
+   */
+  const home = await tempDir();
+  await writeFile(
+    join(home, '.claude.json'),
+    JSON.stringify({
+      mcpServers: {
+        gmail: { command: 'npx', args: ['-y', '@agentcomms/gmail-mcp@0.1.4'] },
+        // A different Gmail server entirely: present on plenty of machines, and not this one.
+        other: { command: 'npx', args: ['-y', '@somebody/gmail-mcp'] },
+      },
+    }),
+  );
+  await mkdir(join(home, '.codex'), { recursive: true });
+  await writeFile(
+    join(home, '.codex', 'config.toml'),
+    ['[mcp_servers.gmail]', 'command = "node"', 'args = ["/opt/agentcomms/gmail/dist/cli.mjs", "mcp", "serve"]'].join(
+      '\n',
+    ),
+  );
+
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  const context = new GmailContext({ core: harness.core, env: { ...harness.env, HOME: home, USERPROFILE: home } });
+
+  const state = await setupState(context, { scanDownloads: false });
+  assert.deepEqual(state.registeredWith.sort(), ['claude-code', 'codex'], 'the registered servers were not matched');
+  assert.ok(state.done.includes('mcp'));
+  assert.equal(state.next, 'done');
+});
+
+test('scanDownloads: false really does not scan', async () => {
+  // The setup command asks for this five times in a row and a pinned server discards the result, so "skip it"
+  // has to mean skipped rather than computed-and-ignored — a few hundred `lstat`s and up to forty opened files.
+  const dir = await downloads([{ name: 'client_secret_real.json', body: DESKTOP, minutesAgo: 1 }]);
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: { ...harness.env, XDG_DOWNLOAD_DIR: dir } });
+
+  assert.equal((await setupState(context)).candidates.length, 1, 'the default still scans');
+  assert.deepEqual((await setupState(context, { scanDownloads: false })).candidates, []);
 });
