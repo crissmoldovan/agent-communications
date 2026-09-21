@@ -669,7 +669,13 @@ test('an interactive setup with an explicit flag does not ask what you already s
    */
   const said = `${result.stdout}${result.stderr}`;
   assert.match(said, /MCP configuration of codex|registered/i, `the agent step never ran:\n${said}`);
-  // And the entry is this package's own CLI — `--launcher local` points at the checkout, so the marker is the
-  // package directory rather than the `@agentcomms` scope a managed install would carry.
-  assert.match(said, /packages[/\\]gmail[/\\].*cli\./, `the entry it produced was not ours:\n${said}`);
+  /*
+   * The entry is this package's own CLI — `--launcher local` points at the checkout, so the marker is the package
+   * directory rather than the `@agentcomms` scope a managed install would carry.
+   *
+   * `[/\\]+` rather than `[/\\]`: this is matched against a JSON document, and a Windows path inside JSON has
+   * its separators escaped, so `packages\gmail` arrives as `packages\\gmail`. A one-character class matched the
+   * first backslash and then looked for `g`.
+   */
+  assert.match(said, /packages[/\\]+gmail[/\\]+.*cli\./, `the entry it produced was not ours:\n${said}`);
 });
