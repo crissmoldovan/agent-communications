@@ -324,6 +324,18 @@ async function defaultListenerCommand(): Promise<ListenerEntry> {
 
 export interface FinishOptions {
   flowId: string;
+  /**
+   * Refuse a flow that is not this kind.
+   *
+   * A flow id is the only thing `finish` needs, and the two kinds do very different things: an `add` creates a
+   * mailbox, a `reauth` re-points an existing one at a possibly different client and tier. The MCP surface is
+   * allowed the first and not the second, and without this it could finish a `reauth` the CLI had started —
+   * changing a mailbox somebody else was in the middle of re-authorising, through a tool whose whole permission
+   * to exist is that it only ever adds.
+   *
+   * The CLI leaves it unset: it finishes whatever it started.
+   */
+  onlyMode?: 'add' | 'reauth' | undefined;
   /** The address bar URL, pasted back on a machine with no browser of its own. */
   url?: string | undefined;
   /** How long to wait for the detached listener, in seconds. */
@@ -337,6 +349,16 @@ export interface FinishOptions {
  */
 export async function finishSignIn(context: GmailContext, options: FinishOptions): Promise<ConsentResult> {
   const flow = await context.flows.get(options.flowId);
+  if (options.onlyMode && flow.mode !== options.onlyMode) {
+    const wanted = options.onlyMode === 'add' ? 'a new mailbox' : 're-authorising an existing mailbox';
+    throw new CommsError(
+      'USAGE',
+      `that sign-in is ${flow.mode === 'reauth' ? 're-authorising an existing mailbox' : 'a new mailbox'}, and this can only finish ${wanted}`,
+      {
+        hint: `Finish it where it was started: \`agent-gmail inbox ${flow.mode} --finish ${options.flowId}\`.`,
+      },
+    );
+  }
 
   let code: string;
   if (options.url) {

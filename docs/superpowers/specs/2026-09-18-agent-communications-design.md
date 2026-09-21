@@ -200,9 +200,12 @@ permissions and ownership. On Windows the ACL defaults of `%APPDATA%` apply.
   moving its secret.
 - **Only user intent lives here.** Anything a running process updates (last successful refresh, last use,
   health, granted-scope drift, `refresh_token_expires_in`) lives in `<state>/inboxes/<id>.json` (§5.5).
-- **Concurrency.** Only CLI lifecycle commands write `config.json`, and every write is a read-modify-write under
-  an exclusive lock (`<state>/config.lock`: `O_EXCL`, holder pid and time, stale after 30 s), re-reading the file
-  inside the lock, then temp file + fsync + rename. **MCP servers never write `config.json`.** Readers check the
+- **Concurrency.** Lifecycle writes to `config.json` are a read-modify-write under an exclusive lock
+  (`<state>/config.lock`: `O_EXCL`, holder pid and time, stale after 30 s), re-reading the file inside the lock,
+  then temp file + fsync + rename. **The only write an MCP server may make is adding an inbox**, through
+  `gmail_inbox_finish`, under the same lock and subject to the bounds in §9 — a server that is `--read-only` or
+  pinned does not offer it, it can finish only a flow it started as an `add`, and no MCP tool writes anything
+  else. Every other lifecycle write is CLI-only. Readers check the
   file's (inode, mtime, size) on every call rather than relying on `fs.watch` (which stops firing after the first
   rename on Linux), so a tightened policy applies to the next tool call of an already-running server.
 
@@ -739,8 +742,13 @@ TTL); execution requires that token. Trash always requires a plan token. Every w
     mailbox, only the client behind it, and no downloaded-file paths at all. A pinned server exists to reach
     exactly one mailbox: a tool that adds a second one makes the pin a suggestion, and an answer naming the other
     five aliases and the contents of a Downloads folder makes it a formality.
-  - Neither tool changes a policy, a tier, or any other safety setting. A new inbox inherits the default policy,
-    exactly as one added by the CLI does, and moving it to something looser is still CLI-only with a challenge.
+  - Neither tool changes the policy or tier of a mailbox that already exists. A new inbox inherits the default
+    policy exactly as one added by the CLI does, and moving it to something looser is still CLI-only with a
+    challenge. `gmail_inbox_add` does take a `tier`, because a tier is the set of scopes to *request* — the person
+    reads those scopes on Google's consent screen and approves them there, so it is a proposal, not a setting.
+  - `gmail_inbox_finish` refuses any flow that is not an `add`. A flow id is all it takes, and a `reauth` flow
+    started from the CLI would otherwise be completable here, re-pointing an existing mailbox at another client
+    and tier through the one tool whose permission to exist is that it only ever adds.
   - There is still no MCP tool that registers an OAuth **client**: that reads a file of the user's choosing and
     writes a secret, with no third party attesting to anything.
 

@@ -54,6 +54,14 @@ export async function buildInstructions(context: GmailContext, pinned: string | 
   } catch {
     // A config that cannot be read is a problem for the tools to report, not a reason to refuse to start.
   }
+  /*
+   * A pinned server names its own mailbox and no other.
+   *
+   * These instructions are the first thing a model reads on connecting, and they used to list every alias on the
+   * machine whatever the server was pinned to — so `--inbox work` still told the model about the other five. The
+   * tools were scoped and the greeting was not, which is the leak arriving by the one route nobody scopes.
+   */
+  if (pinned) aliases = aliases.filter((alias) => alias === pinned);
   const listed = aliases.slice(0, MAX_ALIASES_IN_INSTRUCTIONS).join(', ');
   const more =
     aliases.length > MAX_ALIASES_IN_INSTRUCTIONS ? `, and ${aliases.length - MAX_ALIASES_IN_INSTRUCTIONS} more` : '';
@@ -949,7 +957,10 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         },
         async ({ flowId, waitSeconds }) => {
           try {
-            const result = await finishSignIn(context, { flowId, waitSeconds: waitSeconds ?? 60 });
+            // `onlyMode` is the bound, not a convenience: a flow id is all this takes, and a `reauth` flow the
+            // CLI started would otherwise be finishable here — re-pointing an existing mailbox at another client
+            // and tier through a tool that is allowed to exist only because it adds.
+            const result = await finishSignIn(context, { flowId, waitSeconds: waitSeconds ?? 60, onlyMode: 'add' });
             return reply({
               alias: result.alias,
               email: result.inbox.email,

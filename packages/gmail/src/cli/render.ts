@@ -640,7 +640,7 @@ export const CLIENT_KIND_LABEL: Record<string, string> = {
 /**
  * The setup, written out for somebody who cannot be prompted — an agent, a pipe, `--json`.
  *
- * Every step here needs a person: a browser for the console, a human at the consent screen. So the answer for a
+ * Every step here needs a browser this code does not drive: the console, and Google's consent screen. So the answer for a
  * non-interactive caller is the instructions rather than a refusal, and rather than half-running something that
  * will stop at the first question.
  */
@@ -670,8 +670,8 @@ export function renderSetupPlan(
   if ((state.did ?? []).length > 0) lines.push('');
 
   if (state.handoff) {
-    lines.push(paint(color, 'bold', 'A person has to approve this one.'));
-    lines.push('Consent happens in a browser and cannot be automated. Show them this link:');
+    lines.push(paint(color, 'bold', 'This step needs a browser.'));
+    lines.push("Consent happens on Google's own screen, and this command cannot grant it. Show them this link:");
     lines.push('');
     lines.push(`  ${state.handoff.authUrl}`);
     lines.push('');

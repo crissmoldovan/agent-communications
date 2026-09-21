@@ -256,8 +256,15 @@ test('doctor reports the checks and their fixes through the tool', async () => {
 });
 
 test('the instructions tell the model the three things it must know, and stay under 2 KB', async () => {
-  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const harness = await newHarness({
+    accounts: [
+      { sub: 'sub-1', email: 'jo@example.test' },
+      { sub: 'sub-2', email: 'sam@example.test' },
+    ],
+  });
   await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  // A second mailbox, so the pinned assertion below is about something. With one inbox it passed either way.
+  await harness.addInbox({ alias: 'personal', email: 'sam@example.test', sub: 'sub-2', refreshToken: 'rt_y' });
   const context = new GmailContext({ core: harness.core, env: harness.env });
   const instructions = await buildInstructions(context, undefined);
   assert.ok(Buffer.byteLength(instructions) < 2048, 'Claude Code truncates instructions at 2 KB');
@@ -265,8 +272,12 @@ test('the instructions tell the model the three things it must know, and stay un
   assert.match(instructions, /approve/);
   assert.match(instructions, /Pass `inbox` on every call/);
   assert.match(instructions, /work/);
+  assert.match(instructions, /personal/, 'an unpinned server lists what it serves');
   const pinnedText = await buildInstructions(context, 'work');
   assert.match(pinnedText, /pinned to the "work" mailbox/);
+  // The greeting is the first thing a model reads, and it used to list every alias on the machine whatever the
+  // server was pinned to. Naming the pin is not enough: the others have to be absent.
+  assert.doesNotMatch(pinnedText, /personal/, 'a pinned server named a mailbox it does not serve');
 });
 
 test('arguments some clients send as strings are accepted exactly, never guessed', () => {
@@ -343,8 +354,16 @@ test('a pinned gmail_setup answers about its own mailbox and nothing else', asyn
       { sub: 'sub-2', email: 'sam@example.test' },
     ],
   });
+  // Two clients, not one: with both mailboxes on `default` the client assertion below passes whether the filter
+  // is there or not, which is the shape of a test that reads as coverage and is not.
   await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
-  await harness.addInbox({ alias: 'personal', email: 'sam@example.test', sub: 'sub-2', refreshToken: 'rt_y' });
+  await harness.addInbox({
+    alias: 'personal',
+    email: 'sam@example.test',
+    sub: 'sub-2',
+    refreshToken: 'rt_y',
+    client: 'other',
+  });
 
   // A client JSON sitting in the download directory. Unpinned this is the tool's whole point; pinned it is a
   // path out of somebody's Downloads folder that a server narrowed to one mailbox has no business reporting.
@@ -359,9 +378,10 @@ test('a pinned gmail_setup answers about its own mailbox and nothing else', asyn
   const open = await connect({ core: harness.core, env });
   try {
     const all = (await open.client.callTool({ name: 'gmail_setup', arguments: {} })) as {
-      structuredContent: { inboxes: string[]; candidates: unknown[] };
+      structuredContent: { inboxes: string[]; clients: string[]; candidates: unknown[] };
     };
     assert.deepEqual(all.structuredContent.inboxes.sort(), ['personal', 'work']);
+    assert.deepEqual(all.structuredContent.clients.sort(), ['default', 'other']);
     assert.equal(all.structuredContent.candidates.length, 1);
   } finally {
     await open.close();
@@ -374,8 +394,50 @@ test('a pinned gmail_setup answers about its own mailbox and nothing else', asyn
     };
     assert.deepEqual(scoped.structuredContent.inboxes, ['work'], 'a pinned server named another mailbox');
     assert.deepEqual(scoped.structuredContent.candidates, [], 'a pinned server listed the download directory');
-    assert.equal(scoped.structuredContent.clients.length, 1);
+    assert.deepEqual(scoped.structuredContent.clients, ['default'], 'a pinned server named another client');
   } finally {
     await pinned.close();
+  }
+});
+
+test('an MCP server cannot finish a re-authorisation somebody started at the CLI', async () => {
+  /*
+   * The bound that makes the whole MCP exception defensible.
+   *
+   * `gmail_inbox_finish` takes a flow id and nothing else, and `finishSignIn` will complete either kind of flow.
+   * A `reauth` re-points an *existing* mailbox at a possibly different client and tier — so without this, the one
+   * tool whose permission to exist is that it only ever adds could quietly finish somebody else's re-consent and
+   * change a mailbox that was already there.
+   */
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+
+  // Started the way the CLI starts one, in this process so nothing is left waiting.
+  const { startSignIn } = await import('../src/operations/signin.ts');
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', detached: false });
+
+  // Nobody is going to sign in, so the listener's promise would reject in ten minutes, long after this test is
+  // over. Claimed now so it lands here rather than as an unhandled rejection in whatever is running then.
+  reauth.listener?.result.catch(() => undefined);
+
+  const { client, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    const result = (await client.callTool({
+      name: 'gmail_inbox_finish',
+      arguments: { flowId: reauth.flowId, waitSeconds: 0 },
+    })) as ToolResult;
+    assert.equal(result.isError, true, 'a reauth flow was finished through MCP');
+    const said = (result.content ?? []).map((part) => part.text ?? '').join(' ');
+    /*
+     * The code, not the wording. Without the guard this call still fails — it waits zero seconds for a consent
+     * nobody gave and reports APPROVAL_PENDING — and that error's hint names `inbox reauth`, so a test matching
+     * on "reauth" passes whether the guard is there or not. It has to be the refusal, not any failure.
+     */
+    assert.match(said, /"code":"USAGE"/, `refused for the wrong reason: ${said}`);
+    assert.match(said, /can only finish a new mailbox/);
+  } finally {
+    await close();
+    await reauth.listener?.close();
   }
 });

@@ -96,9 +96,11 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    their own project; there is no shared client to borrow, and the 100-user lifetime cap on one project
    makes a shared one a bad idea anyway.
    **Complete when:** the user has named the project, or agreed to create one.
-2. **A browser the user can reach.** Consent happens in their browser, under their control. An agent
-   cannot complete it, and no flag makes it headless — `--url` only lets the user paste the address bar
-   back from a machine that has no browser of its own.
+2. **A browser the user can reach.** Consent happens in a browser, on Google's own screen. Neither this
+   package nor you can grant it: no flag makes it headless, and `--url` only lets the user paste the
+   address bar back from a machine that has no browser of its own. Hand the link over and wait.
+   (The bound is on *this software*, not on browsers in general — a tool driving an already-signed-in
+   browser could click through. Treat the link as something to give the user, not something to open.)
    **Complete when:** you know whether the user will click a link, or paste a URL back.
 3. **Node 22.12 or newer.** Below that the package does not run; `doctor`'s `node-version` check says so
    in one line.

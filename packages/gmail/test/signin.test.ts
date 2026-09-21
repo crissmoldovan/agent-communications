@@ -460,3 +460,28 @@ test('the resolved listener entry understands oauth-listen', async () => {
   assert.doesNotMatch(output, /unknown command/i, `the resolved entry does not handle oauth-listen:\n${output}`);
   assert.match(output, /flw_doesnotexist|no such|not found|unknown flow/i, `unexpected output:\n${output}`);
 });
+
+test('a detached sign-in with no listener injected still starts: the wiring, not just the resolver', async () => {
+  /*
+   * The regression test the other two are not.
+   *
+   * They call `resolveListenerEntry` directly, and every other sign-in test hands `listenerCommand` in — so
+   * reverting `defaultListenerCommand()` to `process.argv[1]` would leave all of them green while
+   * `gmail_inbox_add` was broken for everybody running `npx @agentcomms/gmail-mcp`.
+   *
+   * This one injects nothing, so the real `defaultListenerCommand()` runs. Under the test runner `argv[1]` is
+   * this file, which has no `oauth-listen` command — the same shape as the packaged MCP entry that broke. If the
+   * resolution regresses, the listener fails to start and this call never returns a URL.
+   */
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+
+  const started = await startSignIn(context, { mode: 'add', alias: 'work', detached: true });
+  assert.match(started.authUrl, /[?&]client_id=/, 'no sign-in link came back');
+  assert.match(started.flowId, FLOW_ID_PATTERN);
+
+  // Let the listener finish rather than leaving a detached process waiting ten minutes for a browser.
+  await fetch(harness.google.consent(started.authUrl));
+  const signedIn = await finishSignIn(context, { flowId: started.flowId, waitSeconds: 20 });
+  assert.equal(signedIn.inbox.email, 'jo@example.test');
+});

@@ -156,8 +156,21 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
   const bodyText = async (options: Options, behaviour: { bodyOptional?: boolean } = {}): Promise<string> => {
     if (typeof options.text === 'string') return options.text;
     if (typeof options.file === 'string') {
-      const { readFile } = await import('node:fs/promises');
-      return readFile(String(options.file), 'utf8');
+      // Bounded at the size a message can be anyway: anything larger was going to be refused by `compose` a
+      // moment later, so the ceiling costs nothing — and a FIFO or a device at `--file` no longer reads until
+      // the process dies rather than failing at the point it was always going to fail.
+      const { readSmallFile } = await import('../operations/small-file.ts');
+      const { MAX_MESSAGE_BYTES } = await import('../domain/compose.ts');
+      const path = String(options.file);
+      const content = await readSmallFile(path, { follow: true, maxBytes: MAX_MESSAGE_BYTES });
+      if (!content.ok) {
+        throw new CommsError(
+          content.problem === 'missing' ? 'NOT_FOUND' : 'USAGE',
+          content.problem === 'too-large' ? `${path} is larger than a message can be` : `cannot read ${path}`,
+          { hint: 'Pass a regular file holding the message body, or use --text.' },
+        );
+      }
+      return content.text;
     }
     const stdin = streams.stdin as NodeJS.ReadableStream & { isTTY?: boolean };
     // On an update, no body means "keep the one that is there" rather than an error.
@@ -956,7 +969,20 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
                   chunks.push(Buffer.from(chunk as Buffer));
                 return Buffer.concat(chunks).toString('utf8');
               })()
-            : await (await import('node:fs/promises')).readFile(source, 'utf8');
+            : await (async () => {
+                // A receipt this tool wrote, so it is JSON and it is small. The bound is generous — a hundred
+                // thousand message ids — and it exists so `--from /dev/zero` fails instead of never returning.
+                const { readSmallFile } = await import('../operations/small-file.ts');
+                const content = await readSmallFile(source, { follow: true, maxBytes: 4 * 1024 * 1024 });
+                if (!content.ok) {
+                  throw new CommsError(
+                    content.problem === 'missing' ? 'NOT_FOUND' : 'USAGE',
+                    `cannot read the undo receipt at ${source}`,
+                    { hint: 'Pass the file `agent-gmail organise … --json` wrote, or pipe it in on stdin.' },
+                  );
+                }
+                return content.text;
+              })();
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw);
@@ -1174,9 +1200,9 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
            * and the run stops there and says so. Printing the plan and doing nothing, whatever it was given, was
            * the first version of this and it made every flag decorative.
            *
-           * One step cannot be finished this way at all: consent happens in a browser, in front of a person. So
-           * the mailbox step goes as far as producing the link and the command that finishes it, and hands both
-           * back rather than waiting for something that is not going to happen.
+           * One step cannot be finished this way at all: consent is granted on Google's screen, in a browser
+           * this command does not drive. So the mailbox step goes as far as producing the link and the command
+           * that finishes it, and hands both back rather than waiting for something that is not going to happen.
            */
           const did: string[] = [];
           let blocked: { step: string; needs: string; hint?: string } | null = null;
@@ -1367,15 +1393,40 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         }
 
         // ── 2. A mailbox ──────────────────────────────────────────────────────────────────────────────────────
+        /** Reads a flag once and forgets it, so the second mailbox is not offered the first one's name. */
+        const pending: Record<string, string> = {
+          inbox: options.inbox ? String(options.inbox).trim() : '',
+          email: options.email ? String(options.email).trim() : '',
+        };
+        const takeFlag = (name: 'inbox' | 'email'): string => {
+          const value = pending[name] ?? '';
+          pending[name] = '';
+          return value;
+        };
+
         while (state.next === 'inbox' || addAnother) {
           addAnother = false;
           out.write(`${bold('Connect a mailbox')}\n`);
           out.write(`${dim('Google will warn the app is not verified. That is expected for a client you made')}\n`);
           out.write(`${dim('yourself: choose Advanced, then "Go to … (unsafe)", and leave every box ticked.')}\n\n`);
-          const alias = (await askFor(streams, { question: '  a short name for it [work]: ' })).trim() || 'work';
-          const email = (
-            await askFor(streams, { question: '  which address (blank to choose in the browser): ' })
-          ).trim();
+          /*
+           * The flags are answers, not decoration — on this path too.
+           *
+           * `--inbox` and `--email` were advertised by `--help` and read only by the headless branch, so somebody
+           * at a terminal who passed them was asked the same two questions anyway. They are consumed once here,
+           * so the first mailbox uses them and "connect another" asks properly rather than proposing the same
+           * name a second time.
+           */
+          const alias =
+            takeFlag('inbox') ||
+            (await askText(mode, streams, {
+              message: 'A short name for it',
+              placeholder: 'work',
+              defaultValue: 'work',
+            }));
+          const email =
+            takeFlag('email') ||
+            (await askText(mode, streams, { message: 'Which address (blank to choose in the browser)' }));
 
           const { startSignIn } = await import('../operations/signin.ts');
           const started = await startSignIn(context, {

@@ -30,6 +30,8 @@ export interface Harness {
     email: string;
     sub?: string;
     refreshToken: string;
+    /** Which OAuth client it signed in through. Defaults to `default`; name it when a test is about the difference. */
+    client?: string;
     tier?: string;
     grantedScopes?: string[];
     sendPolicy?: 'chat' | 'confirm' | 'never';
@@ -67,13 +69,14 @@ export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harne
 
   const addInbox: Harness['addInbox'] = async (inboxOptions) => {
     const id = newInboxId();
+    const clientName = inboxOptions.client ?? 'default';
     const secrets = await core.secrets('file');
-    await secrets.set(clientSecretRef('default'), TEST_CLIENT_SECRET);
+    await secrets.set(clientSecretRef(clientName), TEST_CLIENT_SECRET);
     await secrets.set(refreshTokenRef(id), inboxOptions.refreshToken);
     const client: ClientConfig = {
       provider: 'gmail',
       clientId: TEST_CLIENT_ID,
-      secretRef: clientSecretRef('default'),
+      secretRef: clientSecretRef(clientName),
       addedAt: new Date().toISOString(),
     };
     const inbox: InboxConfig = {
@@ -82,7 +85,7 @@ export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harne
       email: inboxOptions.email,
       sub: inboxOptions.sub,
       identity: inboxOptions.sub ? 'oidc' : 'legacy',
-      client: 'default',
+      client: clientName,
       tier: inboxOptions.tier ?? 'organize',
       contacts: true,
       grantedScopes: inboxOptions.grantedScopes ?? ['https://www.googleapis.com/auth/gmail.modify'],
@@ -95,7 +98,7 @@ export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harne
       (config: Config): Config => ({
         ...config,
         secrets: { store: 'file' },
-        clients: { ...config.clients, default: client },
+        clients: { ...config.clients, [clientName]: client },
         inboxes: { ...config.inboxes, [inboxOptions.alias]: inbox },
       }),
     );

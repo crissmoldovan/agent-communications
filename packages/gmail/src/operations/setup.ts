@@ -1,6 +1,7 @@
-import { readdir } from 'node:fs/promises';
+import { lstat, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { parseClientJson } from '../auth/oauth.ts';
 import type { GmailContext } from '../context.ts';
 import { listRegisteredServers } from './client-configs.ts';
 import { readSmallFile } from './small-file.ts';
@@ -19,7 +20,7 @@ import { readSmallFile } from './small-file.ts';
  * **Everything here is data, and none of it is prose for a terminal.** The steps, their fields and their traps are
  * structures a caller renders — the CLI prints them, and a settings pane or a web installer would lay the same
  * ones out as a form without this file changing. The one thing no surface can avoid is that a person has to be
- * present: the console needs a browser and the consent screen needs a human.
+ * reached: the console and the consent screen are both browser pages this code does not drive.
  */
 
 export interface ConsoleStep {
@@ -121,25 +122,44 @@ export const CONSOLE_STEPS: readonly ConsoleStep[] = [
 /** What a downloaded client file turns out to be, read rather than guessed from its name. */
 export type ClientKind = 'desktop' | 'web' | 'unreadable';
 
-/** How many files the scan will open. A download directory can hold thousands; the answer is in the newest few. */
+/** How many files the scan will open and read. A download directory can hold thousands; the answer is in the newest few. */
 const MAX_CANDIDATES = 40;
 
 /**
- * Desktop, web, or neither — decided on the same shape `parseClientJson` requires, not on a truthy key.
+ * How many it will take a date from first.
  *
- * `{"installed": true}` satisfies a truthiness test and nothing else: it was offered as a usable Desktop client
- * and then refused a moment later by the code that actually reads it. Saying "usable" about a file that is about
- * to be rejected is worse than saying nothing.
+ * `lstat` is cheap and reads no content, so a wider net here costs little and is what makes "the newest forty"
+ * mean anything. Past this the directory is pathological and the newest file is somebody else's problem.
  */
-function classifyClient(json: Record<string, unknown>): ClientKind {
-  const usable = (node: unknown): boolean => {
-    if (!node || typeof node !== 'object') return false;
-    const record = node as Record<string, unknown>;
-    return typeof record.client_id === 'string' && record.client_id.length > 0;
-  };
-  if (usable(json.installed)) return 'desktop';
-  if (usable(json.web)) return 'web';
-  return 'unreadable';
+const MAX_NAMES_DATED = 500;
+
+/**
+ * Desktop, web, or neither — decided by running the real parser, not by a check that resembles it.
+ *
+ * Saying "usable" about a file that is about to be rejected is worse than saying nothing, and this got there
+ * twice. First `{"installed": true}` passed a truthiness test. Then a rewrite required a non-empty `client_id`
+ * and still called a file usable when it had no `client_secret`, or an id without the
+ * `.apps.googleusercontent.com` suffix — because it was a second implementation of the same rules, and a second
+ * implementation drifts by definition.
+ *
+ * So it calls `parseClientJson` and reads the answer from whether it threw. There is nothing left to drift.
+ */
+function classifyClient(text: string): ClientKind {
+  let json: Record<string, unknown>;
+  try {
+    json = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return 'unreadable';
+  }
+  // Named separately because it is the one wrong kind worth explaining: a Web client is a real, valid credential
+  // that this cannot use, and "unreadable" would send somebody looking for a corrupt download.
+  if (json.web && !json.installed) return 'web';
+  try {
+    parseClientJson(text);
+    return 'desktop';
+  } catch {
+    return 'unreadable';
+  }
 }
 
 export interface ClientCandidate {
@@ -183,38 +203,56 @@ export async function findClientJson(env: NodeJS.ProcessEnv = process.env): Prom
     return [];
   }
 
+  /*
+   * Dates first, then the newest forty — in that order, because the other way round is not "the newest forty".
+   *
+   * `readdir` returns names in whatever order the filesystem gives, which is not time. Slicing before reading any
+   * date therefore took an arbitrary forty and called them recent: in a directory with more than forty matches,
+   * the client somebody downloaded a minute ago could simply be absent, and the step whose entire job is to find
+   * that file would say it was not there.
+   *
+   * `lstat` gives the date without opening anything and without following a link, so the wide pass is cheap. Only
+   * the forty newest are then opened and read.
+   */
+  const matches = names.filter((name) => /^client_secret.*\.json$/i.test(name)).slice(0, MAX_NAMES_DATED);
+  const dated = await Promise.all(
+    matches.map(async (name) => {
+      try {
+        return { name, at: (await lstat(join(directory, name))).mtimeMs };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  const newest = dated
+    .filter((entry): entry is { name: string; at: number } => entry !== null)
+    .sort((a, b) => b.at - a.at)
+    .slice(0, MAX_CANDIDATES);
+
   const found = await Promise.all(
-    names
-      .filter((name) => /^client_secret.*\.json$/i.test(name))
-      // Bounded: opening every match in a directory holding thousands exhausts descriptors for no benefit.
-      .slice(0, MAX_CANDIDATES)
-      .map(async (name): Promise<(ClientCandidate & { at: number }) | null> => {
-        const path = join(directory, name);
-        /*
-         * A bounded read, and `follow: false`.
-         *
-         * Nothing here chose these paths: they are whatever is sitting in a directory other software writes to,
-         * matched on their names. So a match can be a symlink, a FIFO, a directory or something enormous, and a
-         * plain `readFile` on each would follow, block, throw or exhaust memory in turn. `readSmallFile` refuses
-         * all four off one handle — which also removes the gap between a `stat` and a `readFile` by path, and
-         * the file in question is a client secret.
-         */
-        const file = await readSmallFile(path, { follow: false });
-        if (!file.ok) {
-          // A file that is the wrong shape entirely is not listed; one that is merely too big to be a client
-          // JSON is, because it is a file with the right name and saying nothing about it would be stranger.
-          if (file.problem !== 'too-large') return null;
-          return { path, kind: 'unreadable', modifiedAt: file.modifiedAt.toISOString(), at: file.modifiedMs };
-        }
-        const modifiedAt = file.modifiedAt.toISOString();
-        try {
-          const json = JSON.parse(file.text) as Record<string, unknown>;
-          return { path, kind: classifyClient(json), modifiedAt, at: file.modifiedMs };
-        } catch {
-          // Listed anyway: an unreadable file may still be the one they meant, and saying so beats hiding it.
-          return { path, kind: 'unreadable', modifiedAt, at: file.modifiedMs };
-        }
-      }),
+    newest.map(async ({ name }): Promise<(ClientCandidate & { at: number }) | null> => {
+      const path = join(directory, name);
+      /*
+       * A bounded read, and `follow: false`.
+       *
+       * Nothing here chose these paths: they are whatever is sitting in a directory other software writes to,
+       * matched on their names. So a match can be a symlink, a FIFO, a directory or something enormous, and a
+       * plain `readFile` on each would follow, block, throw or exhaust memory in turn. `readSmallFile` refuses
+       * all four off one handle — which also removes the gap between a `stat` and a `readFile` by path, and
+       * the file in question is a client secret.
+       */
+      const file = await readSmallFile(path, { follow: false });
+      if (!file.ok) {
+        // A file that is the wrong shape entirely is not listed; one that is merely too big to be a client
+        // JSON is, because it is a file with the right name and saying nothing about it would be stranger.
+        if (file.problem !== 'too-large') return null;
+        return { path, kind: 'unreadable', modifiedAt: file.modifiedAt.toISOString(), at: file.modifiedMs };
+      }
+      const modifiedAt = file.modifiedAt.toISOString();
+      // An unreadable file is listed rather than hidden: it may still be the one they meant, and saying so
+      // beats saying nothing.
+      return { path, kind: classifyClient(file.text), modifiedAt, at: file.modifiedMs };
+    }),
   );
 
   const rank = (kind: ClientKind) => (kind === 'desktop' ? 0 : kind === 'web' ? 1 : 2);

@@ -17,13 +17,14 @@ one: a "Web application" client reads as the modern choice and is refused, and l
 the cautious one and stops every sign-in working seven days later.
 
 It runs the same way whoever is driving. At a terminal it draws a list you move through with the cursor keys;
-through a pipe, in CI, or behind `--no-tui` it asks the same questions one line at a time; with `--json` it asks
-nothing and prints one document. Every prompt goes to stderr, so the document on stdout stays parseable.
+behind `--no-tui` it asks the same questions one line at a time; and where nobody can answer one — `--json`,
+`--no-input`, CI, or either end of the pipe redirected — it asks nothing and acts on the flags it was given.
+Every prompt goes to stderr, so the document `--json` puts on stdout stays parseable.
 
-**An agent can now drive all of it except the part that exists to require a person.** `setup --client-json <path>
---inbox work --mcp-client claude-code --json` runs each step that has what it needs and stops at the first that
-does not, naming the flag that would have let it continue. The one step it cannot finish is consent: it produces
-the sign-in link and the command that completes it, and hands both back.
+**An agent can now drive all of it except the grant itself.** `setup --client-json <path> --inbox work
+--mcp-client claude-code --json` runs each step that has what it needs and stops at the first that does not,
+naming the flag that would have let it continue. The one step it cannot finish is consent: it produces the
+sign-in link and the command that completes it, and hands both back.
 
 **And the same onboarding is available over MCP**, so an agent asked to "set up Gmail" is no longer reduced to
 telling you to go and run a CLI. `gmail_setup` says what is missing and changes nothing. `gmail_inbox_add`

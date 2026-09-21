@@ -94,7 +94,29 @@ export async function readSmallFile(path: string, options: ReadSmallFileOptions)
     if (!info.isFile()) return { ok: false, problem: 'not-a-file' };
     if (info.size > maxBytes)
       return { ok: false, problem: 'too-large', modifiedAt: info.mtime, modifiedMs: info.mtimeMs };
-    return { ok: true, text: await handle.readFile('utf8'), modifiedAt: info.mtime, modifiedMs: info.mtimeMs };
+    /*
+     * The size check is a shortcut, not the bound. `stat` then `readFile` are two moments, and a regular file can
+     * grow between them — so a file that measured 2KB and was appended to before the read would have been read
+     * whole, whatever `maxBytes` said. The bound has to be on the read itself.
+     *
+     * One byte over the limit is requested so the result can tell "exactly at the ceiling" from "more than we
+     * asked for", which is the difference between a large-but-valid file and one still being written.
+     *
+     * No test covers the growth itself: staging it means writing to the file between this function's `stat` and
+     * its `read`, and there is no portable hook between them. The bound holds by construction instead — `read`
+     * with an explicit length cannot return more than that length — rather than by demonstration, and it is
+     * worth saying which of the two this is.
+     */
+    const buffer = Buffer.allocUnsafe(maxBytes + 1);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes + 1, 0);
+    if (bytesRead > maxBytes)
+      return { ok: false, problem: 'too-large', modifiedAt: info.mtime, modifiedMs: info.mtimeMs };
+    return {
+      ok: true,
+      text: buffer.subarray(0, bytesRead).toString('utf8'),
+      modifiedAt: info.mtime,
+      modifiedMs: info.mtimeMs,
+    };
   } catch {
     return { ok: false, problem: 'missing' };
   } finally {

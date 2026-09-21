@@ -37,20 +37,25 @@ export interface InteractionInput {
 /**
  * Which of the three this run is.
  *
- * `--json` is `none` whatever the terminal says: a caller asking for a document is not going to answer a question,
- * and a prompt on the way would corrupt the document anyway. CI is `plain` rather than `none` because a CI job may
- * still be feeding stdin, but it cannot render a list into a log nobody is watching.
+ * **`canPrompt` decides almost all of it, and that is deliberate.** It is the repository's one answer to "could a
+ * person answer a question right now" — no `--json`, no `--no-input`, not CI, and both stdin and stdout are
+ * terminals — and it is the same helper that guards the send approval, where the answer is a security boundary.
+ * Anything it excludes is `none` here, and this file does not get a second opinion.
+ *
+ * That leaves less to decide than it first appeared. This used to branch again on CI and on a piped stdin,
+ * reasoning that a CI job might still be feeding answers in and should get plain prompts rather than none — and
+ * those branches could not run, because `canPrompt` had already returned false for both. They read as support for
+ * `setup < answers.txt` and were dead code. Making them live would mean loosening `canPrompt`, which would loosen
+ * the send gate with it, so they are gone instead.
+ *
+ * What is left: nobody who can answer → `none`. Somebody who asked for plain → `plain`. Otherwise the terminal
+ * gets the list, unless stderr is not one — the list is drawn there, and `canPrompt` checks stdout rather than
+ * stderr, so this is the one thing it does not already cover.
  */
 export function interactionFor(input: InteractionInput): Interaction {
   if (input.json || input.noInput || !input.canPrompt) return 'none';
   if (input.noTui) return 'plain';
-  const env = input.env;
-  const inCI = Boolean(env.CI || env.CONTINUOUS_INTEGRATION || env.BUILD_NUMBER || env.GITHUB_ACTIONS);
-  if (inCI) return 'plain';
-  // Both ends matter: the list is drawn on stderr and steered from stdin, and either one being a pipe makes it
-  // unusable in a different way — an undrawable list, or one nobody can move the cursor in.
-  const stdinIsTty = Boolean((input.streams.stdin as { isTTY?: boolean }).isTTY);
-  return stdinIsTty && isTTY(input.streams.stderr as unknown as Writable) ? 'tui' : 'plain';
+  return isTTY(input.streams.stderr as unknown as Writable) ? 'tui' : 'plain';
 }
 
 /** Cancelling is a decision, not a crash: Ctrl-C leaves the setup where it was, and it can be resumed. */
