@@ -109,11 +109,36 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
 
 ## Procedure
 
-1. **Start with `doctor`, before proposing anything.** Run `agent-gmail doctor --json` (MCP:
-   `gmail_doctor`). It costs nothing, changes nothing, and each check carries a `fix` line that is the
-   command to run. Most "set up Gmail for me" requests turn out to be one failing check.
-   **Complete when:** you can say which of `node-version`, `secret-store`, `oauth-client`, `inboxes` and
-   `other-gmail-servers` are not `ok`, and quoted their fixes.
+1. **Start with `setup --json`, not `doctor`.** Run `agent-gmail setup --json`. It costs nothing, changes
+   nothing without a flag, and answers the only question worth asking first — what is next. `doctor` is a
+   diagnostic: it tells you what is *broken* about an install that used to work, which is the wrong
+   question for a machine that has nothing yet. Use it later, for a setup that stops behaving.
+
+   Four fields drive everything you do after this:
+
+   | | |
+   |---|---|
+   | `next` | `client`, `inbox`, `mcp` or `done` — the one thing to do now |
+   | `done` | steps already behind you, so a resumed run does not repeat them |
+   | `blocked` | `{ step, needs, hint }` — `needs` names the exact flag that would let it continue |
+   | `candidates` | every downloaded client file with its `kind`, so you never open one to tell Desktop from Web |
+
+   **Complete when:** you can say what `next` is and, if `blocked` is set, which flag it asked for.
+
+1b. **Drive it with flags, and stop where a person is required.** Each step runs when you supply its
+   answer and stops when you do not:
+
+   ```
+   agent-gmail setup --client-json <path> --json      # registers the client
+   agent-gmail setup --inbox <alias> --email <addr> --json
+   agent-gmail setup --mcp-client claude-code --json
+   ```
+
+   The mailbox step is the boundary. Consent happens in a browser in front of a person, so that call
+   returns `handoff: { authUrl, finish }` rather than waiting: show the user `authUrl`, warn them about
+   the unverified-app screen *before* they meet it, and run `finish` once they say they have approved it.
+   `did` lists what the run changed. Never claim a step succeeded that is not in `did`.
+   **Complete when:** every step you can drive has run, and anything left is named in `blocked`.
 
 2. **Offer the import when a legacy setup exists.** If `~/.gmail-mcp` is there, run
    `agent-gmail inbox import --dry-run` first: it reports which mailboxes would be imported, under which
@@ -124,6 +149,16 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
 
 3. **Create the OAuth client in the Google Cloud console.** Walk the user through it in the order they
    meet it (next section). This is the part that takes the time; the CLI steps after it take seconds.
+
+   At a terminal with a person at it, `agent-gmail setup` walks these screens itself — opening each page
+   and waiting — and says what to type in every field. Prefer that to reciting the steps yourself. Recite
+   them when the person is not at the machine running the command, which is common: they are on a laptop
+   and you are on their server.
+
+   Two of these screens have a wrong answer that looks more correct than the right one, and both are worth
+   saying out loud before they choose: **Audience** must be published, not left in Testing with a test user
+   added — Testing refuses every account except the owner's, and expires the ones it allows after seven
+   days. And the client must be **Desktop app**, not Web application.
    **Complete when:** a Desktop client JSON is downloaded, usually to `~/Downloads/client_secret_*.json`.
 
 4. **Register the client.** `agent-gmail client add ~/Downloads/client_secret_*.json --move`. The client
