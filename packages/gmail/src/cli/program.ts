@@ -1188,7 +1188,9 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             }
           }
 
-          if (!blocked && state.next === 'inbox') {
+          // An explicit `--inbox` is a request, not a step in a sequence: most people have more than one
+          // mailbox, and the first one connected must not close the door on the rest.
+          if (!blocked && (state.next === 'inbox' || options.inbox)) {
             const alias = options.inbox ? String(options.inbox) : '';
             if (alias) {
               const { startSignIn } = await import('../operations/signin.ts');
@@ -1214,7 +1216,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             }
           }
 
-          if (!blocked && state.next === 'mcp') {
+          if (!blocked && (state.next === 'mcp' || options.mcpClient)) {
             const which = options.mcpClient ? String(options.mcpClient) : '';
             if (which) {
               const { mcpInstall } = await import('../mcp/install.ts');
@@ -1234,6 +1236,9 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         // A second run says what it is resuming from, rather than silently doing something different from the
         // first. Nothing here is destructive, so "start over" only re-walks the console; it removes nothing.
         let walkConsole = state.next === 'client' || options.restart === true;
+        // Set when a finished setup is asked to do more, so the steps below run for a state already past them.
+        let addAnother = false;
+        let addMcp = false;
         if (state.done.length > 0 && !options.restart) {
           out.write(`${bold('Picking up where you left off.')}\n`);
           if (state.clients.length > 0) out.write(`  done · client "${state.clients.join('", "')}" registered\n`);
@@ -1241,8 +1246,31 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             out.write(`  done · ${state.inboxes.length} mailbox(es): ${state.inboxes.join(', ')}\n`);
           if (state.registeredWith.length > 0) out.write(`  done · connected to ${state.registeredWith.join(', ')}\n`);
           if (state.next === 'done') {
-            out.write(`\nAll three steps are done. ${dim('`--restart` walks the Google Cloud steps again.')}\n`);
-            return;
+            // Not a dead end: "set up" is a state you pass through, not one you arrive at. Somebody running this
+            // again almost always wants another mailbox — the first one connected must not close that door.
+            const what = await askChoice(mode, streams, {
+              message: 'Everything is set up. What would you like to do?',
+              choices: [
+                { value: 'inbox', label: 'Connect another mailbox', hint: 'you can have as many as you like' },
+                {
+                  value: 'mcp',
+                  label: 'Register with another agent',
+                  hint: `already: ${state.registeredWith.join(', ')}`,
+                },
+                {
+                  value: 'console',
+                  label: 'Walk the Google Cloud steps again',
+                  hint: 'changes nothing on this machine',
+                },
+                { value: 'nothing', label: 'Nothing, thanks' },
+              ],
+              initial: 'inbox',
+            });
+            if (what === 'nothing') return;
+            if (what === 'console') walkConsole = true;
+            if (what === 'inbox') addAnother = true;
+            if (what === 'mcp') addMcp = true;
+            out.write('\n');
           }
           const choice = await askChoice(mode, streams, {
             message: 'Continue from here, or start over?',
@@ -1318,7 +1346,8 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         }
 
         // ── 2. A mailbox ──────────────────────────────────────────────────────────────────────────────────────
-        if (state.next === 'inbox') {
+        while (state.next === 'inbox' || addAnother) {
+          addAnother = false;
           out.write(`${bold('Connect a mailbox')}\n`);
           out.write(`${dim('Google will warn the app is not verified. That is expected for a client you made')}\n`);
           out.write(`${dim('yourself: choose Advanced, then "Go to … (unsafe)", and leave every box ticked.')}\n\n`);
@@ -1342,10 +1371,12 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             out.write(`\n${renderSignedIn(signedIn, globalOptions.color)}\n\n`);
           }
           state = await setupState(context);
+          if (!(await askYesNo(mode, streams, { message: 'Connect another mailbox?', defaultYes: false }))) break;
+          out.write('\n');
         }
 
         // ── 3. The agent connection ───────────────────────────────────────────────────────────────────────────
-        if (state.next === 'mcp') {
+        if (state.next === 'mcp' || addMcp) {
           const named = options.mcpClient ? String(options.mcpClient) : '';
           const wanted = named !== '' || (await askYesNo(mode, streams, { message: 'Connect this to an agent?' }));
           if (wanted) {
