@@ -1,4 +1,5 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
+import { open, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { GmailContext } from '../context.ts';
@@ -166,22 +167,36 @@ export async function findClientJson(env: NodeJS.ProcessEnv = process.env): Prom
       .filter((name) => /^client_secret.*\.json$/i.test(name))
       .map(async (name): Promise<(ClientCandidate & { at: number }) | null> => {
         const path = join(directory, name);
-        let at = 0;
-        let modifiedAt = '';
+        /*
+         * Opened once, then both the date and the contents come off that handle.
+         *
+         * Two calls by path — `stat` then `readFile` — describe whatever the name pointed at each time, which can
+         * be two different files. That matters more than usual here: this reads a client secret, and following a
+         * name to something else is exactly the substitution `O_NOFOLLOW` exists to refuse elsewhere in this
+         * package. One handle removes the gap, and costs nothing.
+         */
+        let handle: FileHandle;
         try {
-          const info = await stat(path);
-          at = info.mtimeMs;
-          modifiedAt = info.mtime.toISOString();
+          handle = await open(path, 'r');
         } catch {
           return null;
         }
         try {
-          const json = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
-          const kind: ClientKind = json.installed ? 'desktop' : json.web ? 'web' : 'unreadable';
-          return { path, kind, modifiedAt, at };
+          const info = await handle.stat();
+          const at = info.mtimeMs;
+          const modifiedAt = info.mtime.toISOString();
+          try {
+            const json = JSON.parse(await handle.readFile('utf8')) as Record<string, unknown>;
+            const kind: ClientKind = json.installed ? 'desktop' : json.web ? 'web' : 'unreadable';
+            return { path, kind, modifiedAt, at };
+          } catch {
+            // Listed anyway: an unreadable file may still be the one they meant, and saying so beats hiding it.
+            return { path, kind: 'unreadable', modifiedAt, at };
+          }
         } catch {
-          // Listed anyway: an unreadable file may still be the one they meant, and saying so beats hiding it.
-          return { path, kind: 'unreadable', modifiedAt, at };
+          return null;
+        } finally {
+          await handle.close();
         }
       }),
   );
