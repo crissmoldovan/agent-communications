@@ -31,7 +31,7 @@ same server.
 | [`gmail_draft_get`](#gmail_draft_get) | Read a draft back, with the same preview the person would approve. |
 | [`gmail_setup`](#gmail_setup) | Where this machine is in connecting Gmail, and the one thing to do next: whether an OAuth client is registered, whether any mailbox is connected, and the Google Cloud steps with their links. |
 | [`gmail_inbox_add`](#gmail_inbox_add) | Begin connecting a Gmail account. |
-| [`gmail_inbox_finish`](#gmail_inbox_finish) | Complete a sign-in the person has approved in their browser. |
+| [`gmail_inbox_finish`](#gmail_inbox_finish) | Complete a sign-in once Google has returned a grant for it. |
 | [`gmail_draft_create`](#gmail_draft_create) | Write a new message into Drafts and return the preview the person must read before anything is sent. |
 | [`gmail_draft_reply`](#gmail_draft_reply) | Draft an answer to a message, or forward it. |
 | [`gmail_draft_update`](#gmail_draft_update) | Change a draft: its body, recipients, subject or attachments. |
@@ -267,14 +267,14 @@ Begin connecting a Gmail account. Returns a sign-in link and stops — this serv
 
 ### `gmail_inbox_finish`
 
-Complete a sign-in the person has approved in their browser. APPROVAL_PENDING means they have not finished yet and the link is still good — wait and call again, do not start a new one.
+Complete a sign-in once Google has returned a grant for it. APPROVAL_PENDING means the browser flow has not completed yet and the link is still good — wait and call again, do not start a new one.
 
 *writes*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `flowId` | string | **yes** |  |
-| `waitSeconds` | integer | no | how long to wait for them; default 60 |
+| `waitSeconds` | integer | no | how long to wait for the grant; default 60 |
 
 ### `gmail_draft_create`
 

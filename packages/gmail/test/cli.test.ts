@@ -559,10 +559,17 @@ test('setup can choose the file store, and says which store it used', async () =
     JSON.stringify({ installed: { client_id: TEST_CLIENT_ID, client_secret: TEST_CLIENT_SECRET, project_id: 'p' } }),
   );
 
-  const result = await cli(harness, ['setup', '--client-json', path, '--store', 'file', '--json']);
+  const result = await cli(harness, ['setup', '--client-json', path, '--store', 'file', '--move', '--json']);
   assert.equal(result.code, 0, result.stderr);
   const { data: report } = result.json<{ data: { did: string[]; clients: string[] } }>();
   assert.deepEqual(report.clients, ['desktop']);
+  // `--move` is the other half of the pass-through, and "deleted it" is a claim worth checking against the disk
+  // rather than against the sentence that makes it.
+  await assert.rejects(readFile(path, 'utf8'), /ENOENT/, 'the downloaded client JSON is still there');
+  assert.ok(
+    report.did.some((entry) => /removed the downloaded file/.test(entry)),
+    `did not report the move: ${JSON.stringify(report.did)}`,
+  );
   // What happened, not what usually happens: `did` used to say "registered" with no mention of where the secret
   // went, and the interactive path claimed "your keychain, never to a file" whatever the store turned out to be.
   assert.ok(
@@ -622,7 +629,10 @@ test('an interactive setup with an explicit flag does not ask what you already s
    * named failure on the line that explains it.
    */
   const result = await Promise.race([
-    cli(harness, ['setup', '--mcp-client', 'codex', '--no-browser', '--no-tui'], {
+    // `--launcher local` so this registers the checkout rather than running an `npm install` of a managed
+    // runtime — which is what the default does, and what made the first version of this test reach into the
+    // machine's real data directory.
+    cli(harness, ['setup', '--mcp-client', 'codex', '--launcher', 'local', '--no-browser', '--no-tui'], {
       tty: true,
       env: { HOME: home, USERPROFILE: home },
       stdin: 'n\nn\nn\n',
@@ -635,9 +645,31 @@ test('an interactive setup with an explicit flag does not ask what you already s
     ),
   ]);
 
+  /*
+   * Asserted against stderr, where the prompts actually go.
+   *
+   * The first version of this checked `stdout` for the question — and the prompts are deliberately written to
+   * stderr so that `--json` keeps stdout parseable, which this file's own TUI comment says. So the assertion
+   * could not fail, and what caught the mutation was the deadline underneath it rather than the claim on top.
+   */
   assert.doesNotMatch(
-    result.stdout,
+    `${result.stdout}${result.stderr}`,
     /What would you like to do\?/,
     'it asked what to do, of somebody who had already said',
   );
+  // And it did the thing that was asked, rather than merely not asking about it. Dropping `|| addMcp` from the
+  // agent step skips the registration silently, and nothing above would have noticed.
+  assert.equal(result.code, 0, `${result.stdout}${result.stderr}`);
+  /*
+   * It registered, or printed exactly what to paste.
+   *
+   * `mcp install` writes through the client's own CLI when that CLI is on PATH and prints the entry when it is
+   * not; `codex` is not installed here, so the second is the honest outcome. Either way the agent step *ran*,
+   * which is the claim — dropping `|| addMcp` skips it silently and prints neither.
+   */
+  const said = `${result.stdout}${result.stderr}`;
+  assert.match(said, /MCP configuration of codex|registered/i, `the agent step never ran:\n${said}`);
+  // And the entry is this package's own CLI — `--launcher local` points at the checkout, so the marker is the
+  // package directory rather than the `@agentcomms` scope a managed install would carry.
+  assert.match(said, /packages[/\\]gmail[/\\].*cli\./, `the entry it produced was not ours:\n${said}`);
 });

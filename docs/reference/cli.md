@@ -781,6 +781,8 @@ agent-gmail setup [options]
 | `"keychain", "file")` |  | — |
 | `--move` | delete the downloaded client JSON once its secret is | — |
 | `stored (default: false)` |  | — |
+| `--launcher <launcher>` | how the server is started (choices: "managed", "npx", | — |
+| `"local")` |  | — |
 | `--restart` | walk the Google Cloud steps again even if a client is | — |
 | `registered (default: false)` |  | — |
 | `--no-tui` | plain one-line prompts instead of lists and fields | — |

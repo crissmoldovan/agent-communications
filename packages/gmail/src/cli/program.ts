@@ -1206,6 +1206,10 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
      */
     .addOption(new Option('--store <store>', 'where secrets are kept (first time only)').choices(['keychain', 'file']))
     .option('--move', 'delete the downloaded client JSON once its secret is stored', false)
+    // Parity with `mcp install`, which has had this since the start. Without it `setup` could only ever register
+    // the managed runtime — an `npm install` — so somebody working from a checkout had to leave this command to
+    // get `--launcher local`, and a test of this path had to install a runtime to exercise one branch.
+    .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
     .option('--restart', 'walk the Google Cloud steps again even if a client is registered', false)
     .option('--no-tui', 'plain one-line prompts instead of lists and fields')
     .option('--no-browser', 'print the links instead of opening them')
@@ -1308,6 +1312,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
                 client: which as SupportedClient,
                 apply: true,
                 force: options.replaceServer === true,
+                ...(options.launcher ? { launcher: String(options.launcher) as 'managed' | 'npx' | 'local' } : {}),
               });
               // Only what happened. Reporting "registered" for an install that did not apply, or that failed its
               // own start-up check, is the kind of claim the `did` list exists to make impossible.
@@ -1450,7 +1455,9 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             `${dim(
               added.store === 'keychain'
                 ? 'The id went to your config; the secret to your keychain, never to a file.'
-                : 'The id went to your config; the secret to an owner-only file beside it, because no keychain is available here.',
+                : // Not "because no keychain is available": `--store file` is a choice somebody can make on a
+                  // machine whose keychain works perfectly, and telling them otherwise is a guess reported as a fact.
+                  'The id went to your config; the secret to an owner-only file beside it, in the file store.',
             )}\n`,
           );
           if (added.sourceRemoved) out.write(`${dim('The downloaded JSON has been deleted.')}\n`);
@@ -1537,6 +1544,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
               client: which as SupportedClient,
               apply: true,
               force: options.replaceServer === true,
+              ...(options.launcher ? { launcher: String(options.launcher) as 'managed' | 'npx' | 'local' } : {}),
             });
             out.write(`\n${renderInstall(result, globalOptions.color)}\n`);
           }

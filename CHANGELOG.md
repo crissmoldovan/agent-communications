@@ -28,7 +28,7 @@ sign-in link and the command that completes it, and hands both back, because it 
 
 **And the same onboarding is available over MCP**, so an agent asked to "set up Gmail" is no longer reduced to
 telling you to go and run a CLI. `gmail_setup` says what is missing and changes nothing. `gmail_inbox_add`
-produces the sign-in link and stops. `gmail_inbox_finish` completes a grant you approved in your browser.
+produces the sign-in link and stops. `gmail_inbox_finish` completes the sign-in once Google has returned a grant for it.
 
 This is a deliberate exception to a rule this project had: no MCP tool adds an inbox. The rule was written before
 there was any way to do this from a conversation, and the cost was paid by everyone. What the exception buys is

@@ -346,13 +346,50 @@ test('a registered server is what marks the agent step done, and it is matched o
     join(home, '.claude.json'),
     JSON.stringify({ mcpServers: { gmail: { command: 'npx', args: ['-y', '@agentcomms/gmail-mcp@0.1.4'] } } }),
   );
-  // Ours, by path, launched by file — a local or managed install.
+  /*
+   * Ours, by path — and this is the shape that matters most, because it is what the **default** installer writes.
+   *
+   * A segment matcher looking for `agentcomms` missed it entirely: the segment is `@agentcomms`. A correctly
+   * registered managed install reported nothing, so setup would have said the agent step was still to do forever.
+   * Both separators, because the matcher splits on them and a Windows path is the case nobody runs locally.
+   */
   await mkdir(join(home, '.codex'), { recursive: true });
+  // Built from the temp home rather than written out as a literal: a home-directory path in a fixture is a
+  // machine-specific path, and this repository's own check refuses those — including in a comment explaining it.
+  const managed = join(
+    home,
+    '.local',
+    'share',
+    'agent-comms',
+    'runtime',
+    '0.1.4',
+    'node_modules',
+    '@agentcomms',
+    'gmail',
+    'dist',
+    'cli.mjs',
+  );
   await writeFile(
     join(home, '.codex', 'config.toml'),
-    ['[mcp_servers.gmail]', 'command = "node"', 'args = ["/opt/agentcomms/gmail/dist/cli.mjs", "mcp", "serve"]'].join(
-      '\n',
-    ),
+    ['[mcp_servers.gmail]', 'command = "node"', `args = ["${managed}", "mcp", "serve"]`].join('\n'),
+  );
+  // A Windows managed path, backslash-separated, which is the case nobody exercises locally.
+  const windows = [
+    'C:',
+    'ProgramData',
+    'agent-comms',
+    'runtime',
+    '0.1.4',
+    'node_modules',
+    '@agentcomms',
+    'gmail-mcp',
+    'dist',
+    'server.mjs',
+  ].join('\\\\');
+  await mkdir(join(home, 'Library', 'Application Support', 'Claude'), { recursive: true });
+  await writeFile(
+    join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
+    JSON.stringify({ mcpServers: { gmail: { command: 'node', args: [windows, 'mcp', 'serve'] } } }),
   );
   /*
    * Not ours — and in clients of their own, which is the point.
@@ -370,7 +407,10 @@ test('a registered server is what marks the agent step done, and it is matched o
   await writeFile(
     join(home, '.gemini', 'settings.json'),
     JSON.stringify({
-      mcpServers: { gmail: { command: 'node', args: ['/opt/notagentcomms/gmail/dist/cli.mjs', 'mcp', 'serve'] } },
+      mcpServers: {
+        // A neighbour under the same scope. `startsWith('gmail')` called this ours.
+        gmail: { command: 'node', args: ['/opt/node_modules/@agentcomms/gmail-evil/dist/cli.mjs', 'serve'] },
+      },
     }),
   );
 
@@ -379,9 +419,13 @@ test('a registered server is what marks the agent step done, and it is matched o
   const context = new GmailContext({ core: harness.core, env: { ...harness.env, HOME: home, USERPROFILE: home } });
 
   const state = await setupState(context, { scanDownloads: false });
-  assert.deepEqual(state.registeredWith.sort(), ['claude-code', 'codex'], 'the registered servers were not matched');
+  assert.deepEqual(
+    state.registeredWith.sort(),
+    ['claude-code', 'claude-desktop', 'codex'],
+    'the registered servers were not matched',
+  );
   assert.ok(!state.registeredWith.includes('cursor'), '@notagentcomms/gmail-mcp was counted as ours');
-  assert.ok(!state.registeredWith.includes('gemini'), '/opt/notagentcomms/gmail was counted as ours');
+  assert.ok(!state.registeredWith.includes('gemini'), '@agentcomms/gmail-evil was counted as ours');
   assert.ok(state.done.includes('mcp'));
   assert.equal(state.next, 'done');
 });

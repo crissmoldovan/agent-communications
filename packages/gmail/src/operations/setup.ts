@@ -303,20 +303,35 @@ export interface SetupStateOptions {
 /**
  * Whether a registered MCP server is one of ours.
  *
- * This decides whether the last setup step is behind you, and it used to be `join(' ').includes('agentcomms/gmail')`
- * — a substring test against a whole command line, which `@notagentcomms/gmail-mcp` and `/opt/notagentcomms/gmail/…`
- * both satisfy. Somebody else's server would have reported our setup complete.
+ * This decides whether the last setup step is behind you, and it has now been wrong in both directions.
  *
- * So: the package name if the entry names one, matched exactly; otherwise a path, matched on whole segments, for a
- * local or managed install launched by file. `agentcomms` as part of a longer word is not `agentcomms`.
+ * It began as `join(' ').includes('agentcomms/gmail')` — a substring test against a whole command line, which
+ * `@notagentcomms/gmail-mcp` and `/opt/notagentcomms/gmail/…` also satisfy: somebody else's server reporting our
+ * setup complete. Replacing it with a segment match fixed that and broke the common case instead, because the
+ * managed installer — the default — writes `…/node_modules/@agentcomms/gmail/dist/cli.mjs`, and the segment is
+ * `@agentcomms`, not `agentcomms`. A correctly registered default install reported `registeredWith: []`, so
+ * setup would have said the agent step was still to do, forever.
+ *
+ * So it is written against what the installer actually emits, which is one of three shapes:
+ *
+ *   npx      `npx -y @agentcomms/gmail-mcp@<version> …`   → read from `packageName`
+ *   managed  `node <data>/runtime/<v>/node_modules/@agentcomms/gmail/dist/cli.mjs mcp serve`
+ *   local    `node <checkout>/packages/gmail/{src/cli.ts,dist/cli.mjs} mcp serve`
+ *
+ * The middle one is matched on the two consecutive segments `@agentcomms` and `gmail` — exactly, so
+ * `gmail-evil` is not one of ours — and the last on this package's own directory followed by the entry it runs.
  */
 function isOurServer(server: { command: string; args: string[]; packageName?: string | undefined }): boolean {
   if (server.packageName) return OUR_PACKAGES.has(server.packageName);
-  return [server.command, ...server.args].some((part) =>
-    part
-      .split(/[\\/]/)
-      .some((segment, index, segments) => segment === 'agentcomms' && segments[index + 1]?.startsWith('gmail')),
-  );
+  return [server.command, ...server.args].some((part) => {
+    const segments = part.split(/[\\/]+/);
+    return segments.some((segment, index) => {
+      const next = segments[index + 1];
+      if (segment === '@agentcomms' && (next === 'gmail' || next === 'gmail-mcp')) return true;
+      // A checkout: `…/packages/gmail/dist/cli.mjs`, which is what `--launcher local` points at.
+      return segment === 'packages' && next === 'gmail' && segments.slice(index + 2).includes('cli.mjs');
+    });
+  });
 }
 
 /** The npm packages that are this server. An entry naming one of these, and no other, is ours. */

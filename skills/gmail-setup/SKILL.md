@@ -152,7 +152,7 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    The mailbox step is the boundary. Consent is granted on Google's own screen, in a browser this
    command does not drive, so that call returns `handoff: { authUrl, finish }` rather than waiting: give
    the user `authUrl`, warn them about the unverified-app screen *before* they meet it, and run `finish`
-   once they say they have approved it. Hand the link over — it is the user's to open, not yours.
+   once the user says the sign-in is done. Hand the link over — it is the user's to open, not yours.
    `did` lists what the run changed. Never claim a step succeeded that is not in `did`.
    **Complete when:** every step you can drive has run, and anything left is named in `blocked`.
 

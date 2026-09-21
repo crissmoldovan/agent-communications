@@ -938,7 +938,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
             flowId: z.string(),
             authUrl: z.string().describe('show this to the person; it expires in ten minutes'),
             expiresAt: z.string(),
-            nextTool: z.string().describe('call this once they say they have approved it'),
+            nextTool: z.string().describe('call this once the user says the sign-in is done'),
           }),
           annotations: { readOnlyHint: false, openWorldHint: true },
         },
@@ -968,10 +968,16 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         {
           title: 'Finish connecting a mailbox',
           description:
-            'Complete a sign-in the person has approved in their browser. APPROVAL_PENDING means they have not finished yet and the link is still good — wait and call again, do not start a new one.',
+            'Complete a sign-in once Google has returned a grant for it. APPROVAL_PENDING means the browser flow has not completed yet and the link is still good — wait and call again, do not start a new one.',
           inputSchema: z.object({
             flowId: z.string().min(1),
-            waitSeconds: z.number().int().min(0).max(120).optional().describe('how long to wait for them; default 60'),
+            waitSeconds: z
+              .number()
+              .int()
+              .min(0)
+              .max(120)
+              .optional()
+              .describe('how long to wait for the grant; default 60'),
           }),
           outputSchema: z.object({
             alias: z.string(),

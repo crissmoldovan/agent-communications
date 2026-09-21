@@ -675,7 +675,7 @@ export function renderSetupPlan(
     lines.push('');
     lines.push(`  ${state.handoff.authUrl}`);
     lines.push('');
-    lines.push('Then, once they have approved it:');
+    lines.push('Then, once the browser flow has returned a grant:');
     lines.push(`  ${state.handoff.finish}`);
     return lines.join('\n');
   }
