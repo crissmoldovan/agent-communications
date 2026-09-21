@@ -90,9 +90,12 @@ export const CONSOLE_STEPS: readonly ConsoleStep[] = [
       'When it is right, the status reads "In production".',
     ],
     avoid: [
-      'Do NOT add yourself under "Test users" and stop there. It works today and fails on day seven: Google ' +
-        "expires a test user's authorization, and its refresh token with it, seven days after consent.",
-      'Publishing submits nothing for review. Verification only matters past 100 accounts.',
+      'Do NOT add yourself under "Test users" and stop there. Testing mode has two consequences, and you will ' +
+        'meet one of them: only the project owner and accounts listed as test users can sign in at all — every ' +
+        'other address is refused with "Access blocked … has not completed the Google verification process" — ' +
+        "and any sign-in that does work expires seven days later, because Google expires a test user's " +
+        'authorization and its refresh token with it.',
+      'Publishing submits nothing for review and asks nothing of you. Verification only matters past 100 accounts.',
     ],
   },
   {

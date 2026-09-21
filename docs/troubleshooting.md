@@ -41,6 +41,21 @@ not being caught:
   Paste the redirect URL instead: `agent-gmail inbox add <alias> --finish <flowId> --url '<the URL from the bar>'`.
 - **The flow expired.** Flows are short-lived. Start again.
 
+### `Access blocked: … has not completed the Google verification process`
+
+Error 403, `access_denied`, at the sign-in screen — often noticed as "it will not let me use any address except
+the one I built the project with".
+
+Both are the same setting. While the app's publishing status is **Testing**, only the project owner and accounts
+explicitly listed as test users may consent, and every other address is refused outright. Publishing lifts that,
+and asks nothing of you:
+
+Open [console.cloud.google.com/auth/audience](https://console.cloud.google.com/auth/audience) → **PUBLISH APP** →
+confirm. The status then reads **In production**. Sign in again and it goes through.
+
+Publishing submits nothing for review. Verification is a separate thing and only applies past 100 accounts. The
+other consequence of leaving it in Testing is that any sign-in which *does* work expires seven days later.
+
 ### `that sign-in was <other address>`
 
 Google's account chooser offered an account you were already signed into. Nothing was saved. Run it again choosing
