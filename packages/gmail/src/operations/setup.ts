@@ -182,6 +182,14 @@ export interface SetupState {
   done: readonly ('client' | 'inbox' | 'mcp')[];
   clients: string[];
   inboxes: string[];
+  /**
+   * Which OAuth client each mailbox signed in through, from the same read as everything else here.
+   *
+   * Carried rather than looked up, because the caller that needed it was loading the config a second time to get
+   * it — and two reads are two moments. A mailbox removed in between produced an answer whose `inboxes` came
+   * from one snapshot and whose verdict came from another, which is the bug this state object exists to avoid.
+   */
+  clientOf: Record<string, string>;
   registeredWith: string[];
   /** Downloaded client files: Desktop first, then newest first. Empty is ordinary. */
   candidates: ClientCandidate[];
@@ -336,5 +344,6 @@ export async function setupState(context: GmailContext, options: SetupStateOptio
   const next =
     clients.length === 0 ? 'client' : inboxes.length === 0 ? 'inbox' : registeredWith.length === 0 ? 'mcp' : 'done';
   const candidates = options.scanDownloads === false ? [] : await findClientJson(context.env);
-  return { next, done, clients, inboxes, registeredWith, candidates };
+  const clientOf = Object.fromEntries(Object.entries(config.inboxes).map(([alias, inbox]) => [alias, inbox.client]));
+  return { next, done, clients, inboxes, clientOf, registeredWith, candidates };
 }

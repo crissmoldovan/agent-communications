@@ -854,9 +854,11 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
          * five aliases, the clients behind them, and the paths of files in a person's Downloads folder. None of
          * that is needed to set up the mailbox this server serves.
          */
-        const config = await context.core.config.load();
-        const pinnedInbox = pinned ? config.inboxes[pinned] : undefined;
-        const pinnedClient = pinnedInbox?.client;
+        // One snapshot, not two. This loaded the config again to find the pinned mailbox's client, so `inboxes`
+        // could come from `setupState`'s read and the verdict from a read a moment later — the same split this
+        // scoping exists to close.
+        const pinnedInbox = pinned ? state.inboxes.includes(pinned) : false;
+        const pinnedClient = pinned ? state.clientOf[pinned] : undefined;
         /*
          * `next` and `done` have to be scoped too, and this is not the same filter.
          *
@@ -873,7 +875,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           ? {
               next: !pinnedInbox ? 'inbox' : state.registeredWith.length === 0 ? 'mcp' : 'done',
               done: [
-                ...(pinnedClient && config.clients[pinnedClient] ? (['client'] as const) : []),
+                ...(pinnedClient && state.clients.includes(pinnedClient) ? (['client'] as const) : []),
                 ...(pinnedInbox ? (['inbox'] as const) : []),
                 ...(state.registeredWith.length > 0 ? (['mcp'] as const) : []),
               ],

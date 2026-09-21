@@ -489,3 +489,15 @@ test('a bounded stream stops at the limit rather than after it', async () => {
   assert.deepEqual(await readBoundedStream(huge, 8 * 1024), { ok: false, problem: 'too-large' });
   assert.ok(yielded < 64, `it drained ${yielded} chunks instead of stopping at the limit`);
 });
+
+test('a stream that faults mid-read is an outcome, not a crash', async () => {
+  // `for await` turns the stream's `error` event into a rejection, which reached the CLI as `UNEXPECTED` — the
+  // code this package reserves for something nobody thought about. A pipe closing early is not that.
+  const broken = Readable.from(
+    (async function* () {
+      yield Buffer.from('half a ');
+      throw new Error('the writer went away');
+    })(),
+  ) as unknown as NodeJS.ReadableStream;
+  assert.deepEqual(await readBoundedStream(broken, 1024), { ok: false, problem: 'unreadable' });
+});

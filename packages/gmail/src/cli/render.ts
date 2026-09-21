@@ -713,7 +713,7 @@ export function renderSetupPlan(
       for (const warning of step.avoid) lines.push(`       ! ${warning}`);
     }
     lines.push('');
-    lines.push('  Then: agent-gmail client add <the downloaded JSON> --name desktop');
+    lines.push('  Then: agent-gmail setup --client-json <the downloaded JSON>');
     for (const candidate of state.candidates) {
       const note = CLIENT_KIND_LABEL[candidate.kind] ?? candidate.kind;
       lines.push(`  ${paint(color, 'dim', `found: ${candidate.path} (${note}, ${candidate.modifiedAt})`)}`);
@@ -723,7 +723,10 @@ export function renderSetupPlan(
   if (state.inboxes.length === 0) {
     lines.push('');
     lines.push(paint(color, 'bold', 'A mailbox'));
-    lines.push('  agent-gmail inbox add work --email you@example.com --start');
+    // `setup`'s own flags, because this is `setup`'s own output. It named `inbox add … --start` — a real command,
+    // but a different one, so the text told you to leave the thing you were running while `blocked.needs` beside
+    // it correctly said `--inbox <alias>`. Two answers to one question, in the same document.
+    lines.push('  agent-gmail setup --inbox work --email you@example.com');
     lines.push('  then run the --finish command it prints, after signing in.');
   }
 

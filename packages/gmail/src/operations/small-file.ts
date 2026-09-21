@@ -134,18 +134,26 @@ export async function readSmallFile(path: string, options: ReadSmallFileOptions)
  * It stops at the first chunk that takes the total past the limit, so it never holds more than `maxBytes` plus one
  * chunk, and it stops reading rather than draining: whatever is still upstream is the caller's problem, not this
  * process's memory.
+ *
+ * A stream that faults mid-read is an outcome like the others rather than a throw. `for await` turns the stream's
+ * `error` event into a rejection, which left the two callers reporting a broken pipe as `UNEXPECTED` — the code
+ * this package uses for "something happened that we did not think about", which a closed pipe is not.
  */
 export async function readBoundedStream(
   stream: NodeJS.ReadableStream,
   maxBytes: number,
-): Promise<{ ok: true; text: string } | { ok: false; problem: 'too-large' }> {
+): Promise<{ ok: true; text: string } | { ok: false; problem: 'too-large' | 'unreadable' }> {
   const chunks: Buffer[] = [];
   let total = 0;
-  for await (const chunk of stream) {
-    const buffer = Buffer.from(chunk as Buffer);
-    total += buffer.byteLength;
-    if (total > maxBytes) return { ok: false, problem: 'too-large' };
-    chunks.push(buffer);
+  try {
+    for await (const chunk of stream) {
+      const buffer = Buffer.from(chunk as Buffer);
+      total += buffer.byteLength;
+      if (total > maxBytes) return { ok: false, problem: 'too-large' };
+      chunks.push(buffer);
+    }
+  } catch {
+    return { ok: false, problem: 'unreadable' };
   }
   return { ok: true, text: Buffer.concat(chunks).toString('utf8') };
 }

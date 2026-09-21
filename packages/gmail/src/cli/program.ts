@@ -186,9 +186,18 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     const { MAX_MESSAGE_BYTES } = await import('../domain/compose.ts');
     const piped = await readBoundedStream(stdin, MAX_MESSAGE_BYTES);
     if (!piped.ok) {
-      throw new CommsError('USAGE', 'the piped message body is larger than a message can be', {
-        hint: 'A Gmail message tops out at 35MB including attachments.',
-      });
+      throw new CommsError(
+        'USAGE',
+        piped.problem === 'too-large'
+          ? 'the piped message body is larger than a message can be'
+          : 'the piped message body could not be read to the end',
+        {
+          hint:
+            piped.problem === 'too-large'
+              ? 'A Gmail message tops out at 35MB including attachments.'
+              : 'Whatever was piping the body stopped before it finished. Pass --text or --file instead.',
+        },
+      );
     }
     const text = piped.text;
     if (!text.trim()) {
@@ -975,9 +984,13 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
                 const { readBoundedStream } = await import('../operations/small-file.ts');
                 const piped = await readBoundedStream(streams.stdin as NodeJS.ReadableStream, 4 * 1024 * 1024);
                 if (!piped.ok) {
-                  throw new CommsError('USAGE', 'that is far larger than an undo receipt', {
-                    hint: 'Pipe in the `undo` array from `agent-gmail organise … --json`.',
-                  });
+                  throw new CommsError(
+                    'USAGE',
+                    piped.problem === 'too-large'
+                      ? 'that is far larger than an undo receipt'
+                      : 'the piped undo receipt could not be read to the end',
+                    { hint: 'Pipe in the `undo` array from `agent-gmail organise … --json`.' },
+                  );
                 }
                 return piped.text;
               })()
