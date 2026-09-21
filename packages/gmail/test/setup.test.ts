@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdir, open, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { test } from 'node:test';
 import type { CommsError } from '@agentcomms/core';
 import { canPrompt } from '@agentcomms/core';
@@ -9,6 +10,7 @@ import { interactionFor } from '../src/cli/tui.ts';
 import { GmailContext } from '../src/context.ts';
 import { clientAdd } from '../src/operations/clients.ts';
 import { CONSOLE_STEPS, findClientJson, setupState } from '../src/operations/setup.ts';
+import { readBoundedStream } from '../src/operations/small-file.ts';
 import { newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
 
 /** A well-formed Desktop client, for the cases that are about something other than its contents. */
@@ -339,22 +341,37 @@ test('a registered server is what marks the agent step done, and it is matched o
    * not count.
    */
   const home = await tempDir();
+  // Ours, by package name, launched with npx.
   await writeFile(
     join(home, '.claude.json'),
-    JSON.stringify({
-      mcpServers: {
-        gmail: { command: 'npx', args: ['-y', '@agentcomms/gmail-mcp@0.1.4'] },
-        // A different Gmail server entirely: present on plenty of machines, and not this one.
-        other: { command: 'npx', args: ['-y', '@somebody/gmail-mcp'] },
-      },
-    }),
+    JSON.stringify({ mcpServers: { gmail: { command: 'npx', args: ['-y', '@agentcomms/gmail-mcp@0.1.4'] } } }),
   );
+  // Ours, by path, launched by file — a local or managed install.
   await mkdir(join(home, '.codex'), { recursive: true });
   await writeFile(
     join(home, '.codex', 'config.toml'),
     ['[mcp_servers.gmail]', 'command = "node"', 'args = ["/opt/agentcomms/gmail/dist/cli.mjs", "mcp", "serve"]'].join(
       '\n',
     ),
+  );
+  /*
+   * Not ours — and in clients of their own, which is the point.
+   *
+   * The first version of this test put the near miss in `.claude.json` beside a real entry, so the client was
+   * named either way and deleting the filter outright left the assertion green. A near miss only proves
+   * something when it is the *only* thing that could name its client.
+   */
+  await mkdir(join(home, '.cursor'), { recursive: true });
+  await writeFile(
+    join(home, '.cursor', 'mcp.json'),
+    JSON.stringify({ mcpServers: { gmail: { command: 'npx', args: ['-y', '@notagentcomms/gmail-mcp'] } } }),
+  );
+  await mkdir(join(home, '.gemini'), { recursive: true });
+  await writeFile(
+    join(home, '.gemini', 'settings.json'),
+    JSON.stringify({
+      mcpServers: { gmail: { command: 'node', args: ['/opt/notagentcomms/gmail/dist/cli.mjs', 'mcp', 'serve'] } },
+    }),
   );
 
   const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
@@ -363,8 +380,30 @@ test('a registered server is what marks the agent step done, and it is matched o
 
   const state = await setupState(context, { scanDownloads: false });
   assert.deepEqual(state.registeredWith.sort(), ['claude-code', 'codex'], 'the registered servers were not matched');
+  assert.ok(!state.registeredWith.includes('cursor'), '@notagentcomms/gmail-mcp was counted as ours');
+  assert.ok(!state.registeredWith.includes('gemini'), '/opt/notagentcomms/gmail was counted as ours');
   assert.ok(state.done.includes('mcp'));
   assert.equal(state.next, 'done');
+});
+
+test('a client file that is valid JSON but not an object does not abort the scan', async () => {
+  // `JSON.parse('null')` succeeds and returns null, whose `typeof` is 'object' — so the obvious guard lets it
+  // through and the next property read throws. One junk file in a download directory and `setup` could not say
+  // anything at all, because the TypeError came out of the whole scan rather than out of one candidate.
+  const dir = await downloads([
+    { name: 'client_secret_null.json', body: 'null', minutesAgo: 1 },
+    { name: 'client_secret_array.json', body: '[1,2,3]', minutesAgo: 2 },
+    { name: 'client_secret_number.json', body: '42', minutesAgo: 3 },
+    { name: 'client_secret_string.json', body: '"a string"', minutesAgo: 4 },
+    { name: 'client_secret_real.json', body: DESKTOP, minutesAgo: 5 },
+  ]);
+
+  const found = await findClientJson({ XDG_DOWNLOAD_DIR: dir } as NodeJS.ProcessEnv);
+  assert.equal(found.length, 5, 'every candidate is still listed');
+  assert.deepEqual(
+    found.filter((candidate) => candidate.kind === 'desktop').map((candidate) => candidate.path.split(/[\\/]/).pop()),
+    ['client_secret_real.json'],
+  );
 });
 
 test('scanDownloads: false really does not scan', async () => {
@@ -376,4 +415,77 @@ test('scanDownloads: false really does not scan', async () => {
 
   assert.equal((await setupState(context)).candidates.length, 1, 'the default still scans');
   assert.deepEqual((await setupState(context, { scanDownloads: false })).candidates, []);
+});
+
+test('both scan bounds hold: how many are dated, and how many are opened', async () => {
+  /*
+   * Two separate limits, and the reorder test only pins the second one. Deleting the first — the cut on how many
+   * names are dated at all — left that test green, because its assertion is on the forty that come back rather
+   * than on the hundreds that were `lstat`ed to choose them. A directory with a hundred thousand matches would
+   * then have been stat'd in full.
+   *
+   * Both are parameters rather than a test-only seam, so this asserts the real behaviour at small numbers.
+   */
+  const dir = await downloads(
+    Array.from({ length: 12 }, (_, index) => ({
+      name: `client_secret_${String(index).padStart(2, '0')}.json`,
+      body: DESKTOP,
+      minutesAgo: index,
+    })),
+  );
+  const env = { XDG_DOWNLOAD_DIR: dir } as NodeJS.ProcessEnv;
+
+  // Only three names are ever dated, so at most three can come back however many match.
+  assert.equal((await findClientJson(env, { maxDated: 3 })).length, 3, 'the dating pass is not bounded');
+  // And of those dated, only two are opened.
+  assert.equal(
+    (await findClientJson(env, { maxDated: 10, maxOpened: 2 })).length,
+    2,
+    'the opening pass is not bounded',
+  );
+  // Unbounded by these arguments, every one of the twelve is found — so the numbers above are the bounds doing it.
+  assert.equal((await findClientJson(env)).length, 12);
+});
+
+test('a bounded stream stops at the limit rather than after it', async () => {
+  /*
+   * The pipe twins of `--file` and `--from <path>`. Both accumulated every chunk and let the size check happen
+   * afterwards, which is no check at all when the thing upstream is `/dev/zero`: the process dies before any
+   * limit is consulted. This one stops at the chunk that crosses the line, so it never holds more than the limit
+   * plus one chunk, and it stops reading rather than draining.
+   *
+   * The function is tested rather than the two commands that call it: proving the wiring would mean piping 35MB
+   * through a CLI test. Which limit each caller passes is one readable line, checked by reading it.
+   */
+  const stream = (chunks: string[]) =>
+    Readable.from(
+      (async function* () {
+        for (const chunk of chunks) yield Buffer.from(chunk);
+      })(),
+    ) as unknown as NodeJS.ReadableStream;
+
+  const under = await readBoundedStream(stream(['hello ', 'world']), 64);
+  assert.deepEqual(under, { ok: true, text: 'hello world' });
+
+  // Exactly at the limit is fine; one byte past it is not.
+  assert.deepEqual(await readBoundedStream(stream(['abcde']), 5), { ok: true, text: 'abcde' });
+  assert.deepEqual(await readBoundedStream(stream(['abcde', 'f']), 5), { ok: false, problem: 'too-large' });
+
+  /*
+   * And it stops reading rather than draining. Large but finite on purpose: an endless generator would prove the
+   * same thing by hanging, and a test that hangs is a test that fails as a CI timeout twenty minutes later with
+   * no message. This one ends either way — a reader that stops at the limit sees nine of these chunks, and one
+   * that checks the total afterwards returns `ok` with 64MB of zeroes and fails on the next line.
+   */
+  let yielded = 0;
+  const huge = Readable.from(
+    (async function* () {
+      for (let index = 0; index < 64 * 1024; index += 1) {
+        yielded += 1;
+        yield Buffer.alloc(1024, 0);
+      }
+    })(),
+  ) as unknown as NodeJS.ReadableStream;
+  assert.deepEqual(await readBoundedStream(huge, 8 * 1024), { ok: false, problem: 'too-large' });
+  assert.ok(yielded < 64, `it drained ${yielded} chunks instead of stopping at the limit`);
 });

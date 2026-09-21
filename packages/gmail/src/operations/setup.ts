@@ -7,7 +7,7 @@ import { listRegisteredServers } from './client-configs.ts';
 import { readSmallFile } from './small-file.ts';
 
 /**
- * What a person has to do before this software can read their mail, and how much of it they have already done.
+ * What has to happen before this software can read somebody's mail, and how much of it is already done.
  *
  * This exists because `doctor` was standing in for it. `doctor` is a diagnostic — it answers "what is broken" for
  * an install that used to work — and pressing it into service as step one of onboarding produced advice written
@@ -19,8 +19,8 @@ import { readSmallFile } from './small-file.ts';
  *
  * **Everything here is data, and none of it is prose for a terminal.** The steps, their fields and their traps are
  * structures a caller renders — the CLI prints them, and a settings pane or a web installer would lay the same
- * ones out as a form without this file changing. The one thing no surface can avoid is that a person has to be
- * reached: the console and the consent screen are both browser pages this code does not drive.
+ * ones out as a form without this file changing. The one thing no surface can avoid is the browser: the console
+ * and the consent screen are both pages this code does not drive and cannot answer for.
  */
 
 export interface ConsoleStep {
@@ -147,7 +147,13 @@ const MAX_NAMES_DATED = 500;
 function classifyClient(text: string): ClientKind {
   let json: Record<string, unknown>;
   try {
-    json = JSON.parse(text) as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(text);
+    // `JSON.parse` returns any JSON value, and `null` is one of them — `typeof null` is `'object'`, so the
+    // obvious check lets it through and the next line reads a property off it. A file containing the four
+    // characters `null` is valid JSON, and it threw a TypeError out of the whole scan: one piece of junk in a
+    // download directory and `setup` could not tell you anything at all.
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return 'unreadable';
+    json = parsed as Record<string, unknown>;
   } catch {
     return 'unreadable';
   }
@@ -193,7 +199,19 @@ export interface SetupState {
  * `XDG_DOWNLOAD_DIR` and localises the name — so finding nothing is an ordinary outcome, and every caller must
  * still accept a path typed by hand.
  */
-export async function findClientJson(env: NodeJS.ProcessEnv = process.env): Promise<ClientCandidate[]> {
+export interface FindClientOptions {
+  /** How many matching names are dated before the newest are chosen. Defaults to {@link MAX_NAMES_DATED}. */
+  maxDated?: number;
+  /** How many of those are opened and read. Defaults to {@link MAX_CANDIDATES}. */
+  maxOpened?: number;
+}
+
+export async function findClientJson(
+  env: NodeJS.ProcessEnv = process.env,
+  options: FindClientOptions = {},
+): Promise<ClientCandidate[]> {
+  const maxDated = options.maxDated ?? MAX_NAMES_DATED;
+  const maxOpened = options.maxOpened ?? MAX_CANDIDATES;
   const home = env.HOME || env.USERPROFILE || homedir();
   const directory = env.XDG_DOWNLOAD_DIR || join(home, 'Downloads');
   let names: string[];
@@ -214,7 +232,7 @@ export async function findClientJson(env: NodeJS.ProcessEnv = process.env): Prom
    * `lstat` gives the date without opening anything and without following a link, so the wide pass is cheap. Only
    * the forty newest are then opened and read.
    */
-  const matches = names.filter((name) => /^client_secret.*\.json$/i.test(name)).slice(0, MAX_NAMES_DATED);
+  const matches = names.filter((name) => /^client_secret.*\.json$/i.test(name)).slice(0, maxDated);
   const dated = await Promise.all(
     matches.map(async (name) => {
       try {
@@ -227,7 +245,7 @@ export async function findClientJson(env: NodeJS.ProcessEnv = process.env): Prom
   const newest = dated
     .filter((entry): entry is { name: string; at: number } => entry !== null)
     .sort((a, b) => b.at - a.at)
-    .slice(0, MAX_CANDIDATES);
+    .slice(0, maxOpened);
 
   const found = await Promise.all(
     newest.map(async ({ name }): Promise<(ClientCandidate & { at: number }) | null> => {
@@ -274,6 +292,28 @@ export interface SetupStateOptions {
   scanDownloads?: boolean;
 }
 
+/**
+ * Whether a registered MCP server is one of ours.
+ *
+ * This decides whether the last setup step is behind you, and it used to be `join(' ').includes('agentcomms/gmail')`
+ * — a substring test against a whole command line, which `@notagentcomms/gmail-mcp` and `/opt/notagentcomms/gmail/…`
+ * both satisfy. Somebody else's server would have reported our setup complete.
+ *
+ * So: the package name if the entry names one, matched exactly; otherwise a path, matched on whole segments, for a
+ * local or managed install launched by file. `agentcomms` as part of a longer word is not `agentcomms`.
+ */
+function isOurServer(server: { command: string; args: string[]; packageName?: string | undefined }): boolean {
+  if (server.packageName) return OUR_PACKAGES.has(server.packageName);
+  return [server.command, ...server.args].some((part) =>
+    part
+      .split(/[\\/]/)
+      .some((segment, index, segments) => segment === 'agentcomms' && segments[index + 1]?.startsWith('gmail')),
+  );
+}
+
+/** The npm packages that are this server. An entry naming one of these, and no other, is ours. */
+const OUR_PACKAGES = new Set(['@agentcomms/gmail', '@agentcomms/gmail-mcp']);
+
 /** Where this machine is in the setup, what is already behind it, and the single next thing to do. */
 export async function setupState(context: GmailContext, options: SetupStateOptions = {}): Promise<SetupState> {
   const config = await context.core.config.load();
@@ -283,13 +323,7 @@ export async function setupState(context: GmailContext, options: SetupStateOptio
   let registeredWith: string[] = [];
   try {
     const servers = await listRegisteredServers(context.env);
-    registeredWith = [
-      ...new Set(
-        servers
-          .filter((server) => [server.command, ...server.args].join(' ').includes('agentcomms/gmail'))
-          .map((server) => server.client),
-      ),
-    ];
+    registeredWith = [...new Set(servers.filter(isOurServer).map((server) => server.client))];
   } catch {
     // Unreadable client configs are not a setup failure; the MCP step simply cannot be skipped automatically.
   }

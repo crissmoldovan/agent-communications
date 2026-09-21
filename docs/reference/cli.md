@@ -777,6 +777,10 @@ agent-gmail setup [options]
 | `"codex", "cursor", "gemini", "vscode")` |  | — |
 | `--replace-server` | replace an MCP entry of the same name that is already | — |
 | `there (default: false)` |  | — |
+| `--store <store>` | where secrets are kept (first time only) (choices: | — |
+| `"keychain", "file")` |  | — |
+| `--move` | delete the downloaded client JSON once its secret is | — |
+| `stored (default: false)` |  | — |
 | `--restart` | walk the Google Cloud steps again even if a client is | — |
 | `registered (default: false)` |  | — |
 | `--no-tui` | plain one-line prompts instead of lists and fields | — |

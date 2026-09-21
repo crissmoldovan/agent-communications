@@ -926,7 +926,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         {
           title: 'Start connecting a mailbox',
           description:
-            'Begin connecting a Gmail account. Returns a sign-in link for the person to open — it does NOT connect anything on its own, because consent happens in their browser. Show them the link, warn them Google will call the app unverified (Advanced → "Go to … (unsafe)" is expected for a client they made themselves), then call gmail_inbox_finish.',
+            'Begin connecting a Gmail account. Returns a sign-in link and stops — this server does not open browsers and cannot grant the consent itself. Give the user the link, warn them Google will call the app unverified (Advanced → "Go to … (unsafe)" is expected for a client they made themselves), then call gmail_inbox_finish.',
           inputSchema: z.object({
             alias: z.string().min(1).describe('a short name for the mailbox, e.g. work'),
             email: z.string().min(3).optional().describe('the address it must turn out to be; refuses any other'),

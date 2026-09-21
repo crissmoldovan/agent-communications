@@ -123,3 +123,29 @@ export async function readSmallFile(path: string, options: ReadSmallFileOptions)
     await handle.close();
   }
 }
+
+/**
+ * The same ceiling, for a stream.
+ *
+ * `--file` and `--from <path>` are bounded; the pipes that do the same job were not, and a pipe is the easier of
+ * the two to point at something endless — `cat /dev/zero | agent-gmail draft create` accumulates until the process
+ * dies. The limit has to be enforced while reading rather than after, which is the whole difference.
+ *
+ * It stops at the first chunk that takes the total past the limit, so it never holds more than `maxBytes` plus one
+ * chunk, and it stops reading rather than draining: whatever is still upstream is the caller's problem, not this
+ * process's memory.
+ */
+export async function readBoundedStream(
+  stream: NodeJS.ReadableStream,
+  maxBytes: number,
+): Promise<{ ok: true; text: string } | { ok: false; problem: 'too-large' }> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of stream) {
+    const buffer = Buffer.from(chunk as Buffer);
+    total += buffer.byteLength;
+    if (total > maxBytes) return { ok: false, problem: 'too-large' };
+    chunks.push(buffer);
+  }
+  return { ok: true, text: Buffer.concat(chunks).toString('utf8') };
+}

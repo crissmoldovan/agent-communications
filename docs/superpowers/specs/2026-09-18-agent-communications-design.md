@@ -298,7 +298,11 @@ per-process memory.
 - **Capabilities are checked at call time** (§11). A tool or command whose scope was not granted for that inbox fails
   with `SCOPE_MISSING` (exit 77): "grant `organize`: `agent-gmail inbox reauth work --tier organize`".
 
-### 6.2 Commands (CLI; MCP gets read-only views only)
+### 6.2 Commands (CLI; MCP gets read-only views of lifecycle state, with one exception)
+
+> The exception is adding an inbox, added in 0.1.4 and specified with its reasoning and bounds in §5.2 and §9:
+> `gmail_setup` (read-only), `gmail_inbox_add` and `gmail_inbox_finish`. Everything else in this section is
+> CLI-only, and MCP sees it read-only.
 
 | Command | Behaviour |
 |---|---|
@@ -914,6 +918,9 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
 | `gmail_trash`, `gmail_untrash` | mailbox write | destructive (trash) |
 | `gmail_send_prepare` | prepare | destructive:false |
 | `gmail_draft_send` | **send** | destructive, openWorld, not idempotent, requiresUserInteraction under `confirm` |
+| `gmail_setup` | read | readOnly — and on a pinned server it reports only that mailbox, its client, and no downloaded-file paths |
+| `gmail_inbox_add` | **config write** (the §5.2 exception) | openWorld; returns a sign-in URL and writes nothing; absent when `--read-only` or pinned |
+| `gmail_inbox_finish` | **config write** (the §5.2 exception) | openWorld; refuses any flow that is not an `add`; absent when `--read-only` or pinned |
 
 - **Results:** `structuredContent` conforming to a declared `outputSchema`, and the same JSON minified in one text
   block. Claude Code and Codex pass **only** `structuredContent` to the model and drop text blocks; Cursor passes

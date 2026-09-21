@@ -23,8 +23,8 @@ Every prompt goes to stderr, so the document `--json` puts on stdout stays parse
 
 **An agent can now drive all of it except the grant itself.** `setup --client-json <path> --inbox work
 --mcp-client claude-code --json` runs each step that has what it needs and stops at the first that does not,
-naming the flag that would have let it continue. The one step it cannot finish is consent: it produces the
-sign-in link and the command that completes it, and hands both back.
+naming the flag that would have let it continue. The one step it does not finish is the grant: it produces the
+sign-in link and the command that completes it, and hands both back, because it does not drive browsers.
 
 **And the same onboarding is available over MCP**, so an agent asked to "set up Gmail" is no longer reduced to
 telling you to go and run a CLI. `gmail_setup` says what is missing and changes nothing. `gmail_inbox_add`

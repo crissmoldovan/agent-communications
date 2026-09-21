@@ -140,7 +140,7 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    **Complete when:** you have used `gmail_setup` to say what is next, or established you have a shell
    and are using the CLI instead.
 
-1b. **Drive it with flags, and stop where a person is required.** Each step runs when you supply its
+1b. **Drive it with flags, and stop at the browser.** Each step runs when you supply its
    answer and stops when you do not:
 
    ```
@@ -149,9 +149,10 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    agent-gmail setup --mcp-client claude-code --json
    ```
 
-   The mailbox step is the boundary. Consent happens in a browser in front of a person, so that call
-   returns `handoff: { authUrl, finish }` rather than waiting: show the user `authUrl`, warn them about
-   the unverified-app screen *before* they meet it, and run `finish` once they say they have approved it.
+   The mailbox step is the boundary. Consent is granted on Google's own screen, in a browser this
+   command does not drive, so that call returns `handoff: { authUrl, finish }` rather than waiting: give
+   the user `authUrl`, warn them about the unverified-app screen *before* they meet it, and run `finish`
+   once they say they have approved it. Hand the link over — it is the user's to open, not yours.
    `did` lists what the run changed. Never claim a step succeeded that is not in `did`.
    **Complete when:** every step you can drive has run, and anything left is named in `blocked`.
 

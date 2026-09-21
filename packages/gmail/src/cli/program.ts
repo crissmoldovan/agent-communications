@@ -180,9 +180,17 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         hint: 'Pass --text "…", or --file <path>, or pipe the body in on standard input.',
       });
     }
-    const chunks: Buffer[] = [];
-    for await (const chunk of stdin) chunks.push(Buffer.from(chunk as Buffer));
-    const text = Buffer.concat(chunks).toString('utf8');
+    // Bounded the same way `--file` is, and at the same ceiling: a pipe is the easier of the two to point at
+    // something endless, and the size check in `compose` only runs once the whole thing is already in memory.
+    const { readBoundedStream } = await import('../operations/small-file.ts');
+    const { MAX_MESSAGE_BYTES } = await import('../domain/compose.ts');
+    const piped = await readBoundedStream(stdin, MAX_MESSAGE_BYTES);
+    if (!piped.ok) {
+      throw new CommsError('USAGE', 'the piped message body is larger than a message can be', {
+        hint: 'A Gmail message tops out at 35MB including attachments.',
+      });
+    }
+    const text = piped.text;
     if (!text.trim()) {
       throw new CommsError('USAGE', 'the message body was empty', {
         hint: 'Pass --text "…", or --file <path>, or pipe the body in on standard input.',
@@ -964,10 +972,14 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         const raw =
           source === '-'
             ? await (async () => {
-                const chunks: Buffer[] = [];
-                for await (const chunk of streams.stdin as NodeJS.ReadableStream)
-                  chunks.push(Buffer.from(chunk as Buffer));
-                return Buffer.concat(chunks).toString('utf8');
+                const { readBoundedStream } = await import('../operations/small-file.ts');
+                const piped = await readBoundedStream(streams.stdin as NodeJS.ReadableStream, 4 * 1024 * 1024);
+                if (!piped.ok) {
+                  throw new CommsError('USAGE', 'that is far larger than an undo receipt', {
+                    hint: 'Pipe in the `undo` array from `agent-gmail organise … --json`.',
+                  });
+                }
+                return piped.text;
               })()
             : await (async () => {
                 // A receipt this tool wrote, so it is JSON and it is small. The bound is generous — a hundred
@@ -1172,6 +1184,15 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       ]),
     )
     .option('--replace-server', 'replace an MCP entry of the same name that is already there', false)
+    /*
+     * `--store` exists here because without it this command dead-ends on a machine with no keychain.
+     *
+     * `clientAdd` defaults to the keychain, probes it, and on a headless Linux box tells you to run the command
+     * again with `--store file` — a flag `setup` did not accept. The instruction was correct and impossible to
+     * follow, in the one command whose whole purpose is to be where a new install starts.
+     */
+    .addOption(new Option('--store <store>', 'where secrets are kept (first time only)').choices(['keychain', 'file']))
+    .option('--move', 'delete the downloaded client JSON once its secret is stored', false)
     .option('--restart', 'walk the Google Cloud steps again even if a client is registered', false)
     .option('--no-tui', 'plain one-line prompts instead of lists and fields')
     .option('--no-browser', 'print the links instead of opening them')
@@ -1212,8 +1233,16 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             const path = options.clientJson ? String(options.clientJson) : '';
             if (path) {
               const { clientAdd } = await import('../operations/clients.ts');
-              const added = await clientAdd(context, { path, name: 'desktop' });
-              did.push(`registered the OAuth client as "${added.name}"`);
+              const added = await clientAdd(context, {
+                path,
+                name: 'desktop',
+                ...(options.store ? { store: String(options.store) as 'keychain' | 'file' } : {}),
+                ...(options.move === true ? { move: true } : {}),
+              });
+              did.push(
+                `registered the OAuth client as "${added.name}" (secret in the ${added.store} store)` +
+                  (added.sourceRemoved ? ', and removed the downloaded file' : ''),
+              );
               // Scanned, not skipped: this `state` is folded into the report below, and the report lists what is
               // in the downloads directory.
               state = await setupState(context);
@@ -1247,8 +1276,8 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
               did.push(`started a sign-in for "${alias}"`);
               blocked = {
                 step: 'inbox',
-                needs: 'a person to open the link and approve it',
-                hint: 'Consent happens in a browser. Show them the link, then run the finish command.',
+                needs: 'the link opened and approved in a browser',
+                hint: 'This command does not open browsers or grant consent. Give the user the link, then run the finish command.',
               };
             } else {
               blocked = { step: 'inbox', needs: '--inbox <alias> [--email <address>]' };
@@ -1290,10 +1319,17 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         // A second run says what it is resuming from, rather than silently doing something different from the
         // first. Nothing here is destructive, so "start over" only re-walks the console; it removes nothing.
         let walkConsole = state.next === 'client' || options.restart === true;
-        // Set when a finished setup is asked to do more, so the steps below run for a state already past them.
-        let addAnother = false;
-        let addMcp = false;
-        if (state.done.length > 0 && !options.restart) {
+        /*
+         * Set when a finished setup is asked to do more, so the steps below run for a state already past them.
+         *
+         * An explicit `--inbox` or `--mcp-client` sets it before anything is asked. Consuming the flags inside
+         * the mailbox loop was not enough: the loop is entered on `state.next === 'inbox'`, so
+         * `setup --inbox personal` on a machine that already has one mailbox never reached them — it went to the
+         * agent step, or asked "what would you like to do?" of somebody who had already said.
+         */
+        let addAnother = Boolean(options.inbox);
+        let addMcp = Boolean(options.mcpClient);
+        if (state.done.length > 0 && !options.restart && !addAnother && !addMcp) {
           out.write(`${bold('Picking up where you left off.')}\n`);
           if (state.clients.length > 0) out.write(`  done · client "${state.clients.join('", "')}" registered\n`);
           if (state.inboxes.length > 0)
@@ -1388,9 +1424,24 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           }
 
           const { clientAdd } = await import('../operations/clients.ts');
-          const added = await clientAdd(context, { path, name: 'desktop' });
+          const added = await clientAdd(context, {
+            path,
+            name: 'desktop',
+            ...(options.store ? { store: String(options.store) as 'keychain' | 'file' } : {}),
+            ...(options.move === true ? { move: true } : {}),
+          });
           out.write(`\n${bold('Client registered')} as "${added.name}".\n`);
-          out.write(`${dim('The id went to your config; the secret to your keychain, never to a file.')}\n\n`);
+          // What happened, not what usually happens: this said "your keychain, never to a file" whatever the
+          // store turned out to be, including on the machines where the keychain is exactly what is missing.
+          out.write(
+            `${dim(
+              added.store === 'keychain'
+                ? 'The id went to your config; the secret to your keychain, never to a file.'
+                : 'The id went to your config; the secret to an owner-only file beside it, because no keychain is available here.',
+            )}\n`,
+          );
+          if (added.sourceRemoved) out.write(`${dim('The downloaded JSON has been deleted.')}\n`);
+          out.write('\n');
           state = await setupState(context, { scanDownloads: false });
         }
 

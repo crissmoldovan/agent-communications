@@ -255,7 +255,7 @@ Takes no arguments.
 
 ### `gmail_inbox_add`
 
-Begin connecting a Gmail account. Returns a sign-in link for the person to open — it does NOT connect anything on its own, because consent happens in their browser. Show them the link, warn them Google will call the app unverified (Advanced → "Go to … (unsafe)" is expected for a client they made themselves), then call gmail_inbox_finish.
+Begin connecting a Gmail account. Returns a sign-in link and stops — this server does not open browsers and cannot grant the consent itself. Give the user the link, warn them Google will call the app unverified (Advanced → "Go to … (unsafe)" is expected for a client they made themselves), then call gmail_inbox_finish.
 
 *writes*
 
