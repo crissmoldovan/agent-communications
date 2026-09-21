@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
-import { open } from 'node:fs/promises';
+import { lstat, open } from 'node:fs/promises';
 
 /**
  * Reading a file somebody else chose the name of.
@@ -42,7 +42,8 @@ export interface ReadSmallFileOptions {
    * `false` for a path this code found by scanning a directory: a symlink wearing the name of a client file is
    * something another process put there, and following it is the substitution the whole open-once dance exists
    * to refuse. `true` for a path a person typed, where the symlink is their own and refusing it would only be
-   * confusing. Ignored on Windows, where the constant is 0.
+   * confusing. Enforced on every platform: with `O_NOFOLLOW` where it exists, and with an `lstat` everywhere,
+   * because a guard that only runs on some platforms is one nobody notices is missing on the others.
    */
   follow: boolean;
   /** Anything larger is reported as `too-large` rather than read. */
@@ -52,9 +53,33 @@ export interface ReadSmallFileOptions {
 /** One bounded read: open once, check the shape, check the size, then take the text off the same handle. */
 export async function readSmallFile(path: string, options: ReadSmallFileOptions): Promise<SmallFileResult> {
   const maxBytes = options.maxBytes ?? MAX_CLIENT_BYTES;
-  // `O_NONBLOCK` so a FIFO opens rather than hanging here waiting for a writer that may never come. Both flags
-  // are absent on Windows, where the constants are 0 and this is an ordinary open.
+  // `O_NONBLOCK` so a FIFO opens rather than hanging here waiting for a writer that may never come. Neither flag
+  // exists on Windows, where the constants are absent and this is an ordinary open.
   const flags = constants.O_RDONLY | (options.follow ? 0 : (constants.O_NOFOLLOW ?? 0)) | (constants.O_NONBLOCK ?? 0);
+
+  /*
+   * Refusing a symlink, on every platform, in both of the ways available.
+   *
+   * `O_NOFOLLOW` does it inside the open, with no window between deciding and acting — but it does not exist on
+   * Windows, where `?? 0` quietly meant *no check at all*. The guard read as universal and was not, and only a
+   * Windows CI run said so.
+   *
+   * So the `lstat` runs everywhere rather than only where the flag is missing. Making it conditional would put
+   * the Windows behaviour on a branch that never executes on the machine this is written on, which is how the
+   * hole got there in the first place. Unconditional costs one `stat` per candidate — at most forty, once — and
+   * every platform then runs the same code.
+   *
+   * On its own `lstat` is the weaker check: two calls, so something could swap the file in between. Where the
+   * flag exists it closes that window; where it does not, an attacker has to win a race rather than walk through
+   * an open door, and planting a symlink on Windows needs Developer Mode or elevation to begin with.
+   */
+  if (!options.follow) {
+    try {
+      if ((await lstat(path)).isSymbolicLink()) return { ok: false, problem: 'missing' };
+    } catch {
+      return { ok: false, problem: 'missing' };
+    }
+  }
 
   let handle: FileHandle;
   try {
