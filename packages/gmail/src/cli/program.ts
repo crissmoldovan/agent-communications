@@ -1206,9 +1206,17 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
      */
     .addOption(new Option('--store <store>', 'where secrets are kept (first time only)').choices(['keychain', 'file']))
     .option('--move', 'delete the downloaded client JSON once its secret is stored', false)
-    // Parity with `mcp install`, which has had this since the start. Without it `setup` could only ever register
-    // the managed runtime — an `npm install` — so somebody working from a checkout had to leave this command to
-    // get `--launcher local`, and a test of this path had to install a runtime to exercise one branch.
+    /*
+     * Parity with `mcp install`, which has had this since the start. Without it `setup` could only ever register
+     * the managed runtime — an `npm install` — so somebody working from a checkout had to leave this command to
+     * get `--launcher local`.
+     *
+     * The interactive path's use of this flag is tested. The headless one is the same flag through the other
+     * `mcpInstall` call site and is **not**: `--json` reports what happened rather than the entry it built, so
+     * telling one launcher from another there means driving a real registration, which needs a client CLI on
+     * PATH — and the `npx` launcher fetches the published server over the network. Covered by reading, and said
+     * here rather than left as a silent gap.
+     */
     .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
     .option('--restart', 'walk the Google Cloud steps again even if a client is registered', false)
     .option('--no-tui', 'plain one-line prompts instead of lists and fields')

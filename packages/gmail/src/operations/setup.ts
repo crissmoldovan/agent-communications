@@ -325,23 +325,26 @@ export function isOurServer(server: { command: string; args: string[]; packageNa
   if (server.packageName) return OUR_PACKAGES.has(server.packageName);
   return [server.command, ...server.args].some((part) => {
     const segments = part.split(/[\\/]+/);
+    // The file at the end has to be an entry this package actually starts. Without this,
+    // `…/@agentcomms/gmail/dist/index.mjs` — the library, not the server — counted as a registration.
+    if (!ENTRY_FILES.has(segments.at(-1) ?? '')) return false;
     return segments.some((segment, index) => {
       const next = segments[index + 1];
       if (segment === '@agentcomms' && (next === 'gmail' || next === 'gmail-mcp')) return true;
-      /*
-       * A checkout, which is what `--launcher local` points at — and it points at one of two files.
-       *
-       * `localCliEntry()` returns `src/cli.ts` when running from source and `dist/cli.mjs` when bundled, and it
-       * tries the TypeScript one first. Matching only `cli.mjs` meant a successful `--launcher local`
-       * registration from a source checkout was never recognised, and the agent step stayed unfinished forever
-       * — the same false negative as the `@agentcomms` one above, in the other branch, found by a reviewer
-       * while the test I had just written was printing `packages/gmail/src/cli.ts` at me.
-       */
-      const entry = segments.slice(index + 2);
-      return segment === 'packages' && next === 'gmail' && (entry.includes('cli.mjs') || entry.includes('cli.ts'));
+      // A checkout, which is what `--launcher local` points at: `packages/gmail/src/cli.ts` from source, or
+      // `packages/gmail/dist/cli.mjs` from a bundle. The directory in between is named, so a `packages/gmail`
+      // belonging to somebody else does not qualify by having a file called `cli.ts` somewhere beneath it.
+      const where = segments[index + 2];
+      return segment === 'packages' && next === 'gmail' && (where === 'src' || where === 'dist');
     });
   });
 }
+
+/**
+ * The files this package is started by, as `mcpEntry` writes them: `cli.mjs` bundled, `cli.ts` from source, and
+ * `server.mjs` for the standalone MCP bin. Anything else under the same directory is a library file.
+ */
+const ENTRY_FILES = new Set(['cli.mjs', 'cli.ts', 'server.mjs']);
 
 /** The npm packages that are this server. An entry naming one of these, and no other, is ours. */
 const OUR_PACKAGES = new Set(['@agentcomms/gmail', '@agentcomms/gmail-mcp']);

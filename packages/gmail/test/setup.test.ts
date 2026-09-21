@@ -548,50 +548,64 @@ test('a stream that faults mid-read is an outcome, not a crash', async () => {
 
 test('every shape the installer writes is recognised, and its neighbours are not', async () => {
   /*
-   * This has now been wrong in three ways, each of which shipped:
+   * This has now been wrong in four ways, each of which shipped:
    *
    *   1. a substring match, so `@notagentcomms/gmail-mcp` counted as ours;
    *   2. a segment match for `agentcomms`, which missed the **default** managed install because the segment is
    *      `@agentcomms` — a correctly registered install reporting nothing;
    *   3. a checkout match for `cli.mjs` only, which missed `--launcher local` from a source checkout, where
-   *      `localCliEntry()` returns `src/cli.ts` first.
+   *      `localCliEntry()` returns `src/cli.ts` first;
+   *   4. no check on the file at the end, so `@agentcomms/gmail/dist/index.mjs` — the library — counted as a
+   *      registered server, as did `packages/gmail/not-src/cli.ts`.
    *
-   * Two of the three were false negatives that would have left the agent step unfinished forever after a
-   * registration that had actually worked. The integration test above proves the wiring through real client
-   * config files; this one enumerates the shapes, because that is where the mistakes were.
+   * Two of the four were false negatives after a registration that had actually worked, which is the failure
+   * nobody reports: nothing looks broken, setup just keeps saying there is one more thing to do.
+   *
+   * So the accepted shapes are taken from `mcpInstall` itself rather than written out here. A table of what I
+   * believe the installer emits is exactly the thing that was wrong three times; this asks it.
    */
-  const runtime = ['node_modules', '@agentcomms'];
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const { mcpInstall } = await import('../src/mcp/install.ts');
+  const { isOurServer } = await import('../src/operations/setup.ts');
+  const { packageFrom } = await import('./support/package-from.ts');
+
+  // `apply: false` builds the entry and writes nothing — the same entry `--launcher <x>` would register.
+  for (const launcher of ['npx', 'local'] as const) {
+    const result = await mcpInstall(context, { client: 'claude-code', apply: false, noVerify: true, launcher });
+    const line = [result.entry.command, ...result.entry.args].join(' ');
+    assert.equal(
+      isOurServer({ ...result.entry, ...(packageFrom(line) ? { packageName: packageFrom(line) } : {}) }),
+      true,
+      `the ${launcher} launcher writes an entry this does not recognise: ${line}`,
+    );
+  }
+
+  /*
+   * The managed launcher is not exercised through `mcpInstall` here — it runs an `npm install` — so its entry is
+   * spelled out, in both separators. It is the default, and the shape that was missed.
+   */
+  const managed = ['node_modules', '@agentcomms'];
   const ours: [string, string[]][] = [
-    ['npx, the published server', ['npx', '-y', '@agentcomms/gmail-mcp@0.1.4', 'mcp']],
-    ['npx, the CLI package', ['npx', '-y', '@agentcomms/gmail@0.1.4', 'mcp']],
-    ['managed, posix', ['node', ['', 'opt', 'runtime', ...runtime, 'gmail', 'dist', 'cli.mjs'].join('/'), 'mcp']],
-    ['managed, windows', ['node', ['C:', 'rt', ...runtime, 'gmail-mcp', 'dist', 'server.mjs'].join('\\')]],
-    ['checkout, bundled', ['node', ['', 'src', 'packages', 'gmail', 'dist', 'cli.mjs'].join('/'), 'mcp']],
-    [
-      'checkout, source',
-      ['node', '--experimental-strip-types', ['', 'src', 'packages', 'gmail', 'src', 'cli.ts'].join('/')],
-    ],
+    ['managed, posix', ['node', ['', 'opt', 'rt', ...managed, 'gmail', 'dist', 'cli.mjs'].join('/')]],
+    ['managed, windows', ['node', ['C:', 'rt', ...managed, 'gmail-mcp', 'dist', 'server.mjs'].join('\\')]],
   ];
   const theirs: [string, string[]][] = [
     ['a scope that contains ours', ['npx', '-y', '@notagentcomms/gmail-mcp']],
-    ['a neighbour in our scope', ['node', ['', 'opt', ...runtime, 'gmail-evil', 'dist', 'cli.mjs'].join('/')]],
+    ['a neighbour in our scope', ['node', ['', 'opt', ...managed, 'gmail-evil', 'dist', 'cli.mjs'].join('/')]],
     ['a different gmail server', ['npx', '-y', '@gongrzhe/server-gmail-autoauth-mcp']],
     ['someone else with a packages/gmail', ['node', ['', 'them', 'packages', 'gmail', 'index.js'].join('/')]],
+    // The two the previous version accepted: our own library file, and a directory that is not `src` or `dist`.
+    ['our library, not our server', ['node', ['', 'opt', ...managed, 'gmail', 'dist', 'index.mjs'].join('/')]],
+    ['a cli.ts somewhere else in a checkout', ['node', ['', 'r', 'packages', 'gmail', 'not-src', 'cli.ts'].join('/')]],
   ];
 
-  const { isOurServer } = await import('../src/operations/setup.ts');
   const ask = (parts: string[]) => {
     const [command, ...args] = parts;
-    // `packageName` is read off the command line by the same regex the real reader uses, so the npx cases go
-    // through the package path and the file cases through the segment path, exactly as in production.
-    const match = /(@[\w.-]+\/[\w.-]+|(?<=\s)[\w.-]+-mcp)(?=@|\s|$)/.exec(parts.join(' '));
-    return isOurServer({
-      command: command ?? '',
-      args,
-      ...(match?.[1] ? { packageName: match[1] } : {}),
-    });
+    const name = packageFrom(parts.join(' '));
+    return isOurServer({ command: command ?? '', args, ...(name ? { packageName: name } : {}) });
   };
-
   for (const [what, parts] of ours) assert.equal(ask(parts), true, `not recognised: ${what} — ${parts.join(' ')}`);
   for (const [what, parts] of theirs) assert.equal(ask(parts), false, `wrongly ours: ${what} — ${parts.join(' ')}`);
 });
