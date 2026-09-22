@@ -279,22 +279,20 @@ distinct `acc_` / `ibx_` prefixes mean an id alone still says which it is.
 > the credential behind it can post. The Gmail package overwrites, and has the same window; that is not fixed
 > here.
 >
-> **Three things are still unverified against a real workspace**: whether the exchange endpoint is
-> `oauth.v2.access` or `oauth.v2.user.access`; whether `token_rotation_enabled` in the manifest actually enables
-> rotation, or whether that is an app-settings toggle only; and whether Slack accepts `127.0.0.1` as well as
-> `localhost`. The code takes the documented answer in each case and says so at the point it does.
+> **Verified against a real workspace, 2026-09-22.** The manifest's `pkce_enabled` and `token_rotation_enabled`
+> both take effect, and `oauth.v2.access` is the right exchange endpoint. The run found one bug, since fixed:
+> Slack adds `identify` to every user token, and `doctor` reported it as drift. Only `127.0.0.1` stays untried,
+> and nothing depends on it. **S3 is no longer blocked on verification.**
 >
-> It was four. The fourth — how an app opts into PKCE — was documented all along, as
+> Before the run there were four open questions. One — how an app opts into PKCE — was documented all along, as
 > `oauth_config.pkce_enabled`, and the manifest was omitting it. The app S2 printed could not have completed a
 > single sign-in, because "if the app has never enabled PKCE, [localhost redirects] will be treated like a
 > server redirect". It was recorded as unknown because a first pass over the docs did not find it, and that was
 > written down as a fact about Slack rather than about the search.
 >
-> One ten-minute sign-in settles all four, and the checklist is
-> [`docs/research/2026-09-22-slack-live-verification.md`](../../research/2026-09-22-slack-live-verification.md) —
-> what to run, what each outcome means, and which line to change for each answer. **S3 is what this blocks, not
-> S2.** S2 is the sign-in machinery and it is complete; S3 is the first phase that reads Slack, and building it
-> on four unverified assumptions means discovering them through S3's bugs.
+> The checklist that settled it is
+> [`docs/research/2026-09-22-slack-live-verification.md`](../../research/2026-09-22-slack-live-verification.md),
+> kept for the next workspace or the next Slack change.
 >
 > `docs/reference/cli.md` is generated from `packages/gmail` only. Extending the generator to a second CLI is
 > S7's, with the packaging — a reference page that tells people to install an unpublished package would be worse

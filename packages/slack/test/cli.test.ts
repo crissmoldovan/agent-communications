@@ -1068,3 +1068,44 @@ test('removing waits for a migration holding the credentials lock, instead of de
   assert.equal(await secrets.get(account.secretRef), null);
   assert.equal((await harness.core.config.load()).accounts.acme, undefined);
 });
+
+test('the identify scope Slack adds to every user token is not reported as drift', async () => {
+  /*
+   * Found by the first real sign-in. The grant held exactly the eleven read scopes, but `auth.test`'s scope header
+   * listed `identify` too, and `doctor` failed every healthy install with a fix that could not work. The harness
+   * now mirrors what Slack actually sends.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  harness.authTest = () =>
+    new Response(JSON.stringify({ ok: true, team_id: 'T0001', user_id: 'U0001' }), {
+      headers: { 'x-oauth-scopes': [...scopesForMode('read'), 'identify'].sort().join(',') },
+    });
+
+  const result = await cli(harness, ['--json', 'doctor']);
+  const scopes = result
+    .json<Envelope<{ checks: { id: string; status: string; detail: string }[] }>>()
+    .data?.checks.find((check) => check.id === 'scopes');
+  assert.equal(scopes?.status, 'ok', scopes?.detail);
+  // And it says so, rather than calling the filtered eleven "exactly as Slack reports them" when Slack sent twelve.
+  assert.match(scopes?.detail ?? '', /the 11 scopes it asked for/);
+  assert.match(scopes?.detail ?? '', /plus identify, which Slack adds to every user token/);
+  assert.equal(result.code, EXIT_CODES.OK);
+});
+
+test('a scope beyond read that Slack reports is still drift, identify aside', async () => {
+  // The exemption is one named scope, not a loosening of the check: anything else extra still fails.
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  harness.authTest = () =>
+    new Response(JSON.stringify({ ok: true, team_id: 'T0001', user_id: 'U0001' }), {
+      headers: { 'x-oauth-scopes': [...scopesForMode('read'), 'identify', 'chat:write'].sort().join(',') },
+    });
+  const result = await cli(harness, ['--json', 'doctor']);
+  const scopes = result
+    .json<Envelope<{ checks: { id: string; status: string; detail: string }[] }>>()
+    .data?.checks.find((check) => check.id === 'scopes');
+  assert.equal(scopes?.status, 'fail');
+  assert.match(scopes?.detail ?? '', /chat:write/);
+  assert.doesNotMatch(scopes?.detail ?? '', /identify/);
+});

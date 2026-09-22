@@ -77,6 +77,21 @@ export interface DoctorInput {
   readonly identities?: ReadonlyMap<string, IdentityProbe> | undefined;
 }
 
+/**
+ * Scopes Slack adds to every user token without being asked, and so never counts as drift.
+ *
+ * Found by the first real sign-in, 2026-09-22, against a real workspace. The grant Slack returned at sign-in
+ * held exactly the eleven `read` scopes — the exchange refuses anything wider, and it passed — but the
+ * `x-oauth-scopes` header on `auth.test` listed `identify` as well. So `doctor` reported every healthy install
+ * as "more than read allows: identify", with a fix that could not work, since re-authorising gets the same
+ * answer. Nothing a test against a fake Slack could have shown.
+ *
+ * `identify` lets a token read its own identity, which is what `auth.test` does anyway. It posts nothing, so
+ * disregarding it leaves the read-only guarantee exactly where it was. Anything *else* Slack reports beyond the
+ * mode's scopes is still drift.
+ */
+export const IMPLICIT_USER_SCOPES: readonly string[] = ['identify'];
+
 export function doctor(input: DoctorInput): DoctorResult {
   const checks: Check[] = [];
   const workspaces = listWorkspaces(input.config);
@@ -276,7 +291,14 @@ export function doctor(input: DoctorInput): DoctorResult {
      * it catches a bug in this package and nothing that happened in Slack. An admin narrowing an app is exactly
      * the drift this check is named for, and it is invisible from disk.
      */
-    const observed = identity?.kind === 'ok' ? identity.scopes : undefined;
+    /*
+     * What Slack reported, split into what is compared and what Slack adds on its own — kept apart so the result
+     * can say both. Reporting the filtered count as "exactly as Slack reports them" was an understatement by one
+     * scope in text people read to check what a token can do.
+     */
+    const reported = identity?.kind === 'ok' ? identity.scopes : undefined;
+    const observed = reported?.filter((scope) => !IMPLICIT_USER_SCOPES.includes(scope));
+    const implicit = reported?.filter((scope) => IMPLICIT_USER_SCOPES.includes(scope)) ?? [];
     const { missing, extra } = scopeMismatch(mode, observed ?? workspace.grantedScopes);
     if (missing.length > 0 || extra.length > 0) {
       checks.push({
@@ -298,7 +320,9 @@ export function doctor(input: DoctorInput): DoctorResult {
         title: `Permissions for ${workspace.alias}`,
         status: 'ok',
         detail: observed
-          ? `${mode}: ${observed.length} scopes, exactly as Slack reports them`
+          ? `${mode}: the ${observed.length} scopes it asked for, as Slack reports them${
+              implicit.length > 0 ? ` (plus ${implicit.join(', ')}, which Slack adds to every user token)` : ''
+            }`
           : `${mode}: ${workspace.grantedScopes.length} scopes, exactly as recorded at sign-in`,
         fix: null,
         workspace: workspace.alias,
