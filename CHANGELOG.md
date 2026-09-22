@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.3.0
 
 **Accounts are named `organisation/platform` now, and `agentcomms names migrate` renames yours.** A mailbox is
 `cue/gmail`, a second one for the same organisation is `cue/gmail-tech`, a Slack workspace is `cue/slack`. The
@@ -14,6 +14,11 @@ lists every problem at once rather than one per run. It needs `--yes`, or a pers
 Afterwards the old names stop working, and anything that uses one is told what it is called now rather than that
 it does not exist. That refusal is permanent: a name that was replaced can never be given to another account,
 because the two would be impossible to tell apart later.
+
+**`doctor` says so once.** A version-1 config is not a problem and is never reported as one, but `agentcomms
+doctor` names the command that would rename it, and the release everything sharing that config has to be on
+first. It stops saying it once the names have been migrated, and says nothing about the names of a config it
+could not read.
 
 **A new config is created in the new format.** Connecting a first mailbox now asks for a name like `acme/gmail`;
 `work` is refused, with an example. An existing config stays exactly as it is until you migrate it — no command
