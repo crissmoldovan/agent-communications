@@ -240,17 +240,23 @@ const accountSchema = z.looseObject({
   mode: z.string().min(1).optional(),
 });
 
+// Loose at every level, nested objects included. `sendCaps` and `confirm` were plain objects, which strip what they do
+// not know — so a key a newer release added inside them was silently dropped by the next write from an older one,
+// and a change to it was invisible to the migration's fingerprint. Keeping more than before is safe for every older
+// reader: it strips them, as it always has.
 const defaultsSchema = z.looseObject({
   sendPolicy: sendPolicySchema.default('chat'),
   riskEscalation: z.boolean().default(true),
   sendCaps: z
-    .object({ perHour: z.number().int().min(0).default(20), perDay: z.number().int().min(0).default(100) })
+    .looseObject({ perHour: z.number().int().min(0).default(20), perDay: z.number().int().min(0).default(100) })
     .default({ perHour: 20, perDay: 100 }),
   attachRoots: z.array(z.string()).default(['~']),
   attachDeny: z.array(z.string()).default([]),
   downloadsDir: z.string().optional(),
   timezone: z.string().default('system'),
-  confirm: z.object({ elicitationClients: z.array(z.string()).default([]) }).default({ elicitationClients: [] }),
+  confirm: z
+    .looseObject({ elicitationClients: z.array(z.string()).default([]) })
+    .default({ elicitationClients: [] }),
 });
 
 export const RESERVED_ALIASES: ReadonlySet<string> = new Set(['all']);

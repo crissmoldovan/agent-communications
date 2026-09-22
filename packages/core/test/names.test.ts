@@ -571,6 +571,30 @@ test('a change to nothing but a policy between preview and apply refuses it too'
   assert.equal(JSON.parse(readFileSync(store.path, 'utf8')).version, 1);
 });
 
+test('a key nested anywhere counts: an unknown field inside sendCaps or confirm is kept and fingerprinted', async () => {
+  const raw = {
+    ...machine(),
+    defaults: {
+      ...machine().defaults,
+      sendCaps: { perHour: 20, perDay: 100, perMinute: 2 },
+      confirm: { elicitationClients: [], trustedSince: 'x' },
+    },
+  };
+  const store = storeWith(raw);
+  const plan = ready(planNamesMigration(await store.load()));
+  // A change to nothing but an unknown nested field between preview and apply.
+  const changed = JSON.parse(readFileSync(store.path, 'utf8'));
+  changed.defaults.sendCaps.perMinute = 5;
+  writeFileSync(store.path, `${JSON.stringify(changed, null, 2)}\n`);
+  await assert.rejects(migrateNames(store, plan), isError('TRANSIENT'));
+
+  const fresh = ready(planNamesMigration(await store.load()));
+  await migrateNames(store, fresh);
+  const written = JSON.parse(readFileSync(store.path, 'utf8'));
+  assert.equal(written.defaults.sendCaps.perMinute, 5);
+  assert.equal(written.defaults.confirm.trustedSince, 'x');
+});
+
 test('a build that changes more than names is refused before it is written', async () => {
   const store = storeWith(machine());
   const current = (await store.load()) as ConfigV1;

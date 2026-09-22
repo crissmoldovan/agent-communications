@@ -8,8 +8,8 @@ schema requires it. `cue/gmail` is the CUE++ mailbox, `cue/slack` the CUE++ work
 Wherefrom mailbox. A name says which organisation an account belongs to and what it is, and the schema makes sure
 the second half is true.
 
-> **Revised twice on 2026-09-22 after design reviews.** The first found nine P1s and three P2s; the second, five
-> P1s and four P2s. The shape of the design is unchanged; what changed is everything that has to be true for it to
+> **Revised three times on 2026-09-22 after design reviews.** The first found nine P1s and three P2s; the second,
+> five P1s and four P2s; the third, three P1s. The shape of the design is unchanged; what changed is everything that has to be true for it to
 > be safe: separate schemas per config version, a whole-config check between preview and apply, per-kind permanent
 > tombstones, credential writes that survive a write committing and then reporting failure, every creation and
 > lookup path by name, and **two releases** — readers first, the writer only once every reader is installed.
@@ -139,7 +139,9 @@ the config and both maps live in it.
    refuses and lists *every* problem at once; it never applies part of a rename.
 2. **Preview.** The full mapping is printed, with a **fingerprint** of what it was computed from: a hash of the
    whole configuration in canonical form — every key, including ones this version does not know, since the schema
-   keeps them. A narrower fingerprint would let a change to a policy, a domain list or a client pass unnoticed
+   keeps them. At every level: `defaults.sendCaps` and `defaults.confirm` were plain objects that stripped unknown
+   keys, so a field a newer release put inside them was dropped by the next write and invisible to a fingerprint.
+   Both keep them now, which no older reader notices. A narrower fingerprint would let a change to a policy, a domain list or a client pass unnoticed
    between preview and apply. Without `--yes`, a person at a terminal confirms; an agent
    or a non-TTY run needs `--yes`. A rename changes no access, so there is no typed challenge — and the classifier
    agrees: it matches rows by immutable id, so a pure key rename is not a loosening.
@@ -190,13 +192,19 @@ agentcomms names migrate \
   skips the secret deletion and strands a live token that nothing records. So on an update error, removal re-reads
   the config, still under the credentials lock, and looks for the row by id: **gone** — the write committed, carry
   on and delete the secret; **present** — nothing was written, rethrow; **unreadable** — record the reference in the
-  orphaned-secrets file `doctor` already reads, and say so.
+  orphaned-secrets file `doctor` already reads, marked **unconfirmed** and with the inbox id, and say so.
+
+  `doctor` currently treats every line of that file as a token nothing references and tells the person to delete
+  it. For an unconfirmed record that advice could delete a live mailbox's credential, so `doctor` re-checks
+  **every** record against the current config before advising anything: a reference a configured row still holds
+  is reported as still in use, and dropped from the advice.
 - **Slack removal** already takes the credentials lock and reads the config inside it, so it serialises with the
   migration. Its mutation looks the row up *by name* and then checks the id — correct only because nothing else
   renames an account while that lock is held. Both removals find the row **by immutable id**, through one shared
   core helper, so neither depends on that staying true.
-- **Sign-ins do not take the credentials lock**, deliberately — waiting on it would spend a one-shot authorisation
-  code on a timeout. Instead, both packages re-check the name **inside the final config mutation**, under whichever
+- **New sign-ins do not take the credentials lock**, deliberately — waiting on it would spend a one-shot
+  authorisation code on a timeout, and a new account's secret is written under a fresh id nothing else can be
+  removing. (Gmail reauth, which overwrites an existing account's secret, is the exception below.) Instead, both packages re-check the name **inside the final config mutation**, under whichever
   version the file is then: a flow started against v1 with a plain name, finishing after the migration, is refused
   there, and its staged credential withdrawn.
 - **Gmail add reconciles before it withdraws.** Today any config error deletes the new secret — including an error
@@ -204,16 +212,25 @@ agentcomms names migrate \
   swallowed. Under this change it does what Slack's sign-in does: on an update error it re-reads the config and
   looks for the new inbox id. **Committed** — keep the secret, report the lock problem; **absent** — withdraw the
   secret, and **report** it if that fails; **unknown** — keep the secret and say which reference may be stranded.
-- **Gmail reauth writes the row it found, by id.** It currently writes back `inboxes[<name it started with>]`, so a
-  rename between starting and finishing a reauth would put the old name back beside the new one. It finds the row
-  by the flow's inbox id inside the mutation and writes it under whatever key it holds then.
+- **Gmail reauth writes the row it found, by id, under the credentials lock.** It currently writes back
+  `inboxes[<name it started with>]`, so a rename between starting and finishing a reauth would put the old name
+  back beside the new one — and a removal finishing in between would be undone. And it overwrites the refresh
+  token before the config write, outside any lock, so a removal that completed first would have its deleted token
+  written back, and then either the row recreated (today) or, matched by id, no row at all — a live token nothing
+  references.
 
-  It still overwrites the live refresh token *before* the config write, under the same reference. That is the
-  existing reauth race, and it is **not** fixed here: staging under a fresh reference means changing how the token
-  session finds its secret (`session.ts` derives the reference from the inbox id and re-reads it to pick up a
-  concurrent reauth), which is a token-refresh change, not a naming one. It is also not unsafe: identity is checked
-  before the write, so the overwritten token is a valid one for the same account, and a config write that then
-  fails leaves the row describing a grant no wider than the token.
+  So reauth takes the credentials lock **after** the code is exchanged — the one-shot code is spent before any
+  waiting, and a lock timeout only discards the new token, which the person gets again by retrying — and inside
+  it re-reads the row by the flow's inbox id. **Gone:** refuse, and write nothing. **Present:** overwrite the
+  secret, update the row by id under whatever key it holds, and on an update error reconcile — the row is there
+  either way, so the token is referenced and nothing is stranded. Removal and `secrets migrate` hold the same lock,
+  so neither can land in between.
+
+  Staging the new token under a fresh reference is still **not** done here: `session.ts` derives the reference from
+  the inbox id and re-reads it to pick up a concurrent reauth, so a fresh reference is a token-refresh change, not a
+  naming one. With the lock it is also not needed for safety: the overwrite only happens to a row that exists, for
+  an identity checked to be the same account, and a config write that then fails leaves a row describing a grant no
+  wider than its token.
 
 ## Every path that creates or renames an account
 
@@ -270,8 +287,8 @@ only Gmail on npm is 0.1.4, which cannot read it.
 
 | Phase | Branch | What |
 |---|---|---|
-| N1 | `feat/names-core` | `ConfigV1`/`ConfigV2`, the union, `parseConfig` by version, the grammar, `resolveName`/`nameAvailable`, tombstones, `ConfigStore.migrateNames`, the classifier fallback, the shared by-id helper, the architecture test. **Still creates v1 configs; no command writes v2.** |
-| N2 | `feat/names-gmail` | Every Gmail lookup and creation path on the helpers; removal under the credentials lock with reconciliation; add reconciliation; reauth by id; import; nested downloads — all v2-ready. **No public v2 writer.** |
+| N1 | `feat/names-core` | `ConfigV1`/`ConfigV2`, the union, `parseConfig` by version, the grammar, `resolveName`/`nameAvailable`, tombstones, `ConfigStore.migrateNames`, the classifier fallback, the shared by-id helper, loose nested defaults, the architecture test. **Still creates v1 configs; no command writes v2.** |
+| N2 | `feat/names-gmail` | Every Gmail lookup and creation path on the helpers; removal under the credentials lock with reconciliation; add reconciliation; reauth by id under the credentials lock; `doctor` re-checking orphan records; import; nested downloads — all v2-ready. **No public v2 writer.** |
 | N3 | `feat/names-slack` | Every Slack path on the helpers; removal by id; v2-ready. **No public v2 writer.** |
 | R1 | — | **Reader release, 0.2.0:** core, gmail and gmail-mcp through `scripts/release.mjs`, the owner confirming the publish. Reads v1 and v2, writes v1, has no migrate command. A partial publish is harmless: nothing in it writes v2. |
 | N4 | `feat/names-flip` | New configs start at v2; `agentcomms names migrate` is exposed; skills, docs and the generated reference use the new names; the setup prompt for a second computer is updated. |
@@ -324,6 +341,11 @@ After **R2**, on each machine:
 - **Committed-then-rejected writes:** for Gmail removal, Gmail add and each import write — a rejection before the
   write, a rejection after it committed (lock release failing), and a failed secret cleanup, each reported rather
   than swallowed.
+- **Gmail reauth against removal:** a removal that completes first leaves reauth refusing with no token written; a
+  removal that starts during reauth waits for it.
+- **`doctor`'s orphan advice:** a record whose reference a configured row still holds is reported as in use, not
+  as something to delete.
+- **Unknown keys nested in `sendCaps` and `confirm`** survive a write and change the fingerprint.
 - **`nameAvailable`** across the v1/v2 × inbox/account matrix.
 - **Architecture:** the scan finds a planted `.inboxes[name]` read outside the allowlist.
 - **Downloads and exports** under nested names, through a symlinked ancestor, and beside an old folder.
@@ -335,6 +357,7 @@ After **R2**, on each machine:
 - Moving previously downloaded files.
 - Aliases that keep working after the migration (D3 chose refusal).
 - Any change to what an account can do. This is names only.
-- Staging Gmail reauth under a fresh secret reference (see **Locks**): a token-refresh change, tracked separately.
+- Staging Gmail reauth under a fresh secret reference (see **Locks**): a token-refresh change, tracked separately,
+  and not needed for safety once reauth holds the credentials lock.
 - List or cancel commands for pending sign-in flows: the in-mutation re-check makes a late flow safe, and the
   rollout waits out their lifetime.
