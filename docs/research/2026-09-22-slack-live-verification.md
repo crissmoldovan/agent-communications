@@ -131,7 +131,7 @@ ok    Permissions for live: read: the 11 scopes it asked for, as Slack reports t
 ?     Other Slack MCP servers: not checked on this machine
 ```
 
-Three things to look at rather than skim past:
+Four things to look at rather than skim past:
 
 - **"as Slack reports them"** rather than "as recorded at sign-in" means the `x-oauth-scopes` header was
   present, and the drift check is comparing against Slack rather than against itself. It was present.
