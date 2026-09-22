@@ -41,8 +41,6 @@
   },
   "devDependencies": {
     "@agentcomms/core": "workspace:*",
-    "commander": "^15.0.0",
-    "p-retry": "^8.0.1",
-    "zod": "catalog:"
+    "commander": "^15.0.0"
   }
 }
