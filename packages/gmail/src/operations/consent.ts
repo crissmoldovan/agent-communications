@@ -402,14 +402,19 @@ async function writeReauth(
       secrets.invalidate(existing.inbox.secretRef);
       holdsNewToken = (await secrets.get(existing.inbox.secretRef)) === tokens.refreshToken;
     } catch (unreadable) {
+      // What the configuration says is known — it was read a line ago — so it is reported rather than assumed: the
+      // write may well have committed and only its lock release failed.
+      const settingsUpdated = Boolean(after && sameRow(after.inbox, written.inbox));
       const base = error instanceof CommsError ? error : new CommsError('UNEXPECTED', String(error));
       throw new CommsError(base.code, base.message, {
         hint:
-          `${base.hint ? `${base.hint} ` : ''}Whether the new token reached the secret store could not be confirmed, ` +
-          `and this mailbox's settings were not changed. Run \`agent-gmail inbox reauth ${existing.alias}\` again ` +
-          'when the store is available; `agent-gmail doctor` says whether the mailbox still works.',
+          `${base.hint ? `${base.hint} ` : ''}Whether the new token reached the secret store could not be confirmed. ` +
+          `This mailbox's settings ${settingsUpdated ? 'were updated' : 'were not changed'}. Run ` +
+          `\`agent-gmail inbox reauth ${after?.alias ?? existing.alias}\` again when the store is available; ` +
+          '`agent-gmail doctor` says whether the mailbox still works.',
         details: {
           tokenStateUnknown: existing.inbox.secretRef,
+          settingsUpdated,
           storeError: (unreadable as Error).message,
         },
         cause: error,

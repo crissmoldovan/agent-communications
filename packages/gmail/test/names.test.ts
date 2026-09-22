@@ -1670,6 +1670,39 @@ test('reauth: when the store cannot say what it holds, it says so rather than gu
     (error: unknown) =>
       error instanceof CommsError &&
       (error.details as { tokenStateUnknown?: string }).tokenStateUnknown === `gmail:refresh:${id}` &&
-      /could not be confirmed/.test(error.hint ?? ''),
+      (error.details as { settingsUpdated?: boolean }).settingsUpdated === false &&
+      /were not changed/.test(error.hint ?? ''),
   );
+});
+
+test('reauth: a write that committed before the store went quiet says the settings were updated', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const id = await connectBySignIn(harness, context, 'work', 'read');
+  const secrets = await harness.core.secrets('file');
+  const write = secrets.set.bind(secrets);
+  const read = secrets.get.bind(secrets);
+  // The token is stored, the row is written, the lock release fails — and only then does the store go quiet.
+  let quiet = false;
+  secrets.set = async (ref, value) => {
+    await write(ref, value);
+    if (ref === `gmail:refresh:${id}`) quiet = true;
+  };
+  secrets.get = async (ref) => {
+    if (quiet) throw new CommsError('SECRET_STORE_UNAVAILABLE', 'a write is still in flight');
+    return read(ref);
+  };
+  commitThenReject(harness);
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', tier: 'organize', detached: false });
+  await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
+  await assert.rejects(
+    reauth.listener?.result ?? Promise.resolve(),
+    (error: unknown) =>
+      error instanceof CommsError &&
+      (error.details as { settingsUpdated?: boolean }).settingsUpdated === true &&
+      (error.details as { tokenStateUnknown?: string }).tokenStateUnknown === `gmail:refresh:${id}` &&
+      /were updated/.test(error.hint ?? ''),
+  );
+  secrets.get = read;
+  assert.equal((await inboxList(context))[0]?.tier, 'organize', 'the settings it says were updated, were');
 });
