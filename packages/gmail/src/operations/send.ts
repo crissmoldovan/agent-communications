@@ -622,8 +622,8 @@ export async function listApprovals(
   const byId = new Map(Object.entries(config.inboxes).map(([alias, inbox]) => [inbox.id, alias]));
   const name = filter.inbox;
   const inboxId = name
-    ? resolveName(config, 'inbox', name, () => new CommsError('NOT_FOUND', `there is no mailbox called "${name}"`)).inbox
-        .id
+    ? resolveName(config, 'inbox', name, () => new CommsError('NOT_FOUND', `there is no mailbox called "${name}"`))
+        .inbox.id
     : undefined;
   const records = await context.core.approvals.list(inboxId ? { inboxId } : {});
   return records.map((record) => ({ ...publicView(record), inbox: byId.get(record.inboxId) ?? '(removed)' }));

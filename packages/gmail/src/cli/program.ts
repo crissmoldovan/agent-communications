@@ -445,8 +445,8 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .addOption(new Option('--store <store>', 'where secrets are kept (first time only)').choices(['keychain', 'file']))
     .option('--dry-run', 'say what would be imported, and change nothing', false)
     .option(
-      '--rename <legacy=name>',
-      'import one mailbox under a name of your choosing, by the name --dry-run shows (repeatable)',
+      '--rename <old=new>',
+      'import one under another name (repeatable)',
       (value: string, previous: string[] = []) => [...previous, value],
     )
     .action(

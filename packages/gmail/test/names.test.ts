@@ -1,18 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { writeFile } from 'node:fs/promises';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import {
-  CommsError,
-  type Config,
-  credentialsLockPath,
-  migrateNames,
-  planNamesMigration,
-  type SecretStore,
-  withFileLock,
-} from '@agentcomms/core';
+import { CommsError, type Config, credentialsLockPath, type SecretStore, withFileLock } from '@agentcomms/core';
 import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { GmailContext } from '../src/context.ts';
@@ -35,13 +25,20 @@ import { search } from '../src/operations/search.ts';
 import { listApprovals } from '../src/operations/send.ts';
 import { startSignIn } from '../src/operations/signin.ts';
 import type { FakeMessage } from './support/fake-google.ts';
-import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
+import {
+  type Harness,
+  migrateNamesForTest,
+  newHarness,
+  TEST_CLIENT_ID,
+  TEST_CLIENT_SECRET,
+  tempDir,
+} from './support/harness.ts';
 
 /**
  * Organisation/platform names, end to end through the Gmail package.
  *
  * Nothing here can create a version-2 config the way a person will — that command arrives in a later release — so
- * each test migrates its own with core's `migrateNames`, exactly as `agentcomms names migrate` will.
+ * each test writes its own with core's plan and transform (`migrateNamesForTest`), exactly what the command writes.
  */
 
 function is(code: string, pattern?: RegExp) {
@@ -73,11 +70,7 @@ function message(id: string, from: string, subject: string): FakeMessage {
   };
 }
 
-async function migrate(harness: Harness, renames: string[] = []): Promise<void> {
-  const plan = planNamesMigration(await harness.core.config.load(), renames);
-  assert.equal(plan.status, 'ready');
-  if (plan.status === 'ready') await migrateNames(harness.core.config, plan);
-}
+const migrate = migrateNamesForTest;
 
 /** A registered OAuth client, as `client add` leaves it, and a context to use it. */
 async function withClient(harness: Harness): Promise<GmailContext> {
@@ -583,10 +576,7 @@ test('import on a migrated config proposes <name>/gmail, and --rename overrides 
   assert.deepEqual(dry.imported.map((row) => row.alias).sort(), ['acme/gmail', 'home/gmail']);
 
   await importLegacy(context, { dir: directory, store: 'file', renames: ['work=acme/gmail'] });
-  assert.deepEqual(
-    (await inboxList(context)).map((row) => row.alias).sort(),
-    ['acme/gmail', 'home/gmail'],
-  );
+  assert.deepEqual((await inboxList(context)).map((row) => row.alias).sort(), ['acme/gmail', 'home/gmail']);
 });
 
 test('import refuses every bad name together, and writes nothing', async () => {
@@ -605,7 +595,10 @@ test('import refuses every bad name together, and writes nothing', async () => {
     (error: unknown) => {
       if (!(error instanceof CommsError) || error.code !== 'USAGE') return false;
       const problems = (error.details as { problems: string[] }).problems;
-      assert.ok(problems.some((p) => /given to more than one mailbox/.test(p)), problems.join('\n'));
+      assert.ok(
+        problems.some((p) => /given to more than one mailbox/.test(p)),
+        problems.join('\n'),
+      );
       assert.ok(problems.some((p) => /no credentials file is called "nope"/.test(p)));
       assert.ok(problems.some((p) => /"broken" is not/.test(p)));
       return true;

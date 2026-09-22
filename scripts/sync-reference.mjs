@@ -71,7 +71,12 @@ function sections(text) {
     if (/^\S/.test(line) && current && current !== 'description') current = null;
     if (!line.trim()) continue;
     if (current === 'description') out.description += `${line.trim()} `;
-    else if (current) out[current].push(line);
+    else if (current && /^\s{3,}/.test(line) && out[current].length > 0) {
+      // A wrapped continuation: Commander starts every entry two spaces in, and indents the rest of a long description
+      // to line up under it. Read as its own entry, it became a row of its own — the flag column holding the tail of
+      // the previous description, and the previous row's default cut off mid-sentence.
+      out[current][out[current].length - 1] += ` ${line.trim()}`;
+    } else if (current) out[current].push(line);
   }
   out.description = out.description.trim();
   return out;

@@ -2,14 +2,21 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { CommsError, migrateNames, planNamesMigration } from '@agentcomms/core';
+import { CommsError } from '@agentcomms/core';
 import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { GmailContext } from '../src/context.ts';
 import { attachmentQuery, downloadAttachments, findAttachments } from '../src/operations/attachments.ts';
 import { exportMail } from '../src/operations/export.ts';
 import type { FakeMessage } from './support/fake-google.ts';
-import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
+import {
+  type Harness,
+  migrateNamesForTest,
+  newHarness,
+  TEST_CLIENT_ID,
+  TEST_CLIENT_SECRET,
+  tempDir,
+} from './support/harness.ts';
 
 function base64url(text: string): string {
   return Buffer.from(text, 'utf8').toString('base64url');
@@ -444,9 +451,7 @@ test('under an organisation/platform name, downloads and exports land one folder
     },
     { a1: 'invoice bytes' },
   );
-  const plan = planNamesMigration(await harness.core.config.load(), ['work=acme/gmail']);
-  assert.equal(plan.status, 'ready');
-  if (plan.status === 'ready') await migrateNames(harness.core.config, plan);
+  await migrateNamesForTest(harness, ['work=acme/gmail']);
 
   const result = await downloadAttachments(context, 'acme/gmail', [{ messageId: 'm1', partId: '1' }]);
   const file = result.files[0];

@@ -151,9 +151,13 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
    * have deleted that secret.
    */
   if (!existingClient && Object.hasOwn(config.clients, clientKey)) {
-    throw new CommsError('CONFIG', `an OAuth client called "${clientKey}" already exists, for a different Google project`, {
-      hint: 'Import it under another name with `--name <name>`.',
-    });
+    throw new CommsError(
+      'CONFIG',
+      `an OAuth client called "${clientKey}" already exists, for a different Google project`,
+      {
+        hint: 'Import it under another name with `--name <name>`.',
+      },
+    );
   }
 
   const credentialFiles = entries.filter((entry) => /^creds-.+\.json$/i.test(entry) || entry === 'credentials.json');
@@ -375,7 +379,8 @@ export function importNames(config: Config, files: readonly string[], renames: r
     const to = rename.slice(at + 1);
     if (at <= 0 || !to) problems.push(`"${rename}" is not <legacy name>=<name>`);
     else if (!byLegacy.has(from)) problems.push(`no credentials file is called "${from}"`);
-    else if ((byLegacy.get(from)?.length ?? 0) > 1) problems.push(`"${from}" is more than one file, so it cannot be renamed`);
+    else if ((byLegacy.get(from)?.length ?? 0) > 1)
+      problems.push(`"${from}" is more than one file, so it cannot be renamed`);
     else if (overrides.has(from)) problems.push(`"${from}" is renamed more than once`);
     else overrides.set(from, to);
   }

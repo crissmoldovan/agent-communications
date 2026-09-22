@@ -360,7 +360,8 @@ async function orphanedSecretsCheck(context: GmailContext): Promise<Check> {
       id: 'orphaned-secrets',
       title: 'Tokens left behind',
       status: 'ok',
-      detail: inUse === 0 ? 'none' : `none — ${inUse} recorded token(s) belong to a connected mailbox, so nothing to do`,
+      detail:
+        inUse === 0 ? 'none' : `none — ${inUse} recorded token(s) belong to a connected mailbox, so nothing to do`,
     };
   }
   if (unreferenced.length === 0) {
