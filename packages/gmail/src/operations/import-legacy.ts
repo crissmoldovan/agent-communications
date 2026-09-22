@@ -487,14 +487,23 @@ async function storeThenRecord(
        * release — can register the same name in between. Deleting the reference would then delete the credential
        * that row depends on. Whose secret is there now cannot be known, so it is said, not guessed at.
        */
-      if (ownedByAnother && (await writeOutcome(ownedByAnother)) !== 'absent') {
+      if (ownedByAnother) {
+        /*
+         * A client's reference is never taken back. It is derived from the name, so a writer outside the lock can
+         * register that name at any moment — including between a check and a delete — and a delete would then take a
+         * credential that row depends on. The reference is kept and named, which is recoverable; a deleted secret
+         * Google shows once is not.
+         */
         const base = error instanceof CommsError ? error : new CommsError('UNEXPECTED', String(error));
+        const contested = (await writeOutcome(ownedByAnother)) !== 'absent';
         throw new CommsError(base.code, base.message, {
-          hint:
-            `${base.hint ? `${base.hint} ` : ''}Something else registered this client name while the import ran, and ` +
-            `both wrote \`${ref}\`, so it may now hold the wrong secret. Register that client again with ` +
-            '`agent-gmail client add <its JSON> --replace`.',
-          details: { contestedSecretRef: ref },
+          hint: contested
+            ? `${base.hint ? `${base.hint} ` : ''}Something else registered this client name while the import ran, and ` +
+              `both wrote \`${ref}\`, so it may now hold the wrong secret. Register that client again with ` +
+              '`agent-gmail client add <its JSON> --replace`.'
+            : `${base.hint ? `${base.hint} ` : ''}The client's secret was stored as \`${ref}\` but not registered. ` +
+              'Run the import again, or delete it from your secret store.',
+          details: contested ? { contestedSecretRef: ref } : { strandedSecretRef: ref },
           cause: error,
         });
       }

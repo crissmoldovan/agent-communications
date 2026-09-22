@@ -116,7 +116,14 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
    * overwrites anything. The probe above is a network call and stays outside.
    */
   const client = await withCredentialsLock(context.core.paths.configDir, async () => {
-    const held = (await context.config()).clients[name];
+    const fresh = await context.config();
+    // The store was chosen before the lock; `secrets migrate` holds it too, and may have finished in between.
+    if (fresh.secrets?.store && fresh.secrets.store !== chosen) {
+      throw new CommsError('TRANSIENT', 'the secret store was changed while this ran', {
+        hint: 'Run the command again.',
+      });
+    }
+    const held = fresh.clients[name];
     if (held && !options.replace) {
       throw new CommsError('CONFIG', `an OAuth client called "${name}" was registered while this ran`, {
         hint: 'Run the command again to see what is there now.',
@@ -142,11 +149,15 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
       secretRef,
       addedAt: existing?.addedAt ?? context.now().toISOString(),
     };
-    await context.core.config.update((current) => ({
-      ...current,
-      secrets: { store: chosen },
-      clients: { ...current.clients, [name]: row },
-    }));
+    await context.core.config.update((current) => {
+      // Never switch the store back: only `secrets migrate` changes it, and it moves the secrets with it.
+      if (current.secrets?.store && current.secrets.store !== chosen) {
+        throw new CommsError('TRANSIENT', 'the secret store was changed while this ran', {
+          hint: 'Run the command again.',
+        });
+      }
+      return { ...current, secrets: { store: chosen }, clients: { ...current.clients, [name]: row } };
+    });
     return row;
   });
 
@@ -195,6 +206,12 @@ export async function clientList(context: GmailContext): Promise<ClientView[]> {
 }
 
 export async function clientRemove(context: GmailContext, name: string): Promise<{ name: string }> {
+  // Under the credentials lock, from the read to the secret deletion: `client add --replace` holds it too, and a
+  // replacement landing in between would otherwise be re-added and then have its secret deleted from under it.
+  return withCredentialsLock(context.core.paths.configDir, () => removeClientLocked(context, name));
+}
+
+async function removeClientLocked(context: GmailContext, name: string): Promise<{ name: string }> {
   const config = await context.config();
   const client = config.clients[name];
   if (!client) {
@@ -211,6 +228,12 @@ export async function clientRemove(context: GmailContext, name: string): Promise
     });
   }
   await context.core.config.update((current) => {
+    // The row this read, not whatever holds the name now.
+    if (current.clients[name]?.clientId !== client.clientId) {
+      throw new CommsError('CONFIG', `the OAuth client "${name}" changed while it was being removed`, {
+        hint: 'Run the command again to see what is there now.',
+      });
+    }
     const clients = { ...current.clients };
     delete clients[name];
     return { ...current, clients };

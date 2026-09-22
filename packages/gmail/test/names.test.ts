@@ -16,7 +16,7 @@ import { clientSecretRef } from '../src/auth/session.ts';
 import { renderSetupPlan } from '../src/cli/render.ts';
 import { GmailContext } from '../src/context.ts';
 import { mcpInstall } from '../src/mcp/install.ts';
-import { clientAdd } from '../src/operations/clients.ts';
+import { clientAdd, clientRemove } from '../src/operations/clients.ts';
 import { searchContacts } from '../src/operations/contacts.ts';
 import { doctor } from '../src/operations/doctor.ts';
 import { createDraft, listDrafts } from '../src/operations/drafts.ts';
@@ -771,7 +771,8 @@ test('import: each write — the client and every mailbox — is looked at befor
   // Write 1 records the OAuth client; writes 2 and 3 record the mailboxes, in file order (home, then work).
   const cases: Array<{ write: number; how: 'commit-then-reject' | 'reject' | 'unknown'; expect: RegExp | null }> = [
     { write: 1, how: 'commit-then-reject', expect: null },
-    { write: 1, how: 'reject', expect: /LOCK_TIMEOUT/ },
+    // A client's reference is name-derived and shared, so it is never taken back — only named.
+    { write: 1, how: 'reject', expect: /strandedSecretRef/ },
     { write: 1, how: 'unknown', expect: /possiblyStrandedSecretRef/ },
     { write: 2, how: 'commit-then-reject', expect: null },
     { write: 2, how: 'reject', expect: /LOCK_TIMEOUT/ },
@@ -797,8 +798,9 @@ test('import: each write — the client and every mailbox — is looked at befor
     );
     assert.match(`${(error as CommsError).code} ${JSON.stringify((error as CommsError).details ?? {})}`, expect, label);
     const failedRef = seen.set.at(-1) ?? '';
-    if (how === 'reject') assert.ok(seen.deleted.includes(failedRef), `${label}: withdrawn`);
-    if (how === 'unknown') assert.ok(!seen.deleted.includes(failedRef), `${label}: kept`);
+    const keptAnyway = write === 1; // the client's reference, which is never withdrawn
+    if (how === 'reject' && !keptAnyway) assert.ok(seen.deleted.includes(failedRef), `${label}: withdrawn`);
+    if (how === 'unknown' || keptAnyway) assert.ok(!seen.deleted.includes(failedRef), `${label}: kept`);
   }
 });
 
@@ -1034,4 +1036,133 @@ test('doctor --inbox reports only that mailbox’s leftover folders', async () =
   const detail = scoped.checks.find((check) => check.id === 'former-download-folders')?.detail ?? '';
   assert.match(detail, /"work" became "work\/gmail"/);
   assert.doesNotMatch(detail, /home/);
+});
+
+test('client add refuses to register into a store that moved while it ran', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  await harness.core.config.update((config) => ({ ...config, secrets: { store: 'file' } }));
+  const json = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    json,
+    JSON.stringify({
+      installed: { client_id: 'project-a.apps.googleusercontent.com', client_secret: 'fake-secret-a' },
+    }),
+  );
+  // `secrets migrate` finishing between the secret write and the row write.
+  meddleAfterStoring(
+    await harness.core.secrets('file'),
+    (ref) => ref === clientSecretRef('desktop'),
+    () => harness.core.config.update((config) => ({ ...config, secrets: { store: 'keychain' } })),
+  );
+  await assert.rejects(
+    clientAdd(context, { path: json, name: 'desktop', store: 'file', noProbe: true }),
+    is('TRANSIENT', /secret store was changed/),
+  );
+  assert.equal((await harness.core.config.load()).clients.desktop, undefined);
+});
+
+test('client remove waits for the credentials lock', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const json = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    json,
+    JSON.stringify({
+      installed: { client_id: 'project-a.apps.googleusercontent.com', client_secret: 'fake-secret-a' },
+    }),
+  );
+  await clientAdd(context, { path: json, name: 'desktop', store: 'file', noProbe: true });
+  let released = false;
+  let removedWhileHeld = false;
+  let running: Promise<unknown> | undefined;
+  await withFileLock(credentialsLockPath(harness.configDir), async () => {
+    running = clientRemove(context, 'desktop').then(() => {
+      removedWhileHeld = !released;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    released = true;
+  });
+  await running;
+  assert.equal(removedWhileHeld, false);
+  assert.equal((await harness.core.config.load()).clients.desktop, undefined);
+});
+
+test('reauth: a token write that lands and then reports failure still puts the old token back', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const id = await connectBySignIn(harness, context, 'work', 'read');
+  const secrets = await harness.core.secrets('file');
+  const before = await secrets.get(`gmail:refresh:${id}`);
+  // A keychain write that stores the value and then reports a timeout.
+  const store = secrets.set.bind(secrets);
+  let armed = true;
+  secrets.set = async (ref, value) => {
+    await store(ref, value);
+    if (!armed || ref !== `gmail:refresh:${id}`) return;
+    armed = false;
+    throw new CommsError('SECRET_STORE_UNAVAILABLE', 'the keychain timed out');
+  };
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', tier: 'organize', detached: false });
+  await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
+  await assert.rejects(reauth.listener?.result ?? Promise.resolve(), (error: unknown) => error instanceof CommsError);
+  assert.equal(await secrets.get(`gmail:refresh:${id}`), before, 'the old token is back under the row that names it');
+  assert.equal((await inboxList(context))[0]?.tier, 'read');
+});
+
+test('client add refuses a store that moved while it waited for the credentials lock', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  await harness.core.config.update((config) => ({ ...config, secrets: { store: 'file' } }));
+  const json = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    json,
+    JSON.stringify({
+      installed: { client_id: 'project-a.apps.googleusercontent.com', client_secret: 'fake-secret-a' },
+    }),
+  );
+  // The store changes while the command is queued behind the lock — the window before any of its writes.
+  const seen = recordSecrets(await harness.core.secrets('file'));
+  let running: Promise<unknown> | undefined;
+  await withFileLock(credentialsLockPath(harness.configDir), async () => {
+    running = clientAdd(context, { path: json, name: 'desktop', store: 'file', noProbe: true });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await harness.core.config.update((config) => ({ ...config, secrets: { store: 'keychain' } }));
+  });
+  await assert.rejects(running ?? Promise.resolve(), is('TRANSIENT', /secret store was changed/));
+  assert.equal((await harness.core.config.load()).clients.desktop, undefined);
+  // Refused before writing, not after: nothing was put into the store it was about to leave.
+  assert.deepEqual(seen.set, []);
+});
+
+test('client remove refuses when the client under the name changed since it was read', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const json = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    json,
+    JSON.stringify({
+      installed: { client_id: 'project-a.apps.googleusercontent.com', client_secret: 'fake-secret-a' },
+    }),
+  );
+  await clientAdd(context, { path: json, name: 'desktop', store: 'file', noProbe: true });
+  const secrets = await harness.core.secrets('file');
+  // Something that holds no lock — an older release — replaces the row between the read and the write.
+  const read = context.config.bind(context);
+  let swapped = false;
+  context.config = async () => {
+    const config = await read();
+    if (!swapped) {
+      swapped = true;
+      await harness.core.config.update((current) => ({
+        ...current,
+        clients: { desktop: { ...(current.clients.desktop as ClientConfig), clientId: 'another-project' } },
+      }));
+    }
+    return config;
+  };
+  await assert.rejects(clientRemove(context, 'desktop'), is('CONFIG', /changed while it was being removed/));
+  context.config = read;
+  assert.ok((await harness.core.config.load()).clients.desktop, 'the other client’s row is still there');
+  assert.notEqual(await secrets.get(clientSecretRef('desktop')), null, 'and its secret was not deleted');
 });

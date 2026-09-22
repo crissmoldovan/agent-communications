@@ -331,12 +331,13 @@ async function writeReauth(
   // Kept, so a write that does not land can put it back: the row would otherwise still name the old client and grant
   // while the token under it belongs to the new ones — after `--client`, a mailbox that no longer renews.
   const previous = await secrets.get(existing.inbox.secretRef);
-  await secrets.set(existing.inbox.secretRef, tokens.refreshToken);
   let written: { alias: string; inbox: InboxConfig } = {
     alias: existing.alias,
     inbox: { ...existing.inbox, ...grantFields(flow, identity, granted, existing.inbox) },
   };
   try {
+    // Inside the boundary that puts things back: a keychain write can land after it reported a timeout.
+    await secrets.set(existing.inbox.secretRef, tokens.refreshToken);
     await context.core.config.update((current) => {
       // By id, under whatever key it holds now: a rename is followed rather than undone.
       const now = findById(current, 'inbox', inboxId);
