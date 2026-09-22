@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import type { CommsError } from '@agentcomms/core';
 import { buildAuthorizeUrl } from '../src/auth/authorize.ts';
-import { type FlowStore, newFlowId, openFlowStore, type SlackFlow } from '../src/auth/flow.ts';
+import { type FlowStore, fillMarker, newFlowId, openFlowStore, type SlackFlow } from '../src/auth/flow.ts';
 import { startLoopback } from '../src/auth/listener.ts';
 
 /**
@@ -388,14 +388,7 @@ test('the sweep of an expired flow takes every file with it, not just the record
 });
 
 test('a claim on a flow that is gone gives the marker back', async () => {
-  /*
-   * `claim` acquires the marker first and reads the record second, so it can hold a marker for a flow that turns
-   * out not to exist. That marker has to be released, or it claims the flow for nobody.
-   *
-   * What this does *not* cover: the marker's own write or close failing after the create succeeded, which is
-   * handled in `claim` and released the same way, but cannot be forced here without replacing the filesystem.
-   * Said so rather than implied by the name.
-   */
+  // `claim` acquires first and reads second, so it can hold a marker for a flow that turns out not to exist.
   const { dir, flows } = await store();
   const saved = flow();
   await flows.save(saved);
@@ -404,4 +397,55 @@ test('a claim on a flow that is gone gives the marker back', async () => {
   await assert.rejects(flows.claim(saved.flowId), /not waiting to be finished/);
   const left = await readdir(join(dir, 'slack', 'flows'));
   assert.deepEqual(left, [], `a claim on nothing left ${left.join(', ')}`);
+});
+
+test('a marker whose write fails after the create is given back', async () => {
+  /*
+   * The case the test above only claimed to cover. Creating the marker and writing to it were one step, so a
+   * write that failed after the create threw out with the marker still there — claiming the flow for nobody.
+   * Unreachable through the filesystem, so forced through the helper that does the bookkeeping.
+   */
+  let released = 0;
+  let closed = 0;
+  await assert.rejects(
+    fillMarker(
+      {
+        writeFile: async () => {
+          throw new Error('disk full');
+        },
+        close: async () => {
+          closed += 1;
+        },
+      },
+      async () => {
+        released += 1;
+      },
+      '{}',
+    ),
+    /disk full/,
+  );
+  assert.equal(released, 1, 'a claim whose write failed was kept');
+  assert.equal(closed, 1, 'the handle was left open');
+});
+
+test('a marker whose close fails after a good write is kept, because it is already a claim', async () => {
+  /*
+   * The other half, decided rather than left to chance. The marker exists and says who holds it, which is
+   * everything a claim is. Releasing it on a failed close would let a second finisher in while the first is
+   * still exchanging its code.
+   */
+  let released = 0;
+  await fillMarker(
+    {
+      writeFile: async () => undefined,
+      close: async () => {
+        throw new Error('EBADF');
+      },
+    },
+    async () => {
+      released += 1;
+    },
+    '{}',
+  );
+  assert.equal(released, 0, 'a good claim was given up over a close');
 });

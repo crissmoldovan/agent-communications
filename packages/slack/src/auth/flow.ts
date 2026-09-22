@@ -103,6 +103,34 @@ function flowPath(stateDir: string, flowId: string, suffix = '.json'): string {
   return join(flowDir(stateDir), `${flowId}${suffix}`);
 }
 
+/**
+ * Writes a freshly created claim marker, and gives the claim back if that fails.
+ *
+ * The create is the claim; this is bookkeeping, and bookkeeping failing is not a reason to hold the claim. A write
+ * that fails after the create has succeeded would otherwise leave a marker claiming the flow for nobody, so it
+ * could never be finished.
+ *
+ * A failed **close** after a successful write is different, and deliberately kept: the marker exists and says who
+ * holds it, which is everything a claim is. Releasing it there would open the flow to a second finisher while the
+ * first is still exchanging its code.
+ *
+ * Its own function so both cases can be forced in a test. They cannot be reached through the filesystem.
+ */
+export async function fillMarker(
+  handle: { writeFile(data: string): Promise<unknown>; close(): Promise<unknown> },
+  release: () => Promise<unknown>,
+  contents: string,
+): Promise<void> {
+  try {
+    await handle.writeFile(contents);
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    await release();
+    throw error;
+  }
+  await handle.close().catch(() => undefined);
+}
+
 export interface FlowStore {
   save(flow: SlackFlow): Promise<void>;
   /** Reads without consuming. Used to report what is pending, never to complete one. */
@@ -219,14 +247,11 @@ export function openFlowStore(stateDir: string, now: () => Date): FlowStore {
        * could then never be finished. The create is the claim; what follows is bookkeeping, and bookkeeping
        * failing is not a reason to hold the claim.
        */
-      try {
-        await handle.writeFile(JSON.stringify({ pid: process.pid, at: now().toISOString() }));
-      } catch (error) {
-        await handle.close().catch(() => undefined);
-        await rm(marker, { force: true });
-        throw error;
-      }
-      await handle.close().catch(() => undefined);
+      await fillMarker(
+        handle,
+        () => rm(marker, { force: true }),
+        JSON.stringify({ pid: process.pid, at: now().toISOString() }),
+      );
 
       let flow: SlackFlow;
       try {

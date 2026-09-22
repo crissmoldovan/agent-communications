@@ -309,6 +309,19 @@ distinct `acc_` / `ibx_` prefixes mean an id alone still says which it is.
 > *Scanning client configurations for other Slack MCP servers* needs an MCP server to scan for, which arrives
 > with the MCP surface. Until then `doctor` reports that check as not performed rather than as clear.
 >
+> **An S3 prerequisite the S2 review surfaced: token refresh and `secrets migrate` must serialize.** Migration
+> copies credentials outside the config lock and compares only the backend and the *set* of references before
+> switching. A refresh writes a new value under the *same* reference, so one landing mid-migration passes that
+> check, the switch activates the stale copy, and the migration then deletes the fresh original. Slack refresh
+> tokens are single-use, so the stale one is already spent and the workspace needs re-authorising.
+>
+> It cannot happen in S2: the only Slack writes to an existing reference are in `auth/refresh.ts`, reachable
+> only through `accessTokenFor`, which nothing calls yet — every sign-in writes to a fresh reference. It becomes
+> real the moment S3's transport calls `accessTokenFor`. So before that: a core-level credential lock that both
+> a refresh and a migration take, rather than a value re-check that narrows the window without closing it and
+> would read as a fix. **Gmail is exposed to the same race today** — an inbox reauth rewrites its reference in
+> place — and that is a shipped-package change, not this phase's.
+>
 > *A durable transaction journal across the secret store and the config* was proposed for the window between
 > writing a credential and pointing at it. Declined: the window is now closed by a compare-and-swap inside the
 > config lock, the credential written into a failed attempt is deleted, and the one remaining leak — a keychain

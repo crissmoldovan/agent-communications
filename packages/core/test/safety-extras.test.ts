@@ -582,3 +582,35 @@ test('ConfigStore.update itself refuses a Slack widening, not only classifyChang
   await store.update(widened, { consent: { kind: 'loosening-consent', paths: ['accounts.acme.mode'] } });
   assert.equal((await store.load()).accounts.acme?.mode, 'send');
 });
+
+test('classifyChange: a different workspace taking the name is not a loosening of the one that left', () => {
+  /*
+   * The alias fallback over-reached. Replacing workspace A (set to `never`, `read`) with an unrelated workspace B
+   * (`chat`, `send`) under the same name read as B loosening A — a finding about a workspace B never had. A
+   * reauth keeps the platform, the workspace and the user; a replacement does not, and only the first is the
+   * same account.
+   */
+  const before = parseConfig(
+    JSON.stringify({
+      version: 1,
+      accounts: { acme: { ...accountFixture('acc_AAAAAAAAAAAAAAAA'), sendPolicy: 'never', mode: 'read' } },
+    }),
+  );
+  const replaced = parseConfig(
+    JSON.stringify({
+      version: 1,
+      accounts: {
+        acme: {
+          ...accountFixture('acc_BBBBBBBBBBBBBBBB'),
+          workspace: 'T_SOMEWHERE_ELSE',
+          userId: 'U_SOMEBODY_ELSE',
+          sendPolicy: 'chat',
+          mode: 'send',
+          tier: 'send',
+        },
+      },
+    }),
+  );
+  // Measured as the new account it is, against the default — which is `chat`, so no loosening.
+  assert.deepEqual(classifyChange(before, replaced).loosened, []);
+});

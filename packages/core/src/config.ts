@@ -508,6 +508,22 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   // walks straight through the gate built to catch exactly that.
   for (const [alias, account] of Object.entries(after.accounts)) {
     /*
+     * The same person in the same workspace under this name — not merely whatever held the name.
+     *
+     * Matching by alias alone was the first fix for id rotation, and it over-reached: replacing workspace A with
+     * an unrelated workspace B under the same alias read as B loosening A's policy, which is a finding about a
+     * workspace B never had. A reauth keeps the platform, the workspace and the user; a replacement does not.
+     */
+    const sameAccountUnder = (name: string): AccountConfig | undefined => {
+      const held = before.accounts[name];
+      return held &&
+        held.platform === account.platform &&
+        held.workspace === account.workspace &&
+        held.userId === account.userId
+        ? held
+        : undefined;
+    };
+    /*
      * By id, and failing that by alias.
      *
      * Re-authorising a Slack workspace mints a new account id on purpose, so the new credential can be staged
@@ -516,7 +532,7 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
      * default and needed nobody's consent. The alias is what the person set the policy on.
      */
     const previous =
-      Object.values(before.accounts).find((existing) => existing.id === account.id) ?? before.accounts[alias];
+      Object.values(before.accounts).find((existing) => existing.id === account.id) ?? sameAccountUnder(alias);
     const was = previous ? (previous.sendPolicy ?? before.defaults.sendPolicy) : before.defaults.sendPolicy;
     const now = account.sendPolicy ?? after.defaults.sendPolicy;
     if (POLICY_RANK[now] < POLICY_RANK[was]) loosened.push(`accounts.${alias}.sendPolicy`);
@@ -535,8 +551,7 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
      * account — which is exactly the case this must not miss. A genuinely new account is not a loosening: nobody
      * decided anything about that name before, and choosing `send` when connecting is the decision itself.
      */
-    const held = before.accounts[alias];
-    if (held && (held.mode ?? held.tier) === 'read' && (account.mode ?? account.tier) === 'send') {
+    if (previous && (previous.mode ?? previous.tier) === 'read' && (account.mode ?? account.tier) === 'send') {
       loosened.push(`accounts.${alias}.mode`);
     }
   }

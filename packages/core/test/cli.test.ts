@@ -4,6 +4,7 @@ import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import type { CommsError } from '../src/errors.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /** A fixed timestamp, so a fixture never depends on when the suite ran. */
@@ -189,4 +190,122 @@ test('a migration does not switch backends when a credential appeared or vanishe
   const moved = structuredClone(base);
   moved.secrets = { store: 'file' };
   assert.match(migrationConflict(moved, 'keychain', copied) ?? '', /changed by something else/);
+});
+
+/**
+ * An in-memory secret store for driving a real migration without a keychain.
+ *
+ * `failSet` writes and then throws, which is what a keychain timeout that landed anyway looks like from outside.
+ * `failDelete` refuses every delete, which is what a keychain whose prompt is dismissed looks like.
+ */
+function memoryStore(kind: 'keychain' | 'file', options: { failSet?: string; failDelete?: boolean } = {}) {
+  const values = new Map<string, string>();
+  return {
+    values,
+    store: {
+      kind,
+      async get(ref: string) {
+        return values.get(ref) ?? null;
+      },
+      async set(ref: string, value: string) {
+        values.set(ref, value);
+        if (options.failSet === ref) throw new Error('timed out waiting for the keychain');
+      },
+      async delete(ref: string) {
+        if (options.failDelete) throw new Error('the keychain said no');
+        return values.delete(ref);
+      },
+      invalidate() {},
+    },
+  };
+}
+
+async function coreWithTwoSlackTokens() {
+  const { openCore } = await import('../src/core.ts');
+  const dir = tempDir();
+  const core = openCore({ env: { AGENT_COMMS_CONFIG_DIR: dir, HOME: dir } });
+  const account = (id: string) => ({
+    id,
+    platform: 'slack',
+    workspace: 'T1',
+    userId: `U-${id}`,
+    tier: 'read',
+    grantedScopes: [] as string[],
+    secretRef: `slack/token/${id}`,
+    createdAt: '2026-09-22T12:00:00.000Z',
+  });
+  await core.config.update((c) => ({
+    ...c,
+    secrets: { store: 'file' },
+    accounts: { one: account('acc_AAAAAAAAAAAAAAAA'), two: account('acc_BBBBBBBBBBBBBBBB') },
+  }));
+  const source = await core.secrets('file');
+  await source.set('slack/token/acc_AAAAAAAAAAAAAAAA', 'fake-token-one');
+  await source.set('slack/token/acc_BBBBBBBBBBBBBBBB', 'fake-token-two');
+  return { core, source };
+}
+
+test('a migration whose copy throws after landing takes that copy back', async () => {
+  /*
+   * A copy was tracked only once `set` returned, so a write that threw after landing — a keychain timeout that
+   * finished anyway — was a copy nobody would ever clean up: a live credential in a backend nothing reads.
+   */
+  const { migrateSecrets } = await import('../src/cli.ts');
+  const { core, source } = await coreWithTwoSlackTokens();
+  const target = memoryStore('keychain', { failSet: 'slack/token/acc_BBBBBBBBBBBBBBBB' });
+
+  await assert.rejects(migrateSecrets(core, 'keychain', { source, target: target.store }), /timed out/);
+  assert.equal(target.values.size, 0, `copies were left in the target: ${[...target.values.keys()].join(', ')}`);
+  assert.equal((await core.config.load()).secrets?.store, 'file', 'the backend was switched after a failed copy');
+  assert.equal(await source.get('slack/token/acc_AAAAAAAAAAAAAAAA'), 'fake-token-one', 'an original was lost');
+});
+
+test('a migration that cannot take its copies back says which ones, instead of failing quietly', async () => {
+  const { migrateSecrets } = await import('../src/cli.ts');
+  const { core, source } = await coreWithTwoSlackTokens();
+  const target = memoryStore('keychain', { failSet: 'slack/token/acc_BBBBBBBBBBBBBBBB', failDelete: true });
+
+  await assert.rejects(migrateSecrets(core, 'keychain', { source, target: target.store }), (error: CommsError) => {
+    const leftovers = (error.details?.leftovers ?? []) as { backend: string; ref: string }[];
+    assert.deepEqual(leftovers.map((l) => l.ref).sort(), [
+      'slack/token/acc_AAAAAAAAAAAAAAAA',
+      'slack/token/acc_BBBBBBBBBBBBBBBB',
+    ]);
+    assert.ok(leftovers.every((l) => l.backend === 'keychain'));
+    assert.match(error.hint ?? '', /Copies were left in keychain/);
+    return true;
+  });
+});
+
+test('a migration that switched but could not remove an original reports it rather than calling it done', async () => {
+  /*
+   * The originals are duplicates once the switch has happened, and `catch(() => false)` used to drop every
+   * failure to remove them under a result that said the migration had simply worked.
+   */
+  const { migrateSecrets } = await import('../src/cli.ts');
+  const { core } = await coreWithTwoSlackTokens();
+  const stubborn = memoryStore('file', { failDelete: true });
+  stubborn.values.set('slack/token/acc_AAAAAAAAAAAAAAAA', 'fake-token-one');
+  stubborn.values.set('slack/token/acc_BBBBBBBBBBBBBBBB', 'fake-token-two');
+  const target = memoryStore('keychain');
+
+  const result = await migrateSecrets(core, 'keychain', { source: stubborn.store, target: target.store });
+  assert.equal(result.moved, 2);
+  assert.equal((await core.config.load()).secrets?.store, 'keychain');
+  assert.deepEqual(result.leftovers.map((l) => `${l.backend}:${l.ref}`).sort(), [
+    'file:slack/token/acc_AAAAAAAAAAAAAAAA',
+    'file:slack/token/acc_BBBBBBBBBBBBBBBB',
+  ]);
+});
+
+test('a clean migration moves everything and leaves nothing behind', async () => {
+  const { migrateSecrets } = await import('../src/cli.ts');
+  const { core, source } = await coreWithTwoSlackTokens();
+  const target = memoryStore('keychain');
+
+  const result = await migrateSecrets(core, 'keychain', { source, target: target.store });
+  assert.equal(result.moved, 2);
+  assert.deepEqual(result.leftovers, []);
+  assert.equal(target.values.get('slack/token/acc_AAAAAAAAAAAAAAAA'), 'fake-token-one');
+  assert.equal(await source.get('slack/token/acc_AAAAAAAAAAAAAAAA'), null, 'an original was left in the old backend');
 });
