@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -220,4 +220,78 @@ test('a refusal in Slack comes back as a denial, with its reason', async () => {
   } finally {
     await listener.close();
   }
+});
+
+test('the outcome the listener leaves is readable by the process that finishes', async () => {
+  // The two halves of a detached sign-in never speak; this file is the only thing between them.
+  const { dir, flows } = await store();
+  const original = flow();
+  await flows.save(original);
+  assert.equal(await flows.readOutcome(original.flowId), null, 'an outcome existed before anything wrote one');
+
+  await flows.recordOutcome(original.flowId, { code: 'fake-authorisation-code' });
+  const later = openFlowStore(dir, () => NOW);
+  const outcome = await later.readOutcome(original.flowId);
+  assert.equal((outcome as { code: string }).code, 'fake-authorisation-code');
+});
+
+test('the outcome file is owner-only too, because it holds an authorisation code', async () => {
+  const { dir, flows } = await store();
+  const original = flow();
+  await flows.save(original);
+  await flows.recordOutcome(original.flowId, { code: 'fake-authorisation-code' });
+  const mode = (await stat(join(dir, 'slack', 'flows', `${original.flowId}.outcome.json`))).mode & 0o777;
+  assert.equal(mode, 0o600);
+});
+
+test('claiming takes the outcome with the flow, so a reused id cannot collect a stale code', async () => {
+  const { flows } = await store();
+  const original = flow();
+  await flows.save(original);
+  await flows.recordOutcome(original.flowId, { code: 'fake-authorisation-code' });
+  await flows.claim(original.flowId);
+  assert.equal(await flows.readOutcome(original.flowId), null);
+});
+
+test('discard removes every trace, not only the record', async () => {
+  const { dir, flows } = await store();
+  const original = flow();
+  await flows.save(original);
+  await flows.recordOutcome(original.flowId, { code: 'fake-authorisation-code' });
+  await flows.discard(original.flowId);
+  assert.deepEqual(await readdir(join(dir, 'slack', 'flows')), []);
+});
+
+test('an outcome file is never mistaken for a flow that can still be finished', async () => {
+  /*
+   * `.outcome.json` also ends in `.json`, and parsing one as a flow yields a record with no `expiresAt`.
+   * `Date.parse(undefined)` is NaN, every comparison against it is false, and the expired sweep would neither
+   * list it as live nor remove it — so it would sit there being offered forever.
+   */
+  const { flows } = await store();
+  const original = flow();
+  await flows.save(original);
+  await flows.recordOutcome(original.flowId, { code: 'fake-authorisation-code' });
+  const pending = await flows.pending();
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]?.flowId, original.flowId);
+});
+
+test('patch records what the listener learned without disturbing the verifier', async () => {
+  const { flows } = await store();
+  const original = flow();
+  await flows.save(original);
+  const patched = await flows.patch(original.flowId, { listenerPid: 4242 });
+  assert.equal(patched.listenerPid, 4242);
+  assert.equal(patched.verifier, original.verifier, 'the verifier changed under a patch');
+  assert.equal((await flows.peek(original.flowId))?.listenerPid, 4242);
+});
+
+test('get refuses a flow that is gone, where peek only says nothing', async () => {
+  const { flows } = await store();
+  assert.equal(await flows.peek('sfl_aaaaaaaaaaaaaaaaaaaaaa'), null);
+  await assert.rejects(flows.get('sfl_aaaaaaaaaaaaaaaaaaaaaa'), (error: CommsError) => {
+    assert.match(error.hint ?? '', /workspace add/);
+    return true;
+  });
 });
