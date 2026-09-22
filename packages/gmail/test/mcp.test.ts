@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { type ConfigV2, renameEntry } from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { GmailContext } from '../src/context.ts';
 import { mcpBoolean, mcpInboxes, mcpInteger, mcpStringArray } from '../src/mcp/schemas.ts';
 import { buildInstructions, createGmailMcpServer } from '../src/mcp/server.ts';
-import { newHarness, tempDir } from './support/harness.ts';
+import { migrateNamesForTest, newHarness, tempDir } from './support/harness.ts';
 
 interface ToolResult {
   isError?: boolean;
@@ -477,6 +478,30 @@ test('a pinned gmail_setup does not call the setup done because some other mailb
       !answer.structuredContent.done.includes('inbox'),
       `"inbox" was called done on the strength of another mailbox: ${JSON.stringify(answer.structuredContent.done)}`,
     );
+  } finally {
+    await close();
+  }
+});
+
+test('a pinned server whose mailbox was renamed says what it is called now, from setup as from every tool', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  await migrateNamesForTest(harness, ['work=acme/gmail']);
+  const { client, close } = await connect({ core: harness.core, env: harness.env, inbox: 'acme/gmail' });
+  try {
+    // Renamed again while the server runs.
+    const config = (await harness.core.config.load()) as ConfigV2;
+    await writeFile(
+      harness.core.config.path,
+      `${JSON.stringify(renameEntry(config, 'inbox', 'acme/gmail', 'acme/gmail-main'), null, 2)}\n`,
+    );
+    for (const name of ['gmail_setup', 'gmail_whoami']) {
+      const result = (await client.callTool({ name, arguments: {} })) as ToolResult;
+      assert.equal(result.isError, true, name);
+      const error = result.structuredContent?.error as { code: string; message: string };
+      assert.equal(error.code, 'NOT_FOUND', name);
+      assert.match(error.message, /renamed to "acme\/gmail-main"/, name);
+    }
   } finally {
     await close();
   }

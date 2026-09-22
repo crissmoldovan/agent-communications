@@ -1,4 +1,4 @@
-import { CommsError, findById, lookupName, stricterPolicy, toCommsError } from '@agentcomms/core';
+import { CommsError, findById, formerNameRefusal, lookupName, stricterPolicy, toCommsError } from '@agentcomms/core';
 import { acceptedContent, inputRequired, inputResponse, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
@@ -857,6 +857,12 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         // One snapshot, not two. This loaded the config again to find the pinned mailbox's client, so `inboxes`
         // could come from `setupState`'s read and the verdict from a read a moment later — the same split this
         // scoping exists to close.
+        // A pin that has since been renamed gets the same answer every other tool on this server gives it — what
+        // it is called now — rather than "connect this mailbox", which would send somebody to connect it twice.
+        if (pinned && !state.inboxes.includes(pinned)) {
+          const renamed = formerNameRefusal(await context.config(), 'inbox', pinned);
+          if (renamed) throw renamed;
+        }
         const pinnedInbox = pinned ? state.inboxes.includes(pinned) : false;
         const pinnedClient = pinned ? state.clientOf[pinned] : undefined;
         /*

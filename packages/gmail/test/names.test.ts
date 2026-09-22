@@ -1,16 +1,26 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { CommsError, type Config, credentialsLockPath, type SecretStore, withFileLock } from '@agentcomms/core';
+import {
+  type ClientConfig,
+  CommsError,
+  type Config,
+  credentialsLockPath,
+  type SecretStore,
+  withFileLock,
+} from '@agentcomms/core';
 import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
+import { clientSecretRef } from '../src/auth/session.ts';
+import { renderSetupPlan } from '../src/cli/render.ts';
 import { GmailContext } from '../src/context.ts';
 import { mcpInstall } from '../src/mcp/install.ts';
 import { clientAdd } from '../src/operations/clients.ts';
 import { searchContacts } from '../src/operations/contacts.ts';
 import { doctor } from '../src/operations/doctor.ts';
 import { createDraft, listDrafts } from '../src/operations/drafts.ts';
+import { exportMail } from '../src/operations/export.ts';
 import { importLegacy } from '../src/operations/import-legacy.ts';
 import {
   inboxList,
@@ -437,12 +447,16 @@ test('reauth: a write that committed and then reported failure is a reauth that 
 test('reauth: a write that did not happen is reported, not mistaken for one that did', async () => {
   const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
   const context = await withClient(harness);
-  await connectBySignIn(harness, context, 'work', 'read');
+  const id = await connectBySignIn(harness, context, 'work', 'read');
+  const secrets = await harness.core.secrets('file');
+  const before = await secrets.get(`gmail:refresh:${id}`);
   const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', tier: 'organize', detached: false });
   rejectBeforeWrite(harness);
   await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
   await assert.rejects(reauth.listener?.result ?? Promise.resolve(), is('LOCK_TIMEOUT'));
   assert.equal((await inboxList(context))[0]?.tier, 'read', 'the row is as it was');
+  // And so is the token under it: the row still names the old grant, so the old token is put back.
+  assert.equal(await secrets.get(`gmail:refresh:${id}`), before);
 });
 
 test('reauth: when the credentials lock cannot be had, it says nothing was saved — and nothing was', async () => {
@@ -457,6 +471,45 @@ test('reauth: when the credentials lock cannot be had, it says nothing was saved
   });
   assert.deepEqual(seen.set, [], `no token written for ${id}`);
   assert.equal((await inboxList(context))[0]?.tier, 'read');
+});
+
+test('add: a secret store switched away while it finished is caught, and the token taken back', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const secrets = await harness.core.secrets('file');
+  const seen = recordSecrets(secrets);
+  // `secrets migrate` switches the backend after the token went into the old one.
+  const store = secrets.set.bind(secrets);
+  secrets.set = async (ref, value) => {
+    await store(ref, value);
+    if (ref.startsWith('gmail:refresh:')) {
+      await harness.core.config.update((config) => ({ ...config, secrets: { store: 'keychain' } }));
+    }
+  };
+  const started = await startSignIn(context, { mode: 'add', alias: 'work', detached: false });
+  await fetch(harness.google.consent(started.authUrl, { sub: 'sub-1' }));
+  await assert.rejects(started.listener?.result ?? Promise.resolve(), is('TRANSIENT', /secret store was changed/));
+  const token = seen.set.find((ref) => ref.startsWith('gmail:refresh:'));
+  assert.ok(token && seen.deleted.includes(token), 'withdrawn from the store it went into');
+});
+
+test('remove: waits for the credentials lock', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt' });
+  let released = false;
+  let removedWhileHeld = false;
+  let running: Promise<void> | undefined;
+  await withFileLock(credentialsLockPath(harness.configDir), async () => {
+    running = inboxRemove(context, 'work').then(() => {
+      removedWhileHeld = !released;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    released = true;
+  });
+  await running;
+  assert.equal(removedWhileHeld, false);
+  assert.deepEqual(await inboxList(context), []);
 });
 
 // ── Gmail removal: under the credentials lock, and a rejected write looked at ───────────────────────────────────
@@ -631,6 +684,199 @@ test('import: a mailbox connected under the same name while it runs is not overw
   assert.equal(rows.find((row) => row.alias === 'home')?.id, raced, 'the mailbox connected meanwhile is intact');
 });
 
+/** Arms the n-th config write from now (1-based) to fail in one of the ways a write can fail. */
+function failNthWrite(
+  harness: Harness,
+  n: number,
+  how: 'commit-then-reject' | 'reject' | 'unknown',
+  context?: GmailContext,
+): void {
+  const original: Update = harness.core.config.update.bind(harness.core.config);
+  let count = 0;
+  harness.core.config.update = (async (mutator, options) => {
+    count += 1;
+    if (count !== n) return original(mutator, options);
+    if (how === 'reject') throw new CommsError('LOCK_TIMEOUT', 'another process is holding the config lock');
+    if (how === 'commit-then-reject') {
+      await original(mutator, options);
+      throw new CommsError('LOCK_TIMEOUT', 'the lock could not be released');
+    }
+    if (context) {
+      context.config = async () => {
+        throw new CommsError('CONFIG', 'config.json could not be read');
+      };
+    }
+    throw new CommsError('LOCK_TIMEOUT', 'the lock could not be released');
+  }) as Update;
+}
+
+test('import: each write — the client and every mailbox — is looked at before anything is undone', async () => {
+  // Write 1 records the OAuth client; writes 2 and 3 record the mailboxes, in file order (home, then work).
+  const cases: Array<{ write: number; how: 'commit-then-reject' | 'reject' | 'unknown'; expect: RegExp | null }> = [
+    { write: 1, how: 'commit-then-reject', expect: null },
+    { write: 1, how: 'reject', expect: /LOCK_TIMEOUT/ },
+    { write: 1, how: 'unknown', expect: /possiblyStrandedSecretRef/ },
+    { write: 2, how: 'commit-then-reject', expect: null },
+    { write: 2, how: 'reject', expect: /LOCK_TIMEOUT/ },
+    { write: 2, how: 'unknown', expect: /possiblyStrandedSecretRef/ },
+  ];
+  for (const { write, how, expect } of cases) {
+    const harness = await newHarness(twoAccounts);
+    const context = new GmailContext({ core: harness.core, env: harness.env });
+    const directory = await legacyDirectory(harness);
+    await harness.core.config.update((config) => ({ ...config, secrets: { store: 'file' } }));
+    const secrets = await harness.core.secrets('file');
+    const seen = recordSecrets(secrets);
+    failNthWrite(harness, write, how, context);
+    const label = `write ${write}, ${how}`;
+    if (expect === null) {
+      const result = await importLegacy(context, { dir: directory, store: 'file' });
+      assert.equal(result.imported.length, 2, label);
+      continue;
+    }
+    const error = await importLegacy(context, { dir: directory, store: 'file' }).then(
+      () => assert.fail(`${label}: should have failed`),
+      (caught: unknown) => caught,
+    );
+    assert.match(`${(error as CommsError).code} ${JSON.stringify((error as CommsError).details ?? {})}`, expect, label);
+    const failedRef = seen.set.at(-1) ?? '';
+    if (how === 'reject') assert.ok(seen.deleted.includes(failedRef), `${label}: withdrawn`);
+    if (how === 'unknown') assert.ok(!seen.deleted.includes(failedRef), `${label}: kept`);
+  }
+});
+
+test('import: a failed withdrawal names the credential it left behind', async () => {
+  const harness = await newHarness(twoAccounts);
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const directory = await legacyDirectory(harness);
+  await harness.core.config.update((config) => ({ ...config, secrets: { store: 'file' } }));
+  const secrets = await harness.core.secrets('file');
+  secrets.delete = async () => {
+    throw new Error('the keychain is locked');
+  };
+  failNthWrite(harness, 2, 'reject');
+  await assert.rejects(
+    importLegacy(context, { dir: directory, store: 'file' }),
+    (error: unknown) =>
+      error instanceof CommsError &&
+      /^gmail:refresh:/.test(String((error.details as { strandedSecretRef?: string }).strandedSecretRef)),
+  );
+});
+
+test('import: two imports racing for one client name from two projects cannot both write it', async () => {
+  const harness = await newHarness(twoAccounts);
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  await harness.core.config.update((config) => ({ ...config, secrets: { store: 'file' } }));
+  const project = async (clientId: string, clientSecret: string) => {
+    const directory = join(tempDir(), '.gmail-mcp');
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      join(directory, 'gcp-oauth.keys.json'),
+      JSON.stringify({ installed: { client_id: clientId, client_secret: clientSecret } }),
+    );
+    return directory;
+  };
+  const a = await project('project-a.apps.googleusercontent.com', 'secret-a');
+  const b = await project('project-b.apps.googleusercontent.com', 'secret-b');
+  const outcomes = await Promise.allSettled([importLegacy(context, { dir: a }), importLegacy(context, { dir: b })]);
+  assert.deepEqual(outcomes.map((o) => o.status).sort(), ['fulfilled', 'rejected']);
+  const registered = (await harness.core.config.load()).clients.imported;
+  const secret = await (await harness.core.secrets('file')).get(clientSecretRef('imported'));
+  assert.equal(
+    secret,
+    registered?.clientId.startsWith('project-a') ? 'secret-a' : 'secret-b',
+    'the secret is the registered project’s own',
+  );
+});
+
+/** Runs `meddle` once, right after the first secret whose reference passes `when` is stored — mid-import. */
+function meddleAfterStoring(store: SecretStore, when: (ref: string) => boolean, meddle: () => Promise<unknown>): void {
+  const set = store.set.bind(store);
+  let fired = false;
+  store.set = async (ref, value) => {
+    await set(ref, value);
+    if (fired || !when(ref)) return;
+    fired = true;
+    await meddle();
+  };
+}
+
+test('import: a client written by something outside the lock is not mistaken for this import’s own', async () => {
+  // An older release, which knows no credentials lock, registers another project's client under the same name
+  // between this import's check and its write.
+  const harness = await newHarness(twoAccounts);
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const directory = await legacyDirectory(harness);
+  await harness.core.config.update((config) => ({ ...config, secrets: { store: 'file' } }));
+  meddleAfterStoring(
+    await harness.core.secrets('file'),
+    (ref) => ref === clientSecretRef('imported'),
+    () =>
+      harness.core.config.update((config) => ({
+        ...config,
+        clients: {
+          imported: {
+            provider: 'gmail',
+            clientId: 'another-project',
+            secretRef: clientSecretRef('imported'),
+            addedAt: 'x',
+          },
+        },
+      })),
+  );
+  await assert.rejects(
+    importLegacy(context, { dir: directory, store: 'file' }),
+    is('CONFIG', /was added while this ran/),
+  );
+  assert.deepEqual(await inboxList(context), [], 'no mailbox was attached to the other project’s client');
+});
+
+test('import: a mailbox is not written under a client that changed after it was registered', async () => {
+  const harness = await newHarness(twoAccounts);
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const directory = await legacyDirectory(harness);
+  await harness.core.config.update((config) => ({ ...config, secrets: { store: 'file' } }));
+  const secrets = await harness.core.secrets('file');
+  const seen = recordSecrets(secrets);
+  meddleAfterStoring(
+    secrets,
+    (ref) => ref.startsWith('gmail:refresh:'),
+    () =>
+      harness.core.config.update((config) => ({
+        ...config,
+        clients: {
+          imported: { ...(config.clients.imported as ClientConfig), clientId: 'replaced.apps.googleusercontent.com' },
+        },
+      })),
+  );
+  await assert.rejects(
+    importLegacy(context, { dir: directory, store: 'file' }),
+    is('CONFIG', /changed while this ran/),
+  );
+  const token = seen.set.find((ref) => ref.startsWith('gmail:refresh:'));
+  assert.ok(token && seen.deleted.includes(token), 'its token taken back');
+});
+
+test('import: a secret store switched away mid-import is caught, and the token taken back', async () => {
+  const harness = await newHarness(twoAccounts);
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const directory = await legacyDirectory(harness);
+  await harness.core.config.update((config) => ({ ...config, secrets: { store: 'file' } }));
+  const secrets = await harness.core.secrets('file');
+  const seen = recordSecrets(secrets);
+  meddleAfterStoring(
+    secrets,
+    (ref) => ref.startsWith('gmail:refresh:'),
+    () => harness.core.config.update((config) => ({ ...config, secrets: { store: 'keychain' } })),
+  );
+  await assert.rejects(
+    importLegacy(context, { dir: directory, store: 'file' }),
+    is('TRANSIENT', /secret store was changed/),
+  );
+  const token = seen.set.find((ref) => ref.startsWith('gmail:refresh:'));
+  assert.ok(token && seen.deleted.includes(token), 'its token taken back');
+});
+
 test('import under a name another Google project already uses is refused, not overwritten', async () => {
   const harness = await newHarness(twoAccounts);
   const context = new GmailContext({ core: harness.core, env: harness.env });
@@ -639,12 +885,69 @@ test('import under a name another Google project already uses is refused, not ov
     ...config,
     secrets: { store: 'file' },
     clients: {
-      imported: { provider: 'gmail', clientId: 'another-project', secretRef: 'gmail:client:imported', addedAt: 'x' },
+      imported: {
+        provider: 'gmail',
+        clientId: 'another-project',
+        secretRef: clientSecretRef('imported'),
+        addedAt: 'x',
+      },
     },
   }));
   const secrets = await harness.core.secrets('file');
-  await secrets.set('gmail:client:imported', 'the other project’s secret');
+  await secrets.set(clientSecretRef('imported'), 'the other project’s secret');
 
   await assert.rejects(importLegacy(context, { dir: directory }), is('CONFIG', /different Google project/));
-  assert.equal(await secrets.get('gmail:client:imported'), 'the other project’s secret');
+  assert.equal(await secrets.get(clientSecretRef('imported')), 'the other project’s secret');
+});
+
+// ── Downloads under former names ────────────────────────────────────────────────────────────────────────────────
+
+async function downloadsHere(harness: Harness): Promise<string> {
+  const downloads = tempDir('agent-gmail-downloads-');
+  await harness.core.config.update(
+    (config) => ({ ...config, defaults: { ...config.defaults, downloadsDir: downloads } }),
+    { consent: { kind: 'loosening-consent', paths: ['defaults.downloadsDir'] } },
+  );
+  return downloads;
+}
+
+test('doctor mentions downloads left under a former name, once, and moves nothing', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt' });
+  const downloads = await downloadsHere(harness);
+  await migrate(harness);
+
+  // Before anything is left over: the new folder alone is the new layout, not a leftover.
+  await mkdir(join(downloads, 'work', 'gmail'), { recursive: true });
+  let report = await doctor(context);
+  assert.equal(
+    report.checks.find((check) => check.id === 'former-download-folders'),
+    undefined,
+  );
+
+  await writeFile(join(downloads, 'work', 'invoice.pdf'), 'from before the rename');
+  report = await doctor(context);
+  const folders = report.checks.filter((check) => check.id === 'former-download-folders');
+  assert.equal(folders.length, 1);
+  assert.match(folders[0]?.detail ?? '', /1 item\(s\) from before "work" became "work\/gmail"/);
+  assert.equal(await readFile(join(downloads, 'work', 'invoice.pdf'), 'utf8'), 'from before the rename', 'not moved');
+});
+
+test('a nested name cannot be used to write through a symlinked folder out of the downloads root', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt' });
+  const downloads = await downloadsHere(harness);
+  await migrate(harness, ['work=acme/gmail']);
+  const elsewhere = tempDir('agent-gmail-elsewhere-');
+  await symlink(elsewhere, join(downloads, 'acme'));
+  await assert.rejects(exportMail(context, 'acme/gmail', 'm1'), (error: unknown) => error instanceof CommsError);
+  assert.deepEqual(await readdir(elsewhere), [], 'nothing written outside the root');
+});
+
+test('setup’s examples name a mailbox the config will accept', () => {
+  const state = { next: 'inbox', done: [], clients: ['desktop'], inboxes: [], registeredWith: [], candidates: [] };
+  assert.match(renderSetupPlan({ ...state, nameExample: 'acme/gmail' }, [], false), /--inbox acme\/gmail/);
+  assert.match(renderSetupPlan(state, [], false), /--inbox work/);
 });

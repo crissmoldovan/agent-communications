@@ -226,7 +226,8 @@ agentcomms names migrate \
 - **Gmail add reconciles before it withdraws.** Today any config error deletes the new secret — including an error
   that followed a committed write, which leaves a connected mailbox with no credential — and a failed deletion is
   swallowed. Under this change it does what Slack's sign-in does: on an update error it re-reads the config and
-  looks for the new inbox id. **Committed** — keep the secret, report the lock problem; **absent** — withdraw the
+  looks for the new inbox id. **Committed** — keep the secret; the sign-in worked, and a lock left behind is reclaimed
+  as stale by the next holder, so reporting a failure would only send somebody to redo it; **absent** — withdraw the
   secret, and **report** it if that fails; **unknown** — keep the secret and say which reference may be stranded.
 - **Gmail reauth writes the row it found, by id, under the credentials lock.** It currently writes back
   `inboxes[<name it started with>]`, so a rename between starting and finishing a reauth would put the old name

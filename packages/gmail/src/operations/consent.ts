@@ -9,6 +9,7 @@ import {
   keepAndReport,
   newInboxId,
   PUBLIC_MAILBOX_DOMAINS,
+  secretsStoreOf,
   withCredentialsLock,
   withdrawStaged,
   writeOutcome,
@@ -157,6 +158,13 @@ async function addInbox(
        * one any more, and the flow is refused here rather than writing a name the file no longer allows.
        */
       requireNewInboxName(current, flow.alias);
+      // The backend the token went into must still be the one in force: `secrets migrate` switches backends, and a
+      // row written after the switch would name a credential that only exists in the store nothing reads any more.
+      if (secretsStoreOf(current) !== secrets.kind) {
+        throw new CommsError('TRANSIENT', 'the secret store was changed while this sign-in was completing', {
+          hint: 'Nothing was saved. Sign in again.',
+        });
+      }
       const raced = duplicateInbox(current, { client: flow.clientName, sub: identity.sub, email: identity.email });
       if (raced) throw new CommsError('CONFIG', `${identity.email} was connected as "${raced}" while this finished`);
       return { ...current, inboxes: { ...current.inboxes, [flow.alias]: inbox } };
@@ -320,6 +328,9 @@ async function writeReauth(
   }
 
   const secrets = await context.core.secrets();
+  // Kept, so a write that does not land can put it back: the row would otherwise still name the old client and grant
+  // while the token under it belongs to the new ones — after `--client`, a mailbox that no longer renews.
+  const previous = await secrets.get(existing.inbox.secretRef);
   await secrets.set(existing.inbox.secretRef, tokens.refreshToken);
   let written: { alias: string; inbox: InboxConfig } = {
     alias: existing.alias,
@@ -349,10 +360,37 @@ async function writeReauth(
      * write the config refused as a loosening, is the original error.
      */
     const after = findById(await context.config(), 'inbox', inboxId);
-    if (!after || !sameRow(after.inbox, written.inbox)) throw error;
+    if (!after || !sameRow(after.inbox, written.inbox))
+      throw await restorePrevious(secrets, existing.inbox.secretRef, previous, error);
     // The row is exactly what this reauth wrote: the write is in and only the lock's cleanup failed.
   }
   return written;
+}
+
+/**
+ * Puts back the token a reauth overwrote, when its row was not written — and says so if that fails.
+ *
+ * Nothing to put back when there was nothing before (a mailbox whose token had already gone missing): the new token
+ * is then left, because it is at least a valid credential for the same account.
+ */
+async function restorePrevious(
+  secrets: Awaited<ReturnType<GmailContext['core']['secrets']>>,
+  ref: string,
+  previous: string | null,
+  original: unknown,
+): Promise<unknown> {
+  if (previous === null) return original;
+  try {
+    await secrets.set(ref, previous);
+    return original;
+  } catch (error) {
+    const base = original instanceof CommsError ? original : new CommsError('UNEXPECTED', String(original));
+    return new CommsError(base.code, base.message, {
+      hint: `${base.hint ? `${base.hint} ` : ''}The previous token could not be put back, so the mailbox may not renew: run \`agent-gmail inbox reauth\` for it again.`,
+      details: { tokenNotRestored: ref, restoreError: (error as Error).message },
+      cause: original,
+    });
+  }
 }
 
 /** Whether two rows are the same, field for field, whatever order their keys were written in. */

@@ -202,6 +202,10 @@ test('a token that could not be deleted is remembered and reported, not forgotte
   assert.deepEqual(await inboxList(context), []);
   const recorded = await readFile(orphanedSecretsPath(context), 'utf8');
   assert.match(recorded, /the keychain is locked/);
+  // The audit says what happened to the token, not what should have.
+  const audit = await harness.core.audit.tail({ inbox: 'work' });
+  const entry = audit.find((row) => row.operation === 'inbox.remove');
+  assert.match(entry?.reason ?? '', /local token could not be deleted/);
 
   const checks = await doctor(context);
   const orphans = checks.checks.find((check) => check.id === 'orphaned-secrets');

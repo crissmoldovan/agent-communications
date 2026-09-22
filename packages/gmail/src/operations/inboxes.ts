@@ -74,7 +74,8 @@ export async function inboxShow(
 ): Promise<InboxView & { grantedScopes: string[]; internalDomains: string[] }> {
   const { inbox } = await context.inbox(alias);
   const views = await inboxList(context);
-  const view = views.find((candidate) => candidate.alias === alias);
+  // By id: `inboxList` reads the config again, and a rename in between would pair this row with another's view.
+  const view = views.find((candidate) => candidate.id === inbox.id);
   if (!view) throw new CommsError('NOT_FOUND', `no inbox called "${alias}"`);
   return { ...view, grantedScopes: inbox.grantedScopes, internalDomains: inbox.internalDomains };
 }
@@ -233,7 +234,9 @@ export async function inboxRemove(
     operation: 'inbox.remove',
     outcome: 'ok',
     surface: context.surface,
-    reason: revoked ? 'token revoked' : 'token deleted locally',
+    reason: `${revoked ? 'token revoked' : 'token not revoked'}; ${
+      removed.orphanedSecret ? `local token could not be deleted (${removed.orphanedSecret})` : 'local token deleted'
+    }`,
   });
   return {
     alias: removed.name,

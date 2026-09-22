@@ -1,8 +1,12 @@
-import { access, constants, readFile, stat } from 'node:fs/promises';
+import { access, constants, readdir, readFile, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import {
   type CommsError,
   type Config,
+  expandHome,
+  findById,
   formerNameRefusal,
+  homeDirectory,
   isGroupOrWorldAccessible,
   lookupName,
   probeKeychain,
@@ -123,6 +127,8 @@ export async function doctor(
   }
 
   checks.push(await orphanedSecretsCheck(context));
+  const folders = await formerFoldersCheck(context, config);
+  if (folders) checks.push(folders);
   checks.push(...(await mcpChecks(context)));
 
   const summary = {
@@ -379,6 +385,45 @@ async function orphanedSecretsCheck(context: GmailContext): Promise<Check> {
     status: 'warn',
     detail: `${unreferenced.length} stored token(s) could not be deleted when an inbox was removed, and nothing uses them`,
     fix: `Remove ${unreferenced.join(', ')} from the secret store by hand, then delete ${orphanedSecretsPath(context)}`,
+  };
+}
+
+/**
+ * Downloads still sitting under a mailbox's former name, said once and never moved.
+ *
+ * A download lands in a folder named for the mailbox, so a rename leaves the old ones where they were. Usually that is
+ * the organisation's own folder — `cue` became `cue/gmail`, so new files go to `downloads/cue/gmail/` inside the old
+ * `downloads/cue/` — and what is worth saying is that the old files sit beside the new folder, not that the folder
+ * exists. Nothing here moves a file: they are a person's downloads, and where they belong is theirs to decide.
+ */
+async function formerFoldersCheck(context: GmailContext, config: Config): Promise<Check | null> {
+  if (config.version !== 2) return null;
+  const configured = config.defaults.downloadsDir;
+  const root = configured ? expandHome(configured, homeDirectory(context.env)) : context.core.paths.downloadsDir;
+  const found: string[] = [];
+  for (const [former, record] of Object.entries(config.formerNames.inboxes)) {
+    let children: string[];
+    try {
+      children = await readdir(join(root, former));
+    } catch {
+      continue;
+    }
+    // The folders the current names put inside this one are the new layout, not leftovers.
+    const current = Object.keys(config.inboxes)
+      .filter((name) => name.startsWith(`${former}/`))
+      .map((name) => name.slice(former.length + 1).split('/')[0]);
+    const leftovers = children.filter((child) => !current.includes(child));
+    if (leftovers.length === 0) continue;
+    const now = findById(config, 'inbox', record.id)?.alias ?? record.name;
+    found.push(`${join(root, former)} (${leftovers.length} item(s) from before "${former}" became "${now}")`);
+  }
+  if (found.length === 0) return null;
+  return {
+    id: 'former-download-folders',
+    title: 'Downloads under former names',
+    status: 'warn',
+    detail: found.join('; '),
+    fix: 'Nothing was moved. Move them into the new folders yourself if you want them together.',
   };
 }
 

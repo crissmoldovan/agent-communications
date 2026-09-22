@@ -16,6 +16,7 @@ import {
   PUBLIC_MAILBOX_DOMAINS,
   type SecretStore,
   type StoreKind,
+  withCredentialsLock,
   withdrawStaged,
   writeOutcome,
 } from '@agentcomms/core';
@@ -173,35 +174,55 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
   const secrets = dryRun ? null : await context.core.secrets(store);
   if (!dryRun && secrets && !existingClient) {
     const ref = clientSecretRef(clientKey);
-    await storeThenRecord(
-      secrets,
-      ref,
-      parsedClient.clientSecret,
-      () =>
-        context.core.config.update((current) => {
-          if (Object.hasOwn(current.clients, clientKey)) {
-            throw new CommsError('CONFIG', `an OAuth client called "${clientKey}" was added while this ran`, {
-              hint: 'Run the import again.',
-            });
-          }
-          return {
-            ...current,
-            // The same value the store above was opened with, so the two can never disagree.
-            secrets: { store: current.secrets?.store ?? store },
-            clients: {
-              ...current.clients,
-              [clientKey]: {
-                provider: 'gmail',
-                clientId: parsedClient.clientId,
-                projectId: parsedClient.projectId,
-                secretRef: ref,
-                addedAt: context.now().toISOString(),
+    /*
+     * Under the credentials lock, and the name checked again inside it before the secret is written.
+     *
+     * The secret's reference is derived from the client's name, so two imports racing for one name from two Google
+     * projects write the same reference — and the loser, finding the other's row, would take it for its own. Inside
+     * the lock the second finds the name taken before it writes anything. `secrets migrate` holds the same lock, so
+     * the backend cannot move under this write either.
+     */
+    await withCredentialsLock(context.core.paths.configDir, async () => {
+      const held = (await context.config()).clients;
+      if (Object.hasOwn(held, clientKey)) {
+        throw new CommsError('CONFIG', `an OAuth client called "${clientKey}" was added while this ran`, {
+          hint: 'Run the import again.',
+        });
+      }
+      await storeThenRecord(
+        secrets,
+        ref,
+        parsedClient.clientSecret,
+        () =>
+          context.core.config.update((current) => {
+            if (Object.hasOwn(current.clients, clientKey)) {
+              throw new CommsError('CONFIG', `an OAuth client called "${clientKey}" was added while this ran`, {
+                hint: 'Run the import again.',
+              });
+            }
+            requireStore(current, secrets.kind);
+            return {
+              ...current,
+              // The same value the store above was opened with, so the two can never disagree.
+              secrets: { store: current.secrets?.store ?? store },
+              clients: {
+                ...current.clients,
+                [clientKey]: {
+                  provider: 'gmail',
+                  clientId: parsedClient.clientId,
+                  projectId: parsedClient.projectId,
+                  secretRef: ref,
+                  addedAt: context.now().toISOString(),
+                },
               },
-            },
-          };
-        }),
-      async () => (await context.config()).clients[clientKey]?.secretRef === ref,
-    );
+            };
+          }),
+        async () => {
+          const row = (await context.config()).clients[clientKey];
+          return row?.secretRef === ref && row.clientId === parsedClient.clientId;
+        },
+      );
+    });
   }
 
   for (const file of credentialFiles.sort()) {
@@ -274,6 +295,13 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
           context.core.config.update((existing: Config) => {
             // Checked again under the lock: the names were chosen from a snapshot, before any network call.
             requireNewInboxName(existing, alias, 'Run the import again.');
+            requireStore(existing, secrets.kind);
+            // And the client these tokens were issued by is still the one registered under that name.
+            if (existing.clients[clientKey]?.clientId !== parsedClient.clientId) {
+              throw new CommsError('CONFIG', `the OAuth client "${clientKey}" changed while this ran`, {
+                hint: 'Run the import again.',
+              });
+            }
             return { ...existing, inboxes: { ...existing.inboxes, [alias]: inbox } };
           }),
         async () => findById(await context.config(), 'inbox', id)?.inbox.secretRef === inbox.secretRef,
@@ -415,6 +443,15 @@ export function importNames(config: Config, files: readonly string[], renames: r
     );
   }
   return names;
+}
+
+/** Refuses a write whose secret went into a backend that is no longer the one recorded. */
+function requireStore(config: Config, kind: StoreKind): void {
+  if (config.secrets && config.secrets.store !== kind) {
+    throw new CommsError('TRANSIENT', 'the secret store was changed while this ran', {
+      hint: 'Run the import again.',
+    });
+  }
 }
 
 /**
