@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { link, open, readFile, rename, rm, stat } from 'node:fs/promises';
+import { link, open, readFile, rename, rm, stat, utimes } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { CommsError } from './errors.ts';
@@ -10,6 +10,15 @@ export interface LockOptions {
   timeoutMs?: number;
   /** A lock whose recorded time is older than this is assumed abandoned by a crashed process. */
   staleMs?: number;
+  /**
+   * Renew the lock this often while `fn` runs, so a holder that is still working is never judged abandoned.
+   *
+   * Opt-in, for locks held across work of unbounded length. Staleness was judged from a time written once, at
+   * acquisition, so a live holder that ran past `staleMs` could be taken over mid-operation — for the credentials
+   * lock, a migration with enough credentials and a slow enough keychain, recreating the very race the lock
+   * exists to prevent.
+   */
+  renewMs?: number;
 }
 
 /**
@@ -46,14 +55,24 @@ async function readLock(path: string): Promise<LockBody | null> {
  * trap wearing a different hat: `Date.now() - NaN > staleMs` is false, forever.
  */
 async function isStale(path: string, body: LockBody | null, staleMs: number): Promise<boolean> {
-  const declared = body ? new Date(body.at).getTime() : Number.NaN;
-  if (Number.isFinite(declared)) return Date.now() - declared > staleMs;
+  let touched: number;
   try {
-    return Date.now() - (await stat(path)).mtimeMs > staleMs;
+    touched = (await stat(path)).mtimeMs;
   } catch {
     // The lock is gone; whoever is waiting will simply create their own.
     return false;
   }
+  /*
+   * The fresher of the declared time and the file's own modification time.
+   *
+   * A renewing holder touches the file rather than rewriting it: a rewrite would have to check the token and then
+   * write, and a takeover landing between the two would have this holder overwrite a new holder's token. Touching
+   * a file that has since been replaced only keeps the new holder's lock fresh, which is harmless. So a renewal
+   * shows up as the modification time, and that has to count.
+   */
+  const declared = body ? new Date(body.at).getTime() : Number.NaN;
+  const freshest = Number.isFinite(declared) ? Math.max(declared, touched) : touched;
+  return Date.now() - freshest > staleMs;
 }
 
 /**
@@ -129,9 +148,17 @@ export async function withFileLock<T>(lockPath: string, fn: () => Promise<T>, op
       await sleep(25 + Math.floor(Math.random() * 50));
     }
   }
+  const renewal = options.renewMs
+    ? setInterval(() => {
+        const now = new Date();
+        void utimes(lockPath, now, now).catch(() => undefined);
+      }, options.renewMs)
+    : undefined;
+  renewal?.unref?.();
   try {
     return await fn();
   } finally {
+    if (renewal) clearInterval(renewal);
     // Only remove the lock if it is still ours (a very slow holder could have been taken over as stale).
     const current = await readLock(lockPath);
     if (current?.token === token) await rm(lockPath, { force: true });
@@ -159,12 +186,16 @@ export function credentialsLockPath(configDir: string): string {
 }
 
 /**
- * Runs `fn` holding the credentials lock.
+ * Runs `fn` holding the credentials lock, renewed for as long as `fn` runs.
  *
- * A long stale window, because what runs under it can wait on a keychain prompt a person has not answered yet;
- * a short timeout, because a second migration arriving while one is running should be told so promptly rather
- * than queue behind a prompt.
+ * Renewed rather than given a long stale window. What runs under this has no upper bound on its length — a
+ * migration of many credentials, each waiting on the keychain — so any fixed window is one a live holder can
+ * outlast. With renewal the window only has to cover a holder that has actually died, which is also why it can be
+ * short: a crashed migration stops blocking the next one in two minutes rather than ten.
+ *
+ * A short timeout, because a second caller arriving while one is running should be told so promptly rather than
+ * queue behind a prompt nobody is answering.
  */
 export function withCredentialsLock<T>(configDir: string, fn: () => Promise<T>): Promise<T> {
-  return withFileLock(credentialsLockPath(configDir), fn, { staleMs: 10 * 60_000, timeoutMs: 5_000 });
+  return withFileLock(credentialsLockPath(configDir), fn, { staleMs: 2 * 60_000, renewMs: 20_000, timeoutMs: 5_000 });
 }

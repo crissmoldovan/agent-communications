@@ -9,6 +9,7 @@ import {
   paint,
   runCommand,
   type Streams,
+  withCredentialsLock,
   writeResult,
 } from '@agentcomms/core';
 import { Command, CommanderError, Option } from 'commander';
@@ -274,13 +275,28 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
     .description('disconnect a workspace from this machine')
     .action(
       act(async (context, _options, alias: string) => {
-        const removed = await removeWorkspace(
-          {
-            config: await context.config(),
-            secrets: await context.secrets(),
-            update: (mutator) => context.core.config.update(mutator),
-          },
-          alias,
+        /*
+         * Under the credentials lock, from reading the configuration to the last write.
+         *
+         * Removal deletes a credential and then drops the entry naming it, and a migration running in between
+         * saw an account still configured whose credential was already gone — skipped it as having nothing to
+         * copy, switched backends, and left the removal refusing because the backend had moved. The account stayed
+         * configured with its credential in neither backend. Holding the lock makes the two strictly one after
+         * the other, and reading the configuration inside it means the store chosen is the one actually in force.
+         *
+         * A sign-in does not take it, deliberately: it only ever *adds* a reference, which the migration's own
+         * check of the reference set does see, and the sign-in checks the backend from its side. Making it wait
+         * here would spend a one-shot authorisation code on a five-second lock timeout.
+         */
+        const removed = await withCredentialsLock(context.core.paths.configDir, async () =>
+          removeWorkspace(
+            {
+              config: await context.config(),
+              secrets: await context.secrets(),
+              update: (mutator) => context.core.config.update(mutator),
+            },
+            alias,
+          ),
         );
         writeResult(removed, output(), () => renderRemoved(alias), streams);
       }),

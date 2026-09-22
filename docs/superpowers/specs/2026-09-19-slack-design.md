@@ -318,7 +318,8 @@ distinct `acc_` / `ibx_` prefixes mean an id alone still says which it is.
 > It cannot happen in S2: the only Slack writes to an existing reference are in `auth/refresh.ts`, reachable
 > only through `accessTokenFor`, which nothing calls yet — every sign-in writes to a fresh reference. It becomes
 > real the moment S3's transport calls `accessTokenFor`. **The lock now exists**: `withCredentialsLock` in
-> `@agentcomms/core`, which `secrets migrate` holds from reading the configuration to its last cleanup. It went in
+> `@agentcomms/core`, which `secrets migrate` and `workspace remove` hold from reading the configuration to their
+> last write. It renews itself while held, because a fixed stale window is one a long migration can outlast. It went in
 > during S2 because two *opposite* migrations could already interleave and leave a credential in neither backend.
 > S3's refresh must take the same lock around its read-rotate-write before `accessTokenFor` is wired to
 > anything — rather than a value re-check that narrows the window without closing it and would read as a fix.

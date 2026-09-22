@@ -3,7 +3,7 @@ import { createServer } from 'node:net';
 import { PassThrough } from 'node:stream';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { EXIT_CODES } from '@agentcomms/core';
+import { EXIT_CODES, withCredentialsLock } from '@agentcomms/core';
 import { parseBundle } from '../src/auth/bundle.ts';
 import { openFlowStore } from '../src/auth/flow.ts';
 import { run } from '../src/cli/program.ts';
@@ -1038,4 +1038,33 @@ test('--wait 0 looks once and reports, rather than quietly waiting a minute', as
   const result = await cli(harness, ['--json', 'workspace', 'add', '--finish', start.flowId, '--wait', '0']);
   assert.equal(result.code, EXIT_CODES.APPROVAL);
   assert.ok(Date.now() - began < 5000, `--wait 0 took ${Date.now() - began}ms`);
+});
+
+test('removing waits for a migration holding the credentials lock, instead of deleting under it', async () => {
+  /*
+   * Removal deleted the credential before any lock, so a migration running in between saw an account still
+   * configured with nothing stored, skipped it, switched backends — and the removal then refused because the
+   * backend had moved. The account stayed configured with its credential in neither backend.
+   *
+   * Here the lock is held as a migration would hold it. While it is held, nothing may have been deleted.
+   */
+  const harness = await newHarness();
+  const account = await harness.addWorkspace({ alias: 'acme' });
+  const secrets = await harness.core.secrets('file');
+
+  let midway: string | null = 'unread';
+  const migration = withCredentialsLock(harness.core.paths.configDir, async () => {
+    await new Promise((settle) => setTimeout(settle, 400));
+  });
+  await new Promise((settle) => setTimeout(settle, 50)); // the lock is held from here
+  const removal = cli(harness, ['workspace', 'remove', 'acme']);
+  await new Promise((settle) => setTimeout(settle, 150)); // removal has started and must be waiting
+  midway = await secrets.get(account.secretRef);
+
+  await migration;
+  const result = await removal;
+  assert.ok(midway, 'the credential was deleted while a migration held the credentials lock');
+  assert.equal(result.code, EXIT_CODES.OK, result.stderr);
+  assert.equal(await secrets.get(account.secretRef), null);
+  assert.equal((await harness.core.config.load()).accounts.acme, undefined);
 });
