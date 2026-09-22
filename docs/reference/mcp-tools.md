@@ -261,7 +261,7 @@ Begin connecting a Gmail account. Returns a sign-in link and stops — this serv
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
-| `alias` | string | **yes** | a short name for the mailbox, e.g. work |
+| `alias` | string | **yes** | a name for the mailbox: organisation/gmail, e.g. acme/gmail, once names have been migrated (gmail_inboxes_list shows which); before that, one plain word |
 | `email` | string | no | the address it must turn out to be; refuses any other |
 | `tier` | string | no | read, draft or organize — how much access to ask for |
 

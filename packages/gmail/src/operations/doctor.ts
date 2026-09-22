@@ -1,5 +1,17 @@
-import { access, constants, readFile, stat } from 'node:fs/promises';
-import { type CommsError, isGroupOrWorldAccessible, probeKeychain, secretsStoreOf } from '@agentcomms/core';
+import { access, constants, readdir, readFile, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+import {
+  type CommsError,
+  type Config,
+  expandHome,
+  findById,
+  formerNameRefusal,
+  homeDirectory,
+  isGroupOrWorldAccessible,
+  lookupName,
+  probeKeychain,
+  secretsStoreOf,
+} from '@agentcomms/core';
 import { capabilitiesOf, scopesFor, TIERS, type Tier } from '../auth/scopes.ts';
 import { TokenSource } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';
@@ -115,6 +127,10 @@ export async function doctor(
   }
 
   checks.push(await orphanedSecretsCheck(context));
+  // Scoped like everything else here: `--inbox`, and a pinned server, report their own mailbox's folders only.
+  const scope = options.inbox ? (lookupName(config, 'inbox', options.inbox)?.id ?? null) : undefined;
+  const folders = scope === null ? null : await formerFoldersCheck(context, config, scope);
+  if (folders) checks.push(folders);
   checks.push(...(await mcpChecks(context)));
 
   const summary = {
@@ -199,15 +215,18 @@ async function secretStoreCheck(context: GmailContext): Promise<Check> {
 async function inboxChecks(context: GmailContext, alias: string): Promise<Check[]> {
   const checks: Check[] = [];
   const config = await context.config();
-  const inbox = config.inboxes[alias];
+  const inbox = lookupName(config, 'inbox', alias);
   if (!inbox) {
+    // A former name gets what it is called now, not "no such mailbox" and an invitation to connect it again.
+    const renamed = formerNameRefusal(config, 'inbox', alias);
+    const current = (renamed?.details as { currentName?: string } | undefined)?.currentName;
     return [
       {
         id: 'inbox-known',
         title: `Mailbox ${alias}`,
         status: 'fail',
-        detail: 'no such mailbox',
-        fix: `agent-gmail inbox add ${alias} --start`,
+        detail: renamed ? renamed.message : 'no such mailbox',
+        fix: current ? `agent-gmail doctor --inbox ${current}` : `agent-gmail inbox add ${alias} --start`,
         inbox: alias,
       },
     ];
@@ -310,7 +329,14 @@ async function inboxChecks(context: GmailContext, alias: string): Promise<Check[
   return checks;
 }
 
-/** Tokens whose removal failed when an inbox was disconnected: still in the keychain, no longer referenced. */
+/**
+ * Tokens whose removal failed when an inbox was disconnected: still stored, no longer referenced.
+ *
+ * Every recorded line is checked against the config as it is now before any deletion is advised. A line can be
+ * recorded for a token whose mailbox is still connected — a removal that could not tell whether its write went through
+ * keeps the token and records it as unconfirmed — and advising the person to delete that would delete a live
+ * credential. A reference something configured still holds is reported as in use, and left out of the advice.
+ */
 async function orphanedSecretsCheck(context: GmailContext): Promise<Check> {
   let lines: string[] = [];
   try {
@@ -318,17 +344,98 @@ async function orphanedSecretsCheck(context: GmailContext): Promise<Check> {
   } catch {
     // Nothing recorded: nothing was ever left behind.
   }
+  const refs = lines.map((line) => {
+    try {
+      return (JSON.parse(line) as { secretRef?: unknown }).secretRef;
+    } catch {
+      return undefined;
+    }
+  });
+  let held: Set<string> | null = null;
+  try {
+    held = referencedSecrets(await context.config());
+  } catch {
+    // Unreadable config: nothing can be confirmed unreferenced, so nothing is advised for deletion below.
+  }
+  const unreferenced = [
+    ...new Set(refs.filter((ref): ref is string => typeof ref === 'string' && held !== null && !held.has(ref))),
+  ];
+  const inUse = refs.filter((ref) => typeof ref === 'string' && held?.has(ref)).length;
+  const unchecked = held === null ? lines.length : refs.filter((ref) => typeof ref !== 'string').length;
+
+  if (unreferenced.length === 0 && unchecked === 0) {
+    return {
+      id: 'orphaned-secrets',
+      title: 'Tokens left behind',
+      status: 'ok',
+      detail:
+        inUse === 0 ? 'none' : `none — ${inUse} recorded token(s) belong to a connected mailbox, so nothing to do`,
+    };
+  }
+  if (unreferenced.length === 0) {
+    return {
+      id: 'orphaned-secrets',
+      title: 'Tokens left behind',
+      status: 'warn',
+      detail: `${unchecked} recorded token(s) could not be checked against the configuration`,
+      fix: 'Run `agent-gmail doctor` again once the configuration can be read. Delete nothing until then.',
+    };
+  }
   return {
     id: 'orphaned-secrets',
     title: 'Tokens left behind',
-    status: lines.length === 0 ? 'ok' : 'warn',
-    detail:
-      lines.length === 0 ? 'none' : `${lines.length} stored token(s) could not be deleted when an inbox was removed`,
-    fix:
-      lines.length === 0
-        ? undefined
-        : `Remove them from the system keychain by hand, then delete ${orphanedSecretsPath(context)}`,
+    status: 'warn',
+    detail: `${unreferenced.length} stored token(s) could not be deleted when an inbox was removed, and nothing uses them`,
+    fix: `Remove ${unreferenced.join(', ')} from the secret store by hand, then delete ${orphanedSecretsPath(context)}`,
   };
+}
+
+/**
+ * Downloads still sitting under a mailbox's former name, said once and never moved.
+ *
+ * A download lands in a folder named for the mailbox, so a rename leaves the old ones where they were. Usually that is
+ * the organisation's own folder — `cue` became `cue/gmail`, so new files go to `downloads/cue/gmail/` inside the old
+ * `downloads/cue/` — and what is worth saying is that the old files sit beside the new folder, not that the folder
+ * exists. Nothing here moves a file: they are a person's downloads, and where they belong is theirs to decide.
+ */
+async function formerFoldersCheck(context: GmailContext, config: Config, onlyId?: string): Promise<Check | null> {
+  if (config.version !== 2) return null;
+  const configured = config.defaults.downloadsDir;
+  const root = configured ? expandHome(configured, homeDirectory(context.env)) : context.core.paths.downloadsDir;
+  const found: string[] = [];
+  for (const [former, record] of Object.entries(config.formerNames.inboxes)) {
+    if (onlyId !== undefined && record.id !== onlyId) continue;
+    let children: string[];
+    try {
+      children = await readdir(join(root, former));
+    } catch {
+      continue;
+    }
+    // The folders the current names put inside this one are the new layout, not leftovers.
+    const current = Object.keys(config.inboxes)
+      .filter((name) => name.startsWith(`${former}/`))
+      .map((name) => name.slice(former.length + 1).split('/')[0]);
+    const leftovers = children.filter((child) => !current.includes(child));
+    if (leftovers.length === 0) continue;
+    const now = findById(config, 'inbox', record.id)?.alias ?? record.name;
+    found.push(`${join(root, former)} (${leftovers.length} item(s) from before "${former}" became "${now}")`);
+  }
+  if (found.length === 0) return null;
+  return {
+    id: 'former-download-folders',
+    title: 'Downloads under former names',
+    status: 'warn',
+    detail: found.join('; '),
+    fix: 'Nothing was moved. Move them into the new folders yourself if you want them together.',
+  };
+}
+
+function referencedSecrets(config: Config): Set<string> {
+  return new Set([
+    ...Object.values(config.inboxes).map((inbox) => inbox.secretRef),
+    ...Object.values(config.accounts).map((account) => account.secretRef),
+    ...Object.values(config.clients).map((client) => client.secretRef),
+  ]);
 }
 
 async function mcpChecks(context: GmailContext): Promise<Check[]> {

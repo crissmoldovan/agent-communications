@@ -1,4 +1,4 @@
-import { CommsError, stricterPolicy, toCommsError } from '@agentcomms/core';
+import { CommsError, findById, lookupName, stricterPolicy, toCommsError } from '@agentcomms/core';
 import { acceptedContent, inputRequired, inputResponse, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
@@ -90,17 +90,16 @@ export async function buildInstructions(context: GmailContext, pinned: string | 
 export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promise<GmailMcpServer> {
   const context = new GmailContext({ ...options, surface: 'mcp' });
   const pinned = options.inbox;
-  if (pinned) {
-    // Resolve now so a pinned server fails loudly at startup rather than on the first call.
-    await context.inbox(pinned);
-  }
+  // Resolved now so a pinned server fails loudly at startup rather than on the first call — and the id kept, because
+  // the pin is to a mailbox, not to a word. See `checkPin`.
+  const pinnedId = pinned ? (await context.inbox(pinned)).inbox.id : undefined;
 
   // Whether any mailbox this server can reach needs an approval the model cannot give. Read once, at start-up, only
   // to decide a client hint; what a send actually needs is re-read from config on every call.
   const needsInteraction = await (async (): Promise<boolean> => {
     try {
       const config = await context.config();
-      const served = pinned ? [config.inboxes[pinned]].filter(Boolean) : Object.values(config.inboxes);
+      const served = pinned ? [lookupName(config, 'inbox', pinned)].filter(Boolean) : Object.values(config.inboxes);
       return served.some((inbox) => (inbox?.sendPolicy ?? config.defaults.sendPolicy) !== 'chat');
     } catch {
       // Unreadable config: ask for the human. The wrong answer in this direction costs a prompt, not a send.
@@ -134,6 +133,54 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       content: [{ type: 'text', text: JSON.stringify(structured) }],
     };
   };
+
+  /**
+   * Whether the pinned name still names the mailbox this server was started for.
+   *
+   * Checked before every tool, because the config is re-read on every call and the name can move under a running
+   * server: renamed, so every call would refuse it while `gmail_inboxes_list` answered with nothing; or removed and
+   * connected again under the same name, so the pin would silently serve a different mailbox.
+   */
+  const checkPin = async (tool: unknown): Promise<void> => {
+    if (!pinned || !pinnedId) return;
+    const config = await context.config();
+    const now = findById(config, 'inbox', pinnedId);
+    if (now?.alias === pinned) return;
+    if (now) {
+      throw new CommsError('NOT_FOUND', `"${pinned}" was renamed to "${now.alias}"`, {
+        hint: `This server is pinned to the old name. Register it again with \`--inbox ${now.alias}\` and restart the client.`,
+        details: { formerName: pinned, currentName: now.alias },
+      });
+    }
+    if (lookupName(config, 'inbox', pinned)) {
+      throw new CommsError(
+        'CONFIG',
+        `the mailbox this server was pinned to was removed, and "${pinned}" now names another`,
+        {
+          hint: 'Restart the client so the server starts again for the mailbox it should serve.',
+        },
+      );
+    }
+    // Removed, and nothing new under the name: `gmail_setup` answers that — connecting it is what is next — as it
+    // always has. Every other tool has nothing to act on.
+    if (tool === 'gmail_setup') return;
+    throw new CommsError('NOT_FOUND', `the mailbox this server was pinned to, "${pinned}", was removed`);
+  };
+  if (pinnedId) {
+    // Every tool, without touching each: the check wraps the handler as the tool is registered.
+    const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
+    (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (...args: unknown[]) => {
+      const [name, config, handler] = args as [unknown, unknown, (...inner: unknown[]) => unknown];
+      return register(name, config, async (...inner: unknown[]) => {
+        try {
+          await checkPin(name);
+        } catch (error) {
+          return fail(error);
+        }
+        return handler(...inner);
+      });
+    };
+  }
 
   /** Resolves the inbox argument under the pin: a pinned server serves exactly one mailbox, whatever is asked for. */
   const targetInbox = (requested: string | undefined): string => {
@@ -930,7 +977,12 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           description:
             'Begin connecting a Gmail account. Returns a sign-in link and stops — this server does not open browsers and cannot grant the consent itself. Give the user the link, warn them Google will call the app unverified (Advanced → "Go to … (unsafe)" is expected for a client they made themselves), then call gmail_inbox_finish.',
           inputSchema: z.object({
-            alias: z.string().min(1).describe('a short name for the mailbox, e.g. work'),
+            alias: z
+              .string()
+              .min(1)
+              .describe(
+                'a name for the mailbox: organisation/gmail, e.g. acme/gmail, once names have been migrated (gmail_inboxes_list shows which); before that, one plain word',
+              ),
             email: z.string().min(3).optional().describe('the address it must turn out to be; refuses any other'),
             tier: z.string().optional().describe('read, draft or organize — how much access to ask for'),
           }),
@@ -1257,11 +1309,13 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
   const probes = new Map<string, { probeId: string; code: string }>();
 
   /** Whether this approval must be approved outside the chat, read from config now rather than at prepare time. */
-  const needsConfirmation = async (alias: string, approvalId: string): Promise<boolean> => {
+  const needsConfirmation = async (approvalId: string): Promise<boolean> => {
     const record = await context.core.approvals.get(approvalId);
     if (!record || record.state === 'approved') return false;
     const config = await context.config();
-    const live = config.inboxes[alias]?.sendPolicy ?? config.defaults.sendPolicy;
+    // By the approval's own inbox id, not the name the call used: the approval is for that mailbox, whatever it is
+    // called now.
+    const live = findById(config, 'inbox', record.inboxId)?.inbox.sendPolicy ?? config.defaults.sendPolicy;
     return stricterPolicy(live, record.requiredPolicy) === 'confirm';
   };
 
@@ -1361,7 +1415,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           // Channel (a): a form the model cannot answer, but only from a client that has proved its forms reach a
           // person. An un-allowlisted client is told to use the terminal or Gmail — and the approval is left alone,
           // because being asked from the wrong client is not evidence that anything is wrong with the message.
-          if (await needsConfirmation(alias, approvalId)) {
+          if (await needsConfirmation(approvalId)) {
             const answered = inputResponse(ctx.mcpReq.inputResponses, APPROVAL_KEY);
             if (answered.kind === 'missing') {
               const client = server.server.getClientVersion()?.name ?? '';

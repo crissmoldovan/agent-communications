@@ -8,6 +8,7 @@ import {
   type LooseningConsent,
   type OutputOptions,
   paint,
+  resolveName,
   runCommand,
   type SendPolicy,
   type StoreKind,
@@ -334,8 +335,9 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       return;
     }
     if (!alias) {
+      const example = (await context.config()).version === 2 ? 'acme/gmail' : 'work';
       throw new CommsError('USAGE', 'name the inbox', {
-        hint: `For example: \`agent-gmail inbox ${mode} work --start\`.`,
+        hint: `For example: \`agent-gmail inbox ${mode} ${example} --start\`.`,
       });
     }
 
@@ -443,6 +445,11 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .option('--name <name>', 'register its OAuth client under this name', 'imported')
     .addOption(new Option('--store <store>', 'where secrets are kept (first time only)').choices(['keychain', 'file']))
     .option('--dry-run', 'say what would be imported, and change nothing', false)
+    .option(
+      '--rename <old=new>',
+      'import one under another name (repeatable)',
+      (value: string, previous: string[] = []) => [...previous, value],
+    )
     .action(
       act(async (context, globalOptions, source: string | undefined, options: Options) => {
         if (source && source !== 'artymclabin') {
@@ -455,6 +462,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           clientName: options.name ? String(options.name) : undefined,
           store: options.store as StoreKind | undefined,
           dryRun: Boolean(options.dryRun),
+          renames: Array.isArray(options.rename) ? options.rename.map(String) : [],
         });
         writeResult(result, output(), (data) => renderImport(data, globalOptions.color), streams);
       }),
@@ -473,7 +481,14 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             `Disconnected "${data.alias}" (${data.email}).\n` +
             (data.revoked
               ? 'Its token was revoked with Google.'
-              : 'Its token was deleted from this machine. To revoke it with Google: https://myaccount.google.com/connections'),
+              : 'Its token was not revoked. To revoke it with Google: https://myaccount.google.com/connections') +
+            (data.orphanedSecret
+              ? `\nIts token could not be deleted from this machine: remove ${data.orphanedSecret} from the secret store${
+                  data.orphanRecorded
+                    ? ' (`agent-gmail doctor` lists it).'
+                    : '. It could not be recorded either, so nothing else will list it.'
+                }`
+              : '\nIts token was deleted from this machine.'),
           streams,
         );
       }),
@@ -1336,7 +1351,13 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           }
 
           const report = { ...state, did, blocked, handoff };
-          writeResult(report, output(), () => renderSetupPlan(report, CONSOLE_STEPS, globalOptions.color), streams);
+          const nameExample = (await context.config()).version === 2 ? 'acme/gmail' : 'work';
+          writeResult(
+            report,
+            output(),
+            () => renderSetupPlan({ ...report, nameExample }, CONSOLE_STEPS, globalOptions.color),
+            streams,
+          );
           return;
         }
 
@@ -1496,13 +1517,23 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
            * so the first mailbox uses them and "connect another" asks properly rather than proposing the same
            * name a second time.
            */
+          /*
+           * No default once names are organisation/platform.
+           *
+           * The name is asked before the address, so nothing is known yet to suggest one from — and a default of
+           * `work` is not a name version 2 accepts. So on a migrated config the prompt shows the shape and waits for
+           * an answer; version 1 keeps the default it always had.
+           */
+          const organisationNames = (await context.config()).version === 2;
           const alias =
             takeFlag('inbox') ||
-            (await askText(mode, streams, {
-              message: 'A short name for it',
-              placeholder: 'work',
-              defaultValue: 'work',
-            }));
+            (await askText(
+              mode,
+              streams,
+              organisationNames
+                ? { message: 'A name for it: organisation/gmail', placeholder: 'acme/gmail' }
+                : { message: 'A short name for it', placeholder: 'work', defaultValue: 'work' },
+            ));
           const email =
             takeFlag('email') ||
             (await askText(mode, streams, { message: 'Which address (blank to choose in the browser)' }));
@@ -1601,7 +1632,9 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
   ): Promise<LooseningConsent | undefined> => {
     const rank: Record<SendPolicy, number> = { chat: 0, confirm: 1, never: 2 };
     const config = await context.config();
-    const current = config.inboxes[alias]?.sendPolicy ?? config.defaults.sendPolicy;
+    // Resolved, so a former name is refused with its replacement here rather than silently measured against the
+    // default — which would skip the consent a loosening of the renamed mailbox needs.
+    const current = resolveName(config, 'inbox', alias).inbox.sendPolicy ?? config.defaults.sendPolicy;
     if (rank[wanted] >= rank[current]) return undefined;
     const marker = agentMarker(env);
     if (marker) {

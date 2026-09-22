@@ -7,6 +7,7 @@ import {
   decodeHeaderWords,
   defaultAttachDeny,
   expandHome,
+  formerNamesOf,
   homeDirectory,
   neutralise,
   parseAddressList,
@@ -148,9 +149,12 @@ async function signatureFor(
 }
 
 async function profileFor(context: GmailContext, alias: string): Promise<string> {
+  const config = await context.config();
   const profile = await readComposeProfile(join(context.core.paths.configDir, 'compose'), {
     platform: 'gmail',
     inbox: alias,
+    // So rules written before a rename keep applying to the mailbox they were written for.
+    formerInboxes: formerNamesOf(config, 'inbox', alias),
   });
   return profile.text;
 }

@@ -5,9 +5,12 @@ import {
   CommsError,
   expandHome,
   homeDirectory,
+  keepAndReport,
   probeKeychain,
   type StoreKind,
   secretsStoreOf,
+  withCredentialsLock,
+  writeOutcome,
 } from '@agentcomms/core';
 import { parseClientJson, probeClientCredentials } from '../auth/oauth.ts';
 import { clientSecretRef } from '../auth/session.ts';
@@ -107,26 +110,119 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
 
   const secrets = await context.core.secrets(chosen);
   const secretRef = clientSecretRef(name);
-  await secrets.set(secretRef, parsed.clientSecret);
-  const stored = await secrets.get(secretRef);
-  if (stored !== parsed.clientSecret) {
-    throw new CommsError('SECRET_STORE_UNAVAILABLE', 'the secret did not read back the way it was written', {
-      hint: 'Try again with `--store file` to keep secrets in owner-only files instead of the system keychain.',
-    });
-  }
+  /*
+   * Under the credentials lock, and the name checked again inside it.
+   *
+   * The secret's reference is derived from the client's name, so a second writer of the same name — an import, or
+   * another `client add` — writes the same reference. Held, whichever comes second finds the name taken before it
+   * overwrites anything. The probe above is a network call and stays outside.
+   */
+  const client = await withCredentialsLock(context.core.paths.configDir, async () => {
+    const fresh = await context.config();
+    // The store was chosen before the lock; `secrets migrate` holds it too, and may have finished in between.
+    if (fresh.secrets?.store && fresh.secrets.store !== chosen) {
+      throw new CommsError('TRANSIENT', 'the secret store was changed while this ran', {
+        hint: 'Run the command again.',
+      });
+    }
+    const held = fresh.clients[name];
+    if (held && !options.replace) {
+      throw new CommsError('CONFIG', `an OAuth client called "${name}" was registered while this ran`, {
+        hint: 'Run the command again to see what is there now.',
+      });
+    }
+    // Re-checked here, not only on the snapshot: a sign-in completing in between can attach a mailbox to it.
+    if (held && options.replace && held.clientId !== parsed.clientId && inboxesOf(fresh.inboxes, name).length > 0) {
+      throw new CommsError('CONFIG', `"${name}" is a different OAuth client, and mailboxes use it`, {
+        hint: 'Add the new client under another name, then `inbox reauth` each mailbox onto it.',
+      });
+    }
+    if (held && options.replace && held.clientId !== existing?.clientId) {
+      throw new CommsError('CONFIG', `the OAuth client "${name}" changed while this ran`, {
+        hint: 'Run the command again to see what is there now.',
+      });
+    }
+    // Kept, so a write that does not land can put the reference back as it was: the row would otherwise name this
+    // client while the secret under it belongs to another — or a stray secret would be left under a name nothing uses.
+    const previous = await secrets.get(secretRef);
 
-  const client: ClientConfig = {
-    provider: 'gmail',
-    clientId: parsed.clientId,
-    projectId: parsed.projectId,
-    secretRef,
-    addedAt: existing?.addedAt ?? context.now().toISOString(),
-  };
-  await context.core.config.update((current) => ({
-    ...current,
-    secrets: { store: chosen },
-    clients: { ...current.clients, [name]: client },
-  }));
+    const row: ClientConfig = {
+      provider: 'gmail',
+      clientId: parsed.clientId,
+      projectId: parsed.projectId,
+      secretRef,
+      addedAt: existing?.addedAt ?? context.now().toISOString(),
+    };
+    // Whether the write refused itself rather than failing around itself: re-registering the same client with the
+    // same secret changes nothing, so a refusal would otherwise look exactly like a write that landed.
+    let refused = false;
+    try {
+      /*
+       * Inside the boundary that puts it back: a keychain write can land after it has reported a timeout, so even a
+       * failed write has to be reconciled rather than assumed not to have happened.
+       */
+      await secrets.set(secretRef, parsed.clientSecret);
+      const stored = await secrets.get(secretRef);
+      if (stored !== parsed.clientSecret) {
+        throw new CommsError('SECRET_STORE_UNAVAILABLE', 'the secret did not read back the way it was written', {
+          hint: 'Try again with `--store file` to keep secrets in owner-only files instead of the system keychain.',
+        });
+      }
+      await context.core.config.update((current) => {
+        refused = true;
+        // Never switch the store back: only `secrets migrate` changes it, and it moves the secrets with it.
+        if (current.secrets?.store && current.secrets.store !== chosen) {
+          throw new CommsError('TRANSIENT', 'the secret store was changed while this ran', {
+            hint: 'Run the command again.',
+          });
+        }
+        // The users are re-checked here as well as above: a sign-in completing between the two would otherwise
+        // attach a mailbox to the client being replaced, and its token would not survive the replacement.
+        const held = current.clients[name];
+        if (held && held.clientId !== parsed.clientId && inboxesOf(current.inboxes, name).length > 0) {
+          throw new CommsError('CONFIG', `"${name}" is a different OAuth client, and mailboxes use it`, {
+            hint: 'Add the new client under another name, then `inbox reauth` each mailbox onto it.',
+          });
+        }
+        refused = false;
+        return { ...current, secrets: { store: chosen }, clients: { ...current.clients, [name]: row } };
+      });
+    } catch (error) {
+      /*
+       * A rejected write may have committed (see `writeOutcome` in core) — but "committed" has to mean *this* write.
+       *
+       * Rotating one client's secret writes a row identical to the one already there, so asking whether a row with
+       * this client id exists is answered "yes" before anything happens: a secret write that failed before storing
+       * would read as success, the error would be swallowed, and `--move` would then delete the only copy of the new
+       * secret. So the row must match completely *and* the store must hold the new secret, read fresh.
+       */
+      const landed = refused
+        ? ('absent' as const)
+        : await writeOutcome(async () => {
+            const held = (await context.config()).clients[name];
+            if (!held || JSON.stringify(held) !== JSON.stringify(row)) return false;
+            secrets.invalidate(secretRef);
+            return (await secrets.get(secretRef)) === parsed.clientSecret;
+          });
+      if (landed === 'unknown') throw keepAndReport(error, secretRef, 'Run `agent-gmail client list`.');
+      if (landed === 'absent') {
+        // Exactly as it was: the previous secret, or nothing when there was none.
+        try {
+          if (previous === null) await secrets.delete(secretRef);
+          else await secrets.set(secretRef, previous);
+        } catch (restoreError) {
+          const base = error instanceof CommsError ? error : new CommsError('UNEXPECTED', String(error));
+          throw new CommsError(base.code, base.message, {
+            hint: `${base.hint ? `${base.hint} ` : ''}The secret store could not be put back as it was: register the client again with \`agent-gmail client add <its JSON> --replace\`.`,
+            details: { secretNotRestored: secretRef, restoreError: (restoreError as Error).message },
+            cause: error,
+          });
+        }
+      }
+      if (landed !== 'present') throw error;
+    }
+    return row;
+  });
 
   // Only once the secret is safely stored, and only if asked: the file is the one copy Google will ever show.
   let sourceRemoved = false;
@@ -173,6 +269,12 @@ export async function clientList(context: GmailContext): Promise<ClientView[]> {
 }
 
 export async function clientRemove(context: GmailContext, name: string): Promise<{ name: string }> {
+  // Under the credentials lock, from the read to the secret deletion: `client add --replace` holds it too, and a
+  // replacement landing in between would otherwise be re-added and then have its secret deleted from under it.
+  return withCredentialsLock(context.core.paths.configDir, () => removeClientLocked(context, name));
+}
+
+async function removeClientLocked(context: GmailContext, name: string): Promise<{ name: string }> {
   const config = await context.config();
   const client = config.clients[name];
   if (!client) {
@@ -188,11 +290,33 @@ export async function clientRemove(context: GmailContext, name: string): Promise
       hint: `Remove them first (${users.join(', ')}), or move them to another client with \`agent-gmail inbox reauth\`.`,
     });
   }
-  await context.core.config.update((current) => {
-    const clients = { ...current.clients };
-    delete clients[name];
-    return { ...current, clients };
-  });
+  try {
+    await context.core.config.update((current) => {
+      // The row this read, not whatever holds the name now.
+      if (current.clients[name]?.clientId !== client.clientId) {
+        throw new CommsError('CONFIG', `the OAuth client "${name}" changed while it was being removed`, {
+          hint: 'Run the command again to see what is there now.',
+        });
+      }
+      // And still used by nothing: a sign-in completing in between attaches a mailbox to it.
+      const attached = inboxesOf(current.inboxes, name);
+      if (attached.length > 0) {
+        throw new CommsError(
+          'CONFIG',
+          `${attached.length} inbox(es) began using "${name}" while it was being removed`,
+          { hint: `Remove them first (${attached.join(', ')}), or move them with \`agent-gmail inbox reauth\`.` },
+        );
+      }
+      const clients = { ...current.clients };
+      delete clients[name];
+      return { ...current, clients };
+    });
+  } catch (error) {
+    // A rejected write may have committed (see `writeOutcome` in core): only skip the deletion if the row is there.
+    const gone = await writeOutcome(async () => (await context.config()).clients[name] === undefined);
+    if (gone === 'absent') throw error;
+    if (gone === 'unknown') throw keepAndReport(error, client.secretRef, 'Run `agent-gmail client list`.');
+  }
   const secrets = await context.core.secrets();
   await secrets.delete(client.secretRef);
   return { name };

@@ -89,6 +89,19 @@ function defaultNotFound(config: Config, kind: NameKind, name: string): CommsErr
   return new CommsError('NOT_FOUND', `no account called "${name}"`);
 }
 
+/**
+ * The live account under exactly this name, or undefined — no former names, no refusal.
+ *
+ * For callers that only ask "is this name connected right now": a policy preflight, a startup hint. Anything that
+ * acts on the answer for a person who typed the name should use `resolveName`, which tells them what an old name is
+ * called now.
+ */
+export function lookupName(config: Config, kind: 'inbox', name: string): InboxConfig | undefined;
+export function lookupName(config: Config, kind: 'account', name: string): AccountConfig | undefined;
+export function lookupName(config: Config, kind: NameKind, name: string): InboxConfig | AccountConfig | undefined {
+  return kind === 'inbox' ? own(config.inboxes, name) : own(config.accounts, name);
+}
+
 /** The name an account has now, found by its immutable id. */
 export function findById(config: Config, kind: 'inbox', id: string): { alias: string; inbox: InboxConfig } | null;
 export function findById(config: Config, kind: 'account', id: string): { alias: string; account: AccountConfig } | null;
@@ -126,6 +139,22 @@ export function formerNameRefusal(config: Config, kind: NameKind, name: string):
     hint: `Use "${current.alias}".`,
     details: { formerName: name, currentName: current.alias, id: former.id },
   });
+}
+
+/**
+ * The names this account used to have, most recently recorded first.
+ *
+ * For the few places a name is more than a lookup — a file named after the mailbox, say — so what was written under
+ * the old name can still be found after a rename.
+ */
+export function formerNamesOf(config: Config, kind: NameKind, name: string): string[] {
+  if (config.version !== 2) return [];
+  const row = kind === 'inbox' ? own(config.inboxes, name) : own(config.accounts, name);
+  if (!row) return [];
+  return Object.entries(config.formerNames[MAP[kind]])
+    .filter(([, record]) => record.id === row.id)
+    .map(([former]) => former)
+    .reverse();
 }
 
 /** Looks up an inbox by name, or fails with the list of known names — or with what a former name is called now. */

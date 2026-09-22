@@ -226,7 +226,8 @@ agentcomms names migrate \
 - **Gmail add reconciles before it withdraws.** Today any config error deletes the new secret — including an error
   that followed a committed write, which leaves a connected mailbox with no credential — and a failed deletion is
   swallowed. Under this change it does what Slack's sign-in does: on an update error it re-reads the config and
-  looks for the new inbox id. **Committed** — keep the secret, report the lock problem; **absent** — withdraw the
+  looks for the new inbox id. **Committed** — keep the secret; the sign-in worked, and a lock left behind is reclaimed
+  as stale by the next holder, so reporting a failure would only send somebody to redo it; **absent** — withdraw the
   secret, and **report** it if that fails; **unknown** — keep the secret and say which reference may be stranded.
 - **Gmail reauth writes the row it found, by id, under the credentials lock.** It currently writes back
   `inboxes[<name it started with>]`, so a rename between starting and finishing a reauth would put the old name
@@ -277,9 +278,15 @@ example ending in the right platform.
   lexical containment and an existing-ancestor realpath check, and `relativeSubpath` refuses absolute paths and
   `..`. Windows device names are excluded by the grammar. **Existing files are not moved**; `doctor` mentions an
   old folder once.
+- **Compose profiles** are files named after the mailbox, `compose/inbox-<name>.md`. A `/` would name a file in a
+  directory nobody created, so it is encoded (`inbox-acme__gmail.md`; `_` cannot appear in a name), and the profile
+  written under a former name is still read when nothing has been written under the new one.
 - **Audit records** keep the name they were written with. That is history.
 - **Search cursors** compare a comma-joined list of names; names contain no commas.
 - **OAuth completion pages** render names as escaped HTML. Names never reach a URL.
+- **The untrusted-content envelope** carries the mailbox name as an attribute, from a character allowlist that had
+  no `/` — so every read of a renamed mailbox failed. Found by N2's first test under a nested name; `/` is added.
+  Values stay quoted and can never hold a quote or an angle bracket.
 - **`/` is ordinary** in JSON, MCP string parameters and shell arguments.
 
 ## The classifier

@@ -67,7 +67,9 @@ export function neutralise(text: string): NeutraliseResult {
   return { text: out, tokensNeutralised };
 }
 
-const ATTRIBUTE_SAFE = /^[A-Za-z0-9._:@-]{1,128}$/;
+// `/` is allowed because an account name contains one (`cue/gmail`). Values are always quoted and can never contain a
+// quote or an angle bracket, so a slash cannot close the tag or start another.
+const ATTRIBUTE_SAFE = /^[A-Za-z0-9._:@/-]{1,128}$/;
 
 function attribute(name: string, value: string | undefined): string {
   if (value === undefined) return '';

@@ -658,6 +658,8 @@ export function renderSetupPlan(
     blocked?: { step: string; needs: string; hint?: string | undefined } | null | undefined;
     /** The link and the command, when the only thing left is a person approving it. */
     handoff?: { authUrl: string; finish: string } | null | undefined;
+    /** A name the config accepts, for the examples: `acme/gmail` once names are organisation/platform. */
+    nameExample?: string | undefined;
   },
   steps: readonly { title: string; url: string; why: string; actions: readonly string[]; avoid: readonly string[] }[],
   color: boolean,
@@ -726,7 +728,7 @@ export function renderSetupPlan(
     // `setup`'s own flags, because this is `setup`'s own output. It named `inbox add … --start` — a real command,
     // but a different one, so the text told you to leave the thing you were running while `blocked.needs` beside
     // it correctly said `--inbox <alias>`. Two answers to one question, in the same document.
-    lines.push('  agent-gmail setup --inbox work --email you@example.com');
+    lines.push(`  agent-gmail setup --inbox ${state.nameExample ?? 'work'} --email you@example.com`);
     lines.push('  then run the --finish command it prints, after signing in.');
   }
 

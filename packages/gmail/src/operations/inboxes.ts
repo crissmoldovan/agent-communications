@@ -1,18 +1,22 @@
 import { join } from 'node:path';
 import {
-  ALIAS_PATTERN,
   appendPrivateLine,
   CommsError,
   effectiveSendPolicy,
+  findById,
   type InboxRuntimeState,
-  isValidAlias,
+  keepAndReport,
   type LooseningConsent,
   RESERVED_ALIASES,
+  renameEntry,
   type SendPolicy,
+  withCredentialsLock,
+  writeOutcome,
 } from '@agentcomms/core';
 import { revokeToken } from '../auth/oauth.ts';
 import { type Capability, capabilitiesOf, tierOf } from '../auth/scopes.ts';
 import type { GmailContext } from '../context.ts';
+import { requireNewInboxName } from './inbox-names.ts';
 
 export interface InboxView {
   alias: string;
@@ -70,7 +74,8 @@ export async function inboxShow(
 ): Promise<InboxView & { grantedScopes: string[]; internalDomains: string[] }> {
   const { inbox } = await context.inbox(alias);
   const views = await inboxList(context);
-  const view = views.find((candidate) => candidate.alias === alias);
+  // By id: `inboxList` reads the config again, and a rename in between would pair this row with another's view.
+  const view = views.find((candidate) => candidate.id === inbox.id);
   if (!view) throw new CommsError('NOT_FOUND', `no inbox called "${alias}"`);
   return { ...view, grantedScopes: inbox.grantedScopes, internalDomains: inbox.internalDomains };
 }
@@ -84,20 +89,14 @@ export async function inboxRename(
   if (RESERVED_ALIASES.has(to)) {
     throw new CommsError('USAGE', `"${to}" is reserved: it means every inbox`, { hint: 'Choose another name.' });
   }
-  if (!isValidAlias(to)) {
-    throw new CommsError('USAGE', `"${to}" is not a valid name`, {
-      hint: `Names match ${ALIAS_PATTERN.source}: lowercase letters, digits and hyphens.`,
-    });
-  }
+  requireNewInboxName(await context.config(), to, 'Choose another name.');
   await context.core.config.update((current) => {
-    if (current.inboxes[to]) {
-      throw new CommsError('CONFIG', `an inbox called "${to}" already exists`);
-    }
-    const inboxes = { ...current.inboxes };
-    const row = inboxes[from];
-    if (!row) throw new CommsError('NOT_FOUND', `no inbox called "${from}"`);
-    delete inboxes[from];
-    return { ...current, inboxes: { ...inboxes, [to]: row } };
+    // By id, and the target checked again, under the lock: a rename is a write like any other, and the file may have
+    // moved since it was read. In version 2 `renameEntry` also records the old name, for good.
+    const now = findById(current, 'inbox', inbox.id);
+    if (!now) throw new CommsError('NOT_FOUND', `no inbox called "${from}"`);
+    requireNewInboxName(current, to, 'Choose another name.');
+    return renameEntry(current, 'inbox', now.alias, to);
   });
   context.forgetTransports();
   await context.core.audit.append({
@@ -126,9 +125,9 @@ export async function inboxPolicy(
   const previous = effectiveSendPolicy(config, alias);
   await context.core.config.update(
     (current) => {
-      const row = current.inboxes[alias];
-      if (!row) throw new CommsError('NOT_FOUND', `no inbox called "${alias}"`);
-      return { ...current, inboxes: { ...current.inboxes, [alias]: { ...row, sendPolicy } } };
+      const now = findById(current, 'inbox', inbox.id);
+      if (!now) throw new CommsError('NOT_FOUND', `no inbox called "${alias}"`);
+      return { ...current, inboxes: { ...current.inboxes, [now.alias]: { ...now.inbox, sendPolicy } } };
     },
     consent ? { consent } : {},
   );
@@ -148,8 +147,10 @@ export interface InboxRemoveResult {
   id: string;
   email: string;
   revoked: boolean;
-  /** Set when the stored token could not be deleted; it is recorded for `doctor` to report. */
+  /** Set when the stored token could not be deleted. */
   orphanedSecret?: string | undefined;
+  /** Whether that token was recorded for `doctor` to report. Recording can fail too, and then nothing will list it. */
+  orphanRecorded?: boolean | undefined;
 }
 
 /**
@@ -162,54 +163,125 @@ export async function inboxRemove(
   alias: string,
   options: { revoke?: boolean } = {},
 ): Promise<InboxRemoveResult> {
-  const { inbox } = await context.inbox(alias);
-  const secrets = await context.core.secrets();
-  const refreshToken = options.revoke ? await secrets.get(inbox.secretRef) : null;
+  const { inbox: named } = await context.inbox(alias);
 
-  await context.core.config.update((current) => {
-    const inboxes = { ...current.inboxes };
-    delete inboxes[alias];
-    return { ...current, inboxes };
-  });
-  context.forgetTransports();
+  /*
+   * Under the credentials lock, from the read to the secret deletion.
+   *
+   * This read a name, deleted `inboxes[name]` by key and then deleted the secret, holding no credentials lock. A
+   * migration renaming every key in between left the deletion removing nothing and the secret deleted from under an
+   * account that stayed configured; `secrets migrate` could interleave the same way. Held, neither can land in
+   * between, and the row is found by its immutable id rather than by the name the command was given.
+   */
+  const removed = await withCredentialsLock(context.core.paths.configDir, async () => {
+    const found = findById(await context.config(), 'inbox', named.id);
+    if (!found) throw new CommsError('NOT_FOUND', `no inbox called "${alias}"`);
+    const { inbox } = found;
+    const secrets = await context.core.secrets();
+    const refreshToken = options.revoke ? await secrets.get(inbox.secretRef) : null;
 
-  let revoked = false;
-  if (options.revoke && refreshToken) {
     try {
-      await revokeToken(context.endpoints, refreshToken);
+      await context.core.config.update((current) => {
+        const now = findById(current, 'inbox', inbox.id);
+        if (!now) throw new CommsError('NOT_FOUND', `no inbox called "${alias}"`);
+        const inboxes = { ...current.inboxes };
+        delete inboxes[now.alias];
+        return { ...current, inboxes };
+      });
+    } catch (error) {
+      /*
+       * The row goes first and the secret second — the other order leaves a configured account with no credential.
+       * But a rejected write may have committed (see `writeOutcome`), and skipping the deletion then strands a live
+       * token that nothing records. So: look. Row gone, the write is in — carry on. Row still there, nothing was
+       * written — say so. Unreadable — keep the token, and record it as unconfirmed, because `doctor` must not advise
+       * deleting a credential whose mailbox may still be connected.
+       */
+      const gone = await writeOutcome(async () => findById(await context.config(), 'inbox', inbox.id) === null);
+      if (gone === 'absent') throw error;
+      if (gone === 'unknown') {
+        await recordOrphan(context, { secretRef: inbox.secretRef, alias: found.alias, inboxId: inbox.id }, error, true);
+        throw keepAndReport(error, inbox.secretRef, 'Run `agent-gmail inbox list`.');
+      }
+    }
+    context.forgetTransports();
+
+    let orphanedSecret: string | undefined;
+    let orphanRecorded: boolean | undefined;
+    try {
+      await secrets.delete(inbox.secretRef);
+    } catch (error) {
+      // The row is already gone, so the inbox is disconnected either way; but a token still sitting in the keychain
+      // is worth saying out loud rather than forgetting, so `doctor` can report it and the user can remove it.
+      orphanedSecret = inbox.secretRef;
+      orphanRecorded = await recordOrphan(
+        context,
+        { secretRef: inbox.secretRef, alias: found.alias, inboxId: inbox.id },
+        error,
+        false,
+      );
+    }
+    return { name: found.alias, inbox, refreshToken, orphanedSecret, orphanRecorded };
+  });
+
+  // Revocation is a call to Google, so it runs after the lock is released: nothing should wait on a network round
+  // trip to touch stored credentials. The token was read under the lock; the row is gone whatever this does.
+  let revoked = false;
+  if (options.revoke && removed.refreshToken) {
+    try {
+      await revokeToken(context.endpoints, removed.refreshToken);
       revoked = true;
     } catch {
       // Revocation is best effort: the row is already gone, and the user is told to check their Google account.
     }
   }
 
-  let orphanedSecret: string | undefined;
+  await context.core.states.update(removed.inbox.id, { lastError: undefined });
+  await context.core.audit.append({
+    inboxId: removed.inbox.id,
+    alias: removed.name,
+    operation: 'inbox.remove',
+    outcome: 'ok',
+    surface: context.surface,
+    reason: `${revoked ? 'token revoked' : 'token not revoked'}; ${
+      removed.orphanedSecret ? `local token could not be deleted (${removed.orphanedSecret})` : 'local token deleted'
+    }`,
+  });
+  return {
+    alias: removed.name,
+    id: removed.inbox.id,
+    email: removed.inbox.email,
+    revoked,
+    orphanedSecret: removed.orphanedSecret,
+    orphanRecorded: removed.orphanRecorded,
+  };
+}
+
+/**
+ * One line in the orphaned-secrets file `doctor` reads.
+ *
+ * `unconfirmed` marks a token kept because nobody could tell whether its mailbox was removed. `doctor` re-checks every
+ * line against the config anyway, and only advises deleting a reference nothing still holds.
+ */
+async function recordOrphan(
+  context: GmailContext,
+  entry: { secretRef: string; alias: string; inboxId: string },
+  error: unknown,
+  unconfirmed: boolean,
+): Promise<boolean> {
   try {
-    await secrets.delete(inbox.secretRef);
-  } catch (error) {
-    // The row is already gone, so the inbox is disconnected either way; but a token still sitting in the keychain is
-    // worth saying out loud rather than forgetting, so `doctor` can report it and the user can remove it.
-    orphanedSecret = inbox.secretRef;
     await appendPrivateLine(
       orphanedSecretsPath(context),
       JSON.stringify({
         at: context.now().toISOString(),
-        secretRef: inbox.secretRef,
-        alias,
+        ...entry,
+        ...(unconfirmed ? { unconfirmed: true } : {}),
         reason: error instanceof Error ? error.message : String(error),
       }),
-    ).catch(() => undefined);
+    );
+    return true;
+  } catch {
+    return false;
   }
-  await context.core.states.update(inbox.id, { lastError: undefined });
-  await context.core.audit.append({
-    inboxId: inbox.id,
-    alias,
-    operation: 'inbox.remove',
-    outcome: 'ok',
-    surface: context.surface,
-    reason: revoked ? 'token revoked' : 'token deleted locally',
-  });
-  return { alias, id: inbox.id, email: inbox.email, revoked, orphanedSecret };
 }
 
 export function orphanedSecretsPath(context: GmailContext): string {

@@ -78,21 +78,10 @@ agent-gmail client add [options] <path>
 | Option | What it does | Default |
 |---|---|---|
 | `--name <name>` | register it under this name | `"default"` |
-| `--store <store>` | where secrets are kept (first time only) (choices: | — |
-| `"keychain", "file")` |  | — |
-| `--move` | delete the downloaded file once the secret is stored | — |
-| `(default: false)` |  | — |
-| `--replace` | rotate the secret of the client already registered under this | — |
-| `name (default: false)` |  | — |
+| `--store <store>` | where secrets are kept (first time only) (choices: "keychain", "file") | — |
+| `--move` | delete the downloaded file once the secret is stored | `false` |
+| `--replace` | rotate the secret of the client already registered under this name | `false` |
 | `--no-probe` | do not check the credentials with Google first | — |
-
-### `agent-gmail client Google`
-
-the Google Cloud OAuth client every inbox signs in through
-
-```
-agent-gmail client [options] [command]
-```
 
 ### `agent-gmail client list`
 
@@ -129,16 +118,14 @@ agent-gmail inbox add [options] [alias]
 | Option | What it does | Default |
 |---|---|---|
 | `--email <address>` | the address this must turn out to be; refused if it is not | — |
-| `--tier <tier>` | how much access to ask for (choices: "read", "draft", | — |
-| `"organize")` |  | — |
+| `--tier <tier>` | how much access to ask for (choices: "read", "draft", "organize") | — |
 | `--no-contacts` | do not ask for contacts access | — |
 | `--contacts` | ask for contacts access (the default) | — |
 | `--client <name>` | sign in through this OAuth client | — |
 | `--port <number>` | use this loopback port for the redirect | — |
 | `--no-browser` | do not open the link, just print it | — |
 | `--hd <domain>` | restrict the account chooser to a Google Workspace domain | — |
-| `--start` | start the sign-in and return the link, to be finished later | — |
-| `(default: false)` |  | — |
+| `--start` | start the sign-in and return the link, to be finished later | `false` |
 | `--finish <flowId>` | finish a sign-in started earlier | — |
 | `--url <url>` | the address the browser ended up at, pasted back | — |
 | `--wait <seconds>` | how long to wait for the browser | `60` |
@@ -154,27 +141,17 @@ agent-gmail inbox reauth [options] [alias]
 | Option | What it does | Default |
 |---|---|---|
 | `--email <address>` | the address this must turn out to be; refused if it is not | — |
-| `--tier <tier>` | how much access to ask for (choices: "read", "draft", | — |
-| `"organize")` |  | — |
+| `--tier <tier>` | how much access to ask for (choices: "read", "draft", "organize") | — |
 | `--no-contacts` | do not ask for contacts access | — |
 | `--contacts` | ask for contacts access (the default) | — |
 | `--client <name>` | sign in through this OAuth client | — |
 | `--port <number>` | use this loopback port for the redirect | — |
 | `--no-browser` | do not open the link, just print it | — |
 | `--hd <domain>` | restrict the account chooser to a Google Workspace domain | — |
-| `--start` | start the sign-in and return the link, to be finished later | — |
-| `(default: false)` |  | — |
+| `--start` | start the sign-in and return the link, to be finished later | `false` |
 | `--finish <flowId>` | finish a sign-in started earlier | — |
 | `--url <url>` | the address the browser ended up at, pasted back | — |
 | `--wait <seconds>` | how long to wait for the browser | `60` |
-
-### `agent-gmail inbox access`
-
-connect, inspect and disconnect mailboxes
-
-```
-agent-gmail inbox [options] [command]
-```
 
 ### `agent-gmail inbox list`
 
@@ -223,20 +200,10 @@ agent-gmail inbox import [options] [source]
 | Option | What it does | Default |
 |---|---|---|
 | `--dir <path>` | where that server keeps its files | `"~/.gmail-mcp"` |
-| `--name <name>` | register its OAuth client under this name (default: | — |
-| `"imported")` |  | — |
-| `--store <store>` | where secrets are kept (first time only) (choices: | — |
-| `"keychain", "file")` |  | — |
-| `--dry-run` | say what would be imported, and change nothing (default: | — |
-| `false)` |  | — |
-
-### `agent-gmail inbox server`
-
-connect, inspect and disconnect mailboxes
-
-```
-agent-gmail inbox [options] [command]
-```
+| `--name <name>` | register its OAuth client under this name | `"imported"` |
+| `--store <store>` | where secrets are kept (first time only) (choices: "keychain", "file") | — |
+| `--dry-run` | say what would be imported, and change nothing | `false` |
+| `--rename <old=new>` | import one under another name (repeatable) | — |
 
 ### `agent-gmail inbox remove`
 
@@ -248,8 +215,7 @@ agent-gmail inbox remove [options] <alias>
 
 | Option | What it does | Default |
 |---|---|---|
-| `--revoke` | also ask Google to revoke the token (may affect other tools | — |
-| `sharing the grant) (default: false)` |  | — |
+| `--revoke` | also ask Google to revoke the token (may affect other tools sharing the grant) | `false` |
 
 ### `agent-gmail search`
 
@@ -355,14 +321,6 @@ agent-gmail attachments download [options] <messageId...>
 | `--out <subpath>` | a folder inside the downloads root | — |
 | `--max-files <number>` | stop after this many files | — |
 
-### `agent-gmail attachments messages,`
-
-find and download files people sent
-
-```
-agent-gmail attachments [options] [command]
-```
-
 ### `agent-gmail contacts`
 
 find someone’s address: from the address book, from people written to, and from past mail
@@ -427,17 +385,14 @@ agent-gmail draft new [options]
 
 | Option | What it does | Default |
 |---|---|---|
-| `--text <text>` | the body, as plain text (the HTML part is generated from | — |
-| `it)` |  | — |
+| `--text <text>` | the body, as plain text (the HTML part is generated from it) | — |
 | `--file <path>` | read the body from a file | — |
 | `--cc <address...>` | copy these people | — |
 | `--bcc <address...>` | blind-copy these people | — |
 | `--attach <path...>` | attach these local files | — |
 | `--no-signature` | leave the mailbox signature off | — |
-| `--no-quote` | do not quote the original (a reply only; a forward needs | — |
-| `it)` |  | — |
-| `--profile` | include the mailbox writing profile in the result | — |
-| `(default: false)` |  | — |
+| `--no-quote` | do not quote the original (a reply only; a forward needs it) | — |
+| `--profile` | include the mailbox writing profile in the result | `false` |
 | `--inbox <alias>` | which mailbox | — |
 | `--to <address...>` | who it goes to | — |
 | `--subject <subject>` | the subject line | — |
@@ -452,17 +407,14 @@ agent-gmail draft reply [options] <messageId>
 
 | Option | What it does | Default |
 |---|---|---|
-| `--text <text>` | the body, as plain text (the HTML part is generated from | — |
-| `it)` |  | — |
+| `--text <text>` | the body, as plain text (the HTML part is generated from it) | — |
 | `--file <path>` | read the body from a file | — |
 | `--cc <address...>` | copy these people | — |
 | `--bcc <address...>` | blind-copy these people | — |
 | `--attach <path...>` | attach these local files | — |
 | `--no-signature` | leave the mailbox signature off | — |
-| `--no-quote` | do not quote the original (a reply only; a forward needs | — |
-| `it)` |  | — |
-| `--profile` | include the mailbox writing profile in the result | — |
-| `(default: false)` |  | — |
+| `--no-quote` | do not quote the original (a reply only; a forward needs it) | — |
+| `--profile` | include the mailbox writing profile in the result | `false` |
 | `--inbox <alias>` | which mailbox | — |
 | `--mode <mode>` | how to answer (choices: "reply", "reply_all", "forward") | — |
 | `--to <address...>` | who it goes to (a forward needs this; a reply computes it) | — |
@@ -492,14 +444,6 @@ agent-gmail draft show [options] <draftId>
 |---|---|---|
 | `--inbox <alias>` | which mailbox | — |
 
-### `agent-gmail draft would`
-
-write messages into Drafts — never sent from here
-
-```
-agent-gmail draft [options] [command]
-```
-
 ### `agent-gmail draft update`
 
 change a draft — the body, files and headers you do not restate are kept
@@ -510,28 +454,17 @@ agent-gmail draft update [options] <draftId>
 
 | Option | What it does | Default |
 |---|---|---|
-| `--text <text>` | the body, as plain text (the HTML part is generated from | — |
-| `it)` |  | — |
+| `--text <text>` | the body, as plain text (the HTML part is generated from it) | — |
 | `--file <path>` | read the body from a file | — |
 | `--cc <address...>` | copy these people | — |
 | `--bcc <address...>` | blind-copy these people | — |
 | `--attach <path...>` | attach these local files | — |
 | `--no-signature` | leave the mailbox signature off | — |
-| `--no-quote` | do not quote the original (a reply only; a forward needs | — |
-| `it)` |  | — |
-| `--profile` | include the mailbox writing profile in the result | — |
-| `(default: false)` |  | — |
+| `--no-quote` | do not quote the original (a reply only; a forward needs it) | — |
+| `--profile` | include the mailbox writing profile in the result | `false` |
 | `--inbox <alias>` | which mailbox | — |
 | `--to <address...>` | replace the recipients | — |
 | `--subject <subject>` | replace the subject line | — |
-
-### `agent-gmail draft do`
-
-write messages into Drafts — never sent from here
-
-```
-agent-gmail draft [options] [command]
-```
 
 ### `agent-gmail draft delete`
 
@@ -565,14 +498,6 @@ agent-gmail send prepare [options] <draftId>
 |---|---|---|
 | `--inbox <alias>` | which mailbox | — |
 
-### `agent-gmail send approval`
-
-send a draft that has been prepared and approved — never anything else
-
-```
-agent-gmail send [options] [command]
-```
-
 ### `agent-gmail send execute`
 
 send it — only with an approval, and only to the recipients that approval names
@@ -586,20 +511,9 @@ agent-gmail send execute [options] <draftId>
 | `--inbox <alias>` | which mailbox | — |
 | `--approval <id>` | the approval from `send prepare` | — |
 | `--expect-to <address...>` | who you believe this goes to; `none` for nobody | — |
-| `--expect-subject <subject>` | the subject you believe it has; `none` for an | — |
-| `empty one` |  | — |
-| `--expect-cc <address...>` | who you believe is copied; `none` for nobody | — |
-| `(default: ["none"])` |  | — |
-| `--expect-bcc <address...>` | who you believe is blind-copied; `none` for nobody | — |
-| `(default: ["none"])` |  | — |
-
-### `agent-gmail send recipients`
-
-send a draft that has been prepared and approved — never anything else
-
-```
-agent-gmail send [options] [command]
-```
+| `--expect-subject <subject>` | the subject you believe it has; `none` for an empty one | — |
+| `--expect-cc <address...>` | who you believe is copied; `none` for nobody | `["none"]` |
+| `--expect-bcc <address...>` | who you believe is blind-copied; `none` for nobody | `["none"]` |
 
 ### `agent-gmail send list`
 
@@ -619,14 +533,6 @@ cancel an approval — refusing to send is never the dangerous direction
 
 ```
 agent-gmail send cancel [options] <approvalId>
-```
-
-### `agent-gmail send the`
-
-send a draft that has been prepared and approved — never anything else
-
-```
-agent-gmail send [options] [command]
 ```
 
 ### `agent-gmail approve`
@@ -678,8 +584,7 @@ agent-gmail organise-undo|organize-undo [options]
 | Option | What it does | Default |
 |---|---|---|
 | `--inbox <alias>` | which mailbox | — |
-| `--from <path>` | a file holding the undo array; `-` reads standard input | — |
-| `(default: "-")` |  | — |
+| `--from <path>` | a file holding the undo array; `-` reads standard input | `"-"` |
 
 ### `agent-gmail trash`
 
@@ -756,8 +661,7 @@ agent-gmail mcp [options] [command]
 | Option | What it does | Default |
 |---|---|---|
 | `--inbox <alias>` | serve only this mailbox | — |
-| `--read-only` | leave out every tool that changes the mailbox (default: | — |
-| `false)` |  | — |
+| `--read-only` | leave out every tool that changes the mailbox | `false` |
 
 ### `agent-gmail setup`
 
@@ -772,19 +676,12 @@ agent-gmail setup [options]
 | `--client-json <path>` | the OAuth client JSON, if you already have it | — |
 | `--inbox <alias>` | the name to connect the first mailbox under | — |
 | `--email <address>` | the address that mailbox must turn out to be | — |
-| `--mcp-client <client>` | register with this MCP client when the mailbox is | — |
-| `connected (choices: "claude-code", "claude-desktop",` |  | — |
-| `"codex", "cursor", "gemini", "vscode")` |  | — |
-| `--replace-server` | replace an MCP entry of the same name that is already | — |
-| `there (default: false)` |  | — |
-| `--store <store>` | where secrets are kept (first time only) (choices: | — |
-| `"keychain", "file")` |  | — |
-| `--move` | delete the downloaded client JSON once its secret is | — |
-| `stored (default: false)` |  | — |
-| `--launcher <launcher>` | how the server is started (choices: "managed", "npx", | — |
-| `"local")` |  | — |
-| `--restart` | walk the Google Cloud steps again even if a client is | — |
-| `registered (default: false)` |  | — |
+| `--mcp-client <client>` | register with this MCP client when the mailbox is connected (choices: "claude-code", "claude-desktop", "codex", "cursor", "gemini", "vscode") | — |
+| `--replace-server` | replace an MCP entry of the same name that is already there | `false` |
+| `--store <store>` | where secrets are kept (first time only) (choices: "keychain", "file") | — |
+| `--move` | delete the downloaded client JSON once its secret is stored | `false` |
+| `--launcher <launcher>` | how the server is started (choices: "managed", "npx", "local") | — |
+| `--restart` | walk the Google Cloud steps again even if a client is registered | `false` |
 | `--no-tui` | plain one-line prompts instead of lists and fields | — |
 | `--no-browser` | print the links instead of opening them | — |
 

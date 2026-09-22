@@ -1,8 +1,18 @@
 import { mkdtempSync, realpathSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after } from 'node:test';
-import { type ClientConfig, type Config, type Core, type InboxConfig, newInboxId, openCore } from '@agentcomms/core';
+import {
+  applyNamesMigration,
+  type ClientConfig,
+  type Config,
+  type Core,
+  type InboxConfig,
+  newInboxId,
+  openCore,
+  planNamesMigration,
+} from '@agentcomms/core';
 import type { GoogleEndpoints } from '../../src/auth/endpoints.ts';
 import { resolveEndpoints } from '../../src/auth/endpoints.ts';
 import { buildAuthUrl, exchangeCode, newPkce } from '../../src/auth/oauth.ts';
@@ -125,4 +135,18 @@ export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harne
   };
 
   return { configDir, core, google, endpoints, env, addInbox, connectInbox };
+}
+
+/**
+ * Migrates the harness's config to organisation/platform names, as `agentcomms names migrate` will.
+ *
+ * Written straight to the file, because this release deliberately cannot write version 2 through any API — the
+ * migration command arrives with the release that may use it. The content is exactly what that command produces:
+ * core's own plan, applied by core's own pure transform.
+ */
+export async function migrateNamesForTest(harness: Harness, renames: string[] = []): Promise<void> {
+  const current = await harness.core.config.load();
+  const plan = planNamesMigration(current, renames);
+  if (plan.status !== 'ready' || current.version !== 1) throw new Error('the harness config is already migrated');
+  await writeFile(harness.core.config.path, `${JSON.stringify(applyNamesMigration(current, plan.rows), null, 2)}\n`);
 }
