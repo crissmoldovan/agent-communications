@@ -201,8 +201,10 @@ async function reauthorise(
   granted: string[],
   missingScopes: string[],
 ): Promise<ConsentResult> {
+  // Whether the row still exists is decided inside the lock below, not on the snapshot `config` was read into.
+  void config;
   const inboxId = flow.expect.inboxId;
-  if (!inboxId || !findById(config, 'inbox', inboxId)) throw inboxGone();
+  if (!inboxId) throw inboxGone();
 
   /*
    * Under the credentials lock, taken only now that the code is spent.
@@ -216,12 +218,16 @@ async function reauthorise(
    * the code to a timeout. A timeout here loses only the new token, and the person gets it again by retrying.
    */
   let result: { alias: string; inbox: InboxConfig };
+  let entered = false;
   try {
-    result = await withCredentialsLock(context.core.paths.configDir, () =>
-      writeReauth(context, flow, inboxId, tokens, identity, granted),
-    );
+    result = await withCredentialsLock(context.core.paths.configDir, () => {
+      entered = true;
+      return writeReauth(context, flow, inboxId, tokens, identity, granted);
+    });
   } catch (error) {
-    if (error instanceof CommsError && error.code === 'LOCK_TIMEOUT') {
+    // Only a lock that could not be taken means nothing was saved. A timeout from inside — the config lock, after
+    // the token was written — is reported as itself.
+    if (!entered && error instanceof CommsError && error.code === 'LOCK_TIMEOUT') {
       throw new CommsError('TRANSIENT', 'another operation on stored credentials is running, so nothing was saved', {
         hint: `Run \`agent-gmail inbox reauth ${flow.alias}\` again in a moment.`,
         cause: error,
@@ -337,16 +343,31 @@ async function writeReauth(
     const landed = await writeOutcome(async () => findById(await context.config(), 'inbox', inboxId) !== null);
     if (landed === 'unknown') throw keepAndReport(error, existing.inbox.secretRef, 'Run `agent-gmail inbox list`.');
     if (landed === 'absent') throw await withdrawStaged(secrets, existing.inbox.secretRef, error);
+    /*
+     * Present — but was it this write? The token lives under the same reference either way, so its presence proves
+     * nothing. Only a row identical to the one this reauth built says the write landed; anything else, including a
+     * write the config refused as a loosening, is the original error.
+     */
     const after = findById(await context.config(), 'inbox', inboxId);
-    const applied = after?.inbox.client === written.inbox.client && sameScopes(after.inbox.grantedScopes, granted);
-    if (!applied) throw error;
-    // The write is in and only the lock's cleanup failed.
+    if (!after || !sameRow(after.inbox, written.inbox)) throw error;
+    // The row is exactly what this reauth wrote: the write is in and only the lock's cleanup failed.
   }
   return written;
 }
 
-function sameScopes(a: readonly string[], b: readonly string[]): boolean {
-  return a.length === b.length && [...a].sort().join(' ') === [...b].sort().join(' ');
+/** Whether two rows are the same, field for field, whatever order their keys were written in. */
+function sameRow(a: InboxConfig, b: InboxConfig): boolean {
+  const canonical = (value: unknown): string =>
+    Array.isArray(value)
+      ? `[${value.map(canonical).join(',')}]`
+      : value !== null && typeof value === 'object'
+        ? `{${Object.entries(value)
+            .filter(([, entry]) => entry !== undefined)
+            .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))
+            .map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`)
+            .join(',')}}`
+        : JSON.stringify(value);
+  return canonical(a) === canonical(b);
 }
 
 /** Confirms a stored inbox still works, used by `doctor` and after a sign-in. */

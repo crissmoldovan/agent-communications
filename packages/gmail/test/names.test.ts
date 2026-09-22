@@ -4,7 +4,15 @@ import { writeFile } from 'node:fs/promises';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { CommsError, type Config, migrateNames, planNamesMigration, type SecretStore } from '@agentcomms/core';
+import {
+  CommsError,
+  type Config,
+  credentialsLockPath,
+  migrateNames,
+  planNamesMigration,
+  type SecretStore,
+  withFileLock,
+} from '@agentcomms/core';
 import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { GmailContext } from '../src/context.ts';
@@ -323,8 +331,13 @@ test('add: a write that did not happen takes the token back, and says so if it c
 
 // ── Gmail reauth: under the credentials lock, by id ─────────────────────────────────────────────────────────────
 
-async function connectBySignIn(harness: Harness, context: GmailContext, alias: string): Promise<string> {
-  const started = await startSignIn(context, { mode: 'add', alias, detached: false });
+async function connectBySignIn(
+  harness: Harness,
+  context: GmailContext,
+  alias: string,
+  tier: 'read' | 'organize' = 'organize',
+): Promise<string> {
+  const started = await startSignIn(context, { mode: 'add', alias, tier, detached: false });
   await fetch(harness.google.consent(started.authUrl, { sub: 'sub-1' }));
   const result = await started.listener?.result;
   assert.ok(result);
@@ -339,38 +352,118 @@ test('reauth: a removal that finished first leaves nothing written', async () =>
 
   const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', detached: false });
   await inboxRemove(context, 'work');
+  const seen = recordSecrets(secrets);
   await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
   await assert.rejects(reauth.listener?.result ?? Promise.resolve(), is('NOT_FOUND', /no longer exists/));
-  assert.equal(await secrets.get(`gmail:refresh:${id}`), null, 'the removed mailbox’s token was not written back');
+  // Not written and then taken back: never written at all.
+  assert.deepEqual(seen.set, [], 'the removed mailbox’s token was not written back');
+  assert.equal(await secrets.get(`gmail:refresh:${id}`), null);
   assert.deepEqual(await inboxList(context), []);
+});
+
+test('reauth: a removal that starts while it is writing waits for it, then removes', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const id = await connectBySignIn(harness, context, 'work');
+  const secrets = await harness.core.secrets('file');
+
+  // The removal is started from inside the reauth's token write — the middle of its critical section.
+  let removal: Promise<unknown> | undefined;
+  const store = secrets.set.bind(secrets);
+  secrets.set = async (ref, value) => {
+    if (ref === `gmail:refresh:${id}` && !removal) removal = inboxRemove(context, 'work');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return store(ref, value);
+  };
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', detached: false });
+  await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
+  const result = await reauth.listener?.result;
+  assert.equal(result?.reauthorised, true, 'the reauth finished first');
+  await removal;
+  assert.deepEqual(await inboxList(context), [], 'and the removal after it');
+  assert.equal(await secrets.get(`gmail:refresh:${id}`), null, 'leaving no token behind');
 });
 
 test('reauth: a rename made while it was open is followed, not undone', async () => {
   const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
   const context = await withClient(harness);
-  const id = await connectBySignIn(harness, context, 'work');
+  const id = await connectBySignIn(harness, context, 'work', 'read');
 
-  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', detached: false });
+  // An upgrade, so what the reauth writes differs from what is there and a write that did not land cannot pass.
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', tier: 'organize', detached: false });
   await inboxRename(context, 'work', 'home');
   await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
   const result = await reauth.listener?.result;
   assert.equal(result?.alias, 'home');
   assert.equal(result?.inbox.id, id);
+  const rows = await inboxList(context);
   assert.deepEqual(
-    (await inboxList(context)).map((row) => row.alias),
-    ['home'],
+    rows.map((row) => `${row.alias}:${row.tier}`),
+    ['home:organize'],
   );
 });
 
-test('reauth keeps a policy set while it was open', async () => {
+test('reauth keeps a policy set while it was writing', async () => {
   const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
   const context = await withClient(harness);
-  await connectBySignIn(harness, context, 'work');
+  const id = await connectBySignIn(harness, context, 'work');
+  const secrets = await harness.core.secrets('file');
+  // Set from inside the reauth's token write: after it read the row, before it writes the row back.
+  const store = secrets.set.bind(secrets);
+  secrets.set = async (ref, value) => {
+    await store(ref, value);
+    if (ref === `gmail:refresh:${id}`) await inboxPolicy(context, 'work', 'never');
+  };
   const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', detached: false });
-  await inboxPolicy(context, 'work', 'never');
   await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
   await reauth.listener?.result;
   assert.equal((await inboxList(context))[0]?.sendPolicy, 'never');
+});
+
+test('remove: two removals of one mailbox at once — one removes it, the other is told it is gone', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt' });
+  const outcomes = await Promise.allSettled([inboxRemove(context, 'work'), inboxRemove(context, 'work')]);
+  assert.deepEqual(outcomes.map((outcome) => outcome.status).sort(), ['fulfilled', 'rejected']);
+  const refused = outcomes.find((outcome) => outcome.status === 'rejected');
+  assert.ok(refused && is('NOT_FOUND')((refused as PromiseRejectedResult).reason));
+});
+
+test('reauth: a write that committed and then reported failure is a reauth that worked', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  await connectBySignIn(harness, context, 'work', 'read');
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', tier: 'organize', detached: false });
+  commitThenReject(harness);
+  await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
+  assert.equal((await reauth.listener?.result)?.reauthorised, true);
+  assert.equal((await inboxList(context))[0]?.tier, 'organize');
+});
+
+test('reauth: a write that did not happen is reported, not mistaken for one that did', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  await connectBySignIn(harness, context, 'work', 'read');
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', tier: 'organize', detached: false });
+  rejectBeforeWrite(harness);
+  await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
+  await assert.rejects(reauth.listener?.result ?? Promise.resolve(), is('LOCK_TIMEOUT'));
+  assert.equal((await inboxList(context))[0]?.tier, 'read', 'the row is as it was');
+});
+
+test('reauth: when the credentials lock cannot be had, it says nothing was saved — and nothing was', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const id = await connectBySignIn(harness, context, 'work', 'read');
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', tier: 'organize', detached: false });
+  const seen = recordSecrets(await harness.core.secrets('file'));
+  await withFileLock(credentialsLockPath(harness.configDir), async () => {
+    await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
+    await assert.rejects(reauth.listener?.result ?? Promise.resolve(), is('TRANSIENT', /nothing was saved/));
+  });
+  assert.deepEqual(seen.set, [], `no token written for ${id}`);
+  assert.equal((await inboxList(context))[0]?.tier, 'read');
 });
 
 // ── Gmail removal: under the credentials lock, and a rejected write looked at ───────────────────────────────────
@@ -520,6 +613,29 @@ test('import refuses every bad name together, and writes nothing', async () => {
   );
   assert.deepEqual(seen.set, [], 'no secret was written');
   assert.deepEqual(await inboxList(context), []);
+});
+
+test('import: a mailbox connected under the same name while it runs is not overwritten', async () => {
+  const harness = await newHarness(twoAccounts);
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const directory = await legacyDirectory(harness);
+  await harness.core.config.update((config) => ({ ...config, secrets: { store: 'file' } }));
+  const secrets = await harness.core.secrets('file');
+  // While the first imported token is being stored, somebody connects a mailbox under the name it was going to take.
+  const store = secrets.set.bind(secrets);
+  let raced: string | undefined;
+  let fired = false;
+  secrets.set = async (ref, value) => {
+    await store(ref, value);
+    // Once: connecting the other mailbox stores a token too, and must not set this off again.
+    if (ref.startsWith('gmail:refresh:') && !fired) {
+      fired = true;
+      raced = (await harness.addInbox({ alias: 'home', email: 'other@x.test', sub: 'sub-9', refreshToken: 'rt' })).id;
+    }
+  };
+  await assert.rejects(importLegacy(context, { dir: directory, store: 'file' }), is('CONFIG', /already exists/));
+  const rows = await inboxList(context);
+  assert.equal(rows.find((row) => row.alias === 'home')?.id, raced, 'the mailbox connected meanwhile is intact');
 });
 
 test('import under a name another Google project already uses is refused, not overwritten', async () => {

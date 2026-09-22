@@ -26,18 +26,10 @@ const ALLOWED = [join('packages', 'core', 'src', 'config.ts'), join('packages', 
 /**
  * Lookups not yet moved onto the helpers, and how many each file has.
  *
- * Gmail's move in N2 and Slack's in N3. Exact counts, so a new lookup added to one of these files fails like one
+ * Slack's move in N3; Gmail's moved in N2. Exact counts, so a new lookup added to one of these files fails like one
  * added anywhere else — and a file that reaches zero must leave the list, so the list can only shrink.
  */
 const NOT_YET_MOVED = {
-  [join('packages', 'gmail', 'src', 'cli', 'program.ts')]: 1,
-  [join('packages', 'gmail', 'src', 'mcp', 'server.ts')]: 2,
-  [join('packages', 'gmail', 'src', 'operations', 'consent.ts')]: 1,
-  [join('packages', 'gmail', 'src', 'operations', 'doctor.ts')]: 1,
-  [join('packages', 'gmail', 'src', 'operations', 'import-legacy.ts')]: 2,
-  [join('packages', 'gmail', 'src', 'operations', 'inboxes.ts')]: 2,
-  [join('packages', 'gmail', 'src', 'operations', 'send.ts')]: 1,
-  [join('packages', 'gmail', 'src', 'operations', 'signin.ts')]: 1,
   [join('packages', 'slack', 'src', 'cli', 'program.ts')]: 1,
   [join('packages', 'slack', 'src', 'operations', 'signin.ts')]: 2,
   [join('packages', 'slack', 'src', 'operations', 'workspaces.ts')]: 2,

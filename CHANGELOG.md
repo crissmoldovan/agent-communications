@@ -13,6 +13,24 @@ it, installed everywhere, and only then one that writes it. An older release ref
 and one config file is shared by everything on a machine — an MCP server started last week reads the file a CLI
 updated today.
 
+**Every Gmail command understands organisation/platform names**, ready for the release that introduces them: a
+mailbox called `acme/gmail` reads, searches, drafts, downloads into `downloads/acme/gmail/`, and is named in
+`doctor`. A name that was replaced is refused with the one it is called now, wherever a mailbox name is typed —
+including `mcp install --inbox`, which now checks the name even with `--no-verify`.
+
+**Removing, re-authorising and adding a mailbox no longer strand or lose a token.** A config write can fail
+*after* it has been written, when the lock around it cannot be released, and three paths assumed otherwise:
+removal skipped deleting a token nothing referenced any more; adding deleted the token of a mailbox that had in
+fact been connected, and swallowed a failed deletion without saying so; and a re-authorisation racing a removal
+could write the removed mailbox's token back. Each now reads the config again and acts on what it finds, keeps a
+token when nobody can tell, and names any reference it could not clean up. Removal and re-authorisation now hold
+the same lock as `secrets migrate`. `doctor` checks every recorded leftover token against the config before
+suggesting it be deleted, so it can no longer advise deleting a mailbox's live credential.
+
+**`inbox import --rename <legacy-name>=<name>`** imports a mailbox under a name of your choosing, and every bad name
+is reported together before anything is written. An import under a client name another Google project already
+uses is refused rather than overwriting that project's secret.
+
 **The page at the end of a sign-in now says what it was for.** It read "Signed in — you can close this tab" and
 nothing else, so connecting six mailboxes in a row showed the same six words six times, with no way to tell which
 one you had just approved. It now carries the package's name, the mailbox being connected, the address the flow
