@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { parseAddressList } from '../src/addresses.ts';
 import {
   aliasConflicts,
+  type Config,
   ConfigStore,
   classifyChange,
   configSchema,
@@ -193,6 +194,46 @@ test('classifyChange: an inbox added with a looser policy than the default needs
   const added = structuredClone(ordinary);
   added.inboxes.work = inbox('ibx_AAAAAAAAAAAAAAAA');
   assert.deepEqual(classifyChange(ordinary, added).loosened, []);
+});
+
+/** A configuration holding one Slack workspace under `alias`, at `mode`, with the given account id. */
+function withWorkspace(alias: string, id: string, mode: string): Config {
+  return parseConfig(
+    JSON.stringify({
+      version: 1,
+      accounts: { [alias]: { ...accountFixture(id), tier: mode, mode } },
+    }),
+  );
+}
+
+test('classifyChange: re-authorising a read workspace as send is a loosening', () => {
+  /*
+   * `mode` is not a policy sitting in front of a token that could post; it is a claim that the token cannot.
+   * Renewing a `read` workspace as `send` replaces the credential with one that can, and nothing downstream
+   * undoes that.
+   *
+   * Matched by alias rather than id, because re-authorising deliberately mints a new account id so the new
+   * credential can be staged beside the old one. An id lookup finds nothing and reads every renewal as a
+   * brand-new account — which is exactly the case this must not miss.
+   */
+  const loosened = classifyChange(
+    withWorkspace('acme', 'acc_AAAAAAAAAAAAAAAA', 'read'),
+    withWorkspace('acme', 'acc_BBBBBBBBBBBBBBBB', 'send'),
+  ).loosened;
+  assert.deepEqual(loosened, ['accounts.acme.mode']);
+});
+
+test('classifyChange: narrowing a workspace, or connecting a new one, needs nobody’s consent', () => {
+  const send = withWorkspace('acme', 'acc_AAAAAAAAAAAAAAAA', 'send');
+
+  // send → read is a tightening.
+  assert.deepEqual(classifyChange(send, withWorkspace('acme', 'acc_BBBBBBBBBBBBBBBB', 'read')).loosened, []);
+
+  // Renewing a send workspace as send is not a change at all.
+  assert.deepEqual(classifyChange(send, withWorkspace('acme', 'acc_CCCCCCCCCCCCCCCC', 'send')).loosened, []);
+
+  // A name nobody has decided anything about: choosing `send` while connecting *is* the decision.
+  assert.deepEqual(classifyChange(emptyConfig(), withWorkspace('zed', 'acc_DDDDDDDDDDDDDDDD', 'send')).loosened, []);
 });
 
 test('classifyChange: a path that climbs back out is not inside the directory it starts in', () => {

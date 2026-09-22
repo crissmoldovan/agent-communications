@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { access, mkdir, open } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CommsError, newAccountId } from '@agentcomms/core';
+import { CommsError, type LooseningConsent, newAccountId } from '@agentcomms/core';
 import { buildAuthorizeUrl, readExchange } from '../auth/authorize.ts';
 import { serialiseBundle } from '../auth/bundle.ts';
 import { FLOW_TTL_MS, newFlowId, type SlackFlow } from '../auth/flow.ts';
@@ -44,6 +44,8 @@ export interface StartOptions {
   readonly detached?: boolean | undefined;
   /** The account this must turn out to be, on a reauth. */
   readonly expect?: SlackFlow['expect'];
+  /** Proof a person typed a challenge, when this sign-in widens what the workspace can do. */
+  readonly consent?: LooseningConsent | undefined;
   /** Command that can run the hidden listener; tests point it at the source entry. */
   readonly listenerCommand?: ListenerEntry | undefined;
 }
@@ -84,6 +86,7 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
     mode: options.mode,
     alias: options.alias,
     ...(options.expect ? { expect: options.expect } : {}),
+    ...(options.consent ? { consent: options.consent } : {}),
     clientId: options.clientId,
     verifier: request.pkce.verifier,
     state: request.state,
@@ -482,73 +485,105 @@ function stopListener(flow: SlackFlow, now: Date): void {
  * something nobody re-examined.
  */
 export async function completeSignIn(context: SlackContext, flowId: string, code: string): Promise<WorkspaceView> {
-  // Claimed first, so two `--finish` calls cannot both spend one code.
+  // Claimed first, so two `--finish` calls cannot both spend one code. The claim is a file, so it is cleaned up
+  // however this ends — the interactive path has no `--finish` above it to do that.
   const flow = await context.flows.claim(flowId);
-
-  const token = readExchange(
-    await context.exchange({
-      client_id: flow.clientId,
-      code,
-      redirect_uri: flow.redirectUrl,
-      code_verifier: flow.verifier,
-    }),
-  );
-
-  const config = await context.config();
-  /*
-   * The alias is checked again here, not only when the sign-in started.
-   *
-   * Up to ten minutes pass in between, and `--finish` may run in a different process. Something else can connect
-   * that name in the gap, and writing over it would not merely rename a workspace: the entry being replaced
-   * carries the only reference to its credential, so the previous one would be left in the secret store with
-   * nothing able to list, refresh or remove it.
-   */
-  const existing = flow.expect ? requireWorkspace(config, flow.alias) : undefined;
-  if (!existing) checkAliasFree(config, flow.alias);
-  validateExchange({ token, mode: flow.mode, flow, config, existing });
-
-  const at = context.now();
-  /*
-   * A new secret reference on a reauth, rather than overwriting the old one.
-   *
-   * Overwriting first would open a window where the configuration says `read` while the credential behind it is
-   * whatever the new grant turned out to be. Staging the new one under its own reference, moving the pointer in a
-   * single config write, and only then deleting the old, means the old credential is authoritative until the
-   * exact moment the new one is.
-   */
-  const accountId = newAccountId();
-  const secrets = await context.secrets();
-  await secrets.set(secretRefFor(accountId), serialiseBundle(bundleFrom(token, at)));
-
-  const account = accountFrom({ token, mode: flow.mode, flow, accountId, now: at });
   try {
-    await context.core.config.update((current) => ({
-      ...current,
-      accounts: { ...current.accounts, [flow.alias]: account },
-    }));
-  } catch (error) {
-    // The config write failed, so nothing points at the credential just stored. Leaving it would be a live Slack
-    // token in the secret store that no command lists, removes or refreshes.
-    await secrets.delete(secretRefFor(accountId)).catch(() => undefined);
-    throw error;
-  }
+    const token = readExchange(
+      await context.exchange({
+        client_id: flow.clientId,
+        code,
+        redirect_uri: flow.redirectUrl,
+        code_verifier: flow.verifier,
+      }),
+    );
 
-  /*
-   * The superseded credential, removed last and not allowed to fail the reauth that has already succeeded.
-   *
-   * The swallow is deliberate and bounded. By this point the configuration already points at the new credential,
-   * so the workspace works; throwing here would report a failure for a sign-in that worked and send somebody to
-   * do it again. What is left behind if the delete fails — a keychain that prompts and is refused is the only
-   * realistic way — is one Slack user token whose access half expires in twelve hours and whose refresh half
-   * Slack expires thirty days after issue. It cannot be renewed, because nothing knows its reference any more.
-   *
-   * That bound is the whole justification. A credential that did *not* expire on its own would have to be
-   * reported instead of dropped.
-   */
-  const previousRef = existing?.account.secretRef;
-  if (previousRef && previousRef !== secretRefFor(accountId)) {
-    await secrets.delete(previousRef).catch(() => undefined);
-  }
+    const config = await context.config();
+    /*
+     * The alias is checked again here, not only when the sign-in started.
+     *
+     * Up to ten minutes pass in between, and `--finish` may run in a different process. Something else can
+     * connect that name in the gap, and writing over it would not merely rename a workspace: the entry being
+     * replaced carries the only reference to its credential, so the previous one would be stranded in the secret
+     * store with nothing able to list, refresh or remove it.
+     *
+     * This is the cheap check on a snapshot. The one that actually holds is inside the config lock below —
+     * everything read here can be stale by the time the write happens.
+     */
+    const existing = flow.expect ? requireWorkspace(config, flow.alias) : undefined;
+    if (!existing) checkAliasFree(config, flow.alias);
+    validateExchange({ token, mode: flow.mode, flow, config, existing });
 
-  return viewOf(flow.alias, account);
+    const at = context.now();
+    /*
+     * A new secret reference on a reauth, rather than overwriting the old one.
+     *
+     * Overwriting first would open a window where the configuration says `read` while the credential behind it
+     * is whatever the new grant turned out to be. Staging the new one under its own reference, moving the
+     * pointer in a single config write, and only then deleting the old, means the old credential is
+     * authoritative until the exact moment the new one is.
+     */
+    const accountId = newAccountId();
+    const secrets = await context.secrets();
+    await secrets.set(secretRefFor(accountId), serialiseBundle(bundleFrom(token, at)));
+
+    const account = accountFrom({ token, mode: flow.mode, flow, accountId, now: at });
+    try {
+      await context.core.config.update(
+        (current) => {
+          /*
+           * The check that counts, because this one runs under the lock.
+           *
+           * Everything above was validated against a snapshot read before the network call. Two sign-ins
+           * completing at once both pass those checks, both store a credential, and the second config write
+           * simply overwrites the first — leaving a live Slack token that nothing names. So the assumption each
+           * one made is re-stated here, where the file cannot move underneath it.
+           */
+          const held = current.accounts[flow.alias];
+          if (existing) {
+            if (!held || held.id !== existing.account.id) {
+              throw new CommsError('CONFIG', `"${flow.alias}" changed while this sign-in was being completed`, {
+                hint: `Check it with \`agent-slack workspace show ${flow.alias}\`, then re-authorise if it is still yours.`,
+              });
+            }
+          } else if (held) {
+            throw new CommsError('CONFIG', `"${flow.alias}" was connected while this sign-in was being completed`, {
+              hint: `Choose another name, or renew that one with \`agent-slack workspace reauth ${flow.alias}\`.`,
+            });
+          }
+          return { ...current, accounts: { ...current.accounts, [flow.alias]: account } };
+        },
+        // A reauth may narrow what a workspace can do freely; widening it is gated before we get here, and the
+        // proof is carried in so the config layer can tell the two apart.
+        flow.consent ? { consent: flow.consent } : {},
+      );
+    } catch (error) {
+      // Nothing points at the credential just stored — whether the write failed or the guard above refused it.
+      // Left behind, it would be a live Slack token in the secret store that no command lists or removes.
+      await secrets.delete(secretRefFor(accountId)).catch(() => undefined);
+      throw error;
+    }
+
+    /*
+     * The superseded credential, removed last and not allowed to fail the reauth that has already succeeded.
+     *
+     * The swallow is deliberate and bounded. By this point the configuration already points at the new
+     * credential, so the workspace works; throwing here would report a failure for a sign-in that worked and
+     * send somebody to do it again. What is left behind if the delete fails — a keychain that prompts and is
+     * refused is the only realistic way — is one Slack user token whose access half expires in twelve hours and
+     * whose refresh half Slack expires thirty days after issue. It cannot be renewed, because nothing knows its
+     * reference any more.
+     *
+     * That bound is the whole justification. A credential that did *not* expire on its own would have to be
+     * reported rather than dropped.
+     */
+    const previousRef = existing?.account.secretRef;
+    if (previousRef && previousRef !== secretRefFor(accountId)) {
+      await secrets.delete(previousRef).catch(() => undefined);
+    }
+
+    return viewOf(flow.alias, account);
+  } finally {
+    await context.flows.discard(flowId);
+  }
 }

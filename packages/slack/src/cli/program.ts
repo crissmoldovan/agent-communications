@@ -1,6 +1,10 @@
 import {
+  agentMarker,
+  askChallenge,
   CommsError,
+  canPrompt,
   colorEnabled,
+  type LooseningConsent,
   type OutputOptions,
   paint,
   runCommand,
@@ -290,13 +294,13 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
          * the default would quietly downgrade a `send` workspace every time somebody renewed its grant, which is
          * the opposite of what "the same, again" means. Commander knows where the value came from; ask it.
          */
-        const mode =
-          command.getOptionValueSource('mode') === 'default'
-            ? ((account.mode ?? account.tier) as InstallMode)
-            : (String(flags.mode) as InstallMode);
+        const was = (account.mode ?? account.tier) as InstallMode;
+        const mode = command.getOptionValueSource('mode') === 'default' ? was : (String(flags.mode) as InstallMode);
+        const consent = mode === 'send' && was === 'read' ? await confirmWidening(context, options, alias) : undefined;
         await signIn(context, options, {
           alias,
           mode,
+          ...(consent ? { consent } : {}),
           clientId: account.oauthClientId,
           port: portOf(flags),
           start: flags.start === true,
@@ -354,6 +358,44 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
     );
 
   // ── shared by add and reauth ────────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * `read` → `send` is the one change here that a person has to make deliberately.
+   *
+   * A workspace connected as `read` holds a token that physically cannot post. That is the guarantee D1 makes,
+   * and re-authorising as `send` replaces the token with one that can — so it is not a setting an agent may flip
+   * on somebody's behalf, however reasonable the reason sounds in a transcript.
+   *
+   * Two things stand in the way, and they answer different threats. The agent marker refuses outright when the
+   * caller is an agent, because an agent that can run commands can also type a challenge. The typed challenge
+   * then makes it deliberate for the person who is left, which is what it is for: a speed bump against a hasty
+   * change, never a security boundary.
+   *
+   * The consent travels on the flow, because the sign-in this gates may be finished by a different process.
+   */
+  async function confirmWidening(
+    context: SlackContext,
+    options: GlobalOptions,
+    alias: string,
+  ): Promise<LooseningConsent> {
+    const marker = agentMarker(env);
+    if (marker) {
+      throw new CommsError('LOOSENING_REFUSED', `widening "${alias}" from read to send is not an agent's to do`, {
+        hint: `Ask the user to run \`agent-slack workspace reauth ${alias} --mode send\` in their own terminal.`,
+        details: { marker },
+      });
+    }
+    if (!canPrompt(env, streams, { json: globals().json, noInput: false })) {
+      throw new CommsError('LOOSENING_REFUSED', 'widening a workspace from read to send needs a terminal', {
+        hint: `Run \`agent-slack workspace reauth ${alias} --mode send\` directly in a terminal.`,
+      });
+    }
+    await askChallenge(streams, {
+      prompt: `This replaces "${alias}"'s token with one that can post to Slack (read → send).`,
+      color: options.color,
+    });
+    return { kind: 'loosening-consent', paths: [`accounts.${alias}.mode`] };
+  }
 
   async function signIn(
     context: SlackContext,

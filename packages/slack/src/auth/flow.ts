@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { CommsError } from '@agentcomms/core';
+import { CommsError, type LooseningConsent } from '@agentcomms/core';
 import type { InstallMode } from '../manifest.ts';
 
 /**
@@ -39,6 +39,17 @@ export interface SlackFlow {
       }
     | undefined;
   readonly clientId: string;
+  /**
+   * Proof that a person at a terminal typed a challenge to widen this workspace's access.
+   *
+   * On the flow rather than gathered at `--finish`, because `--finish` may be headless and may be a different
+   * process entirely — which is the whole reason the two-step form exists. The person consented when the sign-in
+   * was started, which is also the moment they were told what they were about to change.
+   *
+   * It sits beside the PKCE verifier under the same 0600 file and the same ten-minute life. Anything that can
+   * read this file can already finish the sign-in.
+   */
+  readonly consent?: LooseningConsent | undefined;
   readonly verifier: string;
   readonly state: string;
   readonly redirectUrl: string;
@@ -98,9 +109,10 @@ export interface FlowStore {
   /**
    * Takes the flow, so nothing else can.
    *
-   * Removing the file *is* the claim: two `--finish` calls racing would otherwise both exchange the same code,
-   * and Slack would refuse the second while the first had already written a credential — leaving a failure
-   * reported for a sign-in that actually worked.
+   * The claim is a separate file created with `O_EXCL`, which is the only part of this that is actually atomic.
+   * Reading the record and then deleting it is not: two processes can both finish the read before either delete
+   * runs, and both deletes then succeed — so both would exchange the same code. Slack refuses the second, and
+   * the first has already written a credential, which reports a failure for a sign-in that worked.
    */
   claim(flowId: string): Promise<SlackFlow>;
   discard(flowId: string): Promise<void>;
@@ -116,12 +128,21 @@ export function openFlowStore(stateDir: string, now: () => Date): FlowStore {
     },
 
     async peek(flowId) {
+      let flow: SlackFlow;
       try {
-        const flow = JSON.parse(await readFile(flowPath(stateDir, flowId), 'utf8')) as SlackFlow;
-        return Date.parse(flow.expiresAt) <= now().getTime() ? null : flow;
+        flow = JSON.parse(await readFile(flowPath(stateDir, flowId), 'utf8')) as SlackFlow;
       } catch {
         return null;
       }
+      if (Date.parse(flow.expiresAt) > now().getTime()) return flow;
+      /*
+       * Swept, not merely reported as absent.
+       *
+       * A flow file holds a PKCE verifier. Saying "there is nothing there" while leaving it on disk means the
+       * only thing that ever removes one is somebody calling `pending()`, and nothing in the product does.
+       */
+      await this.discard(flowId);
+      return null;
     },
 
     async get(flowId) {
@@ -167,13 +188,30 @@ export function openFlowStore(stateDir: string, now: () => Date): FlowStore {
           hint: 'It may have been completed already, or expired. Start again with `agent-slack workspace add`.',
         });
       }
-      // Removed before the caller does anything with it, so a second `--finish` finds nothing rather than
-      // exchanging the same code twice.
-      await rm(path, { force: true });
-      await rm(flowPath(stateDir, flowId, '.outcome.json'), { force: true });
       if (Date.parse(flow.expiresAt) <= now().getTime()) {
+        await this.discard(flowId);
         throw new CommsError('NOT_FOUND', 'that sign-in expired before it was finished', {
           hint: 'Sign-ins last ten minutes. Start again with `agent-slack workspace add`.',
+        });
+      }
+      /*
+       * `wx` is `O_EXCL`: the kernel creates this file for exactly one caller and fails for everybody else.
+       *
+       * That is the whole claim, and it has to be a create rather than a delete. An earlier version read the
+       * record and then removed it, calling that atomic — it is not. Two processes can both finish the read
+       * before either removal runs, and both removals then succeed, so both go on to exchange the same code.
+       * Slack refuses the second while the first has already stored a credential: a failure reported for a
+       * sign-in that worked, which is the one outcome this must never produce.
+       */
+      await mkdir(flowDir(stateDir), { recursive: true, mode: 0o700 });
+      try {
+        const handle = await open(flowPath(stateDir, flowId, '.claim'), 'wx', 0o600);
+        await handle.writeFile(JSON.stringify({ pid: process.pid, at: now().toISOString() }));
+        await handle.close();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        throw new CommsError('NOT_FOUND', 'that sign-in has already been finished', {
+          hint: 'Each sign-in completes once. Start another with `agent-slack workspace add`.',
         });
       }
       return flow;
@@ -182,7 +220,7 @@ export function openFlowStore(stateDir: string, now: () => Date): FlowStore {
     async discard(flowId) {
       // Every trace, not just the record: an outcome file left behind would be collected by the next flow to be
       // handed the same id, and the log is the listener's and outlives it.
-      for (const suffix of ['.json', '.outcome.json', '.log']) {
+      for (const suffix of ['.json', '.outcome.json', '.claim', '.log']) {
         await rm(flowPath(stateDir, flowId, suffix), { force: true });
       }
     },

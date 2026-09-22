@@ -5,6 +5,7 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { classifyChange, parseConfig } from '@agentcomms/core';
 import { SlackContext } from '../src/context.ts';
 import { releaseChannel, resolveListenerEntry, startSignIn } from '../src/operations/signin.ts';
 import { newHarness, TEST_CLIENT_ID, tempDir } from './support/harness.ts';
@@ -143,3 +144,33 @@ test('dropping the IPC channel survives the child having closed it first', () =>
   });
   assert.equal(called, 1, 'an open channel was left open');
 });
+
+test('a widening sign-in with no consent is refused by the config layer, not only by the CLI', () => {
+  /*
+   * Belt and braces, and they answer different failures.
+   *
+   * The CLI gate stops an agent asking for `--mode send` on a `read` workspace. This is what stops a *second*
+   * caller — another surface, a later refactor, a path somebody forgets to route through the gate — from writing
+   * the same change. `classifyChange` sees it whatever asked for it, and `ConfigStore.update` refuses without a
+   * matching consent.
+   */
+  const read = parseConfig(
+    JSON.stringify({ version: 1, accounts: { acme: { ...slackAccount('acc_AAAAAAAAAAAAAAAA'), mode: 'read' } } }),
+  );
+  const send = parseConfig(
+    JSON.stringify({ version: 1, accounts: { acme: { ...slackAccount('acc_BBBBBBBBBBBBBBBB'), mode: 'send' } } }),
+  );
+  assert.deepEqual(classifyChange(read, send).loosened, ['accounts.acme.mode']);
+});
+
+function slackAccount(id: string): Record<string, unknown> {
+  return {
+    id,
+    platform: 'slack',
+    workspace: 'T0001',
+    userId: 'U0001',
+    tier: 'read',
+    secretRef: `slack/token/${id}`,
+    createdAt: '2026-09-22T12:00:00.000Z',
+  };
+}

@@ -1,5 +1,6 @@
 import {
   agentMarker,
+  askChallenge,
   CommsError,
   canPrompt,
   colorEnabled,
@@ -42,7 +43,7 @@ import {
 import { finishSignIn, startSignIn } from '../operations/signin.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
-import { askChallenge, askFor } from './prompt.ts';
+import { askFor } from './prompt.ts';
 import {
   CLIENT_KIND_LABEL,
   renderApprovals,

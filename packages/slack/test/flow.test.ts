@@ -244,13 +244,41 @@ test('the outcome file is owner-only too, because it holds an authorisation code
   assert.equal(mode, 0o600);
 });
 
-test('claiming takes the outcome with the flow, so a reused id cannot collect a stale code', async () => {
+test('two processes racing to claim one flow: exactly one wins', async () => {
+  /*
+   * The finding this replaces a weaker test for.
+   *
+   * Reading the record and then deleting it is not atomic: both callers can finish the read before either
+   * delete runs, and both deletes then succeed — so both exchange the same code. Slack refuses the second while
+   * the first has already stored a credential, reporting a failure for a sign-in that worked.
+   *
+   * `O_EXCL` is what makes it one. The kernel creates the claim file for exactly one caller.
+   */
   const { flows } = await store();
   const original = flow();
   await flows.save(original);
-  await flows.recordOutcome(original.flowId, { code: 'fake-authorisation-code' });
+
+  const results = await Promise.allSettled(Array.from({ length: 8 }, () => flows.claim(original.flowId)));
+  const won = results.filter((r) => r.status === 'fulfilled');
+  assert.equal(won.length, 1, `${won.length} callers claimed the same sign-in`);
+  for (const lost of results.filter((r) => r.status === 'rejected')) {
+    assert.equal((lost.reason as CommsError).code, 'NOT_FOUND');
+    assert.match((lost.reason as CommsError).message, /already been finished/);
+  }
+});
+
+test('a claim survives across processes, because it is a file and not a variable', async () => {
+  const { dir, flows } = await store();
+  const original = flow();
+  await flows.save(original);
   await flows.claim(original.flowId);
-  assert.equal(await flows.readOutcome(original.flowId), null);
+
+  // A different store object over the same directory — the stand-in for a second `--finish`.
+  const later = openFlowStore(dir, () => NOW);
+  await assert.rejects(later.claim(original.flowId), (error: CommsError) => {
+    assert.match(error.message, /already been finished/);
+    return true;
+  });
 });
 
 test('discard removes every trace, not only the record', async () => {

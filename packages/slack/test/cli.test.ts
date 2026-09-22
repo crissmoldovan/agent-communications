@@ -37,7 +37,7 @@ interface Envelope<T> {
 async function cli(
   harness: Harness,
   argv: string[],
-  options: { onStderr?: (soFar: string) => void; tty?: boolean } = {},
+  options: { onStderr?: (soFar: string) => void; tty?: boolean; env?: NodeJS.ProcessEnv } = {},
 ): Promise<Captured> {
   let stdout = '';
   let stderr = '';
@@ -52,7 +52,7 @@ async function cli(
   });
   const code = await run(argv, {
     core: harness.core,
-    env: harness.env,
+    env: { ...harness.env, ...options.env },
     exchange: (params) => harness.exchange(params),
     streams: {
       stdout: Object.assign(out, { isTTY: options.tty ?? false }),
@@ -375,13 +375,17 @@ test('a successful reauth replaces the credential and removes the old one', asyn
   assert.equal(parseBundle(await secrets.get(after?.secretRef as string))?.accessToken, 'fake-user-token-1');
 });
 
-test('reauth through a different Slack app is refused', async () => {
+test('reauth that comes back from a different Slack app is refused', async () => {
+  /*
+   * The client id cannot differ here — `reauth` re-uses the workspace's own, which is the point of recording it
+   * — so what has to be caught is the app Slack says answered. They can disagree: an app can be deleted and
+   * remade under the same client id, and the token that comes back then belongs to a different app with a
+   * different install and different permissions.
+   */
   const harness = await newHarness();
-  await harness.addWorkspace({ alias: 'acme', oauthClientId: '9999.9999' });
-  harness.reply = () => slackOk();
-  const port = await freePort();
-  // The CLI re-uses the workspace's own client id, so the refusal has to come from the app id Slack reports.
+  await harness.addWorkspace({ alias: 'acme', appId: 'A0001' });
   harness.reply = () => slackOk({ app_id: 'A9999' });
+  const port = await freePort();
   const result = await cli(
     harness,
     ['--json', 'workspace', 'reauth', 'acme', '--port', String(port), '--no-browser'],
@@ -564,4 +568,60 @@ test('reauth --mode read narrows a send workspace, because that was asked for', 
   const after = (await harness.core.config.load()).accounts.acme;
   assert.equal(after?.mode, 'read');
   assert.deepEqual([...(after?.grantedScopes ?? [])], scopesForMode('read'));
+});
+
+test('reauth read → send is refused to an agent, by name', async () => {
+  /*
+   * The change D1 exists to prevent. A workspace connected as `read` holds a token that physically cannot post;
+   * renewing it as `send` replaces that token with one that can, and nothing downstream undoes it.
+   *
+   * An agent that can run commands can also type a challenge, so the challenge is not what stops this — being
+   * refused outright is.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'read' });
+  const port = await freePort();
+  const result = await cli(
+    harness,
+    ['--json', 'workspace', 'reauth', 'acme', '--mode', 'send', '--port', String(port), '--no-browser'],
+    // The browser answers with a refusal only if the gate lets the flow start at all. It must not: this is here
+    // so that removing the gate fails this test in seconds rather than hanging on a sign-in nobody completes.
+    { ...browserOn({ error: 'access_denied' }), env: { CLAUDECODE: '1' } },
+  );
+  assert.equal(result.code, EXIT_CODES.APPROVAL);
+  const error = result.json<Envelope<never>>().error;
+  assert.equal(error?.code, 'LOOSENING_REFUSED');
+  assert.match(error?.hint ?? '', /in their own terminal/);
+  // Refused before anything was asked of Slack, and before the workspace changed.
+  assert.equal(harness.calls.length, 0);
+  assert.equal((await harness.core.config.load()).accounts.acme?.mode, 'read');
+});
+
+test('reauth read → send is refused with no terminal to type a challenge at', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'read' });
+  const port = await freePort();
+  const result = await cli(
+    harness,
+    ['--json', 'workspace', 'reauth', 'acme', '--mode', 'send', '--port', String(port), '--no-browser'],
+    browserOn({ error: 'access_denied' }),
+  );
+  assert.equal(result.code, EXIT_CODES.APPROVAL);
+  assert.match(result.json<Envelope<never>>().error?.message ?? '', /needs a terminal/);
+  assert.equal((await harness.core.config.load()).accounts.acme?.mode, 'read');
+});
+
+test('reauth send → send renews without asking anybody anything', async () => {
+  // The gate has to catch the widening and nothing else, or it becomes something people work around.
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'send' });
+  harness.reply = () => slackOk({ scopes: scopesForMode('send') });
+  const port = await freePort();
+  const result = await cli(
+    harness,
+    ['workspace', 'reauth', 'acme', '--mode', 'send', '--port', String(port), '--no-browser'],
+    { ...browserOn(), env: { CLAUDECODE: '1' } },
+  );
+  assert.equal(result.code, EXIT_CODES.OK, result.stderr);
+  assert.equal((await harness.core.config.load()).accounts.acme?.mode, 'send');
 });

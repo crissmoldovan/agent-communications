@@ -139,7 +139,45 @@ export function validateExchange(options: {
    * "The workspace's own app" binds the client; it does not bind the person. A browser signed into two accounts
    * will authorise whichever one is active, and an account that silently starts acting as somebody else is the
    * worst possible outcome of a command whose name means "the same, again".
+   *
+   * Checked against **both** the flow and the account it names, and they are different questions. `flow.expect`
+   * is who this sign-in set out to renew, recorded before the browser opened and unchangeable since. The account
+   * is who holds that alias now — and up to ten minutes and a process boundary sit between the two, so the alias
+   * can have been re-pointed at somebody else in the gap. Checking only the second would bind the grant to
+   * whatever the alias means at the moment it lands.
    */
+  if (flow.expect) {
+    const expected = flow.expect;
+    if (token.workspaceId !== expected.workspaceId) {
+      throw new CommsError('CONFIG', `that sign-in is for a different workspace than "${flow.alias}"`, {
+        hint: 'Re-authorising must use the same workspace. To connect another, use `workspace add`.',
+      });
+    }
+    if (token.userId !== expected.userId) {
+      throw new CommsError('CONFIG', `that sign-in is a different Slack account than "${flow.alias}" uses`, {
+        hint: 'Sign in as the same person, or connect the other account separately with `workspace add`.',
+      });
+    }
+    if (expected.oauthClientId && flow.clientId !== expected.oauthClientId) {
+      // The Gmail bug, in its Slack form: a reauth through a different app changes what the account can do.
+      throw new CommsError('CONFIG', `"${flow.alias}" was connected through a different Slack app`, {
+        hint: 'Re-authorise through the same app, or remove and add the workspace again.',
+      });
+    }
+    /*
+     * A recorded app id must be matched, not merely not-contradicted.
+     *
+     * This compared the two only when both were present, so a response that simply omitted `app_id` dropped the
+     * binding and passed — and a silent way to skip a check is worse than not having it, because the check is
+     * still written down and still believed.
+     */
+    if (expected.appId && token.appId !== expected.appId) {
+      throw new CommsError('CONFIG', `that sign-in is from a different Slack app than "${flow.alias}" uses`, {
+        hint: 'Re-authorise through the same app, or remove and add the workspace again.',
+      });
+    }
+  }
+
   if (existing) {
     const account = existing.account;
     if (token.workspaceId !== account.workspace) {
@@ -153,12 +191,11 @@ export function validateExchange(options: {
       });
     }
     if (account.oauthClientId && flow.clientId !== account.oauthClientId) {
-      // The Gmail bug, in its Slack form: a reauth through a different app changes what the account can do.
       throw new CommsError('CONFIG', `"${existing.alias}" was connected through a different Slack app`, {
         hint: 'Re-authorise through the same app, or remove and add the workspace again.',
       });
     }
-    if (account.appId && token.appId && token.appId !== account.appId) {
+    if (account.appId && token.appId !== account.appId) {
       throw new CommsError('CONFIG', `that sign-in is from a different Slack app than "${existing.alias}" uses`, {
         hint: 'Re-authorise through the same app, or remove and add the workspace again.',
       });

@@ -511,6 +511,25 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
     const was = previous ? (previous.sendPolicy ?? before.defaults.sendPolicy) : before.defaults.sendPolicy;
     const now = account.sendPolicy ?? after.defaults.sendPolicy;
     if (POLICY_RANK[now] < POLICY_RANK[was]) loosened.push(`accounts.${alias}.sendPolicy`);
+
+    /*
+     * `mode` is a claim about what the stored credential can do at all, and widening it is a different kind of
+     * change from the ones above.
+     *
+     * A workspace connected as `read` holds a token that physically cannot post — that is the guarantee, not a
+     * policy sitting in front of a token that could. Re-authorising it as `send` replaces the token with one that
+     * can, and nothing downstream can undo that: the send gate governs whether this package posts, while the mode
+     * governs whether posting is possible at all.
+     *
+     * **Matched by alias, not by id.** Re-authorising mints a new account id precisely so the new credential can
+     * be staged beside the old one, so an id lookup finds nothing and would read every renewal as a brand-new
+     * account — which is exactly the case this must not miss. A genuinely new account is not a loosening: nobody
+     * decided anything about that name before, and choosing `send` when connecting is the decision itself.
+     */
+    const held = before.accounts[alias];
+    if (held && (held.mode ?? held.tier) === 'read' && (account.mode ?? account.tier) === 'send') {
+      loosened.push(`accounts.${alias}.mode`);
+    }
   }
 
   const b = before.defaults;
