@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { SlackContext } from '../src/context.ts';
-import { resolveListenerEntry, startSignIn } from '../src/operations/signin.ts';
+import { releaseChannel, resolveListenerEntry, startSignIn } from '../src/operations/signin.ts';
 import { newHarness, TEST_CLIENT_ID, tempDir } from './support/harness.ts';
 
 /*
@@ -115,4 +115,31 @@ test('a detached sign-in with no listener injected still starts: the wiring, not
   const flow = await context.flows.peek(started.flowId);
   assert.ok(flow?.listenerPid, 'the detached listener never reported itself');
   strays.push(flow.listenerPid as number);
+});
+
+test('dropping the IPC channel survives the child having closed it first', () => {
+  /*
+   * The listener disconnects itself the instant after it reports ready, so the parent races it and loses
+   * whenever it is not already on the next tick — measured, every time once it pauses at all in between.
+   *
+   * Unguarded, the resulting `ERR_IPC_DISCONNECTED` escapes `startSignIn` *after* the listener is running and
+   * the flow is on disk, and past the block that would discard it: the caller is told the sign-in failed, the
+   * port stays held for ten minutes, and the flow is still finishable.
+   */
+  const closed = {
+    disconnect() {
+      const error = new Error('channel closed') as NodeJS.ErrnoException;
+      error.code = 'ERR_IPC_DISCONNECTED';
+      throw error;
+    },
+  };
+  assert.doesNotThrow(() => releaseChannel(closed));
+
+  let called = 0;
+  releaseChannel({
+    disconnect() {
+      called += 1;
+    },
+  });
+  assert.equal(called, 1, 'an open channel was left open');
 });

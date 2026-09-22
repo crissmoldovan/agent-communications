@@ -253,9 +253,30 @@ async function startDetached(
     });
   }
 
-  child.disconnect();
+  releaseChannel(child);
   child.unref();
   return undefined;
+}
+
+/**
+ * Drops the IPC channel to the listener, whoever closed it first.
+ *
+ * The child disconnects itself the instant after it reports ready, so the parent races it and loses whenever it
+ * is not already on the next tick. `disconnect()` on an already-disconnected channel throws
+ * `ERR_IPC_DISCONNECTED` — measured, every time once the parent pauses at all in between.
+ *
+ * Unguarded, that throw escapes `startSignIn` **after** the listener is running and the flow is on disk, and past
+ * the block that would have discarded it. The caller is told the sign-in failed, the listener holds the port for
+ * ten minutes, and the flow is still finishable: a failure reported for something that worked, which is the worst
+ * shape a failure can take. A channel that is already closed is the outcome this wants, so there is nothing to
+ * handle.
+ */
+export function releaseChannel(child: { disconnect(): void }): void {
+  try {
+    child.disconnect();
+  } catch {
+    // already disconnected by the child, which is the normal case
+  }
 }
 
 function listenerEnv(context: SlackContext): NodeJS.ProcessEnv {
