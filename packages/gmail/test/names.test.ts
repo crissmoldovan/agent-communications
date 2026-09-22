@@ -1371,30 +1371,31 @@ test('client add --replace refuses when a mailbox attached to the client while i
 test('writing rules written for a mailbox keep applying after it is renamed', async () => {
   const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
   const context = new GmailContext({ core: harness.core, env: harness.env });
-  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt' });
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1' });
   const compose = join(harness.configDir, 'compose');
   await mkdir(compose, { recursive: true });
   await writeFile(join(compose, 'inbox-work.md'), '- Sign off as the team, never as yourself.');
   await migrate(harness, ['work=acme/gmail']);
 
-  const config = await harness.core.config.load();
-  const underFormer = await readComposeProfile(compose, {
-    platform: 'gmail',
-    inbox: 'acme/gmail',
-    formerInboxes: formerNamesOf(config, 'inbox', 'acme/gmail'),
-  });
-  assert.match(underFormer.text, /Sign off as the team/, 'the rules written under the old name still apply');
+  // Through the draft that uses it, not only the helper: the wiring is what a person would notice missing.
+  const draft = async () =>
+    (
+      await createDraft(context, 'acme/gmail', {
+        to: ['sam@partner.test'],
+        subject: 'Hi',
+        text: 'x',
+        includeProfile: true,
+      })
+    ).profile ?? '';
+  assert.match(await draft(), /Sign off as the team/, 'the rules written under the old name still apply');
 
   // A file under the new name wins, and its name is a file — not a directory nobody made.
   await writeFile(join(compose, inboxProfileFile('acme/gmail')), '- Say the thing.');
-  const underCurrent = await readComposeProfile(compose, {
-    platform: 'gmail',
-    inbox: 'acme/gmail',
-    formerInboxes: formerNamesOf(config, 'inbox', 'acme/gmail'),
-  });
-  assert.match(underCurrent.text, /Say the thing/);
-  assert.doesNotMatch(underCurrent.text, /Sign off as the team/);
+  const current = await draft();
+  assert.match(current, /Say the thing/);
+  assert.doesNotMatch(current, /Sign off as the team/);
   assert.equal(inboxProfileFile('acme/gmail'), 'inbox-acme__gmail.md');
+  assert.deepEqual(formerNamesOf(await harness.core.config.load(), 'inbox', 'acme/gmail'), ['work']);
 });
 
 test('client add --replace refuses a mailbox attached during its own write, and puts the old secret back', async () => {
@@ -1484,4 +1485,102 @@ test('reauth refuses when the same account was connected under another name whil
   await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
   await assert.rejects(reauth.listener?.result ?? Promise.resolve(), is('CONFIG', /was connected as "twin"/));
   assert.equal((await inboxList(context)).find((row) => row.alias === 'work')?.tier, 'read');
+});
+
+test('reauth refuses a legacy twin matched by address, whatever its case, and restores the token', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const id = await connectBySignIn(harness, context, 'work', 'read');
+  const secrets = await harness.core.secrets('file');
+  const before = await secrets.get(`gmail:refresh:${id}`);
+  // A row imported from the old server: no `sub`, and the address written in another case.
+  meddleAfterStoring(
+    secrets,
+    (ref) => ref === `gmail:refresh:${id}`,
+    () =>
+      harness.core.config.update((current) => ({
+        ...current,
+        inboxes: {
+          ...current.inboxes,
+          legacy: {
+            id: 'ibx_LLLLLLLLLLLLLLLL',
+            provider: 'gmail',
+            email: 'JO@Example.test',
+            identity: 'legacy' as const,
+            client: 'default',
+            tier: 'read',
+            contacts: false,
+            grantedScopes: [],
+            secretRef: 'gmail:refresh:ibx_LLLLLLLLLLLLLLLL',
+            internalDomains: [],
+            createdAt: '2026-09-22T00:00:00.000Z',
+          },
+        },
+      })),
+  );
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', tier: 'organize', detached: false });
+  await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
+  await assert.rejects(reauth.listener?.result ?? Promise.resolve(), is('CONFIG', /was connected as "legacy"/));
+  assert.equal(await secrets.get(`gmail:refresh:${id}`), before, 'the old token is back');
+});
+
+test('client add: a secret written for a row that was never registered is put back as it was', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const json = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    json,
+    JSON.stringify({
+      installed: { client_id: 'project-a.apps.googleusercontent.com', client_secret: 'fake-secret-a' },
+    }),
+  );
+  const secrets = await harness.core.secrets('file');
+  rejectBeforeWrite(harness);
+  await assert.rejects(
+    clientAdd(context, { path: json, name: 'desktop', store: 'file', noProbe: true }),
+    is('LOCK_TIMEOUT'),
+  );
+  // Nothing was registered, so nothing is left in the store under that name either.
+  assert.equal(await secrets.get(clientSecretRef('desktop')), null);
+});
+
+test('client add --replace: a secret write that lands and then reports failure is put back', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const first = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    first,
+    JSON.stringify({
+      installed: { client_id: 'project-a.apps.googleusercontent.com', client_secret: 'fake-secret-a' },
+    }),
+  );
+  await clientAdd(context, { path: first, name: 'desktop', store: 'file', noProbe: true });
+  const second = join(tempDir(), 'other_secret.json');
+  await writeFile(
+    second,
+    JSON.stringify({
+      installed: { client_id: 'project-b.apps.googleusercontent.com', client_secret: 'fake-secret-b' },
+    }),
+  );
+  const secrets = await harness.core.secrets('file');
+  // The keychain stores the value and then reports a timeout: the row is never written.
+  const store = secrets.set.bind(secrets);
+  let armed = true;
+  secrets.set = async (ref, value) => {
+    await store(ref, value);
+    if (!armed || ref !== clientSecretRef('desktop')) return;
+    armed = false;
+    throw new CommsError('SECRET_STORE_UNAVAILABLE', 'the keychain timed out');
+  };
+  await assert.rejects(
+    clientAdd(context, { path: second, name: 'desktop', replace: true, store: 'file', noProbe: true }),
+    (error: unknown) => error instanceof CommsError,
+  );
+  secrets.set = store;
+  assert.equal((await harness.core.config.load()).clients.desktop?.clientId, 'project-a.apps.googleusercontent.com');
+  assert.equal(
+    await secrets.get(clientSecretRef('desktop')),
+    'fake-secret-a',
+    'the registered client’s secret is back',
+  );
 });

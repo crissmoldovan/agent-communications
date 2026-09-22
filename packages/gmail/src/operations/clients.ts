@@ -142,16 +142,9 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
         hint: 'Run the command again to see what is there now.',
       });
     }
-    // Kept, so a write that does not land can put it back: the row would otherwise name this client while the
-    // secret under it belongs to the one being replaced.
-    const previous = options.replace ? await secrets.get(secretRef) : null;
-    await secrets.set(secretRef, parsed.clientSecret);
-    const stored = await secrets.get(secretRef);
-    if (stored !== parsed.clientSecret) {
-      throw new CommsError('SECRET_STORE_UNAVAILABLE', 'the secret did not read back the way it was written', {
-        hint: 'Try again with `--store file` to keep secrets in owner-only files instead of the system keychain.',
-      });
-    }
+    // Kept, so a write that does not land can put the reference back as it was: the row would otherwise name this
+    // client while the secret under it belongs to another — or a stray secret would be left under a name nothing uses.
+    const previous = await secrets.get(secretRef);
 
     const row: ClientConfig = {
       provider: 'gmail',
@@ -161,6 +154,17 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
       addedAt: existing?.addedAt ?? context.now().toISOString(),
     };
     try {
+      /*
+       * Inside the boundary that puts it back: a keychain write can land after it has reported a timeout, so even a
+       * failed write has to be reconciled rather than assumed not to have happened.
+       */
+      await secrets.set(secretRef, parsed.clientSecret);
+      const stored = await secrets.get(secretRef);
+      if (stored !== parsed.clientSecret) {
+        throw new CommsError('SECRET_STORE_UNAVAILABLE', 'the secret did not read back the way it was written', {
+          hint: 'Try again with `--store file` to keep secrets in owner-only files instead of the system keychain.',
+        });
+      }
       await context.core.config.update((current) => {
         // Never switch the store back: only `secrets migrate` changes it, and it moves the secrets with it.
         if (current.secrets?.store && current.secrets.store !== chosen) {
@@ -185,13 +189,15 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
         async () => (await context.config()).clients[name]?.clientId === parsed.clientId,
       );
       if (landed === 'unknown') throw keepAndReport(error, secretRef, 'Run `agent-gmail client list`.');
-      if (landed === 'absent' && previous !== null) {
+      if (landed === 'absent') {
+        // Exactly as it was: the previous secret, or nothing when there was none.
         try {
-          await secrets.set(secretRef, previous);
+          if (previous === null) await secrets.delete(secretRef);
+          else await secrets.set(secretRef, previous);
         } catch (restoreError) {
           const base = error instanceof CommsError ? error : new CommsError('UNEXPECTED', String(error));
           throw new CommsError(base.code, base.message, {
-            hint: `${base.hint ? `${base.hint} ` : ''}The previous client secret could not be put back: register that client again with \`agent-gmail client add <its JSON> --replace\`.`,
+            hint: `${base.hint ? `${base.hint} ` : ''}The secret store could not be put back as it was: register the client again with \`agent-gmail client add <its JSON> --replace\`.`,
             details: { secretNotRestored: secretRef, restoreError: (restoreError as Error).message },
             cause: error,
           });
