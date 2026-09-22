@@ -29,7 +29,7 @@ client. No agent, no MCP server, no skills.
 
 ```bash
 npm i -g @agentcomms/gmail
-agent-gmail search 'from:accounts newer_than:30d' --inbox work --json | jq '.data.rows[].subject'
+agent-gmail search 'from:accounts newer_than:30d' --inbox acme/gmail --json | jq '.data.rows[].subject'
 ```
 
 `agent-gmail mcp` starts an MCP server from that same package when you want one. `@agentcomms/gmail-mcp` is a thin

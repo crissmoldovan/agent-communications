@@ -3,6 +3,26 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**Accounts are named `organisation/platform` now, and `agentcomms names migrate` renames yours.** A mailbox is
+`cue/gmail`, a second one for the same organisation is `cue/gmail-tech`, a Slack workspace is `cue/slack`. The
+command shows the whole mapping before it touches anything — `--dry-run` shows it and stops — proposes
+`<old name>/<platform>` for each account, takes `--rename old=new` for the ones you want to name yourself, and
+lists every problem at once rather than one per run. It needs `--yes`, or a person at a terminal to answer.
+
+Afterwards the old names stop working, and anything that uses one is told what it is called now rather than that
+it does not exist. That refusal is permanent: a name that was replaced can never be given to another account,
+because the two would be impossible to tell apart later.
+
+**A new config is created in the new format.** Connecting a first mailbox now asks for a name like `acme/gmail`;
+`work` is refused, with an example. An existing config stays exactly as it is until you migrate it — no command
+changes a config's version except the migration.
+
+**Before you migrate, every program that shares the config must be on 0.2.0 or later** — the release that could
+read this format without writing it. An older one refuses the file outright, and one config is shared by
+everything on a machine.
+
 ## 0.2.0
 
 **This release can read the next config format, and never writes it.** Accounts are about to be named

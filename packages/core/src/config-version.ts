@@ -4,8 +4,10 @@ export type ConfigVersion = 1 | 2;
 /**
  * The version a brand-new config is created at.
  *
- * Still 1. Nothing may write version 2 until every reader that shares the file can read it, so this release reads
- * version 2 and never creates it. The release that writes it changes this constant, and with it the gate in
- * `release-gate.ts` that lets `ConfigStore.migrateNames` run.
+ * **2, from this release.** Version 2 names every account `organisation/platform`. The release before this one could
+ * read version 2 and deliberately could not create it, so that every program sharing a config file — an MCP server
+ * started last week, a CLI updated today — could read what the next one writes. That release is out; this is the one
+ * that writes. Moving this constant also opens the gate in `release-gate.ts` that lets `ConfigStore.migrateNames`
+ * run, because the two must never disagree.
  */
-export const NEW_CONFIG_VERSION: ConfigVersion = 1;
+export const NEW_CONFIG_VERSION: ConfigVersion = 2;

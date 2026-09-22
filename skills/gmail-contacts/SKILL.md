@@ -146,7 +146,7 @@ or to decide that an address is safe. It never sends, and it never decides.
 6. **Narrow with evidence, not with judgement.** If the user needs help choosing, fetch more facts
    rather than forming an opinion: run `gmail_contacts_search` again scoped to `--sources history`
    to see which address actually carries traffic, or `gmail_search` (CLI: `agent-gmail search
-   "from:<address>" --inbox <alias>`) to find the thread that proves who they are, and quote the
+   "from:<address>" --inbox <name>`) to find the thread that proves who they are, and quote the
    message id. Evidence the user can check beats a confident sentence they cannot.
    **Complete when:** each candidate has something checkable attached to it, or you have said there
    is nothing to attach.
@@ -158,7 +158,7 @@ or to decide that an address is safe. It never sends, and it never decides.
    **Complete when:** the user has named the address, or has asked you to stop.
 
 8. **Report an empty result as a search, not as a fact about the world.** "Nobody matched 'Rivera'
-   in `work` and `personal`; the address book was unavailable in `personal`" is true. "She is not in
+   in `acme/gmail` and `personal`; the address book was unavailable in `personal`" is true. "She is not in
    your contacts" is a claim the search cannot support.
    **Complete when:** the report names what was searched, in which mailboxes, and what was not.
 

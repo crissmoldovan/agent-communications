@@ -7,6 +7,7 @@ import {
   ConfigStore,
   classifyChange,
   configV1Schema,
+  configV2Schema,
   connectedAccounts,
   defaultInternalDomains,
   emptyConfig,
@@ -132,15 +133,18 @@ test('address lists: groups expanded, names kept, addresses canonical and de-dup
 test('loosening a safety setting is refused without consent; tightening and consented loosening pass', async () => {
   const dir = tempDir();
   const store = new ConfigStore(dir);
-  await store.update((c) => ({ ...c, inboxes: { work: inbox('ibx_AAAAAAAAAAAAAAAA', { sendPolicy: 'confirm' }) } }));
+  await store.update((c) => ({
+    ...c,
+    inboxes: { 'acme/gmail': inbox('ibx_AAAAAAAAAAAAAAAA', { sendPolicy: 'confirm' }) },
+  }));
 
   await assert.rejects(
     store.update((c) => {
-      const work = c.inboxes.work as InboxConfig;
-      return { ...c, inboxes: { work: { ...work, sendPolicy: 'chat' } } };
+      const work = c.inboxes['acme/gmail'] as InboxConfig;
+      return { ...c, inboxes: { 'acme/gmail': { ...work, sendPolicy: 'chat' } } };
     }),
     (e: unknown) =>
-      e instanceof CommsError && e.code === 'LOOSENING_REFUSED' && /inboxes\.work\.sendPolicy/.test(e.message),
+      e instanceof CommsError && e.code === 'LOOSENING_REFUSED' && /inboxes\.acme\/gmail\.sendPolicy/.test(e.message),
   );
   const loosenings: [string, (c: ReturnType<typeof emptyConfig>) => ReturnType<typeof emptyConfig>][] = [
     ['defaults.riskEscalation', (c) => ({ ...c, defaults: { ...c.defaults, riskEscalation: false } })],
@@ -162,31 +166,31 @@ test('loosening a safety setting is refused without consent; tightening and cons
   }
   // Tightening never needs consent.
   await store.update((c) => {
-    const work = c.inboxes.work as InboxConfig;
-    return { ...c, inboxes: { work: { ...work, sendPolicy: 'never' } } };
+    const work = c.inboxes['acme/gmail'] as InboxConfig;
+    return { ...c, inboxes: { 'acme/gmail': { ...work, sendPolicy: 'never' } } };
   });
-  assert.equal((await store.load()).inboxes.work?.sendPolicy, 'never');
+  assert.equal((await store.load()).inboxes['acme/gmail']?.sendPolicy, 'never');
 });
 
 test('classifyChange: inheriting a looser default counts as loosening the inbox', () => {
   const before = emptyConfig();
   before.defaults.sendPolicy = 'confirm';
-  before.inboxes.work = inbox('ibx_AAAAAAAAAAAAAAAA');
+  before.inboxes['acme/gmail'] = inbox('ibx_AAAAAAAAAAAAAAAA');
   const after = structuredClone(before);
   after.defaults.sendPolicy = 'chat';
-  assert.deepEqual(classifyChange(before, after).loosened, ['inboxes.work.sendPolicy', 'defaults.sendPolicy']);
+  assert.deepEqual(classifyChange(before, after).loosened, ['inboxes.acme/gmail.sendPolicy', 'defaults.sendPolicy']);
 });
 
 test('classifyChange: an inbox added with a looser policy than the default needs consent too', async () => {
   const before = emptyConfig();
   before.defaults.sendPolicy = 'never';
   const after = structuredClone(before);
-  after.inboxes.work = inbox('ibx_AAAAAAAAAAAAAAAA', { sendPolicy: 'chat' });
-  assert.deepEqual(classifyChange(before, after).loosened, ['inboxes.work.sendPolicy']);
+  after.inboxes['acme/gmail'] = inbox('ibx_AAAAAAAAAAAAAAAA', { sendPolicy: 'chat' });
+  assert.deepEqual(classifyChange(before, after).loosened, ['inboxes.acme/gmail.sendPolicy']);
 
   // Inheriting the default, or being stricter than it, is not a loosening.
   const inherits = structuredClone(before);
-  inherits.inboxes.work = inbox('ibx_AAAAAAAAAAAAAAAA');
+  inherits.inboxes['acme/gmail'] = inbox('ibx_AAAAAAAAAAAAAAAA');
   assert.deepEqual(classifyChange(before, inherits).loosened, []);
 
   // Connecting a mailbox under the ordinary default must not demand a typed challenge.
@@ -306,17 +310,17 @@ test('classifyChange: a new inbox may trust its own domain, but not somebody els
   const before = emptyConfig();
   const own = structuredClone(before);
   const row = inbox('ibx_AAAAAAAAAAAAAAAA');
-  own.inboxes.work = { ...row, email: 'jo@company.test', internalDomains: ['company.test'] };
+  own.inboxes['acme/gmail'] = { ...row, email: 'jo@company.test', internalDomains: ['company.test'] };
   assert.deepEqual(classifyChange(before, own).loosened, []);
 
   const other = structuredClone(before);
-  other.inboxes.work = { ...row, email: 'jo@company.test', internalDomains: ['company.test', 'partner.test'] };
-  assert.deepEqual(classifyChange(before, other).loosened, ['inboxes.work.internalDomains']);
+  other.inboxes['acme/gmail'] = { ...row, email: 'jo@company.test', internalDomains: ['company.test', 'partner.test'] };
+  assert.deepEqual(classifyChange(before, other).loosened, ['inboxes.acme/gmail.internalDomains']);
 
   // Domains are case-insensitive: writing one in capitals is not a change of meaning, so it needs no consent.
   const shouted = structuredClone(before);
-  shouted.inboxes.work = { ...row, email: 'Jo@Company.TEST', internalDomains: ['Company.TEST'] };
-  assert.deepEqual(classifyChange(before, configV1Schema.parse(shouted)).loosened, []);
+  shouted.inboxes['acme/gmail'] = { ...row, email: 'Jo@Company.TEST', internalDomains: ['Company.TEST'] };
+  assert.deepEqual(classifyChange(before, configV2Schema.parse(shouted)).loosened, []);
 });
 
 test('classifyChange: loosening the default policy counts even when there are no inboxes yet', async () => {
@@ -503,7 +507,7 @@ test('config: a configuration whose only secrets are accounts still counts as ho
   const directory = tempDir();
   const store = new ConfigStore(directory);
   await store.update((config) => {
-    config.accounts.acme = accountFixture('acc_BBBBBBBBBBBBBBBB') as never;
+    config.accounts['acme/slack'] = accountFixture('acc_BBBBBBBBBBBBBBBB') as never;
     return config;
   });
 
@@ -555,32 +559,33 @@ test('ConfigStore.update itself refuses a Slack widening, not only classifyChang
 
   await store.update((c) => ({
     ...c,
-    accounts: { acme: at('acc_AAAAAAAAAAAAAAAA', { mode: 'read', sendPolicy: 'never' }) },
+    accounts: { 'acme/slack': at('acc_AAAAAAAAAAAAAAAA', { mode: 'read', sendPolicy: 'never' }) },
   }));
 
   const widened = (c: ReturnType<typeof emptyConfig>) => ({
     ...c,
-    accounts: { acme: at('acc_BBBBBBBBBBBBBBBB', { mode: 'send', tier: 'send', sendPolicy: 'never' }) },
+    accounts: { 'acme/slack': at('acc_BBBBBBBBBBBBBBBB', { mode: 'send', tier: 'send', sendPolicy: 'never' }) },
   });
   await assert.rejects(
     store.update(widened),
-    (e: unknown) => e instanceof CommsError && e.code === 'LOOSENING_REFUSED' && /accounts\.acme\.mode/.test(e.message),
+    (e: unknown) =>
+      e instanceof CommsError && e.code === 'LOOSENING_REFUSED' && /accounts\.acme\/slack\.mode/.test(e.message),
   );
 
   const relaxed = (c: ReturnType<typeof emptyConfig>) => ({
     ...c,
-    accounts: { acme: at('acc_CCCCCCCCCCCCCCCC', { mode: 'read', sendPolicy: 'chat' }) },
+    accounts: { 'acme/slack': at('acc_CCCCCCCCCCCCCCCC', { mode: 'read', sendPolicy: 'chat' }) },
   });
   await assert.rejects(
     store.update(relaxed),
     (e: unknown) =>
-      e instanceof CommsError && e.code === 'LOOSENING_REFUSED' && /accounts\.acme\.sendPolicy/.test(e.message),
+      e instanceof CommsError && e.code === 'LOOSENING_REFUSED' && /accounts\.acme\/slack\.sendPolicy/.test(e.message),
   );
 
   // Nothing was written by either refusal, and a consented widening goes through.
-  assert.equal((await store.load()).accounts.acme?.id, 'acc_AAAAAAAAAAAAAAAA');
-  await store.update(widened, { consent: { kind: 'loosening-consent', paths: ['accounts.acme.mode'] } });
-  assert.equal((await store.load()).accounts.acme?.mode, 'send');
+  assert.equal((await store.load()).accounts['acme/slack']?.id, 'acc_AAAAAAAAAAAAAAAA');
+  await store.update(widened, { consent: { kind: 'loosening-consent', paths: ['accounts.acme/slack.mode'] } });
+  assert.equal((await store.load()).accounts['acme/slack']?.mode, 'send');
 });
 
 test('classifyChange: a different workspace taking the name is not a loosening of the one that left', () => {

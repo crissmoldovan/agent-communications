@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
@@ -1842,4 +1842,21 @@ test('re-registering an identical client still refuses when the secret store mov
     clientAdd(context, { path: json, name: 'desktop', replace: true, store: 'file', noProbe: true }),
     is('TRANSIENT', /secret store was changed/),
   );
+});
+
+test('a mailbox connected on a config created today needs an organisation/platform name', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  // A config created by this release, rather than the version-1 fixture the harness pins.
+  await rm(harness.core.config.path, { force: true });
+  const context = await withClient(harness);
+  assert.equal((await harness.core.config.load()).version, 2, 'a fresh config names accounts organisation/platform');
+
+  await assert.rejects(
+    startSignIn(context, { mode: 'add', alias: 'work', detached: false }),
+    is('USAGE', /acme\/gmail/),
+  );
+  const started = await startSignIn(context, { mode: 'add', alias: 'acme/gmail', detached: false });
+  await fetch(harness.google.consent(started.authUrl, { sub: 'sub-1' }));
+  assert.equal((await started.listener?.result)?.alias, 'acme/gmail');
+  assert.equal((await harness.core.config.load()).version, 2);
 });

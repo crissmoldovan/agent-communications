@@ -113,7 +113,7 @@ writes a file to the user's disk every time.
    **Complete when:** you can name which of the rules above applies, or the user asked outright.
 
 If the `gmail_*` tools are not available, everything here works through the CLI: `npx -y
-@agentcomms/gmail@<version> export <id> --inbox <alias> --json`.
+@agentcomms/gmail@<version> export <id> --inbox <name> --json`.
 
 ## Procedure
 
@@ -136,7 +136,7 @@ If the `gmail_*` tools are not available, everything here works through the CLI:
    **Complete when:** the choice was made deliberately, not left to whatever was typed first.
 
 4. **Write the file.** Call `gmail_export` with `inbox`, `id`, and as needed `thread`, `format`,
-   `out` and `includeQuoted` (CLI: `agent-gmail export <id> --inbox <alias> [--thread] [--format
+   `out` and `includeQuoted` (CLI: `agent-gmail export <id> --inbox <name> [--thread] [--format
    md|json|eml] [--out <subpath>] [--quoted]`). The file is created under the downloads root, never
    overwriting: a name already taken becomes `name-2`, `name-3`.
    **Complete when:** the call returned `path`, `format`, `bytes`, `kind` and `messageCount`, or an
@@ -221,8 +221,8 @@ Good — the decision made before reading, the path quoted, nothing pasted:
 The timeline puts that thread at 38 messages, so I have written it to a file rather than reading
 it in here.
 
-    agent-gmail timeline 18f2c9a0b1d4e5f6 --inbox work
-    agent-gmail export 18f2c9a0b1d4e5f6 --inbox work --thread --format md
+    agent-gmail timeline 18f2c9a0b1d4e5f6 --inbox acme/gmail
+    agent-gmail export 18f2c9a0b1d4e5f6 --inbox acme/gmail --thread --format md
 
 Wrote 38 messages to
 ~/Downloads/agent-communications/work/exports/phase-2-rollout-plan.md

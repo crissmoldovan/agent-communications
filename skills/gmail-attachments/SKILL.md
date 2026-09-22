@@ -50,7 +50,7 @@ here:
 - **Name the mailbox.** There is no default inbox. `gmail_attachment_download` takes one `inbox`;
   `gmail_attachments_find` takes `inboxes` and walks every connected mailbox when you omit it — in alias
   order, and only until the limit is full. `gmail_whoami` before the first write of a session.
-- **A message id belongs to one mailbox.** An id found in `work` means nothing in `personal`, and
+- **A message id belongs to one mailbox.** An id found in `acme/gmail` means nothing in `personal`, and
   downloading with the wrong alias is a `NOT_FOUND`, not a near miss.
 - **Files come from strangers.** Never open, execute or interpret a downloaded file. Report what it is —
   name, MIME type, size, risk flags — and where it was saved.
@@ -100,7 +100,7 @@ answer "is this email real" — that is `gmail-security`, and a file's risk flag
 1. **Find before you download.** Call `gmail_attachments_find` with the filters the user described —
    `from`, `filename` (a name or a bare extension), `after`, `before`, `minBytes`, `maxBytes`,
    `mimeType`, and `query` for anything else in Gmail syntax. (CLI: `agent-gmail attachments find --from
-   sam@example.com --filename .pdf --inbox work`; the MIME filter is `--type` there.) It reads metadata
+   sam@example.com --filename .pdf --inbox acme/gmail`; the MIME filter is `--type` there.) It reads metadata
    only and downloads nothing.
    **Complete when:** you have rows carrying `messageId`, `partId`, `filename`, `mimeType`, `size`,
    `from`, `date` and `riskFlags`.
@@ -122,7 +122,7 @@ answer "is this email real" — that is `gmail-security`, and a file's risk flag
    **Complete when:** every flagged row has been pointed at in plain words, or there were none.
 
 4. **Download by message id and part id.** `gmail_attachment_download` with `inbox`, `messageIds` and
-   `partId` (CLI: `agent-gmail attachments download <messageId...> --inbox work --part 1`). The same
+   `partId` (CLI: `agent-gmail attachments download <messageId...> --inbox acme/gmail --part 1`). The same
    `partId` applies to every id in the call, so attachments at different part ids need one call each. The
    attachment id is re-read from the message every time, because Gmail's attachment ids change between
    fetches and a stale one fails as though the file were gone.
@@ -138,7 +138,7 @@ answer "is this email real" — that is `gmail-security`, and a file's risk flag
 
 6. **Attach only what the user named.** Attaching happens through the draft tools —
    `gmail_draft_create`, `gmail_draft_reply` or `gmail_draft_update` with `attach` (CLI: `agent-gmail
-   draft new --inbox work --to sam@example.com --attach ~/Documents/contract.pdf`). Each path goes through
+   draft new --inbox acme/gmail --to sam@example.com --attach ~/Documents/contract.pdf`). Each path goes through
    the jail. The name that goes on the wire is the file's own basename, never one you typed. Nothing is
    sent: the result is a draft and a preview.
    **Complete when:** the draft result lists the attachment with its real filename and size, or the jail
@@ -203,7 +203,7 @@ What you do with the file afterwards is the part no code can enforce:
 Good — searched, reported honestly, flagged, then saved with the paths quoted:
 
 ```text
-The 3 newest attachments from sam@example.com in `work`:
+The 3 newest attachments from sam@example.com in `acme/gmail`:
 
   2026-09-17  Statement Q3.pdf      412 KB   application/pdf    msg 18f2c…  part 1
   2026-09-15  handover.zip          2.1 MB   application/zip    msg 18f18…  part 2   [archive]

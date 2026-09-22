@@ -65,7 +65,7 @@ bind here:
 - **Only `gmail-send` sends.** A nudge goes to `gmail-compose` for a draft, and from there to
   `gmail-send` for a preview and an explicit yes. This skill never calls `gmail_draft_send`.
 - **Cite ids.** Every row you report carries its thread id and its mailbox. "Sam has not replied"
-  cannot be checked; "`18f2c…` in `work`, last message 6 days ago" can.
+  cannot be checked; "`18f2c…` in `acme/gmail`, last message 6 days ago" can.
 - **Say how much you read.** The row cap is 20 by default and 50 at most, shared across every
   mailbox in the run. "The 20 oldest of what the first pass returned" is honest; "here is
   everything waiting" is not.
@@ -105,7 +105,7 @@ does `gmail-compose` get involved.
 ## Procedure
 
 1. **Confirm the mailbox before the first read of a session.** `gmail_whoami` (CLI:
-   `agent-gmail whoami --inbox <alias>`) catches an alias that was reconnected to another account
+   `agent-gmail whoami --inbox <name>`) catches an alias that was reconnected to another account
    since you last looked, which would otherwise produce a plausible list about the wrong life.
    **Complete when:** the alias you are about to use resolves to the address you expect.
 
@@ -139,7 +139,7 @@ does `gmail-compose` get involved.
 
 5. **Check a row before you call it waiting.** For anything you are about to put in front of the
    user as needing action, open the thread: `gmail_thread_get` (CLI: `agent-gmail thread <threadId>
-   --inbox <alias>`), or `gmail_thread_timeline` when the question is who has been waiting longest
+   --inbox <name>`), or `gmail_thread_timeline` when the question is who has been waiting longest
    and for how long in working hours. Look for the two cheap disqualifiers — a last message that
    closed the matter ("no need to reply"), and a sender that is an automated no-reply address.
    **Complete when:** every row you promote to the user has been read, or is labelled as unchecked.
@@ -198,7 +198,7 @@ This skill sends nothing and drafts nothing. When the user picks a row and wants
    repeats a question already answered further up is worse than silence.
 2. **Hand the row to `gmail-compose`**: the `inbox` alias and the `messageId` from the row are what
    it needs to reply into the existing thread — `gmail_draft_reply` (CLI: `agent-gmail draft reply
-   <messageId> --inbox <alias> --mode reply`). The draft lands in Gmail Drafts where the user can
+   <messageId> --inbox <name> --mode reply`). The draft lands in Gmail Drafts where the user can
    read and change it. If the user has a writing-style skill, it governs the wording.
 3. **`gmail-send` takes it from there**: prepare, the preview shown verbatim, an explicit yes, then
    the send. Nothing in this skill shortens that path.
@@ -213,7 +213,7 @@ written from a list is how a single wrong row becomes six awkward emails.
 Good — one direction, real numbers, the caveat, and an offer rather than a draft:
 
 ```text
-Waiting on other people in `work` — sent at least 5 days ago, looking back 45 days.
+Waiting on other people in `acme/gmail` — sent at least 5 days ago, looking back 45 days.
 Oldest first, 6 rows out of a 20-row cap — so nothing was cut for space, though each
 mailbox is only read one page deep:
 

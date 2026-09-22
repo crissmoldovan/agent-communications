@@ -2,14 +2,24 @@
 import { access, constants, stat } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { publicView } from './approvals.ts';
-import { colorEnabled, type OutputOptions, runCommand, writeError, writeResult } from './cli-runtime.ts';
+import {
+  agentMarker,
+  canPrompt,
+  colorEnabled,
+  defaultStreams,
+  type OutputOptions,
+  runCommand,
+  type Streams,
+  writeError,
+  writeResult,
+} from './cli-runtime.ts';
 import { type Config, emptyConfig, secretsStoreOf } from './config.ts';
 import { type Core, openCore } from './core.ts';
 import { CommsError } from './errors.ts';
 import { isGroupOrWorldAccessible } from './fs.ts';
 import { APPROVAL_KEY_REF } from './keys.ts';
 import { withCredentialsLock } from './lock.ts';
-import { resolveName } from './names.ts';
+import { migrateNames, type NamesMigrationRow, planNamesMigration, resolveName } from './names.ts';
 import {
   keychainNamespace,
   loadKeyringModule,
@@ -35,6 +45,7 @@ Usage:
   agentcomms approvals list [--inbox <alias>] [--state <state>]
   agentcomms approvals revoke <approvalId>
   agentcomms secrets migrate --to keychain|file
+  agentcomms names migrate [--rename <old>=<new>] [--dry-run] [--yes]
 
 Options:
   --json        print the versioned JSON envelope
@@ -343,6 +354,9 @@ function parse(argv: string[]) {
       limit: { type: 'string' },
       state: { type: 'string' },
       to: { type: 'string' },
+      rename: { type: 'string', multiple: true },
+      'dry-run': { type: 'boolean', default: false },
+      yes: { type: 'boolean', default: false },
     },
   });
 }
@@ -446,6 +460,51 @@ export async function main(
         }
         throw usage('usage: agentcomms approvals list|revoke');
       }
+      case 'names': {
+        if (sub !== 'migrate') {
+          throw usage('usage: agentcomms names migrate [--rename <old>=<new>] [--dry-run] [--yes]');
+        }
+        const plan = planNamesMigration(await core.config.load(), values.rename ?? []);
+        if (plan.status === 'already-migrated') {
+          writeResult(
+            { status: 'already-migrated' as const },
+            output,
+            () => 'Names are already organisation/platform.',
+          );
+          return;
+        }
+        if (values['dry-run']) {
+          writeResult(
+            { status: 'dry-run' as const, rows: plan.rows },
+            output,
+            (data) =>
+              `${renderMapping(data.rows)}\n\nNothing was changed. Run the same command without --dry-run to apply it.`,
+          );
+          return;
+        }
+        /*
+         * A person at a terminal confirms; anything else passes `--yes`.
+         *
+         * Not a typed challenge: a rename grants nothing and takes nothing away, and the classifier agrees — it
+         * matches accounts by their immutable ids, so renaming every key loosens nothing. What this asks for is
+         * deliberateness, because the old names stop working the moment it is done.
+         */
+        if (!values.yes) {
+          if (agentMarker(env) || !canPrompt(env, defaultStreams, { json: values.json })) {
+            throw new CommsError('USAGE', 'this would rename every account, so it needs --yes or a terminal', {
+              hint: 'See the mapping first with `agentcomms names migrate --dry-run`, then add `--yes`.',
+            });
+          }
+          await confirm(defaultStreams, `${renderMapping(plan.rows)}\n`);
+        }
+        const result = await migrateNames(core.config, plan);
+        writeResult({ status: result.status, rows: plan.rows }, output, (data) =>
+          data.status === 'already-migrated'
+            ? 'Names are already organisation/platform.'
+            : `${renderMapping(data.rows)}\n\nDone. The names on the left no longer work; anything that uses one is told what it is called now.`,
+        );
+        return;
+      }
       case 'secrets': {
         if (sub !== 'migrate' || (values.to !== 'keychain' && values.to !== 'file')) {
           throw usage('usage: agentcomms secrets migrate --to keychain|file');
@@ -479,6 +538,35 @@ export async function main(
         throw usage(`unknown command "${command}"`);
     }
   });
+}
+
+/** The mapping, one line per account, old name on the left. */
+function renderMapping(rows: readonly NamesMigrationRow[]): string {
+  const width = Math.max(...rows.map((row) => row.from.length), 0);
+  const kind = (row: NamesMigrationRow) => (row.kind === 'inbox' ? 'mailbox  ' : 'workspace');
+  return [
+    `${rows.length} account(s) will be renamed:`,
+    '',
+    ...rows.map((row) => `  ${kind(row)}  ${row.from.padEnd(width)}  →  ${row.to}`),
+  ].join('\n');
+}
+
+/** A plain yes/no, for a change that is deliberate rather than dangerous. */
+async function confirm(streams: Streams, prompt: string): Promise<void> {
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({
+    input: streams.stdin as NodeJS.ReadableStream,
+    output: streams.stderr as NodeJS.WritableStream,
+  });
+  try {
+    streams.stderr.write(`${prompt}\n`);
+    const answer = await rl.question('Rename them? [y/N] ');
+    if (!/^y(es)?$/i.test(answer.trim())) {
+      throw new CommsError('USAGE', 'nothing was renamed');
+    }
+  } finally {
+    rl.close();
+  }
 }
 
 const invokedDirectly =

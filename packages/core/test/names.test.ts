@@ -173,11 +173,15 @@ test('an invalid name is explained with an example ending in the right platform'
 
 // ── The two versions ─────────────────────────────────────────────────────────────────────────────────────────────
 
-test('a new config is still created at version 1 — nothing writes version 2 yet', async () => {
-  assert.equal(emptyConfig().version, 1);
-  const store = new ConfigStore(tempDir('comms-names-'));
-  assert.equal((await store.load()).version, 1);
-  assert.equal((await store.update((config) => config)).version, 1);
+test('a new config is created at version 2, and an existing version-1 one stays where it is', async () => {
+  assert.equal(emptyConfig().version, 2);
+  const fresh = new ConfigStore(tempDir('comms-names-'));
+  assert.equal((await fresh.load()).version, 2);
+  assert.equal((await fresh.update((config) => config)).version, 2);
+
+  // An existing file is never moved by an ordinary write: only the migration changes a version.
+  const existing = storeWith(machine());
+  assert.equal((await existing.update((config) => config)).version, 1);
 });
 
 test('version 1 keeps its rules: plain names, and the same word in both maps is tolerated', () => {

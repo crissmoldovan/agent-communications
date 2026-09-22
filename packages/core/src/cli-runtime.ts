@@ -21,7 +21,7 @@ export interface Streams {
   stdin?: NodeJS.ReadableStream & { isTTY?: boolean };
 }
 
-const defaultStreams: Streams = { stdout: process.stdout, stderr: process.stderr, stdin: process.stdin };
+export const defaultStreams: Streams = { stdout: process.stdout, stderr: process.stderr, stdin: process.stdin };
 
 export function colorEnabled(env: NodeJS.ProcessEnv, stream: { isTTY?: boolean }, flag?: boolean): boolean {
   if (flag === false) return false;

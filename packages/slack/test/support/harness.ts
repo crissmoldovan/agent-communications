@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync } from 'node:fs';
+import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type AccountConfig, type Core, newAccountId, openCore } from '@agentcomms/core';
@@ -99,6 +99,14 @@ export async function newHarness(): Promise<Harness> {
     NO_COLOR: '1',
   };
   const core = openCore({ env });
+  /*
+   * Version 1, said rather than assumed.
+   *
+   * From this release a new config is created at version 2, where every name is `organisation/platform`. The tests
+   * here that are not about names call their workspace `acme`, which version 2 does not accept, so the fixture pins
+   * version 1; `names.test.ts` migrates it where the names are the point, and covers a fresh version-2 config too.
+   */
+  writeFileSync(join(configDir, 'config.json'), `${JSON.stringify({ version: 1 }, null, 2)}\n`);
   const calls: ExchangeCall[] = [];
 
   const harness: Harness = {

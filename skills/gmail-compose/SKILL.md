@@ -122,14 +122,14 @@ is not a request to draft: offer, and stop.
    **Complete when:** you have an alias and `gmail_whoami` agrees with it.
 
 2. **Resolve the people.** For a name rather than an address, `gmail_contacts_search` (CLI:
-   `agent-gmail contacts "<query>" --inbox <alias>`) searches the address book, people the user
+   `agent-gmail contacts "<query>" --inbox <name>`) searches the address book, people the user
    has written to, and the headers of past mail; every row says where it came from and how often
    it was seen. Offer the candidates and let the user pick. Never choose between two similar
    domains on their behalf.
    **Complete when:** every recipient is an address the user chose, or one a reply will compute.
 
 3. **Know which addresses this mailbox can send as.** `gmail_sendas_list` (CLI:
-   `agent-gmail sendas --inbox <alias>`) lists them, says which is the default, and says whether
+   `agent-gmail sendas --inbox <name>`) lists them, says which is the default, and says whether
    each is verified. Note what it does **not** do: the draft is sent from the mailbox's own
    address, and there is no per-draft `from` argument. If the user wants a message to come from a
    different identity, that means drafting in the inbox connected under that identity. The
@@ -143,10 +143,10 @@ is not a request to draft: offer, and stop.
    **Complete when:** you have written a body you would be willing to show the user unedited.
 
 5. **Write the draft.** A new message: `gmail_draft_create` with `inbox`, `to`, optional `cc`,
-   `bcc`, `subject`, `text`, `attach`, `signature` (CLI: `agent-gmail draft new --inbox <alias>
+   `bcc`, `subject`, `text`, `attach`, `signature` (CLI: `agent-gmail draft new --inbox <name>
    --to <address...> --subject "<subject>" --text "<body>"`, or `--file <path>`, or the body piped
    in). An answer to something: `gmail_draft_reply` with `messageId` and `mode` of `reply`,
-   `reply_all` or `forward` (CLI: `agent-gmail draft reply <messageId> --inbox <alias> --mode
+   `reply_all` or `forward` (CLI: `agent-gmail draft reply <messageId> --inbox <name> --mode
    reply_all --text "<body>"`). Pass recipients as bare addresses: `sam@partner.test`, not
    `Sam Lee <sam@partner.test>`. Both forms reach the same person, but the outside-the-organisation
    warning is read off the string you handed over, and a display name in front of an address is
@@ -169,7 +169,7 @@ is not a request to draft: offer, and stop.
    loud.
 
 7. **Iterate on the same draft.** When the user wants it different, call `gmail_draft_update` with
-   the same `draftId` (CLI: `agent-gmail draft update <draftId> --inbox <alias> --text "<body>"`).
+   the same `draftId` (CLI: `agent-gmail draft update <draftId> --inbox <name> --text "<body>"`).
    Everything you do not restate is kept: the recipients, the subject, the body and the attachments
    alike. So changing only the subject leaves the message and its files exactly as they were, and
    passing `attach` **replaces** the attachment set rather than adding to it — which is what passing
@@ -183,7 +183,7 @@ is not a request to draft: offer, and stop.
    **Complete when:** there is exactly one draft for this message, and its preview is the one the
    user has seen.
 
-8. **Hand over, and stop.** Say which draft and which mailbox: "Draft `r_88214` in `work` is
+8. **Hand over, and stop.** Say which draft and which mailbox: "Draft `r_88214` in `acme/gmail` is
    ready. Sending is `gmail-send`'s job — say the word and I will take it there." Then stop.
    Do not call a send tool. Do not prepare a send "so it is ready". If the user says send, that is
    `gmail-send` starting its own two-step procedure, with its own preview and its own explicit

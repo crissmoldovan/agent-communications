@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync } from 'node:fs';
+import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -75,6 +75,16 @@ export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harne
     NO_COLOR: '1',
   };
   const core = openCore({ env });
+  /*
+   * The harness starts a mailbox at config version 1, and says so rather than relying on the default.
+   *
+   * A new config is created at version 2 from this release, where every name is `organisation/platform`. Most tests
+   * here are about behaviour that does not depend on the version at all — reading, drafting, the send gate — and
+   * they name their mailbox `work`, which version 2 does not accept. So the fixture pins version 1, and the tests
+   * that *are* about names migrate it with `migrateNamesForTest`, exactly as a person's config will be migrated.
+   * `names.test.ts` also covers a config created fresh at version 2.
+   */
+  writeFileSync(join(configDir, 'config.json'), `${JSON.stringify({ version: 1 }, null, 2)}\n`);
   const endpoints = resolveEndpoints(env);
 
   const addInbox: Harness['addInbox'] = async (inboxOptions) => {

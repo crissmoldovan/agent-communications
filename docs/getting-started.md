@@ -94,7 +94,7 @@ Add `--move` to delete the download afterwards.
 > commands below if you would rather not do them one at a time.
 
 ```bash
-npx -y @agentcomms/gmail inbox add work --start
+npx -y @agentcomms/gmail inbox add acme/gmail --start
 ```
 
 This prints a Google sign-in link and a `--finish` command, then returns. Open the link, choose the account, leave
@@ -142,8 +142,8 @@ npx -y @agentcomms/gmail doctor
 ## 5. Read something
 
 ```bash
-npx -y @agentcomms/gmail search 'newer_than:7d' --inbox work --limit 5
-npx -y @agentcomms/gmail thread <threadId> --inbox work
+npx -y @agentcomms/gmail search 'newer_than:7d' --inbox acme/gmail --limit 5
+npx -y @agentcomms/gmail thread <threadId> --inbox acme/gmail
 ```
 
 That is the whole loop. Everything else — drafting, organising, attachments, sending — builds on it.

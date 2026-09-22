@@ -106,7 +106,7 @@ the briefing, and `gmail-compose` starts from there if the user asks.
 ## Procedure
 
 1. **Take the timeline before you read anything.** Call `gmail_thread_timeline` with the inbox and
-   thread id (CLI: `agent-gmail timeline <threadId> --inbox <alias>`). It reads the thread with the
+   thread id (CLI: `agent-gmail timeline <threadId> --inbox <name>`). It reads the thread with the
    bodies at their smallest — one character each — so what comes back is the *shape* of the
    conversation and nothing about its content: one event per message with an index, a message id, a
    date, a direction, `to` and `cc`, `isDraft`, attachments with risk flags, `subjectChanged`,
@@ -135,7 +135,7 @@ the briefing, and `gmail-compose` starts from there if the user asks.
    missing its most recent messages. Three ways back, cheapest first: re-read the thread with a
    smaller `maxChars` (CLI: `--max-chars 500`), which spreads the same budget over many more messages
    and brings back every message's opening lines; read the last messages individually by the ids the
-   timeline gave you, with `gmail_message_get` (CLI: `agent-gmail read <messageId> --inbox <alias>`);
+   timeline gave you, with `gmail_message_get` (CLI: `agent-gmail read <messageId> --inbox <name>`);
    or write the whole thing to a file with `gmail_export` (CLI: `agent-gmail export <threadId> --inbox
    <alias> --thread`), which reads it without the budget, and work from the file.
    **Complete when:** you have read the final message in the thread, or have said plainly in the
@@ -175,7 +175,7 @@ Facts above, reading below, never interleaved:
 ```text
 ## What the thread says
 
-Subject "Phase 2 pricing", 7 messages in `work`, 12 Sep – 19 Sep, 4 participants.
+Subject "Phase 2 pricing", 7 messages in `acme/gmail`, 12 Sep – 19 Sep, 4 participants.
 
 | # | when | who | what happened |
 |---|---|---|---|

@@ -79,7 +79,7 @@ bind here:
   change.
 - **It works without the MCP server.** The same three calls are `agent-gmail inbox list --json`,
   `agent-gmail search "<query>" --inbox <alias...> --json` and `agent-gmail read <messageId>
-  --inbox <alias> --json`.
+  --inbox <name> --json`.
 
 ## When to Use
 
@@ -171,7 +171,7 @@ use it on a standing instruction: "keep my inbox tidy" is not approval for today
    has been applied.
 
 8. **Hand the approved batch over and stop.** On an explicit yes, pass the ids and the change to
-   `gmail-organize`, which calls `gmail_organise` (CLI: `agent-gmail organise --inbox <alias>
+   `gmail-organize`, which calls `gmail_organise` (CLI: `agent-gmail organise --inbox <name>
    --thread <id...> --archive --dry-run` first, then without `--dry-run`) and keeps the `undo`
    block it returns. If the user changes one line of the proposal, that is a new batch: re-show it.
    **Complete when:** either the batch has gone to `gmail-organize` intact, or nothing has been
@@ -224,7 +224,7 @@ Classifying four hundred threads by reading four hundred bodies is not a triage,
   cursor carries both and a changed query is refused with `CURSOR_MISMATCH` rather than silently
   interleaving two result sets.
 - **Export instead of pasting.** Anything the user actually wants to read in full goes to
-  `gmail_export` (CLI: `agent-gmail export <id> --inbox <alias> --thread --format md`), which
+  `gmail_export` (CLI: `agent-gmail export <id> --inbox <name> --thread --format md`), which
   returns a path. A long thread in a digest destroys the digest.
 - **Reading widens the tainted set.** Every address seen while reading is recorded, so that a later
   send can tell an address the user typed from one that came out of an email. Reading a lot of mail

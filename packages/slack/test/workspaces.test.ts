@@ -76,7 +76,8 @@ function account(over: Partial<AccountConfig> = {}): AccountConfig {
 }
 
 function configWith(accounts: Record<string, AccountConfig> = {}): Config {
-  return { ...emptyConfig(), accounts };
+  // Version 1: these are the plain-name rules, and `names.test.ts` covers the organisation/platform ones.
+  return { ...emptyConfig(1), accounts };
 }
 
 test('an exactly-right install passes', () => {
