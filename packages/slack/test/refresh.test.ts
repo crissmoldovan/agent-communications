@@ -72,6 +72,25 @@ async function deps(secrets: SecretStore, exchange: RefreshDeps['exchange']): Pr
   return { secrets, stateDir: await mkdtemp(join(tmpdir(), 'slack-refresh-')), now: () => NOW, exchange };
 }
 
+/**
+ * An exchange that must never run, counted rather than asserted.
+ *
+ * `assert.fail` inside `deps.exchange` is swallowed: the refresh catches everything the exchange throws and
+ * converts it into "the token refresh did not complete, and cannot be retried safely" — whose message matches
+ * the very assertion the test was making. So the test passed whether or not the refresh token was spent, which
+ * is the one thing it exists to prove.
+ */
+function neverExchanges(): { exchange: RefreshDeps['exchange']; calls: () => number } {
+  let calls = 0;
+  return {
+    exchange: async () => {
+      calls += 1;
+      return { accessToken: 'unreachable', accessExpiresAt: NOW.toISOString(), issuedAt: NOW.toISOString() };
+    },
+    calls: () => calls,
+  };
+}
+
 test('a token with hours left is used as it is, and nothing is written', async () => {
   const secrets = store(serialiseBundle(bundle()));
   const d = await deps(secrets, async () => assert.fail('it refreshed a token that was not due'));
@@ -131,9 +150,16 @@ test('a refresh that does not come back leaves the credential uncertain, never r
 });
 
 test('an uncertain credential is not retried once its access token is due', async () => {
+  /*
+   * The guarantee this protects: a refresh token that may already have been spent is never presented again.
+   * Slack revokes a used one after a short grace period and keeps at most two access tokens, so a retry can
+   * revoke the token another process is holding.
+   */
   const secrets = store(serialiseBundle(bundle({ state: 'refresh-uncertain', accessExpiresAt: DUE })));
-  const d = await deps(secrets, async () => assert.fail('it refreshed after an uncertain outcome'));
+  const guard = neverExchanges();
+  const d = await deps(secrets, guard.exchange);
   await assert.rejects(accessTokenFor(d, ACCOUNT, REF), /cannot be retried safely/);
+  assert.equal(guard.calls(), 0, 'a refresh token that may already be spent was presented to Slack again');
 });
 
 test('an uncertain credential still hands back an access token that has not expired', async () => {
@@ -158,11 +184,13 @@ test('a live refreshing marker makes another caller wait rather than refresh too
       bundle({ state: 'refreshing', accessExpiresAt: DUE, attempt: { id: 'a1', startedAt: NOW.toISOString() } }),
     ),
   );
-  const d = await deps(secrets, async () => assert.fail('two processes refreshed the same token'));
+  const guard = neverExchanges();
+  const d = await deps(secrets, guard.exchange);
   await assert.rejects(accessTokenFor(d, ACCOUNT, REF), (error: CommsError) => {
     assert.equal(error.code, 'TRANSIENT', 'a live refresh should be waited for, not treated as broken');
     return true;
   });
+  assert.equal(guard.calls(), 0, 'two processes refreshed the same token');
 });
 
 test('a marker left by a dead process becomes uncertain, not a second refresh', async () => {
@@ -176,8 +204,10 @@ test('a marker left by a dead process becomes uncertain, not a second refresh', 
       }),
     ),
   );
-  const d = await deps(secrets, async () => assert.fail('it retried a refresh token that may already be spent'));
+  const guard = neverExchanges();
+  const d = await deps(secrets, guard.exchange);
   await assert.rejects(accessTokenFor(d, ACCOUNT, REF), /interrupted/);
+  assert.equal(guard.calls(), 0, 'it retried a refresh token that may already be spent');
   assert.equal(parseBundle(await secrets.get(REF))?.state, 'refresh-uncertain');
 });
 
