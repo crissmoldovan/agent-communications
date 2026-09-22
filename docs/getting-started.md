@@ -89,8 +89,9 @@ Add `--move` to delete the download afterwards.
 
 ## 3. Connect a mailbox
 
-> `agent-gmail setup` does steps 2 and 3 together, and offers step 4 as well. Run it instead of the commands
-> below if you would rather not do them one at a time.
+> `agent-gmail setup` does steps 2 and 3 together, and then offers the MCP registration from
+> [Using it from an agent](#using-it-from-an-agent). It does not run step 4 for you. Run it instead of the
+> commands below if you would rather not do them one at a time.
 
 ```bash
 npx -y @agentcomms/gmail inbox add work --start
