@@ -325,7 +325,7 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
       act(async (context, options) => {
         const config = await context.config();
         const secrets = await context.secrets();
-        const bundles = new Map<string, TokenBundle | null>();
+        const bundles = new Map<string, TokenBundle | null | 'unreadable'>();
         for (const view of listWorkspaces(config)) {
           const account = config.accounts[view.alias];
           if (!account) continue;
@@ -333,11 +333,14 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
             bundles.set(view.alias, parseBundle(await secrets.get(account.secretRef)));
           } catch {
             /*
-             * An unreadable credential is a finding, not a crash. `doctor` is what somebody runs *because*
-             * something is wrong, so it has to survive the thing being wrong — and `null` is exactly what the
-             * `credential` check reports, with the command that fixes it.
+             * An unreadable credential is a finding, not a crash — `doctor` is what somebody runs *because*
+             * something is wrong, so it has to survive the thing being wrong.
+             *
+             * Reported as unreadable rather than as absent, which is a different problem with a different fix.
+             * Collapsing the two said "no stored token" for a credential that is very much stored, and sent
+             * people to `workspace add` — which then refuses it as already connected.
              */
-            bundles.set(view.alias, null);
+            bundles.set(view.alias, 'unreadable');
           }
         }
         const result = doctor({ config, now: context.now(), bundles });

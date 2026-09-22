@@ -11,10 +11,17 @@ import { listWorkspaces } from './workspaces.ts';
  * rather than an accident — see `rate-limit` below, which is the check that taught it.
  */
 
+/**
+ * `unknown` is not a shade of `ok`.
+ *
+ * Three states made every check that had not been performed print green, because green was the only thing left
+ * to print. A reader takes green as "checked, and fine" — so a diagnostic with nothing to say has to say that,
+ * and a warning would be worse: something that warns on every healthy install is something people stop reading.
+ */
 export interface Check {
   readonly id: string;
   readonly title: string;
-  readonly status: 'ok' | 'warn' | 'fail';
+  readonly status: 'ok' | 'unknown' | 'warn' | 'fail';
   readonly detail: string;
   readonly fix: string | null;
   readonly workspace: string | null;
@@ -22,15 +29,22 @@ export interface Check {
 
 export interface DoctorResult {
   readonly healthy: boolean;
-  readonly summary: { ok: number; warn: number; fail: number };
+  readonly summary: { ok: number; unknown: number; warn: number; fail: number };
   readonly checks: readonly Check[];
 }
 
 export interface DoctorInput {
   readonly config: Config;
   readonly now: Date;
-  /** The stored credential per alias, already read. `null` when there is none. */
-  readonly bundles: ReadonlyMap<string, TokenBundle | null>;
+  /**
+   * The stored credential per alias, already read.
+   *
+   * Three outcomes, not two. `null` means the secret store holds nothing under that reference; `'unreadable'`
+   * means it holds something this cannot parse. Collapsing the second into the first sent somebody to
+   * `workspace add` — connect it, it is not connected — when the truthful answer is that it *is* connected and
+   * the credential is corrupt, which `reauth` repairs and `add` refuses outright as a duplicate.
+   */
+  readonly bundles: ReadonlyMap<string, TokenBundle | null | 'unreadable'>;
   /**
    * What ordinary traffic has already observed about rate limiting. Empty until S3 does any reading.
    *
@@ -69,12 +83,15 @@ export function doctor(input: DoctorInput): DoctorResult {
   for (const workspace of workspaces) {
     const bundle = input.bundles.get(workspace.alias) ?? null;
 
-    if (!bundle) {
+    if (bundle === null || bundle === 'unreadable') {
       checks.push({
         id: 'credential',
         title: `Credential for ${workspace.alias}`,
         status: 'fail',
-        detail: 'the configuration names a workspace with no stored token',
+        detail:
+          bundle === 'unreadable'
+            ? 'the stored credential cannot be read; it is corrupt or from a newer version'
+            : 'the configuration names a workspace with no stored token',
         fix: `agent-slack workspace reauth ${workspace.alias}`,
         workspace: workspace.alias,
       });
@@ -107,12 +124,23 @@ export function doctor(input: DoctorInput): DoctorResult {
         workspace: workspace.alias,
       });
     } else {
+      /*
+       * An expired or unreadable expiry is not "valid until".
+       *
+       * This printed the stored string whatever it said, so a token that expired last week reported as valid
+       * until last week — in the one command somebody runs to find out why nothing works.
+       */
+      const expiresAt = Date.parse(bundle.accessExpiresAt);
       checks.push({
         id: 'credential-state',
         title: `Sign-in for ${workspace.alias}`,
-        status: 'ok',
-        detail: `access token valid until ${bundle.accessExpiresAt}`,
-        fix: null,
+        status: Number.isFinite(expiresAt) ? (expiresAt > input.now.getTime() ? 'ok' : 'warn') : 'fail',
+        detail: !Number.isFinite(expiresAt)
+          ? `the stored expiry is not a date: ${bundle.accessExpiresAt}`
+          : expiresAt > input.now.getTime()
+            ? `access token valid until ${bundle.accessExpiresAt}`
+            : `the access token expired ${bundle.accessExpiresAt}; it is renewed on the next call`,
+        fix: Number.isFinite(expiresAt) ? null : `agent-slack workspace reauth ${workspace.alias}`,
         workspace: workspace.alias,
       });
     }
@@ -174,7 +202,7 @@ export function doctor(input: DoctorInput): DoctorResult {
         id: 'scopes',
         title: `Permissions for ${workspace.alias}`,
         status: 'ok',
-        detail: `${mode}: ${workspace.grantedScopes.length} scopes, exactly as installed`,
+        detail: `${mode}: ${workspace.grantedScopes.length} scopes, exactly as recorded at sign-in`,
         fix: null,
         workspace: workspace.alias,
       });
@@ -197,7 +225,7 @@ export function doctor(input: DoctorInput): DoctorResult {
   checks.push({
     id: 'rate-limit',
     title: 'Rate limit',
-    status: evidence?.lastThrottledAt ? 'warn' : 'ok',
+    status: evidence?.lastThrottledAt ? 'warn' : 'unknown',
     detail: evidence?.lastThrottledAt
       ? `expected Tier 3; throttled at ${evidence.lastThrottledAt}${
           evidence.retryAfterSeconds ? ` (Retry-After ${evidence.retryAfterSeconds}s)` : ''
@@ -220,7 +248,7 @@ export function doctor(input: DoctorInput): DoctorResult {
   checks.push({
     id: 'other-slack-servers',
     title: 'Other Slack MCP servers',
-    status: others && others.length > 0 ? 'warn' : 'ok',
+    status: others === undefined ? 'unknown' : others.length > 0 ? 'warn' : 'ok',
     detail:
       others === undefined
         ? 'not checked on this machine'
@@ -236,6 +264,7 @@ export function doctor(input: DoctorInput): DoctorResult {
 
   const summary = {
     ok: checks.filter((check) => check.status === 'ok').length,
+    unknown: checks.filter((check) => check.status === 'unknown').length,
     warn: checks.filter((check) => check.status === 'warn').length,
     fail: checks.filter((check) => check.status === 'fail').length,
   };

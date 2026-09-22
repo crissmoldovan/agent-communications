@@ -10,5 +10,15 @@ import { VERSION } from './version.ts';
 export { VERSION };
 export const PACKAGE_NAME = '@agentcomms/slack';
 
-export * from './api/guard.ts';
+/*
+ * The guard is **not** exported, and that is the point of it.
+ *
+ * It was, and exporting it handed every caller `closedPermit()` and `spendOn()` — so anything importing this
+ * package could mint its own permit and open the door the guard exists to keep shut. A boundary whose key is
+ * part of the public API is not a boundary; it is a convention with good manners.
+ *
+ * It stays internal, reached only through this package's own transport when S3 builds one. The method registry
+ * below is different: it is a description of what this package may call, useful to read and impossible to abuse,
+ * since knowing a method's name grants nothing.
+ */
 export * from './api/methods.ts';

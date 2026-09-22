@@ -282,3 +282,37 @@ test('the token exchange passes with a closed permit, because it is not a write'
   await fetch(`${API}/oauth.v2.access`);
   assert.deepEqual(calls, [`${API}/oauth.v2.access`]);
 });
+
+test('a redirect is refused rather than followed to an address nothing checked', async () => {
+  /*
+   * Everything this guard does validates the URL in hand. `fetch` then follows a 30x wherever it points, and the
+   * header carrying a workspace token travels with it unless the runtime decides otherwise — which is not ours
+   * to rely on. The Slack Web API does not redirect, so one here is a mistake or somebody's idea.
+   */
+  let seen: RequestInit | undefined;
+  const fetch = guardSlackRequests(async (_input, init) => {
+    seen = init;
+    return new Response('{}');
+  }, closedPermit());
+
+  await fetch(`${API}/auth.test`);
+  assert.equal(seen?.redirect, 'error');
+
+  // And it is not something a caller can hand back the other way.
+  await fetch(`${API}/auth.test`, { redirect: 'follow' });
+  assert.equal(seen?.redirect, 'error', 'a caller turned redirect-following back on');
+});
+
+test('the package root does not hand out the key to its own door', async () => {
+  /*
+   * This exported `guardSlackRequests`, `closedPermit` and `spendOn`, so anything importing the package could
+   * mint a permit and open the door the guard exists to keep shut. A boundary whose key is part of the public
+   * API is not a boundary.
+   */
+  const surface = (await import('../src/index.ts')) as Record<string, unknown>;
+  for (const name of ['guardSlackRequests', 'closedPermit', 'spendOn', 'WritePermit']) {
+    assert.equal(surface[name], undefined, `${name} is exported from the package root`);
+  }
+  // The method registry stays: knowing a method's name grants nothing, and it is worth reading.
+  assert.equal(typeof surface.methodRule, 'function');
+});

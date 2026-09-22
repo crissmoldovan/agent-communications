@@ -48,7 +48,13 @@ export type BundleState =
 export interface TokenBundle {
   readonly v: typeof BUNDLE_VERSION;
   readonly state: BundleState;
-  /** `xoxp-…`. Present even when `refresh-uncertain`: it may have hours left, and refusing to use it helps nobody. */
+  /**
+   * `xoxp-…`. Used whenever it has not expired, whatever `state` says.
+   *
+   * `state` is about the refresh token — in flight, or possibly already spent — and none of that changes whether
+   * this one still works. `accessTokenFor` once demanded `ready` as well, so an interrupted refresh became an
+   * immediate outage rather than a workspace that keeps reading until somebody re-authorises.
+   */
   readonly accessToken: string;
   readonly accessExpiresAt: string;
   /** Absent once spent, or on a token that does not rotate. */

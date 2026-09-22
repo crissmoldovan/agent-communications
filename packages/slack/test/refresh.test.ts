@@ -51,6 +51,9 @@ function store(initial?: string): SecretStore & { writes: string[]; failNextSet:
 const AT = (iso: string) => new Date(iso);
 const NOW = AT('2026-09-22T12:00:00.000Z');
 
+/** Already expired, so the state machine below is reachable at all. */
+const DUE = '2026-09-22T11:00:00.000Z';
+
 function bundle(over: Partial<TokenBundle> = {}): TokenBundle {
   return {
     v: BUNDLE_VERSION,
@@ -127,15 +130,33 @@ test('a refresh that does not come back leaves the credential uncertain, never r
   assert.equal(after?.accessToken, 'fake-access-old');
 });
 
-test('an uncertain credential is not retried on the next call either', async () => {
-  const secrets = store(serialiseBundle(bundle({ state: 'refresh-uncertain' })));
+test('an uncertain credential is not retried once its access token is due', async () => {
+  const secrets = store(serialiseBundle(bundle({ state: 'refresh-uncertain', accessExpiresAt: DUE })));
   const d = await deps(secrets, async () => assert.fail('it refreshed after an uncertain outcome'));
   await assert.rejects(accessTokenFor(d, ACCOUNT, REF), /cannot be retried safely/);
 });
 
+test('an uncertain credential still hands back an access token that has not expired', async () => {
+  /*
+   * `state` is about the *refresh* token — in flight, or possibly already spent — and none of that changes
+   * whether the access token in hand still works for the next few hours.
+   *
+   * Demanding `ready` here turned an interrupted refresh into an immediate total outage rather than a workspace
+   * that keeps reading until somebody re-authorises. `doctor` reports the state as a failure either way, so
+   * letting reads continue hides nothing.
+   */
+  const secrets = store(serialiseBundle(bundle({ state: 'refresh-uncertain' })));
+  const d = await deps(secrets, async () => assert.fail('it refreshed a token that was not due'));
+  const { token, bundle: got } = await accessTokenFor(d, ACCOUNT, REF);
+  assert.equal(token, 'fake-access-old');
+  assert.equal(got.state, 'refresh-uncertain', 'using the token quietly repaired the state');
+});
+
 test('a live refreshing marker makes another caller wait rather than refresh too', async () => {
   const secrets = store(
-    serialiseBundle(bundle({ state: 'refreshing', attempt: { id: 'a1', startedAt: NOW.toISOString() } })),
+    serialiseBundle(
+      bundle({ state: 'refreshing', accessExpiresAt: DUE, attempt: { id: 'a1', startedAt: NOW.toISOString() } }),
+    ),
   );
   const d = await deps(secrets, async () => assert.fail('two processes refreshed the same token'));
   await assert.rejects(accessTokenFor(d, ACCOUNT, REF), (error: CommsError) => {
@@ -147,7 +168,13 @@ test('a live refreshing marker makes another caller wait rather than refresh too
 test('a marker left by a dead process becomes uncertain, not a second refresh', async () => {
   // The case a file lock cannot cover: the holder died, so the lock is gone, but the token it named may be spent.
   const secrets = store(
-    serialiseBundle(bundle({ state: 'refreshing', attempt: { id: 'a1', startedAt: '2026-09-22T11:50:00.000Z' } })),
+    serialiseBundle(
+      bundle({
+        state: 'refreshing',
+        accessExpiresAt: DUE,
+        attempt: { id: 'a1', startedAt: '2026-09-22T11:50:00.000Z' },
+      }),
+    ),
   );
   const d = await deps(secrets, async () => assert.fail('it retried a refresh token that may already be spent'));
   await assert.rejects(accessTokenFor(d, ACCOUNT, REF), /interrupted/);

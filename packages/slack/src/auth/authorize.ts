@@ -117,8 +117,16 @@ export function readCallback(
  */
 export interface ExchangedToken {
   readonly accessToken: string;
-  readonly refreshToken?: string | undefined;
-  readonly expiresInSeconds?: number | undefined;
+  /**
+   * Required, not optional.
+   *
+   * The manifest sets `token_rotation_enabled: true`, so a grant from this app has a refresh token and an
+   * expiry. A response carrying neither is not a rotating grant, and storing it anyway would mean a credential
+   * that stops working in twelve hours with nothing able to renew it — a silent death a fortnight later, whose
+   * cause is a setting nobody looked at on the day it was made.
+   */
+  readonly refreshToken: string;
+  readonly expiresInSeconds: number;
   readonly scopes: readonly string[];
   readonly userId: string;
   readonly workspaceId: string;
@@ -203,10 +211,29 @@ export function readExchange(body: unknown): ExchangedToken {
     });
   }
 
+  /*
+   * A grant with no refresh half is refused rather than stored.
+   *
+   * The manifest asks for token rotation, so this app's grants come with a refresh token and an expiry. One that
+   * does not is a rotation setting that did not take effect — and the alternative to refusing is storing a
+   * credential that stops working in twelve hours with nothing able to renew it. That failure arrives days
+   * later, in a command that has nothing to do with signing in, and points at nothing.
+   *
+   * It is also the first thing a real workspace will settle: whether the manifest's `token_rotation_enabled`
+   * does what it says, or whether rotation has to be switched on somewhere else.
+   */
+  if (!user.refresh_token || typeof user.expires_in !== 'number' || user.expires_in <= 0) {
+    throw new CommsError('AUTH_REQUIRED', 'Slack issued a token that cannot be renewed', {
+      hint:
+        'The app must have token rotation enabled — check it at https://api.slack.com/apps, or re-create it ' +
+        'from `agent-slack manifest`, which asks for it.',
+    });
+  }
+
   return {
     accessToken: user.access_token,
-    ...(user.refresh_token ? { refreshToken: user.refresh_token } : {}),
-    ...(typeof user.expires_in === 'number' ? { expiresInSeconds: user.expires_in } : {}),
+    refreshToken: user.refresh_token,
+    expiresInSeconds: user.expires_in,
     scopes: (user.scope ?? '').split(',').filter(Boolean).sort(),
     userId: user.id,
     workspaceId: response.team.id,

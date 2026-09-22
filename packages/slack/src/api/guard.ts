@@ -122,7 +122,15 @@ export function guardSlackRequests(inner: FetchLike, permit: WritePermit): Fetch
       permit.method = null;
     }
 
-    return inner(input, init);
+    /*
+     * A redirect is a second request this never saw.
+     *
+     * Everything above validates the URL in hand; `fetch` then follows a 30x wherever it points, and the
+     * header carrying a workspace token travels with it unless the runtime decides otherwise. That decision is
+     * not ours to rely on, and the Slack Web API does not redirect — so a redirect here is either a mistake or
+     * somebody's idea, and both are better as an error than as a request to an address nothing checked.
+     */
+    return inner(input, { ...init, redirect: 'error' });
   };
 }
 

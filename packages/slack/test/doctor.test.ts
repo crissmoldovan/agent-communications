@@ -136,11 +136,47 @@ test('scope drift is a failure, in both directions', () => {
   assert.match(find(second, 'scopes')?.detail ?? '', /missing search:read/);
 });
 
-test('a configured workspace with no stored token is a failure, not a crash', () => {
-  const result = doctor({ config: config({ acme: account() }), now: NOW, bundles: new Map([['acme', null]]) });
-  const check = find(result, 'credential');
-  assert.equal(check?.status, 'fail');
-  assert.match(check?.fix ?? '', /reauth acme/);
+test('a stored credential that cannot be read is a different finding from one that is not there', () => {
+  /*
+   * Both are failures and both are fixed by `reauth`, but they are not the same sentence. Saying "no stored
+   * token" for a credential that is very much stored sends somebody to `workspace add` — which then refuses it
+   * as already connected, in a command they ran precisely because they did not know what was wrong.
+   */
+  const missing = doctor({ config: config({ acme: account() }), now: NOW, bundles: new Map([['acme', null]]) });
+  assert.equal(find(missing, 'credential')?.status, 'fail');
+  assert.match(find(missing, 'credential')?.detail ?? '', /no stored token/);
+  assert.match(find(missing, 'credential')?.fix ?? '', /reauth acme/);
+
+  const corrupt = doctor({
+    config: config({ acme: account() }),
+    now: NOW,
+    bundles: new Map([['acme', 'unreadable']]),
+  });
+  assert.equal(find(corrupt, 'credential')?.status, 'fail');
+  assert.match(find(corrupt, 'credential')?.detail ?? '', /cannot be read/);
+  assert.doesNotMatch(find(corrupt, 'credential')?.detail ?? '', /no stored token/);
+});
+
+test('an expired access token is not reported as valid until the moment it expired', () => {
+  // This printed the stored string whatever it said, in the one command somebody runs to find out why nothing
+  // works. Expiry is ordinary — the next call renews it — so it is a note, not a failure.
+  const stale = doctor({
+    config: config({ acme: account() }),
+    now: NOW,
+    bundles: new Map([['acme', bundle({ accessExpiresAt: '2026-09-22T00:00:00.000Z' })]]),
+  });
+  const check = find(stale, 'credential-state');
+  assert.equal(check?.status, 'warn');
+  assert.match(check?.detail ?? '', /expired/);
+  assert.doesNotMatch(check?.detail ?? '', /valid until/);
+
+  const broken = doctor({
+    config: config({ acme: account() }),
+    now: NOW,
+    bundles: new Map([['acme', bundle({ accessExpiresAt: 'whenever' })]]),
+  });
+  assert.equal(find(broken, 'credential-state')?.status, 'fail');
+  assert.match(find(broken, 'credential-state')?.fix ?? '', /reauth acme/);
 });
 
 test('the rate-limit check reports expected versus observed, and never probes', () => {
@@ -152,7 +188,8 @@ test('the rate-limit check reports expected versus observed, and never probes', 
    */
   const quiet = doctor({ config: config({ acme: account() }), now: NOW, bundles: new Map([['acme', bundle()]]) });
   const check = find(quiet, 'rate-limit');
-  assert.equal(check?.status, 'ok');
+  // Not `ok`: nothing has been observed, and green reads as "checked, and fine".
+  assert.equal(check?.status, 'unknown');
   assert.match(check?.detail ?? '', /expected Tier 3/);
   assert.match(check?.detail ?? '', /not yet observed/, 'it implied health it has not observed');
 
@@ -174,7 +211,7 @@ test('not having looked for other Slack servers is reported as not having looked
    */
   const result = doctor({ config: config({ acme: account() }), now: NOW, bundles: new Map([['acme', bundle()]]) });
   const check = find(result, 'other-slack-servers');
-  assert.equal(check?.status, 'ok');
+  assert.equal(check?.status, 'unknown');
   assert.equal(check?.detail, 'not checked on this machine');
 
   const scanned = doctor({

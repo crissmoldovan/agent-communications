@@ -23,7 +23,15 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
  * and a token, so it has to come from the CSPRNG.
  */
 export interface PkcePair {
-  /** Never leaves this process, never logged, never written to disk. */
+  /**
+   * Never logged, never sent anywhere but the token exchange — but it **is** written to disk.
+   *
+   * This said "never written to disk", which was true of the interactive flow and false of the detached one,
+   * where the whole point is that the process which started a sign-in is not the one that finishes it. The
+   * verifier lives in a 0600 file for at most ten minutes and is destroyed when the flow is claimed or expires.
+   * See `flow.ts`, which argues for that trade; a comment here saying the opposite is how somebody later
+   * "fixes" the file store by removing the only thing making the two-step form work.
+   */
   readonly verifier: string;
   /** Sent to Slack in the authorisation URL. Safe to log. */
   readonly challenge: string;

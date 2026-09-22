@@ -92,7 +92,22 @@ export async function accessTokenFor(
     // to discover that would serialise every call in the process for no reason.
     deps.secrets.invalidate(secretRef);
     const current = requireBundle(await deps.secrets.get(secretRef));
-    if (current.state === 'ready' && !isDue(current, deps.now())) return current;
+    /*
+     * A token that still works is used, whatever state the bundle is in.
+     *
+     * This asked for `ready` as well, which made the state decide something it has no business deciding. The
+     * state is about the *refresh* token — whether one is in flight, whether one may already have been spent —
+     * and none of that changes whether the access token in hand is still valid for the next few hours.
+     *
+     * The comment on `refresh-uncertain` had said as much all along ("the old access token is kept because it
+     * may still work for up to twelve hours"), and the code refused it anyway: an interrupted refresh became an
+     * immediate total outage instead of a workspace that keeps reading until somebody re-authorises. `doctor`
+     * reports the state as a failure either way, so nothing is hidden by letting reads continue.
+     *
+     * The same reasoning covers `refreshing`: another process renewing this credential is not a reason to stop
+     * using the one we already hold.
+     */
+    if (!isDue(current, deps.now())) return current;
 
     return withFileLock(lockPathFor(deps.stateDir, accountId), () => refreshUnderLock(deps, secretRef), {
       staleMs: LOCK_STALE_MS,
@@ -131,7 +146,7 @@ async function refreshUnderLock(deps: RefreshDeps, secretRef: string): Promise<T
   const current = requireBundle(await deps.secrets.get(secretRef));
   const now = deps.now();
 
-  if (current.state === 'ready' && !isDue(current, now)) return current;
+  if (!isDue(current, now)) return current;
 
   if (current.state === 'refresh-uncertain') {
     throw new CommsError('AUTH_REQUIRED', 'a previous token refresh did not finish, and cannot be retried safely', {

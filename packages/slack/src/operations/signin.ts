@@ -97,8 +97,25 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
   };
   await context.flows.save(flow);
 
-  const listener =
-    options.detached === false ? await startInProcess(context, flow) : await startDetached(context, flow, options);
+  /*
+   * A flow that never gets a listener is discarded rather than left.
+   *
+   * The detached path already cleans up after itself; the interactive one did not, so a port already in use —
+   * the commonest failure there is, since Slack forces a fixed one — left a PKCE verifier on disk with nothing
+   * able to complete it and nothing that would ever remove it.
+   */
+  let listener: StartedSignIn['listener'];
+  try {
+    listener =
+      options.detached === false ? await startInProcess(context, flow) : await startDetached(context, flow, options);
+  } catch (error) {
+    await context.flows.discard(flow.flowId);
+    if (error instanceof CommsError) throw error;
+    throw new CommsError('UNEXPECTED', `the sign-in could not start: ${(error as Error).message}`, {
+      hint: `Port ${options.port} may already be in use.`,
+      cause: error,
+    });
+  }
 
   return {
     flowId: flow.flowId,
@@ -164,8 +181,16 @@ export async function runSignInListener(context: SlackContext, flowId: string): 
       error: outcome.error,
       ...(outcome.description ? { description: outcome.description } : {}),
     });
+  } else {
+    /*
+     * A timeout ends the flow here, rather than leaving it to "expire on its own" — which files do not do.
+     *
+     * Nobody is coming: this listener held the port for the flow's whole life and saw no redirect. Leaving the
+     * record behind leaves a PKCE verifier on disk until something happens to call `peek` on that exact id, which
+     * nothing ever will.
+     */
+    await context.flows.discard(flowId);
   }
-  // On a timeout nothing is written: the flow expires on its own, and `--finish` says so.
 }
 
 export interface ListenerEntry {

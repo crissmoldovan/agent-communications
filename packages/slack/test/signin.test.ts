@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { classifyChange, parseConfig } from '@agentcomms/core';
+import { type CommsError, classifyChange, parseConfig } from '@agentcomms/core';
 import { SlackContext } from '../src/context.ts';
 import { releaseChannel, resolveListenerEntry, startSignIn } from '../src/operations/signin.ts';
 import { newHarness, TEST_CLIENT_ID, tempDir } from './support/harness.ts';
@@ -174,3 +174,34 @@ function slackAccount(id: string): Record<string, unknown> {
     createdAt: '2026-09-22T12:00:00.000Z',
   };
 }
+
+test('a port already in use leaves no sign-in behind', async () => {
+  /*
+   * The commonest failure on this path, because Slack forces a fixed port: something else already has it. The
+   * flow record holds a PKCE verifier, so leaving it means a secret on disk that nothing can complete and
+   * nothing will ever remove — `peek` only sweeps an id somebody asks about, and nobody will.
+   */
+  const harness = await newHarness();
+  const context = new SlackContext({ core: harness.core, env: harness.env, exchange: (p) => harness.exchange(p) });
+  const port = await freePort();
+  const blocker = createServer();
+  await new Promise<void>((settle) => blocker.listen(port, 'localhost', () => settle()));
+  try {
+    await assert.rejects(
+      startSignIn(context, {
+        mode: 'read',
+        alias: 'acme',
+        clientId: TEST_CLIENT_ID,
+        port,
+        detached: false,
+      }),
+      (error: CommsError) => {
+        assert.match(error.hint ?? '', new RegExp(String(port)), 'the message never names the port');
+        return true;
+      },
+    );
+    assert.deepEqual(await context.flows.pending(), [], 'a sign-in with no listener was left on disk');
+  } finally {
+    await new Promise<void>((settle) => blocker.close(() => settle()));
+  }
+});

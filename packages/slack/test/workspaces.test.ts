@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { type AccountConfig, type CommsError, type Config, emptyConfig, newAccountId } from '@agentcomms/core';
-import type { ExchangedToken } from '../src/auth/authorize.ts';
+import { type ExchangedToken, readExchange } from '../src/auth/authorize.ts';
 import type { SlackFlow } from '../src/auth/flow.ts';
 import { scopesForMode } from '../src/manifest.ts';
 import {
@@ -238,10 +238,41 @@ test('the bundle records the 30-day refresh expiry Slack does not report', () =>
   assert.equal(bundle.refreshExpiresAt, '2026-10-22T12:00:00.000Z', 'thirty days');
 });
 
-test('a token with no refresh half gets no refresh expiry', () => {
-  const bundle = bundleFrom(token({ refreshToken: undefined }), NOW);
-  assert.equal(bundle.refreshToken, undefined);
-  assert.equal(bundle.refreshExpiresAt, undefined, 'an expiry was recorded for a token that cannot expire');
+test('a grant with no refresh half is refused at the exchange, not stored without one', () => {
+  /*
+   * This test used to assert the opposite: that a token with no refresh half was stored, with no refresh expiry.
+   * That blessed a credential which stops working in twelve hours with nothing able to renew it — a silent
+   * death a fortnight later, whose cause is a setting nobody looked at on the day it was made.
+   *
+   * The manifest asks for token rotation, so a grant from this app has both halves. One that does not is a
+   * rotation setting that did not take effect, and saying so at the exchange is the only moment anybody is
+   * looking.
+   */
+  for (const half of [{ refresh_token: undefined }, { expires_in: undefined }, { expires_in: 0 }]) {
+    assert.throws(
+      () =>
+        readExchange({
+          ok: true,
+          team: { id: 'T0001', name: 'Acme' },
+          authed_user: {
+            id: 'U0001',
+            access_token: 'fake-user-token-1',
+            refresh_token: 'fake-refresh-token-1',
+            expires_in: 43_200,
+            token_type: 'user',
+            scope: scopesForMode('read').join(','),
+            ...half,
+          },
+        }),
+      (error: CommsError) => {
+        assert.equal(error.code, 'AUTH_REQUIRED');
+        assert.match(error.message, /cannot be renewed/);
+        assert.match(error.hint ?? '', /token rotation/);
+        return true;
+      },
+      `a grant missing ${Object.keys(half)[0]} was accepted`,
+    );
+  }
 });
 
 test('the account records which app issued its token', () => {

@@ -100,19 +100,28 @@ export function renderRemoved(alias: string): string {
   ].join('\n');
 }
 
+const FAILED: { text: string; colour: Parameters<typeof paint>[1] } = { text: 'fail', colour: 'red' };
+
+const MARKS: Record<string, { text: string; colour: Parameters<typeof paint>[1] }> = {
+  ok: { text: 'ok  ', colour: 'green' },
+  // Dim, not yellow: this is "nobody looked", and a diagnostic that warns on every healthy install is one people
+  // stop reading.
+  unknown: { text: '?   ', colour: 'dim' },
+  warn: { text: 'warn', colour: 'yellow' },
+  fail: FAILED,
+};
+
 export function renderDoctor(result: DoctorResult, color: boolean): string {
   const lines = result.checks.map((check) => {
-    const mark =
-      check.status === 'ok'
-        ? paint(color, 'green', 'ok  ')
-        : check.status === 'warn'
-          ? paint(color, 'yellow', 'warn')
-          : paint(color, 'red', 'fail');
+    const mark = MARKS[check.status] ?? FAILED;
     const fix = check.fix ? `\n      ${paint(color, 'dim', `fix: ${check.fix}`)}` : '';
-    return `${mark}  ${check.title}: ${check.detail}${fix}`;
+    return `${paint(color, mark.colour, mark.text)}  ${check.title}: ${check.detail}${fix}`;
   });
-  const { ok, warn, fail } = result.summary;
-  lines.push('', `${ok} ok · ${warn} to look at · ${fail} broken`);
+  const { ok, unknown, warn, fail } = result.summary;
+  const counts = [`${ok} ok`, unknown > 0 ? `${unknown} not checked` : '', `${warn} to look at`, `${fail} broken`]
+    .filter(Boolean)
+    .join(' · ');
+  lines.push('', counts);
   return lines.join('\n');
 }
 

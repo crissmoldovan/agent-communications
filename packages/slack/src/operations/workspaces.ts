@@ -222,21 +222,27 @@ export function validateExchange(options: {
 
 /** The credential, as one value, from what Slack returned. */
 export function bundleFrom(token: ExchangedToken, now: Date): TokenBundle {
-  const expiresInSeconds = token.expiresInSeconds ?? 12 * 60 * 60;
   return {
     v: BUNDLE_VERSION,
     state: 'ready',
     accessToken: token.accessToken,
-    accessExpiresAt: new Date(now.getTime() + expiresInSeconds * 1000).toISOString(),
-    ...(token.refreshToken ? { refreshToken: token.refreshToken } : {}),
     /*
-     * 30 days, and only when there is a refresh token to expire.
+     * Slack's own number, never a default.
      *
-     * Slack does not report this in the response — "all refresh tokens issued to your app will expire in 30 days"
-     * is a property of the app, not a field — so it is computed. Recorded rather than inferred later, because the
-     * only other way to discover it is a refresh that fails.
+     * This used to fall back to twelve hours when `expires_in` was absent. That is a guess written down as a
+     * fact: everything afterwards — `isDue`, `doctor`, the refresh schedule — reads it as what Slack said. A
+     * grant with no expiry is now refused at the exchange, so there is nothing left to guess.
      */
-    ...(token.refreshToken ? { refreshExpiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60_000).toISOString() } : {}),
+    accessExpiresAt: new Date(now.getTime() + token.expiresInSeconds * 1000).toISOString(),
+    refreshToken: token.refreshToken,
+    /*
+     * 30 days, computed rather than reported.
+     *
+     * Slack does not put this in the response — "all refresh tokens issued to your app will expire in 30 days"
+     * is a property of the app, not a field. Recorded rather than inferred later, because the only other way to
+     * discover it is a refresh that fails.
+     */
+    refreshExpiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60_000).toISOString(),
     issuedAt: now.toISOString(),
   };
 }
