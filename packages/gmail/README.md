@@ -6,8 +6,6 @@ approval the user gives at that moment**.
 This package is the `agent-gmail` command and the MCP server behind it. It is part of
 [agent-communications](https://github.com/crissmoldovan/agent-communications).
 
-> **Status: 0.x, not published yet.** The commands below describe the released behaviour; until then, use it from a
-> checkout.
 
 ## Why the sending rule exists
 
@@ -25,8 +23,30 @@ Node 22.12 or newer. Nothing else: the command ships as a single bundle.
 
 ## Connect a mailbox
 
-You need one OAuth client of your own, created once in Google Cloud (type **Desktop app**), and published so its
-tokens do not expire after a week. The `gmail-setup` skill walks an agent through it; by hand it is:
+```sh
+npm i -g @agentcomms/gmail
+agent-gmail setup
+```
+
+`setup` is the way in. You need one OAuth client of your own, created once in Google Cloud (type **Desktop app**)
+and published so its tokens do not expire after a week — `setup` walks those five screens with a link to each and
+says what to type in every field, then finds the JSON you downloaded, connects a mailbox, and offers to register
+the MCP server. It skips whatever is already done, so running it again adds another mailbox.
+
+At a terminal it draws a list you move through with the cursor keys; `--no-tui` asks the same questions one line
+at a time. Where nobody can answer one — `--json`, `--no-input`, CI, a redirected stream — it acts on the flags it
+was given and names the flag that would have let it continue:
+
+```sh
+agent-gmail setup --client-json ~/Downloads/client_secret_*.json \
+  --inbox work --email you@example.com --mcp-client claude-code --json
+```
+
+The one step it cannot finish is the grant: it returns the sign-in link and the command that completes it.
+
+### By hand
+
+The commands `setup` wraps are all still there:
 
 ```sh
 agent-gmail client add ~/Downloads/client_secret_*.json --move
@@ -43,6 +63,7 @@ long. On a terminal, plain `agent-gmail inbox add work` waits for the browser it
 
 | Command | What it does |
 |---|---|
+| `setup` | the Google Cloud steps, the client, a mailbox and the agent connection, in one command |
 | `client add\|list\|remove` | the Google Cloud OAuth client every mailbox signs in through |
 | `inbox add\|list\|show\|reauth\|rename\|policy\|remove\|import` | connect and manage mailboxes |
 | `whoami --inbox <name>` | what Google says about a mailbox |

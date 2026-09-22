@@ -14,22 +14,31 @@ It is one call into [`@agentcomms/gmail`](https://www.npmjs.com/package/@agentco
 and the `agent-gmail` command live. Part of
 [agent-communications](https://github.com/crissmoldovan/agent-communications).
 
-> **Status: 0.x, not published yet.**
-
 ## Set up mailboxes first
 
-This package only serves; it does not connect anything. Use the command from `@agentcomms/gmail`:
+This package serves mailboxes; connecting them is `@agentcomms/gmail`, and one command does all of it —
+the Google Cloud steps, the client, the first mailbox, and registering this server with your agent:
 
 ```sh
-npx @agentcomms/gmail client add ~/Downloads/client_secret_*.json --move
-npx @agentcomms/gmail inbox add work --start
+npx @agentcomms/gmail setup
 ```
 
-Then let it write the client configuration for you, which also proves the server starts:
+To register it separately, or to move an existing registration to a new version:
 
 ```sh
 npx @agentcomms/gmail mcp install --client claude-code --launcher npx
 ```
+
+### Connecting a mailbox from the agent instead
+
+Three of the 32 tools do the onboarding, so an agent asked to "set up Gmail" need not send you to a terminal:
+`gmail_setup` says what is missing and changes nothing, `gmail_inbox_add` returns a sign-in link and stops, and
+`gmail_inbox_finish` completes it once Google returns the grant. The grant is still yours to approve in your own
+browser — this server does not open one and cannot grant it.
+
+Those two writers are withheld from a server started `--read-only`, and from one pinned to a single mailbox with
+`--inbox`. `gmail_inbox_finish` refuses any flow that is not an add, so a re-authorisation started elsewhere
+cannot be completed through MCP.
 
 ## Options
 

@@ -6,7 +6,7 @@ Four things ship, and they are independent. You can take one and ignore the rest
                        ┌──────────────────────────────────────┐
   people, scripts ───► │  agent-gmail          (the CLI)      │
                        ├──────────────────────────────────────┤
-  agents ────────────► │  MCP server           (29 tools)     │
+  agents ────────────► │  MCP server           (32 tools)     │
                        ├──────────────────────────────────────┤
                        │  @agentcomms/gmail    (the library)  │
                        ├──────────────────────────────────────┤
@@ -17,7 +17,7 @@ Four things ship, and they are independent. You can take one and ignore the rest
 
 | | What it is | Install | Needs |
 |---|---|---|---|
-| **`agent-gmail`** | A CLI. 23 commands, `--json` on all of them, documented exit codes. | `@agentcomms/gmail` | nothing else |
+| **`agent-gmail`** | A CLI. 24 commands, `--json` on all of them, documented exit codes. | `@agentcomms/gmail` | nothing else |
 | **MCP server** | The same operations over stdio, for agents. | `@agentcomms/gmail` (`agent-gmail mcp`) or `@agentcomms/gmail-mcp` | nothing else |
 | **Library** | The TypeScript API both surfaces are built on. | `@agentcomms/gmail` | nothing else |
 | **Skills** | Markdown instructions telling an agent how to use the above, and where to stop. | `npx skills add` | neither package |
