@@ -323,3 +323,27 @@ test('get refuses a flow that is gone, where peek only says nothing', async () =
     return true;
   });
 });
+
+test('only a GET is treated as the browser coming back', async () => {
+  /*
+   * Slack's redirect is a GET. Anything else is not the browser returning, whatever it carries — and this port
+   * is open on the machine for ten minutes, reachable by anything running on it.
+   *
+   * A POST carrying a valid-looking `state` and `code` would otherwise complete somebody's sign-in with an
+   * authorisation code they chose.
+   */
+  const listener = await startLoopback({ state: 'st-post', timeoutMs: 5_000 });
+  try {
+    const response = await fetch(`${listener.redirectUrl}?state=st-post&code=abc`, { method: 'POST' });
+    assert.equal(response.status, 405);
+
+    // And the sign-in is still waiting, not finished by it.
+    const settled = await Promise.race([
+      listener.result,
+      new Promise((r) => setTimeout(() => r('still waiting'), 200)),
+    ]);
+    assert.equal(settled, 'still waiting', 'a POST ended the sign-in');
+  } finally {
+    await listener.close();
+  }
+});

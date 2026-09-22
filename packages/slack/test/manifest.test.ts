@@ -76,6 +76,13 @@ test('the manifest carries only settings keys the research verified', () => {
   ]);
   assert.equal(settings.token_rotation_enabled, true, 'rotation off would make the 30-day handling dead code');
   assert.equal(settings.socket_mode_enabled, false, 'D13: nothing in v1 subscribes to events');
+  /*
+   * Org-wide deployment is a different install with a different blast radius: the app lands across every
+   * workspace in an Enterprise Grid org rather than the one person's. Nothing here is designed for that — the
+   * account model is one workspace and one user — and the key was asserted to exist without anyone checking
+   * which way it pointed.
+   */
+  assert.equal(settings.org_deploy_enabled, false, 'this would install the app across an entire Grid org');
 });
 
 test('only user scopes are requested, never bot scopes', () => {
