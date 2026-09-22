@@ -4,6 +4,25 @@ From nothing to reading mail, in about ten minutes. Most of that is Google's con
 
 You need Node 22.12 or newer and a Google account.
 
+## The short version
+
+```bash
+npm i -g @agentcomms/gmail
+agent-gmail setup
+```
+
+`setup` is this page as a command. It walks the same Google Cloud screens with a link to each and says what to
+type in every field, finds the JSON you download at the end, connects a mailbox, and offers to register the MCP
+server — skipping whatever is already done. If it works, you do not need the rest of this page.
+
+The rest of this page is here for three reasons: to explain *why* each screen is set the way it is, to be
+readable before you run anything, and because the one step nothing can automate — approving the grant in your
+own browser — is easier to meet if you have read about it first. Everything below is also what `setup` does, in
+the same order.
+
+An agent can drive the same steps over MCP with `gmail_setup`, `gmail_inbox_add` and `gmail_inbox_finish`; the
+grant is still yours to approve.
+
 ## 1. A Google OAuth client
 
 Gmail's API needs credentials that belong to you. There is no way around this and no shared client to borrow: a
@@ -69,6 +88,9 @@ The client id goes into your config; the secret goes into your OS keychain, neve
 Add `--move` to delete the download afterwards.
 
 ## 3. Connect a mailbox
+
+> `agent-gmail setup` does steps 2 and 3 together, and offers step 4 as well. Run it instead of the commands
+> below if you would rather not do them one at a time.
 
 ```bash
 npx -y @agentcomms/gmail inbox add work --start

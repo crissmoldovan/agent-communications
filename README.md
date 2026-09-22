@@ -82,12 +82,28 @@ No agent, no MCP server, nothing else required.
 
 ```bash
 npm i -g @agentcomms/gmail
-agent-gmail client add ~/Downloads/client_secret_*.json   # ← the JSON from above
-agent-gmail inbox add work --email you@example.com --start
+agent-gmail setup            # the console steps, the client, a mailbox, and the agent connection
 agent-gmail search 'newer_than:7d' --inbox work
 ```
 
-23 commands, `--json` on all of them, documented exit codes. [CLI reference](docs/reference/cli.md).
+`setup` is the way in. It walks the five Google Cloud screens with a link to each and says what to type in
+every field, finds the client JSON you downloaded, connects the first mailbox, and offers to register the MCP
+server — stopping at whatever is already done rather than starting over. Run it again to add another mailbox.
+
+At a terminal it draws a list you move through with the cursor keys; `--no-tui` asks the same questions one
+line at a time. Where nobody can answer one — `--json`, `--no-input`, CI, or a redirected stream — it acts on
+the flags it was given and names the flag that would have let it go further:
+
+```bash
+agent-gmail setup --client-json ~/Downloads/client_secret_*.json \
+  --inbox work --email you@example.com --mcp-client claude-code --json
+```
+
+The one step it cannot finish is the grant itself: it hands back the sign-in link and the command that
+completes it. The individual commands it wraps — `client add`, `inbox add`, `mcp install` — are all still
+there if you would rather drive them yourself.
+
+24 commands, `--json` on all of them, documented exit codes. [CLI reference](docs/reference/cli.md).
 
 ### An MCP server, for agents
 
@@ -95,8 +111,15 @@ agent-gmail search 'newer_than:7d' --inbox work
 npx -y @agentcomms/gmail mcp install --client claude-code
 ```
 
-29 tools over stdio — the same operations the CLI runs. Works with Claude Code, Codex, Cursor, Claude Desktop,
+32 tools over stdio — the same operations the CLI runs. Works with Claude Code, Codex, Cursor, Claude Desktop,
 Gemini CLI and anything else that speaks MCP. [MCP tool reference](docs/reference/mcp-tools.md).
+
+**Onboarding works over MCP too**, so an agent asked to "set up Gmail" is not reduced to telling you to go and
+run a CLI. `gmail_setup` says what is missing and changes nothing; `gmail_inbox_add` returns a sign-in link and
+stops; `gmail_inbox_finish` completes it once Google returns the grant. The bounds are deliberate and enforced:
+a server started `--read-only` does not offer the two writers at all, nor does one pinned to a single mailbox,
+`gmail_inbox_finish` refuses any flow that is not an add, and no MCP tool registers an OAuth client or changes a
+policy. [Why this is the one exception](docs/superpowers/specs/2026-09-18-agent-communications-design.md).
 
 ### Skills, so an agent uses it well
 
