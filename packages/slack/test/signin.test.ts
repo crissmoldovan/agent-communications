@@ -511,3 +511,85 @@ test('a sign-in refuses to finish into a backend a migration has just switched a
   assert.equal((await harness.core.config.load()).accounts.acme, undefined, 'the account was saved anyway');
   assert.equal(await real.get(stored as string), null, 'the credential was left in the abandoned backend');
 });
+
+test('a sign-in whose config write committed but whose lock release failed keeps its credential', async () => {
+  /*
+   * The configuration names the new credential; only releasing the lock failed afterwards. The rollback read
+   * the rejection as "nothing was saved" and deleted the token the configuration now points at — a sign-in that
+   * worked, turned into a workspace with no credential.
+   */
+  const harness = await newHarness();
+  const context = new SlackContext({ core: harness.core, env: harness.env, exchange: (p) => harness.exchange(p) });
+  const update = harness.core.config.update.bind(harness.core.config);
+  let failed = false;
+  harness.core.config.update = (async (...args: Parameters<typeof update>) => {
+    const written = await update(...args);
+    if (!failed && written.accounts.acme) {
+      failed = true;
+      throw new Error('EPERM: could not remove the lock file');
+    }
+    return written;
+  }) as typeof harness.core.config.update;
+
+  const started = await startSignIn(context, {
+    mode: 'read',
+    alias: 'acme',
+    clientId: TEST_CLIENT_ID,
+    port: await freePort(),
+    detached: false,
+  });
+  const listener = started.listener as NonNullable<StartedSignIn['listener']>;
+  await redirectTo(started.authUrl);
+  const view = await listener.result;
+  await listener.close();
+
+  assert.ok(failed, 'the lock failure was never injected, so the test proves nothing');
+  assert.equal(view.alias, 'acme');
+  const account = (await harness.core.config.load()).accounts.acme;
+  const secrets = await harness.core.secrets('file');
+  assert.ok(await secrets.get(account?.secretRef as string), 'the credential the config names was deleted');
+});
+
+test('a sign-in that cannot tell whether it was saved keeps the credential and names it', async () => {
+  /*
+   * If the configuration cannot even be read back, either deletion could be the wrong one. Keeping a possibly
+   * orphaned token and saying so is recoverable; deleting a live one is not.
+   */
+  const harness = await newHarness();
+  const context = new SlackContext({ core: harness.core, env: harness.env, exchange: (p) => harness.exchange(p) });
+  const update = harness.core.config.update.bind(harness.core.config);
+  let broken = false;
+  harness.core.config.update = (async (...args: Parameters<typeof update>) => {
+    const written = await update(...args);
+    if (!broken && written.accounts.acme) {
+      broken = true;
+      throw new Error('EPERM: could not remove the lock file');
+    }
+    return written;
+  }) as typeof harness.core.config.update;
+  const realConfig = context.config.bind(context);
+  context.config = async () => {
+    if (broken) throw new Error('EIO reading the configuration');
+    return realConfig();
+  };
+
+  const started = await startSignIn(context, {
+    mode: 'read',
+    alias: 'acme',
+    clientId: TEST_CLIENT_ID,
+    port: await freePort(),
+    detached: false,
+  });
+  const listener = started.listener as NonNullable<StartedSignIn['listener']>;
+  await redirectTo(started.authUrl);
+  let ref = '';
+  await assert.rejects(listener.result, (error: CommsError) => {
+    ref = String(error.details?.possiblyStrandedSecretRef);
+    assert.match(ref, /^slack\/token\/acc_/);
+    assert.match(error.hint ?? '', /kept rather than risk deleting a live one/);
+    return true;
+  });
+  await listener.close();
+  const secrets = await harness.core.secrets('file');
+  assert.ok(await secrets.get(ref), 'the credential was deleted when nobody could say it was unused');
+});

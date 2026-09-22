@@ -523,6 +523,31 @@ function stopListener(flow: SlackFlow, now: Date): void {
  * something nobody re-examined.
  */
 /**
+ * Whether the configuration now names `ref` under `alias` — read fresh, after a write that may or may not have
+ * committed. `unknown` when the configuration cannot be read at all, which must never be treated as `absent`.
+ */
+async function committed(context: SlackContext, alias: string, ref: string): Promise<'present' | 'absent' | 'unknown'> {
+  try {
+    return (await context.config()).accounts[alias]?.secretRef === ref ? 'present' : 'absent';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/** The original error, with the credential it may have left behind named — and deliberately not deleted. */
+function keepAndReport(original: unknown, ref: string): CommsError {
+  const base = original instanceof CommsError ? original : new CommsError('UNEXPECTED', String(original));
+  return new CommsError(base.code, base.message, {
+    hint:
+      `${base.hint ? `${base.hint} ` : ''}Whether the sign-in was saved could not be confirmed, so the credential ` +
+      `stored for it was kept rather than risk deleting a live one. Run \`agent-slack workspace list\`: if the ` +
+      `workspace is not there, delete \`${ref}\` from your secret store.`,
+    details: { possiblyStrandedSecretRef: ref },
+    cause: original,
+  });
+}
+
+/**
  * Takes back a credential that was stored for an attempt that then failed, and says so if it cannot.
  *
  * This used to be `delete().catch(() => undefined)`, and the commit that introduced it claimed the credential
@@ -677,9 +702,20 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
         flow.consent ? { consent: flow.consent } : {},
       );
     } catch (error) {
-      // Nothing points at the credential just stored — whether the write failed or the guard above refused it.
-      // Left behind, it would be a live Slack token in the secret store that no command lists or removes.
-      throw await withdrawStaged(secrets, secretRefFor(accountId), error);
+      /*
+       * Look before undoing. A rejection does not mean the configuration was not written.
+       *
+       * `ConfigStore.update` commits its write atomically and *then* releases the lock in a `finally`; if that
+       * release throws — a file Windows will not let go of — the call rejects with the write already in. Taking
+       * the credential back then deletes the one the configuration now names, and turns a sign-in that worked
+       * into a workspace with no token. So the configuration is read again first, and only a credential it does
+       * not name is withdrawn. If it cannot even be read, nothing is deleted: a possible leftover is reported,
+       * because the alternative risks deleting a live one.
+       */
+      const landed = await committed(context, flow.alias, secretRefFor(accountId));
+      if (landed === 'unknown') throw keepAndReport(error, secretRefFor(accountId));
+      if (landed === 'absent') throw await withdrawStaged(secrets, secretRefFor(accountId), error);
+      // 'present': the write is in and only the lock's cleanup failed. The sign-in worked; carry on as it did.
     }
 
     /*

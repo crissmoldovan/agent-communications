@@ -1000,3 +1000,42 @@ test('--mode send on a workspace whose stored mode is a typo does not skip the c
   assert.equal(harness.calls.length, 0);
   assert.equal((await harness.core.config.load()).accounts.acme?.mode, 'raed', 'the workspace was changed');
 });
+
+test('--wait is a number of seconds from 0 to 600, and nothing else', async () => {
+  /*
+   * `Number(flags.wait) || 60` turned `0` into sixty seconds, accepted negatives, and accepted `Infinity` — an
+   * unbounded deadline on a command whose whole job is to return.
+   */
+  const harness = await newHarness();
+  for (const bad of ['-5', 'Infinity', 'soon', '601']) {
+    const result = await cli(harness, [
+      '--json',
+      'workspace',
+      'add',
+      '--finish',
+      'sfl_aaaaaaaaaaaaaaaaaaaaaa',
+      '--wait',
+      bad,
+    ]);
+    assert.equal(result.code, EXIT_CODES.USAGE, `--wait ${bad} was accepted`);
+    assert.match(result.json<Envelope<never>>().error?.message ?? '', /is not a wait/);
+  }
+});
+
+test('--wait 0 looks once and reports, rather than quietly waiting a minute', async () => {
+  const harness = await newHarness();
+  const port = await freePort();
+  const start = await startDetached(harness, [
+    'workspace',
+    'add',
+    'acme',
+    '--client-id',
+    TEST_CLIENT_ID,
+    '--port',
+    String(port),
+  ]);
+  const began = Date.now();
+  const result = await cli(harness, ['--json', 'workspace', 'add', '--finish', start.flowId, '--wait', '0']);
+  assert.equal(result.code, EXIT_CODES.APPROVAL);
+  assert.ok(Date.now() - began < 5000, `--wait 0 took ${Date.now() - began}ms`);
+});

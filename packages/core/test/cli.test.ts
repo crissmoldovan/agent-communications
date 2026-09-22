@@ -309,3 +309,26 @@ test('a clean migration moves everything and leaves nothing behind', async () =>
   assert.equal(target.values.get('slack/token/acc_AAAAAAAAAAAAAAAA'), 'fake-token-one');
   assert.equal(await source.get('slack/token/acc_AAAAAAAAAAAAAAAA'), null, 'an original was left in the old backend');
 });
+
+test('a migration whose switch committed but whose lock release failed keeps the new backend’s copies', async () => {
+  /*
+   * `ConfigStore.update` writes atomically and releases its lock in a `finally`; a release that throws rejects
+   * the call with the switch already in. The rollback treated every rejection as "nothing was switched" and
+   * deleted the copies — the credentials the runtime now reads.
+   */
+  const { migrateSecrets } = await import('../src/cli.ts');
+  const { core, source } = await coreWithTwoSlackTokens();
+  const target = memoryStore('keychain');
+  const update = core.config.update.bind(core.config);
+  core.config.update = (async (...args: Parameters<typeof update>) => {
+    await update(...args);
+    throw new Error('EPERM: could not remove the lock file');
+  }) as typeof core.config.update;
+
+  const result = await migrateSecrets(core, 'keychain', { source, target: target.store });
+  assert.equal((await core.config.load()).secrets?.store, 'keychain');
+  assert.equal(target.values.get('slack/token/acc_AAAAAAAAAAAAAAAA'), 'fake-token-one', 'the live copy was deleted');
+  assert.equal(target.values.get('slack/token/acc_BBBBBBBBBBBBBBBB'), 'fake-token-two', 'the live copy was deleted');
+  assert.equal(result.moved, 2);
+  assert.equal(await source.get('slack/token/acc_AAAAAAAAAAAAAAAA'), null, 'the original was not tidied up');
+});

@@ -239,8 +239,37 @@ export async function migrateSecrets(
       return { ...current, secrets: { store: to } };
     });
   } catch (error) {
-    // Nothing was switched, so every copy is a duplicate of a secret still in the source — a live credential in a
-    // backend nothing reads from. Take them back, and name any that will not go.
+    /*
+     * Whether anything was switched is read, not assumed.
+     *
+     * `ConfigStore.update` writes atomically and releases its lock afterwards, in a `finally`; a release that
+     * throws rejects the whole call with the switch already committed. Taking the copies back then would delete
+     * the credentials the runtime now reads. So: switched means finish the job; not switched means take the
+     * copies back; and a configuration that cannot be read means touch nothing and say so, because either
+     * deletion could be the wrong one.
+     */
+    let switched: boolean | undefined;
+    try {
+      switched = secretsStoreOf(await core.config.load()) === to;
+    } catch {
+      switched = undefined;
+    }
+    if (switched === true) {
+      const leftovers = await takeBack(source, from, attempted);
+      return { from, to, moved, leftovers };
+    }
+    if (switched === undefined) {
+      const base = error instanceof CommsError ? error : new CommsError('UNEXPECTED', String(error));
+      throw new CommsError(base.code, base.message, {
+        hint:
+          `${base.hint ? `${base.hint} ` : ''}Whether the backend was switched could not be confirmed, so nothing ` +
+          `was deleted from either. Run \`agentcomms secrets migrate --to ${to}\` again once the configuration is readable.`,
+        details: { unconfirmed: true, copiedToTarget: attempted.map((ref) => ({ backend: to, ref })) },
+        cause: error,
+      });
+    }
+    // Not switched, so every copy is a duplicate of a secret still in the source — a live credential in a backend
+    // nothing reads from. Take them back, and name any that will not go.
     const leftovers = await takeBack(target, to, attempted);
     if (leftovers.length === 0) throw error;
     const base = error instanceof CommsError ? error : new CommsError('UNEXPECTED', String(error));

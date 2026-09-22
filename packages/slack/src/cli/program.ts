@@ -148,6 +148,24 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
     return port;
   };
 
+  /**
+   * How long `--finish` waits for the browser, checked rather than coerced.
+   *
+   * `Number(flags.wait) || 60` turned `--wait 0` into sixty seconds, accepted a negative number, and accepted
+   * `Infinity` — an unbounded deadline on a command whose whole job is to return. `0` now means what it says:
+   * look once and report. The ceiling is the flow's own life, since nothing can arrive after it has expired.
+   */
+  const waitOf = (flags: Options): number => {
+    const raw = flags.wait ?? '60';
+    const seconds = Number(raw);
+    if (!Number.isFinite(seconds) || seconds < 0 || seconds > 600) {
+      throw new CommsError('USAGE', `"${String(raw)}" is not a wait`, {
+        hint: 'A number of seconds from 0 to 600. A sign-in lasts ten minutes, so there is nothing to wait for after that.',
+      });
+    }
+    return seconds;
+  };
+
   // ── manifest ────────────────────────────────────────────────────────────────────────────────────────────────
 
   program
@@ -204,7 +222,7 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
             // Optional here, so bound only when it was given rather than invented from the flow.
             ...(alias ? { expectAlias: alias } : {}),
             ...(flags.url ? { url: String(flags.url) } : {}),
-            waitSeconds: Number(flags.wait) || 60,
+            waitSeconds: waitOf(flags),
           });
           writeResult(view, output(), () => renderConnected(view, false, options.color), streams);
           return;
@@ -279,7 +297,7 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
             // The caller named a workspace; a flow id names one too, and they have to be the same one.
             expectAlias: alias,
             ...(flags.url ? { url: String(flags.url) } : {}),
-            waitSeconds: Number(flags.wait) || 60,
+            waitSeconds: waitOf(flags),
           });
           writeResult(view, output(), () => renderConnected(view, true, options.color), streams);
           return;
