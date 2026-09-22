@@ -495,12 +495,34 @@ test('a pinned server whose mailbox was renamed says what it is called now, from
       harness.core.config.path,
       `${JSON.stringify(renameEntry(config, 'inbox', 'acme/gmail', 'acme/gmail-main'), null, 2)}\n`,
     );
-    for (const name of ['gmail_setup', 'gmail_whoami']) {
+    for (const name of ['gmail_setup', 'gmail_whoami', 'gmail_inboxes_list', 'gmail_doctor']) {
       const result = (await client.callTool({ name, arguments: {} })) as ToolResult;
       assert.equal(result.isError, true, name);
       const error = result.structuredContent?.error as { code: string; message: string };
       assert.equal(error.code, 'NOT_FOUND', name);
       assert.match(error.message, /renamed to "acme\/gmail-main"/, name);
+    }
+  } finally {
+    await close();
+  }
+});
+
+test('a pinned server whose mailbox was removed and replaced under the same name refuses to serve the stranger', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  const { client, close } = await connect({ core: harness.core, env: harness.env, inbox: 'work' });
+  try {
+    await harness.core.config.update((config) => {
+      const { work: _removed, ...rest } = config.inboxes;
+      return { ...config, inboxes: rest };
+    });
+    await harness.addInbox({ alias: 'work', email: 'someone.else@example.test', sub: 'sub-9', refreshToken: 'rt_y' });
+    for (const name of ['gmail_whoami', 'gmail_inboxes_list']) {
+      const result = (await client.callTool({ name, arguments: {} })) as ToolResult;
+      assert.equal(result.isError, true, name);
+      const error = result.structuredContent?.error as { code: string; message: string };
+      assert.equal(error.code, 'CONFIG', name);
+      assert.match(error.message, /now names another/, name);
     }
   } finally {
     await close();

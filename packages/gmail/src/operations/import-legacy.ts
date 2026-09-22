@@ -221,6 +221,11 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
           const row = (await context.config()).clients[clientKey];
           return row?.secretRef === ref && row.clientId === parsedClient.clientId;
         },
+        // Another client's row naming the same reference: never withdraw it, whoever wrote last.
+        async () => {
+          const row = (await context.config()).clients[clientKey];
+          return row?.secretRef === ref && row.clientId !== parsedClient.clientId;
+        },
       );
     });
   }
@@ -466,6 +471,7 @@ async function storeThenRecord(
   value: string,
   record: () => Promise<unknown>,
   recorded: () => Promise<boolean>,
+  ownedByAnother?: () => Promise<boolean>,
 ): Promise<void> {
   try {
     await secrets.set(ref, value);
@@ -473,6 +479,26 @@ async function storeThenRecord(
   } catch (error) {
     const landed = await writeOutcome(recorded);
     if (landed === 'unknown') throw keepAndReport(error, ref, 'Run `agent-gmail inbox list`.');
-    if (landed === 'absent') throw await withdrawStaged(secrets, ref, error);
+    if (landed === 'absent') {
+      /*
+       * Not taken back if another row names it.
+       *
+       * A client's reference is derived from its name, so a writer that does not hold the credentials lock — an older
+       * release — can register the same name in between. Deleting the reference would then delete the credential
+       * that row depends on. Whose secret is there now cannot be known, so it is said, not guessed at.
+       */
+      if (ownedByAnother && (await writeOutcome(ownedByAnother)) !== 'absent') {
+        const base = error instanceof CommsError ? error : new CommsError('UNEXPECTED', String(error));
+        throw new CommsError(base.code, base.message, {
+          hint:
+            `${base.hint ? `${base.hint} ` : ''}Something else registered this client name while the import ran, and ` +
+            `both wrote \`${ref}\`, so it may now hold the wrong secret. Register that client again with ` +
+            '`agent-gmail client add <its JSON> --replace`.',
+          details: { contestedSecretRef: ref },
+          cause: error,
+        });
+      }
+      throw await withdrawStaged(secrets, ref, error);
+    }
   }
 }

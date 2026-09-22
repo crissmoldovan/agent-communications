@@ -127,7 +127,9 @@ export async function doctor(
   }
 
   checks.push(await orphanedSecretsCheck(context));
-  const folders = await formerFoldersCheck(context, config);
+  // Scoped like everything else here: `--inbox`, and a pinned server, report their own mailbox's folders only.
+  const scope = options.inbox ? (lookupName(config, 'inbox', options.inbox)?.id ?? null) : undefined;
+  const folders = scope === null ? null : await formerFoldersCheck(context, config, scope);
   if (folders) checks.push(folders);
   checks.push(...(await mcpChecks(context)));
 
@@ -396,12 +398,13 @@ async function orphanedSecretsCheck(context: GmailContext): Promise<Check> {
  * `downloads/cue/` — and what is worth saying is that the old files sit beside the new folder, not that the folder
  * exists. Nothing here moves a file: they are a person's downloads, and where they belong is theirs to decide.
  */
-async function formerFoldersCheck(context: GmailContext, config: Config): Promise<Check | null> {
+async function formerFoldersCheck(context: GmailContext, config: Config, onlyId?: string): Promise<Check | null> {
   if (config.version !== 2) return null;
   const configured = config.defaults.downloadsDir;
   const root = configured ? expandHome(configured, homeDirectory(context.env)) : context.core.paths.downloadsDir;
   const found: string[] = [];
   for (const [former, record] of Object.entries(config.formerNames.inboxes)) {
+    if (onlyId !== undefined && record.id !== onlyId) continue;
     let children: string[];
     try {
       children = await readdir(join(root, former));

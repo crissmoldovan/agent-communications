@@ -483,7 +483,11 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
               ? 'Its token was revoked with Google.'
               : 'Its token was not revoked. To revoke it with Google: https://myaccount.google.com/connections') +
             (data.orphanedSecret
-              ? `\nIts token could not be deleted from this machine: remove ${data.orphanedSecret} from the secret store (\`agent-gmail doctor\` lists it).`
+              ? `\nIts token could not be deleted from this machine: remove ${data.orphanedSecret} from the secret store${
+                  data.orphanRecorded
+                    ? ' (`agent-gmail doctor` lists it).'
+                    : '. It could not be recorded either, so nothing else will list it.'
+                }`
               : '\nIts token was deleted from this machine.'),
           streams,
         );

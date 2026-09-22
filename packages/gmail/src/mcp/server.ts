@@ -1,4 +1,4 @@
-import { CommsError, findById, formerNameRefusal, lookupName, stricterPolicy, toCommsError } from '@agentcomms/core';
+import { CommsError, findById, lookupName, stricterPolicy, toCommsError } from '@agentcomms/core';
 import { acceptedContent, inputRequired, inputResponse, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
@@ -90,10 +90,9 @@ export async function buildInstructions(context: GmailContext, pinned: string | 
 export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promise<GmailMcpServer> {
   const context = new GmailContext({ ...options, surface: 'mcp' });
   const pinned = options.inbox;
-  if (pinned) {
-    // Resolve now so a pinned server fails loudly at startup rather than on the first call.
-    await context.inbox(pinned);
-  }
+  // Resolved now so a pinned server fails loudly at startup rather than on the first call — and the id kept, because
+  // the pin is to a mailbox, not to a word. See `checkPin`.
+  const pinnedId = pinned ? (await context.inbox(pinned)).inbox.id : undefined;
 
   // Whether any mailbox this server can reach needs an approval the model cannot give. Read once, at start-up, only
   // to decide a client hint; what a send actually needs is re-read from config on every call.
@@ -134,6 +133,54 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       content: [{ type: 'text', text: JSON.stringify(structured) }],
     };
   };
+
+  /**
+   * Whether the pinned name still names the mailbox this server was started for.
+   *
+   * Checked before every tool, because the config is re-read on every call and the name can move under a running
+   * server: renamed, so every call would refuse it while `gmail_inboxes_list` answered with nothing; or removed and
+   * connected again under the same name, so the pin would silently serve a different mailbox.
+   */
+  const checkPin = async (tool: unknown): Promise<void> => {
+    if (!pinned || !pinnedId) return;
+    const config = await context.config();
+    const now = findById(config, 'inbox', pinnedId);
+    if (now?.alias === pinned) return;
+    if (now) {
+      throw new CommsError('NOT_FOUND', `"${pinned}" was renamed to "${now.alias}"`, {
+        hint: `This server is pinned to the old name. Register it again with \`--inbox ${now.alias}\` and restart the client.`,
+        details: { formerName: pinned, currentName: now.alias },
+      });
+    }
+    if (lookupName(config, 'inbox', pinned)) {
+      throw new CommsError(
+        'CONFIG',
+        `the mailbox this server was pinned to was removed, and "${pinned}" now names another`,
+        {
+          hint: 'Restart the client so the server starts again for the mailbox it should serve.',
+        },
+      );
+    }
+    // Removed, and nothing new under the name: `gmail_setup` answers that — connecting it is what is next — as it
+    // always has. Every other tool has nothing to act on.
+    if (tool === 'gmail_setup') return;
+    throw new CommsError('NOT_FOUND', `the mailbox this server was pinned to, "${pinned}", was removed`);
+  };
+  if (pinnedId) {
+    // Every tool, without touching each: the check wraps the handler as the tool is registered.
+    const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
+    (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (...args: unknown[]) => {
+      const [name, config, handler] = args as [unknown, unknown, (...inner: unknown[]) => unknown];
+      return register(name, config, async (...inner: unknown[]) => {
+        try {
+          await checkPin(name);
+        } catch (error) {
+          return fail(error);
+        }
+        return handler(...inner);
+      });
+    };
+  }
 
   /** Resolves the inbox argument under the pin: a pinned server serves exactly one mailbox, whatever is asked for. */
   const targetInbox = (requested: string | undefined): string => {
@@ -857,12 +904,6 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         // One snapshot, not two. This loaded the config again to find the pinned mailbox's client, so `inboxes`
         // could come from `setupState`'s read and the verdict from a read a moment later — the same split this
         // scoping exists to close.
-        // A pin that has since been renamed gets the same answer every other tool on this server gives it — what
-        // it is called now — rather than "connect this mailbox", which would send somebody to connect it twice.
-        if (pinned && !state.inboxes.includes(pinned)) {
-          const renamed = formerNameRefusal(await context.config(), 'inbox', pinned);
-          if (renamed) throw renamed;
-        }
         const pinnedInbox = pinned ? state.inboxes.includes(pinned) : false;
         const pinnedClient = pinned ? state.clientOf[pinned] : undefined;
         /*

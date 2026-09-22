@@ -368,10 +368,10 @@ async function writeReauth(
 }
 
 /**
- * Puts back the token a reauth overwrote, when its row was not written — and says so if that fails.
+ * Puts the reference back as it was before a reauth whose row was not written — and says so if that fails.
  *
- * Nothing to put back when there was nothing before (a mailbox whose token had already gone missing): the new token
- * is then left, because it is at least a valid credential for the same account.
+ * As it was means the previous token, or no token when there was none: the row still describes the old client and
+ * grant, and a new token left under it — issued to another client, after `--client` — would be one it cannot use.
  */
 async function restorePrevious(
   secrets: Awaited<ReturnType<GmailContext['core']['secrets']>>,
@@ -379,9 +379,9 @@ async function restorePrevious(
   previous: string | null,
   original: unknown,
 ): Promise<unknown> {
-  if (previous === null) return original;
   try {
-    await secrets.set(ref, previous);
+    if (previous === null) await secrets.delete(ref);
+    else await secrets.set(ref, previous);
     return original;
   } catch (error) {
     const base = original instanceof CommsError ? original : new CommsError('UNEXPECTED', String(original));

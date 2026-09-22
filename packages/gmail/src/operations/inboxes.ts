@@ -147,8 +147,10 @@ export interface InboxRemoveResult {
   id: string;
   email: string;
   revoked: boolean;
-  /** Set when the stored token could not be deleted; it is recorded for `doctor` to report. */
+  /** Set when the stored token could not be deleted. */
   orphanedSecret?: string | undefined;
+  /** Whether that token was recorded for `doctor` to report. Recording can fail too, and then nothing will list it. */
+  orphanRecorded?: boolean | undefined;
 }
 
 /**
@@ -204,15 +206,21 @@ export async function inboxRemove(
     context.forgetTransports();
 
     let orphanedSecret: string | undefined;
+    let orphanRecorded: boolean | undefined;
     try {
       await secrets.delete(inbox.secretRef);
     } catch (error) {
       // The row is already gone, so the inbox is disconnected either way; but a token still sitting in the keychain
       // is worth saying out loud rather than forgetting, so `doctor` can report it and the user can remove it.
       orphanedSecret = inbox.secretRef;
-      await recordOrphan(context, { secretRef: inbox.secretRef, alias: found.alias, inboxId: inbox.id }, error, false);
+      orphanRecorded = await recordOrphan(
+        context,
+        { secretRef: inbox.secretRef, alias: found.alias, inboxId: inbox.id },
+        error,
+        false,
+      );
     }
-    return { name: found.alias, inbox, refreshToken, orphanedSecret };
+    return { name: found.alias, inbox, refreshToken, orphanedSecret, orphanRecorded };
   });
 
   // Revocation is a call to Google, so it runs after the lock is released: nothing should wait on a network round
@@ -244,6 +252,7 @@ export async function inboxRemove(
     email: removed.inbox.email,
     revoked,
     orphanedSecret: removed.orphanedSecret,
+    orphanRecorded: removed.orphanRecorded,
   };
 }
 
@@ -258,16 +267,21 @@ async function recordOrphan(
   entry: { secretRef: string; alias: string; inboxId: string },
   error: unknown,
   unconfirmed: boolean,
-): Promise<void> {
-  await appendPrivateLine(
-    orphanedSecretsPath(context),
-    JSON.stringify({
-      at: context.now().toISOString(),
-      ...entry,
-      ...(unconfirmed ? { unconfirmed: true } : {}),
-      reason: error instanceof Error ? error.message : String(error),
-    }),
-  ).catch(() => undefined);
+): Promise<boolean> {
+  try {
+    await appendPrivateLine(
+      orphanedSecretsPath(context),
+      JSON.stringify({
+        at: context.now().toISOString(),
+        ...entry,
+        ...(unconfirmed ? { unconfirmed: true } : {}),
+        reason: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function orphanedSecretsPath(context: GmailContext): string {

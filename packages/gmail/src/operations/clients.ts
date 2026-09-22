@@ -8,6 +8,7 @@ import {
   probeKeychain,
   type StoreKind,
   secretsStoreOf,
+  withCredentialsLock,
 } from '@agentcomms/core';
 import { parseClientJson, probeClientCredentials } from '../auth/oauth.ts';
 import { clientSecretRef } from '../auth/session.ts';
@@ -107,26 +108,47 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
 
   const secrets = await context.core.secrets(chosen);
   const secretRef = clientSecretRef(name);
-  await secrets.set(secretRef, parsed.clientSecret);
-  const stored = await secrets.get(secretRef);
-  if (stored !== parsed.clientSecret) {
-    throw new CommsError('SECRET_STORE_UNAVAILABLE', 'the secret did not read back the way it was written', {
-      hint: 'Try again with `--store file` to keep secrets in owner-only files instead of the system keychain.',
-    });
-  }
+  /*
+   * Under the credentials lock, and the name checked again inside it.
+   *
+   * The secret's reference is derived from the client's name, so a second writer of the same name — an import, or
+   * another `client add` — writes the same reference. Held, whichever comes second finds the name taken before it
+   * overwrites anything. The probe above is a network call and stays outside.
+   */
+  const client = await withCredentialsLock(context.core.paths.configDir, async () => {
+    const held = (await context.config()).clients[name];
+    if (held && !options.replace) {
+      throw new CommsError('CONFIG', `an OAuth client called "${name}" was registered while this ran`, {
+        hint: 'Run the command again to see what is there now.',
+      });
+    }
+    if (held && options.replace && held.clientId !== existing?.clientId) {
+      throw new CommsError('CONFIG', `the OAuth client "${name}" changed while this ran`, {
+        hint: 'Run the command again to see what is there now.',
+      });
+    }
+    await secrets.set(secretRef, parsed.clientSecret);
+    const stored = await secrets.get(secretRef);
+    if (stored !== parsed.clientSecret) {
+      throw new CommsError('SECRET_STORE_UNAVAILABLE', 'the secret did not read back the way it was written', {
+        hint: 'Try again with `--store file` to keep secrets in owner-only files instead of the system keychain.',
+      });
+    }
 
-  const client: ClientConfig = {
-    provider: 'gmail',
-    clientId: parsed.clientId,
-    projectId: parsed.projectId,
-    secretRef,
-    addedAt: existing?.addedAt ?? context.now().toISOString(),
-  };
-  await context.core.config.update((current) => ({
-    ...current,
-    secrets: { store: chosen },
-    clients: { ...current.clients, [name]: client },
-  }));
+    const row: ClientConfig = {
+      provider: 'gmail',
+      clientId: parsed.clientId,
+      projectId: parsed.projectId,
+      secretRef,
+      addedAt: existing?.addedAt ?? context.now().toISOString(),
+    };
+    await context.core.config.update((current) => ({
+      ...current,
+      secrets: { store: chosen },
+      clients: { ...current.clients, [name]: row },
+    }));
+    return row;
+  });
 
   // Only once the secret is safely stored, and only if asked: the file is the one copy Google will ever show.
   let sourceRemoved = false;
