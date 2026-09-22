@@ -184,6 +184,19 @@ export function methodOfUrl(url: string): string | null {
   } catch {
     path = url.split(/[?#]/)[0] ?? url;
   }
-  const match = /\/api\/([^/?#]+)\/?$/.exec(path.replace(/\/+$/, '/'));
-  return match?.[1] ?? null;
+  /*
+   * No regular expression here, deliberately.
+   *
+   * This collapsed trailing slashes with `/\/+$/`, which an unanchored regex engine tries from every position in a
+   * run of slashes — quadratic on a path of many `/` that does not end in one. It sits on the guard every Slack
+   * request passes through and is exported from the package root, which is the one place a slow-path input is
+   * least acceptable. A backwards scan and a split say the same thing in linear time: the path, less any trailing
+   * slashes, ends in `/api/<method>`.
+   */
+  let end = path.length;
+  while (end > 0 && path.charCodeAt(end - 1) === 0x2f) end -= 1;
+  const segments = path.slice(0, end).split('/');
+  const method = segments.at(-1);
+  if (segments.at(-2) !== 'api' || !method) return null;
+  return method;
 }

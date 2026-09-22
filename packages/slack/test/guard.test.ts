@@ -316,3 +316,35 @@ test('the package root does not hand out the key to its own door', async () => {
   // The method registry stays: knowing a method's name grants nothing, and it is worth reading.
   assert.equal(typeof surface.methodRule, 'function');
 });
+
+test('reading the method out of a URL is linear, even on a path made of slashes', () => {
+  /*
+   * This used `/\/+$/` to collapse trailing slashes. An unanchored regex tries it from every position in a run of
+   * slashes, so a long run that does not end the string is quadratic — flagged by code scanning, on the one
+   * function every Slack request passes through.
+   *
+   * Timed rather than argued. Measured under the old regex: 5,000 slashes 37ms, 10,000 159ms, 20,000 607ms —
+   * doubling the input quadrupled the time. 40,000 took about 2.4 seconds there and must now take
+   * milliseconds; sized to fail this test by name rather than by timing out the whole file.
+   */
+  const hostile = `https://slack.com/${'/'.repeat(40_000)}x`;
+  const started = performance.now();
+  assert.equal(methodOfUrl(hostile), null);
+  assert.ok(performance.now() - started < 250, `methodOfUrl took ${Math.round(performance.now() - started)}ms`);
+});
+
+test('the method is still read the way it was: the last segment, when the one before is `api`', () => {
+  // Rewriting a guard is how a guard changes meaning; these are the shapes it has to keep answering the same way.
+  const cases: [string, string | null][] = [
+    ['https://slack.com/api/auth.test', 'auth.test'],
+    ['https://slack.com/api/auth.test/', 'auth.test'],
+    ['https://slack.com/api/auth.test///', 'auth.test'],
+    ['https://slack.com/api/chat.postMessage?channel=C1', 'chat.postMessage'],
+    ['https://slack.com/api/', null],
+    ['https://slack.com/api', null],
+    ['https://slack.com/xapi/auth.test', null],
+    ['https://slack.com/oauth/v2/authorize', null],
+    ['https://slack.com/api/auth.test/extra', null],
+  ];
+  for (const [url, expected] of cases) assert.equal(methodOfUrl(url), expected, url);
+});

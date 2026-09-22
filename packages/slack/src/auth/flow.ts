@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomInt } from 'node:crypto';
 import { mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CommsError, type LooseningConsent } from '@agentcomms/core';
@@ -73,10 +73,18 @@ export type FlowOutcome =
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
+/**
+ * `randomInt`, not `byte % 62`.
+ *
+ * 256 is not a multiple of 62, so reducing a random byte modulo 62 makes the first eight characters of the
+ * alphabet one part in thirty-one likelier than the rest. Small, and a flow id is not what secures a sign-in —
+ * the `state` and the PKCE verifier are — but it is the kind of small that code scanning is right to refuse, and
+ * `randomInt` rejects the out-of-range values instead of folding them back in. `@agentcomms/core` already does it
+ * this way for challenges; the Gmail package's flow ids have the same bias and are not changed here.
+ */
 export function newFlowId(): string {
-  const bytes = randomBytes(22);
   let out = '';
-  for (const byte of bytes) out += BASE62[byte % BASE62.length];
+  for (let i = 0; i < 22; i += 1) out += BASE62[randomInt(BASE62.length)];
   return `sfl_${out}`;
 }
 

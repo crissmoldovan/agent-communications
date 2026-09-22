@@ -355,3 +355,22 @@ test('only a GET is treated as the browser coming back', async () => {
     await listener.close();
   }
 });
+
+test('flow ids draw evenly from the whole alphabet', () => {
+  /*
+   * `byte % 62` made the first eight characters one part in thirty-one likelier, because 256 is not a multiple
+   * of 62. Measured over enough ids to see it: under a fair draw every character lands near the mean, and the
+   * old bias put A–H well clear of the rest.
+   */
+  const counts = new Map<string, number>();
+  const draws = 4000;
+  for (let i = 0; i < draws; i += 1) {
+    for (const char of newFlowId().slice(4)) counts.set(char, (counts.get(char) ?? 0) + 1);
+  }
+  const mean = (draws * 22) / 62;
+  const early = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].map((c) => counts.get(c) ?? 0);
+  const late = ['w', 'x', 'y', 'z', '6', '7', '8', '9'].map((c) => counts.get(c) ?? 0);
+  const ratio = early.reduce((a, b) => a + b, 0) / late.reduce((a, b) => a + b, 0);
+  // Fair gives ~1.00; the modulo bias gave ~1.29. The band is wide enough not to flake.
+  assert.ok(ratio > 0.9 && ratio < 1.12, `early/late ratio ${ratio.toFixed(3)} (mean ${mean.toFixed(0)})`);
+});
