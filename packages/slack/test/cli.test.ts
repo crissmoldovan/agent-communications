@@ -549,3 +549,19 @@ test('a sign-in for one workspace cannot be finished under another name', async 
   assert.equal(wrong.code, EXIT_CODES.USAGE);
   assert.match(wrong.json<Envelope<never>>().error?.message ?? '', /is for "acme", not "zed"/);
 });
+
+test('reauth --mode read narrows a send workspace, because that was asked for', async () => {
+  // The other half of the default-versus-explicit rule: keeping the existing mode must not become "ignore --mode".
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'send' });
+  const port = await freePort();
+  const result = await cli(
+    harness,
+    ['workspace', 'reauth', 'acme', '--mode', 'read', '--port', String(port), '--no-browser'],
+    browserOn(),
+  );
+  assert.equal(result.code, EXIT_CODES.OK, result.stderr);
+  const after = (await harness.core.config.load()).accounts.acme;
+  assert.equal(after?.mode, 'read');
+  assert.deepEqual([...(after?.grantedScopes ?? [])], scopesForMode('read'));
+});
