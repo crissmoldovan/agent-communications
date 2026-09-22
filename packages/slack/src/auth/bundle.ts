@@ -19,7 +19,7 @@ import { CommsError } from '@agentcomms/core';
  * the one where a refresh has been sent and nothing local yet knows what happened to it.
  */
 
-export const BUNDLE_VERSION = 1;
+export const BUNDLE_VERSION: number = 1;
 
 export type BundleState =
   /** Usable. The ordinary case. */
