@@ -171,6 +171,17 @@ address. This matters because the Gmail side deliberately uses `127.0.0.1` — `
 a name service says, which is the reason to avoid it — so the two packages will differ here, and the reason is
 that Slack documents one and not the other. Verify against a real workspace before the manifests are fixed.
 
+**How an app opts into PKCE is nowhere on the page.** Everything above is conditional on "if the app
+has opted into PKCE", and no source found says where that switch is — not the PKCE page, not the
+manifest reference. The S2 manifest therefore carries **no PKCE key**, because a key Slack silently
+ignores produces an app that looks configured and is not. This is the one genuine unknown of the
+four, and it is the first thing a real sign-in answers.
+
+> **All four unknowns in this section have a checklist.**
+> [`2026-09-22-slack-live-verification.md`](2026-09-22-slack-live-verification.md) says what to run,
+> what each outcome means and which line to change for each answer. Update this section with what was
+> observed, and the date, once it has been run.
+
 Sources: <https://docs.slack.dev/authentication/using-pkce/>,
 <https://docs.slack.dev/reference/methods/oauth.v2.user.access/>
 
