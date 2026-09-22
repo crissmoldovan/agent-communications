@@ -278,6 +278,9 @@ example ending in the right platform.
   lexical containment and an existing-ancestor realpath check, and `relativeSubpath` refuses absolute paths and
   `..`. Windows device names are excluded by the grammar. **Existing files are not moved**; `doctor` mentions an
   old folder once.
+- **Compose profiles** are files named after the mailbox, `compose/inbox-<name>.md`. A `/` would name a file in a
+  directory nobody created, so it is encoded (`inbox-acme__gmail.md`; `_` cannot appear in a name), and the profile
+  written under a former name is still read when nothing has been written under the new one.
 - **Audit records** keep the name they were written with. That is history.
 - **Search cursors** compare a comma-joined list of names; names contain no commas.
 - **OAuth completion pages** render names as escaped HTML. Names never reach a URL.

@@ -7,6 +7,9 @@ import {
   CommsError,
   type Config,
   credentialsLockPath,
+  formerNamesOf,
+  inboxProfileFile,
+  readComposeProfile,
   type SecretStore,
   withFileLock,
 } from '@agentcomms/core';
@@ -1363,4 +1366,122 @@ test('client add --replace refuses when a mailbox attached to the client while i
   const registered = (await harness.core.config.load()).clients.desktop;
   assert.equal(registered?.clientId, 'project-a.apps.googleusercontent.com', 'the client the mailbox uses is intact');
   assert.equal(await (await harness.core.secrets('file')).get(clientSecretRef('desktop')), 'fake-secret-a');
+});
+
+test('writing rules written for a mailbox keep applying after it is renamed', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt' });
+  const compose = join(harness.configDir, 'compose');
+  await mkdir(compose, { recursive: true });
+  await writeFile(join(compose, 'inbox-work.md'), '- Sign off as the team, never as yourself.');
+  await migrate(harness, ['work=acme/gmail']);
+
+  const config = await harness.core.config.load();
+  const underFormer = await readComposeProfile(compose, {
+    platform: 'gmail',
+    inbox: 'acme/gmail',
+    formerInboxes: formerNamesOf(config, 'inbox', 'acme/gmail'),
+  });
+  assert.match(underFormer.text, /Sign off as the team/, 'the rules written under the old name still apply');
+
+  // A file under the new name wins, and its name is a file — not a directory nobody made.
+  await writeFile(join(compose, inboxProfileFile('acme/gmail')), '- Say the thing.');
+  const underCurrent = await readComposeProfile(compose, {
+    platform: 'gmail',
+    inbox: 'acme/gmail',
+    formerInboxes: formerNamesOf(config, 'inbox', 'acme/gmail'),
+  });
+  assert.match(underCurrent.text, /Say the thing/);
+  assert.doesNotMatch(underCurrent.text, /Sign off as the team/);
+  assert.equal(inboxProfileFile('acme/gmail'), 'inbox-acme__gmail.md');
+});
+
+test('client add --replace refuses a mailbox attached during its own write, and puts the old secret back', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const first = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    first,
+    JSON.stringify({
+      installed: { client_id: 'project-a.apps.googleusercontent.com', client_secret: 'fake-secret-a' },
+    }),
+  );
+  await clientAdd(context, { path: first, name: 'desktop', store: 'file', noProbe: true });
+  const second = join(tempDir(), 'other_secret.json');
+  await writeFile(
+    second,
+    JSON.stringify({
+      installed: { client_id: 'project-b.apps.googleusercontent.com', client_secret: 'fake-secret-b' },
+    }),
+  );
+  const secrets = await harness.core.secrets('file');
+  // The mailbox attaches after the new secret is stored: only the check inside the write can see it.
+  meddleAfterStoring(
+    secrets,
+    (ref) => ref === clientSecretRef('desktop'),
+    () =>
+      harness.core.config.update((current) => ({
+        ...current,
+        inboxes: {
+          ...current.inboxes,
+          work: {
+            id: 'ibx_RRRRRRRRRRRRRRRR',
+            provider: 'gmail',
+            email: 'jo@example.test',
+            identity: 'oidc' as const,
+            sub: 'sub-1',
+            client: 'desktop',
+            tier: 'read',
+            contacts: false,
+            grantedScopes: [],
+            secretRef: 'gmail:refresh:ibx_RRRRRRRRRRRRRRRR',
+            internalDomains: [],
+            createdAt: '2026-09-22T00:00:00.000Z',
+          },
+        },
+      })),
+  );
+  await assert.rejects(
+    clientAdd(context, { path: second, name: 'desktop', replace: true, store: 'file', noProbe: true }),
+    is('CONFIG', /mailboxes use it/),
+  );
+  assert.equal((await harness.core.config.load()).clients.desktop?.clientId, 'project-a.apps.googleusercontent.com');
+  assert.equal(await secrets.get(clientSecretRef('desktop')), 'fake-secret-a', 'the mailbox’s client secret is back');
+});
+
+test('reauth refuses when the same account was connected under another name while it ran', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const id = await connectBySignIn(harness, context, 'work', 'read');
+  const secrets = await harness.core.secrets('file');
+  meddleAfterStoring(
+    secrets,
+    (ref) => ref === `gmail:refresh:${id}`,
+    () =>
+      harness.core.config.update((current) => ({
+        ...current,
+        inboxes: {
+          ...current.inboxes,
+          twin: {
+            id: 'ibx_TTTTTTTTTTTTTTTT',
+            provider: 'gmail',
+            email: 'jo@example.test',
+            identity: 'oidc' as const,
+            sub: 'sub-1',
+            client: 'default',
+            tier: 'read',
+            contacts: false,
+            grantedScopes: [],
+            secretRef: 'gmail:refresh:ibx_TTTTTTTTTTTTTTTT',
+            internalDomains: [],
+            createdAt: '2026-09-22T00:00:00.000Z',
+          },
+        },
+      })),
+  );
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', tier: 'organize', detached: false });
+  await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
+  await assert.rejects(reauth.listener?.result ?? Promise.resolve(), is('CONFIG', /was connected as "twin"/));
+  assert.equal((await inboxList(context)).find((row) => row.alias === 'work')?.tier, 'read');
 });

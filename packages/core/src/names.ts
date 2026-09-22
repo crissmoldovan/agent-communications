@@ -141,6 +141,22 @@ export function formerNameRefusal(config: Config, kind: NameKind, name: string):
   });
 }
 
+/**
+ * The names this account used to have, most recently recorded first.
+ *
+ * For the few places a name is more than a lookup — a file named after the mailbox, say — so what was written under
+ * the old name can still be found after a rename.
+ */
+export function formerNamesOf(config: Config, kind: NameKind, name: string): string[] {
+  if (config.version !== 2) return [];
+  const row = kind === 'inbox' ? own(config.inboxes, name) : own(config.accounts, name);
+  if (!row) return [];
+  return Object.entries(config.formerNames[MAP[kind]])
+    .filter(([, record]) => record.id === row.id)
+    .map(([former]) => former)
+    .reverse();
+}
+
 /** Looks up an inbox by name, or fails with the list of known names — or with what a former name is called now. */
 export function requireInbox(config: Config, alias: string): InboxConfig {
   return resolveName(config, 'inbox', alias).inbox;

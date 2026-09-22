@@ -52,8 +52,25 @@ export const BUILT_IN_PROFILE = `# Writing a message
 export interface ProfileOptions {
   /** `gmail`, or another provider later. */
   platform?: string | undefined;
-  /** The mailbox alias, for per-inbox rules. */
+  /** The mailbox name, for per-inbox rules. */
   inbox?: string | undefined;
+  /**
+   * Names this mailbox used to have, newest first.
+   *
+   * A profile is a file named after the mailbox, so a rename would leave the rules a person wrote behind under the
+   * old name. The current name wins; a former one is read when nothing has been written under the new one.
+   */
+  formerInboxes?: readonly string[] | undefined;
+}
+
+/**
+ * A mailbox's profile file name, with `/` encoded.
+ *
+ * `acme/gmail` would otherwise name a file in an `inbox-acme` directory nobody created, and the rules written for
+ * that mailbox would silently stop applying. `_` cannot appear in a name, so `__` can only mean the separator.
+ */
+export function inboxProfileFile(inbox: string): string {
+  return `inbox-${inbox.replaceAll('/', '__')}.md`;
 }
 
 function fileFor(directory: string, layer: ProfileLayer, options: ProfileOptions): string | null {
@@ -65,7 +82,7 @@ function fileFor(directory: string, layer: ProfileLayer, options: ProfileOptions
     case 'platform':
       return options.platform ? join(directory, `${options.platform}.md`) : null;
     case 'inbox':
-      return options.inbox ? join(directory, `inbox-${options.inbox}.md`) : null;
+      return options.inbox ? join(directory, inboxProfileFile(options.inbox)) : null;
   }
 }
 
@@ -78,14 +95,23 @@ export async function readComposeProfile(directory: string, options: ProfileOpti
   const candidates: string[] = [];
 
   for (const layer of PROFILE_LAYERS) {
-    const path = fileFor(directory, layer, options);
-    if (!path) continue;
-    candidates.push(path);
-    try {
-      const text = (await readFile(path, 'utf8')).trim();
-      if (text) sections.push({ layer, source: path, text });
-    } catch {
-      // Not written yet.
+    const paths =
+      layer === 'inbox' && options.inbox
+        ? [options.inbox, ...(options.formerInboxes ?? [])].map((name) => join(directory, inboxProfileFile(name)))
+        : [fileFor(directory, layer, options)].filter((path): path is string => path !== null);
+    for (const path of paths) {
+      candidates.push(path);
+      let text: string;
+      try {
+        text = (await readFile(path, 'utf8')).trim();
+      } catch {
+        continue; // Not written yet.
+      }
+      if (text) {
+        sections.push({ layer, source: path, text });
+        // One file per layer: the current name first, a former one only when nothing was written under it.
+        break;
+      }
     }
   }
 

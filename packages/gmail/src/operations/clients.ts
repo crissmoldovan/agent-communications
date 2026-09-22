@@ -142,6 +142,9 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
         hint: 'Run the command again to see what is there now.',
       });
     }
+    // Kept, so a write that does not land can put it back: the row would otherwise name this client while the
+    // secret under it belongs to the one being replaced.
+    const previous = options.replace ? await secrets.get(secretRef) : null;
     await secrets.set(secretRef, parsed.clientSecret);
     const stored = await secrets.get(secretRef);
     if (stored !== parsed.clientSecret) {
@@ -157,15 +160,45 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
       secretRef,
       addedAt: existing?.addedAt ?? context.now().toISOString(),
     };
-    await context.core.config.update((current) => {
-      // Never switch the store back: only `secrets migrate` changes it, and it moves the secrets with it.
-      if (current.secrets?.store && current.secrets.store !== chosen) {
-        throw new CommsError('TRANSIENT', 'the secret store was changed while this ran', {
-          hint: 'Run the command again.',
-        });
+    try {
+      await context.core.config.update((current) => {
+        // Never switch the store back: only `secrets migrate` changes it, and it moves the secrets with it.
+        if (current.secrets?.store && current.secrets.store !== chosen) {
+          throw new CommsError('TRANSIENT', 'the secret store was changed while this ran', {
+            hint: 'Run the command again.',
+          });
+        }
+        // The users are re-checked here as well as above: a sign-in completing between the two would otherwise
+        // attach a mailbox to the client being replaced, and its token would not survive the replacement.
+        const held = current.clients[name];
+        if (held && held.clientId !== parsed.clientId && inboxesOf(current.inboxes, name).length > 0) {
+          throw new CommsError('CONFIG', `"${name}" is a different OAuth client, and mailboxes use it`, {
+            hint: 'Add the new client under another name, then `inbox reauth` each mailbox onto it.',
+          });
+        }
+        return { ...current, secrets: { store: chosen }, clients: { ...current.clients, [name]: row } };
+      });
+    } catch (error) {
+      // A rejected write may have committed (see `writeOutcome` in core). Only put the old secret back when it did
+      // not, and say so if that fails: a client whose secret is the other one's cannot renew anything.
+      const landed = await writeOutcome(
+        async () => (await context.config()).clients[name]?.clientId === parsed.clientId,
+      );
+      if (landed === 'unknown') throw keepAndReport(error, secretRef, 'Run `agent-gmail client list`.');
+      if (landed === 'absent' && previous !== null) {
+        try {
+          await secrets.set(secretRef, previous);
+        } catch (restoreError) {
+          const base = error instanceof CommsError ? error : new CommsError('UNEXPECTED', String(error));
+          throw new CommsError(base.code, base.message, {
+            hint: `${base.hint ? `${base.hint} ` : ''}The previous client secret could not be put back: register that client again with \`agent-gmail client add <its JSON> --replace\`.`,
+            details: { secretNotRestored: secretRef, restoreError: (restoreError as Error).message },
+            cause: error,
+          });
+        }
       }
-      return { ...current, secrets: { store: chosen }, clients: { ...current.clients, [name]: row } };
-    });
+      if (landed !== 'present') throw error;
+    }
     return row;
   });
 

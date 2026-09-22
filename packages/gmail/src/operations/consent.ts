@@ -347,6 +347,25 @@ async function writeReauth(
       const now = findById(current, 'inbox', inboxId);
       if (!now) throw inboxGone();
       requireSameClient(current, flow.clientName, clientId);
+      /*
+       * And no other mailbox on this client is the same account.
+       *
+       * Checked on the snapshot above and again here: an add or an import completing in between can connect this
+       * account under another name, and two rows for one account share — and overwrite — one grant. Legacy rows
+       * have no `sub`, so the address decides for them, exactly as `duplicateInbox` does.
+       */
+      const twin = Object.entries(current.inboxes).find(
+        ([, row]) =>
+          row.id !== inboxId &&
+          row.client === flow.clientName &&
+          ((identity.sub !== undefined && row.sub === identity.sub) ||
+            (row.sub === undefined && row.email.toLowerCase() === identity.email.toLowerCase())),
+      );
+      if (twin) {
+        throw new CommsError('CONFIG', `${identity.email} was connected as "${twin[0]}" while this ran`, {
+          hint: `Remove "${twin[0]}" first if you want it under this name.`,
+        });
+      }
       written = { alias: now.alias, inbox: { ...now.inbox, ...grantFields(flow, identity, granted, now.inbox) } };
       return { ...current, inboxes: { ...current.inboxes, [now.alias]: written.inbox } };
     });
