@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CommsError, requireInbox } from '@agentcomms/core';
 import type { OAuthFlow } from '../auth/flows.ts';
+import { aboutFlow } from '../auth/flows.ts';
 import { startLoopback } from '../auth/loopback.ts';
 import { buildAuthUrl, newPkce, newState, oauthError } from '../auth/oauth.ts';
 import { scopesFor, TIERS, type Tier } from '../auth/scopes.ts';
@@ -145,6 +146,7 @@ async function startInProcess(
     state: flow.state,
     port,
     timeoutMs: Date.parse(flow.expiresAt) - context.now().getTime(),
+    about: aboutFlow(flow),
   });
   await context.flows.patch(flow.flowId, { redirectUri: listener.redirectUri, port: listener.port });
   const result = (async (): Promise<ConsentResult> => {
