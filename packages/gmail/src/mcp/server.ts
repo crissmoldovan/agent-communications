@@ -1,4 +1,4 @@
-import { CommsError, stricterPolicy, toCommsError } from '@agentcomms/core';
+import { CommsError, findById, lookupName, stricterPolicy, toCommsError } from '@agentcomms/core';
 import { acceptedContent, inputRequired, inputResponse, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
@@ -100,7 +100,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
   const needsInteraction = await (async (): Promise<boolean> => {
     try {
       const config = await context.config();
-      const served = pinned ? [config.inboxes[pinned]].filter(Boolean) : Object.values(config.inboxes);
+      const served = pinned ? [lookupName(config, 'inbox', pinned)].filter(Boolean) : Object.values(config.inboxes);
       return served.some((inbox) => (inbox?.sendPolicy ?? config.defaults.sendPolicy) !== 'chat');
     } catch {
       // Unreadable config: ask for the human. The wrong answer in this direction costs a prompt, not a send.
@@ -930,7 +930,12 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           description:
             'Begin connecting a Gmail account. Returns a sign-in link and stops — this server does not open browsers and cannot grant the consent itself. Give the user the link, warn them Google will call the app unverified (Advanced → "Go to … (unsafe)" is expected for a client they made themselves), then call gmail_inbox_finish.',
           inputSchema: z.object({
-            alias: z.string().min(1).describe('a short name for the mailbox, e.g. work'),
+            alias: z
+              .string()
+              .min(1)
+              .describe(
+                'a name for the mailbox: organisation/gmail, e.g. acme/gmail, once names have been migrated (gmail_inboxes_list shows which); before that, one plain word',
+              ),
             email: z.string().min(3).optional().describe('the address it must turn out to be; refuses any other'),
             tier: z.string().optional().describe('read, draft or organize — how much access to ask for'),
           }),
@@ -1261,7 +1266,9 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     const record = await context.core.approvals.get(approvalId);
     if (!record || record.state === 'approved') return false;
     const config = await context.config();
-    const live = config.inboxes[alias]?.sendPolicy ?? config.defaults.sendPolicy;
+    // By the approval's own inbox id, not the name the call used: the approval is for that mailbox, whatever it is
+    // called now.
+    const live = findById(config, 'inbox', record.inboxId)?.inbox.sendPolicy ?? config.defaults.sendPolicy;
     return stricterPolicy(live, record.requiredPolicy) === 'confirm';
   };
 

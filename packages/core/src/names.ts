@@ -89,6 +89,19 @@ function defaultNotFound(config: Config, kind: NameKind, name: string): CommsErr
   return new CommsError('NOT_FOUND', `no account called "${name}"`);
 }
 
+/**
+ * The live account under exactly this name, or undefined — no former names, no refusal.
+ *
+ * For callers that only ask "is this name connected right now": a policy preflight, a startup hint. Anything that
+ * acts on the answer for a person who typed the name should use `resolveName`, which tells them what an old name is
+ * called now.
+ */
+export function lookupName(config: Config, kind: 'inbox', name: string): InboxConfig | undefined;
+export function lookupName(config: Config, kind: 'account', name: string): AccountConfig | undefined;
+export function lookupName(config: Config, kind: NameKind, name: string): InboxConfig | AccountConfig | undefined {
+  return kind === 'inbox' ? own(config.inboxes, name) : own(config.accounts, name);
+}
+
 /** The name an account has now, found by its immutable id. */
 export function findById(config: Config, kind: 'inbox', id: string): { alias: string; inbox: InboxConfig } | null;
 export function findById(config: Config, kind: 'account', id: string): { alias: string; account: AccountConfig } | null;

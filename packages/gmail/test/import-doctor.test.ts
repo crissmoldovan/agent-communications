@@ -206,7 +206,9 @@ test('a token that could not be deleted is remembered and reported, not forgotte
   const checks = await doctor(context);
   const orphans = checks.checks.find((check) => check.id === 'orphaned-secrets');
   assert.equal(orphans?.status, 'warn');
-  assert.match(orphans?.fix ?? '', /keychain/);
+  // The advice names the reference to delete, from whichever store is in use.
+  assert.ok(orphans?.fix?.includes(`gmail:refresh:${removed.id}`), orphans?.fix);
+  assert.match(orphans?.fix ?? '', /secret store/);
 });
 
 test('doctor reports what is missing with the command that fixes it, and finds ungated servers', async () => {

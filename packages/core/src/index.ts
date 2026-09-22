@@ -19,6 +19,7 @@ export * from './names.ts';
 export * from './output.ts';
 export * from './paths.ts';
 export * from './plans.ts';
+export * from './reconcile.ts';
 export * from './render.ts';
 export * from './sanitize.ts';
 export * from './secrets.ts';

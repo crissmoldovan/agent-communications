@@ -4,10 +4,14 @@ import {
   type Config,
   defaultInternalDomains,
   duplicateInbox,
-  findInboxById,
+  findById,
   type InboxConfig,
+  keepAndReport,
   newInboxId,
   PUBLIC_MAILBOX_DOMAINS,
+  withCredentialsLock,
+  withdrawStaged,
+  writeOutcome,
 } from '@agentcomms/core';
 import type { OAuthFlow } from '../auth/flows.ts';
 import { exchangeCode, type TokenResponse } from '../auth/oauth.ts';
@@ -15,6 +19,7 @@ import { capabilitiesOf, tierOf } from '../auth/scopes.ts';
 import { refreshTokenRef, TokenSource } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';
 import { getProfileWithToken } from '../gmail-api/profile.ts';
+import { requireNewInboxName } from './inbox-names.ts';
 
 export interface ConsentResult {
   alias: string;
@@ -119,11 +124,7 @@ async function addInbox(
       hint: `Use it as "${duplicate}", rename it (\`agent-gmail inbox rename ${duplicate} ${flow.alias}\`), or remove it first.`,
     });
   }
-  if (config.inboxes[flow.alias]) {
-    throw new CommsError('CONFIG', `an inbox called "${flow.alias}" already exists`, {
-      hint: `Choose another name, or re-authorise the existing one with \`agent-gmail inbox reauth ${flow.alias}\`.`,
-    });
-  }
+  requireNewInboxName(config, flow.alias);
 
   const id = newInboxId();
   const inbox: InboxConfig = {
@@ -143,15 +144,35 @@ async function addInbox(
 
   // The token first: a registry row pointing at a secret that is not there would look connected and fail on use.
   const secrets = await context.core.secrets();
-  await secrets.set(inbox.secretRef, tokens.refreshToken);
   try {
-    await context.core.config.update((current) => ({
-      ...current,
-      inboxes: { ...current.inboxes, [flow.alias]: inbox },
-    }));
+    // Inside the boundary that takes it back: a keychain write can finish after it reported a timeout.
+    await secrets.set(inbox.secretRef, tokens.refreshToken);
+    await context.core.config.update((current) => {
+      /*
+       * Checked again under the lock, against the file as it is now.
+       *
+       * Up to ten minutes pass between starting a sign-in and finishing it, and the checks above ran on a snapshot.
+       * In between, the name can be taken, the same account connected under another name, or every name migrated
+       * to the organisation/platform form — in which case a plain name that was fine when the flow started is not
+       * one any more, and the flow is refused here rather than writing a name the file no longer allows.
+       */
+      requireNewInboxName(current, flow.alias);
+      const raced = duplicateInbox(current, { client: flow.clientName, sub: identity.sub, email: identity.email });
+      if (raced) throw new CommsError('CONFIG', `${identity.email} was connected as "${raced}" while this finished`);
+      return { ...current, inboxes: { ...current.inboxes, [flow.alias]: inbox } };
+    });
   } catch (error) {
-    await secrets.delete(inbox.secretRef).catch(() => undefined);
-    throw error;
+    /*
+     * Look before undoing: a rejected write may have committed (see `writeOutcome`). This used to delete the token on
+     * any error, which turned a sign-in whose lock release failed into a connected mailbox with no credential — and
+     * swallowed a failed deletion, which left a live token nothing named and nobody was told about.
+     */
+    const landed = await writeOutcome(
+      async () => findById(await context.config(), 'inbox', id)?.inbox.secretRef === inbox.secretRef,
+    );
+    if (landed === 'unknown') throw keepAndReport(error, inbox.secretRef, 'Run `agent-gmail inbox list`.');
+    if (landed === 'absent') throw await withdrawStaged(secrets, inbox.secretRef, error);
+    // 'present': the write is in and only the lock's cleanup failed. The mailbox is connected.
   }
   await context.core.states.update(id, {
     lastRefreshOkAt: context.now().toISOString(),
@@ -181,12 +202,92 @@ async function reauthorise(
   missingScopes: string[],
 ): Promise<ConsentResult> {
   const inboxId = flow.expect.inboxId;
-  const existing = inboxId ? findInboxById(config, inboxId) : null;
-  if (!inboxId || !existing) {
-    throw new CommsError('NOT_FOUND', 'the inbox this sign-in was for no longer exists', {
-      hint: 'Add it again with `agent-gmail inbox add <alias>`.',
-    });
+  if (!inboxId || !findById(config, 'inbox', inboxId)) throw inboxGone();
+
+  /*
+   * Under the credentials lock, taken only now that the code is spent.
+   *
+   * A reauth overwrites an existing account's token, under the same reference. Outside the lock, a removal that
+   * finished first would have its deleted token written back — and then either its row recreated under the old name,
+   * undoing the removal, or no row at all and a live token nothing references. Removal and `secrets migrate` hold
+   * this lock, so inside it the row read below is the row the token is written for.
+   *
+   * Taken after the exchange rather than before, because waiting on a lock with an unspent one-shot code would lose
+   * the code to a timeout. A timeout here loses only the new token, and the person gets it again by retrying.
+   */
+  let result: { alias: string; inbox: InboxConfig };
+  try {
+    result = await withCredentialsLock(context.core.paths.configDir, () =>
+      writeReauth(context, flow, inboxId, tokens, identity, granted),
+    );
+  } catch (error) {
+    if (error instanceof CommsError && error.code === 'LOCK_TIMEOUT') {
+      throw new CommsError('TRANSIENT', 'another operation on stored credentials is running, so nothing was saved', {
+        hint: `Run \`agent-gmail inbox reauth ${flow.alias}\` again in a moment.`,
+        cause: error,
+      });
+    }
+    throw error;
   }
+
+  await context.core.states.update(inboxId, {
+    lastRefreshOkAt: context.now().toISOString(),
+    grantedScopes: granted,
+    lastError: undefined,
+  });
+  await context.core.audit.append({
+    inboxId,
+    alias: result.alias,
+    operation: 'inbox.reauth',
+    outcome: 'ok',
+    surface: context.surface,
+  });
+  context.forgetTransports();
+  return { alias: result.alias, inbox: result.inbox, missingScopes, reauthorised: true };
+}
+
+function inboxGone(): CommsError {
+  return new CommsError('NOT_FOUND', 'the inbox this sign-in was for no longer exists', {
+    hint: 'Add it again with `agent-gmail inbox add <alias>`.',
+  });
+}
+
+/** What a grant sets on an inbox row. Everything else — the send policy, the internal domains — carries over. */
+function grantFields(
+  flow: OAuthFlow,
+  identity: VerifiedIdentity,
+  granted: string[],
+  previous: InboxConfig,
+): Partial<InboxConfig> {
+  return {
+    email: identity.email,
+    sub: identity.sub ?? previous.sub,
+    identity: identity.sub ? 'oidc' : previous.identity,
+    // The client the token was actually issued to. `completeConsent` exchanged the code with `flow.clientName`, so
+    // after `inbox reauth <alias> --client desktop` the stored refresh token belongs to `desktop` while the row
+    // still said whatever it said before — and every later refresh then presented the new token to the old client.
+    // That breaks the one recovery the shipped troubleshooting guide prescribes for a deleted or mismatched OAuth
+    // client, which is this exact command.
+    client: flow.clientName,
+    tier: tierOf(granted) ?? previous.tier,
+    contacts: capabilitiesOf(granted).has('contacts'),
+    grantedScopes: granted,
+  };
+}
+
+/** The part of a reauth that must run under the credentials lock: read the row, write the token, write the row. */
+async function writeReauth(
+  context: GmailContext,
+  flow: OAuthFlow,
+  inboxId: string,
+  tokens: TokenResponse,
+  identity: VerifiedIdentity,
+  granted: string[],
+): Promise<{ alias: string; inbox: InboxConfig }> {
+  // Read inside the lock, by id: the row as it is now, under whatever name it has now.
+  const config = await context.config();
+  const existing = findById(config, 'inbox', inboxId);
+  if (!existing) throw inboxGone();
 
   // The same account, or nothing is written: a re-consent must not quietly point an alias at a different mailbox.
   //
@@ -204,7 +305,7 @@ async function reauthorise(
   }
   // A sub that already belongs to another alias would leave two aliases sharing one grant.
   const clash = Object.entries(config.inboxes).find(
-    ([alias, inbox]) => alias !== existing.alias && identity.sub !== undefined && inbox.sub === identity.sub,
+    ([, inbox]) => inbox.id !== inboxId && identity.sub !== undefined && inbox.sub === identity.sub,
   );
   if (clash) {
     throw new CommsError('CONFIG', `that account is already connected as "${clash[0]}"`, {
@@ -214,39 +315,38 @@ async function reauthorise(
 
   const secrets = await context.core.secrets();
   await secrets.set(existing.inbox.secretRef, tokens.refreshToken);
-  const updated: InboxConfig = {
-    ...existing.inbox,
-    email: identity.email,
-    sub: identity.sub ?? existing.inbox.sub,
-    identity: identity.sub ? 'oidc' : existing.inbox.identity,
-    // The client the token was actually issued to. `completeConsent` exchanged the code with `flow.clientName`, so
-    // after `inbox reauth <alias> --client desktop` the stored refresh token belongs to `desktop` while the row
-    // still said whatever it said before — and every later refresh then presented the new token to the old client.
-    // That breaks the one recovery the shipped troubleshooting guide prescribes for a deleted or mismatched OAuth
-    // client, which is this exact command.
-    client: flow.clientName,
-    tier: tierOf(granted) ?? existing.inbox.tier,
-    contacts: capabilitiesOf(granted).has('contacts'),
-    grantedScopes: granted,
-  };
-  await context.core.config.update((current) => ({
-    ...current,
-    inboxes: { ...current.inboxes, [existing.alias]: updated },
-  }));
-  await context.core.states.update(existing.inbox.id, {
-    lastRefreshOkAt: context.now().toISOString(),
-    grantedScopes: granted,
-    lastError: undefined,
-  });
-  await context.core.audit.append({
-    inboxId: existing.inbox.id,
+  let written: { alias: string; inbox: InboxConfig } = {
     alias: existing.alias,
-    operation: 'inbox.reauth',
-    outcome: 'ok',
-    surface: context.surface,
-  });
-  context.forgetTransports();
-  return { alias: existing.alias, inbox: updated, missingScopes, reauthorised: true };
+    inbox: { ...existing.inbox, ...grantFields(flow, identity, granted, existing.inbox) },
+  };
+  try {
+    await context.core.config.update((current) => {
+      // By id, under whatever key it holds now: a rename is followed rather than undone.
+      const now = findById(current, 'inbox', inboxId);
+      if (!now) throw inboxGone();
+      written = { alias: now.alias, inbox: { ...now.inbox, ...grantFields(flow, identity, granted, now.inbox) } };
+      return { ...current, inboxes: { ...current.inboxes, [now.alias]: written.inbox } };
+    });
+  } catch (error) {
+    /*
+     * The row existed, under this lock, when the token was written — and nothing that holds the lock can have removed
+     * it since. So normally the token stays referenced whatever the write did. The exception is a release that does
+     * not know this lock (0.1.x removes without it): if the row is gone now, the token just written is referenced by
+     * nothing and is taken back.
+     */
+    const landed = await writeOutcome(async () => findById(await context.config(), 'inbox', inboxId) !== null);
+    if (landed === 'unknown') throw keepAndReport(error, existing.inbox.secretRef, 'Run `agent-gmail inbox list`.');
+    if (landed === 'absent') throw await withdrawStaged(secrets, existing.inbox.secretRef, error);
+    const after = findById(await context.config(), 'inbox', inboxId);
+    const applied = after?.inbox.client === written.inbox.client && sameScopes(after.inbox.grantedScopes, granted);
+    if (!applied) throw error;
+    // The write is in and only the lock's cleanup failed.
+  }
+  return written;
+}
+
+function sameScopes(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && [...a].sort().join(' ') === [...b].sort().join(' ');
 }
 
 /** Confirms a stored inbox still works, used by `doctor` and after a sign-in. */

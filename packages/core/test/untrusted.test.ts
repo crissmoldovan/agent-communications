@@ -29,6 +29,9 @@ test('boundaries differ between calls', () => {
 test('attacker-controlled values are refused as tag attributes', () => {
   assert.throws(() => wrapUntrusted('x', { field: 'body', inbox: 'work" onload="x' }), /unsafe envelope attribute/);
   assert.throws(() => wrapUntrusted('x', { field: 'Display Name <a@b>' }), /unsafe envelope attribute/);
+  // An organisation/platform account name is an ordinary value; a slash still cannot smuggle in a quote or a bracket.
+  assert.match(wrapUntrusted('x', { field: 'body', inbox: 'cue/gmail-tech' }, 'b1'), /inbox="cue\/gmail-tech"/);
+  assert.throws(() => wrapUntrusted('x', { field: 'body', inbox: 'cue/"><x' }), /unsafe envelope attribute/);
 });
 
 test('chat-template control tokens and role markers are neutralised and counted', () => {

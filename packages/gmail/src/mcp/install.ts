@@ -221,6 +221,9 @@ function snippetFor(name: string, entry: ServerEntry): string {
  */
 export async function mcpInstall(context: GmailContext, options: InstallOptions): Promise<InstallResult> {
   const name = options.name ?? 'gmail';
+  // Resolved here, whatever `--no-verify` says: a server pinned to a name that does not exist — or to one that was
+  // renamed — starts, fails, and says so only in a client's log. Refused now, with the name it is called today.
+  if (options.inbox) await context.inbox(options.inbox);
   const { entry, launcher } = await buildEntry(context, options);
   const snippet = snippetFor(name, entry);
   const apply = options.apply ?? true;

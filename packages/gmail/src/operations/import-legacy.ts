@@ -6,12 +6,18 @@ import {
   defaultInternalDomains,
   duplicateInbox,
   expandHome,
+  findById,
   homeDirectory,
   type InboxConfig,
   isValidAlias,
+  keepAndReport,
+  nameAvailable,
   newInboxId,
   PUBLIC_MAILBOX_DOMAINS,
+  type SecretStore,
   type StoreKind,
+  withdrawStaged,
+  writeOutcome,
 } from '@agentcomms/core';
 import { parseClientJson } from '../auth/oauth.ts';
 import { capabilitiesOf, parseGrantedScopes, tierOf } from '../auth/scopes.ts';
@@ -19,6 +25,7 @@ import { clientSecretRef, refreshTokenRef } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';
 import { getProfileWithToken } from '../gmail-api/profile.ts';
 import { findUngatedGmailServers, type LegacyServerFinding, listRegisteredServers } from './client-configs.ts';
+import { requireNewInboxName } from './inbox-names.ts';
 import { readSmallFile } from './small-file.ts';
 
 /**
@@ -58,6 +65,11 @@ export interface ImportOptions {
   clientName?: string | undefined;
   store?: StoreKind | undefined;
   dryRun?: boolean | undefined;
+  /**
+   * `<legacy name>=<name>`, one per mailbox to name differently. The legacy name is the one the file implies —
+   * `creds-work.json` is `work` — so a person can see it in `--dry-run` and override exactly that one.
+   */
+  renames?: readonly string[] | undefined;
 }
 
 interface LegacyCredentials {
@@ -130,8 +142,22 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
   const config = await context.config();
   const existingClient = Object.entries(config.clients).find(([, row]) => row.clientId === parsedClient.clientId);
   const clientKey = existingClient?.[0] ?? clientName;
+  /*
+   * A different client already under this name is refused, not overwritten.
+   *
+   * This wrote `clientSecretRef(clientKey)` and replaced the row whenever no client had the same *id* — so a second
+   * import from a different Google project, under the default name `imported`, silently replaced the first project's
+   * secret, and every mailbox signed in through it stopped renewing. With failed writes now taken back, it would also
+   * have deleted that secret.
+   */
+  if (!existingClient && Object.hasOwn(config.clients, clientKey)) {
+    throw new CommsError('CONFIG', `an OAuth client called "${clientKey}" already exists, for a different Google project`, {
+      hint: 'Import it under another name with `--name <name>`.',
+    });
+  }
 
   const credentialFiles = entries.filter((entry) => /^creds-.+\.json$/i.test(entry) || entry === 'credentials.json');
+  const names = importNames(config, credentialFiles, options.renames ?? []);
   const imported: ImportCandidate[] = [];
   const skipped: ImportCandidate[] = [];
 
@@ -142,27 +168,41 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
   const store = config.secrets?.store ?? options.store ?? 'keychain';
   const secrets = dryRun ? null : await context.core.secrets(store);
   if (!dryRun && secrets && !existingClient) {
-    await secrets.set(clientSecretRef(clientKey), parsedClient.clientSecret);
-    await context.core.config.update((current) => ({
-      ...current,
-      // The same value the store above was opened with, so the two can never disagree.
-      secrets: { store: current.secrets?.store ?? store },
-      clients: {
-        ...current.clients,
-        [clientKey]: {
-          provider: 'gmail',
-          clientId: parsedClient.clientId,
-          projectId: parsedClient.projectId,
-          secretRef: clientSecretRef(clientKey),
-          addedAt: context.now().toISOString(),
-        },
-      },
-    }));
+    const ref = clientSecretRef(clientKey);
+    await storeThenRecord(
+      secrets,
+      ref,
+      parsedClient.clientSecret,
+      () =>
+        context.core.config.update((current) => {
+          if (Object.hasOwn(current.clients, clientKey)) {
+            throw new CommsError('CONFIG', `an OAuth client called "${clientKey}" was added while this ran`, {
+              hint: 'Run the import again.',
+            });
+          }
+          return {
+            ...current,
+            // The same value the store above was opened with, so the two can never disagree.
+            secrets: { store: current.secrets?.store ?? store },
+            clients: {
+              ...current.clients,
+              [clientKey]: {
+                provider: 'gmail',
+                clientId: parsedClient.clientId,
+                projectId: parsedClient.projectId,
+                secretRef: ref,
+                addedAt: context.now().toISOString(),
+              },
+            },
+          };
+        }),
+      async () => (await context.config()).clients[clientKey]?.secretRef === ref,
+    );
   }
 
   for (const file of credentialFiles.sort()) {
     const path = join(directory, file);
-    const alias = uniqueAlias(aliasFromCredentialsFile(file), await context.config());
+    const alias = names.get(file) ?? aliasFromCredentialsFile(file);
     let credentials: LegacyCredentials;
     try {
       const content = await readSmallFile(path, { follow: false });
@@ -221,11 +261,20 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
       internalDomains: defaultInternalDomains(email, PUBLIC_MAILBOX_DOMAINS),
       createdAt: context.now().toISOString(),
     };
-    await secrets?.set(inbox.secretRef, credentials.refreshToken);
-    await context.core.config.update((existing: Config) => ({
-      ...existing,
-      inboxes: { ...existing.inboxes, [alias]: inbox },
-    }));
+    if (secrets) {
+      await storeThenRecord(
+        secrets,
+        inbox.secretRef,
+        credentials.refreshToken,
+        () =>
+          context.core.config.update((existing: Config) => {
+            // Checked again under the lock: the names were chosen from a snapshot, before any network call.
+            requireNewInboxName(existing, alias, 'Run the import again.');
+            return { ...existing, inboxes: { ...existing.inboxes, [alias]: inbox } };
+          }),
+        async () => findById(await context.config(), 'inbox', id)?.inbox.secretRef === inbox.secretRef,
+      );
+    }
     await context.core.audit.append({
       inboxId: id,
       alias,
@@ -303,11 +352,85 @@ async function identify(
   return profile.emailAddress;
 }
 
-function uniqueAlias(wanted: string, config: Config): string {
-  if (!config.inboxes[wanted]) return wanted;
-  for (let suffix = 2; suffix < 50; suffix++) {
-    const candidate = `${wanted}-${suffix}`;
-    if (!config.inboxes[candidate]) return candidate;
+/**
+ * What each credentials file will be called, decided before anything is written.
+ *
+ * Version 1 keeps the plain name the file implies, made unique with `-2`, `-3`… Version 2 proposes
+ * `<legacy name>/gmail`, made unique with a qualifier — `work/gmail-2`. `--rename work=acme/gmail` overrides one, by
+ * the legacy name. Every problem — an override naming no file, a target the config cannot take, two files given one
+ * name — is collected and refused together, so nothing is half-imported under names somebody would have to undo.
+ */
+export function importNames(config: Config, files: readonly string[], renames: readonly string[]): Map<string, string> {
+  const problems: string[] = [];
+  // Several files can imply one legacy name — anything unreadable as a name becomes `imported` — so this is per file.
+  const byLegacy = new Map<string, string[]>();
+  for (const file of files) {
+    const from = aliasFromCredentialsFile(file);
+    byLegacy.set(from, [...(byLegacy.get(from) ?? []), file]);
   }
-  return `${wanted}-${Date.now()}`;
+  const overrides = new Map<string, string>();
+  for (const rename of renames) {
+    const at = rename.indexOf('=');
+    const from = rename.slice(0, at);
+    const to = rename.slice(at + 1);
+    if (at <= 0 || !to) problems.push(`"${rename}" is not <legacy name>=<name>`);
+    else if (!byLegacy.has(from)) problems.push(`no credentials file is called "${from}"`);
+    else if ((byLegacy.get(from)?.length ?? 0) > 1) problems.push(`"${from}" is more than one file, so it cannot be renamed`);
+    else if (overrides.has(from)) problems.push(`"${from}" is renamed more than once`);
+    else overrides.set(from, to);
+  }
+
+  const taken = new Set<string>();
+  const free = (name: string) => !taken.has(name) && nameAvailable(config, 'inbox', name, 'gmail').ok;
+  const names = new Map<string, string>();
+  for (const file of [...files].sort()) {
+    const from = aliasFromCredentialsFile(file);
+    const override = overrides.get(from);
+    let name: string;
+    if (override !== undefined) {
+      const check = nameAvailable(config, 'inbox', override, 'gmail');
+      if (!check.ok) problems.push(`${from}: ${check.error.message}`);
+      else if (taken.has(override)) problems.push(`"${override}" is given to more than one mailbox`);
+      name = override;
+    } else {
+      const base = config.version === 2 ? `${from}/gmail` : from;
+      const variant = (n: number) => (config.version === 2 ? `${from}/gmail-${n}` : `${from}-${n}`);
+      name = base;
+      for (let n = 2; !free(name) && n < 50; n++) name = variant(n);
+      if (!free(name)) problems.push(`${from}: no free name near "${base}" — choose one with --rename ${from}=<name>`);
+    }
+    taken.add(name);
+    names.set(file, name);
+  }
+  if (problems.length > 0) {
+    throw new CommsError(
+      'USAGE',
+      `nothing was imported: ${problems.length === 1 ? problems[0] : `${problems.length} problems`}`,
+      { hint: problems.map((problem) => `- ${problem}`).join('\n'), details: { problems } },
+    );
+  }
+  return names;
+}
+
+/**
+ * Stores a secret, then the config row naming it — and if the row's write is rejected, looks before undoing.
+ *
+ * A rejected write may have committed (see `writeOutcome` in core). The secret is kept when the row is there, taken
+ * back when it is not, and kept and reported when nobody can tell.
+ */
+async function storeThenRecord(
+  secrets: SecretStore,
+  ref: string,
+  value: string,
+  record: () => Promise<unknown>,
+  recorded: () => Promise<boolean>,
+): Promise<void> {
+  try {
+    await secrets.set(ref, value);
+    await record();
+  } catch (error) {
+    const landed = await writeOutcome(recorded);
+    if (landed === 'unknown') throw keepAndReport(error, ref, 'Run `agent-gmail inbox list`.');
+    if (landed === 'absent') throw await withdrawStaged(secrets, ref, error);
+  }
 }

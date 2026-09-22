@@ -280,6 +280,9 @@ example ending in the right platform.
 - **Audit records** keep the name they were written with. That is history.
 - **Search cursors** compare a comma-joined list of names; names contain no commas.
 - **OAuth completion pages** render names as escaped HTML. Names never reach a URL.
+- **The untrusted-content envelope** carries the mailbox name as an attribute, from a character allowlist that had
+  no `/` — so every read of a renamed mailbox failed. Found by N2's first test under a nested name; `/` is added.
+  Values stay quoted and can never hold a quote or an angle bracket.
 - **`/` is ordinary** in JSON, MCP string parameters and shell arguments.
 
 ## The classifier

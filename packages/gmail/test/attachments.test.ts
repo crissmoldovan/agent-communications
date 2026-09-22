@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { CommsError } from '@agentcomms/core';
+import { CommsError, migrateNames, planNamesMigration } from '@agentcomms/core';
 import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { GmailContext } from '../src/context.ts';
@@ -427,5 +427,39 @@ test('an attachment risk is judged on the name the file would be written under, 
   assert.ok(
     rows[0].riskFlags.length > 0,
     `an executable with a trailing space must still be flagged, got ${JSON.stringify(rows[0].riskFlags)}`,
+  );
+});
+
+test('under an organisation/platform name, downloads and exports land one folder per organisation', async () => {
+  const { harness, context, downloads } = await connected(
+    {
+      m1: withAttachment({
+        id: 'm1',
+        at: '2026-09-15T09:00:00Z',
+        from: 'Sam Lee <sam@partner.test>',
+        subject: 'Invoice for August',
+        filename: 'invoice.pdf',
+        attachmentId: 'a1',
+      }),
+    },
+    { a1: 'invoice bytes' },
+  );
+  const plan = planNamesMigration(await harness.core.config.load(), ['work=acme/gmail']);
+  assert.equal(plan.status, 'ready');
+  if (plan.status === 'ready') await migrateNames(harness.core.config, plan);
+
+  const result = await downloadAttachments(context, 'acme/gmail', [{ messageId: 'm1', partId: '1' }]);
+  const file = result.files[0];
+  assert.ok(file);
+  assert.ok(file.path.startsWith(join(downloads, 'acme', 'gmail')), file.path);
+  assert.equal(await readFile(file.path, 'utf8'), 'invoice bytes');
+
+  const exported = await exportMail(context, 'acme/gmail', 'm1');
+  assert.ok(exported.path.startsWith(join(downloads, 'acme', 'gmail', 'exports')), exported.path);
+
+  // The old name is refused with the new one, not treated as a folder or an unknown mailbox.
+  await assert.rejects(
+    downloadAttachments(context, 'work', [{ messageId: 'm1', partId: '1' }]),
+    (error: unknown) => error instanceof CommsError && /renamed to "acme\/gmail"/.test(error.message),
   );
 });

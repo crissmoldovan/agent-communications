@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   CommsError,
   decodeHeaderWords,
+  formerNameRefusal,
   neutralise,
   newBoundary,
   parseAddressList,
@@ -277,6 +278,11 @@ export async function resolveInboxes(
     return [...known].sort();
   }
   const unknown = requested.filter((alias) => !known.includes(alias));
+  // A former name is refused with what it is called now, before the plain "unknown" answer for the rest.
+  for (const alias of unknown) {
+    const renamed = formerNameRefusal(config, 'inbox', alias);
+    if (renamed) throw renamed;
+  }
   if (unknown.length > 0) {
     throw new CommsError('NOT_FOUND', `no inbox called "${unknown.join('", "')}"`, {
       hint: known.length ? `Known inboxes: ${known.join(', ')}.` : 'No inboxes yet.',

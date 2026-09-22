@@ -11,6 +11,7 @@ import { buildAuthUrl, newPkce, newState, oauthError } from '../auth/oauth.ts';
 import { scopesFor, TIERS, type Tier } from '../auth/scopes.ts';
 import type { GmailContext } from '../context.ts';
 import { type ConsentResult, completeConsent } from './consent.ts';
+import { requireNewInboxName } from './inbox-names.ts';
 
 export interface StartOptions {
   mode: 'add' | 'reauth';
@@ -87,10 +88,10 @@ export async function startSignIn(context: GmailContext, options: StartOptions):
     );
     contacts = options.contacts ?? inbox.contacts;
     expect = { email: options.email ?? inbox.email, sub: inbox.sub, inboxId: inbox.id };
-  } else if (config.inboxes[options.alias]) {
-    throw new CommsError('CONFIG', `an inbox called "${options.alias}" already exists`, {
-      hint: `Re-authorise it with \`agent-gmail inbox reauth ${options.alias}\`, or choose another name.`,
-    });
+  } else {
+    // Before the browser opens, not only when it comes back: a name the file cannot take would otherwise be refused
+    // after the person has already been through Google's consent screens.
+    requireNewInboxName(config, options.alias);
   }
 
   const client = await context.client(clientName);
