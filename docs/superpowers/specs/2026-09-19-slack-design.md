@@ -41,7 +41,7 @@ That produces the central design decision:
 | Mode | Scopes | Who enforces "cannot post" | What the agent can do |
 |---|---|---|---|
 | **`read`** (default) | history, read, `users:read`, `files:read`, `search:read` | **Slack.** The token physically cannot post | Read, search, analyse, and compose drafts held locally. To send, the person copies from the preview, or re-installs in `send` mode |
-| **`send`** | the above plus `chat:write` | **Us**, exactly as for Gmail | Everything, with the approval gate between a draft and `chat.postMessage` |
+| **`send`** | the above plus `chat:write`, `files:write`, `reactions:write` | **Us**, exactly as for Gmail | Everything, with the approval gate between a draft and `chat.postMessage` |
 
 `agent-slack workspace add --mode read` is the default and what the setup skill recommends. Moving a workspace
 from `read` to `send` is a **re-installation** — a new OAuth grant a person must approve in Slack's own UI, which
@@ -176,15 +176,32 @@ messages per request, which is unusable. Marketplace approval restores Tier 3 bu
 requires ten installs before review. **Internal customer-built apps are exempt** and may use Socket Mode.
 
 So we do not distribute a Slack app. We ship a **manifest** and the setup skill walks a person through creating
-their own app from it — which is three screens and a paste. The manifest exists in two forms, `read` and `send`,
-and the skill shows which scopes each asks for and what each one permits.
+their own app from it — three screens and one paste. The manifest exists in two forms, `read` and `send`, and the
+skill shows which scopes each asks for and what each one permits.
+
+**The paste is the app's Client ID, which is not a secret, and that is the whole of it.** The token arrives
+through a real OAuth flow: the manifests opt into **PKCE**, which lets the authorisation redirect land on
+`http://127.0.0.1:<port>/` — "Redirects to `localhost` … are treated as desktop redirects if the app has opted
+into PKCE" — and the exchange then carries no `client_secret` at all.
+
+> **Corrected 2026-09-22, before S2 was written.** This section previously implied the person pastes a *token*,
+> because the research said a redirect URI "must be HTTPS" and that was read as ruling out a local listener. It
+> does not: it is true of the confidential-client flow and false for PKCE. The design review caught it while S2
+> was still a plan. A token paste would have been a worse install — the token on a web page, through the
+> clipboard — and would have put a client secret on disk for the rotation exchange. Neither is needed.
+> See research §1.4a.
 
 Consequences to document rather than hide:
 
 - A corporate workspace may require admin approval to install any app. The setup skill says so up front, because
   finding out at step nine is worse.
 - Slack has twice announced and twice silently withdrawn a date for sweeping existing installs into the rate cap.
-  The doctor command checks the observed rate-limit tier and says if it has changed.
+  `doctor` reports the tier as **expected versus observed**: expected Tier 3, because an internal customer-built
+  app is exempt, and observed from evidence ordinary reads have already produced — a 429 with its `Retry-After`,
+  or a page that came back smaller than the `limit` asked for. It does **not** probe for it. Slack publishes no
+  remaining/limit headers and states burst tolerance deliberately loosely, so the only way to observe the cap is
+  to spend the budget being measured, and a diagnostic that degrades the thing it diagnoses is worse than one
+  that says "not yet observed". The evidence is collected by the transport from S3 onwards.
 
 ### D9 — Socket Mode for events, polling as the fallback
 
@@ -243,7 +260,7 @@ distinct `acc_` / `ibx_` prefixes mean an id alone still says which it is.
 | Phase | Branch | What |
 |---|---|---|
 | S1 | `feat/slack-core` | `@agentcomms/core` changes: the canonical-message union, the additive `accounts` config, the channel preview renderer, taint for ids |
-| S2 | `feat/slack-auth` | `@agentcomms/slack`: the two manifests, OAuth with token rotation, `workspace add/list/show/remove/reauth`, `doctor`, the transport with its method allowlist |
+| S2 | `feat/slack-auth` | `@agentcomms/slack`: the two manifests, **PKCE loopback OAuth** (no client secret) with token rotation, scope validation before anything is stored, `workspace add/list/show/remove/reauth`, `doctor`, the CLI entry point, the transport with its method allowlist and Slack-origin check |
 | S3 | `feat/slack-read` | Conversations, history, threads, search, users, files; the body pipeline with unfurl labelling and text/blocks reconciliation |
 | S4 | `feat/slack-compose` | Local drafts, the block composer, the preview with its notification count |
 | S5 | `feat/slack-send` | The gate: prepare, approve, post; the four guarded doors; reactions at lower ceremony |

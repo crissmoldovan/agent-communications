@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import type { CommsError } from '@agentcomms/core';
 import { closedPermit, guardSlackRequests, spendOn } from '../src/api/guard.ts';
-import { classifiedMethods, methodOfUrl, methodRule, writeMethods } from '../src/api/methods.ts';
+import {
+  classifiedMethods,
+  methodOfUrl,
+  methodRule,
+  requiredScopes,
+  unscopedWriteMethods,
+  writeMethods,
+} from '../src/api/methods.ts';
 
 const API = 'https://slack.com/api';
 
@@ -111,8 +119,50 @@ test('a method refused by design says why, and the reason travels with the error
 
 test('anything that is not the Slack Web API is refused outright', async () => {
   const fetch = guardSlackRequests(recorder().inner, closedPermit());
-  await assert.rejects(fetch('https://evil.test/collect'), /only calls the Slack Web API/);
+  await assert.rejects(fetch('https://evil.test/collect'), /only calls https:\/\/slack\.com/);
+  // The right host, a path that names no method.
   await assert.rejects(fetch('https://slack.com/oauth/v2/authorize'), /only calls the Slack Web API/);
+});
+
+test('the host is checked, not just the path that names the method', async () => {
+  /*
+   * The method name is the *last path segment*, and any host in the world can offer that path. This guard read
+   * the path and never the host, so `https://evil.example/api/auth.test` classified as a read and went out —
+   * with the workspace's token attached to it. The error message already claimed "this package only calls the
+   * Slack Web API"; it was aspiration rather than enforcement.
+   */
+  const { calls, inner } = recorder();
+  const fetch = guardSlackRequests(inner, closedPermit());
+
+  for (const url of [
+    'https://evil.example/api/auth.test',
+    'http://127.0.0.1:9/api/auth.test',
+    // Starts with the right characters and is a different site — which is why this compares parsed origins
+    // rather than a prefix.
+    'https://slack.com.attacker.net/api/auth.test',
+    // Right host, wrong scheme. A token must not go out in clear.
+    'http://slack.com/api/auth.test',
+    'https://slack.com:8443/api/auth.test',
+  ]) {
+    await assert.rejects(fetch(url), /only calls https:\/\/slack\.com/, url);
+  }
+  assert.deepEqual(calls, [], 'a request reached the inner fetch despite the wrong origin');
+
+  // The error names the origin and nothing else: a query string can carry a token.
+  await assert.rejects(fetch('https://evil.example/api/auth.test?token=xoxp-secret'), (error: CommsError) => {
+    assert.doesNotMatch(error.message, /xoxp-secret/, 'the refusal quoted the query back');
+    return true;
+  });
+});
+
+test('a test can point the guard somewhere else without turning the check off', async () => {
+  // The alternative — a flag that disables the origin check — is a mode in which the guard does not guard.
+  const { calls, inner } = recorder();
+  const fetch = guardSlackRequests(inner, closedPermit(), { origin: 'https://fake.test' });
+  await fetch('https://fake.test/api/auth.test');
+  assert.equal(calls.length, 1);
+  // The check still runs; only what it holds to moved.
+  await assert.rejects(fetch('https://slack.com/api/auth.test'), /only calls https:\/\/fake\.test/);
 });
 
 test('a query string cannot hide the method from the guard', () => {
@@ -139,9 +189,24 @@ test('every classified method is read, write or refused, and every write is name
   for (const method of methods) {
     const rule = methodRule(method);
     assert.ok(rule, method);
-    assert.ok(['read', 'write', 'refused'].includes(rule.kind), `${method} is ${rule.kind}`);
+    assert.ok(['read', 'write', 'auth', 'refused'].includes(rule.kind), `${method} is ${rule.kind}`);
     if (rule.kind === 'refused') assert.ok(rule.note, `${method} is refused without saying why`);
   }
+
+  // Every write says which scope it needs, so the manifest can be checked against this table rather than
+  // against a second one somebody keeps in step by hand. A write with no scope recorded is a write nobody
+  // checked, and `requiredScopes` would hide it by returning the others.
+  assert.deepEqual(unscopedWriteMethods(), [], 'a write method has no required scope recorded');
+  assert.deepEqual(requiredScopes('write'), ['chat:write', 'files:write', 'reactions:write']);
+
+  // Getting a token is neither a read nor a write: there is no approval to attach a permit to, and no account
+  // token to carry, because these are the calls that produce the credential.
+  assert.equal(methodRule('oauth.v2.user.access')?.kind, 'auth');
+  assert.equal(writeMethods().includes('oauth.v2.user.access'), false);
+
+  // `team.info` is gone: it needed `team:read`, a scope neither manifest otherwise wants, to return what
+  // `auth.test` already returns.
+  assert.equal(methodRule('team.info'), null);
 
   // The four write paths the design enumerated are all classified as writes, by name. A future edit that
   // reclassified one as a read would have to delete a line here saying it is not.

@@ -1,5 +1,5 @@
 import { CommsError } from '@agentcomms/core';
-import { methodOfUrl, methodRule } from './methods.ts';
+import { methodOfUrl, methodRule, SLACK_ORIGIN } from './methods.ts';
 
 /**
  * The one door every Slack request goes through.
@@ -32,19 +32,57 @@ export function closedPermit(): WritePermit {
 
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
+export interface GuardOptions {
+  /**
+   * The origin every request must go to. Defaults to Slack's.
+   *
+   * A test needs a fake Slack somewhere else, and the alternative — a flag that turns the check off — is a mode
+   * in which the guard does not guard. This way the check always runs; only what it holds to moves, and moving
+   * it is an explicit argument at the one place a transport is built.
+   */
+  origin?: string | undefined;
+}
+
 /**
  * Wraps `fetch` so every Slack call is classified before it leaves.
  *
  * `permit` is read at call time rather than captured, so opening and closing it around a single request is enough
  * to scope what that request may do.
  */
-export function guardSlackRequests(inner: FetchLike, permit: WritePermit): FetchLike {
+export function guardSlackRequests(inner: FetchLike, permit: WritePermit, options: GuardOptions = {}): FetchLike {
+  const origin = options.origin ?? SLACK_ORIGIN;
   return async (input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+    /*
+     * The host, before anything else.
+     *
+     * This checked only the path, and the method name *is* the last path segment — so
+     * `https://evil.example/api/auth.test` classified as a read and went out with the workspace's token on it.
+     * The message below already claimed "this package only calls the Slack Web API"; now it is true.
+     *
+     * Compared as a parsed origin rather than a prefix: `https://slack.com.attacker.net/…` starts with the
+     * right characters and is a different site.
+     */
+    let actual: string;
+    try {
+      actual = new URL(url).origin;
+    } catch {
+      throw new CommsError('SEND_REFUSED', 'that is not a URL this package can call', {
+        hint: 'This is a bug — please report it.',
+      });
+    }
+    if (actual !== origin) {
+      // The origin is named; the rest of the URL is not, because a query can carry a token.
+      throw new CommsError('SEND_REFUSED', `this package only calls ${origin}, and that request went to ${actual}`, {
+        hint: 'This is a bug — please report it.',
+      });
+    }
+
     const method = methodOfUrl(url);
 
     if (method === null) {
-      throw new CommsError('SEND_REFUSED', `this package only calls the Slack Web API, and ${url} is not it`, {
+      throw new CommsError('SEND_REFUSED', `this package only calls the Slack Web API, and ${actual} is not it`, {
         hint: 'This is a bug — please report it.',
       });
     }

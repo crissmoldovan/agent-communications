@@ -126,6 +126,27 @@ async function doctor(core: Core): Promise<{ checks: Check[]; ok: boolean }> {
   return { checks, ok: checks.every((c) => c.ok) };
 }
 
+/**
+ * Every secret reference a configuration owns.
+ *
+ * Its own function, and exported, because the bug it exists to prevent is an omission — and an omission inside a
+ * larger function is invisible until a migration has already deleted the originals. It listed `clients` and
+ * `inboxes` and not `accounts`, so migrating a backend would have carried the mail credentials across and left
+ * every Slack workspace token on the old one: a total loss for one platform, found on the next call.
+ *
+ * Deduplicated, because two entries may legitimately share a ref and moving one twice would report it twice.
+ */
+export function secretRefsOf(config: Config): string[] {
+  return [
+    ...new Set([
+      ...Object.values(config.clients).map((client) => client.secretRef),
+      ...Object.values(config.inboxes).map((inbox) => inbox.secretRef),
+      ...Object.values(config.accounts).map((account) => account.secretRef),
+      APPROVAL_KEY_REF,
+    ]),
+  ];
+}
+
 /** Copies every secret the config references to another backend, verifies each, then records the new backend. */
 async function migrateSecrets(
   core: Core,
@@ -144,11 +165,7 @@ async function migrateSecrets(
     secretsDir: core.paths.secretsDir,
     namespace: keychainNamespace(core.paths.configDir),
   });
-  const refs = [
-    ...Object.values(config.clients).map((c) => c.secretRef),
-    ...Object.values(config.inboxes).map((i) => i.secretRef),
-    APPROVAL_KEY_REF,
-  ];
+  const refs = secretRefsOf(config);
   let moved = 0;
   for (const ref of refs) {
     const value = await source.get(ref);
