@@ -1262,7 +1262,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
   const probes = new Map<string, { probeId: string; code: string }>();
 
   /** Whether this approval must be approved outside the chat, read from config now rather than at prepare time. */
-  const needsConfirmation = async (alias: string, approvalId: string): Promise<boolean> => {
+  const needsConfirmation = async (approvalId: string): Promise<boolean> => {
     const record = await context.core.approvals.get(approvalId);
     if (!record || record.state === 'approved') return false;
     const config = await context.config();
@@ -1368,7 +1368,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           // Channel (a): a form the model cannot answer, but only from a client that has proved its forms reach a
           // person. An un-allowlisted client is told to use the terminal or Gmail — and the approval is left alone,
           // because being asked from the wrong client is not evidence that anything is wrong with the message.
-          if (await needsConfirmation(alias, approvalId)) {
+          if (await needsConfirmation(approvalId)) {
             const answered = inputResponse(ctx.mcpReq.inputResponses, APPROVAL_KEY);
             if (answered.kind === 'missing') {
               const client = server.server.getClientVersion()?.name ?? '';
