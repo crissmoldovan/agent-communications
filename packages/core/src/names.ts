@@ -203,7 +203,8 @@ export function renameEntry<C extends Config>(config: C, kind: NameKind, from: s
   if (config.version === 1) return { ...config, [map]: renamed };
   const records: FormerNames[typeof map] = {};
   for (const [key, record] of Object.entries(config.formerNames[map])) {
-    records[key] = record.id === row.id ? { name: to, id: row.id } : record;
+    // Spread, so a field a newer release added to the record survives this one rewriting it.
+    records[key] = record.id === row.id ? { ...record, name: to, id: row.id } : record;
   }
   records[from] = { name: to, id: row.id };
   return { ...config, [map]: renamed, formerNames: { ...config.formerNames, [map]: records } };

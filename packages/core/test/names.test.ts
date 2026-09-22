@@ -395,6 +395,22 @@ test('the schema refuses a former name on every write, not only where names are 
   );
 });
 
+test('renameEntry keeps what a newer release added to a former-name record', () => {
+  const config = v2({
+    inboxes: { 'cue/gmail': inbox(IBX_A) },
+    formerNames: {
+      inboxes: { cue: { name: 'cue/gmail', id: IBX_A, recordedBy: 'a newer release' } as { name: string; id: string } },
+      accounts: {},
+    },
+  });
+  const renamed = renameEntry(config, 'inbox', 'cue/gmail', 'cue/gmail-main');
+  assert.deepEqual(renamed.formerNames.inboxes.cue, {
+    name: 'cue/gmail-main',
+    id: IBX_A,
+    recordedBy: 'a newer release',
+  });
+});
+
 test('renameEntry in version 1 renames and records nothing', () => {
   const renamed = renameEntry(v1({ inboxes: { work: inbox(IBX_A) } }), 'inbox', 'work', 'home');
   assert.deepEqual(Object.keys(renamed.inboxes), ['home']);

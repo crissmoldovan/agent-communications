@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
+import * as installed from '@agentcomms/core';
 import {
   CommsError,
   emptyConfig,
@@ -42,6 +43,10 @@ const paths = JSON.parse(run('paths', '--json'));
 assert.equal(paths.ok, true);
 assert.equal(paths.data.configDir, process.env.AGENT_COMMS_CONFIG_DIR);
 // This release reads version 2 of the config and writes nothing at it — the installed package, not only the source.
+// The switch core's own tests use to exercise the transition must not be reachable from here: exported, it would be a
+// public v2 writer with one extra call in front of it.
+assert.equal('enableNamesMigrationForTests' in installed, false);
+assert.equal('namesMigrationEnabled' in installed, false);
 assert.equal(NEW_CONFIG_VERSION, 1);
 assert.equal(emptyConfig().version, 1);
 await assert.rejects(
