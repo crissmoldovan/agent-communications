@@ -681,6 +681,20 @@ export class ConfigStore {
             hint: 'This is a bug — please report it.',
           });
         }
+        /*
+         * And that it is the mapping this call was given.
+         *
+         * `onlyKeysRenamed` proves that *a* rename happened and nothing else; it does not compare it to the rows.
+         * Without this, the rows and the transform could disagree — the caller would show one mapping and write
+         * another — and a retry would then measure itself against a plan that was never applied. The same check
+         * decides both branches, so what counts as this migration cannot drift between writing it and recognising
+         * it later.
+         */
+        if (!migrationApplied(parsed.data, rows)) {
+          throw new CommsError('CONFIG', 'refusing a migration that is not the mapping it was given', {
+            hint: 'This is a bug — please report it.',
+          });
+        }
         await writeFileAtomic(this.path, `${JSON.stringify(parsed.data, null, 2)}\n`);
         this.#cache = null;
         return { status: 'migrated' as const, config: parsed.data };
@@ -713,9 +727,15 @@ export interface RenamedAccount {
  *
  * The second half is what the rows alone cannot say. A plan previewed against a smaller configuration, whose rows
  * another process then happened to reproduce while migrating a larger one, would satisfy every row and still be
- * missing an account. So the flat names left behind are counted too: the migration is the only thing that can
- * create one — version 1 has no tombstones, and every later rename leaves a qualified name behind — so the flat
- * keys in the file are exactly the accounts the migration started from, and they have to be exactly this plan's.
+ * missing an account. So the flat names left behind are compared as a set: a migration of version 1 leaves exactly
+ * one behind per account it renamed, because every version-1 name is flat, and a rename afterwards leaves a
+ * qualified one. The sets have to be equal, and the rows may not name the same account twice — a repeated row
+ * would otherwise make a subset the right size.
+ *
+ * Set equality, rather than provenance: nothing stops a flat former name being written another way — `update`
+ * checks that existing tombstones are kept, not that new ones are earned, and a hand-edited file can hold
+ * anything. An unexpected one makes this false, which refuses a retry that might have been fine. That is the
+ * direction to be wrong in.
  *
  * False, then, for somebody else's mapping, for a migration of a configuration this plan never saw, for a rename
  * after this one, for an account removed since, and for an id that has moved.
@@ -724,8 +744,10 @@ function migrationApplied(config: ConfigV2, rows: readonly RenamedAccount[]): bo
   for (const map of ['inboxes', 'accounts'] as const) {
     const kind = map === 'inboxes' ? 'inbox' : 'account';
     const planned = rows.filter((row) => row.kind === kind);
+    const from = new Set(planned.map((row) => row.from));
+    if (from.size !== planned.length) return false;
     const flat = Object.keys(config.formerNames[map]).filter((key) => ALIAS_PATTERN.test(key));
-    if (flat.length !== planned.length) return false;
+    if (flat.length !== from.size || !flat.every((key) => from.has(key))) return false;
     for (const row of planned) {
       const live = own(config[map] as Record<string, { id: string }>, row.to);
       const former = own(config.formerNames[map], row.from);

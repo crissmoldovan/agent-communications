@@ -667,6 +667,45 @@ test('the store decides whether a migration is already done, not whoever called 
   );
 });
 
+test('rows that disagree with the transform, or name one account twice, are refused', async () => {
+  const store = storeWith(machine());
+  const plan = ready(planNamesMigration(await store.load()));
+  const elsewhere = ready(planNamesMigration(machine(), ['gmail=personal/gmail']));
+
+  // What the caller would show, and what it would write, are not the same mapping.
+  await assert.rejects(
+    store.migrateNames(plan.fingerprint, plan.rows, (current) => applyNamesMigration(current, elsewhere.rows)),
+    isError('CONFIG', /not the mapping it was given/),
+  );
+  assert.equal(JSON.parse(readFileSync(store.path, 'utf8')).version, 1, 'and nothing was written');
+
+  // One account named twice is the right number of rows for the wrong set of accounts.
+  const first = present(plan.rows[0]);
+  const doubled = [first, first, ...plan.rows.slice(2)];
+  await assert.rejects(
+    store.migrateNames(plan.fingerprint, doubled, (current) => applyNamesMigration(current, plan.rows)),
+    isError('CONFIG', /not the mapping it was given/),
+  );
+
+  // And the same rows are refused as a claim that the migration is already done.
+  await migrateNames(store, plan);
+  await assert.rejects(
+    store.migrateNames(plan.fingerprint, doubled, () => {
+      throw new Error('the build is never reached on a version-2 config');
+    }),
+    isError('TRANSIENT', /not to these names/),
+  );
+
+  // The same account twice, where counting the rows alone would agree with the file: one mailbox, two rows.
+  const one = storeWith(v1({ inboxes: { gmail: inbox('ibx_GGGGGGGGGGGGGGGG') } }));
+  const single = ready(planNamesMigration(await one.load()));
+  const only = present(single.rows[0]);
+  await assert.rejects(
+    one.migrateNames(single.fingerprint, [only, only], (current) => applyNamesMigration(current, single.rows)),
+    isError('CONFIG', /not the mapping it was given/),
+  );
+});
+
 test('a renamed row between preview and apply refuses the migration, and writes nothing', async () => {
   const store = storeWith(machine());
   const plan = ready(planNamesMigration(await store.load()));

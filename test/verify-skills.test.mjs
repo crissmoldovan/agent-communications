@@ -326,6 +326,17 @@ test('verifier rejects a flat account name in every position a reader would copy
     ['a longer fence around a shorter one', '````md\n```sh\nagent-gmail inbox reauth work\n```\n````'],
     ['an indented block', 'Then:\n\n    agent-gmail inbox add work --email jo@example.test\n'],
     ['a two-backtick inline span', 'Run ``agent-gmail inbox add work`` to connect it.'],
+    // Forms round 5 found still escaping: a fence on a list line, one indented inside a list, an indented block
+    // past its first line, and a span that runs over a line break.
+    ['a fence on a list-item line', '- Do this:\n\n  ```sh\n  agent-gmail inbox add work\n  ```\n'],
+    ['a fence indented inside a list', '1. Then:\n\n    ```sh\n    agent-gmail inbox reauth work\n    ```\n'],
+    ['the second line of an indented block', 'Then:\n\n    agent-gmail doctor\n    agent-gmail inbox add work\n'],
+    [
+      'an indented block continuing past a blank line',
+      'Then:\n\n    agent-gmail doctor\n\n    agent-gmail inbox add work\n',
+    ],
+    ['a code span broken over a line', 'Run `agent-gmail\ninbox add work` to connect it.'],
+    ['an unclosed fence', '```sh\nagent-gmail inbox add work\n'],
     // A version-1 alias is `[a-z0-9][a-z0-9-]{0,31}`: digits lead, and an English word is a legal name.
     ['an alias beginning with a digit', 'Run `agent-gmail search x --inbox 2024-archive`.'],
     ['an alias that is an English word', 'Run `agent-gmail search x --inbox and`.'],
@@ -355,6 +366,7 @@ test('verifier passes organisation/platform names, and the prose that imitates a
       '- A step.\n\n    When inbox add and reauth both fail, stop.\n',
     ],
     ['triple backticks quoted in prose', 'Write it as ``` ```sh ``` at the top.'],
+    ['a span that would only match across a blank line', 'A stray ` here.\n\nAnd inbox add and reauth ` there.'],
     ['a spec, which records what was true then', '```sh\nagent-gmail inbox add work\n```'],
   ];
   for (const [label, body] of cases) {

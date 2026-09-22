@@ -335,38 +335,55 @@ const IN_CODE = [
 /**
  * The parts of a document a reader copies rather than reads.
  *
- * Enough of CommonMark to be honest about what it covers: fences of three or more backticks or tildes, closed by
- * the same character at the same length or longer; indented blocks, but only where one can actually start — after
- * a blank line, and not as the continuation of a list item, which is indented the same way and is prose; and
- * inline spans of any delimiter length. What is *not* code matters as much: prose imitates subcommand grammar
- * exactly, and a false positive on English is how a check like this gets turned off.
+ * Enough of CommonMark to be honest about what it covers, and it covers what these documents actually contain:
+ *
+ * - fences of three or more backticks or tildes, at any indentation, closed by the same character at the same
+ *   length or longer, or by the end of the file — including one opened on a list-item line (`- ```sh`) and one
+ *   indented inside a list;
+ * - indented blocks, but only where one can start: after a blank line, and not as a list item's own continuation,
+ *   which is indented the same way and is prose. A blank line inside one does not end it;
+ * - inline spans of any delimiter length, which may cross a line but not a blank line.
+ *
+ * What is *not* code matters as much as what is. Prose imitates subcommand grammar exactly — "inbox add and
+ * reauth", "inbox add failed" — and a check that flags English is a check somebody turns off.
  */
 function codeOf(source) {
   const code = [];
-  const lines = source.split('\n');
+  const prose = [];
   let fence = null;
   let blankBefore = true;
+  let indented = false;
   let listBefore = false;
-  for (const line of lines) {
+  for (const line of source.split('\n')) {
     if (fence) {
-      const close = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
+      const close = /^\s*(`{3,}|~{3,})\s*$/.exec(line);
       if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
       else code.push(line);
       continue;
     }
-    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    // An info string may not contain a backtick, which is what tells ```` ``` ```` in prose from a fence.
+    // A fence may open on the same line as the list marker that introduces it.
+    const open = /^\s*(`{3,}|~{3,})(.*)$/.exec(line.replace(/^(\s*)(?:[-*+]|\d{1,9}[.)])\s+/, '$1'));
+    // An info string may not contain a backtick, which is what tells ```` ``` ```` quoted in prose from a fence.
     if (open && !(open[1][0] === '`' && open[2].includes('`'))) {
       fence = open[1];
       blankBefore = false;
+      indented = false;
       continue;
     }
     const blank = line.trim() === '';
-    // An indented block cannot interrupt a paragraph, and a list's own continuation lines are indented too.
-    if (/^ {4,}\S/.test(line) && blankBefore && !listBefore) code.push(line);
-    else for (const [, , span] of line.matchAll(/(`+)((?:[^`]|(?!\1)`)+)\1(?!`)/g)) code.push(span);
+    if (/^ {4,}\S/.test(line) && (indented || (blankBefore && !listBefore))) {
+      code.push(line);
+      indented = true;
+    } else {
+      if (!blank) indented = false;
+      prose.push(line);
+    }
     if (!blank) listBefore = /^ {0,3}(?:[-*+]|\d{1,9}[.)])\s/.test(line) || (listBefore && /^ {2,}\S/.test(line));
     blankBefore = blank;
+  }
+  // A code span may run over a line break but not over a blank line, so each paragraph is scanned on its own.
+  for (const paragraph of prose.join('\n').split(/\n[ \t]*\n/)) {
+    for (const [, , span] of paragraph.matchAll(/(`+)((?:[^`]|(?!\1)`)+)\1(?!`)/g)) code.push(span);
   }
   return code.join('\n');
 }

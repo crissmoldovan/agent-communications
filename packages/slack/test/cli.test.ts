@@ -1109,3 +1109,13 @@ test('a scope beyond read that Slack reports is still drift, identify aside', as
   assert.match(scopes?.detail ?? '', /chat:write/);
   assert.doesNotMatch(scopes?.detail ?? '', /identify/);
 });
+
+test('every name the command suggests is one a config made today would accept', async () => {
+  const harness = await newHarness();
+  // Nothing else on this machine teaches the shape: whatever these two print is what somebody types first.
+  const help = await cli(harness, ['--help']);
+  assert.match(help.stdout, /workspace add acme\/slack/);
+  const missing = await cli(harness, ['workspace', 'add', '--json']);
+  assert.equal(missing.code, EXIT_CODES.USAGE);
+  assert.match(missing.json<Envelope<never>>().error?.hint ?? '', /workspace add acme\/slack/);
+});
