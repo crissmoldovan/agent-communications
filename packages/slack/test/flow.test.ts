@@ -18,6 +18,14 @@ import { startLoopback } from '../src/auth/listener.ts';
 
 const NOW = new Date('2026-09-22T12:00:00.000Z');
 
+/**
+ * Windows does not honour POSIX modes, so `stat().mode` there says nothing about who can read a file.
+ *
+ * CI runs windows-latest. The mode is still *set* on every platform — that is the shipped code, unchanged — and
+ * the assertion is the thing that cannot hold, which is the same guard `packages/core`'s tests already use.
+ */
+const posix = process.platform !== 'win32';
+
 async function store(now: () => Date = () => NOW): Promise<{ dir: string; flows: FlowStore }> {
   const dir = await mkdtemp(join(tmpdir(), 'slack-flow-'));
   return { dir, flows: openFlowStore(dir, now) };
@@ -57,7 +65,7 @@ test('the flow file is owner-only, because it holds the verifier', async () => {
   const saved = flow();
   await flows.save(saved);
   const mode = (await stat(join(dir, 'slack', 'flows', `${saved.flowId}.json`))).mode & 0o777;
-  assert.equal(mode, 0o600, `the flow file is ${mode.toString(8)}`);
+  if (posix) assert.equal(mode, 0o600, `the flow file is ${mode.toString(8)}`);
 });
 
 test('claiming a flow consumes it, so two finishes cannot exchange one code', async () => {
@@ -241,7 +249,7 @@ test('the outcome file is owner-only too, because it holds an authorisation code
   await flows.save(original);
   await flows.recordOutcome(original.flowId, { code: 'fake-authorisation-code' });
   const mode = (await stat(join(dir, 'slack', 'flows', `${original.flowId}.outcome.json`))).mode & 0o777;
-  assert.equal(mode, 0o600);
+  if (posix) assert.equal(mode, 0o600);
 });
 
 test('two processes racing to claim one flow: exactly one wins', async () => {
