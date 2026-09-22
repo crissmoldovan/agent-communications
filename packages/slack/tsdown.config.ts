@@ -1,10 +1,10 @@
 import { defineConfig } from 'tsdown';
 
-// Bundled like the Gmail package, and for the same reason: `npx @agentcomms/slack` should install one package and
-// start immediately. The optional native keychain module is the only thing left external, because it ships a
-// binary per platform.
+// Both entries are fully bundled — commander and comms-core included — for the same reason the Gmail package is:
+// `npx @agentcomms/slack` should install one package and start immediately. The optional native keychain module
+// is the only thing left external, because it ships a binary per platform.
 export default defineConfig({
-  entry: { index: 'src/index.ts' },
+  entry: { index: 'src/index.ts', cli: 'src/cli.ts' },
   format: 'esm',
   platform: 'node',
   target: 'node22',

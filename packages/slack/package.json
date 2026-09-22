@@ -22,6 +22,9 @@
   },
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
+  "bin": {
+    "agent-slack": "./dist/cli.mjs"
+  },
   "files": [
     "dist",
     "README.md",

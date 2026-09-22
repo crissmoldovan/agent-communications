@@ -43,9 +43,22 @@ export interface SlackFlow {
   readonly state: string;
   readonly redirectUrl: string;
   readonly port: number;
+  /** The detached listener holding that port open, once it has said it is ready. */
+  readonly listenerPid?: number | undefined;
   readonly createdAt: string;
   readonly expiresAt: string;
 }
+
+/**
+ * What the detached listener saw, left for `--finish` to collect.
+ *
+ * A separate file from the flow itself, written by a different process. Keeping them apart means the listener
+ * never rewrites the record holding the PKCE verifier, so a crash mid-write cannot destroy the one thing that
+ * makes the code exchangeable.
+ */
+export type FlowOutcome =
+  | { readonly code: string; readonly at?: string | undefined }
+  | { readonly error: string; readonly description?: string | undefined; readonly at?: string | undefined };
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -60,7 +73,7 @@ function flowDir(stateDir: string): string {
   return join(stateDir, 'slack', 'flows');
 }
 
-function flowPath(stateDir: string, flowId: string): string {
+function flowPath(stateDir: string, flowId: string, suffix = '.json'): string {
   if (!FLOW_ID_PATTERN.test(flowId)) {
     // The id reaches this from a command line, and it is about to become a path. A pattern check here is what
     // stops `../` being one.
@@ -68,13 +81,20 @@ function flowPath(stateDir: string, flowId: string): string {
       hint: 'Use the id `workspace add --start` printed.',
     });
   }
-  return join(flowDir(stateDir), `${flowId}.json`);
+  return join(flowDir(stateDir), `${flowId}${suffix}`);
 }
 
 export interface FlowStore {
   save(flow: SlackFlow): Promise<void>;
   /** Reads without consuming. Used to report what is pending, never to complete one. */
   peek(flowId: string): Promise<SlackFlow | null>;
+  /** Like `peek`, but a missing or expired flow is an error with the command that starts a new one. */
+  get(flowId: string): Promise<SlackFlow>;
+  /** Records what the listener learned once it bound — the port it actually got, and its own pid. */
+  patch(flowId: string, patch: Partial<SlackFlow>): Promise<SlackFlow>;
+  /** Written by the detached listener; read by `--finish`. */
+  recordOutcome(flowId: string, outcome: FlowOutcome): Promise<void>;
+  readOutcome(flowId: string): Promise<FlowOutcome | null>;
   /**
    * Takes the flow, so nothing else can.
    *
@@ -104,6 +124,39 @@ export function openFlowStore(stateDir: string, now: () => Date): FlowStore {
       }
     },
 
+    async get(flowId) {
+      const flow = await this.peek(flowId);
+      if (!flow) {
+        throw new CommsError('NOT_FOUND', 'that sign-in is not waiting to be finished', {
+          hint: 'It may have been completed already, or expired. Start again with `agent-slack workspace add`.',
+        });
+      }
+      return flow;
+    },
+
+    async patch(flowId, patch) {
+      const next = { ...(await this.get(flowId)), ...patch };
+      await this.save(next);
+      return next;
+    },
+
+    async recordOutcome(flowId, outcome) {
+      await mkdir(flowDir(stateDir), { recursive: true, mode: 0o700 });
+      await writeFile(
+        flowPath(stateDir, flowId, '.outcome.json'),
+        JSON.stringify({ ...outcome, at: now().toISOString() }),
+        { mode: 0o600 },
+      );
+    },
+
+    async readOutcome(flowId) {
+      try {
+        return JSON.parse(await readFile(flowPath(stateDir, flowId, '.outcome.json'), 'utf8')) as FlowOutcome;
+      } catch {
+        return null;
+      }
+    },
+
     async claim(flowId) {
       const path = flowPath(stateDir, flowId);
       let flow: SlackFlow;
@@ -117,6 +170,7 @@ export function openFlowStore(stateDir: string, now: () => Date): FlowStore {
       // Removed before the caller does anything with it, so a second `--finish` finds nothing rather than
       // exchanging the same code twice.
       await rm(path, { force: true });
+      await rm(flowPath(stateDir, flowId, '.outcome.json'), { force: true });
       if (Date.parse(flow.expiresAt) <= now().getTime()) {
         throw new CommsError('NOT_FOUND', 'that sign-in expired before it was finished', {
           hint: 'Sign-ins last ten minutes. Start again with `agent-slack workspace add`.',
@@ -126,7 +180,11 @@ export function openFlowStore(stateDir: string, now: () => Date): FlowStore {
     },
 
     async discard(flowId) {
-      await rm(flowPath(stateDir, flowId), { force: true });
+      // Every trace, not just the record: an outcome file left behind would be collected by the next flow to be
+      // handed the same id, and the log is the listener's and outlives it.
+      for (const suffix of ['.json', '.outcome.json', '.log']) {
+        await rm(flowPath(stateDir, flowId, suffix), { force: true });
+      }
     },
 
     async pending() {
@@ -138,7 +196,10 @@ export function openFlowStore(stateDir: string, now: () => Date): FlowStore {
       }
       const flows: SlackFlow[] = [];
       for (const name of names) {
-        if (!name.endsWith('.json')) continue;
+        // `.outcome.json` also ends in `.json`, and parsing one as a flow yields a record with no `expiresAt`:
+        // `Date.parse(undefined)` is NaN, every comparison against it is false, and the expired sweep below would
+        // have listed it forever as a sign-in that can still be finished.
+        if (!name.endsWith('.json') || name.endsWith('.outcome.json')) continue;
         try {
           const flow = JSON.parse(await readFile(join(flowDir(stateDir), name), 'utf8')) as SlackFlow;
           // Expired ones are swept rather than listed: a stale sign-in in a list is something to act on, and
