@@ -154,7 +154,7 @@ interface OAuthResponse {
  */
 export function readExchange(body: unknown): ExchangedToken {
   const response = body as OAuthResponse;
-  if (!response || response.ok !== true) {
+  if (response?.ok !== true) {
     throw new CommsError('AUTH_REQUIRED', `Slack refused the sign-in: ${response?.error ?? 'no reason given'}`, {
       hint: 'Start again with `agent-slack workspace add`.',
     });

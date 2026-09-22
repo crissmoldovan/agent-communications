@@ -19,7 +19,7 @@ import {
   type StartedSignIn,
   startSignIn,
 } from '../operations/signin.ts';
-import { listWorkspaces, requireWorkspace, viewOf } from '../operations/workspaces.ts';
+import { listWorkspaces, removeWorkspace, requireWorkspace, viewOf } from '../operations/workspaces.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
 import {
@@ -247,26 +247,15 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
     .description('disconnect a workspace from this machine')
     .action(
       act(async (context, _options, alias: string) => {
-        const found = requireWorkspace(await context.config(), alias);
-        const secrets = await context.secrets();
-        /*
-         * The configuration entry goes first.
-         *
-         * Either order leaves a window and they are not equally bad: a config entry with no credential is
-         * something `doctor` reports and `reauth` fixes, while a credential with no config entry is a live Slack
-         * token in the secret store that nothing lists and nothing can remove.
-         */
-        await context.core.config.update((config) => {
-          const { [alias]: _removed, ...rest } = config.accounts;
-          return { ...config, accounts: rest };
-        });
-        await secrets.delete(found.account.secretRef);
-        writeResult(
-          { alias, accountId: found.account.id, removed: true },
-          output(),
-          () => renderRemoved(alias),
-          streams,
+        const removed = await removeWorkspace(
+          {
+            config: await context.config(),
+            secrets: await context.secrets(),
+            update: (mutator) => context.core.config.update(mutator),
+          },
+          alias,
         );
+        writeResult(removed, output(), () => renderRemoved(alias), streams);
       }),
     );
 

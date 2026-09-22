@@ -68,7 +68,7 @@ export function listWorkspaces(config: Config): WorkspaceView[] {
 
 export function requireWorkspace(config: Config, alias: string): { alias: string; account: AccountConfig } {
   const account = config.accounts[alias];
-  if (!account || account.platform !== 'slack') {
+  if (account?.platform !== 'slack') {
     throw new CommsError('NOT_FOUND', `no Slack workspace called "${alias}"`, {
       hint: 'List them with `agent-slack workspace list`.',
     });
@@ -234,3 +234,36 @@ export function accountFrom(options: {
 }
 
 export { newAccountId, serialiseBundle };
+
+export interface RemovedWorkspace {
+  readonly alias: string;
+  readonly accountId: string;
+  readonly removed: true;
+}
+
+/** What `workspace remove` needs, named explicitly so the order below can be tested with a store that fails. */
+export interface RemovalDeps {
+  readonly config: Config;
+  readonly secrets: { delete(ref: string): Promise<boolean> };
+  readonly update: (mutator: (config: Config) => Config) => Promise<Config>;
+}
+
+/**
+ * Disconnects a workspace from this machine. Local only: the Slack app stays installed in the workspace.
+ *
+ * **The credential goes first, and the order is the whole content of this function.** Either order leaves a
+ * window if the second step fails, and the two windows are not equally bad. Deleting the credential first and
+ * then failing to write the config leaves an entry whose credential is gone — which `doctor` reports as
+ * `credential: fail` and `reauth` repairs. Writing the config first and then failing to delete leaves a live
+ * Slack token in the secret store that no command lists, refreshes or removes, and that nothing will ever
+ * mention again.
+ */
+export async function removeWorkspace(deps: RemovalDeps, alias: string): Promise<RemovedWorkspace> {
+  const found = requireWorkspace(deps.config, alias);
+  await deps.secrets.delete(found.account.secretRef);
+  await deps.update((config) => {
+    const { [alias]: _removed, ...rest } = config.accounts;
+    return { ...config, accounts: rest };
+  });
+  return { alias, accountId: found.account.id, removed: true };
+}

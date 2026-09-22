@@ -265,7 +265,29 @@ distinct `acc_` / `ibx_` prefixes mean an id alone still says which it is.
 | S4 | `feat/slack-compose` | Local drafts, the block composer, the preview with its notification count |
 | S5 | `feat/slack-send` | The gate: prepare, approve, post; the four guarded doors; reactions at lower ceremony |
 | S6 | `feat/slack-skills` | The skills, sharing the contract; the drift test extended; and **an audit of every skill document against the code it describes** before merge (§10) |
-| S7 | `release/slack` | Packaging and manifests, then the release through `scripts/release.mjs` and the repo's `release` skill — from a person's machine, not CI (§10) |
+| S7 | `release/slack` | Packaging and manifests, the package README and the generated CLI reference page, then the release through `scripts/release.mjs` and the repo's `release` skill — from a person's machine, not CI (§10) |
+
+> **S2 landed 2026-09-22.** Three things about it are worth carrying forward.
+>
+> **The port is chosen before the sign-in, not by the OS.** Slack stores redirect URLs on the app and matches
+> them exactly, so `manifest --port` and `workspace add --port` must be the same number, and the manifest help
+> prints the command that uses it. This is the one place the package deliberately diverges from Gmail, which
+> takes whatever port it is handed.
+>
+> **A reauth stages the new credential under a new account id** rather than overwriting the old reference. The
+> mode can change across a reauth, so an overwrite would open a window where the configuration says `read` while
+> the credential behind it can post. The Gmail package overwrites, and has the same window; that is not fixed
+> here.
+>
+> **Three things are still unverified against a real workspace**, and every one of them is a guess that reads
+> like a fact until somebody signs in once: whether PKCE is opted into through the manifest or only through the
+> app settings page; whether the exchange endpoint is `oauth.v2.access` or `oauth.v2.user.access`; and whether
+> Slack accepts `127.0.0.1` as well as `localhost`. The code takes the documented answer in each case and says so
+> at the point it does. A single real sign-in settles all three, and S3 cannot honestly start without it.
+>
+> `docs/reference/cli.md` is generated from `packages/gmail` only. Extending the generator to a second CLI is
+> S7's, with the packaging — a reference page that tells people to install an unpublished package would be worse
+> than one that does not mention it.
 
 Each phase follows the Gmail pattern: a branch, tests, a review round, a squash-merge. One change to that pattern,
 learned the hard way: **reviewers and auditors that are agents run in their own git worktree.** They share the

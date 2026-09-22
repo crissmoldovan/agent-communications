@@ -8,6 +8,7 @@ import { buildAuthorizeUrl, readExchange } from '../auth/authorize.ts';
 import { serialiseBundle } from '../auth/bundle.ts';
 import { FLOW_TTL_MS, newFlowId, type SlackFlow } from '../auth/flow.ts';
 import { startLoopback } from '../auth/listener.ts';
+import { sameState } from '../auth/pkce.ts';
 import type { SlackContext } from '../context.ts';
 import type { InstallMode } from '../manifest.ts';
 import {
@@ -356,7 +357,7 @@ export async function finishSignIn(context: SlackContext, options: FinishOptions
   try {
     return await completeSignIn(context, flow.flowId, code);
   } finally {
-    stopListener(flow);
+    stopListener(flow, context.now());
     await context.flows.discard(flow.flowId);
   }
 }
@@ -395,7 +396,9 @@ function codeFromUrl(raw: string, flow: SlackFlow): string {
       hint: 'Paste the whole thing, starting `http://localhost:`.',
     });
   }
-  if (url.searchParams.get('state') !== flow.state) {
+  // The same comparison the listener makes, rather than `!==`: one code path deciding `state` two different ways
+  // is one of them being wrong later.
+  if (!sameState(url.searchParams.get('state'), flow.state)) {
     throw new CommsError('USAGE', 'that URL is from a different sign-in', {
       hint: 'Paste the URL the browser landed on for this one.',
     });
@@ -417,13 +420,22 @@ function slackDenied(error: string, description?: string | undefined): CommsErro
   });
 }
 
-/** The detached listener is still holding the port; it has done its job and nothing else will read from it. */
-function stopListener(flow: SlackFlow): void {
-  if (!flow.listenerPid) return;
+/**
+ * The detached listener has done its job and nothing else will read from it, so stop it holding the port.
+ *
+ * The pid is only trusted while the flow that recorded it is still inside its own ten-minute window. If the
+ * listener died early and the operating system reused its number, signalling it would kill an unrelated process
+ * of the user's — and the listener times out on its own regardless, which is the real backstop. Copied from the
+ * Gmail package, which reasoned this through first.
+ */
+function stopListener(flow: SlackFlow, now: Date): void {
+  if (!flow.listenerPid || flow.listenerPid === process.pid) return;
+  const expiresAt = Date.parse(flow.expiresAt);
+  if (!Number.isFinite(expiresAt) || now.getTime() >= expiresAt) return;
   try {
-    process.kill(flow.listenerPid);
+    process.kill(flow.listenerPid, 'SIGTERM');
   } catch {
-    // Already gone, or not ours to signal. Either way there is nothing to do about it.
+    // Already gone, or owned by another user: nothing to do.
   }
 }
 
@@ -448,7 +460,16 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
   );
 
   const config = await context.config();
+  /*
+   * The alias is checked again here, not only when the sign-in started.
+   *
+   * Up to ten minutes pass in between, and `--finish` may run in a different process. Something else can connect
+   * that name in the gap, and writing over it would not merely rename a workspace: the entry being replaced
+   * carries the only reference to its credential, so the previous one would be left in the secret store with
+   * nothing able to list, refresh or remove it.
+   */
   const existing = flow.expect ? requireWorkspace(config, flow.alias) : undefined;
+  if (!existing) checkAliasFree(config, flow.alias);
   validateExchange({ token, mode: flow.mode, flow, config, existing });
 
   const at = context.now();
@@ -477,6 +498,18 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
     throw error;
   }
 
+  /*
+   * The superseded credential, removed last and not allowed to fail the reauth that has already succeeded.
+   *
+   * The swallow is deliberate and bounded. By this point the configuration already points at the new credential,
+   * so the workspace works; throwing here would report a failure for a sign-in that worked and send somebody to
+   * do it again. What is left behind if the delete fails — a keychain that prompts and is refused is the only
+   * realistic way — is one Slack user token whose access half expires in twelve hours and whose refresh half
+   * Slack expires thirty days after issue. It cannot be renewed, because nothing knows its reference any more.
+   *
+   * That bound is the whole justification. A credential that did *not* expire on its own would have to be
+   * reported instead of dropped.
+   */
   const previousRef = existing?.account.secretRef;
   if (previousRef && previousRef !== secretRefFor(accountId)) {
     await secrets.delete(previousRef).catch(() => undefined);

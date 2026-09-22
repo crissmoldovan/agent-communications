@@ -9,6 +9,7 @@ import {
   bundleFrom,
   checkAliasFree,
   listWorkspaces,
+  removeWorkspace,
   requireWorkspace,
   validateExchange,
   viewOf,
@@ -281,4 +282,55 @@ test('an unknown workspace says how to find the real ones', () => {
       return true;
     },
   );
+});
+
+test('removing deletes the credential before the entry that names it', async () => {
+  /*
+   * The order is the whole content of `removeWorkspace`, so it is asserted directly rather than inferred from a
+   * successful run — where both orders look identical.
+   *
+   * Deleting the credential first and then failing leaves an entry `doctor` reports and `reauth` repairs.
+   * Failing the other way round leaves a live Slack token that no command lists, refreshes or removes.
+   */
+  const steps: string[] = [];
+  const stored = account();
+  await removeWorkspace(
+    {
+      config: { ...emptyConfig(), accounts: { acme: stored } },
+      secrets: {
+        async delete(ref) {
+          steps.push(`delete ${ref}`);
+          return true;
+        },
+      },
+      async update(mutator) {
+        steps.push('update');
+        return mutator({ ...emptyConfig(), accounts: { acme: stored } });
+      },
+    },
+    'acme',
+  );
+  assert.deepEqual(steps, [`delete ${stored.secretRef}`, 'update']);
+});
+
+test('a secret store that refuses leaves the workspace listed, not orphaned', async () => {
+  const stored = account();
+  const config: Config = { ...emptyConfig(), accounts: { acme: stored } };
+  let updated = false;
+  await assert.rejects(
+    removeWorkspace(
+      {
+        config,
+        secrets: {
+          delete: () => Promise.reject(new Error('the keychain said no')),
+        },
+        async update(mutator) {
+          updated = true;
+          return mutator(config);
+        },
+      },
+      'acme',
+    ),
+  );
+  assert.equal(updated, false, 'the entry was removed while its credential is still stored');
 });

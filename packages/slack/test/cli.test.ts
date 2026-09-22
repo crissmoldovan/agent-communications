@@ -504,3 +504,35 @@ test('a healthy install exits 0', async () => {
   const result = await cli(harness, ['doctor']);
   assert.equal(result.code, EXIT_CODES.OK, result.stdout);
 });
+
+test('a sign-in cannot connect over a name taken while it was waiting', async () => {
+  /*
+   * Ten minutes pass between `--start` and `--finish`, in different processes. The entry being replaced holds
+   * the only reference to its credential, so writing over it would strand a live Slack token that nothing can
+   * list, refresh or remove.
+   */
+  const harness = await newHarness();
+  const port = await freePort();
+  const start = await startDetached(harness, [
+    'workspace',
+    'add',
+    'acme',
+    '--client-id',
+    TEST_CLIENT_ID,
+    '--port',
+    String(port),
+  ]);
+
+  // Somebody else takes the name in the gap — a different workspace, so the duplicate-account check does not fire.
+  const squatter = await harness.addWorkspace({ alias: 'acme', workspaceId: 'T9999', userId: 'U9999' });
+
+  await redirect(start.authUrl);
+  const finished = await cli(harness, ['--json', 'workspace', 'add', '--finish', start.flowId, '--wait', '20']);
+  assert.equal(finished.code, EXIT_CODES.CONFIG);
+  assert.match(finished.json<Envelope<never>>().error?.message ?? '', /already connected/);
+
+  const after = (await harness.core.config.load()).accounts.acme;
+  assert.equal(after?.id, squatter.id, 'the workspace that held the name was replaced');
+  const secrets = await harness.core.secrets('file');
+  assert.ok(await secrets.get(squatter.secretRef), 'its credential was stranded');
+});
