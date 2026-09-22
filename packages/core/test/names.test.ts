@@ -28,7 +28,12 @@ import {
   resolveName,
   retargetFormerNames,
 } from '../src/names.ts';
+import { enableNamesMigrationForTests } from '../src/release-gate.ts';
+import { parseConfigAsReleased014 } from './fixtures/v0.1.4-version-gate.ts';
 import { tempDir } from './helpers/temp.ts';
+
+// The transition is what these tests are about; `release-gate.test.ts` proves it is off by default.
+enableNamesMigrationForTests();
 
 function inbox(id: string, overrides: Partial<InboxConfig> = {}): InboxConfig {
   return {
@@ -546,6 +551,19 @@ test('the migration renames every key, records every old name, and touches nothi
   assert.throws(() => resolveName(reread, 'inbox', 'gmail'), isError('NOT_FOUND', /renamed to "personal\/gmail"/));
 });
 
+test('what the migration writes, 0.1.4 refuses with the message it already prints', async () => {
+  const store = storeWith(machine());
+  await migrateNames(store, ready(planNamesMigration(await store.load())));
+  assert.throws(
+    () => parseConfigAsReleased014(readFileSync(store.path, 'utf8')),
+    /config\.json has version 2; this release reads version 1/,
+  );
+  // And a version-1 file this release wrote, it still reads.
+  const one = storeWith(machine());
+  await one.update((config) => config);
+  assert.doesNotThrow(() => parseConfigAsReleased014(readFileSync(one.path, 'utf8')));
+});
+
 test('a write that committed and then reported failure is found already done on retry', async () => {
   const store = storeWith(machine());
   const plan = ready(planNamesMigration(await store.load()));
@@ -717,6 +735,72 @@ test('a former name may follow a re-authorisation to the new id, and nowhere els
       return { ...next, formerNames: { ...next.formerNames, inboxes: { cue: { name: 'rgc/gmail', id: IBX_B } } } };
     }),
     isError('CONFIG', /points the former name "cue" at a different account/),
+  );
+});
+
+test('a former name cannot be moved to an account that did not replace its own', async () => {
+  // The account it named was removed long ago; something connected today is not its reauth.
+  const removedEarlier = storeWith(
+    v2({
+      accounts: { 'rgc/slack': account(ACC_B, { workspace: 'T_OTHER' }) },
+      formerNames: { inboxes: {}, accounts: { live: { name: 'cue/slack', id: ACC_A } } },
+    }),
+  );
+  await assert.rejects(
+    removedEarlier.update((config) => {
+      const next = config as ConfigV2;
+      return {
+        ...next,
+        accounts: { ...next.accounts, 'new/slack': account('acc_CCCCCCCCCCCCCCCC') },
+        formerNames: { ...next.formerNames, accounts: { live: { name: 'new/slack', id: 'acc_CCCCCCCCCCCCCCCC' } } },
+      };
+    }),
+    isError('CONFIG', /points the former name "live" at a different account/),
+  );
+
+  // A replacement in the same write, but a different person: not a reauth either.
+  const stranger = storeWith(migrated());
+  await assert.rejects(
+    stranger.update((config) => {
+      const next = retargetFormerNames(config as ConfigV2, 'account', ACC_A, ACC_B);
+      return { ...next, accounts: { 'cue/slack': account(ACC_B, { userId: 'U_SOMEONE_ELSE' }) } };
+    }),
+    isError('CONFIG', /at a different account/),
+  );
+
+  // The same person, but the old account is still there: nothing was replaced.
+  const bothKept = storeWith(migrated());
+  await assert.rejects(
+    bothKept.update((config) => {
+      const next = retargetFormerNames(config as ConfigV2, 'account', ACC_A, ACC_B);
+      return { ...next, accounts: { ...next.accounts, 'cue/slack-2': account(ACC_B) } };
+    }),
+    isError('CONFIG', /at a different account/),
+  );
+
+  // The same person, the old account gone — but the other one was already connected before this write.
+  const alreadyThere = storeWith(
+    v2({
+      accounts: { 'cue/slack': account(ACC_A), 'cue/slack-2': account(ACC_B) },
+      formerNames: { inboxes: {}, accounts: { live: { name: 'cue/slack', id: ACC_A } } },
+    }),
+  );
+  await assert.rejects(
+    alreadyThere.update((config) => {
+      const next = retargetFormerNames(config as ConfigV2, 'account', ACC_A, ACC_B);
+      return { ...next, accounts: { 'cue/slack-2': account(ACC_B) } };
+    }),
+    isError('CONFIG', /at a different account/),
+  );
+
+  // Mailboxes never re-authorise under a new id, so their former names never move.
+  const mailbox = storeWith(migrated());
+  await assert.rejects(
+    mailbox.update((config) => {
+      const next = retargetFormerNames(config as ConfigV2, 'inbox', IBX_A, IBX_B);
+      return { ...next, inboxes: { 'cue/gmail': inbox(IBX_B) } };
+    }),
+    isError('CONFIG', /at a different account/),
   );
 });
 

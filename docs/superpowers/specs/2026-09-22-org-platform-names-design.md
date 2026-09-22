@@ -8,8 +8,8 @@ schema requires it. `cue/gmail` is the CUE++ mailbox, `cue/slack` the CUE++ work
 Wherefrom mailbox. A name says which organisation an account belongs to and what it is, and the schema makes sure
 the second half is true.
 
-> **Revised four times on 2026-09-22 after design reviews.** The first found nine P1s and three P2s; the second,
-> five P1s and four P2s; the third, three P1s; the fourth, one. The shape of the design is unchanged; what changed is everything that has to be true for it to
+> **Revised five times on 2026-09-22 after design reviews.** The first found nine P1s and three P2s; the second,
+> five P1s and four P2s; the third, three P1s; the fourth and fifth, one each. The shape of the design is unchanged; what changed is everything that has to be true for it to
 > be safe: separate schemas per config version, a whole-config check between preview and apply, per-kind permanent
 > tombstones, credential writes that survive a write committing and then reporting failure, every creation and
 > lookup path by name, and **two releases** — readers first, the writer only once every reader is installed.
@@ -102,7 +102,14 @@ formerNames: {
   one; `ConfigStore.update` also compares the two sides of every version-2 write, because a single write that
   deleted a record and reused its name would pass a check of the result alone. A record's key is never removed.
   Its id may change only to follow a re-authorisation — from an id that has just disappeared to one that has just
-  appeared. Its `name` is only the fallback shown for a removed account and may change freely.
+  appeared, for an account (mailboxes never re-authorise under a new id) that was connected before the write, and
+  for the same person in the same workspace. Without "connected before", a former name of an account removed long
+  ago could be pointed at whatever was connected next. Its `name` is only the fallback shown for a removed account
+  and may change freely.
+- **The reader release cannot write version 2 at all** — not by a command, and not through the library, since
+  `ConfigStore.migrateNames` is reachable from `openCore().config`. It refuses unless the version new configs are
+  created at is 2, so the writer release flips one constant and both move together. The packed-package check
+  asserts the refusal against the installed package.
 
 ### Refusing a former name
 

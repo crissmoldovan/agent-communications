@@ -3,11 +3,13 @@ import { readFile, stat } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { z } from 'zod';
+import { type ConfigVersion, NEW_CONFIG_VERSION } from './config-version.ts';
 import { CommsError } from './errors.ts';
 import { writeFileAtomic } from './fs.ts';
 import { withCredentialsLock, withFileLock } from './lock.ts';
 import { NAME_MESSAGE, NAME_PATTERN, parseName } from './name-grammar.ts';
 import { expandHome } from './paths.ts';
+import { namesMigrationEnabled } from './release-gate.ts';
 
 /**
  * The one config file. Provider-neutral: provider-specific fields (scopes, tiers) are plain strings here and validated
@@ -23,15 +25,7 @@ import { expandHome } from './paths.ts';
  */
 export const READABLE_CONFIG_VERSIONS: readonly ConfigVersion[] = [1, 2];
 
-/**
- * The version a brand-new config is created at.
- *
- * Still 1. Nothing may write version 2 until every reader that shares the file can read it, so this release reads
- * version 2 and never creates it; the migration command and this constant move together, in a later release.
- */
-export const NEW_CONFIG_VERSION: ConfigVersion = 1;
-
-export type ConfigVersion = 1 | 2;
+export { type ConfigVersion, NEW_CONFIG_VERSION } from './config-version.ts';
 
 export const ALIAS_PATTERN: RegExp = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const ALIAS_MESSAGE = 'names must be 1–32 lowercase letters, digits or hyphens, starting with a letter or digit';
@@ -647,6 +641,11 @@ export class ConfigStore {
     expected: string,
     build: (current: ConfigV1) => ConfigV2,
   ): Promise<{ status: 'migrated' | 'already-migrated'; config: ConfigV2 }> {
+    if (!namesMigrationEnabled()) {
+      throw new CommsError('CONFIG', 'this release reads version 2 of the config but does not write it', {
+        hint: 'Names are migrated by a later release, once every program that shares this config can read the result.',
+      });
+    }
     return withCredentialsLock(dirname(this.path), () =>
       withFileLock(this.#lockPath, async () => {
         this.#cache = null;
@@ -686,17 +685,33 @@ export class ConfigStore {
  */
 function formerNamesDropped(before: ConfigV2, after: ConfigV2): string | null {
   for (const map of ['inboxes', 'accounts'] as const) {
-    const idsBefore = new Set(Object.values(before[map]).map((row) => row.id));
-    const idsAfter = new Set(Object.values(after[map]).map((row) => row.id));
     for (const [key, record] of Object.entries(before.formerNames[map])) {
       const now = Object.hasOwn(after.formerNames[map], key) ? after.formerNames[map][key] : undefined;
       if (!now) return `forgets the former name "${key}"`;
       if (now.id === record.id) continue;
-      const followsRotation = !idsAfter.has(record.id) && idsAfter.has(now.id) && !idsBefore.has(now.id);
-      if (!followsRotation) return `points the former name "${key}" at a different account`;
+      if (map !== 'accounts' || !followsReauth(before, after, record.id, now.id)) {
+        return `points the former name "${key}" at a different account`;
+      }
     }
   }
   return null;
+}
+
+/**
+ * Whether `toId` replaced `fromId` in this write as a re-authorisation of the same account.
+ *
+ * Only accounts re-authorise under a new id — Slack's reauth stages the new credential beside the old one — so only
+ * they can move a former name. The old account must have been connected before the write and gone after it; the new
+ * one must be new in this write; and they must be the same person in the same workspace. Without the first
+ * condition, a former name of an account removed long ago could be pointed at whatever was connected next.
+ */
+function followsReauth(before: ConfigV2, after: ConfigV2, fromId: string, toId: string): boolean {
+  const was = Object.values(before.accounts).find((row) => row.id === fromId);
+  const now = Object.values(after.accounts).find((row) => row.id === toId);
+  if (!was || !now) return false;
+  if (Object.values(after.accounts).some((row) => row.id === fromId)) return false;
+  if (Object.values(before.accounts).some((row) => row.id === toId)) return false;
+  return was.platform === now.platform && was.workspace === now.workspace && was.userId === now.userId;
 }
 
 /**
