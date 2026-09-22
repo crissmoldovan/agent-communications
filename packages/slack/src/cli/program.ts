@@ -5,6 +5,7 @@ import {
   canPrompt,
   colorEnabled,
   type LooseningConsent,
+  lookupName,
   type OutputOptions,
   paint,
   runCommand,
@@ -365,7 +366,7 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
         const secrets = await context.secrets();
         const bundles = new Map<string, TokenBundle | null | 'unreadable'>();
         for (const view of listWorkspaces(config)) {
-          const account = config.accounts[view.alias];
+          const account = lookupName(config, 'account', view.alias);
           if (!account) continue;
           try {
             bundles.set(view.alias, parseBundle(await secrets.get(account.secretRef)));

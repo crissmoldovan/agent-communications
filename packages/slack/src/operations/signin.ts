@@ -6,8 +6,11 @@ import { fileURLToPath } from 'node:url';
 import {
   type AccountConfig,
   CommsError,
+  type Config,
+  findById,
   type LooseningConsent,
   newAccountId,
+  retargetFormerNames,
   type SecretStore,
   secretsStoreOf,
 } from '@agentcomms/core';
@@ -526,9 +529,14 @@ function stopListener(flow: SlackFlow, now: Date): void {
  * Whether the configuration now names `ref` under `alias` — read fresh, after a write that may or may not have
  * committed. `unknown` when the configuration cannot be read at all, which must never be treated as `absent`.
  */
-async function committed(context: SlackContext, alias: string, ref: string): Promise<'present' | 'absent' | 'unknown'> {
+async function committed(
+  context: SlackContext,
+  accountId: string,
+  ref: string,
+): Promise<'present' | 'absent' | 'unknown'> {
   try {
-    return (await context.config()).accounts[alias]?.secretRef === ref ? 'present' : 'absent';
+    // By the new account's id, not by name: a rename in the same write — or since — must not read as absent.
+    return findById(await context.config(), 'account', accountId)?.account.secretRef === ref ? 'present' : 'absent';
   } catch {
     return 'unknown';
   }
@@ -580,6 +588,19 @@ async function withdrawStaged(secrets: SecretStore, ref: string, original: unkno
   });
 }
 
+/** The workspace a reauth set out to renew, found by its id wherever it now lives — or a refusal. */
+function renewing(config: Config, flow: SlackFlow): { alias: string; account: AccountConfig } {
+  const found = flow.expect ? findById(config, 'account', flow.expect.accountId) : null;
+  if (!found || found.account.platform !== 'slack') {
+    // The same refusal as the check inside the lock: the account this set out to renew is not the one there now —
+    // renewed by another sign-in, or removed.
+    throw new CommsError('CONFIG', `"${flow.alias}" changed while this sign-in was being completed`, {
+      hint: `Check it with \`agent-slack workspace list\`, then re-authorise if it is still yours.`,
+    });
+  }
+  return found;
+}
+
 export async function completeSignIn(context: SlackContext, flowId: string, code: string): Promise<WorkspaceView> {
   // Claimed first, so two `--finish` calls cannot both spend one code. The claim is a file, so it is cleaned up
   // however this ends — the interactive path has no `--finish` above it to do that.
@@ -606,7 +627,12 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
      * This is the cheap check on a snapshot. The one that actually holds is inside the config lock below —
      * everything read here can be stale by the time the write happens.
      */
-    const existing = flow.expect ? requireWorkspace(config, flow.alias) : undefined;
+    /*
+     * A reauth is found by the account it set out to renew, not by the name it was started with: a migration between
+     * starting and finishing renames every workspace, and the reauth should follow its workspace to the new name
+     * rather than be refused for using the old one.
+     */
+    const existing = flow.expect ? renewing(config, flow) : undefined;
     if (!existing) checkAliasFree(config, flow.alias);
     validateExchange({ token, mode: flow.mode, flow, config, existing });
 
@@ -623,6 +649,8 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
     const secrets = await context.secrets();
     const account = accountFrom({ token, mode: flow.mode, flow, accountId, now: at });
     let written: AccountConfig = account;
+    let writtenAlias = flow.alias;
+    let replacedRef: string | undefined;
     try {
       /*
        * The write is inside the boundary that takes it back, not before it.
@@ -658,7 +686,7 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
               hint: 'Nothing was saved. Sign in again.',
             });
           }
-          const held = current.accounts[flow.alias];
+          const held = flow.expect ? findById(current, 'account', flow.expect.accountId)?.account : undefined;
           if (flow.expect) {
             /*
              * Compared against the flow, not against the snapshot read a moment ago.
@@ -669,7 +697,7 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
              * a credential minted in between and strand it. `flow.expect.accountId` is what this sign-in set
              * out to renew, written before the browser opened and unchangeable since.
              */
-            if (!held || held.id !== flow.expect.accountId) {
+            if (!held) {
               throw new CommsError('CONFIG', `"${flow.alias}" changed while this sign-in was being completed`, {
                 hint: `Check it with \`agent-slack workspace show ${flow.alias}\`, then re-authorise if it is still yours.`,
               });
@@ -695,6 +723,22 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
            * not speak to, including fields a later version adds that this one has never heard of.
            */
           written = held && flow.expect ? { ...held, ...account } : account;
+          if (held && flow.expect) {
+            /*
+             * Under the key it has now, and its former names carried to the new id.
+             *
+             * Reauth mints a new id so the new credential can be staged beside the old one. Every former name that
+             * pointed at the old id is moved to the new one in this same write — otherwise `live`, renamed to
+             * `cue/slack`, would say its workspace had been removed while it is plainly connected.
+             */
+            const renewed = findById(current, 'account', held.id);
+            const key = renewed?.alias ?? flow.alias;
+            writtenAlias = key;
+            replacedRef = held.secretRef;
+            const moved = retargetFormerNames(current, 'account', held.id, accountId);
+            return { ...moved, accounts: { ...moved.accounts, [key]: written } };
+          }
+          writtenAlias = flow.alias;
           return { ...current, accounts: { ...current.accounts, [flow.alias]: written } };
         },
         // A reauth may narrow what a workspace can do freely; widening it is gated before we get here, and the
@@ -712,7 +756,7 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
        * not name is withdrawn. If it cannot even be read, nothing is deleted: a possible leftover is reported,
        * because the alternative risks deleting a live one.
        */
-      const landed = await committed(context, flow.alias, secretRefFor(accountId));
+      const landed = await committed(context, accountId, secretRefFor(accountId));
       if (landed === 'unknown') throw keepAndReport(error, secretRefFor(accountId));
       if (landed === 'absent') throw await withdrawStaged(secrets, secretRefFor(accountId), error);
       // 'present': the write is in and only the lock's cleanup failed. The sign-in worked; carry on as it did.
@@ -731,12 +775,13 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
      * That bound is the whole justification. A credential that did *not* expire on its own would have to be
      * reported rather than dropped.
      */
-    const previousRef = existing?.account.secretRef;
+    // The credential of the row this write actually replaced, read under the lock — not the snapshot's.
+    const previousRef = replacedRef ?? existing?.account.secretRef;
     if (previousRef && previousRef !== secretRefFor(accountId)) {
       await secrets.delete(previousRef).catch(() => undefined);
     }
 
-    return viewOf(flow.alias, written);
+    return viewOf(writtenAlias, written);
   } finally {
     await context.flows.discard(flowId);
   }
