@@ -34,6 +34,13 @@ import {
  *
  * and a `refreshing` marker found stale by anyone becomes `refresh-uncertain` rather than being retried, because
  * the token behind it may already be spent and nothing local can tell.
+ *
+ * **Nothing in the package calls this yet**, and that is not an oversight. S2 signs in; the first Slack method
+ * call arrives with S3's transport, and this is what that transport will ask for a token. It is here now because
+ * the sign-in it belongs to is here now — `bundleFrom` records the expiry this reads, and a rotation scheme
+ * designed a phase after the credential shape it rotates is a rotation scheme that discovers the shape is wrong.
+ * `doctor` already reports the states it writes, so an interrupted refresh is explicable from the day it can
+ * happen rather than from the day something reads it.
  */
 
 export interface RefreshDeps {
