@@ -85,7 +85,7 @@ function neverExchanges(): { exchange: RefreshDeps['exchange']; calls: () => num
   return {
     exchange: async () => {
       calls += 1;
-      return { accessToken: 'unreachable', accessExpiresAt: NOW.toISOString(), issuedAt: NOW.toISOString() };
+      return { accessToken: 'fake-never-reached', accessExpiresAt: NOW.toISOString(), issuedAt: NOW.toISOString() };
     },
     calls: () => calls,
   };
