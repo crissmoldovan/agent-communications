@@ -152,8 +152,8 @@ Path, size, format, id, mailbox — and the count, checked.
 
 ```text
 Wrote 38 messages to
-~/Downloads/agent-communications/work/exports/phase-2-rollout-plan.md
-(212 KB, md). Thread 18f2c9a0b1d4e5f6 in "work". That is the whole thread: the file's own header
+~/Downloads/agent-communications/acme/gmail/exports/phase-2-rollout-plan.md
+(212 KB, md). Thread 18f2c9a0b1d4e5f6 in "acme/gmail". That is the whole thread: the file's own header
 says 38 messages and 38 were written.
 ```
 

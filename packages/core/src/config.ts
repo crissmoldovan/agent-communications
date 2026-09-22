@@ -635,14 +635,17 @@ export class ConfigStore {
    * bug and is refused before it is written.
    *
    * Idempotent, but only for this plan. A retry after a write that committed — even one whose lock release then
-   * failed — finds version 2, recognises it as what this plan would have written, and says so. Version 2 that this
-   * plan would *not* have written is somebody else's migration, mapping the same names differently; saying "already
-   * migrated" there would report a mapping nobody applied, and a caller updating registrations from it would point
-   * them at names that do not exist. `expectedResult` is the fingerprint of the configuration the plan produces.
+   * failed — finds version 2, recognises its own mapping in it, and says so. Version 2 that does *not* carry this
+   * mapping is somebody else's migration; saying "already migrated" there would report a mapping nobody applied,
+   * and a caller updating registrations from it would point them at names that do not exist.
+   *
+   * `applied` answers that question, and is asked about the mapping rather than about the whole file: between a
+   * committed write and its retry, something else may have changed a policy or a timezone, and a retry refused
+   * over that would be idempotency in name only.
    */
   async migrateNames(
     expected: string,
-    expectedResult: string,
+    applied: (current: ConfigV2) => boolean,
     build: (current: ConfigV1) => ConfigV2,
   ): Promise<{ status: 'migrated' | 'already-migrated'; config: ConfigV2 }> {
     if (!namesMigrationEnabled()) {
@@ -655,7 +658,7 @@ export class ConfigStore {
         this.#cache = null;
         const current = structuredClone(await this.load());
         if (current.version === 2) {
-          if (configFingerprint(current) !== expectedResult) {
+          if (!applied(current)) {
             throw new CommsError('TRANSIENT', 'the names were migrated while this ran, and not to these names', {
               hint: 'Run `agentcomms names migrate` again to see what they are called now.',
             });

@@ -121,8 +121,8 @@ What went where, in full, with the size — and nothing about the contents you h
 
 ```text
 Wrote the thread to
-~/Downloads/agent-communications/work/exports/phase-2-rollout-plan.md
-(212 KB, md). Thread 18f2c9a0b1d4e5f6 in "work".
+~/Downloads/agent-communications/acme/gmail/exports/phase-2-rollout-plan.md
+(212 KB, md). Thread 18f2c9a0b1d4e5f6 in "acme/gmail".
 ```
 
 And for a refusal:
@@ -130,7 +130,7 @@ And for a refusal:
 ```text
 That `--out` was refused: it points out of the downloads root, and everything this writes stays inside it.
 `out` is a folder name within the root — say which folder you meant and it will land at
-~/Downloads/agent-communications/work/<folder>/. If you want the file in your project, move it there
+~/Downloads/agent-communications/acme/gmail/<folder>/. If you want the file in your project, move it there
 yourself once it is written.
 ```
 

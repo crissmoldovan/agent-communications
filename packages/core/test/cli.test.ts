@@ -472,6 +472,13 @@ test('doctor says a version-1 config can be migrated, and stops saying it once i
   const after = names(run(['doctor', '--json'], { AGENT_COMMS_CONFIG_DIR: config }).stdout);
   assert.equal(after.detail, 'organisation/platform');
   assert.equal(after.fix, undefined, 'said until it is done, not for ever');
+
+  // A config nobody can read says nothing about its names — least of all that they have already been migrated.
+  const broken = tempDir();
+  writeFileSync(join(broken, 'config.json'), '{ not json\n');
+  const unknown = names(run(['doctor', '--json'], { AGENT_COMMS_CONFIG_DIR: broken }).stdout);
+  assert.match(unknown.detail, /unknown/);
+  assert.equal(unknown.fix, undefined, 'and offers no migration for a file it could not read');
 });
 
 test('names migrate --dry-run prints the mapping and changes nothing', () => {

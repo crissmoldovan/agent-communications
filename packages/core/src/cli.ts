@@ -103,6 +103,7 @@ async function doctor(core: Core): Promise<{ checks: Check[]; ok: boolean }> {
   }
 
   let config: Config = emptyConfig();
+  let readable = true;
   try {
     config = await core.config.load();
     const exists = await stat(core.config.path).then(
@@ -111,6 +112,7 @@ async function doctor(core: Core): Promise<{ checks: Check[]; ok: boolean }> {
     );
     checks.push({ name: 'config', ok: true, detail: exists ? core.config.path : 'no config yet' });
   } catch (error) {
+    readable = false;
     checks.push({
       name: 'config',
       ok: false,
@@ -127,11 +129,18 @@ async function doctor(core: Core): Promise<{ checks: Check[]; ok: boolean }> {
    * because the release requirement is the part people get wrong: one config is shared by everything on a machine,
    * and a program older than 0.2.0 refuses the migrated file outright.
    */
+  const toMigrate = readable && config.version === 1;
   checks.push({
     name: 'account names',
     ok: true,
-    detail: config.version === 1 ? 'the old flat names, which still work' : 'organisation/platform',
-    ...(config.version === 1
+    // `config` falls back to an empty one when the file could not be read, and an empty one is version 2 — which
+    // would announce a migration that may not have happened. The check above already says the file is unreadable.
+    detail: !readable
+      ? 'unknown — the configuration could not be read'
+      : toMigrate
+        ? 'the old flat names, which still work'
+        : 'organisation/platform',
+    ...(toMigrate
       ? {
           fix: 'See what they would become with `agentcomms names migrate --dry-run`, once everything sharing this config is on 0.2.0 or later.',
         }

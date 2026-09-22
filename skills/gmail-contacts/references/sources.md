@@ -125,9 +125,9 @@ Say what ran, show every row with its source, and describe the two numbers hones
 Three addresses match "Sam Rivera" (acme/gmail, personal/gmail · all three sources ran in acme/gmail; personal/gmail has no
 address-book access, so only its mail history was searched):
 
-1. sam@acme.test           contacts+history · 34 sightings · last seen 2026-09-16 · work
-2. s.rivera@acme.test      history           ·  2 sightings · last seen 2024-11-03 · work
-3. sam@acme-invoices.test  history           ·  1 sighting  · last seen 2026-09-11 · work
+1. sam@acme.test           contacts+history · 34 sightings · last seen 2026-09-16 · acme/gmail
+2. s.rivera@acme.test      history           ·  2 sightings · last seen 2024-11-03 · acme/gmail
+3. sam@acme-invoices.test  history           ·  1 sighting  · last seen 2026-09-11 · acme/gmail
 
 "Sightings" are header appearances in a sample of at most 25 messages per mailbox, so they are a floor.
 ```

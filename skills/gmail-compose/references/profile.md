@@ -50,7 +50,7 @@ name, until one is written under the new one.)
 <!-- user: …/compose/user.md -->
 …
 
-<!-- inbox: …/compose/inbox-work.md -->
+<!-- inbox: …/compose/inbox-acme__gmail.md -->
 …
 ```
 
@@ -121,11 +121,11 @@ professional" gives a writer nothing to check against.
 
 ## An inbox layer, worked
 
-`compose/inbox-work.md` is about what is true of mail sent from that address, and usually means
+`compose/inbox-acme__gmail.md` is about what is true of mail sent from that address, and usually means
 constraints somebody else imposes.
 
 ```markdown
-# Mail from the work mailbox
+# Mail from acme/gmail
 
 - Everything here is with clients or their agencies. Assume it may be forwarded to their legal team.
 - Never commit to a date without "subject to confirmation" unless the date is already in a contract.

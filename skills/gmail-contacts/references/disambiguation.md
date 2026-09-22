@@ -14,11 +14,11 @@ employer in March, that the personal address is the one he reads, that his compa
 One line per candidate, in the order the search returned them, unedited.
 
 ```text
-Three addresses match "Sam Rivera" (searched work and personal; all three sources ran):
+Three addresses match "Sam Rivera" (searched acme/gmail and personal/gmail; all three sources ran):
 
-  1. sam@acme.test           contacts + history · 34 sightings · last seen 2026-09-16 · work
-  2. s.rivera@acme.test      history            ·  2 sightings · last seen 2024-11-03 · work
-  3. sam@acme-invoices.test  history            ·  1 sighting  · last seen 2026-09-11 · work
+  1. sam@acme.test           contacts + history · 34 sightings · last seen 2026-09-16 · acme/gmail
+  2. s.rivera@acme.test      history            ·  2 sightings · last seen 2024-11-03 · acme/gmail
+  3. sam@acme-invoices.test  history            ·  1 sighting  · last seen 2026-09-11 · acme/gmail
 
 1 and 3 differ only by "-invoices" in the domain. 3 has been seen once, this month. I am showing it rather
 than dropping it because its presence in your mailbox is the news. 2 looks like an older address at the

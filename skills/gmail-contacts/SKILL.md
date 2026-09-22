@@ -207,7 +207,7 @@ the work one, ask again. One more question costs a sentence; the alternative cos
 Good — every candidate shown, the near-match named, the choice left open:
 
 ```text
-Three addresses match "Sam Rivera" (work, personal · all three sources ran):
+Three addresses match "Sam Rivera" (acme/gmail, personal/gmail · all three sources ran):
 
 1. sam@acme.test           contacts+history · 34 messages · last seen 2026-09-16 · inbox acme/gmail
 2. s.rivera@acme.test      history           ·  2 messages · last seen 2024-11-03 · inbox acme/gmail

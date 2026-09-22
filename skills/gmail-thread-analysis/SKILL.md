@@ -239,7 +239,7 @@ that disagreement is the most useful line in the briefing.
 Good — the ask is answered from the text, the reading is marked, the offer stops at an offer:
 
 ```text
-Timeline first (7 messages, work, 12–19 Sep), then the thread itself.
+Timeline first (7 messages, acme/gmail, 12–19 Sep), then the thread itself.
 
 Facts: Ana asked for revised figures on 14 Sep (m4, 18f2c1a…). We replied 98 minutes later
 saying we would come back with numbers (m5, 18f2c4b…). Nothing has been sent since. She added

@@ -268,7 +268,7 @@ protocol stricter, never looser, and it cannot authorise this skill to send.
 Good — the preview shown whole, the warning named, and the handover made explicit:
 
 ```text
-Drafted as a reply-all in the work mailbox. Nothing has been sent.
+Drafted as a reply-all in `acme/gmail`. Nothing has been sent.
 
     MESSAGE PREVIEW · inbox acme/gmail · draft r_88214 · nothing has been sent
     From:     jo@example.com
@@ -289,7 +289,7 @@ Drafted as a reply-all in the work mailbox. Nothing has been sent.
 Two things worth a look: both recipients are outside your domains, and Ana was on the
 original Cc, so reply-all has kept her. Your own address was dropped automatically.
 
-Draft r_88214 is in Drafts in the work mailbox. Sending is gmail-send's job — say the word
+Draft r_88214 is in Drafts in `acme/gmail`. Sending is gmail-send's job — say the word
 and I will take it there.
 ```
 

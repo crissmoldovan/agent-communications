@@ -304,20 +304,40 @@ for (const file of walk(root)) {
  *
  * Every account is `organisation/platform` now, and a config created today refuses anything else — so an example
  * that still says `--inbox work` is a command that cannot work, and one a reader will copy before they find out.
- * This looks only at name positions, because most of these words are ordinary English everywhere else: `archive`
- * is an action, `personal` is an adjective, and `work` is what the software does.
  *
- * Historical material is exempt on purpose: a spec records what was decided at the time, and the changelog records
- * what the old names were. Tests are exempt too — a version-1 fixture is legitimately flat.
+ * Only name positions are looked at, because most of these words are ordinary English everywhere else: `archive`
+ * is an action, `personal` is an adjective, and `work` is what the software does. The positions split in two.
+ * Some are unambiguous wherever they appear — a flag, a JSON field, a profile file name, a path under the
+ * downloads root. The rest are subcommands, whose grammar prose imitates exactly ("inbox add and reauth",
+ * "inbox add failed"), so those are read only inside code — a fenced block or a backticked span.
+ *
+ * A version-1 alias is what it always was, digits and all, so the grammar here is that one rather than a guess at
+ * which words looked like names.
+ *
+ * Historical material is exempt: a spec records what was decided at the time, a research note what was observed,
+ * and the changelog what the old names were.
  */
-// A legal version-1 alias, minus the English words that follow these verbs in prose ("inbox add and reauth").
-const FLAT_NAME = String.raw`(?!(?:and|or|the|an?)\b)[a-z][a-z0-9-]*`;
-const NAME_POSITIONS = [
-  new RegExp(String.raw`--(?:inbox|workspace)[ =](${FLAT_NAME})(?![\w/-])`, 'g'),
-  new RegExp(String.raw`\binbox[:=] ?['"](${FLAT_NAME})['"]`, 'g'),
-  new RegExp(String.raw`\b(?:inbox|workspace) (${FLAT_NAME}) ·`, 'g'),
-  new RegExp(String.raw`\b(?:inbox|workspace) (?:add|remove|reauth|finish) (${FLAT_NAME})(?![\w/-])`, 'g'),
+const ALIAS = String.raw`[a-z0-9][a-z0-9-]{0,31}`;
+const ANYWHERE = [
+  new RegExp(String.raw`--(?:inbox|workspace)[ =](${ALIAS})(?![\w/-])`, 'g'),
+  new RegExp(String.raw`["']?\b(?:inbox|workspace)["']?: ?["'](${ALIAS})["']`, 'g'),
+  new RegExp(String.raw`\binbox-(${ALIAS})\.md`, 'g'),
+  // A correct download path has two segments — `…/acme/gmail/exports/…` — so a first segment followed by a
+  // platform is the organisation, not a flat name.
+  new RegExp(String.raw`agent-communications/(${ALIAS})/(?!(?:gmail|slack)(?:-[a-z0-9-]+)?/)`, 'g'),
 ];
+const IN_CODE = [
+  new RegExp(String.raw`\b(?:inbox|workspace) (?:add|remove|reauth|finish) (${ALIAS})(?![\w/-])`, 'g'),
+  new RegExp(String.raw`\b(?:inbox|workspace) (${ALIAS}) ·`, 'g'),
+  new RegExp(String.raw`\bin ["“](${ALIAS})["”]`, 'g'),
+  // A trailing `· something` is not a position: in these documents it is as often a message id as a name.
+];
+/** Fenced blocks and backticked spans, joined — the parts of a document a reader copies rather than reads. */
+function codeOf(source) {
+  return [...source.matchAll(/```[^\n]*\n([\s\S]*?)```/g), ...source.matchAll(/`([^`\n]+)`/g)]
+    .map(([, code]) => code)
+    .join('\n');
+}
 const userFacing = (relativeFile) =>
   (relativeFile.startsWith('skills/') ||
     relativeFile.startsWith('docs/') ||
@@ -330,10 +350,18 @@ for (const file of walk(root)) {
   const relativeFile = show(file);
   if (!userFacing(relativeFile) || !relativeFile.endsWith('.md')) continue;
   const source = readFileSync(file, 'utf8');
-  for (const pattern of NAME_POSITIONS) {
-    for (const [, name] of source.matchAll(pattern)) {
-      fail(`${relativeFile}: "${name}" is a flat account name; every account is organisation/platform`);
+  const searched = [
+    [source, ANYWHERE],
+    [codeOf(source), IN_CODE],
+  ];
+  const flat = new Set();
+  for (const [text, patterns] of searched) {
+    for (const pattern of patterns) {
+      for (const [, name] of text.matchAll(pattern)) if (name) flat.add(name);
     }
+  }
+  for (const name of flat) {
+    fail(`${relativeFile}: "${name}" is a flat account name; every account is organisation/platform`);
   }
 }
 

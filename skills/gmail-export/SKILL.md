@@ -226,7 +226,7 @@ it in here.
 
 Wrote 38 messages to
 ~/Downloads/agent-communications/acme/gmail/exports/phase-2-rollout-plan.md
-(212 KB, md). Thread 18f2c9a0b1d4e5f6 in "work".
+(212 KB, md). Thread 18f2c9a0b1d4e5f6 in "acme/gmail".
 
 I have read the first and last exchanges: the date moved from the 14th to the 21st, and Ana
 is waiting on a schema from you. Tell me what to look for and I will go through the rest of
