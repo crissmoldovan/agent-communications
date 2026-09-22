@@ -187,8 +187,8 @@ If the `gmail_*` tools are not available, everything here works through the CLI:
 Every export goes under the **downloads root**, in a per-mailbox folder:
 
 ```text
-<downloads root>/<alias>/exports/<subject-slug>.md      # the default
-<downloads root>/<alias>/<out>/<subject-slug>.json      # with --out
+<downloads root>/<name>/exports/<subject-slug>.md      # the default
+<downloads root>/<name>/<out>/<subject-slug>.json      # with --out
 ```
 
 The root defaults to `~/Downloads/agent-communications`. The directory is created private (owner
@@ -225,7 +225,7 @@ it in here.
     agent-gmail export 18f2c9a0b1d4e5f6 --inbox acme/gmail --thread --format md
 
 Wrote 38 messages to
-~/Downloads/agent-communications/work/exports/phase-2-rollout-plan.md
+~/Downloads/agent-communications/acme/gmail/exports/phase-2-rollout-plan.md
 (212 KB, md). Thread 18f2c9a0b1d4e5f6 in "work".
 
 I have read the first and last exchanges: the date moved from the 14th to the 21st, and Ana

@@ -4,6 +4,8 @@ import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { needsYes } from '../src/cli.ts';
+import type { Streams } from '../src/cli-runtime.ts';
 import type { CommsError } from '../src/errors.ts';
 import { tempDir } from './helpers/temp.ts';
 
@@ -477,6 +479,9 @@ test('names migrate needs --yes where nobody can answer, and then renames everyt
     AGENT_COMMS_CONFIG_DIR: config,
   });
   assert.equal(done.status, 0, done.stderr);
+  // The mapping is shown before the write, `--yes` included: it is the only record of the old names afterwards.
+  assert.match(done.stderr, /gmail\s+→\s+personal\/gmail/);
+  assert.match(done.stdout, /Renamed 3 account\(s\)/);
   const written = JSON.parse(readFileSync(join(config, 'config.json'), 'utf8'));
   assert.equal(written.version, 2);
   assert.deepEqual(Object.keys(written.inboxes).sort(), ['personal/gmail', 'work/gmail']);
@@ -512,4 +517,17 @@ test('names migrate lists every problem at once, and applies none of them', () =
   );
   assert.ok(problems.some((p) => /there is nothing called "nope"/.test(p)));
   assert.equal(JSON.parse(readFileSync(join(config, 'config.json'), 'utf8')).version, 1);
+});
+
+test('an agent is never asked, even with a terminal: it can answer its own question', () => {
+  const terminal = {
+    stdout: { isTTY: true },
+    stderr: { isTTY: true },
+    stdin: { isTTY: true },
+  } as unknown as Streams;
+  assert.equal(needsYes({}, terminal, {}), false, 'a person at a terminal is asked');
+  assert.equal(needsYes({ CLAUDECODE: '1' }, terminal, {}), true, 'an agent must pass --yes');
+  assert.equal(needsYes({}, terminal, { json: true }), true, '--json is never interactive');
+  const piped = { ...terminal, stdin: { isTTY: false } } as unknown as Streams;
+  assert.equal(needsYes({}, piped, {}), true, 'a pipe cannot answer');
 });

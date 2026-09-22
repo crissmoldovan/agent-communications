@@ -97,7 +97,7 @@ work goes through the CLI with `--json`:
 
 ```bash
 npx -y @agentcomms/gmail@<version> inbox list --json
-npx -y @agentcomms/gmail@<version> search "from:sam newer_than:7d" --inbox work --json
+npx -y @agentcomms/gmail@<version> search "from:sam newer_than:7d" --inbox acme/gmail --json
 ```
 
 Exit codes are stable and documented in `--help`: `0` ok, `10` a send was refused or needs

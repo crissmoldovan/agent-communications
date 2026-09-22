@@ -483,6 +483,15 @@ export async function main(
           return;
         }
         /*
+         * The mapping is shown before anything is written, whoever is running it.
+         *
+         * `--yes` answers the question; it does not skip showing what was answered. A person who passes it still
+         * reads what happened above the result line, and an agent's transcript carries it — which is the only
+         * record of what the old names were once the file no longer holds them. It goes to stderr so `--json`
+         * keeps its one envelope on stdout.
+         */
+        defaultStreams.stderr.write(`${renderMapping(plan.rows)}\n`);
+        /*
          * A person at a terminal confirms; anything else passes `--yes`.
          *
          * Not a typed challenge: a rename grants nothing and takes nothing away, and the classifier agrees — it
@@ -490,18 +499,18 @@ export async function main(
          * deliberateness, because the old names stop working the moment it is done.
          */
         if (!values.yes) {
-          if (agentMarker(env) || !canPrompt(env, defaultStreams, { json: values.json })) {
+          if (needsYes(env, defaultStreams, { json: values.json })) {
             throw new CommsError('USAGE', 'this would rename every account, so it needs --yes or a terminal', {
               hint: 'See the mapping first with `agentcomms names migrate --dry-run`, then add `--yes`.',
             });
           }
-          await confirm(defaultStreams, `${renderMapping(plan.rows)}\n`);
+          await confirm(defaultStreams);
         }
         const result = await migrateNames(core.config, plan);
         writeResult({ status: result.status, rows: plan.rows }, output, (data) =>
           data.status === 'already-migrated'
             ? 'Names are already organisation/platform.'
-            : `${renderMapping(data.rows)}\n\nDone. The names on the left no longer work; anything that uses one is told what it is called now.`,
+            : `Renamed ${data.rows.length} account(s). The old names no longer work; anything that uses one is told what it is called now.`,
         );
         return;
       }
@@ -551,15 +560,25 @@ function renderMapping(rows: readonly NamesMigrationRow[]): string {
   ].join('\n');
 }
 
+/**
+ * Whether this run has to pass `--yes` rather than being asked.
+ *
+ * An agent is not asked even where it has a terminal: it can answer its own question, so the answer would mean
+ * nothing. Exported so the rule can be tested directly — a subprocess test cannot hand the CLI a terminal, and a
+ * rule that only ever runs without one is a rule nobody has checked.
+ */
+export function needsYes(env: NodeJS.ProcessEnv, streams: Streams, options: { json?: boolean }): boolean {
+  return agentMarker(env) !== null || !canPrompt(env, streams, options);
+}
+
 /** A plain yes/no, for a change that is deliberate rather than dangerous. */
-async function confirm(streams: Streams, prompt: string): Promise<void> {
+async function confirm(streams: Streams): Promise<void> {
   const { createInterface } = await import('node:readline/promises');
   const rl = createInterface({
     input: streams.stdin as NodeJS.ReadableStream,
     output: streams.stderr as NodeJS.WritableStream,
   });
   try {
-    streams.stderr.write(`${prompt}\n`);
     const answer = await rl.question('Rename them? [y/N] ');
     if (!/^y(es)?$/i.test(answer.trim())) {
       throw new CommsError('USAGE', 'nothing was renamed');

@@ -53,7 +53,8 @@ Every `gmail-*` skill works under the shared contract in `references/contract.md
 here:
 
 - **Name the mailbox. Always.** This skill is where the names come from, so it is also where a bad one is
-  cheap to fix: aliases are lowercase letters, digits and hyphens, and a few (meaning "every inbox") are
+  cheap to fix: a name is `organisation/platform`, lowercase — `acme/gmail`, `acme/gmail-support` for a second one —
+  and a few (meaning "every inbox") are
   reserved. `gmail_inboxes_list` (CLI: `agent-gmail inbox list --json`) is the register of what exists.
 - **Confirm the mailbox before the first write.** `gmail_whoami` asks Google which account an alias
   actually is. Here it is the closing step of connecting one, not an afterthought: it is the only check

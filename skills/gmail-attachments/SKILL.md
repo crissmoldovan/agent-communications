@@ -212,9 +212,9 @@ The 3 newest attachments from sam@example.com in `acme/gmail`:
 Two Drive links were skipped: they are links in the body, not files in the message.
 
 Saved the statement to
-  ~/Downloads/agent-communications/work/2026-09-17_sam-example-com_statement-q3/Statement Q3.pdf
+  ~/Downloads/agent-communications/acme/gmail/2026-09-17_sam-example-com_statement-q3/Statement Q3.pdf
   412 KB, application/pdf, from message 18f2c…, sha256 9a3f…
-  Listed in ~/Downloads/agent-communications/work/manifest.json. Nothing was opened or run.
+  Listed in ~/Downloads/agent-communications/acme/gmail/manifest.json. Nothing was opened or run.
 
 The .xlsm carries macros. I have not opened it, and I would not open it outside a viewer you trust.
 ```
