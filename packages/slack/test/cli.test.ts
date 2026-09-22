@@ -536,3 +536,16 @@ test('a sign-in cannot connect over a name taken while it was waiting', async ()
   const secrets = await harness.core.secrets('file');
   assert.ok(await secrets.get(squatter.secretRef), 'its credential was stranded');
 });
+
+test('a sign-in for one workspace cannot be finished under another name', async () => {
+  // `reauth <alias>` makes the caller name a workspace; a flow id names one too, and they have to agree.
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  await harness.addWorkspace({ alias: 'zed', workspaceId: 'T0002', userId: 'U0002' });
+  const port = await freePort();
+  const start = await startDetached(harness, ['workspace', 'reauth', 'acme', '--port', String(port)]);
+
+  const wrong = await cli(harness, ['--json', 'workspace', 'reauth', 'zed', '--finish', start.flowId, '--wait', '1']);
+  assert.equal(wrong.code, EXIT_CODES.USAGE);
+  assert.match(wrong.json<Envelope<never>>().error?.message ?? '', /is for "acme", not "zed"/);
+});

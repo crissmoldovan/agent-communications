@@ -194,6 +194,8 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
           const view = await finishSignIn(context, {
             flowId: String(flags.finish),
             only: 'add',
+            // Optional here, so bound only when it was given rather than invented from the flow.
+            ...(alias ? { expectAlias: alias } : {}),
             ...(flags.url ? { url: String(flags.url) } : {}),
             waitSeconds: Number(flags.wait) || 60,
           });
@@ -267,6 +269,8 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
           const view = await finishSignIn(context, {
             flowId: String(flags.finish),
             only: 'reauth',
+            // The caller named a workspace; a flow id names one too, and they have to be the same one.
+            expectAlias: alias,
             ...(flags.url ? { url: String(flags.url) } : {}),
             waitSeconds: Number(flags.wait) || 60,
           });

@@ -317,6 +317,13 @@ export interface FinishOptions {
    * be able to finish a `reauth` the other started.
    */
   readonly only?: 'add' | 'reauth' | undefined;
+  /**
+   * Refuse a flow that is not for this workspace.
+   *
+   * `reauth <alias>` makes the caller name a workspace, and a flow id names a different one. Finishing the flow
+   * and ignoring the name would re-authorise a workspace nobody asked about, and report it as the one they did.
+   */
+  readonly expectAlias?: string | undefined;
   /** The address-bar URL, pasted back on a machine whose browser is elsewhere. */
   readonly url?: string | undefined;
   readonly waitSeconds?: number | undefined;
@@ -332,6 +339,13 @@ export interface FinishOptions {
 export async function finishSignIn(context: SlackContext, options: FinishOptions): Promise<WorkspaceView> {
   const flow = await context.flows.get(options.flowId);
   const kind = flow.expect ? 'reauth' : 'add';
+  if (options.expectAlias && options.expectAlias !== flow.alias) {
+    throw new CommsError('USAGE', `that sign-in is for "${flow.alias}", not "${options.expectAlias}"`, {
+      hint: `Finish it as \`agent-slack workspace ${kind === 'reauth' ? `reauth ${flow.alias}` : 'add'} --finish ${
+        options.flowId
+      }\`.`,
+    });
+  }
   if (options.only && kind !== options.only) {
     throw new CommsError(
       'USAGE',
