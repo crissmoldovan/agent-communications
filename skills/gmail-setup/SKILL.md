@@ -19,7 +19,7 @@ dies with `invalid_grant` about seven days after sign-in, because Testing issues
 the client secret is shown once, at creation, and a JSON that was not downloaded then cannot be recovered.
 Each of those looks like a bug in the tool when it arrives.
 
-The second family of failures belongs to agents specifically. `agent-gmail inbox add work` on a human
+The second family of failures belongs to agents specifically. `agent-gmail inbox add acme/gmail` on a human
 terminal opens a browser and waits up to ten minutes for the redirect. An agent's shell does not live that
 long — Claude Code's Bash tool gives up at 120 seconds. The command tries to tell the two apart by itself
 and only waits when stdin and stdout are both terminals, so an agent usually gets the detached behaviour
@@ -29,7 +29,7 @@ than the environment's, and the waiting then always happens somewhere the agent 
 
 The third is quieter and worse: Google's account chooser hands back whichever account is already signed in
 that browser. Without `--email`, a sign-in meant for the work mailbox can connect a personal one under the
-alias `work`, and everything afterwards — every draft, every search, every send preview — is about the wrong
+alias `acme/gmail`, and everything afterwards — every draft, every search, every send preview — is about the wrong
 mailbox while reading correctly. The consent step refuses a mismatch only when it was told what to expect.
 
 And one that defeats the whole package rather than this skill: while another Gmail MCP server with send
@@ -53,7 +53,8 @@ Every `gmail-*` skill works under the shared contract in `references/contract.md
 here:
 
 - **Name the mailbox. Always.** This skill is where the names come from, so it is also where a bad one is
-  cheap to fix: aliases are lowercase letters, digits and hyphens, and a few (meaning "every inbox") are
+  cheap to fix: a name is `organisation/platform`, lowercase — `acme/gmail`, `acme/gmail-support` for a second one —
+  and a few (meaning "every inbox") are
   reserved. `gmail_inboxes_list` (CLI: `agent-gmail inbox list --json`) is the register of what exists.
 - **Confirm the mailbox before the first write.** `gmail_whoami` asks Google which account an alias
   actually is. Here it is the closing step of connecting one, not an afterthought: it is the only check
@@ -72,7 +73,7 @@ here:
   configuration problem.
 - **Cite what you read.** Quote the alias, the address Google reported, the `flowId`, the config path
   `mcp install` wrote to, and the failing `doctor` check ids. "It is connected" cannot be checked;
-  "connected `work` as jo@example.com, `inbox-token` ok" can.
+  "connected `acme/gmail` as jo@example.com, `inbox-token` ok" can.
 - **Never echo a secret.** The client secret lives in the JSON and then in the secret store. Do not print
   it, do not paste it into the conversation, and do not read the downloaded file to "check" it.
 
@@ -145,7 +146,7 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
 
    ```
    agent-gmail setup --client-json <path> --json      # registers the client
-   agent-gmail setup --inbox <alias> --email <addr> --json
+   agent-gmail setup --inbox <name> --email <addr> --json
    agent-gmail setup --mcp-client claude-code --json
    ```
 
@@ -207,14 +208,14 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    refusal you report rather than a problem you solve.
    **Complete when:** `gmail_inboxes_list` shows the policy the user asked for.
 
-8. **Prove it works, without sending.** `agent-gmail doctor --inbox <alias>`, then
-   `agent-gmail whoami --inbox <alias>` (MCP: `gmail_whoami`) to confirm the address Google reports
-   matches the one stored, then one search — `agent-gmail search "newer_than:1d" --inbox <alias>
+8. **Prove it works, without sending.** `agent-gmail doctor --inbox <name>`, then
+   `agent-gmail whoami --inbox <name>` (MCP: `gmail_whoami`) to confirm the address Google reports
+   matches the one stored, then one search — `agent-gmail search "newer_than:1d" --inbox <name>
    --limit 1`. Report the count, not the contents.
    **Complete when:** `inbox-token` and `inbox-profile` are `ok` and the search returned without error.
 
 9. **Wire the MCP clients.** `agent-gmail mcp install --client claude-code` (also `claude-desktop`,
-   `codex`, `cursor`, `gemini`, `vscode`, or `json` to print the snippet). Add `--inbox <alias>` to pin
+   `codex`, `cursor`, `gemini`, `vscode`, or `json` to print the snippet). Add `--inbox <name>` to pin
    the server to one mailbox, `--read-only` to leave out every tool that changes the mailbox, and
    `--print` to see what would be written without writing it. `--read-only` gates the mailbox and not the
    disk — `gmail_attachment_download` and `gmail_export` are registered either way — so say it can write
@@ -262,12 +263,12 @@ The console renames these pages every few months; the sequence has been stable.
 | `config-dir`, `state-dir` | The directory is readable by other users of the machine | `chmod 700 <path>` |
 | `secret-store` | The system keychain cannot be reached (common on headless Linux) | `agentcomms secrets migrate --to file` |
 | `oauth-client` | No OAuth client is registered at all | `agent-gmail client add ~/Downloads/client_secret_*.json --move` |
-| `inboxes` | No mailbox is connected yet | `agent-gmail inbox add work --start` |
+| `inboxes` | No mailbox is connected yet | `agent-gmail inbox add acme/gmail --start` |
 | `inbox-scopes` | The grant is missing scopes the recorded tier needs | `agent-gmail inbox reauth <alias>` |
 | `inbox-client` | The inbox points at an OAuth client that is not registered | `agent-gmail client add <client_secret.json>` |
 | `inbox-token` | Google would not renew the refresh token | the error's own hint, else `agent-gmail inbox reauth <alias>` |
 | `inbox-profile` | Google reports a different address than the one stored | `agent-gmail inbox reauth <alias>` |
-| `inbox-idle` | Unused for 150 days; Google drops a token unused for six months | `agent-gmail whoami --inbox <alias>` |
+| `inbox-idle` | Unused for 150 days; Google drops a token unused for six months | `agent-gmail whoami --inbox <name>` |
 | `orphaned-secrets` | A token could not be deleted when an inbox was removed | Remove it from the keychain by hand, then delete the listed file |
 | `other-gmail-servers` | Another Gmail MCP server with send tools is registered: **nothing gates sending while it is there** | the removal command the check prints |
 | `mcp-command` | A registered server's command path no longer exists | `agent-gmail mcp install --client <client>` |
@@ -280,7 +281,7 @@ Read `healthy` and the `fail` count, not the exit code.
 Good — the two-step sign-in, with the warning given before the screen appears:
 
 ```text
-$ agent-gmail inbox add work --email jo@example.com --tier organize --start
+$ agent-gmail inbox add acme/gmail --email jo@example.com --tier organize --start
 Open this link to connect the mailbox:
 https://accounts.google.com/o/oauth2/v2/auth?client_id=…&redirect_uri=http%3A%2F%2F127.0.0.1%3A54923…
 
@@ -298,7 +299,7 @@ will run the second command.
 Bad — the shape whose behaviour depends on the shell it lands in:
 
 ```text
-$ agent-gmail inbox add work
+$ agent-gmail inbox add acme/gmail
 Open this link to connect the mailbox:
 https://accounts.google.com/o/oauth2/v2/auth?client_id=…
 …

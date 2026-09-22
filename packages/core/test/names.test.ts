@@ -173,11 +173,15 @@ test('an invalid name is explained with an example ending in the right platform'
 
 // ── The two versions ─────────────────────────────────────────────────────────────────────────────────────────────
 
-test('a new config is still created at version 1 — nothing writes version 2 yet', async () => {
-  assert.equal(emptyConfig().version, 1);
-  const store = new ConfigStore(tempDir('comms-names-'));
-  assert.equal((await store.load()).version, 1);
-  assert.equal((await store.update((config) => config)).version, 1);
+test('a new config is created at version 2, and an existing version-1 one stays where it is', async () => {
+  assert.equal(emptyConfig().version, 2);
+  const fresh = new ConfigStore(tempDir('comms-names-'));
+  assert.equal((await fresh.load()).version, 2);
+  assert.equal((await fresh.update((config) => config)).version, 2);
+
+  // An existing file is never moved by an ordinary write: only the migration changes a version.
+  const existing = storeWith(machine());
+  assert.equal((await existing.update((config) => config)).version, 1);
 });
 
 test('version 1 keeps its rules: plain names, and the same word in both maps is tolerated', () => {
@@ -585,8 +589,8 @@ test('a write that committed and then reported failure is found already done on 
   const plan = ready(planNamesMigration(await store.load()));
   // The write lands and the call rejects anyway — what a failed lock release does after a committed write.
   const original = store.migrateNames.bind(store);
-  store.migrateNames = async (expected, build) => {
-    await original(expected, build);
+  store.migrateNames = async (expected, rows, build) => {
+    await original(expected, rows, build);
     throw new CommsError('LOCK_TIMEOUT', 'the lock could not be released');
   };
   await assert.rejects(migrateNames(store, plan), isError('LOCK_TIMEOUT'));
@@ -596,6 +600,110 @@ test('a write that committed and then reported failure is found already done on 
   const before = readFileSync(store.path, 'utf8');
   assert.equal((await migrateNames(store, plan)).status, 'already-migrated');
   assert.equal(readFileSync(store.path, 'utf8'), before, 'and the retry changes nothing');
+});
+
+test('two people mapping the same names differently: the loser is not told its mapping is already in place', async () => {
+  const store = storeWith(machine());
+  const current = await store.load();
+  // Both previewed the same version-1 config, so both carry the same `fingerprint`. Only the mappings differ.
+  const mine = ready(planNamesMigration(current, ['gmail=personal/gmail']));
+  const theirs = ready(planNamesMigration(current, ['gmail=home/gmail']));
+  assert.equal(mine.fingerprint, theirs.fingerprint, 'the same configuration was previewed twice');
+
+  assert.equal((await migrateNames(store, theirs)).status, 'migrated');
+  // Mine arrives second. It must not report "already migrated" — its rows say `personal/gmail`, and nothing on
+  // disk was ever called that; a caller updating its registrations from them would point them at nothing.
+  await assert.rejects(migrateNames(store, mine), isError('TRANSIENT', /not to these names/));
+  assert.equal(Object.hasOwn(JSON.parse(readFileSync(store.path, 'utf8')).inboxes, 'home/gmail'), true);
+  // The same plan applied twice is still its own retry.
+  assert.equal((await migrateNames(store, theirs)).status, 'already-migrated');
+});
+
+test('a retry after an unrelated edit is still the same migration, and still says so', async () => {
+  const store = storeWith(machine());
+  const plan = ready(planNamesMigration(await store.load()));
+  assert.equal((await migrateNames(store, plan)).status, 'migrated');
+  // Something else changes a setting that has nothing to do with names — which the whole-file check this
+  // replaced would have read as a different migration, refusing a retry of the one that had just landed.
+  await store.update((config) => ({ ...config, defaults: { ...config.defaults, timezone: 'Europe/Paris' } }));
+  const after = readFileSync(store.path, 'utf8');
+  assert.equal((await migrateNames(store, plan)).status, 'already-migrated');
+  assert.equal(readFileSync(store.path, 'utf8'), after, 'and it writes nothing');
+
+  // A rename after this one is not this one: the tombstone names the newer name and the key it wrote is gone.
+  await store.update((config) => renameEntry(config, 'inbox', 'cue/gmail', 'cue/gmail-old'));
+  await assert.rejects(migrateNames(store, plan), isError('TRANSIENT', /not to these names/));
+});
+
+test('a plan that is only part of the migration that landed is not that migration', async () => {
+  // Previewed before a third mailbox existed. Somebody else added one and migrated, naming the two this plan
+  // knows about exactly as this plan would have — so every row it holds is in place, and it is still incomplete.
+  const smaller = v1({ inboxes: { gmail: inbox('ibx_GGGGGGGGGGGGGGGG'), cue: inbox('ibx_CCCCCCCCCCCCCCCC') } });
+  const stale = ready(planNamesMigration(smaller));
+  const store = storeWith({
+    ...smaller,
+    inboxes: { ...smaller.inboxes, 'wf-tech': inbox('ibx_TTTTTTTTTTTTTTTT') },
+  });
+  assert.equal((await migrateNames(store, ready(planNamesMigration(await store.load())))).status, 'migrated');
+
+  const written = JSON.parse(readFileSync(store.path, 'utf8'));
+  for (const row of stale.rows) {
+    assert.equal(written.inboxes[row.to].id, row.id, `${row.to} is there under the name this plan chose`);
+  }
+  await assert.rejects(migrateNames(store, stale), isError('TRANSIENT', /not to these names/));
+});
+
+test('the store decides whether a migration is already done, not whoever called it', async () => {
+  const store = storeWith(machine());
+  const plan = ready(planNamesMigration(await store.load()));
+  await migrateNames(store, plan);
+  // A caller that could answer its own question could answer it wrongly. An empty plan satisfies "every row of
+  // this plan is in place" trivially, and claiming it here would report a migration nobody planned as this one's.
+  await assert.rejects(
+    store.migrateNames(plan.fingerprint, [], () => {
+      throw new Error('the build is never reached on a version-2 config');
+    }),
+    isError('TRANSIENT', /not to these names/),
+  );
+});
+
+test('rows that disagree with the transform, or name one account twice, are refused', async () => {
+  const store = storeWith(machine());
+  const plan = ready(planNamesMigration(await store.load()));
+  const elsewhere = ready(planNamesMigration(machine(), ['gmail=personal/gmail']));
+
+  // What the caller would show, and what it would write, are not the same mapping.
+  await assert.rejects(
+    store.migrateNames(plan.fingerprint, plan.rows, (current) => applyNamesMigration(current, elsewhere.rows)),
+    isError('CONFIG', /not the mapping it was given/),
+  );
+  assert.equal(JSON.parse(readFileSync(store.path, 'utf8')).version, 1, 'and nothing was written');
+
+  // One account named twice is the right number of rows for the wrong set of accounts.
+  const first = present(plan.rows[0]);
+  const doubled = [first, first, ...plan.rows.slice(2)];
+  await assert.rejects(
+    store.migrateNames(plan.fingerprint, doubled, (current) => applyNamesMigration(current, plan.rows)),
+    isError('CONFIG', /not the mapping it was given/),
+  );
+
+  // And the same rows are refused as a claim that the migration is already done.
+  await migrateNames(store, plan);
+  await assert.rejects(
+    store.migrateNames(plan.fingerprint, doubled, () => {
+      throw new Error('the build is never reached on a version-2 config');
+    }),
+    isError('TRANSIENT', /not to these names/),
+  );
+
+  // The same account twice, where counting the rows alone would agree with the file: one mailbox, two rows.
+  const one = storeWith(v1({ inboxes: { gmail: inbox('ibx_GGGGGGGGGGGGGGGG') } }));
+  const single = ready(planNamesMigration(await one.load()));
+  const only = present(single.rows[0]);
+  await assert.rejects(
+    one.migrateNames(single.fingerprint, [only, only], (current) => applyNamesMigration(current, single.rows)),
+    isError('CONFIG', /not the mapping it was given/),
+  );
 });
 
 test('a renamed row between preview and apply refuses the migration, and writes nothing', async () => {
@@ -651,19 +759,25 @@ test('a build that changes more than names is refused before it is written', asy
     next.inboxes['cue/gmail'] = { ...present(next.inboxes['cue/gmail']), sendPolicy: 'chat' };
     return next;
   };
-  await assert.rejects(store.migrateNames(plan.fingerprint, widened), isError('CONFIG', /changes more than names/));
+  await assert.rejects(
+    store.migrateNames(plan.fingerprint, plan.rows, widened),
+    isError('CONFIG', /changes more than names/),
+  );
   const dropped = (config: ConfigV1): ConfigV2 => {
     const next = applyNamesMigration(config, plan.rows);
     delete next.inboxes['cue/gmail'];
     return next;
   };
-  await assert.rejects(store.migrateNames(plan.fingerprint, dropped), isError('CONFIG', /number of inboxes changed/));
+  await assert.rejects(
+    store.migrateNames(plan.fingerprint, plan.rows, dropped),
+    isError('CONFIG', /number of inboxes changed/),
+  );
   const defaults = (config: ConfigV1): ConfigV2 => ({
     ...applyNamesMigration(config, plan.rows),
     defaults: { ...config.defaults, sendPolicy: 'never' },
   });
   await assert.rejects(
-    store.migrateNames(plan.fingerprint, defaults),
+    store.migrateNames(plan.fingerprint, plan.rows, defaults),
     isError('CONFIG', /a setting other than a name/),
   );
   assert.equal(JSON.parse(readFileSync(store.path, 'utf8')).version, 1);
@@ -877,7 +991,7 @@ test('a migration that forges, omits or adds a former name is refused', async ()
     ['extra', (f) => Object.assign(f.inboxes, { ghost: { name: 'cue/gmail', id: 'ibx_CCCCCCCCCCCCCCCC' } })],
   ];
   for (const [label, edit] of cases) {
-    await assert.rejects(store.migrateNames(plan.fingerprint, tamper(edit)), isError('CONFIG'), label);
+    await assert.rejects(store.migrateNames(plan.fingerprint, plan.rows, tamper(edit)), isError('CONFIG'), label);
   }
   assert.equal(JSON.parse(readFileSync(store.path, 'utf8')).version, 1);
 });

@@ -52,7 +52,7 @@ function inbox(overrides: Partial<InboxConfig> = {}): InboxConfig {
 
 test('an empty config has the documented defaults', () => {
   const config = emptyConfig();
-  assert.equal(config.version, 1);
+  assert.equal(config.version, 2, 'new configs name accounts organisation/platform');
   assert.deepEqual(config.inboxes, {});
   assert.equal(config.defaults.sendPolicy, 'chat');
   assert.equal(config.defaults.riskEscalation, true);
@@ -66,13 +66,13 @@ test('inbox ids are immutable-looking and unique; duplicates of one account are 
   assert.equal(ids.size, 200);
   for (const id of ids) assert.match(id, INBOX_ID_PATTERN);
   const config = emptyConfig();
-  config.inboxes.work = inbox({ sub: '42', email: 'Jo@Example.com' });
-  config.inboxes.legacy = inbox({ sub: undefined, identity: 'legacy', email: 'old@example.com' });
-  assert.equal(duplicateInbox(config, { client: 'default', sub: '42', email: 'other@example.com' }), 'work');
-  assert.equal(duplicateInbox(config, { client: 'default', email: 'jo@example.COM' }), 'work');
-  assert.equal(duplicateInbox(config, { client: 'default', email: 'OLD@example.com' }), 'legacy');
+  config.inboxes['acme/gmail'] = inbox({ sub: '42', email: 'Jo@Example.com' });
+  config.inboxes['old/gmail'] = inbox({ sub: undefined, identity: 'legacy', email: 'old@example.com' });
+  assert.equal(duplicateInbox(config, { client: 'default', sub: '42', email: 'other@example.com' }), 'acme/gmail');
+  assert.equal(duplicateInbox(config, { client: 'default', email: 'jo@example.COM' }), 'acme/gmail');
+  assert.equal(duplicateInbox(config, { client: 'default', email: 'OLD@example.com' }), 'old/gmail');
   assert.equal(duplicateInbox(config, { client: 'other', sub: '42', email: 'jo@example.com' }), null);
-  assert.equal(findInboxById(config, config.inboxes.work.id)?.alias, 'work');
+  assert.equal(findInboxById(config, config.inboxes['acme/gmail'].id)?.alias, 'acme/gmail');
 });
 
 test('parseConfig refuses bad JSON, unknown versions and invalid aliases with CONFIG errors', () => {
@@ -89,18 +89,19 @@ test('parseConfig refuses bad JSON, unknown versions and invalid aliases with CO
 
 test('effectiveSendPolicy prefers the inbox policy over the default', () => {
   const config = emptyConfig();
-  config.inboxes.work = inbox({ sendPolicy: 'confirm' });
-  config.inboxes.home = inbox();
-  assert.equal(effectiveSendPolicy(config, 'work'), 'confirm');
-  assert.equal(effectiveSendPolicy(config, 'home'), 'chat');
+  config.inboxes['acme/gmail'] = inbox({ sendPolicy: 'confirm' });
+  config.inboxes['acme/gmail-home'] = inbox();
+  assert.equal(effectiveSendPolicy(config, 'acme/gmail'), 'confirm');
+  assert.equal(effectiveSendPolicy(config, 'acme/gmail-home'), 'chat');
 });
 
 test('requireInbox names the known aliases when one is missing', () => {
   const config = emptyConfig();
-  config.inboxes.work = inbox();
+  config.inboxes['acme/gmail'] = inbox();
   assert.throws(
-    () => requireInbox(config, 'wrok'),
-    (e: unknown) => e instanceof CommsError && e.code === 'NOT_FOUND' && /Known inboxes: work/.test(e.hint ?? ''),
+    () => requireInbox(config, 'acme/gmial'),
+    (e: unknown) =>
+      e instanceof CommsError && e.code === 'NOT_FOUND' && /Known inboxes: acme\/gmail/.test(e.hint ?? ''),
   );
 });
 
@@ -108,15 +109,15 @@ test('ConfigStore writes owner-only, validates before writing, and reloads chang
   const dir = tempDir();
   const store = new ConfigStore(dir);
   assert.deepEqual((await store.load()).inboxes, {});
-  await store.update((config) => ({ ...config, inboxes: { ...config.inboxes, work: inbox() } }));
-  assert.equal((await store.load()).inboxes.work?.email, 'jo@example.com');
+  await store.update((config) => ({ ...config, inboxes: { ...config.inboxes, 'acme/gmail': inbox() } }));
+  assert.equal((await store.load()).inboxes['acme/gmail']?.email, 'jo@example.com');
   if (posix) assert.equal(statSync(store.path).mode & 0o777, 0o600);
 
   await assert.rejects(
     store.update((config) => ({ ...config, inboxes: { ...config.inboxes, 'NOT OK': inbox() } })),
     /refusing to write invalid config/,
   );
-  assert.deepEqual(Object.keys((await store.load()).inboxes), ['work']);
+  assert.deepEqual(Object.keys((await store.load()).inboxes), ['acme/gmail']);
 
   // An edit by another process is picked up.
   const other = new ConfigStore(dir);
@@ -129,7 +130,7 @@ test('concurrent updates from separate stores never lose each other', async () =
   const writers = Array.from({ length: 12 }, (_, i) =>
     new ConfigStore(dir).update((config) => ({
       ...config,
-      inboxes: { ...config.inboxes, [`in-${i}`]: inbox({ secretRef: `r${i}` }) },
+      inboxes: { ...config.inboxes, [`acme/gmail-${i}`]: inbox({ secretRef: `r${i}` }) },
     })),
   );
   await Promise.all(writers);
@@ -355,7 +356,7 @@ test('settings a newer version wrote survive an older reader, instead of being s
     ...config,
     secrets: { store: 'file' },
     inboxes: {
-      work: {
+      'acme/gmail': {
         id: newInboxId(),
         provider: 'gmail',
         email: 'jo@example.test',
@@ -376,7 +377,8 @@ test('settings a newer version wrote survive an older reader, instead of being s
   const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
   raw.futureTopLevel = { enabled: true };
   (raw.defaults as Record<string, unknown>).futureDefault = 42;
-  ((raw.inboxes as Record<string, Record<string, unknown>>).work as Record<string, unknown>).futureInboxField = 'keep';
+  ((raw.inboxes as Record<string, Record<string, unknown>>)['acme/gmail'] as Record<string, unknown>).futureInboxField =
+    'keep';
   writeFileSync(path, JSON.stringify(raw, null, 2));
 
   // Reading keeps them...
@@ -388,7 +390,7 @@ test('settings a newer version wrote survive an older reader, instead of being s
   const after = JSON.parse(readFileSync(path, 'utf8')) as Record<string, Record<string, unknown>>;
   assert.deepEqual(after.futureTopLevel, { enabled: true });
   assert.equal(after.defaults?.futureDefault, 42);
-  assert.equal((after.inboxes?.work as Record<string, unknown>)?.futureInboxField, 'keep');
+  assert.equal((after.inboxes?.['acme/gmail'] as Record<string, unknown>)?.futureInboxField, 'keep');
   assert.equal(after.defaults?.timezone, 'Europe/London');
 });
 

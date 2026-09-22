@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { statSync, writeFileSync } from 'node:fs';
+import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { needsYes } from '../src/cli.ts';
+import type { Streams } from '../src/cli-runtime.ts';
 import type { CommsError } from '../src/errors.ts';
 import { tempDir } from './helpers/temp.ts';
 
@@ -131,7 +133,7 @@ test('the migration ref list carries the non-mail accounts too', async () => {
       desktop: { provider: 'gmail', clientId: 'c', secretRef: 'gmail/client/desktop', addedAt: NOW },
     },
     inboxes: {
-      work: {
+      'acme/gmail': {
         id: newInboxId(),
         provider: 'gmail',
         email: 'jo@example.test',
@@ -140,13 +142,13 @@ test('the migration ref list carries the non-mail accounts too', async () => {
         tier: 'read',
         contacts: false,
         grantedScopes: [],
-        secretRef: 'gmail/token/work',
+        secretRef: 'gmail/token/acme',
         internalDomains: [],
         createdAt: NOW,
       },
     },
     accounts: {
-      acme: {
+      'acme/slack': {
         id: newAccountId(),
         platform: 'slack',
         workspace: 'T0001',
@@ -173,7 +175,7 @@ test('the migration ref list carries the non-mail accounts too', async () => {
 
   const refs = secretRefsOf(config);
   assert.ok(refs.includes('slack/token/acme'), `a workspace token would be stranded: ${JSON.stringify(refs)}`);
-  assert.ok(refs.includes('gmail/token/work'));
+  assert.ok(refs.includes('gmail/token/acme'));
   assert.ok(refs.includes('gmail/client/desktop'));
   // Deduplicated: two entries may legitimately share a ref, and moving it twice would report it twice.
   assert.equal(new Set(refs).size, refs.length);
@@ -276,7 +278,7 @@ async function coreWithTwoSlackTokens() {
   await core.config.update((c) => ({
     ...c,
     secrets: { store: 'file' },
-    accounts: { one: account('acc_AAAAAAAAAAAAAAAA'), two: account('acc_BBBBBBBBBBBBBBBB') },
+    accounts: { 'one/slack': account('acc_AAAAAAAAAAAAAAAA'), 'two/slack': account('acc_BBBBBBBBBBBBBBBB') },
   }));
   const source = await core.secrets('file');
   await source.set('slack/token/acc_AAAAAAAAAAAAAAAA', 'fake-token-one');
@@ -417,4 +419,140 @@ test('two opposite migrations at once cannot leave a credential in neither backe
     'fake-token-two',
     'a credential is in neither backend',
   );
+});
+
+/** A version-1 config with two mailboxes and a workspace, as a machine had before the rename. */
+function beforeTheRename(dir: string): void {
+  const inbox = (id: string, email: string) => ({
+    id,
+    provider: 'gmail',
+    email,
+    identity: 'oidc' as const,
+    client: 'desktop',
+    tier: 'read',
+    secretRef: `gmail:refresh:${id}`,
+    createdAt: NOW,
+  });
+  writeFileSync(
+    join(dir, 'config.json'),
+    `${JSON.stringify({
+      version: 1,
+      inboxes: {
+        work: inbox('ibx_AAAAAAAAAAAAAAAA', 'jo@example.test'),
+        gmail: inbox('ibx_BBBBBBBBBBBBBBBB', 'jo@gmail.test'),
+      },
+      accounts: {
+        live: {
+          id: 'acc_AAAAAAAAAAAAAAAA',
+          platform: 'slack',
+          workspace: 'T0001',
+          userId: 'U0001',
+          tier: 'read',
+          secretRef: 'slack/token/acc_AAAAAAAAAAAAAAAA',
+          createdAt: NOW,
+        },
+      },
+    })}\n`,
+  );
+}
+
+test('doctor says a version-1 config can be migrated, and stops saying it once it has been', () => {
+  const config = tempDir();
+  beforeTheRename(config);
+  // The first line is the report; a failing check (the keychain, in a sandbox) adds an error envelope after it.
+  const names = (out: string) =>
+    JSON.parse(out.split('\n')[0] ?? '').data.checks.find((check: { name: string }) => check.name === 'account names');
+
+  const before = names(run(['doctor', '--json'], { AGENT_COMMS_CONFIG_DIR: config }).stdout);
+  assert.equal(before.ok, true, 'a version-1 config is not a problem, so this never fails doctor on its own');
+  assert.match(before.fix, /names migrate --dry-run/);
+  assert.match(before.fix, /0\.2\.0/, 'and says what everything sharing the config has to be on first');
+
+  run(['names', 'migrate', '--yes'], { AGENT_COMMS_CONFIG_DIR: config });
+  const after = names(run(['doctor', '--json'], { AGENT_COMMS_CONFIG_DIR: config }).stdout);
+  assert.equal(after.detail, 'organisation/platform');
+  assert.equal(after.fix, undefined, 'said until it is done, not for ever');
+
+  // A config nobody can read says nothing about its names — least of all that they have already been migrated.
+  const broken = tempDir();
+  writeFileSync(join(broken, 'config.json'), '{ not json\n');
+  const unknown = names(run(['doctor', '--json'], { AGENT_COMMS_CONFIG_DIR: broken }).stdout);
+  assert.match(unknown.detail, /unknown/);
+  assert.equal(unknown.fix, undefined, 'and offers no migration for a file it could not read');
+});
+
+test('names migrate --dry-run prints the mapping and changes nothing', () => {
+  const config = tempDir();
+  beforeTheRename(config);
+  const dry = run(['names', 'migrate', '--dry-run'], { AGENT_COMMS_CONFIG_DIR: config });
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stdout, /work\s+→\s+work\/gmail/);
+  assert.match(dry.stdout, /live\s+→\s+live\/slack/);
+  assert.match(dry.stdout, /Nothing was changed/);
+  assert.equal(JSON.parse(readFileSync(join(config, 'config.json'), 'utf8')).version, 1, 'still version 1');
+});
+
+test('names migrate needs --yes where nobody can answer, and then renames everything once', () => {
+  const config = tempDir();
+  beforeTheRename(config);
+  const refused = run(['names', 'migrate'], { AGENT_COMMS_CONFIG_DIR: config });
+  assert.equal(refused.status, 64, refused.stderr);
+  assert.match(refused.stderr, /--yes or a terminal/);
+  assert.equal(JSON.parse(readFileSync(join(config, 'config.json'), 'utf8')).version, 1);
+
+  const done = run(['names', 'migrate', '--yes', '--rename', 'gmail=personal/gmail', '--rename', 'live=cue/slack'], {
+    AGENT_COMMS_CONFIG_DIR: config,
+  });
+  assert.equal(done.status, 0, done.stderr);
+  // The mapping is shown before the write, `--yes` included: it is the only record of the old names afterwards.
+  assert.match(done.stderr, /gmail\s+→\s+personal\/gmail/);
+  assert.match(done.stdout, /Renamed 3 account\(s\)/);
+  const written = JSON.parse(readFileSync(join(config, 'config.json'), 'utf8'));
+  assert.equal(written.version, 2);
+  assert.deepEqual(Object.keys(written.inboxes).sort(), ['personal/gmail', 'work/gmail']);
+  assert.deepEqual(Object.keys(written.accounts), ['cue/slack']);
+  assert.deepEqual(written.formerNames.inboxes.gmail, { name: 'personal/gmail', id: 'ibx_BBBBBBBBBBBBBBBB' });
+
+  // Running it again says so, and changes nothing.
+  const again = run(['names', 'migrate', '--yes'], { AGENT_COMMS_CONFIG_DIR: config });
+  assert.equal(again.status, 0, again.stderr);
+  assert.match(again.stdout, /already organisation\/platform/);
+
+  // And the names it replaced are refused with what they are called now.
+  const old = run(['audit', 'tail', '--inbox', 'gmail', '--json'], { AGENT_COMMS_CONFIG_DIR: config });
+  assert.equal(old.status, 66);
+  assert.match(JSON.parse(old.stdout).error.message, /"gmail" was renamed to "personal\/gmail"/);
+});
+
+test('names migrate lists every problem at once, and applies none of them', () => {
+  const config = tempDir();
+  beforeTheRename(config);
+  const refused = run(
+    ['names', 'migrate', '--yes', '--rename', 'work=cue/slack', '--rename', 'nope=x/gmail', '--json'],
+    {
+      AGENT_COMMS_CONFIG_DIR: config,
+    },
+  );
+  assert.equal(refused.status, 64);
+  const problems = JSON.parse(refused.stdout).error.details.problems as string[];
+  assert.equal(problems.length, 2, problems.join(' | '));
+  assert.ok(
+    problems.some((p) => /ends in \/slack, but this is a gmail account/.test(p)),
+    problems.join(' | '),
+  );
+  assert.ok(problems.some((p) => /there is nothing called "nope"/.test(p)));
+  assert.equal(JSON.parse(readFileSync(join(config, 'config.json'), 'utf8')).version, 1);
+});
+
+test('an agent is never asked, even with a terminal: it can answer its own question', () => {
+  const terminal = {
+    stdout: { isTTY: true },
+    stderr: { isTTY: true },
+    stdin: { isTTY: true },
+  } as unknown as Streams;
+  assert.equal(needsYes({}, terminal, {}), false, 'a person at a terminal is asked');
+  assert.equal(needsYes({ CLAUDECODE: '1' }, terminal, {}), true, 'an agent must pass --yes');
+  assert.equal(needsYes({}, terminal, { json: true }), true, '--json is never interactive');
+  const piped = { ...terminal, stdin: { isTTY: false } } as unknown as Streams;
+  assert.equal(needsYes({}, piped, {}), true, 'a pipe cannot answer');
 });

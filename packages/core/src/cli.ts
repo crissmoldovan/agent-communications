@@ -2,14 +2,24 @@
 import { access, constants, stat } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { publicView } from './approvals.ts';
-import { colorEnabled, type OutputOptions, runCommand, writeError, writeResult } from './cli-runtime.ts';
+import {
+  agentMarker,
+  canPrompt,
+  colorEnabled,
+  defaultStreams,
+  type OutputOptions,
+  runCommand,
+  type Streams,
+  writeError,
+  writeResult,
+} from './cli-runtime.ts';
 import { type Config, emptyConfig, secretsStoreOf } from './config.ts';
 import { type Core, openCore } from './core.ts';
 import { CommsError } from './errors.ts';
 import { isGroupOrWorldAccessible } from './fs.ts';
 import { APPROVAL_KEY_REF } from './keys.ts';
 import { withCredentialsLock } from './lock.ts';
-import { resolveName } from './names.ts';
+import { migrateNames, type NamesMigrationRow, planNamesMigration, resolveName } from './names.ts';
 import {
   keychainNamespace,
   loadKeyringModule,
@@ -35,6 +45,7 @@ Usage:
   agentcomms approvals list [--inbox <alias>] [--state <state>]
   agentcomms approvals revoke <approvalId>
   agentcomms secrets migrate --to keychain|file
+  agentcomms names migrate [--rename <old>=<new>] [--dry-run] [--yes]
 
 Options:
   --json        print the versioned JSON envelope
@@ -92,6 +103,7 @@ async function doctor(core: Core): Promise<{ checks: Check[]; ok: boolean }> {
   }
 
   let config: Config = emptyConfig();
+  let readable = true;
   try {
     config = await core.config.load();
     const exists = await stat(core.config.path).then(
@@ -100,6 +112,7 @@ async function doctor(core: Core): Promise<{ checks: Check[]; ok: boolean }> {
     );
     checks.push({ name: 'config', ok: true, detail: exists ? core.config.path : 'no config yet' });
   } catch (error) {
+    readable = false;
     checks.push({
       name: 'config',
       ok: false,
@@ -107,6 +120,32 @@ async function doctor(core: Core): Promise<{ checks: Check[]; ok: boolean }> {
       fix: 'Fix or restore config.json.',
     });
   }
+
+  /*
+   * The one thing on this machine that nothing else announces.
+   *
+   * A version-1 config is not broken — every command reads and writes it unchanged — so this never fails. It is
+   * here because the migration has no symptom until an old name is used somewhere that has already moved on, and
+   * because the release requirement is the part people get wrong: one config is shared by everything on a machine,
+   * and a program older than 0.2.0 refuses the migrated file outright.
+   */
+  const toMigrate = readable && config.version === 1;
+  checks.push({
+    name: 'account names',
+    ok: true,
+    // `config` falls back to an empty one when the file could not be read, and an empty one is version 2 — which
+    // would announce a migration that may not have happened. The check above already says the file is unreadable.
+    detail: !readable
+      ? 'unknown — the configuration could not be read'
+      : toMigrate
+        ? 'the old flat names, which still work'
+        : 'organisation/platform',
+    ...(toMigrate
+      ? {
+          fix: 'See what they would become with `agentcomms names migrate --dry-run`, once everything sharing this config is on 0.2.0 or later.',
+        }
+      : {}),
+  });
 
   const keyring = await loadKeyringModule();
   const probe = await probeKeychain(keyring, keychainNamespace(core.paths.configDir));
@@ -343,6 +382,9 @@ function parse(argv: string[]) {
       limit: { type: 'string' },
       state: { type: 'string' },
       to: { type: 'string' },
+      rename: { type: 'string', multiple: true },
+      'dry-run': { type: 'boolean', default: false },
+      yes: { type: 'boolean', default: false },
     },
   });
 }
@@ -446,6 +488,60 @@ export async function main(
         }
         throw usage('usage: agentcomms approvals list|revoke');
       }
+      case 'names': {
+        if (sub !== 'migrate') {
+          throw usage('usage: agentcomms names migrate [--rename <old>=<new>] [--dry-run] [--yes]');
+        }
+        const plan = planNamesMigration(await core.config.load(), values.rename ?? []);
+        if (plan.status === 'already-migrated') {
+          writeResult(
+            { status: 'already-migrated' as const },
+            output,
+            () => 'Names are already organisation/platform.',
+          );
+          return;
+        }
+        if (values['dry-run']) {
+          writeResult(
+            { status: 'dry-run' as const, rows: plan.rows },
+            output,
+            (data) =>
+              `${renderMapping(data.rows)}\n\nNothing was changed. Run the same command without --dry-run to apply it.`,
+          );
+          return;
+        }
+        /*
+         * The mapping is shown before anything is written, whoever is running it.
+         *
+         * `--yes` answers the question; it does not skip showing what was answered. A person who passes it still
+         * reads what happened above the result line, and an agent's transcript carries it — which is the only
+         * record of what the old names were once the file no longer holds them. It goes to stderr so `--json`
+         * keeps its one envelope on stdout.
+         */
+        defaultStreams.stderr.write(`${renderMapping(plan.rows)}\n`);
+        /*
+         * A person at a terminal confirms; anything else passes `--yes`.
+         *
+         * Not a typed challenge: a rename grants nothing and takes nothing away, and the classifier agrees — it
+         * matches accounts by their immutable ids, so renaming every key loosens nothing. What this asks for is
+         * deliberateness, because the old names stop working the moment it is done.
+         */
+        if (!values.yes) {
+          if (needsYes(env, defaultStreams, { json: values.json })) {
+            throw new CommsError('USAGE', 'this would rename every account, so it needs --yes or a terminal', {
+              hint: 'See the mapping first with `agentcomms names migrate --dry-run`, then add `--yes`.',
+            });
+          }
+          await confirm(defaultStreams);
+        }
+        const result = await migrateNames(core.config, plan);
+        writeResult({ status: result.status, rows: plan.rows }, output, (data) =>
+          data.status === 'already-migrated'
+            ? 'Names are already organisation/platform.'
+            : `Renamed ${data.rows.length} account(s). The old names no longer work; anything that uses one is told what it is called now.`,
+        );
+        return;
+      }
       case 'secrets': {
         if (sub !== 'migrate' || (values.to !== 'keychain' && values.to !== 'file')) {
           throw usage('usage: agentcomms secrets migrate --to keychain|file');
@@ -479,6 +575,45 @@ export async function main(
         throw usage(`unknown command "${command}"`);
     }
   });
+}
+
+/** The mapping, one line per account, old name on the left. */
+function renderMapping(rows: readonly NamesMigrationRow[]): string {
+  const width = Math.max(...rows.map((row) => row.from.length), 0);
+  const kind = (row: NamesMigrationRow) => (row.kind === 'inbox' ? 'mailbox  ' : 'workspace');
+  return [
+    `${rows.length} account(s) will be renamed:`,
+    '',
+    ...rows.map((row) => `  ${kind(row)}  ${row.from.padEnd(width)}  →  ${row.to}`),
+  ].join('\n');
+}
+
+/**
+ * Whether this run has to pass `--yes` rather than being asked.
+ *
+ * An agent is not asked even where it has a terminal: it can answer its own question, so the answer would mean
+ * nothing. Exported so the rule can be tested directly — a subprocess test cannot hand the CLI a terminal, and a
+ * rule that only ever runs without one is a rule nobody has checked.
+ */
+export function needsYes(env: NodeJS.ProcessEnv, streams: Streams, options: { json?: boolean }): boolean {
+  return agentMarker(env) !== null || !canPrompt(env, streams, options);
+}
+
+/** A plain yes/no, for a change that is deliberate rather than dangerous. */
+async function confirm(streams: Streams): Promise<void> {
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({
+    input: streams.stdin as NodeJS.ReadableStream,
+    output: streams.stderr as NodeJS.WritableStream,
+  });
+  try {
+    const answer = await rl.question('Rename them? [y/N] ');
+    if (!/^y(es)?$/i.test(answer.trim())) {
+      throw new CommsError('USAGE', 'nothing was renamed');
+    }
+  } finally {
+    rl.close();
+  }
 }
 
 const invokedDirectly =

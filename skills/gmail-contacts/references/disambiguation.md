@@ -14,11 +14,11 @@ employer in March, that the personal address is the one he reads, that his compa
 One line per candidate, in the order the search returned them, unedited.
 
 ```text
-Three addresses match "Sam Rivera" (searched work and personal; all three sources ran):
+Three addresses match "Sam Rivera" (searched acme/gmail and personal/gmail; all three sources ran):
 
-  1. sam@acme.test           contacts + history · 34 sightings · last seen 2026-09-16 · work
-  2. s.rivera@acme.test      history            ·  2 sightings · last seen 2024-11-03 · work
-  3. sam@acme-invoices.test  history            ·  1 sighting  · last seen 2026-09-11 · work
+  1. sam@acme.test           contacts + history · 34 sightings · last seen 2026-09-16 · acme/gmail
+  2. s.rivera@acme.test      history            ·  2 sightings · last seen 2024-11-03 · acme/gmail
+  3. sam@acme-invoices.test  history            ·  1 sighting  · last seen 2026-09-11 · acme/gmail
 
 1 and 3 differ only by "-invoices" in the domain. 3 has been seen once, this month. I am showing it rather
 than dropping it because its presence in your mailbox is the news. 2 looks like an older address at the
@@ -61,7 +61,7 @@ saying it is correct.
 |---|---|---|
 | `j.smith@gmail.com` and `jsmith@gmail.com` | One Gmail mailbox. This search does no dot folding, so it shows two rows | Say they are likely the same mailbox at Gmail, and let the user pick the one they want written on the message |
 | `sam@acme.test` and `sam+invoices@acme.test` | Almost always one mailbox with a tag. No plus folding happens here either | Ask which the user wants the reply to carry; the tag may be how they file it |
-| The same address in `work` and in `personal` | One address, seen by two mailboxes. The rows differ only by which mailbox found them | Pick the mailbox the reply should come **from**, which is a different question from which address to write to |
+| The same address in `acme/gmail` and in `personal/gmail` | One address, seen by two mailboxes. The rows differ only by which mailbox found them | Pick the mailbox the reply should come **from**, which is a different question from which address to write to |
 | The same address with different display names in different rows | One address; the names came from different senders' headers or from an address-book entry | The address is the identity. Names are decoration, and forgeable decoration |
 
 ## Narrowing with evidence rather than judgement

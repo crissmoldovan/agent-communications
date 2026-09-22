@@ -196,7 +196,7 @@ Warn them about each of these *before* it appears, in this order.
 Then the two-step sign-in finishes from the terminal or the agent:
 
 ```bash
-agent-gmail inbox add work --email jo@example.com --tier organize --start --json
+agent-gmail inbox add acme/gmail --email jo@example.com --tier organize --start --json
 agent-gmail inbox add --finish <flowId> --wait 60
 ```
 

@@ -98,7 +98,7 @@ export async function run(argv: readonly string[], deps: CliDeps = {}): Promise<
       `
 Getting started:
   agent-slack manifest --port 51234        the app to create in Slack, and how
-  agent-slack workspace add acme --client-id <id> --port 51234
+  agent-slack workspace add acme/slack --client-id <id> --port 51234
   agent-slack doctor                       what works and what does not
 
 Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in · 64 usage ·
@@ -231,7 +231,7 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
         }
         if (!alias) {
           throw new CommsError('USAGE', 'a name for the workspace is needed', {
-            hint: 'e.g. `agent-slack workspace add acme --client-id <id> --port 51234`.',
+            hint: 'e.g. `agent-slack workspace add acme/slack --client-id <id> --port 51234`.',
           });
         }
         if (!flags.clientId) {

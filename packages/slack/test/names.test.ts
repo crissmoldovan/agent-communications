@@ -1,29 +1,32 @@
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { test } from 'node:test';
 import {
   type AccountConfig,
-  applyNamesMigration,
   CommsError,
   type ConfigV2,
+  migrateNames,
   planNamesMigration,
   renameEntry,
   resolveName,
   retargetFormerNames,
   type SecretStore,
 } from '@agentcomms/core';
+import { parseBundle } from '../src/auth/bundle.ts';
 import { SlackContext } from '../src/context.ts';
 import { scopesForMode } from '../src/manifest.ts';
+import { doctor } from '../src/operations/doctor.ts';
 import { finishSignIn, type StartedSignIn, startSignIn } from '../src/operations/signin.ts';
-import { removeWorkspace, requireWorkspace } from '../src/operations/workspaces.ts';
+import { listWorkspaces, removeWorkspace, requireWorkspace } from '../src/operations/workspaces.ts';
 import { type Harness, newHarness, slackOk, TEST_CLIENT_ID } from './support/harness.ts';
 
 /**
  * Organisation/platform names through the Slack package.
  *
- * This release cannot write version 2 through any API, by design, so each test writes its migrated config straight to
- * the file with core's own plan and transform — exactly what `agentcomms names migrate` will write.
+ * The harness starts every config at version 1 — most tests here are about Slack rather than about names, and a
+ * fixture that says which version it is written for does not drift. The tests that are about names migrate it
+ * first, through core's own migration, which is the one `agentcomms names migrate` runs.
  */
 
 function is(code: string, pattern?: RegExp) {
@@ -32,10 +35,9 @@ function is(code: string, pattern?: RegExp) {
 }
 
 async function migrate(harness: Harness, renames: string[] = []): Promise<void> {
-  const current = await harness.core.config.load();
-  const plan = planNamesMigration(current, renames);
-  if (plan.status !== 'ready' || current.version !== 1) throw new Error('already migrated');
-  await writeFile(harness.core.config.path, `${JSON.stringify(applyNamesMigration(current, plan.rows), null, 2)}\n`);
+  const plan = planNamesMigration(await harness.core.config.load(), renames);
+  if (plan.status !== 'ready') throw new Error('already migrated');
+  await migrateNames(harness.core.config, plan);
 }
 
 async function freePort(): Promise<number> {
@@ -394,4 +396,48 @@ test('finishing with a name that is nothing at all says which sign-in it is, not
   } finally {
     await listener.close();
   }
+});
+
+test('a workspace connected on a config created today needs an organisation/slack name', async () => {
+  const harness = await newHarness();
+  // A config created by this release, rather than the version-1 fixture the harness pins.
+  await rm(harness.core.config.path, { force: true });
+  const context = contextFor(harness);
+  await harness.core.config.update((config) => ({ ...config, secrets: { store: 'file' } }));
+  assert.equal((await harness.core.config.load()).version, 2, 'a fresh config names accounts organisation/platform');
+
+  const start = async (alias: string) =>
+    startSignIn(context, { mode: 'read', alias, clientId: TEST_CLIENT_ID, port: await freePort(), detached: false });
+  await assert.rejects(start('acme'), is('USAGE', /acme\/slack/));
+  const view = await finish(await start('acme/slack'));
+  assert.equal(view.alias, 'acme/slack');
+  assert.equal((await harness.core.config.load()).version, 2);
+});
+
+test('the everyday commands work under an organisation/platform name', async () => {
+  const harness = await newHarness();
+  const context = contextFor(harness);
+  await harness.addWorkspace({ alias: 'live' });
+  await migrate(harness, ['live=cue/slack']);
+  const config = await harness.core.config.load();
+
+  // list, show and doctor all speak the new name and refuse the old one.
+  assert.deepEqual(
+    listWorkspaces(config).map((view) => view.alias),
+    ['cue/slack'],
+  );
+  assert.equal(requireWorkspace(config, 'cue/slack').account.platform, 'slack');
+  assert.throws(() => requireWorkspace(config, 'live'), is('NOT_FOUND', /renamed to "cue\/slack"/));
+  const secrets = await context.secrets();
+  const account = config.accounts['cue/slack'] as AccountConfig;
+  const report = doctor({
+    config,
+    now: new Date('2026-09-22T12:00:00.000Z'),
+    bundles: new Map([['cue/slack', parseBundle(await secrets.get(account.secretRef))]]),
+  });
+  assert.ok(
+    report.checks.some((check) => check.title.includes('cue/slack')),
+    JSON.stringify(report.checks.map((check) => check.title)),
+  );
+  assert.equal(report.summary.fail, 0);
 });

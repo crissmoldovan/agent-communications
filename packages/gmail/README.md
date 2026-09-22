@@ -39,7 +39,7 @@ was given and names the flag that would have let it continue:
 
 ```sh
 agent-gmail setup --client-json ~/Downloads/client_secret_*.json \
-  --inbox work --email you@example.com --mcp-client claude-code --json
+  --inbox acme/gmail --email you@example.com --mcp-client claude-code --json
 ```
 
 The one step it cannot finish is the grant: it returns the sign-in link and the command that completes it.
@@ -50,14 +50,14 @@ The commands `setup` wraps are all still there:
 
 ```sh
 agent-gmail client add ~/Downloads/client_secret_*.json --move
-agent-gmail inbox add work --email you@example.com --start   # prints a link
+agent-gmail inbox add acme/gmail --email you@example.com --start   # prints a link
 # open the link, choose the account, leave every permission ticked
 agent-gmail inbox add --finish fl_… --wait 60
-agent-gmail whoami --inbox work
+agent-gmail whoami --inbox acme/gmail
 ```
 
 `--start` and `--finish` are two commands because consent takes minutes and an agent's shell does not last that
-long. On a terminal, plain `agent-gmail inbox add work` waits for the browser itself.
+long. On a terminal, plain `agent-gmail inbox add acme/gmail` waits for the browser itself.
 
 ## Commands
 
@@ -100,7 +100,7 @@ Or embed it:
 ```js
 import { createGmailMcpServer } from '@agentcomms/gmail';
 
-const server = await createGmailMcpServer({ inbox: 'work' });
+const server = await createGmailMcpServer({ inbox: 'acme/gmail' });
 await server.connectStdio();
 ```
 

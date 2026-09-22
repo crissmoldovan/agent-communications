@@ -634,11 +634,19 @@ export class ConfigStore {
    * accounts, byte for byte, under new keys — a rename grants nothing, so a build that changed anything else is a
    * bug and is refused before it is written.
    *
-   * Idempotent. A retry after a write that committed — even one whose lock release then failed — finds version 2
-   * and says so.
+   * Idempotent, but only for this plan. A retry after a write that committed — even one whose lock release then
+   * failed — finds version 2, recognises its own mapping in it, and says so. Version 2 that does *not* carry this
+   * mapping is somebody else's migration; saying "already migrated" there would report a mapping nobody applied,
+   * and a caller updating registrations from it would point them at names that do not exist.
+   *
+   * `rows` is the plan, and the question is asked of the mapping rather than of the whole file: between a
+   * committed write and its retry, something else may have changed a policy or a timezone, and a retry refused
+   * over that would be idempotency in name only. The rows are checked here rather than by whoever built them,
+   * for the same reason `build` is: a caller that could answer its own question could answer it wrongly.
    */
   async migrateNames(
     expected: string,
+    rows: readonly RenamedAccount[],
     build: (current: ConfigV1) => ConfigV2,
   ): Promise<{ status: 'migrated' | 'already-migrated'; config: ConfigV2 }> {
     if (!namesMigrationEnabled()) {
@@ -650,7 +658,14 @@ export class ConfigStore {
       withFileLock(this.#lockPath, async () => {
         this.#cache = null;
         const current = structuredClone(await this.load());
-        if (current.version === 2) return { status: 'already-migrated' as const, config: current };
+        if (current.version === 2) {
+          if (!migrationApplied(current, rows)) {
+            throw new CommsError('TRANSIENT', 'the names were migrated while this ran, and not to these names', {
+              hint: 'Run `agentcomms names migrate` again to see what they are called now.',
+            });
+          }
+          return { status: 'already-migrated' as const, config: current };
+        }
         if (configFingerprint(current) !== expected) {
           throw new CommsError('TRANSIENT', 'the configuration changed after the preview was made', {
             hint: 'Run `agentcomms names migrate` again to see the mapping for the configuration as it is now.',
@@ -666,12 +681,80 @@ export class ConfigStore {
             hint: 'This is a bug — please report it.',
           });
         }
+        /*
+         * And that it is the mapping this call was given.
+         *
+         * `onlyKeysRenamed` proves that *a* rename happened and nothing else; it does not compare it to the rows.
+         * Without this, the rows and the transform could disagree — the caller would show one mapping and write
+         * another — and a retry would then measure itself against a plan that was never applied. The same check
+         * decides both branches, so what counts as this migration cannot drift between writing it and recognising
+         * it later.
+         */
+        if (!migrationApplied(parsed.data, rows)) {
+          throw new CommsError('CONFIG', 'refusing a migration that is not the mapping it was given', {
+            hint: 'This is a bug — please report it.',
+          });
+        }
         await writeFileAtomic(this.path, `${JSON.stringify(parsed.data, null, 2)}\n`);
         this.#cache = null;
         return { status: 'migrated' as const, config: parsed.data };
       }),
     );
   }
+}
+
+/** An own property only: a name is user input, and `map.constructor` is a function on every plain object. */
+function own<T>(map: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(map, key) ? map[key] : undefined;
+}
+
+/** One account's rename, as the migration planned it. */
+export interface RenamedAccount {
+  readonly kind: 'inbox' | 'account';
+  readonly from: string;
+  readonly to: string;
+  readonly id: string;
+}
+
+/**
+ * Whether this exact plan is the migration already in place.
+ *
+ * Row by row rather than by comparing whole configurations: a migration that committed and then failed to release
+ * its lock is retried, and between the two something else may legitimately have changed a policy or a timezone.
+ * That is not a reason to refuse the retry. What has to hold is what the plan claimed — each account under the name
+ * it was given, still the same account, and the name it left behind pointing at it — and that the plan is the
+ * *whole* migration, not part of one.
+ *
+ * The second half is what the rows alone cannot say. A plan previewed against a smaller configuration, whose rows
+ * another process then happened to reproduce while migrating a larger one, would satisfy every row and still be
+ * missing an account. So the flat names left behind are compared as a set: a migration of version 1 leaves exactly
+ * one behind per account it renamed, because every version-1 name is flat, and a rename afterwards leaves a
+ * qualified one. The sets have to be equal, and the rows may not name the same account twice — a repeated row
+ * would otherwise make a subset the right size.
+ *
+ * Set equality, rather than provenance: nothing stops a flat former name being written another way — `update`
+ * checks that existing tombstones are kept, not that new ones are earned, and a hand-edited file can hold
+ * anything. An unexpected one makes this false, which refuses a retry that might have been fine. That is the
+ * direction to be wrong in.
+ *
+ * False, then, for somebody else's mapping, for a migration of a configuration this plan never saw, for a rename
+ * after this one, for an account removed since, and for an id that has moved.
+ */
+function migrationApplied(config: ConfigV2, rows: readonly RenamedAccount[]): boolean {
+  for (const map of ['inboxes', 'accounts'] as const) {
+    const kind = map === 'inboxes' ? 'inbox' : 'account';
+    const planned = rows.filter((row) => row.kind === kind);
+    const from = new Set(planned.map((row) => row.from));
+    if (from.size !== planned.length) return false;
+    const flat = Object.keys(config.formerNames[map]).filter((key) => ALIAS_PATTERN.test(key));
+    if (flat.length !== from.size || !flat.every((key) => from.has(key))) return false;
+    for (const row of planned) {
+      const live = own(config[map] as Record<string, { id: string }>, row.to);
+      const former = own(config.formerNames[map], row.from);
+      if (live?.id !== row.id || former?.id !== row.id || former.name !== row.to) return false;
+    }
+  }
+  return true;
 }
 
 /**

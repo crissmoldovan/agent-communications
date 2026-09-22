@@ -23,9 +23,9 @@ draft ──► send prepare ──► you read the preview ──► send execu
 ```
 
 ```bash
-agent-gmail draft create --inbox work --to sam@example.com --subject 'Tuesday' --text 'Works for me.'
-agent-gmail send prepare --inbox work --draft <draftId>     # prints the preview, sends nothing
-agent-gmail send execute --inbox work --draft <draftId> --approval <approvalId> --expect-to sam@example.com
+agent-gmail draft create --inbox acme/gmail --to sam@example.com --subject 'Tuesday' --text 'Works for me.'
+agent-gmail send prepare --inbox acme/gmail --draft <draftId>     # prints the preview, sends nothing
+agent-gmail send execute --inbox acme/gmail --draft <draftId> --approval <approvalId> --expect-to sam@example.com
 ```
 
 **`prepare` sends nothing.** It reads the draft, refuses it outright if an agent could not have written it, and
@@ -88,7 +88,7 @@ Stated plainly, because a security claim that overstates itself is worse than on
 ## Approvals
 
 ```bash
-agent-gmail send list --inbox work        # prepared, not yet used
+agent-gmail send list --inbox acme/gmail        # prepared, not yet used
 agent-gmail send cancel <approvalId>      # void one
 agent-gmail approve <approvalId>          # approve at this terminal, under `confirm`
 ```

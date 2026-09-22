@@ -303,3 +303,81 @@ test('verifier scans every package; no directory is exempt', async () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /leak\.ts: contains a likely secret/);
 });
+
+/*
+ * Account names in the material a reader copies from.
+ *
+ * Both halves matter and they pull against each other: a flat name in a command is a command that cannot work on a
+ * configuration made today, and a false positive on ordinary English would make the check something people turn off.
+ * So the fixtures come in pairs, and the prose cases are the ones that were actually getting flagged.
+ */
+test('verifier rejects a flat account name in every position a reader would copy', async () => {
+  const cases = [
+    ['a command flag', 'Run `agent-gmail search x --inbox work`.'],
+    ['a subcommand in a fenced block', '```sh\nagent-gmail inbox add work --email jo@example.test\n```'],
+    ['a JSON field', '```json\n{ "inbox": "work" }\n```'],
+    ['an argument object', "```js\ncreateGmailMcpServer({ inbox: 'work' })\n```"],
+    ['an output row', '```text\nMESSAGE PREVIEW · inbox work · draft r_88 · nothing has been sent\n```'],
+    ['a quoted name', '```text\nWrote it. Thread 18f2c9a0b1d4e5f6 in "work".\n```'],
+    ['a compose profile file name', 'A mailbox reads `compose/inbox-work.md`.'],
+    ['a nested download path', '```text\n~/Downloads/agent-communications/work/exports/plan.md\n```'],
+    // Fences a simpler extractor missed: tildes, a longer outer fence, and an indented block.
+    ['a tilde fence', '~~~sh\nagent-gmail inbox add work --email jo@example.test\n~~~'],
+    ['a longer fence around a shorter one', '````md\n```sh\nagent-gmail inbox reauth work\n```\n````'],
+    ['an indented block', 'Then:\n\n    agent-gmail inbox add work --email jo@example.test\n'],
+    ['a two-backtick inline span', 'Run ``agent-gmail inbox add work`` to connect it.'],
+    // Forms round 5 found still escaping: a fence on a list line, one indented inside a list, an indented block
+    // past its first line, and a span that runs over a line break.
+    ['a fence on a list-item line', '- Do this:\n\n  ```sh\n  agent-gmail inbox add work\n  ```\n'],
+    ['a fence indented inside a list', '1. Then:\n\n    ```sh\n    agent-gmail inbox reauth work\n    ```\n'],
+    ['the second line of an indented block', 'Then:\n\n    agent-gmail doctor\n    agent-gmail inbox add work\n'],
+    [
+      'an indented block continuing past a blank line',
+      'Then:\n\n    agent-gmail doctor\n\n    agent-gmail inbox add work\n',
+    ],
+    ['a code span broken over a line', 'Run `agent-gmail\ninbox add work` to connect it.'],
+    ['an unclosed fence', '```sh\nagent-gmail inbox add work\n'],
+    // A version-1 alias is `[a-z0-9][a-z0-9-]{0,31}`: digits lead, and an English word is a legal name.
+    ['an alias beginning with a digit', 'Run `agent-gmail search x --inbox 2024-archive`.'],
+    ['an alias that is an English word', 'Run `agent-gmail search x --inbox and`.'],
+  ];
+  for (const [label, body] of cases) {
+    const root = await fixture();
+    await writeFile(path.join(root, 'skills', 'valid-skill', 'references', 'names.md'), `${body}\n`);
+    const result = await verify(root);
+    assert.equal(result.status, 1, `${label}: expected a failure\n${result.stdout}`);
+    assert.match(result.stderr, /is a flat account name/, label);
+  }
+});
+
+test('verifier passes organisation/platform names, and the prose that imitates a command', async () => {
+  const cases = [
+    ['a qualified name in a command', 'Run `agent-gmail search x --inbox acme/gmail-tech`.'],
+    ['a qualified name in JSON', '```json\n{ "inbox": "acme/gmail" }\n```'],
+    ['a nested download path', '```text\n~/Downloads/agent-communications/acme/gmail/exports/plan.md\n```'],
+    ['an encoded profile file name', 'A mailbox reads `compose/inbox-acme__gmail.md`.'],
+    ['a placeholder', 'Run `agent-gmail inbox add <organisation>/gmail --email <address>`.'],
+    // The three that were flagged while this check was being written, all of them ordinary English.
+    ['prose naming two subcommands', 'This skill covers the OAuth client, inbox add and reauth, and doctor.'],
+    ['prose about a failure', 'When inbox add failed, read the flow id it printed.'],
+    ['a risk flag that shares a word with an alias', 'Flags are `markup`, `archive` and `disk-image`.'],
+    [
+      'a list continuation, which is indented like code',
+      '- A step.\n\n    When inbox add and reauth both fail, stop.\n',
+    ],
+    ['triple backticks quoted in prose', 'Write it as ``` ```sh ``` at the top.'],
+    ['a span that would only match across a blank line', 'A stray ` here.\n\nAnd inbox add and reauth ` there.'],
+    ['a spec, which records what was true then', '```sh\nagent-gmail inbox add work\n```'],
+  ];
+  for (const [label, body] of cases) {
+    const root = await fixture();
+    const file =
+      label === 'a spec, which records what was true then'
+        ? path.join(root, 'docs', 'superpowers', 'specs', 'old.md')
+        : path.join(root, 'skills', 'valid-skill', 'references', 'names.md');
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, `${body}\n`);
+    const result = await verify(root);
+    assert.equal(result.status, 0, `${label}: ${result.stderr}`);
+  }
+});

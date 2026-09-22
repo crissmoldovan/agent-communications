@@ -278,7 +278,8 @@ export type NamesMigrationPlan =
  * plan with a problem is never partly applied.
  *
  * The fingerprint is of the whole configuration this was computed from. `migrateNames` refuses to apply the plan to
- * anything else.
+ * anything else, and refuses to call it already done unless this plan's own rows are the ones in place — two people
+ * mapping the same names differently are not each other's retry.
  */
 export function planNamesMigration(config: Config, renames: readonly string[] = []): NamesMigrationPlan {
   if (config.version === 2) return { status: 'already-migrated' };
@@ -395,5 +396,5 @@ export function migrateNames(
   store: ConfigStore,
   plan: Extract<NamesMigrationPlan, { status: 'ready' }>,
 ): Promise<{ status: 'migrated' | 'already-migrated'; config: ConfigV2 }> {
-  return store.migrateNames(plan.fingerprint, (current) => applyNamesMigration(current, plan.rows));
+  return store.migrateNames(plan.fingerprint, plan.rows, (current) => applyNamesMigration(current, plan.rows));
 }

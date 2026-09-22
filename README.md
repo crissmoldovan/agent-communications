@@ -88,7 +88,7 @@ No agent, no MCP server, nothing else required.
 ```bash
 npm i -g @agentcomms/gmail
 agent-gmail setup            # the console steps, the client, a mailbox, and the agent connection
-agent-gmail search 'newer_than:7d' --inbox work
+agent-gmail search 'newer_than:7d' --inbox acme/gmail
 ```
 
 `setup` is the way in. It walks the five Google Cloud screens with a link to each and says what to type in
@@ -101,7 +101,7 @@ the flags it was given and names the flag that would have let it go further:
 
 ```bash
 agent-gmail setup --client-json ~/Downloads/client_secret_*.json \
-  --inbox work --email you@example.com --mcp-client claude-code --json
+  --inbox acme/gmail --email you@example.com --mcp-client claude-code --json
 ```
 
 The one step it cannot finish is the grant itself: it hands back the sign-in link and the command that
@@ -238,7 +238,7 @@ guarantee and the rest of this section is about its limits, but it is not the sa
 a token that physically cannot send.
 
 If you want the stronger one, connect the mailbox at `read` and accept that drafting is not
-available from it: `agent-gmail inbox add archive --tier read --start`.
+available from it: `agent-gmail inbox add acme/gmail-archive --tier read --start`.
 
 [`SECURITY.md`](SECURITY.md) has the full threat model.
 

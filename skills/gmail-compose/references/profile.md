@@ -29,7 +29,9 @@ They live in a `compose/` directory inside the configuration directory, which re
    directory on Windows.
 
 The platform file is named after the platform — `gmail.md` for this package — and the inbox file after
-the mailbox alias, so a mailbox connected as `work` reads `compose/inbox-work.md`.
+the mailbox, with the `/` written as `__` — a mailbox connected as `acme/gmail` reads
+`compose/inbox-acme__gmail.md`. (A mailbox renamed since the file was written still reads the file under its old
+name, until one is written under the new one.)
 
 ## How they combine
 
@@ -48,7 +50,7 @@ the mailbox alias, so a mailbox connected as `work` reads `compose/inbox-work.md
 <!-- user: …/compose/user.md -->
 …
 
-<!-- inbox: …/compose/inbox-work.md -->
+<!-- inbox: …/compose/inbox-acme__gmail.md -->
 …
 ```
 
@@ -76,7 +78,7 @@ Pass `includeProfile: true` (CLI: `--profile`) on a draft call — `gmail_draft_
 field. Ask for it **before** you write, not after: it is a specification, not a review checklist.
 
 The platform is always `gmail` here, and the inbox layer is always the alias you are drafting in, so a
-draft in `work` and a draft in `personal` can be governed by different files with no extra argument.
+draft in `acme/gmail` and a draft in `personal/gmail` can be governed by different files with no extra argument.
 
 ## The built-in default
 
@@ -119,11 +121,11 @@ professional" gives a writer nothing to check against.
 
 ## An inbox layer, worked
 
-`compose/inbox-work.md` is about what is true of mail sent from that address, and usually means
+`compose/inbox-acme__gmail.md` is about what is true of mail sent from that address, and usually means
 constraints somebody else imposes.
 
 ```markdown
-# Mail from the work mailbox
+# Mail from acme/gmail
 
 - Everything here is with clients or their agencies. Assume it may be forwarded to their legal team.
 - Never commit to a date without "subject to confirmation" unless the date is already in a contract.

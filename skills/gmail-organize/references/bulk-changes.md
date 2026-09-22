@@ -113,7 +113,7 @@ It is a record of your change, not a snapshot of the mailbox, and time is the pa
 So offer it as what it is:
 
 ```text
-To put it back: agent-gmail organise-undo --inbox work, with the undo from that result piped in.
+To put it back: agent-gmail organise-undo --inbox acme/gmail, with the undo from that result piped in.
 
 That restores each message to the labels it had before the change. Anything you have changed since — starred,
 filed, archived — would be overwritten on those ids.

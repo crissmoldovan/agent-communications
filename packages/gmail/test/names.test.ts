@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
@@ -19,8 +19,9 @@ import { clientSecretRef } from '../src/auth/session.ts';
 import { renderSetupPlan } from '../src/cli/render.ts';
 import { GmailContext } from '../src/context.ts';
 import { mcpInstall } from '../src/mcp/install.ts';
+import { threadTimeline } from '../src/operations/analyse.ts';
 import { clientAdd, clientRemove } from '../src/operations/clients.ts';
-import { searchContacts } from '../src/operations/contacts.ts';
+import { followUps, searchContacts } from '../src/operations/contacts.ts';
 import { doctor } from '../src/operations/doctor.ts';
 import { createDraft, listDrafts } from '../src/operations/drafts.ts';
 import { exportMail } from '../src/operations/export.ts';
@@ -33,6 +34,7 @@ import {
   orphanedSecretsPath,
   whoami,
 } from '../src/operations/inboxes.ts';
+import { modify } from '../src/operations/organise.ts';
 import { readMessage, readThread } from '../src/operations/read.ts';
 import { search } from '../src/operations/search.ts';
 import { listApprovals } from '../src/operations/send.ts';
@@ -50,8 +52,9 @@ import {
 /**
  * Organisation/platform names, end to end through the Gmail package.
  *
- * Nothing here can create a version-2 config the way a person will — that command arrives in a later release — so
- * each test writes its own with core's plan and transform (`migrateNamesForTest`), exactly what the command writes.
+ * The harness starts every config at version 1 — most tests in this package are about mail rather than about
+ * names, and a fixture that says which version it is written for does not drift. The tests that are about names
+ * migrate it first with `migrateNamesForTest`, which runs core's own migration: the one the command runs.
  */
 
 function is(code: string, pattern?: RegExp) {
@@ -1841,5 +1844,56 @@ test('re-registering an identical client still refuses when the secret store mov
   await assert.rejects(
     clientAdd(context, { path: json, name: 'desktop', replace: true, store: 'file', noProbe: true }),
     is('TRANSIENT', /secret store was changed/),
+  );
+});
+
+test('a mailbox connected on a config created today needs an organisation/platform name', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  // A config created by this release, rather than the version-1 fixture the harness pins.
+  await rm(harness.core.config.path, { force: true });
+  const context = await withClient(harness);
+  assert.equal((await harness.core.config.load()).version, 2, 'a fresh config names accounts organisation/platform');
+
+  await assert.rejects(
+    startSignIn(context, { mode: 'add', alias: 'work', detached: false }),
+    is('USAGE', /acme\/gmail/),
+  );
+  const started = await startSignIn(context, { mode: 'add', alias: 'acme/gmail', detached: false });
+  await fetch(harness.google.consent(started.authUrl, { sub: 'sub-1' }));
+  assert.equal((await started.listener?.result)?.alias, 'acme/gmail');
+  assert.equal((await harness.core.config.load()).version, 2);
+});
+
+test('organising, timelines and follow-ups all work under an organisation/platform name', async () => {
+  const harness = await newHarness({
+    accounts: [
+      {
+        sub: 'sub-1',
+        email: 'jo@example.test',
+        messages: { m1: message('m1', 'Sam Lee <sam@partner.test>', 'Quarterly numbers') },
+      },
+    ],
+  });
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1' });
+  await migrate(harness, ['work=acme/gmail']);
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+
+  const archived = await modify(context, 'acme/gmail', { messageIds: ['m1'], archive: true });
+  assert.equal(archived.inbox, 'acme/gmail');
+  assert.equal(archived.messages, 1);
+  const timeline = await threadTimeline(context, 'acme/gmail', 'm1');
+  assert.equal(timeline.messageCount, 1);
+  const waiting = await followUps(context, { inboxes: ['acme/gmail'] });
+  assert.ok(Array.isArray(waiting.rows));
+  // Every one of them refuses the name it used to have, with the one it has now.
+  const renamed = is('NOT_FOUND', /renamed to "acme\/gmail"/);
+  await assert.rejects(modify(context, 'work', { messageIds: ['m1'], archive: true }), renamed);
+  await assert.rejects(threadTimeline(context, 'work', 'm1'), renamed);
+  await assert.rejects(followUps(context, { inboxes: ['work'] }), renamed);
+  // And the audit trail records the name it acted under.
+  const audit = await harness.core.audit.tail({ inbox: 'acme/gmail' });
+  assert.ok(
+    audit.some((entry) => entry.operation === 'modify'),
+    JSON.stringify(audit.map((e) => e.operation)),
   );
 });

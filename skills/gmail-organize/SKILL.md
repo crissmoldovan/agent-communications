@@ -156,7 +156,7 @@ to archive it.
    Keep the array. To apply it, pass it straight back:
 
    - MCP: `gmail_organise_undo` with `inbox` and the `undo` array, unchanged.
-   - CLI: `agent-gmail organise-undo --inbox work`, with the `undo` from a `--json` run piped in.
+   - CLI: `agent-gmail organise-undo --inbox acme/gmail`, with the `undo` from a `--json` run piped in.
 
    For a bin, the reverse is the same call with `undo: true` (CLI: `--undo`) over the ids in the
    result's `messages`. Keep those ids in the conversation; they are the only durable handle on what
@@ -248,7 +248,7 @@ the undo handed over:
 Your search "from:news@example.com older_than:1y" returned 20 threads, and Gmail estimates about
 180 matches in total. Before touching anything I asked what archiving those 20 threads would do:
 
-    Would change 314 messages in work: -INBOX.
+    Would change 314 messages in acme/gmail: -INBOX.
     Nothing was changed.
 
 314, not 20 — those threads include your own replies. Two of them are order confirmations rather
@@ -258,10 +258,10 @@ than the newsletter. Do you want all 314 archived, the newsletter only, or a nar
 And after the user says yes:
 
 ```text
-Archived 314 messages in work (-INBOX). Nothing was deleted; they are all still searchable.
+Archived 314 messages in acme/gmail (-INBOX). Nothing was deleted; they are all still searchable.
 
 The change came back with an undo — 302 entries, one for each message that was actually in the inbox
-beforehand. To put it back: agent-gmail organise-undo --inbox work, with that array piped in.
+beforehand. To put it back: agent-gmail organise-undo --inbox acme/gmail, with that array piped in.
 
 Each message goes back to the labels it held, so the twelve that were already archived stay archived.
 The array lives only in this conversation, and anything you file or star on those messages between

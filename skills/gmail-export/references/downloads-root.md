@@ -28,22 +28,23 @@ reports — so a `~` always lands under a real home, on Windows too. Everything 
 written, which means a **relative** value is resolved against the process's working directory: wherever the
 MCP client or the shell happened to start the package, and not necessarily the same place twice. If exports
 are appearing somewhere unexpected, read `defaults.downloadsDir` first and check that it is absolute or
-starts with `~`; then check the alias and `out` segments in the layout below.
+starts with `~`; then check the mailbox and `out` segments in the layout below.
 
 ## The layout
 
 ```text
-<root>/<alias>/exports/<subject-slug>.md          an export, by default
-<root>/<alias>/<out>/<subject-slug>.json          an export with out
-<root>/<alias>/<out>/manifest.json                one per download call
-<root>/<alias>/<out>/<date>_<sender>_<subject>/   one folder per downloaded message
+<root>/<organisation>/<platform>/exports/<subject-slug>.md          an export, by default
+<root>/<organisation>/<platform>/<out>/<subject-slug>.json          an export with out
+<root>/<organisation>/<platform>/<out>/manifest.json                one per download call
+<root>/<organisation>/<platform>/<out>/<date>_<sender>_<subject>/   one folder per downloaded message
 ```
 
 Points worth knowing:
 
-- **The mailbox alias is always the first segment**, and it is added for you. `out` never replaces it, so
+- **The mailbox name is always the first two segments** — it is `organisation/platform`, so `acme/gmail`
+  becomes `acme/gmail/…` — and they are added for you. `out` never replaces them, so
   files from two mailboxes never mix.
-- **Exports default to an `exports` subfolder**; downloads default to the alias folder itself.
+- **Exports default to an `exports` subfolder**; downloads default to the mailbox's folder itself.
 - **A download makes one folder per message**, named from facts about that message: the date, a slug of the
   sender's address, and a slug of the subject. Slugs are lower-case letters and digits joined by hyphens, and
   fall back to `undated`, `unknown` and `no-subject`.
@@ -70,7 +71,7 @@ escape from the root that is refused, not the shape of the root.
 
 | What you pass | What happens |
 |---|---|
-| `invoices` | `<root>/<alias>/invoices` |
+| `invoices` | `<root>/<organisation>/<platform>/invoices` |
 | `2026/september` | Nested subfolders, created as needed |
 | `../../Projects/acme/mail` | Refused, lexically |
 | An absolute path | Refused, lexically |
@@ -121,8 +122,8 @@ What went where, in full, with the size — and nothing about the contents you h
 
 ```text
 Wrote the thread to
-~/Downloads/agent-communications/work/exports/phase-2-rollout-plan.md
-(212 KB, md). Thread 18f2c9a0b1d4e5f6 in "work".
+~/Downloads/agent-communications/acme/gmail/exports/phase-2-rollout-plan.md
+(212 KB, md). Thread 18f2c9a0b1d4e5f6 in "acme/gmail".
 ```
 
 And for a refusal:
@@ -130,7 +131,7 @@ And for a refusal:
 ```text
 That `--out` was refused: it points out of the downloads root, and everything this writes stays inside it.
 `out` is a folder name within the root — say which folder you meant and it will land at
-~/Downloads/agent-communications/work/<folder>/. If you want the file in your project, move it there
+~/Downloads/agent-communications/acme/gmail/<folder>/. If you want the file in your project, move it there
 yourself once it is written.
 ```
 

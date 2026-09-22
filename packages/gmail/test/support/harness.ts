@@ -1,14 +1,13 @@
-import { mkdtempSync, realpathSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after } from 'node:test';
 import {
-  applyNamesMigration,
   type ClientConfig,
   type Config,
   type Core,
   type InboxConfig,
+  migrateNames,
   newInboxId,
   openCore,
   planNamesMigration,
@@ -75,6 +74,16 @@ export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harne
     NO_COLOR: '1',
   };
   const core = openCore({ env });
+  /*
+   * The harness starts a mailbox at config version 1, and says so rather than relying on the default.
+   *
+   * A new config is created at version 2 from this release, where every name is `organisation/platform`. Most tests
+   * here are about behaviour that does not depend on the version at all — reading, drafting, the send gate — and
+   * they name their mailbox `work`, which version 2 does not accept. So the fixture pins version 1, and the tests
+   * that *are* about names migrate it with `migrateNamesForTest`, exactly as a person's config will be migrated.
+   * `names.test.ts` also covers a config created fresh at version 2.
+   */
+  writeFileSync(join(configDir, 'config.json'), `${JSON.stringify({ version: 1 }, null, 2)}\n`);
   const endpoints = resolveEndpoints(env);
 
   const addInbox: Harness['addInbox'] = async (inboxOptions) => {
@@ -138,15 +147,13 @@ export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harne
 }
 
 /**
- * Migrates the harness's config to organisation/platform names, as `agentcomms names migrate` will.
+ * Migrates the harness's config to organisation/platform names, exactly as `agentcomms names migrate` does.
  *
- * Written straight to the file, because this release deliberately cannot write version 2 through any API — the
- * migration command arrives with the release that may use it. The content is exactly what that command produces:
- * core's own plan, applied by core's own pure transform.
+ * Through core's own migration rather than by writing the file: the locks, the release gate and the checks inside
+ * them are part of what a renamed mailbox has been through by the time these tests read it.
  */
 export async function migrateNamesForTest(harness: Harness, renames: string[] = []): Promise<void> {
-  const current = await harness.core.config.load();
-  const plan = planNamesMigration(current, renames);
-  if (plan.status !== 'ready' || current.version !== 1) throw new Error('the harness config is already migrated');
-  await writeFile(harness.core.config.path, `${JSON.stringify(applyNamesMigration(current, plan.rows), null, 2)}\n`);
+  const plan = planNamesMigration(await harness.core.config.load(), renames);
+  if (plan.status !== 'ready') throw new Error('the harness config is already migrated');
+  await migrateNames(harness.core.config, plan);
 }

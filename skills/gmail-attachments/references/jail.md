@@ -153,15 +153,16 @@ Attaching is one direction. The other — attachment downloads and exports — h
 - `out` is checked **before** it is joined to anything, by `relativeSubpath`. An absolute path fails with
   `BAD_DATA`: `out must be a relative subpath: it is an absolute path`; a `../` fails with
   `out must be a relative subpath: it climbs out with ".."`. Both refusals happen here rather than in the
-  containment test below, and that is the point — `join('work', '../personal')` is `'personal'`, which still
-  resolves *inside* the root, so the containment test would have allowed one mailbox's files into another's
-  folder. `join('work', '/etc/x')` is `'work/etc/x'`, an absolute path quietly accepted under another name.
-- What remains is a relative, `..`-free subpath under the alias folder. That is resolved against the downloads
+  containment test below, and that is the point — `join('acme/gmail', '../../personal/gmail')` is `'personal/gmail'`,
+  which still resolves *inside* the root, so the containment test would have allowed one mailbox's files into
+  another's folder. `join('acme/gmail', '/etc/x')` is `'acme/gmail/etc/x'`, an absolute path quietly accepted
+  under another name.
+- What remains is a relative, `..`-free subpath under the mailbox's folder. That is resolved against the downloads
   root and the lexical result must be inside it.
 - The real path of the nearest existing ancestor is then resolved, and must still be inside the real root. A
   subfolder that is a symlink pointing elsewhere fails with `refusing to write through a link that leaves
   <root>`.
-- The alias's own folder is added for you: a download lands under `<root>/<alias>/<out>`.
+- The mailbox's own folder is added for you: a download lands under `<root>/<organisation>/<platform>/<out>`.
 
 Same principle, opposite direction: outbound, the jail decides what may leave the machine; inbound, it decides
 where files from strangers may land.

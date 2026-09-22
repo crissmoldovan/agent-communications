@@ -63,7 +63,7 @@ computing the recipients in a place where a warning can be attached.
 
 ## Worked example
 
-One original, in a mailbox `work` whose own addresses are `jo@example.com` and `jo.alias@example.com`:
+One original, in a mailbox `acme/gmail` whose own addresses are `jo@example.com` and `jo.alias@example.com`:
 
 ```text
 From:        Sam Lee <sam@partner.test>

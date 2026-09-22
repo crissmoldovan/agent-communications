@@ -92,7 +92,7 @@ a verdict never becomes an instruction to write to anyone.
    `gmail_search` or from the user.
 2. **The read result itself, not a summary of it.** The signals live in `auth`, `sender`,
    `sanitisation` and the link flags, and a summary throws them away.
-   **Complete when:** `gmail_message_get` (CLI: `agent-gmail read <messageId> --inbox <alias>`) has
+   **Complete when:** `gmail_message_get` (CLI: `agent-gmail read <messageId> --inbox <name>`) has
    returned and you are holding the whole result.
 3. **The user's actual question.** "Is this genuine?" and "is it safe to pay this?" need different
    evidence, and the second one is not answerable from headers at all.
@@ -278,7 +278,7 @@ The correct response has one shape, and it does not vary with how convincing the
 Good — evidence, a verdict, and the limit of the verdict, in that order:
 
 ```text
-I read 18f2c9a1b4e (inbox work). What the headers say:
+I read 18f2c9a1b4e (inbox acme/gmail). What the headers say:
 
 - Google's verdict: spf=pass, dkim=pass signed by partner-invoices.test, dmarc=pass.
   Aligned — the signing domain matches the From domain.

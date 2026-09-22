@@ -82,7 +82,7 @@ exists.
 ## Procedure
 
 1. **Prepare, and read what comes back.** Call `gmail_send_prepare` with the inbox and draft id
-   (CLI: `agent-gmail send prepare <draftId> --inbox <alias>`). It reads the draft, refuses it
+   (CLI: `agent-gmail send prepare <draftId> --inbox <name>`). It reads the draft, refuses it
    outright if an agent could not have written it, and returns a preview, an `approvalId`, an
    `expect` block, `riskFlags` and the `effectivePolicy`. Nothing has been sent.
    **Complete when:** you hold an `approvalId` and the preview text, or a refusal to report.
@@ -194,7 +194,7 @@ Good — the whole preview, the flag named, nothing added that competes with it:
 ```text
 Here is exactly what would be sent. Nothing has gone yet.
 
-    SEND PREVIEW · inbox work · approval ap_7K2Q… · draft r_88… · nothing has been sent
+    SEND PREVIEW · inbox acme/gmail · approval ap_7K2Q… · draft r_88… · nothing has been sent
     From:     Jo Example <jo@example.com>
     To:       sam@partner.test     EXTERNAL
               ana@partner.test     EXTERNAL · FIRST-TIME

@@ -299,6 +299,121 @@ for (const file of walk(root)) {
   if (absolutePath.test(source)) fail(`${relativeFile}: contains a machine-specific absolute path`);
 }
 
+/*
+ * Account names in the material people copy from.
+ *
+ * Every account is `organisation/platform` now, and a config created today refuses anything else — so an example
+ * that still says `--inbox work` is a command that cannot work, and one a reader will copy before they find out.
+ *
+ * Only name positions are looked at, because most of these words are ordinary English everywhere else: `archive`
+ * is an action, `personal` is an adjective, and `work` is what the software does. The positions split in two.
+ * Some are unambiguous wherever they appear — a flag, a JSON field, a profile file name, a path under the
+ * downloads root. The rest are subcommands, whose grammar prose imitates exactly ("inbox add and reauth",
+ * "inbox add failed"), so those are read only inside code — a fenced block or a backticked span.
+ *
+ * A version-1 alias is what it always was, digits and all, so the grammar here is that one rather than a guess at
+ * which words looked like names.
+ *
+ * Historical material is exempt: a spec records what was decided at the time, a research note what was observed,
+ * and the changelog what the old names were.
+ */
+const ALIAS = String.raw`[a-z0-9][a-z0-9-]{0,31}`;
+const ANYWHERE = [
+  new RegExp(String.raw`--(?:inbox|workspace)[ =](${ALIAS})(?![\w/-])`, 'g'),
+  new RegExp(String.raw`["']?\b(?:inbox|workspace)["']?: ?["'](${ALIAS})["']`, 'g'),
+  new RegExp(String.raw`\binbox-(${ALIAS})\.md`, 'g'),
+  // A correct download path has two segments — `…/acme/gmail/exports/…` — so a first segment followed by a
+  // platform is the organisation, not a flat name.
+  new RegExp(String.raw`agent-communications/(${ALIAS})/(?!(?:gmail|slack)(?:-[a-z0-9-]+)?/)`, 'g'),
+];
+const IN_CODE = [
+  new RegExp(String.raw`\b(?:inbox|workspace) (?:add|remove|reauth|finish) (${ALIAS})(?![\w/-])`, 'g'),
+  new RegExp(String.raw`\b(?:inbox|workspace) (${ALIAS}) ·`, 'g'),
+  new RegExp(String.raw`\bin ["“](${ALIAS})["”]`, 'g'),
+  // A trailing `· something` is not a position: in these documents it is as often a message id as a name.
+];
+/**
+ * The parts of a document a reader copies rather than reads.
+ *
+ * Enough of CommonMark to be honest about what it covers, and it covers what these documents actually contain:
+ *
+ * - fences of three or more backticks or tildes, at any indentation, closed by the same character at the same
+ *   length or longer, or by the end of the file — including one opened on a list-item line (`- ```sh`) and one
+ *   indented inside a list;
+ * - indented blocks, but only where one can start: after a blank line, and not as a list item's own continuation,
+ *   which is indented the same way and is prose. A blank line inside one does not end it;
+ * - inline spans of any delimiter length, which may cross a line but not a blank line.
+ *
+ * What is *not* code matters as much as what is. Prose imitates subcommand grammar exactly — "inbox add and
+ * reauth", "inbox add failed" — and a check that flags English is a check somebody turns off.
+ */
+function codeOf(source) {
+  const code = [];
+  const prose = [];
+  let fence = null;
+  let blankBefore = true;
+  let indented = false;
+  let listBefore = false;
+  for (const line of source.split('\n')) {
+    if (fence) {
+      const close = /^\s*(`{3,}|~{3,})\s*$/.exec(line);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
+      else code.push(line);
+      continue;
+    }
+    // A fence may open on the same line as the list marker that introduces it.
+    const open = /^\s*(`{3,}|~{3,})(.*)$/.exec(line.replace(/^(\s*)(?:[-*+]|\d{1,9}[.)])\s+/, '$1'));
+    // An info string may not contain a backtick, which is what tells ```` ``` ```` quoted in prose from a fence.
+    if (open && !(open[1][0] === '`' && open[2].includes('`'))) {
+      fence = open[1];
+      blankBefore = false;
+      indented = false;
+      continue;
+    }
+    const blank = line.trim() === '';
+    if (/^ {4,}\S/.test(line) && (indented || (blankBefore && !listBefore))) {
+      code.push(line);
+      indented = true;
+    } else {
+      if (!blank) indented = false;
+      prose.push(line);
+    }
+    if (!blank) listBefore = /^ {0,3}(?:[-*+]|\d{1,9}[.)])\s/.test(line) || (listBefore && /^ {2,}\S/.test(line));
+    blankBefore = blank;
+  }
+  // A code span may run over a line break but not over a blank line, so each paragraph is scanned on its own.
+  for (const paragraph of prose.join('\n').split(/\n[ \t]*\n/)) {
+    for (const [, , span] of paragraph.matchAll(/(`+)((?:[^`]|(?!\1)`)+)\1(?!`)/g)) code.push(span);
+  }
+  return code.join('\n');
+}
+const userFacing = (relativeFile) =>
+  (relativeFile.startsWith('skills/') ||
+    relativeFile.startsWith('docs/') ||
+    relativeFile === 'README.md' ||
+    /^packages\/[^/]+\/README\.md$/.test(relativeFile)) &&
+  !relativeFile.startsWith('docs/superpowers/') &&
+  !relativeFile.startsWith('docs/research/');
+
+for (const file of walk(root)) {
+  const relativeFile = show(file);
+  if (!userFacing(relativeFile) || !relativeFile.endsWith('.md')) continue;
+  const source = readFileSync(file, 'utf8');
+  const searched = [
+    [source, ANYWHERE],
+    [codeOf(source), IN_CODE],
+  ];
+  const flat = new Set();
+  for (const [text, patterns] of searched) {
+    for (const pattern of patterns) {
+      for (const [, name] of text.matchAll(pattern)) if (name) flat.add(name);
+    }
+  }
+  for (const name of flat) {
+    fail(`${relativeFile}: "${name}" is a flat account name; every account is organisation/platform`);
+  }
+}
+
 if (failures.length) {
   console.error(`Skill verification failed (${failures.length} issue${failures.length === 1 ? '' : 's'}):`);
   for (const message of failures) console.error(`- ${message}`);

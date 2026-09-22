@@ -1588,9 +1588,14 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         }
 
         const final = await setupState(context, { scanDownloads: false });
+        const [first] = final.inboxes;
         out.write(`\n${bold('Done.')} ${final.inboxes.length} mailbox(es): ${final.inboxes.join(', ')}\n`);
-        out.write(`${dim(`Try: agent-gmail search "newer_than:7d" --inbox ${final.inboxes[0] ?? 'work'}`)}\n`);
-        out.write(`${dim('Add another with: agent-gmail inbox add <name> --email <address>')}\n`);
+        // A name to copy, or no line at all. The old fallback printed `--inbox work`, which is not a name a config
+        // made today will accept and was never a name this machine had.
+        if (first) out.write(`${dim(`Try: agent-gmail search "newer_than:7d" --inbox ${first}`)}\n`);
+        out.write(
+          `${dim(`${first ? 'Add another' : 'Add one'} with: agent-gmail inbox add <organisation>/gmail --email <address>`)}\n`,
+        );
       }),
     );
 

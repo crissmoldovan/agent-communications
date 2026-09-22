@@ -80,8 +80,8 @@ produces exactly that shape. Four checks, in order, before saying it:
 Then say the true sentence, which is longer than the tempting one:
 
 ```text
-Nothing came back from the part of the mailbox I looked at: `work` only, direction "awaiting them",
-quiet for at least 3 days, within the last 30, one page deep, 20-row cap. `personal` returned a
+Nothing came back from the part of the mailbox I looked at: `acme/gmail` only, direction "awaiting them",
+quiet for at least 3 days, within the last 30, one page deep, 20-row cap. `personal/gmail` returned a
 permission error and is not represented at all.
 ```
 
@@ -112,8 +112,8 @@ other rows in that list are in the same shape, so I have re-checked all six and 
 And for an absence:
 
 ```text
-It is missing because `personal` returned SCOPE_MISSING, so nothing from that mailbox was in the run at
-all. The list you saw was `work` only. Granting read on `personal` is `agent-gmail inbox reauth personal
+It is missing because `personal/gmail` returned SCOPE_MISSING, so nothing from that mailbox was in the run at
+all. The list you saw was `acme/gmail` only. Granting read on `personal/gmail` is `agent-gmail inbox reauth personal/gmail
 --tier read`, which has to be run by you.
 ```
 

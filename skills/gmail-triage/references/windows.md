@@ -82,7 +82,7 @@ It is a resumption token for one search, not a bookmark in the mailbox. Four way
 | that cursor belongs to a different search | The compiled query or the `kind` changed. Note that changing only the timezone, or a date's rewritten value, changes the compiled query too |
 | that cursor was made for a different set of mailboxes | The alias list differs — **including its order**, because the lists are compared as joined strings |
 
-That last one is the trap. Passing `["work", "personal"]` and then `["personal", "work"]` is a different set
+That last one is the trap. Passing `["acme/gmail", "personal/gmail"]` and then `["personal/gmail", "acme/gmail"]` is a different set
 as far as the cursor is concerned. Using `"all"` avoids it, because `"all"` always resolves sorted.
 
 A refusal is the check working. Run the search again from the start rather than trimming the mailbox list to
@@ -115,16 +115,16 @@ Plus:
 A header that does all of that:
 
 ```text
-Triage · in:inbox after:2026/09/17 (from 2026-09-17 00:00 Europe/London) · mailboxes work, personal
+Triage · in:inbox after:2026/09/17 (from 2026-09-17 00:00 Europe/London) · mailboxes acme/gmail, personal/gmail
 40 of an estimated 310 threads · more remain · read 6 bodies · all mailboxes returned
 ```
 
 And when one did not:
 
 ```text
-Triage · in:inbox newer_than:2d · mailboxes work, personal, archive
+Triage · in:inbox newer_than:2d · mailboxes acme/gmail, personal/gmail, acme/gmail-archive
 40 of an estimated 310 threads · more remain · read 6 bodies
-`archive` returned SCOPE_MISSING and is not in any bucket below — nothing from it was classified.
+`acme/gmail-archive` returned SCOPE_MISSING and is not in any bucket below — nothing from it was classified.
 ```
 
 ## Do not page for completeness

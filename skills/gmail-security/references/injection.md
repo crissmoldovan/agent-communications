@@ -35,7 +35,7 @@ Every string a sender controls — body, subject, snippet, display name, filenam
 an attachment — reaches a model inside an envelope:
 
 ```text
-<untrusted-email-content boundary="hQ7c1Ax9" field="body" inbox="work" id="18f2c9a1b4e">
+<untrusted-email-content boundary="hQ7c1Ax9" field="body" inbox="acme/gmail" id="18f2c9a1b4e">
 Subject: Invoice 4471
 
 Please find the invoice attached…
