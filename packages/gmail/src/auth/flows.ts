@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { open, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CommsError, ensurePrivateDir, writeFileAtomic } from '@agentcomms/core';
+import type { LoopbackAbout } from './loopback.ts';
 
 /**
  * A sign-in in progress. It is written to disk because the two halves run in different processes: an agent's shell
@@ -185,4 +186,19 @@ export class FlowStore {
       await rm(this.#path(flowId, suffix), { force: true });
     }
   }
+}
+
+/**
+ * What the loopback page may say about a flow.
+ *
+ * Derived here rather than assembled at each call site, so the two listeners — the detached one and the one the
+ * interactive flow keeps in-process — cannot describe the same sign-in differently.
+ */
+export function aboutFlow(flow: OAuthFlow): LoopbackAbout {
+  return {
+    alias: flow.alias,
+    mode: flow.mode,
+    tier: flow.tier,
+    ...(flow.expect.email ? { expectEmail: flow.expect.email } : {}),
+  };
 }

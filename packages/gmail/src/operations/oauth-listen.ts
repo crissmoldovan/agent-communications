@@ -1,3 +1,4 @@
+import { aboutFlow } from '../auth/flows.ts';
 import { startLoopback } from '../auth/loopback.ts';
 import type { GmailContext } from '../context.ts';
 
@@ -14,6 +15,7 @@ export async function runOauthListener(context: GmailContext, flowId: string): P
     state: flow.state,
     port,
     timeoutMs: Math.max(1000, Date.parse(flow.expiresAt) - context.now().getTime()),
+    about: aboutFlow(flow),
   });
   await context.flows.patch(flowId, {
     redirectUri: listener.redirectUri,

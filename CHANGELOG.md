@@ -5,6 +5,20 @@ together under one version.
 
 ## Unreleased
 
+**The page at the end of a sign-in now says what it was for.** It read "Signed in — you can close this tab" and
+nothing else, so connecting six mailboxes in a row showed the same six words six times, with no way to tell which
+one you had just approved. It now carries the package's name, the mailbox being connected, the address the flow
+requires it to be, and the access that was asked for.
+
+What it deliberately does *not* say is "signed in as \<address\>". That page is served the moment Google
+redirects, before the authorization code has been exchanged for anything, so the account that was actually granted
+is not known at that point — and a person can pick a different one on the consent screen, which is the whole
+reason `--email` exists. So it says what was asked for, says plainly that nothing is stored yet, and says that a
+different account will be refused. The terminal or the agent names the account once it knows.
+
+A request that arrives without the expected `state` — a stray tab, another process finding an open port — is told
+none of it.
+
 ## 0.1.4
 
 **Setting this up was a diagnostic, and now it is a command.** The first thing a new install told you to do was
