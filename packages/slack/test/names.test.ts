@@ -4,9 +4,9 @@ import { createServer } from 'node:net';
 import { test } from 'node:test';
 import {
   type AccountConfig,
-  applyNamesMigration,
   CommsError,
   type ConfigV2,
+  migrateNames,
   planNamesMigration,
   renameEntry,
   resolveName,
@@ -24,8 +24,9 @@ import { type Harness, newHarness, slackOk, TEST_CLIENT_ID } from './support/har
 /**
  * Organisation/platform names through the Slack package.
  *
- * This release cannot write version 2 through any API, by design, so each test writes its migrated config straight to
- * the file with core's own plan and transform — exactly what `agentcomms names migrate` will write.
+ * The harness starts every config at version 1 — most tests here are about Slack rather than about names, and a
+ * fixture that says which version it is written for does not drift. The tests that are about names migrate it
+ * first, through core's own migration, which is the one `agentcomms names migrate` runs.
  */
 
 function is(code: string, pattern?: RegExp) {
@@ -34,10 +35,9 @@ function is(code: string, pattern?: RegExp) {
 }
 
 async function migrate(harness: Harness, renames: string[] = []): Promise<void> {
-  const current = await harness.core.config.load();
-  const plan = planNamesMigration(current, renames);
-  if (plan.status !== 'ready' || current.version !== 1) throw new Error('already migrated');
-  await writeFile(harness.core.config.path, `${JSON.stringify(applyNamesMigration(current, plan.rows), null, 2)}\n`);
+  const plan = planNamesMigration(await harness.core.config.load(), renames);
+  if (plan.status !== 'ready') throw new Error('already migrated');
+  await migrateNames(harness.core.config, plan);
 }
 
 async function freePort(): Promise<number> {

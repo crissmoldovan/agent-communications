@@ -388,27 +388,6 @@ export function applyNamesMigration(config: ConfigV1, rows: readonly NamesMigrat
 }
 
 /**
- * Whether this exact plan is the one already in place.
- *
- * Row by row rather than by comparing whole configurations: a migration that committed and then failed to release
- * its lock is retried, and between the two something else may legitimately have changed a policy or a timezone.
- * That is not a reason to refuse the retry. What has to hold is what the plan claimed: each account under the name
- * it was given, still the same account, and the name it left behind pointing at it.
- *
- * So this is false for somebody else's mapping, for a rename after this one (the tombstone would name the newer
- * name, and the key this plan wrote would be gone), for an account removed since, and for an id that has moved —
- * all of which mean the rows this plan is holding no longer describe the file.
- */
-export function namesMigrationApplied(config: ConfigV2, rows: readonly NamesMigrationRow[]): boolean {
-  return rows.every((row) => {
-    const map = row.kind === 'inbox' ? 'inboxes' : 'accounts';
-    const live = own(config[map] as Record<string, { id: string }>, row.to);
-    const former = own(config.formerNames[map], row.from);
-    return live?.id === row.id && former?.id === row.id && former?.name === row.to;
-  });
-}
-
-/**
  * Applies a plan, under both locks, to exactly the configuration it was made from.
  *
  * See `ConfigStore.migrateNames` for what is checked inside the locks.
@@ -417,9 +396,5 @@ export function migrateNames(
   store: ConfigStore,
   plan: Extract<NamesMigrationPlan, { status: 'ready' }>,
 ): Promise<{ status: 'migrated' | 'already-migrated'; config: ConfigV2 }> {
-  return store.migrateNames(
-    plan.fingerprint,
-    (current) => namesMigrationApplied(current, plan.rows),
-    (current) => applyNamesMigration(current, plan.rows),
-  );
+  return store.migrateNames(plan.fingerprint, plan.rows, (current) => applyNamesMigration(current, plan.rows));
 }

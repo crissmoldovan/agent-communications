@@ -321,6 +321,11 @@ test('verifier rejects a flat account name in every position a reader would copy
     ['a quoted name', '```text\nWrote it. Thread 18f2c9a0b1d4e5f6 in "work".\n```'],
     ['a compose profile file name', 'A mailbox reads `compose/inbox-work.md`.'],
     ['a nested download path', '```text\n~/Downloads/agent-communications/work/exports/plan.md\n```'],
+    // Fences a simpler extractor missed: tildes, a longer outer fence, and an indented block.
+    ['a tilde fence', '~~~sh\nagent-gmail inbox add work --email jo@example.test\n~~~'],
+    ['a longer fence around a shorter one', '````md\n```sh\nagent-gmail inbox reauth work\n```\n````'],
+    ['an indented block', 'Then:\n\n    agent-gmail inbox add work --email jo@example.test\n'],
+    ['a two-backtick inline span', 'Run ``agent-gmail inbox add work`` to connect it.'],
     // A version-1 alias is `[a-z0-9][a-z0-9-]{0,31}`: digits lead, and an English word is a legal name.
     ['an alias beginning with a digit', 'Run `agent-gmail search x --inbox 2024-archive`.'],
     ['an alias that is an English word', 'Run `agent-gmail search x --inbox and`.'],
@@ -345,6 +350,11 @@ test('verifier passes organisation/platform names, and the prose that imitates a
     ['prose naming two subcommands', 'This skill covers the OAuth client, inbox add and reauth, and doctor.'],
     ['prose about a failure', 'When inbox add failed, read the flow id it printed.'],
     ['a risk flag that shares a word with an alias', 'Flags are `markup`, `archive` and `disk-image`.'],
+    [
+      'a list continuation, which is indented like code',
+      '- A step.\n\n    When inbox add and reauth both fail, stop.\n',
+    ],
+    ['triple backticks quoted in prose', 'Write it as ``` ```sh ``` at the top.'],
     ['a spec, which records what was true then', '```sh\nagent-gmail inbox add work\n```'],
   ];
   for (const [label, body] of cases) {

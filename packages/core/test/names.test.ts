@@ -21,9 +21,7 @@ import {
   applyNamesMigration,
   findById,
   migrateNames,
-  type NamesMigrationPlan,
   nameAvailable,
-  namesMigrationApplied,
   planNamesMigration,
   renameEntry,
   requireInbox,
@@ -551,10 +549,6 @@ test('a version-2 config has nothing to plan', () => {
 
 // ── Applying it ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** The plan's own idempotency check, for the call sites that reach past `migrateNames`. */
-const inPlace = (plan: Extract<NamesMigrationPlan, { status: 'ready' }>) => (config: ConfigV2) =>
-  namesMigrationApplied(config, plan.rows);
-
 test('the migration renames every key, records every old name, and touches nothing else', async () => {
   const raw = { ...machine(), somethingNewer: { kept: true } };
   const store = storeWith(raw);
@@ -595,8 +589,8 @@ test('a write that committed and then reported failure is found already done on 
   const plan = ready(planNamesMigration(await store.load()));
   // The write lands and the call rejects anyway — what a failed lock release does after a committed write.
   const original = store.migrateNames.bind(store);
-  store.migrateNames = async (expected, applied, build) => {
-    await original(expected, applied, build);
+  store.migrateNames = async (expected, rows, build) => {
+    await original(expected, rows, build);
     throw new CommsError('LOCK_TIMEOUT', 'the lock could not be released');
   };
   await assert.rejects(migrateNames(store, plan), isError('LOCK_TIMEOUT'));
@@ -639,6 +633,38 @@ test('a retry after an unrelated edit is still the same migration, and still say
   // A rename after this one is not this one: the tombstone names the newer name and the key it wrote is gone.
   await store.update((config) => renameEntry(config, 'inbox', 'cue/gmail', 'cue/gmail-old'));
   await assert.rejects(migrateNames(store, plan), isError('TRANSIENT', /not to these names/));
+});
+
+test('a plan that is only part of the migration that landed is not that migration', async () => {
+  // Previewed before a third mailbox existed. Somebody else added one and migrated, naming the two this plan
+  // knows about exactly as this plan would have — so every row it holds is in place, and it is still incomplete.
+  const smaller = v1({ inboxes: { gmail: inbox('ibx_GGGGGGGGGGGGGGGG'), cue: inbox('ibx_CCCCCCCCCCCCCCCC') } });
+  const stale = ready(planNamesMigration(smaller));
+  const store = storeWith({
+    ...smaller,
+    inboxes: { ...smaller.inboxes, 'wf-tech': inbox('ibx_TTTTTTTTTTTTTTTT') },
+  });
+  assert.equal((await migrateNames(store, ready(planNamesMigration(await store.load())))).status, 'migrated');
+
+  const written = JSON.parse(readFileSync(store.path, 'utf8'));
+  for (const row of stale.rows) {
+    assert.equal(written.inboxes[row.to].id, row.id, `${row.to} is there under the name this plan chose`);
+  }
+  await assert.rejects(migrateNames(store, stale), isError('TRANSIENT', /not to these names/));
+});
+
+test('the store decides whether a migration is already done, not whoever called it', async () => {
+  const store = storeWith(machine());
+  const plan = ready(planNamesMigration(await store.load()));
+  await migrateNames(store, plan);
+  // A caller that could answer its own question could answer it wrongly. An empty plan satisfies "every row of
+  // this plan is in place" trivially, and claiming it here would report a migration nobody planned as this one's.
+  await assert.rejects(
+    store.migrateNames(plan.fingerprint, [], () => {
+      throw new Error('the build is never reached on a version-2 config');
+    }),
+    isError('TRANSIENT', /not to these names/),
+  );
 });
 
 test('a renamed row between preview and apply refuses the migration, and writes nothing', async () => {
@@ -695,7 +721,7 @@ test('a build that changes more than names is refused before it is written', asy
     return next;
   };
   await assert.rejects(
-    store.migrateNames(plan.fingerprint, inPlace(plan), widened),
+    store.migrateNames(plan.fingerprint, plan.rows, widened),
     isError('CONFIG', /changes more than names/),
   );
   const dropped = (config: ConfigV1): ConfigV2 => {
@@ -704,7 +730,7 @@ test('a build that changes more than names is refused before it is written', asy
     return next;
   };
   await assert.rejects(
-    store.migrateNames(plan.fingerprint, inPlace(plan), dropped),
+    store.migrateNames(plan.fingerprint, plan.rows, dropped),
     isError('CONFIG', /number of inboxes changed/),
   );
   const defaults = (config: ConfigV1): ConfigV2 => ({
@@ -712,7 +738,7 @@ test('a build that changes more than names is refused before it is written', asy
     defaults: { ...config.defaults, sendPolicy: 'never' },
   });
   await assert.rejects(
-    store.migrateNames(plan.fingerprint, inPlace(plan), defaults),
+    store.migrateNames(plan.fingerprint, plan.rows, defaults),
     isError('CONFIG', /a setting other than a name/),
   );
   assert.equal(JSON.parse(readFileSync(store.path, 'utf8')).version, 1);
@@ -926,7 +952,7 @@ test('a migration that forges, omits or adds a former name is refused', async ()
     ['extra', (f) => Object.assign(f.inboxes, { ghost: { name: 'cue/gmail', id: 'ibx_CCCCCCCCCCCCCCCC' } })],
   ];
   for (const [label, edit] of cases) {
-    await assert.rejects(store.migrateNames(plan.fingerprint, inPlace(plan), tamper(edit)), isError('CONFIG'), label);
+    await assert.rejects(store.migrateNames(plan.fingerprint, plan.rows, tamper(edit)), isError('CONFIG'), label);
   }
   assert.equal(JSON.parse(readFileSync(store.path, 'utf8')).version, 1);
 });

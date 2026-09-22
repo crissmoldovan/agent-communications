@@ -251,7 +251,7 @@ on macOS and Linux:
 | default | `compose/default.md` | What is true of any message to a person. A built-in version applies if this file does not exist. |
 | user | `compose/user.md` | How this particular person writes: greetings, sign-off, length, the words they never use. |
 | platform | `compose/gmail.md` | What is true of email and not of chat: subjects, signatures, threads. |
-| inbox | `compose/inbox-<alias>.md` | What is true of one mailbox. Work is not home. |
+| inbox | `compose/inbox-acme__gmail.md` | What is true of one mailbox — the name, with its `/` written `__`. Work is not home. |
 
 Ask for the profile with `includeProfile: true` (CLI: `--profile`) and the joined text comes back
 in the result's `profile` field, each section labelled with the layer and file it came from. The

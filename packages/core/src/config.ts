@@ -639,13 +639,14 @@ export class ConfigStore {
    * mapping is somebody else's migration; saying "already migrated" there would report a mapping nobody applied,
    * and a caller updating registrations from it would point them at names that do not exist.
    *
-   * `applied` answers that question, and is asked about the mapping rather than about the whole file: between a
+   * `rows` is the plan, and the question is asked of the mapping rather than of the whole file: between a
    * committed write and its retry, something else may have changed a policy or a timezone, and a retry refused
-   * over that would be idempotency in name only.
+   * over that would be idempotency in name only. The rows are checked here rather than by whoever built them,
+   * for the same reason `build` is: a caller that could answer its own question could answer it wrongly.
    */
   async migrateNames(
     expected: string,
-    applied: (current: ConfigV2) => boolean,
+    rows: readonly RenamedAccount[],
     build: (current: ConfigV1) => ConfigV2,
   ): Promise<{ status: 'migrated' | 'already-migrated'; config: ConfigV2 }> {
     if (!namesMigrationEnabled()) {
@@ -658,7 +659,7 @@ export class ConfigStore {
         this.#cache = null;
         const current = structuredClone(await this.load());
         if (current.version === 2) {
-          if (!applied(current)) {
+          if (!migrationApplied(current, rows)) {
             throw new CommsError('TRANSIENT', 'the names were migrated while this ran, and not to these names', {
               hint: 'Run `agentcomms names migrate` again to see what they are called now.',
             });
@@ -686,6 +687,52 @@ export class ConfigStore {
       }),
     );
   }
+}
+
+/** An own property only: a name is user input, and `map.constructor` is a function on every plain object. */
+function own<T>(map: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(map, key) ? map[key] : undefined;
+}
+
+/** One account's rename, as the migration planned it. */
+export interface RenamedAccount {
+  readonly kind: 'inbox' | 'account';
+  readonly from: string;
+  readonly to: string;
+  readonly id: string;
+}
+
+/**
+ * Whether this exact plan is the migration already in place.
+ *
+ * Row by row rather than by comparing whole configurations: a migration that committed and then failed to release
+ * its lock is retried, and between the two something else may legitimately have changed a policy or a timezone.
+ * That is not a reason to refuse the retry. What has to hold is what the plan claimed — each account under the name
+ * it was given, still the same account, and the name it left behind pointing at it — and that the plan is the
+ * *whole* migration, not part of one.
+ *
+ * The second half is what the rows alone cannot say. A plan previewed against a smaller configuration, whose rows
+ * another process then happened to reproduce while migrating a larger one, would satisfy every row and still be
+ * missing an account. So the flat names left behind are counted too: the migration is the only thing that can
+ * create one — version 1 has no tombstones, and every later rename leaves a qualified name behind — so the flat
+ * keys in the file are exactly the accounts the migration started from, and they have to be exactly this plan's.
+ *
+ * False, then, for somebody else's mapping, for a migration of a configuration this plan never saw, for a rename
+ * after this one, for an account removed since, and for an id that has moved.
+ */
+function migrationApplied(config: ConfigV2, rows: readonly RenamedAccount[]): boolean {
+  for (const map of ['inboxes', 'accounts'] as const) {
+    const kind = map === 'inboxes' ? 'inbox' : 'account';
+    const planned = rows.filter((row) => row.kind === kind);
+    const flat = Object.keys(config.formerNames[map]).filter((key) => ALIAS_PATTERN.test(key));
+    if (flat.length !== planned.length) return false;
+    for (const row of planned) {
+      const live = own(config[map] as Record<string, { id: string }>, row.to);
+      const former = own(config.formerNames[map], row.from);
+      if (live?.id !== row.id || former?.id !== row.id || former.name !== row.to) return false;
+    }
+  }
+  return true;
 }
 
 /**

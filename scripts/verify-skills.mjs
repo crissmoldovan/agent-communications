@@ -332,11 +332,43 @@ const IN_CODE = [
   new RegExp(String.raw`\bin ["“](${ALIAS})["”]`, 'g'),
   // A trailing `· something` is not a position: in these documents it is as often a message id as a name.
 ];
-/** Fenced blocks and backticked spans, joined — the parts of a document a reader copies rather than reads. */
+/**
+ * The parts of a document a reader copies rather than reads.
+ *
+ * Enough of CommonMark to be honest about what it covers: fences of three or more backticks or tildes, closed by
+ * the same character at the same length or longer; indented blocks, but only where one can actually start — after
+ * a blank line, and not as the continuation of a list item, which is indented the same way and is prose; and
+ * inline spans of any delimiter length. What is *not* code matters as much: prose imitates subcommand grammar
+ * exactly, and a false positive on English is how a check like this gets turned off.
+ */
 function codeOf(source) {
-  return [...source.matchAll(/```[^\n]*\n([\s\S]*?)```/g), ...source.matchAll(/`([^`\n]+)`/g)]
-    .map(([, code]) => code)
-    .join('\n');
+  const code = [];
+  const lines = source.split('\n');
+  let fence = null;
+  let blankBefore = true;
+  let listBefore = false;
+  for (const line of lines) {
+    if (fence) {
+      const close = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
+      else code.push(line);
+      continue;
+    }
+    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    // An info string may not contain a backtick, which is what tells ```` ``` ```` in prose from a fence.
+    if (open && !(open[1][0] === '`' && open[2].includes('`'))) {
+      fence = open[1];
+      blankBefore = false;
+      continue;
+    }
+    const blank = line.trim() === '';
+    // An indented block cannot interrupt a paragraph, and a list's own continuation lines are indented too.
+    if (/^ {4,}\S/.test(line) && blankBefore && !listBefore) code.push(line);
+    else for (const [, , span] of line.matchAll(/(`+)((?:[^`]|(?!\1)`)+)\1(?!`)/g)) code.push(span);
+    if (!blank) listBefore = /^ {0,3}(?:[-*+]|\d{1,9}[.)])\s/.test(line) || (listBefore && /^ {2,}\S/.test(line));
+    blankBefore = blank;
+  }
+  return code.join('\n');
 }
 const userFacing = (relativeFile) =>
   (relativeFile.startsWith('skills/') ||

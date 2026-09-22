@@ -82,7 +82,7 @@ It is a resumption token for one search, not a bookmark in the mailbox. Four way
 | that cursor belongs to a different search | The compiled query or the `kind` changed. Note that changing only the timezone, or a date's rewritten value, changes the compiled query too |
 | that cursor was made for a different set of mailboxes | The alias list differs — **including its order**, because the lists are compared as joined strings |
 
-That last one is the trap. Passing `["work", "personal"]` and then `["personal", "work"]` is a different set
+That last one is the trap. Passing `["acme/gmail", "personal/gmail"]` and then `["personal/gmail", "acme/gmail"]` is a different set
 as far as the cursor is concerned. Using `"all"` avoids it, because `"all"` always resolves sorted.
 
 A refusal is the check working. Run the search again from the start rather than trimming the mailbox list to

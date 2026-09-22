@@ -52,8 +52,9 @@ import {
 /**
  * Organisation/platform names, end to end through the Gmail package.
  *
- * Nothing here can create a version-2 config the way a person will — that command arrives in a later release — so
- * each test writes its own with core's plan and transform (`migrateNamesForTest`), exactly what the command writes.
+ * The harness starts every config at version 1 — most tests in this package are about mail rather than about
+ * names, and a fixture that says which version it is written for does not drift. The tests that are about names
+ * migrate it first with `migrateNamesForTest`, which runs core's own migration: the one the command runs.
  */
 
 function is(code: string, pattern?: RegExp) {
