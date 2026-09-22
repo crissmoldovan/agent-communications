@@ -59,6 +59,15 @@ export interface SlackManifest {
   display_information: typeof DISPLAY;
   oauth_config: {
     redirect_urls: string[];
+    /**
+     * The switch everything else here depends on.
+     *
+     * "Redirects to `localhost` … are treated as desktop redirects if the app has opted into PKCE. If the app
+     * has never enabled PKCE, they will be treated like a server redirect." So without it the loopback redirect
+     * is refused, the secret-free exchange has no basis, and the app this prints cannot complete a single
+     * sign-in.
+     */
+    pkce_enabled: boolean;
     scopes: { user: string[] };
   };
   settings: {
@@ -87,17 +96,25 @@ export function scopesForMode(mode: InstallMode): string[] {
  * `redirectUrl` is a parameter because the loopback port is not fixed until the flow starts, and Slack matches
  * redirect URLs exactly. The caller decides; this only says what goes in the file.
  *
- * **`settings` carries only keys the research verified**: `org_deploy_enabled`, `socket_mode_enabled` and
- * `token_rotation_enabled`. Notably absent is any PKCE flag — the manifest reference the research read does not
- * document one, and inventing a key that Slack silently ignores would produce an app that looks configured for
- * PKCE and is not. Whether PKCE is opted into through the manifest or only through the app's settings page is
- * the one thing S2 must confirm against a real workspace before these are final.
+ * **`oauth_config.pkce_enabled` is the field everything else depends on.** An earlier version of this file left
+ * it out and said so proudly: the research had found no PKCE key documented, and inventing one Slack would
+ * silently ignore is worse than omitting it. The research was simply incomplete. Both the PKCE guide and the app
+ * manifest reference document `pkce_enabled` as a boolean under `oauth_config`, and the guide is explicit about
+ * what its absence costs: "If the app has never enabled PKCE, they will be treated like a server redirect."
+ *
+ * So the app this printed could not have completed a sign-in at all. The refusal to guess was right; the
+ * conclusion drawn from it — that there was nothing to find — was not, and "the docs do not mention it" is a
+ * claim about the search, not about the API.
+ *
+ * `settings` carries only the three keys the research did verify: `org_deploy_enabled`, `socket_mode_enabled`
+ * and `token_rotation_enabled`.
  */
 export function buildManifest(mode: InstallMode, redirectUrl: string): SlackManifest {
   return {
     display_information: DISPLAY,
     oauth_config: {
       redirect_urls: [redirectUrl],
+      pkce_enabled: true,
       scopes: { user: scopesForMode(mode) },
     },
     settings: {

@@ -279,12 +279,16 @@ distinct `acc_` / `ibx_` prefixes mean an id alone still says which it is.
 > the credential behind it can post. The Gmail package overwrites, and has the same window; that is not fixed
 > here.
 >
-> **Four things are still unverified against a real workspace**, and every one of them reads like a fact until
-> somebody signs in once: how an app opts into PKCE, since the manifest reference documents no key for it;
-> whether the exchange endpoint is `oauth.v2.access` or `oauth.v2.user.access`; whether `token_rotation_enabled`
-> in the manifest actually enables rotation, or whether that is an app-settings toggle only; and whether Slack
-> accepts `127.0.0.1` as well as `localhost`. The code takes the documented answer in each case and says so at
-> the point it does.
+> **Three things are still unverified against a real workspace**: whether the exchange endpoint is
+> `oauth.v2.access` or `oauth.v2.user.access`; whether `token_rotation_enabled` in the manifest actually enables
+> rotation, or whether that is an app-settings toggle only; and whether Slack accepts `127.0.0.1` as well as
+> `localhost`. The code takes the documented answer in each case and says so at the point it does.
+>
+> It was four. The fourth — how an app opts into PKCE — was documented all along, as
+> `oauth_config.pkce_enabled`, and the manifest was omitting it. The app S2 printed could not have completed a
+> single sign-in, because "if the app has never enabled PKCE, [localhost redirects] will be treated like a
+> server redirect". It was recorded as unknown because a first pass over the docs did not find it, and that was
+> written down as a fact about Slack rather than about the search.
 >
 > One ten-minute sign-in settles all four, and the checklist is
 > [`docs/research/2026-09-22-slack-live-verification.md`](../../research/2026-09-22-slack-live-verification.md) —

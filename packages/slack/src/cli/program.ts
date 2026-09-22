@@ -438,6 +438,15 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
       start: boolean;
       browser: boolean;
       expect?: Parameters<typeof startSignIn>[1]['expect'];
+      /**
+       * Proof a person typed a challenge to widen this workspace.
+       *
+       * Declared here because leaving it out did not fail to compile: the caller passed it, this signature
+       * ignored it, and the consent was dropped between the two. `ConfigStore.update` then refused every
+       * approved widening, so the gate stopped meaning "a person must approve this" and started meaning "this
+       * can never happen" — while every refusal test went on passing.
+       */
+      consent?: LooseningConsent | undefined;
     },
   ): Promise<void> {
     const started: StartedSignIn = await startSignIn(context, {
@@ -447,6 +456,7 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
       port: input.port,
       detached: input.start,
       ...(input.expect ? { expect: input.expect } : {}),
+      ...(input.consent ? { consent: input.consent } : {}),
       ...(deps.listenerCommand ? { listenerCommand: deps.listenerCommand } : {}),
     });
     const reauth = Boolean(input.expect);

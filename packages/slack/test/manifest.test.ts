@@ -62,6 +62,22 @@ test('neither manifest asks for the scopes the design refused', () => {
   }
 });
 
+test('the manifest turns PKCE on, because without it none of the rest works', () => {
+  /*
+   * This file once omitted the field and argued for omitting it: the research had found no PKCE key documented,
+   * and inventing one Slack would silently ignore is worse than leaving it out. The research was incomplete.
+   * Both the PKCE guide and the app manifest reference document `pkce_enabled` under `oauth_config`, and the
+   * guide says what its absence costs — "If the app has never enabled PKCE, they will be treated like a server
+   * redirect", which refuses the loopback this whole sign-in is built on.
+   *
+   * So the app this printed could not have completed a single sign-in, and nothing in the test suite noticed
+   * because the suite only ever checked that the keys present were ones we meant to write.
+   */
+  for (const mode of ['read', 'send'] as const) {
+    assert.equal(buildManifest(mode, 'http://localhost:3000/slack').oauth_config.pkce_enabled, true, mode);
+  }
+});
+
 test('the manifest carries only settings keys the research verified', () => {
   /*
    * A key Slack does not recognise is silently ignored, which would produce an app that looks configured and is

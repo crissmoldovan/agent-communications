@@ -37,17 +37,33 @@ interface Envelope<T> {
 async function cli(
   harness: Harness,
   argv: string[],
-  options: { onStderr?: (soFar: string) => void; tty?: boolean; env?: NodeJS.ProcessEnv } = {},
+  options: {
+    onStderr?: (soFar: string) => void;
+    tty?: boolean;
+    env?: NodeJS.ProcessEnv;
+    /** Types back whatever challenge the CLI prints, as a person at a terminal would. */
+    answerChallenge?: boolean;
+  } = {},
 ): Promise<Captured> {
   let stdout = '';
   let stderr = '';
   const out = new PassThrough();
   const err = new PassThrough();
+  const input = new PassThrough();
   out.on('data', (chunk) => {
     stdout += String(chunk);
   });
+  let answered = false;
   err.on('data', (chunk) => {
     stderr += String(chunk);
+    if (options.answerChallenge && !answered) {
+      // `Type ABCD to confirm` — the code is invented per run, so it is read back off the prompt.
+      const asked = /Type (\S+) to confirm/.exec(stderr);
+      if (asked) {
+        answered = true;
+        input.write(`${asked[1]}\n`);
+      }
+    }
     options.onStderr?.(stderr);
   });
   const code = await run(argv, {
@@ -57,7 +73,7 @@ async function cli(
     streams: {
       stdout: Object.assign(out, { isTTY: options.tty ?? false }),
       stderr: Object.assign(err, { isTTY: options.tty ?? false }),
-      stdin: Object.assign(new PassThrough(), { isTTY: false }),
+      stdin: Object.assign(input, { isTTY: options.tty ?? false }),
     },
     openBrowser: () => undefined,
     probe: (input, init) => harness.probe(input, init),
@@ -768,4 +784,28 @@ test('an already-expired token is not asked about, because the answer would mean
   const checks = result.json<Envelope<{ checks: { id: string; status: string; detail: string }[] }>>().data?.checks;
   assert.equal(checks?.find((check) => check.id === 'identity')?.status, 'unknown');
   assert.match(checks?.find((check) => check.id === 'credential-state')?.detail ?? '', /expired/);
+});
+
+test('a widening a person approved actually goes through', async () => {
+  /*
+   * The half the refusal tests never covered: that the key works, not only that the door is locked.
+   *
+   * The consent is collected at the terminal and has to reach `ConfigStore.update`, which refuses a read→send
+   * change without it — so dropping it anywhere on the way turns the gate from "a person must approve this" into
+   * "this can never happen", and every refusal test still passes.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'read' });
+  harness.reply = () => slackOk({ scopes: scopesForMode('send') });
+  const port = await freePort();
+
+  const result = await cli(
+    harness,
+    ['workspace', 'reauth', 'acme', '--mode', 'send', '--port', String(port), '--no-browser'],
+    // A terminal, nobody's agent marker, and the challenge typed back.
+    { ...browserOn(), tty: true, answerChallenge: true },
+  );
+
+  assert.equal(result.code, EXIT_CODES.OK, result.stderr);
+  assert.equal((await harness.core.config.load()).accounts.acme?.mode, 'send');
 });

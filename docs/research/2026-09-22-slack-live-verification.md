@@ -1,8 +1,14 @@
-# Slack S2: the four things only a real workspace can settle
+# Slack S2: the things only a real workspace can settle
 
-**Status: not yet run.** Everything in `packages/slack` is built and tested against a fake Slack.
-Four assumptions have never met the real one. This is the checklist that settles them, what each
-outcome means, and what to change in the code for each answer.
+**Status: not yet run.** Everything in `packages/slack` is built and tested against a fake Slack, and
+no sign-in has ever met the real one. This is the checklist, what each outcome means, and what to
+change for each answer.
+
+It started as four unknowns. One of them — how an app opts into PKCE — turned out to be documented all
+along, in two places, and the code now sets `oauth_config.pkce_enabled`. It was recorded as unknown
+because a first pass over the docs did not find it, and "the docs do not mention it" was written down
+as though it were a fact about Slack rather than about the search. What remains below is genuinely
+open.
 
 It takes about ten minutes and needs a Slack workspace you can install an app into. Nothing here
 posts a message, joins a channel, or changes anything in the workspace: the whole run is a sign-in
@@ -10,7 +16,7 @@ and a read of your own identity.
 
 > **Why this blocks S3, not S2.** S2 is the sign-in machinery and it is complete and reviewed. S3
 > is the first phase that *reads* Slack, and every read depends on holding a token this flow
-> produced. Building S3 on four unverified assumptions means discovering them through S3's bugs.
+> produced. Building S3 on unverified assumptions means discovering them through S3's bugs.
 
 ---
 
@@ -53,16 +59,19 @@ purpose.
 
 ## What each outcome settles
 
-### 1. How an app opts into PKCE — the real unknown
+### 1. Does the manifest's `pkce_enabled` actually take effect
 
-Slack's PKCE page says a `localhost` redirect works "if the app has opted into PKCE" and never says
-where that switch is. The manifest this prints carries **no PKCE key**, because inventing one that
-Slack silently ignores would produce an app that looks configured and is not.
+**Settled by documentation, not yet by a sign-in.** The manifest sets `oauth_config.pkce_enabled: true`,
+which both the PKCE guide and the manifest reference document. What has not been seen is Slack applying
+it to an app created from a pasted manifest.
+
+Worth two seconds at step 2: after creating the app, open **OAuth & Permissions** and check the PKCE
+setting is on. The guide says that is where the same switch lives for standard apps.
 
 | What happens at step 3 | What it means | What to do |
 |---|---|---|
-| The browser lands back and the CLI says `Connected "live"` | Opting in is implicit: sending `code_challenge` is enough | Nothing. Record it in the research. |
-| Slack's page refuses the redirect URI before you approve | The app is not treated as a desktop client | Look for a PKCE or "public client" toggle in the app's OAuth settings. If one exists, the manifest needs a key for it — find its name in the manifest reference. |
+| The browser lands back and the CLI says `Connected "live"` | The manifest field took effect | Nothing. Record it. |
+| Slack's page refuses the redirect URI before you approve | PKCE is not on, so `localhost` is being treated as a server redirect | Turn it on under **OAuth & Permissions** and try again — then say so here, because it means the manifest field is not enough and the `manifest` command needs to tell people to check. |
 | You approve, then the CLI says *Slack refused the sign-in* | The authorisation worked and the exchange did not | Read the error Slack gave; it is printed verbatim. Most likely the app still expects a client secret. |
 
 ### 2. `oauth.v2.access` or `oauth.v2.user.access`
