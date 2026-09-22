@@ -279,11 +279,18 @@ distinct `acc_` / `ibx_` prefixes mean an id alone still says which it is.
 > the credential behind it can post. The Gmail package overwrites, and has the same window; that is not fixed
 > here.
 >
-> **Three things are still unverified against a real workspace**, and every one of them is a guess that reads
-> like a fact until somebody signs in once: whether PKCE is opted into through the manifest or only through the
-> app settings page; whether the exchange endpoint is `oauth.v2.access` or `oauth.v2.user.access`; and whether
-> Slack accepts `127.0.0.1` as well as `localhost`. The code takes the documented answer in each case and says so
-> at the point it does. A single real sign-in settles all three, and S3 cannot honestly start without it.
+> **Four things are still unverified against a real workspace**, and every one of them reads like a fact until
+> somebody signs in once: how an app opts into PKCE, since the manifest reference documents no key for it;
+> whether the exchange endpoint is `oauth.v2.access` or `oauth.v2.user.access`; whether `token_rotation_enabled`
+> in the manifest actually enables rotation, or whether that is an app-settings toggle only; and whether Slack
+> accepts `127.0.0.1` as well as `localhost`. The code takes the documented answer in each case and says so at
+> the point it does.
+>
+> One ten-minute sign-in settles all four, and the checklist is
+> [`docs/research/2026-09-22-slack-live-verification.md`](../../research/2026-09-22-slack-live-verification.md) —
+> what to run, what each outcome means, and which line to change for each answer. **S3 is what this blocks, not
+> S2.** S2 is the sign-in machinery and it is complete; S3 is the first phase that reads Slack, and building it
+> on four unverified assumptions means discovering them through S3's bugs.
 >
 > `docs/reference/cli.md` is generated from `packages/gmail` only. Extending the generator to a second CLI is
 > S7's, with the packaging — a reference page that tells people to install an unpublished package would be worse
