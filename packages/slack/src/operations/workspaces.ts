@@ -2,10 +2,12 @@ import {
   type AccountConfig,
   CommsError,
   type Config,
-  connectedAccounts,
-  isValidAlias,
+  findById,
+  lookupName,
+  nameAvailable,
   neutralise,
   newAccountId,
+  resolveName,
   secretsStoreOf,
 } from '@agentcomms/core';
 import { type ExchangedToken, scopeMismatch } from '../auth/authorize.ts';
@@ -68,12 +70,13 @@ export function listWorkspaces(config: Config): WorkspaceView[] {
 }
 
 export function requireWorkspace(config: Config, alias: string): { alias: string; account: AccountConfig } {
-  const account = config.accounts[alias];
-  if (account?.platform !== 'slack') {
-    throw new CommsError('NOT_FOUND', `no Slack workspace called "${alias}"`, {
+  const notFound = () =>
+    new CommsError('NOT_FOUND', `no Slack workspace called "${alias}"`, {
       hint: 'List them with `agent-slack workspace list`.',
     });
-  }
+  // Through core, so a former name is refused with what it is called now rather than reported as unknown.
+  const { account } = resolveName(config, 'account', alias, notFound);
+  if (account.platform !== 'slack') throw notFound();
   return { alias, account };
 }
 
@@ -84,19 +87,21 @@ export function requireWorkspace(config: Config, alias: string): { alias: string
  * called `work` and a workspace called `work` cannot both exist and leave every later lookup ambiguous.
  */
 export function checkAliasFree(config: Config, alias: string): void {
-  if (!isValidAlias(alias)) {
-    // The rule is `core`'s, and the hint quotes it rather than paraphrasing: an earlier draft said "starting with
-    // a letter", which is not what `ALIAS_PATTERN` says — it allows a leading digit — and a hint that describes a
-    // stricter rule than the code sends people to rename things that were fine.
-    throw new CommsError('USAGE', `"${alias}" is not a usable name`, {
-      hint: 'Lower-case letters, digits and dashes, up to 32 characters, not starting with a dash.',
-    });
-  }
-  if (connectedAccounts(config).some((entry) => entry.alias === alias)) {
+  /*
+   * The rule is core's — for either config version — and so is its wording, except for a name that is already
+   * connected, where the fix is one only this package can suggest.
+   *
+   * Version 1: a plain name free in both maps, as before. Version 2: `organisation/slack`, free in both maps, and
+   * never a former name of anything.
+   */
+  const check = nameAvailable(config, 'account', alias, 'slack');
+  if (check.ok) return;
+  if (lookupName(config, 'account', alias) || lookupName(config, 'inbox', alias)) {
     throw new CommsError('CONFIG', `"${alias}" is already connected`, {
       hint: 'Choose another name, or disconnect it first with `agent-slack workspace remove`.',
     });
   }
+  throw check.error;
 }
 
 /**
@@ -327,13 +332,14 @@ export async function removeWorkspace(deps: RemovalDeps, alias: string): Promise
         hint: `Run \`agent-slack workspace remove ${alias}\` again.`,
       });
     }
-    const held = config.accounts[alias];
-    if (!held || held.id !== found.account.id) {
+    // By id, under whatever key it holds now: nothing may depend on the name staying put between the read and here.
+    const held = findById(config, 'account', found.account.id);
+    if (!held) {
       throw new CommsError('CONFIG', `"${alias}" was renewed while it was being removed`, {
         hint: `It is connected again. Run \`agent-slack workspace remove ${alias}\` once more if you still want it gone.`,
       });
     }
-    const { [alias]: _removed, ...rest } = config.accounts;
+    const { [held.alias]: _removed, ...rest } = config.accounts;
     return { ...config, accounts: rest };
   });
   return { alias, accountId: found.account.id, removed: true };

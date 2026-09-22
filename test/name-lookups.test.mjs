@@ -26,14 +26,11 @@ const ALLOWED = [join('packages', 'core', 'src', 'config.ts'), join('packages', 
 /**
  * Lookups not yet moved onto the helpers, and how many each file has.
  *
- * Slack's move in N3; Gmail's moved in N2. Exact counts, so a new lookup added to one of these files fails like one
- * added anywhere else — and a file that reaches zero must leave the list, so the list can only shrink.
+ * Empty: Gmail's moved in N2 and Slack's in N3. Kept, with its counting, so a migration of this kind can be staged
+ * again — exact counts, so a new lookup in a listed file fails like one anywhere else, and a file that reaches zero
+ * must leave the list.
  */
-const NOT_YET_MOVED = {
-  [join('packages', 'slack', 'src', 'cli', 'program.ts')]: 1,
-  [join('packages', 'slack', 'src', 'operations', 'signin.ts')]: 2,
-  [join('packages', 'slack', 'src', 'operations', 'workspaces.ts')]: 2,
-};
+const NOT_YET_MOVED = {};
 
 /**
  * An indexed read of either map: `config.inboxes[alias]`, `current.accounts?.[name]`.
