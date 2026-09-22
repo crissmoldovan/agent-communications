@@ -59,7 +59,9 @@ export function doctor(input: DoctorInput): DoctorResult {
       title: 'Workspaces',
       status: 'warn',
       detail: 'none connected yet',
-      fix: 'agent-slack workspace add <name>',
+      // The first step, not the last: `workspace add` needs a Client ID that does not exist until an app does,
+      // and a fix somebody cannot run is not a fix.
+      fix: 'agent-slack manifest --port 51234, then agent-slack workspace add <name> --client-id <id> --port 51234',
       workspace: null,
     });
   }

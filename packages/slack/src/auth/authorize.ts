@@ -155,8 +155,18 @@ interface OAuthResponse {
 export function readExchange(body: unknown): ExchangedToken {
   const response = body as OAuthResponse;
   if (response?.ok !== true) {
+    /*
+     * The hint names the app, not the command.
+     *
+     * "Start again" is the wrong advice for the likeliest cause: a refusal at this point is usually the app
+     * rather than the attempt. Two things about it can be wrong in ways that produce a refusal and no useful
+     * message — the redirect URL, which Slack matches exactly, and whether the app is allowed to sign in without
+     * a client secret at all. Retrying fixes neither, and somebody retrying is somebody not looking at the app.
+     */
     throw new CommsError('AUTH_REQUIRED', `Slack refused the sign-in: ${response?.error ?? 'no reason given'}`, {
-      hint: 'Start again with `agent-slack workspace add`.',
+      hint:
+        'Check the app at https://api.slack.com/apps: its redirect URL must match the one this used exactly, ' +
+        'and it must be allowed to sign in without a client secret (PKCE).',
     });
   }
 

@@ -68,6 +68,9 @@ test('no workspaces is a warning with the command that connects one', () => {
   const result = doctor({ config: config({}), now: NOW, bundles: new Map() });
   const check = find(result, 'workspaces');
   assert.equal(check?.status, 'warn');
+  // Both halves: `workspace add` needs a Client ID that does not exist until an app does, so a fix naming only
+  // the second command is one nobody can run.
+  assert.match(check?.fix ?? '', /agent-slack manifest/);
   assert.match(check?.fix ?? '', /workspace add/);
   // An empty install is not broken.
   assert.equal(result.healthy, true);
