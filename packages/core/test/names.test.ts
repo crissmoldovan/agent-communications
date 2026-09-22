@@ -26,6 +26,7 @@ import {
   renameEntry,
   requireInbox,
   resolveName,
+  retargetFormerNames,
 } from '../src/names.ts';
 import { tempDir } from './helpers/temp.ts';
 
@@ -372,9 +373,13 @@ test('nameAvailable: version 2 is the grammar, the platform, both maps, and no f
   const check = nameAvailable(reused, 'inbox', 'cue/gmail', 'gmail');
   assert.equal(check.ok, false);
   assert.match(check.ok ? '' : check.error.message, /cannot be used again/);
-  // Of either kind: a former workspace name is not free for a mailbox either.
-  const crossKind = renameEntry(config, 'account', 'cue/slack', 'cue/slack-main');
-  assert.equal(nameAvailable(crossKind, 'account', 'cue/slack', 'slack').ok, false);
+  // Of either kind: a name recorded as a former *account* name is not free for a mailbox either.
+  const crossKind = v2({
+    inboxes: { 'cue/gmail': inbox(IBX_A) },
+    formerNames: { inboxes: {}, accounts: { 'odd/gmail': { name: 'cue/gmail', id: IBX_A } } },
+  });
+  assert.equal(nameAvailable(crossKind, 'inbox', 'odd/gmail', 'gmail').ok, false);
+  assert.equal(nameAvailable(crossKind, 'inbox', 'even/gmail', 'gmail').ok, true);
 });
 
 test('the schema refuses a former name on every write, not only where names are proposed', async () => {
@@ -541,14 +546,22 @@ test('the migration renames every key, records every old name, and touches nothi
   assert.throws(() => resolveName(reread, 'inbox', 'gmail'), isError('NOT_FOUND', /renamed to "personal\/gmail"/));
 });
 
-test('a retry finds the migration already done', async () => {
+test('a write that committed and then reported failure is found already done on retry', async () => {
   const store = storeWith(machine());
   const plan = ready(planNamesMigration(await store.load()));
-  await migrateNames(store, plan);
+  // The write lands and the call rejects anyway — what a failed lock release does after a committed write.
+  const original = store.migrateNames.bind(store);
+  store.migrateNames = async (expected, build) => {
+    await original(expected, build);
+    throw new CommsError('LOCK_TIMEOUT', 'the lock could not be released');
+  };
+  await assert.rejects(migrateNames(store, plan), isError('LOCK_TIMEOUT'));
+  assert.equal(JSON.parse(readFileSync(store.path, 'utf8')).version, 2, 'the write is on disk');
+  store.migrateNames = original;
+
   const before = readFileSync(store.path, 'utf8');
-  // The same call again — what a caller does after a write that committed and then reported a failure.
   assert.equal((await migrateNames(store, plan)).status, 'already-migrated');
-  assert.equal(readFileSync(store.path, 'utf8'), before);
+  assert.equal(readFileSync(store.path, 'utf8'), before, 'and the retry changes nothing');
 });
 
 test('a renamed row between preview and apply refuses the migration, and writes nothing', async () => {
@@ -638,6 +651,94 @@ test('the migration waits for the credentials lock', async () => {
   await running;
   assert.equal(migratedWhileHeld, false);
   assert.equal(JSON.parse(readFileSync(store.path, 'utf8')).version, 2);
+});
+
+test('the migration takes the credentials lock before the config lock', async () => {
+  // While it waits for the credentials lock, the config lock must still be free: taking them the other way round
+  // would hold every ordinary config write hostage to whatever holds the credentials lock.
+  const store = storeWith(machine());
+  const plan = ready(planNamesMigration(await store.load()));
+  let running: Promise<unknown> | undefined;
+  let updatedWhileWaiting = false;
+  await withFileLock(credentialsLockPath(join(store.path, '..')), async () => {
+    running = migrateNames(store, plan);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const update = store.update((config) => config).then(() => true);
+    const timeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1_000));
+    updatedWhileWaiting = await Promise.race([update, timeout]);
+  });
+  await running;
+  assert.equal(updatedWhileWaiting, true);
+});
+
+// ── Former names are permanent ───────────────────────────────────────────────────────────────────────────────────
+
+test('an ordinary write cannot forget a former name, or forget one and reuse it in the same write', async () => {
+  const store = storeWith(migrated());
+  await assert.rejects(
+    store.update((config) => ({ ...config, formerNames: { inboxes: {}, accounts: {} } }) as Config),
+    isError('CONFIG', /forgets the former name/),
+  );
+  await assert.rejects(
+    store.update((config) => {
+      const next = config as ConfigV2;
+      const { cue: _dropped, ...rest } = next.formerNames.inboxes;
+      return {
+        ...next,
+        inboxes: { ...next.inboxes, cue: inbox(IBX_B) },
+        formerNames: { ...next.formerNames, inboxes: rest },
+      } as Config;
+    }),
+    isError('CONFIG'),
+  );
+});
+
+test('a former name may follow a re-authorisation to the new id, and nowhere else', async () => {
+  // A Slack reauth replaces the account under a new id, and moves its former names with it.
+  const store = storeWith(migrated());
+  await store.update((config) => {
+    const next = retargetFormerNames(config as ConfigV2, 'account', ACC_A, ACC_B);
+    return { ...next, accounts: { 'cue/slack': account(ACC_B) } };
+  });
+  const after = (await store.load()) as ConfigV2;
+  assert.equal(after.formerNames.accounts.live?.id, ACC_B);
+  assert.throws(() => resolveName(after, 'account', 'live'), isError('NOT_FOUND', /renamed to "cue\/slack"$/));
+
+  // Pointing one at an account that was already there is not following a reauth.
+  const other = storeWith(
+    v2({
+      inboxes: { 'cue/gmail': inbox(IBX_A), 'rgc/gmail': inbox(IBX_B) },
+      formerNames: { inboxes: { cue: { name: 'cue/gmail', id: IBX_A } }, accounts: {} },
+    }),
+  );
+  await assert.rejects(
+    other.update((config) => {
+      const next = config as ConfigV2;
+      return { ...next, formerNames: { ...next.formerNames, inboxes: { cue: { name: 'rgc/gmail', id: IBX_B } } } };
+    }),
+    isError('CONFIG', /points the former name "cue" at a different account/),
+  );
+});
+
+test('a migration that forges, omits or adds a former name is refused', async () => {
+  const store = storeWith(machine());
+  const plan = ready(planNamesMigration(await store.load()));
+  const tamper =
+    (edit: (formerNames: ConfigV2['formerNames']) => void) =>
+    (config: ConfigV1): ConfigV2 => {
+      const next = applyNamesMigration(config, plan.rows);
+      edit(next.formerNames);
+      return next;
+    };
+  const cases: Array<[string, (formerNames: ConfigV2['formerNames']) => void]> = [
+    ['omitted', (f) => delete f.inboxes.cue],
+    ['forged', (f) => Object.assign(f.inboxes, { cue: { name: 'gmail/gmail', id: 'ibx_GGGGGGGGGGGGGGGG' } })],
+    ['extra', (f) => Object.assign(f.inboxes, { ghost: { name: 'cue/gmail', id: 'ibx_CCCCCCCCCCCCCCCC' } })],
+  ];
+  for (const [label, edit] of cases) {
+    await assert.rejects(store.migrateNames(plan.fingerprint, tamper(edit)), isError('CONFIG'), label);
+  }
+  assert.equal(JSON.parse(readFileSync(store.path, 'utf8')).version, 1);
 });
 
 // ── The classifier ───────────────────────────────────────────────────────────────────────────────────────────────

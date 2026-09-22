@@ -8,8 +8,8 @@ schema requires it. `cue/gmail` is the CUE++ mailbox, `cue/slack` the CUE++ work
 Wherefrom mailbox. A name says which organisation an account belongs to and what it is, and the schema makes sure
 the second half is true.
 
-> **Revised three times on 2026-09-22 after design reviews.** The first found nine P1s and three P2s; the second,
-> five P1s and four P2s; the third, three P1s. The shape of the design is unchanged; what changed is everything that has to be true for it to
+> **Revised four times on 2026-09-22 after design reviews.** The first found nine P1s and three P2s; the second,
+> five P1s and four P2s; the third, three P1s; the fourth, one. The shape of the design is unchanged; what changed is everything that has to be true for it to
 > be safe: separate schemas per config version, a whole-config check between preview and apply, per-kind permanent
 > tombstones, credential writes that survive a write committing and then reporting failure, every creation and
 > lookup path by name, and **two releases** — readers first, the writer only once every reader is installed.
@@ -94,6 +94,15 @@ formerNames: {
   a grammar-valid name for a later account, and a lookup of it would silently act on the wrong mailbox.
 - **Chains collapse.** `cue` → `cue/gmail` → `cue/gmail-main` leaves `cue` pointing at `cue/gmail-main`, never at
   another tombstone.
+- **They follow a re-authorisation.** A Slack reauth mints a new account id on purpose, so the new credential can be
+  staged beside the old one. A tombstone still holding the old id would then report the workspace as removed while
+  it is connected. So the reauth's config write re-points every account tombstone holding the old id to the new
+  one (`retargetFormerNames`), in the same write that replaces the id.
+- **Enforced on every write, not only where names are proposed.** The schema refuses a live name that is a former
+  one; `ConfigStore.update` also compares the two sides of every version-2 write, because a single write that
+  deleted a record and reused its name would pass a check of the result alone. A record's key is never removed.
+  Its id may change only to follow a re-authorisation — from an id that has just disappeared to one that has just
+  appeared. Its `name` is only the fallback shown for a removed account and may change freely.
 
 ### Refusing a former name
 
@@ -287,9 +296,9 @@ only Gmail on npm is 0.1.4, which cannot read it.
 
 | Phase | Branch | What |
 |---|---|---|
-| N1 | `feat/names-core` | `ConfigV1`/`ConfigV2`, the union, `parseConfig` by version, the grammar, `resolveName`/`nameAvailable`, tombstones, `ConfigStore.migrateNames`, the classifier fallback, the shared by-id helper, loose nested defaults, the architecture test. **Still creates v1 configs; no command writes v2.** |
+| N1 | `feat/names-core` | `ConfigV1`/`ConfigV2`, the union, `parseConfig` by version, the grammar, `resolveName`/`nameAvailable`, tombstones, `ConfigStore.migrateNames` (requiring exactly one correct tombstone per old name), tombstone permanence in `ConfigStore.update`, `retargetFormerNames`, the classifier fallback, the shared by-id helper, loose nested defaults, the architecture test. **Still creates v1 configs; no command writes v2.** |
 | N2 | `feat/names-gmail` | Every Gmail lookup and creation path on the helpers; removal under the credentials lock with reconciliation; add reconciliation; reauth by id under the credentials lock; `doctor` re-checking orphan records; import; nested downloads — all v2-ready. **No public v2 writer.** |
-| N3 | `feat/names-slack` | Every Slack path on the helpers; removal by id; v2-ready. **No public v2 writer.** |
+| N3 | `feat/names-slack` | Every Slack path on the helpers; removal by id; reauth re-pointing tombstones to the new id; v2-ready. **No public v2 writer.** |
 | R1 | — | **Reader release, 0.2.0:** core, gmail and gmail-mcp through `scripts/release.mjs`, the owner confirming the publish. Reads v1 and v2, writes v1, has no migrate command. A partial publish is harmless: nothing in it writes v2. |
 | N4 | `feat/names-flip` | New configs start at v2; `agentcomms names migrate` is exposed; skills, docs and the generated reference use the new names; the setup prompt for a second computer is updated. |
 | R2 | — | **Writer release, 0.3.0,** once every reader on every machine is at 0.2.0 or later. A partial publish is harmless here too: every reader it could reach already reads v2. Then the rollout. |
@@ -335,7 +344,9 @@ After **R2**, on each machine:
   refused with nothing applied — a renamed row, and separately a change to nothing but a policy or a domain list; idempotent on v2; retry after a committed write whose lock release failed; secrets
   untouched.
 - **Tombstones:** a former name refused with its replacement on every lookup path, table-driven; reuse refused on
-  add, rename, import and migration; chains collapsed; a removed account's tombstone not pointing elsewhere.
+  add, rename, import and migration; chains collapsed; a removed account's tombstone not pointing elsewhere; a write
+  that forgets a tombstone, or forgets one and reuses its name, refused; migrate → Slack reauth → the former name
+  still refused with the workspace's current name.
 - **Concurrency:** migration against Gmail removal, Slack removal, Gmail add and reauth, Slack add and reauth,
   `secrets migrate`, and an old v1 writer.
 - **Committed-then-rejected writes:** for Gmail removal, Gmail add and each import write — a rejection before the

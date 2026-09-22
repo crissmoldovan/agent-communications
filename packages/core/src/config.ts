@@ -254,9 +254,7 @@ const defaultsSchema = z.looseObject({
   attachDeny: z.array(z.string()).default([]),
   downloadsDir: z.string().optional(),
   timezone: z.string().default('system'),
-  confirm: z
-    .looseObject({ elicitationClients: z.array(z.string()).default([]) })
-    .default({ elicitationClients: [] }),
+  confirm: z.looseObject({ elicitationClients: z.array(z.string()).default([]) }).default({ elicitationClients: [] }),
 });
 
 export const RESERVED_ALIASES: ReadonlySet<string> = new Set(['all']);
@@ -605,6 +603,14 @@ export class ConfigStore {
           `refusing to write invalid config: ${describeIssues(parsed.error, current.version)}`,
         );
       }
+      if (current.version === 2 && parsed.data.version === 2) {
+        const dropped = formerNamesDropped(current, parsed.data);
+        if (dropped !== null) {
+          throw new CommsError('CONFIG', `refusing to write a config that ${dropped}`, {
+            hint: 'Former names are permanent. This is a bug — please report it.',
+          });
+        }
+      }
       const { loosened } = classifyChange(current, parsed.data);
       const allowed = new Set(options.consent?.paths ?? []);
       const unconsented = loosened.filter((path) => !allowed.has(path));
@@ -670,8 +676,32 @@ export class ConfigStore {
 }
 
 /**
- * Null when `after` is `before` with only account keys changed — plus the version and the record of former names —
- * or a description of the first other difference.
+ * Null when every former name in `before` is still in `after`, or a description of the first that is not.
+ *
+ * The schema checks that no live name is a former one, but only in the config it is given — so a single write that
+ * deleted a record and reused its name would pass it. This compares the two sides. A record's key is permanent. Its
+ * id may change only to follow a re-authorisation, which mints a new id for the same account: from an id that has just
+ * gone to one that has just arrived. Its `name` is only the fallback shown when the account has been removed, so it
+ * may change freely.
+ */
+function formerNamesDropped(before: ConfigV2, after: ConfigV2): string | null {
+  for (const map of ['inboxes', 'accounts'] as const) {
+    const idsBefore = new Set(Object.values(before[map]).map((row) => row.id));
+    const idsAfter = new Set(Object.values(after[map]).map((row) => row.id));
+    for (const [key, record] of Object.entries(before.formerNames[map])) {
+      const now = Object.hasOwn(after.formerNames[map], key) ? after.formerNames[map][key] : undefined;
+      if (!now) return `forgets the former name "${key}"`;
+      if (now.id === record.id) continue;
+      const followsRotation = !idsAfter.has(record.id) && idsAfter.has(now.id) && !idsBefore.has(now.id);
+      if (!followsRotation) return `points the former name "${key}" at a different account`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Null when `after` is `before` with only account keys changed — plus the version, and exactly one record of each
+ * former name naming where it went — or a description of the first other difference.
  */
 function onlyKeysRenamed(before: ConfigV1, after: ConfigV2): string | null {
   for (const map of ['inboxes', 'accounts'] as const) {
@@ -680,6 +710,17 @@ function onlyKeysRenamed(before: ConfigV1, after: ConfigV2): string | null {
     if (now.length !== was.size) return `the number of ${map} changed`;
     for (const row of now) {
       if (was.get(row.id) !== canonicalJson(row)) return `${map} row ${row.id} changed`;
+    }
+    // Every old key recorded once, pointing at the key its account has now — no forgeries, no omissions, no extras.
+    const keyOf = new Map(Object.entries(after[map]).map(([key, row]) => [row.id, key]));
+    const records = after.formerNames[map];
+    if (Object.keys(records).length !== Object.keys(before[map]).length)
+      return `the former ${map} are not one per name`;
+    for (const [alias, row] of Object.entries(before[map])) {
+      const record = Object.hasOwn(records, alias) ? records[alias] : undefined;
+      if (!record || record.id !== row.id || record.name !== keyOf.get(row.id)) {
+        return `the former name "${alias}" is wrong`;
+      }
     }
   }
   const { version: _v1, inboxes: _i1, accounts: _a1, ...restBefore } = before;

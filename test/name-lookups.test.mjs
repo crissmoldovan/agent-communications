@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { readdir, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { extname, join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -73,28 +74,54 @@ export function countLookups(source) {
   return withoutComments(source).match(NAME_LOOKUP)?.length ?? 0;
 }
 
-test('nothing outside core looks an account up by name except through the helpers', async () => {
-  const packages = await readdir(join(ROOT, 'packages'));
+/** Every package's `src/` under `root`, checked against the allowlist and the not-yet-moved counts. */
+async function scan(root, allowed, notYetMoved) {
   const counts = new Map();
-  for (const name of packages) {
-    for (const file of await sourceFiles(join(ROOT, 'packages', name, 'src')).catch(() => [])) {
+  for (const name of await readdir(join(root, 'packages'))) {
+    for (const file of await sourceFiles(join(root, 'packages', name, 'src')).catch(() => [])) {
       const count = countLookups(await readFile(file, 'utf8'));
-      if (count > 0) counts.set(relative(ROOT, file), count);
+      if (count > 0) counts.set(relative(root, file), count);
     }
   }
-
   const unexpected = [];
   for (const [file, count] of counts) {
-    if (ALLOWED.includes(file)) continue;
-    const allowed = NOT_YET_MOVED[file] ?? 0;
-    if (count > allowed) unexpected.push(`${file}: ${count} (expected at most ${allowed})`);
+    if (allowed.includes(file)) continue;
+    const limit = notYetMoved[file] ?? 0;
+    if (count > limit) unexpected.push(`${file}: ${count} (expected at most ${limit})`);
   }
-  assert.deepEqual(unexpected, [], 'look names up with resolveName / nameAvailable from @agentcomms/core');
-
-  const stale = Object.entries(NOT_YET_MOVED)
+  const stale = Object.entries(notYetMoved)
     .filter(([file, expected]) => (counts.get(file) ?? 0) < expected)
     .map(([file, expected]) => `${file}: ${counts.get(file) ?? 0} (listed as ${expected})`);
+  return { unexpected, stale };
+}
+
+test('nothing outside core looks an account up by name except through the helpers', async () => {
+  const { unexpected, stale } = await scan(ROOT, ALLOWED, NOT_YET_MOVED);
+  assert.deepEqual(unexpected, [], 'look names up with resolveName / nameAvailable from @agentcomms/core');
   assert.deepEqual(stale, [], 'a lookup was moved onto the helpers — lower its count here, or remove the file');
+});
+
+test('the scan finds a lookup planted in a package it has never seen, and a count that went down', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'name-lookups-'));
+  try {
+    const write = async (path, text) => {
+      await mkdir(join(root, path, '..'), { recursive: true });
+      await writeFile(join(root, path), text);
+    };
+    await write(join('packages', 'core', 'src', 'config.ts'), 'const a = config.inboxes[name];');
+    await write(join('packages', 'newcomer', 'src', 'deep', 'lookup.ts'), 'export const b = (c, n) => c.accounts[n];');
+    await write(join('packages', 'old', 'src', 'moved.ts'), 'export const nothing = 1;');
+    await write(join('packages', 'newcomer', 'node_modules', 'x', 'src', 'dep.ts'), 'c.inboxes[n];');
+
+    const allowed = [join('packages', 'core', 'src', 'config.ts')];
+    const { unexpected, stale } = await scan(root, allowed, { [join('packages', 'old', 'src', 'moved.ts')]: 1 });
+    assert.deepEqual(unexpected, [
+      `${join('packages', 'newcomer', 'src', 'deep', 'lookup.ts')}: 1 (expected at most 0)`,
+    ]);
+    assert.deepEqual(stale, [`${join('packages', 'old', 'src', 'moved.ts')}: 0 (listed as 1)`]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('the scan finds the shapes it claims to, and leaves list indexing alone', () => {

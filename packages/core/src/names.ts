@@ -209,6 +209,24 @@ export function renameEntry<C extends Config>(config: C, kind: NameKind, from: s
   return { ...config, [map]: renamed, formerNames: { ...config.formerNames, [map]: records } };
 }
 
+/**
+ * `config` with every former name that pointed at `fromId` pointed at `toId` instead.
+ *
+ * For a re-authorisation that mints a new id for the same account — Slack's does, so the new credential can be staged
+ * beside the old one. Without this, the account's old names would point at an id that no longer exists and be
+ * reported as belonging to a removed account while it is still connected. Called in the same config write that
+ * replaces the id; `ConfigStore.update` allows exactly this change and no other to a former name's id.
+ */
+export function retargetFormerNames<C extends Config>(config: C, kind: NameKind, fromId: string, toId: string): C {
+  if (config.version !== 2) return config;
+  const map = MAP[kind];
+  const records: FormerNames[typeof map] = {};
+  for (const [key, record] of Object.entries(config.formerNames[map])) {
+    records[key] = record.id === fromId ? { ...record, id: toId } : record;
+  }
+  return { ...config, formerNames: { ...config.formerNames, [map]: records } };
+}
+
 export interface NamesMigrationRow {
   kind: NameKind;
   from: string;
