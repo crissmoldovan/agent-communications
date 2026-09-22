@@ -288,6 +288,21 @@ distinct `acc_` / `ibx_` prefixes mean an id alone still says which it is.
 > `docs/reference/cli.md` is generated from `packages/gmail` only. Extending the generator to a second CLI is
 > S7's, with the packaging — a reference page that tells people to install an unpublished package would be worse
 > than one that does not mention it.
+>
+> **Three things the S2 review raised and S2 deliberately did not do.**
+>
+> *Wiring `accessTokenFor` into a transport* is S3's, because S3 is where the transport is. The rotation logic
+> ships now because the credential shape it rotates ships now, and designing one a phase after the other is how
+> you discover the shape is wrong.
+>
+> *Scanning client configurations for other Slack MCP servers* needs an MCP server to scan for, which arrives
+> with the MCP surface. Until then `doctor` reports that check as not performed rather than as clear.
+>
+> *A durable transaction journal across the secret store and the config* was proposed for the window between
+> writing a credential and pointing at it. Declined: the window is now closed by a compare-and-swap inside the
+> config lock, the credential written into a failed attempt is deleted, and the one remaining leak — a keychain
+> that refuses to delete a superseded token — expires on its own within thirty days. A journal would add a
+> third durable thing to keep consistent with the other two, to shorten a bounded leak nobody has observed.
 
 Each phase follows the Gmail pattern: a branch, tests, a review round, a squash-merge. One change to that pattern,
 learned the hard way: **reviewers and auditors that are agents run in their own git worktree.** They share the
