@@ -26,6 +26,11 @@ Three packages and twelve skills.
   sanitiser. Provider-neutral, so the next platform reuses it.
 - **Twelve skills** that teach an agent how to use all of it well, and where to stop.
 
+There is a fourth directory, `packages/slack`, and it is deliberately not in that list: it is being
+built and is not published, so there is nothing to install yet. It signs in to a workspace and
+reports on it; reading, drafting and posting come later. The design is in
+[`docs/superpowers/specs/2026-09-19-slack-design.md`](docs/superpowers/specs/2026-09-19-slack-design.md).
+
 ## How the send gate works
 
 ```

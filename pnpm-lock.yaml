@@ -122,6 +122,19 @@ importers:
         specifier: 2.1.0
         version: 2.1.0
 
+  packages/slack:
+    devDependencies:
+      '@agentcomms/core':
+        specifier: workspace:*
+        version: link:../core
+      commander:
+        specifier: ^15.0.0
+        version: 15.0.0
+    optionalDependencies:
+      '@napi-rs/keyring':
+        specifier: 2.1.0
+        version: 2.1.0
+
 packages:
 
   '@biomejs/biome@2.5.14':

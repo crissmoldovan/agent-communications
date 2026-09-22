@@ -422,3 +422,47 @@ test('a zero-byte or corrupt lock is taken over by its age, not left to wedge th
     'a lock younger than staleMs is never taken over, body or no body',
   );
 });
+
+test('a renewing holder that runs past the stale window is not overtaken', async () => {
+  /*
+   * Staleness was judged from a time written once, at acquisition. A holder still working past `staleMs` — a
+   * migration of many credentials, each waiting on a keychain — could be taken over mid-operation, recreating the
+   * race the lock exists to prevent. Scaled down: a 150ms stale window, renewed every 40ms, held for 500ms.
+   */
+  const path = join(tempDir(), 'held.lock');
+  const events: string[] = [];
+  const first = withFileLock(
+    path,
+    async () => {
+      events.push('first:start');
+      await new Promise((settle) => setTimeout(settle, 500));
+      events.push('first:end');
+    },
+    { staleMs: 150, renewMs: 40 },
+  );
+  await new Promise((settle) => setTimeout(settle, 250)); // past the stale window, while the first still holds
+  const second = withFileLock(
+    path,
+    async () => {
+      events.push('second:start');
+    },
+    { staleMs: 150, timeoutMs: 2_000 },
+  );
+  await Promise.all([first, second]);
+  assert.deepEqual(events, ['first:start', 'first:end', 'second:start'], 'a live holder was overtaken');
+});
+
+test('a holder that stopped renewing is still taken over, so a crash does not wedge the lock', async () => {
+  // The other half: renewal must not make a dead holder immortal. A lock file nobody is touching goes stale.
+  const path = join(tempDir(), 'abandoned.lock');
+  writeFileSync(path, JSON.stringify({ pid: 999_999, at: new Date(Date.now() - 1_000).toISOString(), token: 'gone' }));
+  let ran = false;
+  await withFileLock(
+    path,
+    async () => {
+      ran = true;
+    },
+    { staleMs: 150, timeoutMs: 2_000 },
+  );
+  assert.equal(ran, true);
+});

@@ -41,7 +41,7 @@ That produces the central design decision:
 | Mode | Scopes | Who enforces "cannot post" | What the agent can do |
 |---|---|---|---|
 | **`read`** (default) | history, read, `users:read`, `files:read`, `search:read` | **Slack.** The token physically cannot post | Read, search, analyse, and compose drafts held locally. To send, the person copies from the preview, or re-installs in `send` mode |
-| **`send`** | the above plus `chat:write` | **Us**, exactly as for Gmail | Everything, with the approval gate between a draft and `chat.postMessage` |
+| **`send`** | the above plus `chat:write`, `files:write`, `reactions:write` | **Us**, exactly as for Gmail | Everything, with the approval gate between a draft and `chat.postMessage` |
 
 `agent-slack workspace add --mode read` is the default and what the setup skill recommends. Moving a workspace
 from `read` to `send` is a **re-installation** — a new OAuth grant a person must approve in Slack's own UI, which
@@ -176,15 +176,32 @@ messages per request, which is unusable. Marketplace approval restores Tier 3 bu
 requires ten installs before review. **Internal customer-built apps are exempt** and may use Socket Mode.
 
 So we do not distribute a Slack app. We ship a **manifest** and the setup skill walks a person through creating
-their own app from it — which is three screens and a paste. The manifest exists in two forms, `read` and `send`,
-and the skill shows which scopes each asks for and what each one permits.
+their own app from it — three screens and one paste. The manifest exists in two forms, `read` and `send`, and the
+skill shows which scopes each asks for and what each one permits.
+
+**The paste is the app's Client ID, which is not a secret, and that is the whole of it.** The token arrives
+through a real OAuth flow: the manifests opt into **PKCE**, which lets the authorisation redirect land on
+`http://127.0.0.1:<port>/` — "Redirects to `localhost` … are treated as desktop redirects if the app has opted
+into PKCE" — and the exchange then carries no `client_secret` at all.
+
+> **Corrected 2026-09-22, before S2 was written.** This section previously implied the person pastes a *token*,
+> because the research said a redirect URI "must be HTTPS" and that was read as ruling out a local listener. It
+> does not: it is true of the confidential-client flow and false for PKCE. The design review caught it while S2
+> was still a plan. A token paste would have been a worse install — the token on a web page, through the
+> clipboard — and would have put a client secret on disk for the rotation exchange. Neither is needed.
+> See research §1.4a.
 
 Consequences to document rather than hide:
 
 - A corporate workspace may require admin approval to install any app. The setup skill says so up front, because
   finding out at step nine is worse.
 - Slack has twice announced and twice silently withdrawn a date for sweeping existing installs into the rate cap.
-  The doctor command checks the observed rate-limit tier and says if it has changed.
+  `doctor` reports the tier as **expected versus observed**: expected Tier 3, because an internal customer-built
+  app is exempt, and observed from evidence ordinary reads have already produced — a 429 with its `Retry-After`,
+  or a page that came back smaller than the `limit` asked for. It does **not** probe for it. Slack publishes no
+  remaining/limit headers and states burst tolerance deliberately loosely, so the only way to observe the cap is
+  to spend the budget being measured, and a diagnostic that degrades the thing it diagnoses is worse than one
+  that says "not yet observed". The evidence is collected by the transport from S3 onwards.
 
 ### D9 — Socket Mode for events, polling as the fallback
 
@@ -243,12 +260,81 @@ distinct `acc_` / `ibx_` prefixes mean an id alone still says which it is.
 | Phase | Branch | What |
 |---|---|---|
 | S1 | `feat/slack-core` | `@agentcomms/core` changes: the canonical-message union, the additive `accounts` config, the channel preview renderer, taint for ids |
-| S2 | `feat/slack-auth` | `@agentcomms/slack`: the two manifests, OAuth with token rotation, `workspace add/list/show/remove/reauth`, `doctor`, the transport with its method allowlist |
+| S2 | `feat/slack-auth` | `@agentcomms/slack`: the two manifests, **PKCE loopback OAuth** (no client secret) with token rotation, scope validation before anything is stored, `workspace add/list/show/remove/reauth`, `doctor`, the CLI entry point, the transport with its method allowlist and Slack-origin check |
 | S3 | `feat/slack-read` | Conversations, history, threads, search, users, files; the body pipeline with unfurl labelling and text/blocks reconciliation |
 | S4 | `feat/slack-compose` | Local drafts, the block composer, the preview with its notification count |
 | S5 | `feat/slack-send` | The gate: prepare, approve, post; the four guarded doors; reactions at lower ceremony |
 | S6 | `feat/slack-skills` | The skills, sharing the contract; the drift test extended; and **an audit of every skill document against the code it describes** before merge (§10) |
-| S7 | `release/slack` | Packaging and manifests, then the release through `scripts/release.mjs` and the repo's `release` skill — from a person's machine, not CI (§10) |
+| S7 | `release/slack` | Packaging and manifests, the package README and the generated CLI reference page, then the release through `scripts/release.mjs` and the repo's `release` skill — from a person's machine, not CI (§10) |
+
+> **S2 landed 2026-09-22.** Three things about it are worth carrying forward.
+>
+> **The port is chosen before the sign-in, not by the OS.** Slack stores redirect URLs on the app and matches
+> them exactly, so `manifest --port` and `workspace add --port` must be the same number, and the manifest help
+> prints the command that uses it. This is the one place the package deliberately diverges from Gmail, which
+> takes whatever port it is handed.
+>
+> **A reauth stages the new credential under a new account id** rather than overwriting the old reference. The
+> mode can change across a reauth, so an overwrite would open a window where the configuration says `read` while
+> the credential behind it can post. The Gmail package overwrites, and has the same window; that is not fixed
+> here.
+>
+> **Three things are still unverified against a real workspace**: whether the exchange endpoint is
+> `oauth.v2.access` or `oauth.v2.user.access`; whether `token_rotation_enabled` in the manifest actually enables
+> rotation, or whether that is an app-settings toggle only; and whether Slack accepts `127.0.0.1` as well as
+> `localhost`. The code takes the documented answer in each case and says so at the point it does.
+>
+> It was four. The fourth — how an app opts into PKCE — was documented all along, as
+> `oauth_config.pkce_enabled`, and the manifest was omitting it. The app S2 printed could not have completed a
+> single sign-in, because "if the app has never enabled PKCE, [localhost redirects] will be treated like a
+> server redirect". It was recorded as unknown because a first pass over the docs did not find it, and that was
+> written down as a fact about Slack rather than about the search.
+>
+> One ten-minute sign-in settles all four, and the checklist is
+> [`docs/research/2026-09-22-slack-live-verification.md`](../../research/2026-09-22-slack-live-verification.md) —
+> what to run, what each outcome means, and which line to change for each answer. **S3 is what this blocks, not
+> S2.** S2 is the sign-in machinery and it is complete; S3 is the first phase that reads Slack, and building it
+> on four unverified assumptions means discovering them through S3's bugs.
+>
+> `docs/reference/cli.md` is generated from `packages/gmail` only. Extending the generator to a second CLI is
+> S7's, with the packaging — a reference page that tells people to install an unpublished package would be worse
+> than one that does not mention it.
+>
+> **Three things the S2 review raised and S2 deliberately did not do.**
+>
+> *Wiring `accessTokenFor` into a transport* is S3's, because S3 is where the transport is. The rotation logic
+> ships now because the credential shape it rotates ships now, and designing one a phase after the other is how
+> you discover the shape is wrong.
+>
+> *Scanning client configurations for other Slack MCP servers* needs an MCP server to scan for, which arrives
+> with the MCP surface. Until then `doctor` reports that check as not performed rather than as clear.
+>
+> **An S3 prerequisite the S2 review surfaced: token refresh and `secrets migrate` must serialize.** Migration
+> copies credentials outside the config lock and compares only the backend and the *set* of references before
+> switching. A refresh writes a new value under the *same* reference, so one landing mid-migration passes that
+> check, the switch activates the stale copy, and the migration then deletes the fresh original. Slack refresh
+> tokens are single-use, so the stale one is already spent and the workspace needs re-authorising.
+>
+> It cannot happen in S2: the only Slack writes to an existing reference are in `auth/refresh.ts`, reachable
+> only through `accessTokenFor`, which nothing calls yet — every sign-in writes to a fresh reference. It becomes
+> real the moment S3's transport calls `accessTokenFor`. **The lock now exists**: `withCredentialsLock` in
+> `@agentcomms/core`, which `secrets migrate` and `workspace remove` hold from reading the configuration to their
+> last write. It renews itself while held, because a fixed stale window is one a long migration can outlast. It went in
+> during S2 because two *opposite* migrations could already interleave and leave a credential in neither backend.
+> S3's refresh must take the same lock around its read-rotate-write before `accessTokenFor` is wired to
+> anything — rather than a value re-check that narrows the window without closing it and would read as a fix.
+> **Gmail is exposed to the same race today** — an inbox reauth rewrites its reference in place without this
+> lock — and that is a shipped-package change, not this phase's.
+>
+> Found on the way, also not this phase's: `agentcomms secrets migrate --to file` is always refused on an install
+> that already records the keychain. Moving secrets into plain files is correctly a loosening, and the command
+> gathers no consent, so it cannot do half of what its help says. Safe by accident rather than by design.
+>
+> *A durable transaction journal across the secret store and the config* was proposed for the window between
+> writing a credential and pointing at it. Declined: the window is now closed by a compare-and-swap inside the
+> config lock, the credential written into a failed attempt is deleted, and the one remaining leak — a keychain
+> that refuses to delete a superseded token — expires on its own within thirty days. A journal would add a
+> third durable thing to keep consistent with the other two, to shorten a bounded leak nobody has observed.
 
 Each phase follows the Gmail pattern: a branch, tests, a review round, a squash-merge. One change to that pattern,
 learned the hard way: **reviewers and auditors that are agents run in their own git worktree.** They share the
@@ -287,6 +373,27 @@ They are the smallest useful write, and that is exactly why they belong in the f
 exercised on something where a mistake costs embarrassment rather than money, before anybody trusts it with a
 message. Under `chat`, naming the emoji and the message and waiting for a yes is proportionate. Under `confirm`,
 the same typed approval as a message — because a reaction from the user's account is still the user speaking.
+
+### D14 — keyword search on the legacy scope, knowingly
+
+Slack labels `search:read` **legacy** and points AI-enabled apps at Real-time Search — `assistant.search.context`
+with granular `search:read.public`, `search:read.private`, `search:read.im`, `search:read.mpim` scopes. Internal
+customer-built apps, which is what D8 makes this, are eligible for it.
+
+v1 keeps `search:read` anyway, and this is a decision rather than an oversight. Three reasons:
+
+1. **The two return different things.** `search.messages` returns messages, which is the shape every downstream
+   piece of this design is written against — S3's search, the citation rules, the skills. `assistant.search.context`
+   returns assistant *context*. Adopting it is not a manifest edit; it is a different S3.
+2. **The research could not verify its behaviour end to end**, and §3.4 records a bot-token `action_token`
+   requirement whose user-token equivalent is unestablished. D13 refused to build on an unverified subscription
+   for exactly this reason; the same restraint applies here.
+3. **Legacy is not withdrawn.** It is documented and working, and the cost of being wrong is bounded: one
+   re-authorisation, which `doctor` can warn about before it is forced.
+
+The cost is stated rather than discovered: **changing this later forces every connected workspace to
+re-authorise**, because the scope set lives in the manifest the person installed. That is the price of picking
+either one now, and it is why this is settled in S2 rather than deferred to S3.
 
 ### D13 — no Socket Mode in v1
 

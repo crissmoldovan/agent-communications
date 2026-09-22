@@ -1,0 +1,46 @@
+{
+  "name": "@agentcomms/slack",
+  "version": "0.1.2",
+  "description": "Slack for coding agents: the agent-slack CLI, an MCP server and a library \u2014 read, search and analyse conversations across workspaces, with posting gated by approval.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "author": "Criss Moldovan",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/crissmoldovan/agent-communications.git",
+    "directory": "packages/slack"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "bin": {
+    "agent-slack": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_LICENSES"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --experimental-strip-types --test --test-timeout=60000 \"test/**/*.test.ts\""
+  },
+  "optionalDependencies": {
+    "@napi-rs/keyring": "2.1.0"
+  },
+  "devDependencies": {
+    "@agentcomms/core": "workspace:*",
+    "commander": "^15.0.0"
+  }
+}

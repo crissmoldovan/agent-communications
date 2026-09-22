@@ -110,9 +110,15 @@ Source: <https://docs.slack.dev/authentication/tokens>
 ### 1.4 The OAuth flow
 
 Authorisation URL: `https://slack.com/oauth/v2/authorize` with `client_id`, `scope` (bot scopes),
-`user_scope` (user scopes), `redirect_uri` (must be HTTPS) and optional `state`. Slack redirects
-back with a temporary `code`, which the backend exchanges at `oauth.v2.access` using
+`user_scope` (user scopes), `redirect_uri` and optional `state`. Slack redirects back with a
+temporary `code`, which the backend exchanges at `oauth.v2.access` using
 `client_id` + `client_secret`.
+
+> **Correction, 2026-09-22.** This section originally said `redirect_uri` "must be HTTPS". That is
+> true for the confidential-client flow described here and **false in general** — see §1.4a. The
+> error was load-bearing: it was read as meaning a local CLI cannot receive a redirect at all,
+> which is the opposite of what the platform supports, and it nearly put a token paste at the
+> centre of the Slack design.
 
 The response contains `access_token` (the **bot** token), `bot_user_id`, `scope`, `team`,
 `enterprise` (if applicable), and an `authed_user` object which carries the **user** token and its
@@ -126,6 +132,67 @@ half of the response is then empty. This is directly relevant to §2.
 For a single-workspace app installed by its own developer, none of this is needed — the token is
 issued by the "Install to Workspace" button and read out of app settings.
 Source: <https://docs.slack.dev/distribution/>
+
+### 1.4a PKCE, and why a local CLI *can* take the redirect
+
+**A PKCE-enabled app may redirect to `http://localhost`.** Verbatim: "Redirects to `localhost`
+(e.g. `http://localhost:8080/auth`) are treated as desktop redirects if the app has opted into
+PKCE." So the loopback pattern the Gmail side uses is available here too, and the HTTPS
+requirement in §1.4 does not apply to it.
+
+**No client secret.** For the PKCE exchange the client "should call the `oauth.v2.access` API
+method, but should not include `client_secret` in the parameters." That removes the thing a local
+install should never have been asked to hold: nothing secret is distributed, and the only value a
+person pastes is the app's **Client ID**, which is not a secret.
+
+**The authorisation request** goes to the same `https://slack.com/oauth/v2/authorize`, with
+`client_id`, `user_scope`, `redirect_uri`, `code_challenge` and `code_challenge_method`. "The only
+supported hashing algorithm for now is SHA-256", and the challenge is that hash in "URL-Safe
+Base64 format (RFC 4648 §5)" — so `code_challenge_method` is `S256`.
+
+**Bot scopes are excluded from this route:** "Desktop redirects are not allowed to request bot
+scopes." That is a constraint the design already meets rather than a problem, because §1.3
+concluded a user token is the right one for an agent acting on one person's behalf.
+
+**Two token endpoints are documented and both accept `code_verifier`:** `oauth.v2.access` (named
+by the PKCE page) and `oauth.v2.user.access`, which is "used to initiate the OAuth flow using just
+user scopes (no bot scopes)" and also takes `refresh_token`. Which of the two to call for a
+user-scope-only PKCE app is **not settled by the documentation alone** and must be confirmed
+against a real workspace before anything depends on it.
+
+**Refresh tokens expire after 30 days on a PKCE app.** Verbatim: "all refresh tokens issued to your app will
+expire in 30 days instead of lasting indefinitely." This is *not* the 12-hour access-token expiry of §1.5; it is
+the refresh token itself. A workspace nothing has touched for a month therefore needs a new authorisation, and
+the design has to say so before the month passes rather than after.
+
+**`localhost`, not `127.0.0.1`.** The promise is made about one spelling: "Redirects to `localhost` (e.g.
+`http://localhost:8080/auth`) are treated as desktop redirects". Nothing on the page extends it to the literal
+address. This matters because the Gmail side deliberately uses `127.0.0.1` — `localhost` can resolve to whatever
+a name service says, which is the reason to avoid it — so the two packages will differ here, and the reason is
+that Slack documents one and not the other. Verify against a real workspace before the manifests are fixed.
+
+**How an app opts into PKCE: `oauth_config.pkce_enabled`.** *Corrected 2026-09-22.* An earlier pass over
+this page concluded the switch was undocumented and recorded it as the phase's one real unknown. It is
+documented in two places. The PKCE guide gives `"pkce_enabled": true` under `oauth_config` and says the
+same setting is in the app settings UI, "under the **OAuth & Permissions** sidebar section"; the app
+manifest reference lists `pkce_enabled` as "A boolean that specifies whether or not PKCE is enabled for
+the OAuth flow", under `oauth_config` alongside `redirect_urls`, `scopes` and `token_management_enabled`.
+
+What its absence costs is stated outright, and is why this matters more than a missing nicety: "If the
+app has never enabled PKCE, [localhost redirects] will be treated like a server redirect." An app built
+without it cannot complete a single sign-in through this package.
+
+The lesson is about the record rather than the API: "no source found says where that switch is" is a
+claim about a search, and it was written down as though it were a claim about Slack. The S2 manifest
+now sets it, and a test fails if it is ever turned off.
+
+> **The remaining unknowns have a checklist.**
+> [`2026-09-22-slack-live-verification.md`](2026-09-22-slack-live-verification.md) says what to run,
+> what each outcome means and which line to change for each answer. Update this section with what was
+> observed, and the date, once it has been run.
+
+Sources: <https://docs.slack.dev/authentication/using-pkce/>,
+<https://docs.slack.dev/reference/methods/oauth.v2.user.access/>
 
 ### 1.5 Token rotation
 

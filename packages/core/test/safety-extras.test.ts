@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { parseAddressList } from '../src/addresses.ts';
 import {
   aliasConflicts,
+  type Config,
   ConfigStore,
   classifyChange,
   configSchema,
@@ -193,6 +194,46 @@ test('classifyChange: an inbox added with a looser policy than the default needs
   const added = structuredClone(ordinary);
   added.inboxes.work = inbox('ibx_AAAAAAAAAAAAAAAA');
   assert.deepEqual(classifyChange(ordinary, added).loosened, []);
+});
+
+/** A configuration holding one Slack workspace under `alias`, at `mode`, with the given account id. */
+function withWorkspace(alias: string, id: string, mode: string): Config {
+  return parseConfig(
+    JSON.stringify({
+      version: 1,
+      accounts: { [alias]: { ...accountFixture(id), tier: mode, mode } },
+    }),
+  );
+}
+
+test('classifyChange: re-authorising a read workspace as send is a loosening', () => {
+  /*
+   * `mode` is not a policy sitting in front of a token that could post; it is a claim that the token cannot.
+   * Renewing a `read` workspace as `send` replaces the credential with one that can, and nothing downstream
+   * undoes that.
+   *
+   * Matched by alias rather than id, because re-authorising deliberately mints a new account id so the new
+   * credential can be staged beside the old one. An id lookup finds nothing and reads every renewal as a
+   * brand-new account — which is exactly the case this must not miss.
+   */
+  const loosened = classifyChange(
+    withWorkspace('acme', 'acc_AAAAAAAAAAAAAAAA', 'read'),
+    withWorkspace('acme', 'acc_BBBBBBBBBBBBBBBB', 'send'),
+  ).loosened;
+  assert.deepEqual(loosened, ['accounts.acme.mode']);
+});
+
+test('classifyChange: narrowing a workspace, or connecting a new one, needs nobody’s consent', () => {
+  const send = withWorkspace('acme', 'acc_AAAAAAAAAAAAAAAA', 'send');
+
+  // send → read is a tightening.
+  assert.deepEqual(classifyChange(send, withWorkspace('acme', 'acc_BBBBBBBBBBBBBBBB', 'read')).loosened, []);
+
+  // Renewing a send workspace as send is not a change at all.
+  assert.deepEqual(classifyChange(send, withWorkspace('acme', 'acc_CCCCCCCCCCCCCCCC', 'send')).loosened, []);
+
+  // A name nobody has decided anything about: choosing `send` while connecting *is* the decision.
+  assert.deepEqual(classifyChange(emptyConfig(), withWorkspace('zed', 'acc_DDDDDDDDDDDDDDDD', 'send')).loosened, []);
 });
 
 test('classifyChange: a path that climbs back out is not inside the directory it starts in', () => {
@@ -475,4 +516,101 @@ test('config: a configuration whose only secrets are accounts still counts as ho
     }),
     /consent|loosen/i,
   );
+});
+
+test('classifyChange: a send policy loosened across an account id rotation is still a loosening', () => {
+  /*
+   * Re-authorising a Slack workspace mints a new account id on purpose. Matched by id alone, the renewed account
+   * was measured against the *default*, so `never` → `chat` across a reauth read as a new account arriving at
+   * the default. The alias is what the person set the policy on.
+   */
+  const before = parseConfig(
+    JSON.stringify({
+      version: 1,
+      accounts: { acme: { ...accountFixture('acc_AAAAAAAAAAAAAAAA'), sendPolicy: 'never' } },
+    }),
+  );
+  const after = parseConfig(
+    JSON.stringify({
+      version: 1,
+      accounts: { acme: { ...accountFixture('acc_BBBBBBBBBBBBBBBB'), sendPolicy: 'chat' } },
+    }),
+  );
+  assert.deepEqual(classifyChange(before, after).loosened, ['accounts.acme.sendPolicy']);
+});
+
+test('ConfigStore.update itself refuses a Slack widening, not only classifyChange', async () => {
+  /*
+   * Raised in review: the test elsewhere that claimed the config layer refused this only ever called
+   * `classifyChange`. That is a necessary condition for the refusal, not the refusal. A regression in how
+   * `update` treats entries under `accounts` — as opposed to `inboxes` and `defaults`, which the loop above
+   * covers — would have passed every test.
+   *
+   * Both account loosenings, each across an id rotation, because that is how a reauth writes them.
+   */
+  const store = new ConfigStore(tempDir());
+  const at = (id: string, over: Record<string, unknown>) =>
+    parseConfig(JSON.stringify({ version: 1, accounts: { acme: { ...accountFixture(id), ...over } } })).accounts
+      .acme as ReturnType<typeof emptyConfig>['accounts'][string];
+
+  await store.update((c) => ({
+    ...c,
+    accounts: { acme: at('acc_AAAAAAAAAAAAAAAA', { mode: 'read', sendPolicy: 'never' }) },
+  }));
+
+  const widened = (c: ReturnType<typeof emptyConfig>) => ({
+    ...c,
+    accounts: { acme: at('acc_BBBBBBBBBBBBBBBB', { mode: 'send', tier: 'send', sendPolicy: 'never' }) },
+  });
+  await assert.rejects(
+    store.update(widened),
+    (e: unknown) => e instanceof CommsError && e.code === 'LOOSENING_REFUSED' && /accounts\.acme\.mode/.test(e.message),
+  );
+
+  const relaxed = (c: ReturnType<typeof emptyConfig>) => ({
+    ...c,
+    accounts: { acme: at('acc_CCCCCCCCCCCCCCCC', { mode: 'read', sendPolicy: 'chat' }) },
+  });
+  await assert.rejects(
+    store.update(relaxed),
+    (e: unknown) =>
+      e instanceof CommsError && e.code === 'LOOSENING_REFUSED' && /accounts\.acme\.sendPolicy/.test(e.message),
+  );
+
+  // Nothing was written by either refusal, and a consented widening goes through.
+  assert.equal((await store.load()).accounts.acme?.id, 'acc_AAAAAAAAAAAAAAAA');
+  await store.update(widened, { consent: { kind: 'loosening-consent', paths: ['accounts.acme.mode'] } });
+  assert.equal((await store.load()).accounts.acme?.mode, 'send');
+});
+
+test('classifyChange: a different workspace taking the name is not a loosening of the one that left', () => {
+  /*
+   * The alias fallback over-reached. Replacing workspace A (set to `never`, `read`) with an unrelated workspace B
+   * (`chat`, `send`) under the same name read as B loosening A — a finding about a workspace B never had. A
+   * reauth keeps the platform, the workspace and the user; a replacement does not, and only the first is the
+   * same account.
+   */
+  const before = parseConfig(
+    JSON.stringify({
+      version: 1,
+      accounts: { acme: { ...accountFixture('acc_AAAAAAAAAAAAAAAA'), sendPolicy: 'never', mode: 'read' } },
+    }),
+  );
+  const replaced = parseConfig(
+    JSON.stringify({
+      version: 1,
+      accounts: {
+        acme: {
+          ...accountFixture('acc_BBBBBBBBBBBBBBBB'),
+          workspace: 'T_SOMEWHERE_ELSE',
+          userId: 'U_SOMEBODY_ELSE',
+          sendPolicy: 'chat',
+          mode: 'send',
+          tier: 'send',
+        },
+      },
+    }),
+  );
+  // Measured as the new account it is, against the default — which is `chat`, so no loosening.
+  assert.deepEqual(classifyChange(before, replaced).loosened, []);
 });

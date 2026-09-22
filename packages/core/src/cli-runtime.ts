@@ -1,5 +1,7 @@
+import { createInterface } from 'node:readline/promises';
 import { styleText } from 'node:util';
-import { type CommsError, EXIT_CODES, toCommsError } from './errors.ts';
+import { CommsError, EXIT_CODES, toCommsError } from './errors.ts';
+import { challengeMatches, hashChallenge, newChallenge } from './ids.ts';
 import { errorEnvelope, okEnvelope } from './output.ts';
 
 /**
@@ -99,4 +101,45 @@ export async function runCommand(
   } catch (error) {
     return writeError(error, options, streams);
   }
+}
+
+export interface ChallengeOptions {
+  /** One line saying what is about to change. */
+  prompt: string;
+  color: boolean;
+  /** Attempts before giving up. */
+  attempts?: number;
+}
+
+/**
+ * Asks a person at the terminal to type a short code back. It exists to make a change deliberate: an agent that can
+ * run commands can also type an answer, so this is a speed bump against an accidental or hasty change, never a
+ * security boundary — the real boundary is that agents are refused outright (see the agent-marker check).
+ *
+ * Here rather than in one package because two need it now, and a second copy of a consent prompt is a second set
+ * of wording, a second attempt count, and eventually two different ideas of what confirming something means.
+ */
+export async function askChallenge(streams: Streams, options: ChallengeOptions): Promise<void> {
+  const challenge = newChallenge();
+  // Only the hash is compared, in constant time, exactly as an approval challenge is.
+  const expected = hashChallenge(challenge);
+  const attempts = options.attempts ?? 3;
+  const rl = createInterface({
+    input: streams.stdin as NodeJS.ReadableStream,
+    output: streams.stderr as NodeJS.WritableStream,
+  });
+  try {
+    streams.stderr.write(`${options.prompt}\n`);
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      const answer = await rl.question(
+        `Type ${paint(options.color, 'bold', challenge)} to confirm (or press Enter to cancel): `,
+      );
+      if (answer.trim() === '') break;
+      if (challengeMatches(answer, expected)) return;
+      streams.stderr.write(`That did not match${attempt < attempts ? ', try again' : ''}.\n`);
+    }
+  } finally {
+    rl.close();
+  }
+  throw new CommsError('LOOSENING_REFUSED', 'the change was not confirmed, so nothing was changed');
 }

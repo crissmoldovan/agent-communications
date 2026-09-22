@@ -8,11 +8,13 @@ import { type Core, openCore } from './core.ts';
 import { CommsError } from './errors.ts';
 import { isGroupOrWorldAccessible } from './fs.ts';
 import { APPROVAL_KEY_REF } from './keys.ts';
+import { withCredentialsLock } from './lock.ts';
 import {
   keychainNamespace,
   loadKeyringModule,
   openSecretStore,
   probeKeychain,
+  type SecretStore,
   type SecretStoreKind,
 } from './secrets.ts';
 import { VERSION } from './version.ts';
@@ -126,41 +128,205 @@ async function doctor(core: Core): Promise<{ checks: Check[]; ok: boolean }> {
   return { checks, ok: checks.every((c) => c.ok) };
 }
 
+/**
+ * Every secret reference a configuration owns.
+ *
+ * Its own function, and exported, because the bug it exists to prevent is an omission — and an omission inside a
+ * larger function is invisible until a migration has already deleted the originals. It listed `clients` and
+ * `inboxes` and not `accounts`, so migrating a backend would have carried the mail credentials across and left
+ * every Slack workspace token on the old one: a total loss for one platform, found on the next call.
+ *
+ * Deduplicated, because two entries may legitimately share a ref and moving one twice would report it twice.
+ */
+export function secretRefsOf(config: Config): string[] {
+  return [
+    ...new Set([
+      ...Object.values(config.clients).map((client) => client.secretRef),
+      ...Object.values(config.inboxes).map((inbox) => inbox.secretRef),
+      ...Object.values(config.accounts).map((account) => account.secretRef),
+      APPROVAL_KEY_REF,
+    ]),
+  ];
+}
+
 /** Copies every secret the config references to another backend, verifies each, then records the new backend. */
-async function migrateSecrets(
+/** A credential this command put somewhere it did not mean to leave it, and could not take back. */
+export interface MigrationLeftover {
+  readonly backend: SecretStoreKind;
+  readonly ref: string;
+}
+
+export interface MigrationResult {
+  readonly from: SecretStoreKind;
+  readonly to: SecretStoreKind;
+  readonly moved: number;
+  /** Credentials still sitting in a backend nothing reads from. Empty is the only clean outcome. */
+  readonly leftovers: readonly MigrationLeftover[];
+}
+
+/**
+ * Deletes each reference from `store`, once more on failure, and returns the ones that would not go.
+ *
+ * A `false` from `delete` means nothing was there, which is the outcome wanted.
+ */
+async function takeBack(
+  store: SecretStore,
+  backend: SecretStoreKind,
+  refs: readonly string[],
+): Promise<MigrationLeftover[]> {
+  const leftovers: MigrationLeftover[] = [];
+  for (const ref of refs) {
+    let gone = false;
+    for (let attempt = 0; attempt < 2 && !gone; attempt++) {
+      gone = await store.delete(ref).then(
+        () => true,
+        () => false,
+      );
+    }
+    if (!gone) leftovers.push({ backend, ref });
+  }
+  return leftovers;
+}
+
+/**
+ * Copies every credential to another backend, verifies each, switches, then removes the originals.
+ *
+ * Every copy is tracked **before** it is written, not after. A keychain write can report a timeout and land
+ * anyway, so "the write threw" does not mean "nothing was written", and a copy tracked only once `set` returned
+ * was a copy nobody would ever clean up. Everything up to and including the switch sits inside one boundary that
+ * takes those copies back; and anything that will not go — a copy after a failed switch, an original after a
+ * successful one — is **reported**, rather than swallowed by a `catch(() => false)` under a result that said the
+ * migration had simply worked.
+ *
+ * `stores` exists for the tests. The only other backend is the real keychain, and a test must never write to it.
+ */
+export function migrateSecrets(
   core: Core,
   to: SecretStoreKind,
-): Promise<{ from: SecretStoreKind; to: SecretStoreKind; moved: number }> {
+  stores: { source?: SecretStore; target?: SecretStore } = {},
+): Promise<MigrationResult> {
+  /*
+   * The whole migration under one lock — reading the configuration included.
+   *
+   * Two opposite migrations used to interleave: one copied into a backend while the other was cleaning that same
+   * backend out, and the credential ended up in neither. Everything this does is a sequence of steps that are
+   * each correct alone and wrong in combination, so no finer lock would do. The configuration is read inside
+   * the lock as well, so a migration that waited sees the backend the previous one left, rather than the one it
+   * saw before it queued.
+   */
+  return withCredentialsLock(core.paths.configDir, () => migrateUnderLock(core, to, stores));
+}
+
+async function migrateUnderLock(
+  core: Core,
+  to: SecretStoreKind,
+  stores: { source?: SecretStore; target?: SecretStore },
+): Promise<MigrationResult> {
   const config = await core.config.load();
   const from = secretsStoreOf(config);
-  if (from === to) return { from, to, moved: 0 };
-  const source = await core.secrets(from);
-  const target = await openSecretStore(to, {
-    // `paths.secretsDir`, never a path rebuilt from `configDir`. On Windows the two are deliberately different:
-    // `resolvePaths` puts the file secret store under `%LOCALAPPDATA%` while config stays in `%APPDATA%`, because
-    // the roaming profile is copied between machines by a domain and refresh tokens are exactly what must not
-    // travel that way. Rebuilding the path here sent every migrated token into the roaming profile, deleted the
-    // originals, and left the runtime — which reads `paths.secretsDir` — finding nothing at all.
-    secretsDir: core.paths.secretsDir,
-    namespace: keychainNamespace(core.paths.configDir),
-  });
-  const refs = [
-    ...Object.values(config.clients).map((c) => c.secretRef),
-    ...Object.values(config.inboxes).map((i) => i.secretRef),
-    APPROVAL_KEY_REF,
-  ];
+  if (from === to) return { from, to, moved: 0, leftovers: [] };
+  const source = stores.source ?? (await core.secrets(from));
+  const target =
+    stores.target ??
+    (await openSecretStore(to, {
+      // `paths.secretsDir`, never a path rebuilt from `configDir`. On Windows the two are deliberately different:
+      // `resolvePaths` puts the file secret store under `%LOCALAPPDATA%` while config stays in `%APPDATA%`,
+      // because the roaming profile is copied between machines by a domain and refresh tokens are exactly what
+      // must not travel that way. Rebuilding the path here sent every migrated token into the roaming profile,
+      // deleted the originals, and left the runtime — which reads `paths.secretsDir` — finding nothing at all.
+      secretsDir: core.paths.secretsDir,
+      namespace: keychainNamespace(core.paths.configDir),
+    }));
+  const refs = secretRefsOf(config);
+  const attempted: string[] = [];
   let moved = 0;
-  for (const ref of refs) {
-    const value = await source.get(ref);
-    if (value === null) continue;
-    await target.set(ref, value);
-    if ((await target.get(ref)) !== value)
-      throw new CommsError('CONFIG', `could not verify a migrated secret (${ref})`);
-    moved += 1;
+  try {
+    for (const ref of refs) {
+      const value = await source.get(ref);
+      if (value === null) continue;
+      attempted.push(ref);
+      await target.set(ref, value);
+      if ((await target.get(ref)) !== value)
+        throw new CommsError('CONFIG', `could not verify a migrated secret (${ref})`);
+      moved += 1;
+    }
+    await core.config.update((current) => {
+      // Under the lock, where it holds. See `migrationConflict`.
+      const conflict = migrationConflict(current, from, refs);
+      if (conflict) throw new CommsError('TRANSIENT', conflict, { hint: 'Nothing was switched. Run it again.' });
+      return { ...current, secrets: { store: to } };
+    });
+  } catch (error) {
+    /*
+     * Whether anything was switched is read, not assumed.
+     *
+     * `ConfigStore.update` writes atomically and releases its lock afterwards, in a `finally`; a release that
+     * throws rejects the whole call with the switch already committed. Taking the copies back then would delete
+     * the credentials the runtime now reads. So: switched means finish the job; not switched means take the
+     * copies back; and a configuration that cannot be read means touch nothing and say so, because either
+     * deletion could be the wrong one.
+     */
+    let switched: boolean | undefined;
+    try {
+      switched = secretsStoreOf(await core.config.load()) === to;
+    } catch {
+      switched = undefined;
+    }
+    if (switched === true) {
+      const leftovers = await takeBack(source, from, attempted);
+      return { from, to, moved, leftovers };
+    }
+    if (switched === undefined) {
+      const base = error instanceof CommsError ? error : new CommsError('UNEXPECTED', String(error));
+      throw new CommsError(base.code, base.message, {
+        hint:
+          `${base.hint ? `${base.hint} ` : ''}Whether the backend was switched could not be confirmed, so nothing ` +
+          `was deleted from either. Run \`agentcomms secrets migrate --to ${to}\` again once the configuration is readable.`,
+        details: { unconfirmed: true, copiedToTarget: attempted.map((ref) => ({ backend: to, ref })) },
+        cause: error,
+      });
+    }
+    // Not switched, so every copy is a duplicate of a secret still in the source — a live credential in a backend
+    // nothing reads from. Take them back, and name any that will not go.
+    const leftovers = await takeBack(target, to, attempted);
+    if (leftovers.length === 0) throw error;
+    const base = error instanceof CommsError ? error : new CommsError('UNEXPECTED', String(error));
+    throw new CommsError(base.code, base.message, {
+      hint: `${base.hint ? `${base.hint} ` : ''}Copies were left in ${to}: ${leftovers.map((l) => l.ref).join(', ')}.`,
+      details: { leftovers },
+      cause: error,
+    });
   }
-  await core.config.update((current) => ({ ...current, secrets: { store: to } }));
-  for (const ref of refs) await source.delete(ref).catch(() => false);
-  return { from, to, moved };
+  // Switched. The originals are now the duplicates, in the backend nothing reads. Only the references that were
+  // actually copied have an original to remove — the rest held nothing, and "could not delete nothing" reported a
+  // credential left behind that never existed.
+  const leftovers = await takeBack(source, from, attempted);
+  return { from, to, moved, leftovers };
+}
+
+/**
+ * Why a secret-store migration can no longer switch backends, or `null` when it still can.
+ *
+ * The copy runs outside the config lock, because it can take as long as the keychain takes. So by the time the
+ * switch happens, the configuration may not be the one that was copied from: a sign-in may have stored a new
+ * credential in the *old* backend, or a removal may have deleted one the copy already duplicated. Switching then
+ * points the runtime at a backend missing the new credential, or holding one nothing names.
+ *
+ * Checked against the configuration read inside the lock: the backend must still be the one copied from, and the
+ * set of credentials the configuration names must still be exactly the set that was copied.
+ */
+export function migrationConflict(
+  current: Config,
+  from: SecretStoreKind,
+  copiedRefs: readonly string[],
+): string | null {
+  if (secretsStoreOf(current) !== from) return 'the secret store was changed by something else while migrating';
+  const now = new Set(secretRefsOf(current));
+  const then = new Set(copiedRefs);
+  if (now.size !== then.size || [...now].some((ref) => !then.has(ref))) {
+    return 'a credential was added or removed while migrating';
+  }
+  return null;
 }
 
 function parse(argv: string[]) {
@@ -286,6 +452,23 @@ export async function main(
           throw usage('usage: agentcomms secrets migrate --to keychain|file');
         }
         const result = await migrateSecrets(core, values.to);
+        /*
+         * One document, whichever way it went.
+         *
+         * Switched but not tidy is reported as an error, not as a success with a footnote — and *instead of* the
+         * success result, not after it: `--json` promises exactly one envelope on stdout, and printing a result and
+         * then throwing puts two there.
+         */
+        if (result.leftovers.length > 0) {
+          throw new CommsError(
+            'CONFIG',
+            `moved ${result.moved} secrets from ${result.from} to ${result.to}, but ${result.leftovers.length} original(s) could not be removed from ${result.from}`,
+            {
+              hint: `The new backend is in use. Delete these references from ${result.from}: ${result.leftovers.map((l) => l.ref).join(', ')}.`,
+              details: { ...result },
+            },
+          );
+        }
         writeResult(result, output, (r) =>
           r.moved === 0 && r.from === r.to
             ? `secrets already use ${r.to}`

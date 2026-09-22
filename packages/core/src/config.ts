@@ -90,6 +90,26 @@ export interface AccountConfig {
   secretRef: string;
   sendPolicy?: SendPolicy | undefined;
   createdAt: string;
+  /**
+   * The OAuth client this account's token was issued by, and the app it belongs to.
+   *
+   * Recorded because the Gmail release found the opposite: a reauth used the first OAuth client in the config
+   * rather than the inbox's own, and then did not record which one it had used. Slack makes that worse — D8
+   * means **one app per workspace**, so "the first app" is wrong more often than it is right — and a reauth
+   * that silently moves an account onto a different app changes what it can do without saying so.
+   *
+   * Optional because the key is additive: a config written before these existed parses unchanged.
+   */
+  oauthClientId?: string | undefined;
+  appId?: string | undefined;
+  /**
+   * `read` or `send`, as installed.
+   *
+   * Kept beside `grantedScopes` rather than derived from them, because the two answer different questions: the
+   * scopes are what Slack granted, and this is what the person asked for. A disagreement between them is drift
+   * worth reporting, and a value derived from the scopes could never disagree.
+   */
+  mode?: string | undefined;
 }
 
 export interface Config {
@@ -168,6 +188,9 @@ const accountSchema = z.looseObject({
   secretRef: z.string().min(1),
   sendPolicy: sendPolicySchema.optional(),
   createdAt: z.string(),
+  oauthClientId: z.string().min(1).optional(),
+  appId: z.string().min(1).optional(),
+  mode: z.string().min(1).optional(),
 });
 
 const defaultsSchema = z.looseObject({
@@ -484,10 +507,53 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   // `chat` classified as no change at all and `ConfigStore.update` took it without asking anyone — a loosening that
   // walks straight through the gate built to catch exactly that.
   for (const [alias, account] of Object.entries(after.accounts)) {
-    const previous = Object.values(before.accounts).find((existing) => existing.id === account.id);
+    /*
+     * The same person in the same workspace under this name — not merely whatever held the name.
+     *
+     * Matching by alias alone was the first fix for id rotation, and it over-reached: replacing workspace A with
+     * an unrelated workspace B under the same alias read as B loosening A's policy, which is a finding about a
+     * workspace B never had. A reauth keeps the platform, the workspace and the user; a replacement does not.
+     */
+    const sameAccountUnder = (name: string): AccountConfig | undefined => {
+      const held = before.accounts[name];
+      return held &&
+        held.platform === account.platform &&
+        held.workspace === account.workspace &&
+        held.userId === account.userId
+        ? held
+        : undefined;
+    };
+    /*
+     * By id, and failing that by alias.
+     *
+     * Re-authorising a Slack workspace mints a new account id on purpose, so the new credential can be staged
+     * beside the old one. An id lookup alone then finds nothing and measures the renewed account against the
+     * *default* — so a workspace set to `never`, re-authorised into `chat`, read as a new account arriving at the
+     * default and needed nobody's consent. The alias is what the person set the policy on.
+     */
+    const previous =
+      Object.values(before.accounts).find((existing) => existing.id === account.id) ?? sameAccountUnder(alias);
     const was = previous ? (previous.sendPolicy ?? before.defaults.sendPolicy) : before.defaults.sendPolicy;
     const now = account.sendPolicy ?? after.defaults.sendPolicy;
     if (POLICY_RANK[now] < POLICY_RANK[was]) loosened.push(`accounts.${alias}.sendPolicy`);
+
+    /*
+     * `mode` is a claim about what the stored credential can do at all, and widening it is a different kind of
+     * change from the ones above.
+     *
+     * A workspace connected as `read` holds a token that physically cannot post — that is the guarantee, not a
+     * policy sitting in front of a token that could. Re-authorising it as `send` replaces the token with one that
+     * can, and nothing downstream can undo that: the send gate governs whether this package posts, while the mode
+     * governs whether posting is possible at all.
+     *
+     * **Matched by alias, not by id.** Re-authorising mints a new account id precisely so the new credential can
+     * be staged beside the old one, so an id lookup finds nothing and would read every renewal as a brand-new
+     * account — which is exactly the case this must not miss. A genuinely new account is not a loosening: nobody
+     * decided anything about that name before, and choosing `send` when connecting is the decision itself.
+     */
+    if (previous && (previous.mode ?? previous.tier) === 'read' && (account.mode ?? account.tier) === 'send') {
+      loosened.push(`accounts.${alias}.mode`);
+    }
   }
 
   const b = before.defaults;
