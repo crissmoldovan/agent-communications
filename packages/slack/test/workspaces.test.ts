@@ -365,3 +365,120 @@ test('a secret store that refuses leaves the workspace listed, not orphaned', as
   );
   assert.equal(updated, false, 'the entry was removed while its credential is still stored');
 });
+
+test('a reauth is bound to the account the sign-in set out to renew, not to whatever holds the alias now', () => {
+  /*
+   * The case the `flow.expect` half exists for, and the only one where the two halves disagree.
+   *
+   * Up to ten minutes and a process boundary sit between `--start` and `--finish`. If the alias is re-pointed at
+   * a different account in the gap, checking only the current entry binds the grant to whatever that name means
+   * at the moment it lands — so a sign-in started for one account quietly re-authorises another, and reports it
+   * under the name the caller typed.
+   *
+   * Constructed so the *current-entry* check passes and only the flow's own expectation catches it: the token
+   * matches the account now holding the alias, and does not match what the sign-in was for.
+   */
+  const started = flow({
+    expect: {
+      accountId: ACCOUNT_ID,
+      workspaceId: 'T0001',
+      userId: 'U0001',
+      oauthClientId: '1.2',
+      appId: 'A0001',
+    },
+  });
+
+  const swappedUser = account({ userId: 'U-SOMEBODY-ELSE' });
+  assert.throws(
+    () =>
+      validateExchange({
+        token: token({ userId: 'U-SOMEBODY-ELSE' }),
+        mode: 'read',
+        flow: started,
+        config: configWith({ acme: swappedUser }),
+        existing: { alias: 'acme', account: swappedUser },
+      }),
+    /different Slack account/,
+    'the sign-in renewed an account it was not started for',
+  );
+
+  const swappedWorkspace = account({ workspace: 'T-OTHER' });
+  assert.throws(
+    () =>
+      validateExchange({
+        token: token({ workspaceId: 'T-OTHER' }),
+        mode: 'read',
+        flow: started,
+        config: configWith({ acme: swappedWorkspace }),
+        existing: { alias: 'acme', account: swappedWorkspace },
+      }),
+    /different workspace/,
+  );
+
+  const swappedApp = account({ appId: 'A-OTHER' });
+  assert.throws(
+    () =>
+      validateExchange({
+        token: token({ appId: 'A-OTHER' }),
+        mode: 'read',
+        flow: started,
+        config: configWith({ acme: swappedApp }),
+        existing: { alias: 'acme', account: swappedApp },
+      }),
+    /different Slack app/,
+  );
+});
+
+test('an app id recorded at sign-in must be matched, not merely not contradicted', () => {
+  /*
+   * This compared the two only when both sides had one, so a reply that simply omitted `app_id` dropped the
+   * binding and passed. A silent way to skip a check is worse than not having the check, because the check is
+   * still written down and still believed.
+   */
+  const started = flow({
+    expect: { accountId: ACCOUNT_ID, workspaceId: 'T0001', userId: 'U0001', oauthClientId: '1.2', appId: 'A0001' },
+  });
+  assert.throws(
+    () =>
+      validateExchange({
+        token: token({ appId: undefined }),
+        mode: 'read',
+        flow: started,
+        config: configWith({ acme: account() }),
+        existing: { alias: 'acme', account: account() },
+      }),
+    /different Slack app/,
+    'a reply with no app id kept a binding that was recorded',
+  );
+});
+
+test('a sign-in that changed which app it goes through cannot renew an account', () => {
+  /*
+   * No command produces this today: `reauth` reads the workspace's own client id and writes it into both halves
+   * of the flow, so the two agree by construction. The check is here for the change that would break it — a
+   * `reauth --client-id <other>`, which is a reasonable-looking flag and is the Gmail bug in Slack form.
+   *
+   * Gmail's reauth used the first OAuth client in the config rather than the inbox's own, so anyone who already
+   * had a `default` client re-consented through it while the inbox said something else. The refresh token that
+   * came back was then issued to a client the registry row did not name.
+   *
+   * Constructed by hand because nothing else can construct it, and asserted so that whoever adds that flag finds
+   * out here rather than in somebody's workspace.
+   */
+  assert.throws(
+    () =>
+      validateExchange({
+        token: token(),
+        mode: 'read',
+        flow: flow({
+          clientId: '9.9',
+          expect: { accountId: ACCOUNT_ID, workspaceId: 'T0001', userId: 'U0001', oauthClientId: '1.2' },
+        }),
+        // The account entry agrees with the flow, so only the flow's own expectation can catch it.
+        config: configWith({ acme: account({ oauthClientId: '9.9' }) }),
+        existing: { alias: 'acme', account: account({ oauthClientId: '9.9' }) },
+      }),
+    /different Slack app/,
+    'a sign-in through another app renewed the account anyway',
+  );
+});
