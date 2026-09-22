@@ -1,4 +1,5 @@
 import { CommsError, type Config, type Core, openCore, type SecretStore, secretsStoreOf } from '@agentcomms/core';
+import { closedPermit, guardSlackRequests } from './api/guard.ts';
 import { SLACK_ORIGIN } from './api/methods.ts';
 import { type FlowStore, openFlowStore } from './auth/flow.ts';
 
@@ -20,14 +21,20 @@ export interface SlackContextOptions {
 }
 
 /**
- * The one call that is not a Slack *method* and so does not go through the guarded transport: the token exchange.
+ * The token exchange, through the same guard as everything else.
  *
- * It carries no credential — that is what PKCE is for. Slack's own guide is explicit that a PKCE client "should
- * call the `oauth.v2.access` API method, but should not include `client_secret`", so what proves this request is
- * the verifier, which never left the machine that generated it.
+ * It would have been easy to call `fetch` here: the URL is built from `SLACK_ORIGIN`, so it cannot go anywhere
+ * else, and `oauth.v2.access` is classified `auth`, so a closed permit lets it through untouched. But the guard's
+ * own comment says it is *the one door every Slack request goes through*, and a request that skips it makes that
+ * false — which is how the next one gets written the same way, by somebody reading this as the precedent.
+ *
+ * It carries no credential, which is what PKCE is for. Slack's guide is explicit that a PKCE client "should call
+ * the `oauth.v2.access` API method, but should not include `client_secret`", so what proves this request is the
+ * verifier, which never left the machine that generated it.
  */
 async function postExchange(params: Record<string, string>): Promise<unknown> {
-  const response = await fetch(new URL('/api/oauth.v2.access', SLACK_ORIGIN), {
+  const send = guardSlackRequests(fetch, closedPermit());
+  const response = await send(new URL('/api/oauth.v2.access', SLACK_ORIGIN), {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded;charset=utf-8' },
     body: new URLSearchParams(params).toString(),

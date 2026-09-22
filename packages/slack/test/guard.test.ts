@@ -266,3 +266,19 @@ test('preparing an upload does not spend the permit the publish needs', async ()
     ['files.getUploadURLExternal', 'files.completeUploadExternal'],
   );
 });
+
+test('the token exchange passes with a closed permit, because it is not a write', async () => {
+  /*
+   * The exchange goes through this guard rather than calling `fetch` directly, so that "the one door every Slack
+   * request goes through" is true rather than nearly true. That only works if `auth` methods are reachable with
+   * no permit open — which is almost always, since a permit exists only around a send.
+   */
+  const calls: string[] = [];
+  const fetch = guardSlackRequests(async (input) => {
+    calls.push(String(input));
+    return new Response('{}');
+  }, closedPermit());
+
+  await fetch(`${API}/oauth.v2.access`);
+  assert.deepEqual(calls, [`${API}/oauth.v2.access`]);
+});
