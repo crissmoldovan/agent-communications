@@ -389,8 +389,32 @@ async function writeReauth(
      * holding the token it minted, read fresh.
      */
     const after = findById(await context.config(), 'inbox', inboxId);
-    secrets.invalidate(existing.inbox.secretRef);
-    const holdsNewToken = (await secrets.get(existing.inbox.secretRef)) === tokens.refreshToken;
+    /*
+     * And the proof itself can be unavailable.
+     *
+     * A keychain write that timed out is not cancelled — the store refuses every call while it is still in flight,
+     * so this read fails rather than answering. That is not "the token was not stored": the write may land a moment
+     * later. Nothing is restored on an unknown, because restoring would race the write that may still be coming;
+     * what the mailbox holds is said plainly instead.
+     */
+    let holdsNewToken: boolean;
+    try {
+      secrets.invalidate(existing.inbox.secretRef);
+      holdsNewToken = (await secrets.get(existing.inbox.secretRef)) === tokens.refreshToken;
+    } catch (unreadable) {
+      const base = error instanceof CommsError ? error : new CommsError('UNEXPECTED', String(error));
+      throw new CommsError(base.code, base.message, {
+        hint:
+          `${base.hint ? `${base.hint} ` : ''}Whether the new token reached the secret store could not be confirmed, ` +
+          `and this mailbox's settings were not changed. Run \`agent-gmail inbox reauth ${existing.alias}\` again ` +
+          'when the store is available; `agent-gmail doctor` says whether the mailbox still works.',
+        details: {
+          tokenStateUnknown: existing.inbox.secretRef,
+          storeError: (unreadable as Error).message,
+        },
+        cause: error,
+      });
+    }
     if (!after || !sameRow(after.inbox, written.inbox) || !holdsNewToken)
       throw await restorePrevious(secrets, existing.inbox.secretRef, previous, error);
     // The row is exactly what this reauth wrote: the write is in and only the lock's cleanup failed.

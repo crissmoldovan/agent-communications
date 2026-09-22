@@ -1645,3 +1645,31 @@ test('reauth that changes nothing: a token write that never stored is not called
   secrets.set = store;
   assert.equal(await secrets.get(`gmail:refresh:${id}`), before, 'the mailbox still holds the token it had');
 });
+
+test('reauth: when the store cannot say what it holds, it says so rather than guessing', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const id = await connectBySignIn(harness, context, 'work', 'read');
+  const secrets = await harness.core.secrets('file');
+  // A keychain write that times out and then refuses every call while it is still in flight: reads before it are
+  // answered, reads after it are not, and the write itself may still land.
+  const read = secrets.get.bind(secrets);
+  let inFlight = false;
+  secrets.set = async () => {
+    inFlight = true;
+    throw new CommsError('SECRET_STORE_UNAVAILABLE', 'the keychain timed out');
+  };
+  secrets.get = async (ref) => {
+    if (inFlight) throw new CommsError('SECRET_STORE_UNAVAILABLE', 'a write is still in flight');
+    return read(ref);
+  };
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', tier: 'organize', detached: false });
+  await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
+  await assert.rejects(
+    reauth.listener?.result ?? Promise.resolve(),
+    (error: unknown) =>
+      error instanceof CommsError &&
+      (error.details as { tokenStateUnknown?: string }).tokenStateUnknown === `gmail:refresh:${id}` &&
+      /could not be confirmed/.test(error.hint ?? ''),
+  );
+});
