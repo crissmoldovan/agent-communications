@@ -17,6 +17,9 @@ import type { IdentityProbe } from './doctor.ts';
 
 export type ProbeFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
+/** Slack saying "not now", which says nothing about whether the token is any good. */
+const TRANSIENT = new Set(['ratelimited', 'service_unavailable', 'fatal_error', 'internal_error', 'request_timeout']);
+
 interface AuthTest {
   ok?: boolean;
   error?: string;
@@ -73,6 +76,16 @@ export async function probeIdentity(
     return { kind: 'unreachable', why: `Slack's reply was not readable: ${(error as Error).message}` };
   }
 
+  /*
+   * Throttled or broken is not the same as refused.
+   *
+   * `ok: false` covers both "this token is revoked" and "ask again later", and reporting the second as the
+   * first would have `doctor` telling somebody to re-authorise a credential that is perfectly good — during
+   * exactly the minutes when Slack is least able to help them.
+   */
+  if (response.status === 429 || response.status >= 500 || TRANSIENT.has(body.error ?? '')) {
+    return { kind: 'unreachable', why: `Slack could not answer right now: ${body.error ?? response.status}` };
+  }
   if (body.ok !== true) return { kind: 'rejected', error: body.error ?? 'no reason given' };
   if (!body.team_id || !body.user_id) {
     return { kind: 'unreachable', why: 'Slack answered without saying which workspace or user' };

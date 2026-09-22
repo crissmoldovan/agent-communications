@@ -12,7 +12,7 @@ import {
   writeResult,
 } from '@agentcomms/core';
 import { Command, CommanderError, Option } from 'commander';
-import { parseBundle, type TokenBundle } from '../auth/bundle.ts';
+import { isDue, parseBundle, type TokenBundle } from '../auth/bundle.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { type InstallMode, renderManifest } from '../manifest.ts';
 import { doctor, type IdentityProbe } from '../operations/doctor.ts';
@@ -358,6 +358,15 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
         if (flags.offline !== true) {
           for (const [alias, bundle] of bundles) {
             if (bundle === null || bundle === 'unreadable') continue;
+            /*
+             * A token already past its expiry is not asked about.
+             *
+             * Slack would refuse it, and the refusal would be reported as a credential problem — which it is
+             * not: an expired access token is the ordinary state of a workspace nobody has used today, and the
+             * `credential-state` check above already says so. Asking anyway would turn "this is fine" into
+             * "re-authorise", which is the one piece of advice that throws away a working refresh token.
+             */
+            if (isDue(bundle, context.now())) continue;
             identities.set(alias, await probeIdentity(bundle, deps.probe ? { fetch: deps.probe } : {}));
           }
         }

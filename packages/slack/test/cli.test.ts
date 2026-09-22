@@ -682,9 +682,15 @@ test('doctor on a machine with no network says it did not ask, and stays healthy
 test('--offline asks Slack nothing at all', async () => {
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'acme' });
-  harness.probe = () => assert.fail('--offline reached the network');
+  // Counted rather than asserted inside the probe, which swallows everything thrown at it by design.
+  let asked = 0;
+  harness.probe = () => {
+    asked += 1;
+    return Promise.resolve(harness.authTest());
+  };
 
   const result = await cli(harness, ['--json', 'doctor', '--offline']);
+  assert.equal(asked, 0, '--offline reached the network');
   assert.equal(result.code, EXIT_CODES.OK);
   const identity = result
     .json<Envelope<{ checks: { id: string; status: string; detail: string }[] }>>()
@@ -716,4 +722,50 @@ test('scope drift is measured against what Slack reports, when Slack reports it'
     .data?.checks.find((check) => check.id === 'scopes');
   assert.equal(scopes?.status, 'fail');
   assert.match(scopes?.detail ?? '', /missing search:read/);
+});
+
+test('a throttled Slack is not reported as a revoked token', async () => {
+  /*
+   * `ok: false` covers both "this token is revoked" and "ask again later". Reporting the second as the first
+   * tells somebody to re-authorise a perfectly good credential — during exactly the minutes when Slack is least
+   * able to help them, and `reauth` is the one piece of advice that throws away a working refresh token.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  harness.authTest = () => new Response(JSON.stringify({ ok: false, error: 'ratelimited' }), { status: 429 });
+
+  const result = await cli(harness, ['--json', 'doctor']);
+  assert.equal(result.code, EXIT_CODES.OK, 'a rate limit was treated as a broken install');
+  const identity = result
+    .json<Envelope<{ checks: { id: string; status: string; detail: string }[] }>>()
+    .data?.checks.find((check) => check.id === 'identity');
+  assert.equal(identity?.status, 'unknown');
+  assert.match(identity?.detail ?? '', /could not answer right now/);
+});
+
+test('an already-expired token is not asked about, because the answer would mean nothing', async () => {
+  /*
+   * Slack would refuse it, and the refusal would read as a credential problem. It is not one: an expired access
+   * token is the ordinary state of a workspace nobody has used today, and `credential-state` already says so.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', bundle: { accessExpiresAt: '2020-01-01T00:00:00.000Z' } });
+  /*
+   * Counted, not `assert.fail`ed inside the probe.
+   *
+   * `probeIdentity` turns every thrown thing into `{ kind: 'unreachable' }` on purpose, so an assertion raised
+   * in there is swallowed and the test passes whatever the code does. Found by deleting the guard and watching
+   * nothing fail.
+   */
+  let asked = 0;
+  harness.probe = () => {
+    asked += 1;
+    return Promise.resolve(harness.authTest());
+  };
+
+  const result = await cli(harness, ['--json', 'doctor']);
+  assert.equal(asked, 0, 'doctor asked Slack about a token it already knew was stale');
+  const checks = result.json<Envelope<{ checks: { id: string; status: string; detail: string }[] }>>().data?.checks;
+  assert.equal(checks?.find((check) => check.id === 'identity')?.status, 'unknown');
+  assert.match(checks?.find((check) => check.id === 'credential-state')?.detail ?? '', /expired/);
 });
