@@ -6,6 +6,7 @@ import {
   isValidAlias,
   neutralise,
   newAccountId,
+  secretsStoreOf,
 } from '@agentcomms/core';
 import { type ExchangedToken, scopeMismatch } from '../auth/authorize.ts';
 import { BUNDLE_VERSION, serialiseBundle, type TokenBundle } from '../auth/bundle.ts';
@@ -287,7 +288,8 @@ export interface RemovedWorkspace {
 /** What `workspace remove` needs, named explicitly so the order below can be tested with a store that fails. */
 export interface RemovalDeps {
   readonly config: Config;
-  readonly secrets: { delete(ref: string): Promise<boolean> };
+  /** `kind` so the removal can tell whether the backend it deleted from is still the one in force. */
+  readonly secrets: { readonly kind?: string; delete(ref: string): Promise<boolean> };
   readonly update: (mutator: (config: Config) => Config) => Promise<Config>;
 }
 
@@ -313,6 +315,18 @@ export async function removeWorkspace(deps: RemovalDeps, alias: string): Promise
      * while leaving its fresh credential in the secret store, named by nothing. So the entry is removed only if
      * it is still the one whose credential was just deleted; otherwise the renewal wins and remove says so.
      */
+    /*
+     * And the credential must have been deleted from the backend still in force.
+     *
+     * A migration that switched backends while this ran copied the credential across first — so deleting it from
+     * the old backend and then dropping the entry would leave the copy in the new backend with nothing naming it.
+     * Refusing keeps the entry, which still points at that copy; running `remove` again deletes both.
+     */
+    if (deps.secrets.kind && secretsStoreOf(config) !== deps.secrets.kind) {
+      throw new CommsError('TRANSIENT', `the secret store changed while "${alias}" was being removed`, {
+        hint: `Run \`agent-slack workspace remove ${alias}\` again.`,
+      });
+    }
     const held = config.accounts[alias];
     if (!held || held.id !== found.account.id) {
       throw new CommsError('CONFIG', `"${alias}" was renewed while it was being removed`, {

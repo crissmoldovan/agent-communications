@@ -3,7 +3,14 @@ import { constants } from 'node:fs';
 import { access, mkdir, open } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CommsError, type LooseningConsent, newAccountId, type SecretStore } from '@agentcomms/core';
+import {
+  type AccountConfig,
+  CommsError,
+  type LooseningConsent,
+  newAccountId,
+  type SecretStore,
+  secretsStoreOf,
+} from '@agentcomms/core';
 import { buildAuthorizeUrl, readExchange } from '../auth/authorize.ts';
 import { serialiseBundle } from '../auth/bundle.ts';
 import { FLOW_TTL_MS, newFlowId, type SlackFlow } from '../auth/flow.ts';
@@ -589,10 +596,20 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
      */
     const accountId = newAccountId();
     const secrets = await context.secrets();
-    await secrets.set(secretRefFor(accountId), serialiseBundle(bundleFrom(token, at)));
-
     const account = accountFrom({ token, mode: flow.mode, flow, accountId, now: at });
+    let written: AccountConfig = account;
     try {
+      /*
+       * The write is inside the boundary that takes it back, not before it.
+       *
+       * It used to sit one line above the `try`, on the reasoning that a write which failed had written nothing.
+       * A keychain write is not like that: it cannot be cancelled, and it can finish *after* the store has
+       * reported it timed out. Outside the boundary, that left a live token with no config entry and no error
+       * naming it. Inside, the same withdrawal runs — and the keychain store refuses every call while such a
+       * write is still in flight, so the withdrawal either fails loudly and names the reference, or runs after
+       * the write has settled and is authoritative about it.
+       */
+      await secrets.set(secretRefFor(accountId), serialiseBundle(bundleFrom(token, at)));
       await context.core.config.update(
         (current) => {
           /*
@@ -603,6 +620,19 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
            * simply overwrites the first — leaving a live Slack token that nothing names. So the assumption each
            * one made is re-stated here, where the file cannot move underneath it.
            */
+          /*
+           * The backend this credential went into must still be the one in force.
+           *
+           * `agentcomms secrets migrate` copies every credential to a new backend outside the lock and then
+           * switches. A sign-in that picked its store before the switch and writes after it would put the token
+           * in a backend nothing reads any more, and the config would name a credential the runtime cannot find.
+           * The migration checks the same thing from its side; this is the half that belongs here.
+           */
+          if (secretsStoreOf(current) !== secrets.kind) {
+            throw new CommsError('TRANSIENT', 'the secret store was changed while this sign-in was completing', {
+              hint: 'Nothing was saved. Sign in again.',
+            });
+          }
           const held = current.accounts[flow.alias];
           if (flow.expect) {
             /*
@@ -630,7 +660,17 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
             checkAliasFree(current, flow.alias);
             validateExchange({ token, mode: flow.mode, flow, config: current });
           }
-          return { ...current, accounts: { ...current.accounts, [flow.alias]: account } };
+          /*
+           * The grant owns what it sets; everything else carries over.
+           *
+           * `accountFrom` builds a record from the token alone, so writing it whole on a reauth threw away every
+           * setting the person had made since — most importantly `sendPolicy`. An explicit `never` became the
+           * default `chat`, and because reauth rotates the account id, the loosening check read the result as a
+           * brand-new account and asked nobody. Spreading the held record first keeps any field the grant does
+           * not speak to, including fields a later version adds that this one has never heard of.
+           */
+          written = held && flow.expect ? { ...held, ...account } : account;
+          return { ...current, accounts: { ...current.accounts, [flow.alias]: written } };
         },
         // A reauth may narrow what a workspace can do freely; widening it is gated before we get here, and the
         // proof is carried in so the config layer can tell the two apart.
@@ -660,7 +700,7 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
       await secrets.delete(previousRef).catch(() => undefined);
     }
 
-    return viewOf(flow.alias, account);
+    return viewOf(flow.alias, written);
   } finally {
     await context.flows.discard(flowId);
   }

@@ -1,3 +1,4 @@
+import { CommsError } from '@agentcomms/core';
 import { scopesFor } from './api/methods.ts';
 
 /**
@@ -55,6 +56,24 @@ export const NEVER_REQUESTED: readonly string[] = ['incoming-webhook', 'im:write
 
 export type InstallMode = 'read' | 'send';
 
+export const INSTALL_MODES: readonly InstallMode[] = ['read', 'send'];
+
+/**
+ * A mode read back from somewhere a type cannot reach — the config file, a flag — checked rather than cast.
+ *
+ * `@agentcomms/core` stores `mode` as any non-empty string, because it is platform-neutral and other platforms
+ * will have other modes. So a Slack mode on disk is only a claim until it is checked, and the code downstream
+ * used to treat every value except `read` as `send`. A typo of `read` in a hand-edited config therefore asked
+ * Slack for posting scopes, and skipped the read → send challenge because the stored value was not `read`
+ * either. An unknown mode is refused, never guessed at.
+ */
+export function parseMode(value: unknown, where: string): InstallMode {
+  if (value === 'read' || value === 'send') return value;
+  throw new CommsError('CONFIG', `${where} has mode "${String(value)}", which is neither "read" nor "send"`, {
+    hint: 'Fix the value in the configuration, or remove and add the workspace again.',
+  });
+}
+
 export interface SlackManifest {
   display_information: typeof DISPLAY;
   oauth_config: {
@@ -86,8 +105,12 @@ export interface SlackManifest {
 export function scopesForMode(mode: InstallMode): string[] {
   // Always sorted, both modes. Slack returns the granted scopes in its own order, and every comparison in this
   // package is against this list — one of the two being unsorted made `read` and `send` compare differently.
-  const scopes = mode === 'read' ? [...READ_SCOPES] : [...READ_SCOPES, ...scopesFor(['write', 'prepare'])];
-  return scopes.sort();
+  //
+  // Each mode named, rather than "read, or else send": the type says only two values arrive here, but the type
+  // is erased at runtime and a cast upstream can deliver anything. Anything else gets no scopes at all.
+  if (mode === 'read') return [...READ_SCOPES].sort();
+  if (mode === 'send') return [...READ_SCOPES, ...scopesFor(['write', 'prepare'])].sort();
+  return parseMode(mode, 'this request') as never;
 }
 
 /**

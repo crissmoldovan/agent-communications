@@ -202,16 +202,31 @@ export function openFlowStore(stateDir: string, now: () => Date): FlowStore {
        * absence *is* the tombstone — which is also why `discard` removes the record before the marker.
        */
       await mkdir(flowDir(stateDir), { recursive: true, mode: 0o700 });
+      let handle: Awaited<ReturnType<typeof open>>;
       try {
-        const handle = await open(marker, 'wx', 0o600);
-        await handle.writeFile(JSON.stringify({ pid: process.pid, at: now().toISOString() }));
-        await handle.close();
+        handle = await open(marker, 'wx', 0o600);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
         throw new CommsError('NOT_FOUND', 'that sign-in has already been finished', {
           hint: 'Each sign-in completes once. Start another with `agent-slack workspace add`.',
         });
       }
+      /*
+       * Acquired, so every failure from here on has to give the marker back.
+       *
+       * Creating the file and writing to it were one `try`, so a write or close that failed after the create
+       * had succeeded threw straight out — leaving a marker that claimed the flow for nobody, and a flow that
+       * could then never be finished. The create is the claim; what follows is bookkeeping, and bookkeeping
+       * failing is not a reason to hold the claim.
+       */
+      try {
+        await handle.writeFile(JSON.stringify({ pid: process.pid, at: now().toISOString() }));
+      } catch (error) {
+        await handle.close().catch(() => undefined);
+        await rm(marker, { force: true });
+        throw error;
+      }
+      await handle.close().catch(() => undefined);
 
       let flow: SlackFlow;
       try {
@@ -264,7 +279,12 @@ export function openFlowStore(stateDir: string, now: () => Date): FlowStore {
           // Expired ones are swept rather than listed: a stale sign-in in a list is something to act on, and
           // there is nothing to do about one that can no longer be finished.
           if (Date.parse(flow.expiresAt) <= now().getTime()) {
-            await rm(join(flowDir(stateDir), name), { force: true });
+            // `discard`, not `rm` of the record: removing only the `.json` left the claim, outcome and log behind
+            // with nothing that would ever sweep them — the one routine that looks for dead flows cleaning up a
+            // quarter of each.
+            // The id from the file's name, not its contents: the name is what is on disk to be removed, and a
+            // record whose contents disagree with its name would otherwise sweep a different flow's files.
+            await this.discard(name.slice(0, -'.json'.length));
             continue;
           }
           flows.push(flow);

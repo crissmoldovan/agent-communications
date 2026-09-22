@@ -120,3 +120,9 @@ test('what a person pastes is valid JSON, and round-trips', () => {
   assert.equal(text.endsWith('\n'), true);
   assert.deepEqual(JSON.parse(text), buildManifest('read', 'http://localhost:3000/slack'));
 });
+
+test('scopes are only ever issued for a mode that exists', () => {
+  // The type allows two values; the type is erased at runtime, and a cast upstream can deliver anything.
+  assert.throws(() => scopesForMode('raed' as never), /neither "read" nor "send"/);
+  assert.throws(() => scopesForMode(undefined as never), /neither "read" nor "send"/);
+});

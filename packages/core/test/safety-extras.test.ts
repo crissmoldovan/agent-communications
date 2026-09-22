@@ -517,3 +517,68 @@ test('config: a configuration whose only secrets are accounts still counts as ho
     /consent|loosen/i,
   );
 });
+
+test('classifyChange: a send policy loosened across an account id rotation is still a loosening', () => {
+  /*
+   * Re-authorising a Slack workspace mints a new account id on purpose. Matched by id alone, the renewed account
+   * was measured against the *default*, so `never` → `chat` across a reauth read as a new account arriving at
+   * the default. The alias is what the person set the policy on.
+   */
+  const before = parseConfig(
+    JSON.stringify({
+      version: 1,
+      accounts: { acme: { ...accountFixture('acc_AAAAAAAAAAAAAAAA'), sendPolicy: 'never' } },
+    }),
+  );
+  const after = parseConfig(
+    JSON.stringify({
+      version: 1,
+      accounts: { acme: { ...accountFixture('acc_BBBBBBBBBBBBBBBB'), sendPolicy: 'chat' } },
+    }),
+  );
+  assert.deepEqual(classifyChange(before, after).loosened, ['accounts.acme.sendPolicy']);
+});
+
+test('ConfigStore.update itself refuses a Slack widening, not only classifyChange', async () => {
+  /*
+   * Raised in review: the test elsewhere that claimed the config layer refused this only ever called
+   * `classifyChange`. That is a necessary condition for the refusal, not the refusal. A regression in how
+   * `update` treats entries under `accounts` — as opposed to `inboxes` and `defaults`, which the loop above
+   * covers — would have passed every test.
+   *
+   * Both account loosenings, each across an id rotation, because that is how a reauth writes them.
+   */
+  const store = new ConfigStore(tempDir());
+  const at = (id: string, over: Record<string, unknown>) =>
+    parseConfig(JSON.stringify({ version: 1, accounts: { acme: { ...accountFixture(id), ...over } } })).accounts
+      .acme as ReturnType<typeof emptyConfig>['accounts'][string];
+
+  await store.update((c) => ({
+    ...c,
+    accounts: { acme: at('acc_AAAAAAAAAAAAAAAA', { mode: 'read', sendPolicy: 'never' }) },
+  }));
+
+  const widened = (c: ReturnType<typeof emptyConfig>) => ({
+    ...c,
+    accounts: { acme: at('acc_BBBBBBBBBBBBBBBB', { mode: 'send', tier: 'send', sendPolicy: 'never' }) },
+  });
+  await assert.rejects(
+    store.update(widened),
+    (e: unknown) => e instanceof CommsError && e.code === 'LOOSENING_REFUSED' && /accounts\.acme\.mode/.test(e.message),
+  );
+
+  const relaxed = (c: ReturnType<typeof emptyConfig>) => ({
+    ...c,
+    accounts: { acme: at('acc_CCCCCCCCCCCCCCCC', { mode: 'read', sendPolicy: 'chat' }) },
+  });
+  await assert.rejects(
+    store.update(relaxed),
+    (e: unknown) =>
+      e instanceof CommsError && e.code === 'LOOSENING_REFUSED' && /accounts\.acme\.sendPolicy/.test(e.message),
+  );
+
+  // Nothing was written by either refusal, and a consented widening goes through.
+  assert.equal((await store.load()).accounts.acme?.id, 'acc_AAAAAAAAAAAAAAAA');
+  await store.update(widened, { consent: { kind: 'loosening-consent', paths: ['accounts.acme.mode'] } });
+  assert.equal((await store.load()).accounts.acme?.mode, 'send');
+});

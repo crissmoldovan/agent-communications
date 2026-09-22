@@ -159,14 +159,15 @@ test('dropping the IPC channel survives the child having closed it first', () =>
   assert.equal(called, 1, 'an open channel was left open');
 });
 
-test('a widening sign-in with no consent is refused by the config layer, not only by the CLI', () => {
+test('the config layer classifies a read → send widening as a loosening, whatever asked for it', () => {
   /*
-   * Belt and braces, and they answer different failures.
+   * The classification half only. Renamed after review: this used to claim `ConfigStore.update` refuses the
+   * change, and asserted nothing of the kind — it calls `classifyChange`, which is necessary for the refusal and
+   * not the refusal itself. The refusal is tested where `ConfigStore` is, in
+   * `packages/core/test/safety-extras.test.ts` ("ConfigStore.update itself refuses a Slack widening").
    *
-   * The CLI gate stops an agent asking for `--mode send` on a `read` workspace. This is what stops a *second*
-   * caller — another surface, a later refactor, a path somebody forgets to route through the gate — from writing
-   * the same change. `classifyChange` sees it whatever asked for it, and `ConfigStore.update` refuses without a
-   * matching consent.
+   * What this one does hold: the change is classified from what is written, not from who asked, so a second
+   * surface or a later refactor that skips the CLI's gate still meets it.
    */
   const read = parseConfig(
     JSON.stringify({ version: 1, accounts: { acme: { ...slackAccount('acc_AAAAAAAAAAAAAAAA'), mode: 'read' } } }),
@@ -421,4 +422,92 @@ test('a credential that cannot be taken back after a failed attempt is named, no
   });
   await listener.close();
   assert.equal(deletes, 2, 'the rollback was not retried once before giving up');
+});
+
+test('a credential write that reports failure but landed anyway is taken back', async () => {
+  /*
+   * A keychain write cannot be cancelled and can finish after the store has reported it timed out. The write
+   * used to sit outside the rollback, so that case left a live token with no config entry and no error naming
+   * it. Modelled here as a store that writes and then throws, which is what a late-landing timeout looks like
+   * from this side.
+   */
+  const harness = await newHarness();
+  const context = new SlackContext({ core: harness.core, env: harness.env, exchange: (p) => harness.exchange(p) });
+  const real = await harness.core.secrets('file');
+  let stored: string | undefined;
+  const lateLanding: SecretStore = {
+    kind: real.kind,
+    get: (ref) => real.get(ref),
+    delete: (ref) => real.delete(ref),
+    invalidate: (ref) => real.invalidate(ref),
+    async set(ref: string, value: string) {
+      await real.set(ref, value);
+      stored = ref;
+      throw new Error('timed out waiting for the keychain');
+    },
+  };
+  context.secrets = async () => lateLanding;
+
+  const started = await startSignIn(context, {
+    mode: 'read',
+    alias: 'acme',
+    clientId: TEST_CLIENT_ID,
+    port: await freePort(),
+    detached: false,
+  });
+  const listener = started.listener as NonNullable<StartedSignIn['listener']>;
+  await redirectTo(started.authUrl);
+  await assert.rejects(listener.result, /timed out waiting for the keychain/);
+  await listener.close();
+
+  assert.ok(stored, 'the fake store never wrote, so the test proves nothing');
+  assert.equal(
+    await real.get(stored as string),
+    null,
+    'a credential that landed after a reported failure was left behind',
+  );
+  assert.equal((await harness.core.config.load()).accounts.acme, undefined);
+});
+
+test('a sign-in refuses to finish into a backend a migration has just switched away from', async () => {
+  /*
+   * `secrets migrate` copies every credential across outside the lock, then switches. A sign-in that chose its
+   * store before the switch and writes after it would leave the token somewhere nothing reads, with the config
+   * naming a credential the runtime cannot find. The switch is modelled at the one moment it matters: after this
+   * sign-in has picked its store and written to it.
+   *
+   * The config is moved to `keychain` here only as a marker that the backend changed. Nothing in this test opens
+   * a keychain: the sign-in's own store is the file store below, and that is where the withdrawal goes.
+   */
+  const harness = await newHarness();
+  const context = new SlackContext({ core: harness.core, env: harness.env, exchange: (p) => harness.exchange(p) });
+  const real = await harness.core.secrets('file');
+  let stored: string | undefined;
+  const beforeTheSwitch: SecretStore = {
+    kind: 'file',
+    get: (ref) => real.get(ref),
+    delete: (ref) => real.delete(ref),
+    invalidate: (ref) => real.invalidate(ref),
+    async set(ref: string, value: string) {
+      await real.set(ref, value);
+      stored = ref;
+      await harness.core.config.update((config) => ({ ...config, secrets: { store: 'keychain' } }));
+    },
+  };
+  context.secrets = async () => beforeTheSwitch;
+
+  const started = await startSignIn(context, {
+    mode: 'read',
+    alias: 'acme',
+    clientId: TEST_CLIENT_ID,
+    port: await freePort(),
+    detached: false,
+  });
+  const listener = started.listener as NonNullable<StartedSignIn['listener']>;
+  await redirectTo(started.authUrl);
+  await assert.rejects(listener.result, /secret store was changed while this sign-in was completing/);
+  await listener.close();
+
+  assert.equal((await harness.core.config.load()).accounts.acme, undefined, 'the account was saved anyway');
+  assert.equal(await real.get(stored as string), null, 'the credential was left in the abandoned backend');
 });

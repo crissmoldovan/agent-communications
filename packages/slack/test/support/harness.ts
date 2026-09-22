@@ -47,10 +47,12 @@ export interface Harness {
     workspaceId?: string;
     workspaceName?: string;
     userId?: string;
-    mode?: InstallMode;
+    /** A string rather than `InstallMode`, so a test can plant what a hand-edited config might hold. */
+    mode?: InstallMode | string;
     grantedScopes?: readonly string[];
     oauthClientId?: string | undefined;
     appId?: string | undefined;
+    sendPolicy?: 'chat' | 'confirm' | 'never';
     bundle?: Partial<TokenBundle>;
   }): Promise<AccountConfig>;
 }
@@ -127,12 +129,13 @@ export async function newHarness(): Promise<Harness> {
         userId: options.userId ?? 'U0001',
         tier: mode,
         mode,
-        grantedScopes: [...(options.grantedScopes ?? scopesForMode(mode))],
+        grantedScopes: [...(options.grantedScopes ?? scopesForMode(mode === 'send' ? 'send' : 'read'))],
         secretRef: secretRefFor(id),
         ...(options.oauthClientId === undefined
           ? { oauthClientId: TEST_CLIENT_ID }
           : { oauthClientId: options.oauthClientId }),
         ...(options.appId === undefined ? { appId: 'A0001' } : { appId: options.appId }),
+        ...(options.sendPolicy ? { sendPolicy: options.sendPolicy } : {}),
         createdAt: new Date('2026-09-22T12:00:00.000Z').toISOString(),
       };
       const secrets = await core.secrets('file');

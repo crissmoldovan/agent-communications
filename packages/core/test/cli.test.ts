@@ -142,3 +142,51 @@ test('the migration ref list carries the non-mail accounts too', async () => {
   // Deduplicated: two entries may legitimately share a ref, and moving it twice would report it twice.
   assert.equal(new Set(refs).size, refs.length);
 });
+
+test('a migration does not switch backends when a credential appeared or vanished while it copied', async () => {
+  /*
+   * The copy runs outside the config lock, so the configuration can change under it: a Slack sign-in storing a
+   * new credential in the *old* backend, or a removal deleting one the copy already duplicated. Switching anyway
+   * points the runtime at a backend missing the new credential, or holding one nothing names.
+   *
+   * Asserted on the decision rather than by running a migration, for the reason given at the top of this file:
+   * the only other backend is the real keychain, and a test must never write to it.
+   */
+  const { migrationConflict, secretRefsOf } = await import('../src/cli.ts');
+  const { parseConfig } = await import('../src/config.ts');
+  const base = parseConfig(
+    JSON.stringify({
+      version: 1,
+      secrets: { store: 'keychain' },
+      accounts: {
+        acme: {
+          id: 'acc_AAAAAAAAAAAAAAAA',
+          platform: 'slack',
+          workspace: 'T1',
+          userId: 'U1',
+          tier: 'read',
+          secretRef: 'slack/token/acc_AAAAAAAAAAAAAAAA',
+          createdAt: '2026-09-22T12:00:00.000Z',
+        },
+      },
+    }),
+  );
+  const copied = secretRefsOf(base);
+  assert.equal(migrationConflict(base, 'keychain', copied), null, 'an unchanged config was refused');
+
+  const added = structuredClone(base);
+  added.accounts.zed = {
+    ...(base.accounts.acme as NonNullable<typeof base.accounts.acme>),
+    id: 'acc_ZZZZZZZZZZZZZZZZ',
+    secretRef: 'slack/token/acc_ZZZZZZZZZZZZZZZZ',
+  };
+  assert.match(migrationConflict(added, 'keychain', copied) ?? '', /added or removed/);
+
+  const removed = structuredClone(base);
+  removed.accounts = {};
+  assert.match(migrationConflict(removed, 'keychain', copied) ?? '', /added or removed/);
+
+  const moved = structuredClone(base);
+  moved.secrets = { store: 'file' };
+  assert.match(migrationConflict(moved, 'keychain', copied) ?? '', /changed by something else/);
+});

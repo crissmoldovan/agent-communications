@@ -919,3 +919,84 @@ test('doctor still asks about a token with minutes left, because Slack would sti
   await cli(harness, ['--json', 'doctor']);
   assert.equal(asked, 1, 'a token Slack would still accept was not asked about');
 });
+
+test('reauth keeps the send policy the person set, on both sides of the default', async () => {
+  /*
+   * `accountFrom` builds a record from the token alone, so writing it whole on a reauth dropped every setting
+   * made since. An explicit `never` became the default `chat` — and because reauth rotates the account id, the
+   * loosening check read the result as a new account arriving at the default and asked nobody.
+   *
+   * Both directions, because "keep the setting" and "reset to the default" only disagree when the setting is
+   * not the default, and a test on one side cannot tell them apart.
+   */
+  for (const policy of ['never', 'confirm'] as const) {
+    const harness = await newHarness();
+    await harness.addWorkspace({ alias: 'acme', sendPolicy: policy });
+    const port = await freePort();
+    const result = await cli(
+      harness,
+      ['workspace', 'reauth', 'acme', '--port', String(port), '--no-browser'],
+      browserOn(),
+    );
+    assert.equal(result.code, EXIT_CODES.OK, result.stderr);
+    assert.equal(
+      (await harness.core.config.load()).accounts.acme?.sendPolicy,
+      policy,
+      `a reauth reset "${policy}" to the default`,
+    );
+  }
+});
+
+test('a stored mode that is neither read nor send is refused, never read as send', async () => {
+  /*
+   * Core stores `mode` as any non-empty string, and this package used to treat every value except `read` as
+   * `send`. A typo of `read` in a hand-edited config therefore asked Slack for posting scopes — and skipped the
+   * read → send challenge, because the stored value was not `read` either.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'raed' });
+  const port = await freePort();
+  const result = await cli(
+    harness,
+    ['--json', 'workspace', 'reauth', 'acme', '--port', String(port), '--no-browser'],
+    // Answers with a refusal only if the flow wrongly starts, so a regression fails fast instead of hanging.
+    browserOn({ error: 'access_denied' }),
+  );
+  assert.equal(result.code, EXIT_CODES.CONFIG);
+  assert.match(result.json<Envelope<never>>().error?.message ?? '', /neither "read" nor "send"/);
+  assert.equal(harness.calls.length, 0, 'a sign-in was started for a mode nobody chose');
+});
+
+test('doctor reports an unknown stored mode instead of crashing or assuming read', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'raed' });
+  const result = await cli(harness, ['--json', 'doctor', '--offline']);
+  assert.equal(result.code, EXIT_CODES.CONFIG);
+  const scopes = result
+    .json<Envelope<{ checks: { id: string; status: string; detail: string }[] }>>()
+    .data?.checks.find((check) => check.id === 'scopes');
+  assert.equal(scopes?.status, 'fail');
+  assert.match(scopes?.detail ?? '', /raed/);
+});
+
+test('--mode send on a workspace whose stored mode is a typo does not skip the challenge', async () => {
+  /*
+   * The exact hole: the challenge fires when the stored mode is `read`. A stored `raed` is not `read`, and an
+   * explicit `--mode send` is a perfectly valid mode, so the scope check downstream has nothing to object to —
+   * and a posting sign-in would start with no challenge and no refusal, for a workspace the person connected
+   * read-only. Only checking the stored value itself closes it.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'raed' });
+  harness.reply = () => slackOk({ scopes: scopesForMode('send') });
+  const port = await freePort();
+  const result = await cli(
+    harness,
+    ['--json', 'workspace', 'reauth', 'acme', '--mode', 'send', '--port', String(port), '--no-browser'],
+    browserOn({ error: 'access_denied' }),
+  );
+  assert.equal(result.code, EXIT_CODES.CONFIG, result.stdout);
+  assert.match(result.json<Envelope<never>>().error?.message ?? '', /neither "read" nor "send"/);
+  assert.equal(harness.calls.length, 0);
+  assert.equal((await harness.core.config.load()).accounts.acme?.mode, 'raed', 'the workspace was changed');
+});

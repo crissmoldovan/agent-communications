@@ -166,18 +166,57 @@ async function migrateSecrets(
     namespace: keychainNamespace(core.paths.configDir),
   });
   const refs = secretRefsOf(config);
+  const copied: string[] = [];
   let moved = 0;
   for (const ref of refs) {
     const value = await source.get(ref);
     if (value === null) continue;
     await target.set(ref, value);
+    copied.push(ref);
     if ((await target.get(ref)) !== value)
       throw new CommsError('CONFIG', `could not verify a migrated secret (${ref})`);
     moved += 1;
   }
-  await core.config.update((current) => ({ ...current, secrets: { store: to } }));
+  try {
+    await core.config.update((current) => {
+      // Under the lock, where it holds. See `migrationConflict`.
+      const conflict = migrationConflict(current, from, refs);
+      if (conflict) throw new CommsError('TRANSIENT', conflict, { hint: 'Nothing was switched. Run it again.' });
+      return { ...current, secrets: { store: to } };
+    });
+  } catch (error) {
+    // Nothing was switched, so every copy made above is a duplicate of a secret still in the source. Left in the
+    // target they are live credentials in a backend nothing reads from — take them back.
+    for (const ref of copied) await target.delete(ref).catch(() => false);
+    throw error;
+  }
   for (const ref of refs) await source.delete(ref).catch(() => false);
   return { from, to, moved };
+}
+
+/**
+ * Why a secret-store migration can no longer switch backends, or `null` when it still can.
+ *
+ * The copy runs outside the config lock, because it can take as long as the keychain takes. So by the time the
+ * switch happens, the configuration may not be the one that was copied from: a sign-in may have stored a new
+ * credential in the *old* backend, or a removal may have deleted one the copy already duplicated. Switching then
+ * points the runtime at a backend missing the new credential, or holding one nothing names.
+ *
+ * Checked against the configuration read inside the lock: the backend must still be the one copied from, and the
+ * set of credentials the configuration names must still be exactly the set that was copied.
+ */
+export function migrationConflict(
+  current: Config,
+  from: SecretStoreKind,
+  copiedRefs: readonly string[],
+): string | null {
+  if (secretsStoreOf(current) !== from) return 'the secret store was changed by something else while migrating';
+  const now = new Set(secretRefsOf(current));
+  const then = new Set(copiedRefs);
+  if (now.size !== then.size || [...now].some((ref) => !then.has(ref))) {
+    return 'a credential was added or removed while migrating';
+  }
+  return null;
 }
 
 function parse(argv: string[]) {

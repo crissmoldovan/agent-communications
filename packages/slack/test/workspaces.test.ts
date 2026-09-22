@@ -517,3 +517,28 @@ test('removing does not delete a workspace that was renewed in the meantime', as
   assert.deepEqual(deleted, [stale.secretRef], 'it deleted a credential other than the one it looked at');
   assert.equal(written, undefined, 'the renewed workspace was removed');
 });
+
+test('removing refuses when a migration switched backends underneath it', async () => {
+  /*
+   * The migration copied the credential to the new backend before this deleted it from the old one. Dropping
+   * the entry now would strand that copy with nothing naming it. Refusing keeps the entry, which still points
+   * at the copy, so running `remove` again deletes both.
+   */
+  const stored = account();
+  let written: Config | undefined;
+  await assert.rejects(
+    removeWorkspace(
+      {
+        config: { ...emptyConfig(), secrets: { store: 'file' }, accounts: { acme: stored } },
+        secrets: { kind: 'file', delete: async () => true },
+        async update(mutator) {
+          written = mutator({ ...emptyConfig(), secrets: { store: 'keychain' }, accounts: { acme: stored } });
+          return written;
+        },
+      },
+      'acme',
+    ),
+    /secret store changed while "acme" was being removed/,
+  );
+  assert.equal(written, undefined, 'the entry was dropped while its credential lives on in the new backend');
+});

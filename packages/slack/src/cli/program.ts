@@ -14,7 +14,7 @@ import {
 import { Command, CommanderError, Option } from 'commander';
 import { isExpired, parseBundle, type TokenBundle } from '../auth/bundle.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
-import { type InstallMode, renderManifest } from '../manifest.ts';
+import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
 import { doctor, type IdentityProbe } from '../operations/doctor.ts';
 import { type ProbeFetch, probeIdentity } from '../operations/identity.ts';
 import {
@@ -297,9 +297,9 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
          * the default would quietly downgrade a `send` workspace every time somebody renewed its grant, which is
          * the opposite of what "the same, again" means. Commander knows where the value came from; ask it.
          */
-        const was = (account.mode ?? account.tier) as InstallMode;
+        const was = parseMode(account.mode ?? account.tier, `"${alias}"`);
         const mode = command.getOptionValueSource('mode') === 'default' ? was : (String(flags.mode) as InstallMode);
-        const consent = mode === 'send' && was === 'read' ? await confirmWidening(context, options, alias) : undefined;
+        const consent = mode === 'send' && was === 'read' ? await confirmWidening(options, alias) : undefined;
         await signIn(context, options, {
           alias,
           mode,
@@ -403,11 +403,7 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
    *
    * The consent travels on the flow, because the sign-in this gates may be finished by a different process.
    */
-  async function confirmWidening(
-    context: SlackContext,
-    options: GlobalOptions,
-    alias: string,
-  ): Promise<LooseningConsent> {
+  async function confirmWidening(options: GlobalOptions, alias: string): Promise<LooseningConsent> {
     const marker = agentMarker(env);
     if (marker) {
       throw new CommsError('LOOSENING_REFUSED', `widening "${alias}" from read to send is not an agent's to do`, {

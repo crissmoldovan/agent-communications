@@ -251,7 +251,24 @@ export function doctor(input: DoctorInput): DoctorResult {
      * The scopes on a token can change under us: an admin can narrow an app, and Slack's optional scopes let a
      * person grant less than was asked for. `read` claiming to be unable to post is only true while this holds.
      */
-    const mode = (workspace.mode ?? 'read') as InstallMode;
+    /*
+     * A mode that is neither `read` nor `send` is a finding, not a crash — and not a guess.
+     *
+     * `doctor` is what somebody runs because something is wrong, so it must survive the thing being wrong. It
+     * also must not quietly assume `read`: that would report a hand-edited typo as a healthy read-only install.
+     */
+    if (workspace.mode !== 'read' && workspace.mode !== 'send') {
+      checks.push({
+        id: 'scopes',
+        title: `Permissions for ${workspace.alias}`,
+        status: 'fail',
+        detail: `the stored mode "${workspace.mode}" is neither "read" nor "send"`,
+        fix: `agent-slack workspace remove ${workspace.alias}, then add it again`,
+        workspace: workspace.alias,
+      });
+      continue;
+    }
+    const mode: InstallMode = workspace.mode;
     /*
      * Slack's list when Slack gave one, ours otherwise.
      *

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -373,4 +373,35 @@ test('flow ids draw evenly from the whole alphabet', () => {
   const ratio = early.reduce((a, b) => a + b, 0) / late.reduce((a, b) => a + b, 0);
   // Fair gives ~1.00; the modulo bias gave ~1.29. The band is wide enough not to flake.
   assert.ok(ratio > 0.9 && ratio < 1.12, `early/late ratio ${ratio.toFixed(3)} (mean ${mean.toFixed(0)})`);
+});
+
+test('the sweep of an expired flow takes every file with it, not just the record', async () => {
+  // Removing only the `.json` left the claim, outcome and log behind with nothing that would ever sweep them.
+  const { dir, flows } = await store();
+  const dead = flow({ expiresAt: new Date(NOW.getTime() - 1).toISOString() });
+  await flows.save(dead);
+  await flows.recordOutcome(dead.flowId, { code: 'fake-authorisation-code' });
+  await writeFile(join(dir, 'slack', 'flows', `${dead.flowId}.log`), 'listener output\n');
+
+  assert.deepEqual(await flows.pending(), []);
+  assert.deepEqual(await readdir(join(dir, 'slack', 'flows')), [], 'an expired flow left files behind');
+});
+
+test('a claim on a flow that is gone gives the marker back', async () => {
+  /*
+   * `claim` acquires the marker first and reads the record second, so it can hold a marker for a flow that turns
+   * out not to exist. That marker has to be released, or it claims the flow for nobody.
+   *
+   * What this does *not* cover: the marker's own write or close failing after the create succeeded, which is
+   * handled in `claim` and released the same way, but cannot be forced here without replacing the filesystem.
+   * Said so rather than implied by the name.
+   */
+  const { dir, flows } = await store();
+  const saved = flow();
+  await flows.save(saved);
+  await rm(join(dir, 'slack', 'flows', `${saved.flowId}.json`));
+
+  await assert.rejects(flows.claim(saved.flowId), /not waiting to be finished/);
+  const left = await readdir(join(dir, 'slack', 'flows'));
+  assert.deepEqual(left, [], `a claim on nothing left ${left.join(', ')}`);
 });

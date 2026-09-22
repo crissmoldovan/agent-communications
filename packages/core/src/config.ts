@@ -507,7 +507,16 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   // `chat` classified as no change at all and `ConfigStore.update` took it without asking anyone — a loosening that
   // walks straight through the gate built to catch exactly that.
   for (const [alias, account] of Object.entries(after.accounts)) {
-    const previous = Object.values(before.accounts).find((existing) => existing.id === account.id);
+    /*
+     * By id, and failing that by alias.
+     *
+     * Re-authorising a Slack workspace mints a new account id on purpose, so the new credential can be staged
+     * beside the old one. An id lookup alone then finds nothing and measures the renewed account against the
+     * *default* — so a workspace set to `never`, re-authorised into `chat`, read as a new account arriving at the
+     * default and needed nobody's consent. The alias is what the person set the policy on.
+     */
+    const previous =
+      Object.values(before.accounts).find((existing) => existing.id === account.id) ?? before.accounts[alias];
     const was = previous ? (previous.sendPolicy ?? before.defaults.sendPolicy) : before.defaults.sendPolicy;
     const now = account.sendPolicy ?? after.defaults.sendPolicy;
     if (POLICY_RANK[now] < POLICY_RANK[was]) loosened.push(`accounts.${alias}.sendPolicy`);
