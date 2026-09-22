@@ -186,10 +186,21 @@ The lesson is about the record rather than the API: "no source found says where 
 claim about a search, and it was written down as though it were a claim about Slack. The S2 manifest
 now sets it, and a test fails if it is ever turned off.
 
-> **The remaining unknowns have a checklist.**
-> [`2026-09-22-slack-live-verification.md`](2026-09-22-slack-live-verification.md) says what to run,
-> what each outcome means and which line to change for each answer. Update this section with what was
-> observed, and the date, once it has been run.
+> **Observed against a real workspace, 2026-09-22** — the run in
+> [`2026-09-22-slack-live-verification.md`](2026-09-22-slack-live-verification.md), with an app created
+> from the S2 manifest:
+>
+> - **`pkce_enabled` in the manifest takes effect.** The `localhost` redirect was accepted as a desktop
+>   redirect and the exchange succeeded with no client secret.
+> - **`oauth.v2.access` is the right exchange endpoint** for a user-scope-only PKCE app. It returned a user
+>   token under `authed_user` and no bot token.
+> - **`token_rotation_enabled` in the manifest takes effect.** The grant carried a refresh token and an
+>   `expires_in` of twelve hours; nothing had to be switched on in the app settings.
+> - **The grant held exactly the scopes asked for** — and **Slack adds `identify` to every user token
+>   anyway**, reporting it in the `x-oauth-scopes` header on `auth.test` though not in the grant. `doctor`
+>   treated that as drift until it was told otherwise; see `IMPLICIT_USER_SCOPES`.
+> - **`auth.test` returns the scope header**, so `doctor`'s drift check compares against Slack's own record.
+> - **`127.0.0.1` was not tried.** Not load-bearing: the code uses `localhost`.
 
 Sources: <https://docs.slack.dev/authentication/using-pkce/>,
 <https://docs.slack.dev/reference/methods/oauth.v2.user.access/>

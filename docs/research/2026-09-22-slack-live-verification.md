@@ -1,8 +1,10 @@
 # Slack S2: the things only a real workspace can settle
 
-**Status: not yet run.** Everything in `packages/slack` is built and tested against a fake Slack, and
-no sign-in has ever met the real one. This is the checklist, what each outcome means, and what to
-change for each answer.
+**Status: run 2026-09-22, against a real workspace.** Sign-in, exchange, rotation and `doctor`'s identity
+check all worked first time. It found one real bug — `doctor` reported the `identify` scope Slack adds to
+every user token as drift — fixed in the same change that recorded these results. What was observed is in
+§1.4a of [the platform research](2026-09-19-slack-platform.md); the checklist below stays, for the next
+workspace or the next Slack change.
 
 It started as four unknowns. One of them — how an app opts into PKCE — turned out to be documented all
 along, in two places, and the code now sets `oauth_config.pkce_enabled`. It was recorded as unknown
