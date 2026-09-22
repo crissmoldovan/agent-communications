@@ -6,16 +6,24 @@ import type { WorkspaceView } from '../operations/workspaces.ts';
 /**
  * Turning results into something to read at a terminal.
  *
- * Every string a workspace controls has already been neutralised by the operation that produced it. This adds the
- * one thing a terminal needs on top: control characters stripped, because a workspace named with a `\r` can
- * overwrite the line above it and make a list say something nobody wrote.
+ * Every string a workspace controls has already been neutralised by the operation that produced it, and
+ * `stripInvisible` removes escape sequences, lone carriage returns and zero-width characters — so none of that
+ * is this layer's job. What is left to do here is the part `stripInvisible` deliberately does not do.
  */
 
-/** Safe to print: no control characters, no invisible characters, and bounded. */
+/**
+ * One value, safe to put in a row.
+ *
+ * `stripInvisible` keeps tab and newline on purpose: they are legitimate in a message body, which is what it was
+ * written for. They are not legitimate in a table cell. A workspace named `"Acme\nchannels:history, chat:write"`
+ * would otherwise print a second line that looks exactly like the scopes row beneath it, in a list whose whole
+ * job is to say what each workspace is allowed to do.
+ *
+ * Bounded for the same reason: a five-hundred-character name is not an attack, but it is a row nobody can read.
+ */
 function cell(value: string, width = 40): string {
   const { text } = stripInvisible(value);
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point.
-  const flat = text.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+  const flat = text.replace(/[\t\n]+/g, ' ').trim();
   return flat.length > width ? `${flat.slice(0, width - 1)}…` : flat;
 }
 
