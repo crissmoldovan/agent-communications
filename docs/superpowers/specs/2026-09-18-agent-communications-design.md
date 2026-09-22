@@ -910,7 +910,7 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
 | `gmail_message_get`, `gmail_thread_get`, `gmail_thread_timeline` | read | readOnly |
 | `gmail_attachments_find` (cross-inbox) | read | readOnly |
 | `gmail_contacts_search` (cross-inbox), `gmail_followups` | read | readOnly |
-| `gmail_labels_list`, `gmail_sendas_list`, `gmail_drafts_list`, `gmail_draft_get` | read | readOnly |
+| `gmail_labels_list`, `gmail_sendas_list`, `gmail_draft_list`, `gmail_draft_get` | read | readOnly |
 | `gmail_attachment_download`, `gmail_export` | local write | destructive:false, openWorld:false |
 | `gmail_draft_create`, `gmail_draft_reply` (mode reply / reply_all / forward), `gmail_draft_update` | mailbox write | destructive:false |
 | `gmail_draft_delete` | mailbox write | destructive |
