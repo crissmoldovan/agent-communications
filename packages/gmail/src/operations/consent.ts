@@ -380,12 +380,18 @@ async function writeReauth(
     if (landed === 'unknown') throw keepAndReport(error, existing.inbox.secretRef, 'Run `agent-gmail inbox list`.');
     if (landed === 'absent') throw await withdrawStaged(secrets, existing.inbox.secretRef, error);
     /*
-     * Present — but was it this write? The token lives under the same reference either way, so its presence proves
-     * nothing. Only a row identical to the one this reauth built says the write landed; anything else, including a
-     * write the config refused as a loosening, is the original error.
+     * Present — but was it this write?
+     *
+     * The token lives under the same reference either way, so its presence proves nothing; and a reauth that changes
+     * nothing — the same client, the same scopes — writes a row identical to the one already there, so the row alone
+     * proves nothing either. A write that failed before storing the token would then be reported as a reauth that
+     * worked, while the mailbox still holds the old token. So both: the row this reauth built, and the store actually
+     * holding the token it minted, read fresh.
      */
     const after = findById(await context.config(), 'inbox', inboxId);
-    if (!after || !sameRow(after.inbox, written.inbox))
+    secrets.invalidate(existing.inbox.secretRef);
+    const holdsNewToken = (await secrets.get(existing.inbox.secretRef)) === tokens.refreshToken;
+    if (!after || !sameRow(after.inbox, written.inbox) || !holdsNewToken)
       throw await restorePrevious(secrets, existing.inbox.secretRef, previous, error);
     // The row is exactly what this reauth wrote: the write is in and only the lock's cleanup failed.
   }

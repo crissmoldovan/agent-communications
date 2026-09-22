@@ -1626,3 +1626,22 @@ test('client add --replace rotating one client’s secret: a write that never st
     'the downloaded JSON is still there',
   );
 });
+
+test('reauth that changes nothing: a token write that never stored is not called a success', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const id = await connectBySignIn(harness, context, 'work', 'read');
+  const secrets = await harness.core.secrets('file');
+  const before = await secrets.get(`gmail:refresh:${id}`);
+  // The same grant again, and the store refuses before writing anything: the row would match either way.
+  const store = secrets.set.bind(secrets);
+  secrets.set = async (ref, value) => {
+    if (ref === `gmail:refresh:${id}`) throw new CommsError('SECRET_STORE_UNAVAILABLE', 'the keychain is locked');
+    return store(ref, value);
+  };
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', tier: 'read', detached: false });
+  await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
+  await assert.rejects(reauth.listener?.result ?? Promise.resolve(), (error: unknown) => error instanceof CommsError);
+  secrets.set = store;
+  assert.equal(await secrets.get(`gmail:refresh:${id}`), before, 'the mailbox still holds the token it had');
+});
