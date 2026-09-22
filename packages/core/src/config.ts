@@ -90,6 +90,26 @@ export interface AccountConfig {
   secretRef: string;
   sendPolicy?: SendPolicy | undefined;
   createdAt: string;
+  /**
+   * The OAuth client this account's token was issued by, and the app it belongs to.
+   *
+   * Recorded because the Gmail release found the opposite: a reauth used the first OAuth client in the config
+   * rather than the inbox's own, and then did not record which one it had used. Slack makes that worse — D8
+   * means **one app per workspace**, so "the first app" is wrong more often than it is right — and a reauth
+   * that silently moves an account onto a different app changes what it can do without saying so.
+   *
+   * Optional because the key is additive: a config written before these existed parses unchanged.
+   */
+  oauthClientId?: string | undefined;
+  appId?: string | undefined;
+  /**
+   * `read` or `send`, as installed.
+   *
+   * Kept beside `grantedScopes` rather than derived from them, because the two answer different questions: the
+   * scopes are what Slack granted, and this is what the person asked for. A disagreement between them is drift
+   * worth reporting, and a value derived from the scopes could never disagree.
+   */
+  mode?: string | undefined;
 }
 
 export interface Config {
@@ -168,6 +188,9 @@ const accountSchema = z.looseObject({
   secretRef: z.string().min(1),
   sendPolicy: sendPolicySchema.optional(),
   createdAt: z.string(),
+  oauthClientId: z.string().min(1).optional(),
+  appId: z.string().min(1).optional(),
+  mode: z.string().min(1).optional(),
 });
 
 const defaultsSchema = z.looseObject({
