@@ -339,12 +339,23 @@ async function writeReauth(
     alias: existing.alias,
     inbox: { ...existing.inbox, ...grantFields(flow, identity, granted, existing.inbox) },
   };
+  /*
+   * Whether the write refused itself, rather than failing around itself.
+   *
+   * The reconciliation below exists for a write that may have committed and then reported a failure — a lock it
+   * could not release. A check inside the mutator is the opposite: it wrote nothing, on purpose. A reauth that
+   * changes nothing produces a row identical to the one already there, and its token is already stored, so without
+   * this the refusal would look exactly like a write that landed, and a deliberate refusal would be reported as
+   * success.
+   */
+  let refused = false;
   try {
     // Inside the boundary that puts things back: a keychain write can land after it reported a timeout.
     await secrets.set(existing.inbox.secretRef, tokens.refreshToken);
     await context.core.config.update((current) => {
       // By id, under whatever key it holds now: a rename is followed rather than undone.
       const now = findById(current, 'inbox', inboxId);
+      refused = true;
       if (!now) throw inboxGone();
       requireSameClient(current, flow.clientName, clientId);
       /*
@@ -366,10 +377,13 @@ async function writeReauth(
           hint: `Remove "${twin[0]}" first if you want it under this name.`,
         });
       }
+      refused = false;
       written = { alias: now.alias, inbox: { ...now.inbox, ...grantFields(flow, identity, granted, now.inbox) } };
       return { ...current, inboxes: { ...current.inboxes, [now.alias]: written.inbox } };
     });
   } catch (error) {
+    // A check inside the write refused it: nothing was written, whatever the row and the store now look like.
+    if (refused) throw await restorePrevious(secrets, existing.inbox.secretRef, previous, error);
     /*
      * The row existed, under this lock, when the token was written — and nothing that holds the lock can have removed
      * it since. So normally the token stays referenced whatever the write did. The exception is a release that does

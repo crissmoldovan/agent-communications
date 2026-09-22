@@ -1706,3 +1706,140 @@ test('reauth: a write that committed before the store went quiet says the settin
   secrets.get = read;
   assert.equal((await inboxList(context))[0]?.tier, 'organize', 'the settings it says were updated, were');
 });
+
+test('a reauth that changes nothing still refuses when its client was replaced under it', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const id = await connectBySignIn(harness, context, 'work', 'read');
+  const secrets = await harness.core.secrets('file');
+  meddleAfterStoring(
+    secrets,
+    (ref) => ref === `gmail:refresh:${id}`,
+    () =>
+      harness.core.config.update((config) => ({
+        ...config,
+        clients: {
+          default: { ...(config.clients.default as ClientConfig), clientId: 'replaced.apps.googleusercontent.com' },
+        },
+      })),
+  );
+  // The same tier as it already has: the row this would write is the row that is already there.
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', tier: 'read', detached: false });
+  await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
+  await assert.rejects(
+    reauth.listener?.result ?? Promise.resolve(),
+    is('CONFIG', /changed while this sign-in was being completed/),
+  );
+});
+
+test('a reauth that changes nothing still refuses a duplicate connected under it', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const id = await connectBySignIn(harness, context, 'work', 'read');
+  const secrets = await harness.core.secrets('file');
+  meddleAfterStoring(
+    secrets,
+    (ref) => ref === `gmail:refresh:${id}`,
+    () =>
+      harness.core.config.update((current) => ({
+        ...current,
+        inboxes: {
+          ...current.inboxes,
+          twin: {
+            id: 'ibx_NNNNNNNNNNNNNNNN',
+            provider: 'gmail',
+            email: 'jo@example.test',
+            identity: 'oidc' as const,
+            sub: 'sub-1',
+            client: 'default',
+            tier: 'read',
+            contacts: false,
+            grantedScopes: [],
+            secretRef: 'gmail:refresh:ibx_NNNNNNNNNNNNNNNN',
+            internalDomains: [],
+            createdAt: '2026-09-22T00:00:00.000Z',
+          },
+        },
+      })),
+  );
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', tier: 'read', detached: false });
+  await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
+  await assert.rejects(reauth.listener?.result ?? Promise.resolve(), is('CONFIG', /was connected as "twin"/));
+});
+
+test('registering the same client again still refuses once a mailbox has attached to it', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const json = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    json,
+    JSON.stringify({
+      installed: { client_id: 'project-a.apps.googleusercontent.com', client_secret: 'fake-secret-a' },
+    }),
+  );
+  await clientAdd(context, { path: json, name: 'desktop', store: 'file', noProbe: true });
+  const secrets = await harness.core.secrets('file');
+  // A different client under the same name, with a mailbox attaching mid-write — but the store ends up holding a
+  // secret that matches what this command meant to write, so only the refusal itself can stop it.
+  const other = join(tempDir(), 'other.json');
+  await writeFile(
+    other,
+    JSON.stringify({
+      installed: { client_id: 'project-b.apps.googleusercontent.com', client_secret: 'fake-secret-a' },
+    }),
+  );
+  meddleAfterStoring(
+    secrets,
+    (ref) => ref === clientSecretRef('desktop'),
+    () =>
+      harness.core.config.update((current) => ({
+        ...current,
+        inboxes: {
+          ...current.inboxes,
+          work: {
+            id: 'ibx_MMMMMMMMMMMMMMMM',
+            provider: 'gmail',
+            email: 'jo@example.test',
+            identity: 'oidc' as const,
+            sub: 'sub-1',
+            client: 'desktop',
+            tier: 'read',
+            contacts: false,
+            grantedScopes: [],
+            secretRef: 'gmail:refresh:ibx_MMMMMMMMMMMMMMMM',
+            internalDomains: [],
+            createdAt: '2026-09-22T00:00:00.000Z',
+          },
+        },
+      })),
+  );
+  await assert.rejects(
+    clientAdd(context, { path: other, name: 'desktop', replace: true, store: 'file', noProbe: true }),
+    is('CONFIG', /mailboxes use it/),
+  );
+  assert.equal((await harness.core.config.load()).clients.desktop?.clientId, 'project-a.apps.googleusercontent.com');
+});
+
+test('re-registering an identical client still refuses when the secret store moved under it', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const json = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    json,
+    JSON.stringify({
+      installed: { client_id: 'project-a.apps.googleusercontent.com', client_secret: 'fake-secret-a' },
+    }),
+  );
+  await clientAdd(context, { path: json, name: 'desktop', store: 'file', noProbe: true });
+  // The same client and the same secret: the row this would write is already there, and the store already holds it.
+  // Only the refusal itself can stop this being reported as a success.
+  meddleAfterStoring(
+    await harness.core.secrets('file'),
+    (ref) => ref === clientSecretRef('desktop'),
+    () => harness.core.config.update((config) => ({ ...config, secrets: { store: 'keychain' } })),
+  );
+  await assert.rejects(
+    clientAdd(context, { path: json, name: 'desktop', replace: true, store: 'file', noProbe: true }),
+    is('TRANSIENT', /secret store was changed/),
+  );
+});

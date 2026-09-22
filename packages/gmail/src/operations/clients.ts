@@ -153,6 +153,9 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
       secretRef,
       addedAt: existing?.addedAt ?? context.now().toISOString(),
     };
+    // Whether the write refused itself rather than failing around itself: re-registering the same client with the
+    // same secret changes nothing, so a refusal would otherwise look exactly like a write that landed.
+    let refused = false;
     try {
       /*
        * Inside the boundary that puts it back: a keychain write can land after it has reported a timeout, so even a
@@ -166,6 +169,7 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
         });
       }
       await context.core.config.update((current) => {
+        refused = true;
         // Never switch the store back: only `secrets migrate` changes it, and it moves the secrets with it.
         if (current.secrets?.store && current.secrets.store !== chosen) {
           throw new CommsError('TRANSIENT', 'the secret store was changed while this ran', {
@@ -180,6 +184,7 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
             hint: 'Add the new client under another name, then `inbox reauth` each mailbox onto it.',
           });
         }
+        refused = false;
         return { ...current, secrets: { store: chosen }, clients: { ...current.clients, [name]: row } };
       });
     } catch (error) {
@@ -191,12 +196,14 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
        * would read as success, the error would be swallowed, and `--move` would then delete the only copy of the new
        * secret. So the row must match completely *and* the store must hold the new secret, read fresh.
        */
-      const landed = await writeOutcome(async () => {
-        const held = (await context.config()).clients[name];
-        if (!held || JSON.stringify(held) !== JSON.stringify(row)) return false;
-        secrets.invalidate(secretRef);
-        return (await secrets.get(secretRef)) === parsed.clientSecret;
-      });
+      const landed = refused
+        ? ('absent' as const)
+        : await writeOutcome(async () => {
+            const held = (await context.config()).clients[name];
+            if (!held || JSON.stringify(held) !== JSON.stringify(row)) return false;
+            secrets.invalidate(secretRef);
+            return (await secrets.get(secretRef)) === parsed.clientSecret;
+          });
       if (landed === 'unknown') throw keepAndReport(error, secretRef, 'Run `agent-gmail client list`.');
       if (landed === 'absent') {
         // Exactly as it was: the previous secret, or nothing when there was none.
