@@ -820,6 +820,47 @@ test('a former name cannot be moved to an account that did not replace its own',
   );
 });
 
+test('a reauth that replaces an account must carry every one of its former names', async () => {
+  const config = (): ConfigV2 =>
+    v2({
+      accounts: { 'cue/slack': account(ACC_A) },
+      formerNames: {
+        inboxes: {},
+        accounts: { live: { name: 'cue/slack', id: ACC_A }, older: { name: 'cue/slack', id: ACC_A } },
+      },
+    });
+  // None moved.
+  await assert.rejects(
+    storeWith(config()).update((current) => ({ ...current, accounts: { 'cue/slack': account(ACC_B) } })),
+    isError('CONFIG', /pointing at an account a reauth just replaced/),
+  );
+  // One of two moved.
+  await assert.rejects(
+    storeWith(config()).update((current) => {
+      const next = current as ConfigV2;
+      return {
+        ...next,
+        accounts: { 'cue/slack': account(ACC_B) },
+        formerNames: {
+          ...next.formerNames,
+          accounts: { ...next.formerNames.accounts, live: { name: 'cue/slack', id: ACC_B } },
+        },
+      };
+    }),
+    isError('CONFIG', /former name "older"/),
+  );
+  // All moved: accepted.
+  const store = storeWith(config());
+  await store.update((current) => {
+    const next = retargetFormerNames(current as ConfigV2, 'account', ACC_A, ACC_B);
+    return { ...next, accounts: { 'cue/slack': account(ACC_B) } };
+  });
+  // And an account simply removed, with nothing replacing it, keeps its former names as they were.
+  const removed = storeWith(config());
+  await removed.update((current) => ({ ...current, accounts: {} }));
+  assert.equal(((await removed.load()) as ConfigV2).formerNames.accounts.live?.id, ACC_A);
+});
+
 test('a migration that forges, omits or adds a former name is refused', async () => {
   const store = storeWith(machine());
   const plan = ready(planNamesMigration(await store.load()));

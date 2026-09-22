@@ -688,7 +688,13 @@ function formerNamesDropped(before: ConfigV2, after: ConfigV2): string | null {
     for (const [key, record] of Object.entries(before.formerNames[map])) {
       const now = Object.hasOwn(after.formerNames[map], key) ? after.formerNames[map][key] : undefined;
       if (!now) return `forgets the former name "${key}"`;
-      if (now.id === record.id) continue;
+      if (now.id === record.id) {
+        // Left behind by a reauth that replaced its account: it would report a connected workspace as removed.
+        if (map === 'accounts' && replacementOf(before, after, record.id)) {
+          return `leaves the former name "${key}" pointing at an account a reauth just replaced`;
+        }
+        continue;
+      }
       if (map !== 'accounts' || !followsReauth(before, after, record.id, now.id)) {
         return `points the former name "${key}" at a different account`;
       }
@@ -705,6 +711,11 @@ function formerNamesDropped(before: ConfigV2, after: ConfigV2): string | null {
  * one must be new in this write; and they must be the same person in the same workspace. Without the first
  * condition, a former name of an account removed long ago could be pointed at whatever was connected next.
  */
+/** The account that replaced `fromId` in this write as its reauth, if one did. */
+function replacementOf(before: ConfigV2, after: ConfigV2, fromId: string): AccountConfig | undefined {
+  return Object.values(after.accounts).find((row) => followsReauth(before, after, fromId, row.id));
+}
+
 function followsReauth(before: ConfigV2, after: ConfigV2, fromId: string, toId: string): boolean {
   const was = Object.values(before.accounts).find((row) => row.id === fromId);
   const now = Object.values(after.accounts).find((row) => row.id === toId);
