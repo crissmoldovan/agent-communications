@@ -32,6 +32,14 @@ export interface Harness {
   readonly calls: ExchangeCall[];
   /** What the next exchange returns. Replaceable mid-test, to model a second sign-in answering differently. */
   reply: (params: Record<string, string>) => unknown;
+  /**
+   * What `auth.test` comes back with, for the one network call `doctor` makes.
+   *
+   * Always supplied, never optional: a test that forgot it would reach the real slack.com, and would pass or
+   * fail depending on somebody's network rather than on the code.
+   */
+  authTest: () => Response;
+  probe: (input: string | URL, init?: RequestInit) => Promise<Response>;
   exchange(params: Record<string, string>): Promise<unknown>;
   /** Writes a connected workspace straight into the config, for tests that are not about signing in. */
   addWorkspace(options: {
@@ -97,6 +105,13 @@ export async function newHarness(): Promise<Harness> {
     env,
     calls,
     reply: () => slackOk(),
+    authTest: () =>
+      new Response(JSON.stringify({ ok: true, team_id: 'T0001', user_id: 'U0001' }), {
+        headers: { 'x-oauth-scopes': scopesForMode('read').join(',') },
+      }),
+    async probe() {
+      return harness.authTest();
+    },
     async exchange(params) {
       calls.push({ params });
       return harness.reply(params);

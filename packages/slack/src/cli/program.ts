@@ -15,7 +15,8 @@ import { Command, CommanderError, Option } from 'commander';
 import { parseBundle, type TokenBundle } from '../auth/bundle.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { type InstallMode, renderManifest } from '../manifest.ts';
-import { doctor } from '../operations/doctor.ts';
+import { doctor, type IdentityProbe } from '../operations/doctor.ts';
+import { type ProbeFetch, probeIdentity } from '../operations/identity.ts';
 import {
   finishSignIn,
   type ListenerEntry,
@@ -53,6 +54,8 @@ export interface CliDeps extends SlackContextOptions {
   listenerCommand?: ListenerEntry;
   /** Opens the browser. Injected so a test does not. */
   openBrowser?: (url: string) => unknown;
+  /** The fetch `doctor` asks Slack with. Injected so a test never reaches the real one. */
+  probe?: ProbeFetch;
 }
 
 interface GlobalOptions {
@@ -321,8 +324,9 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
   program
     .command('doctor')
     .description('check everything that has to work, and say how to fix what does not')
+    .option('--offline', 'do not ask Slack anything; report only what the files say', false)
     .action(
-      act(async (context, options) => {
+      act(async (context, options, flags: Options) => {
         const config = await context.config();
         const secrets = await context.secrets();
         const bundles = new Map<string, TokenBundle | null | 'unreadable'>();
@@ -343,7 +347,21 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
             bundles.set(view.alias, 'unreadable');
           }
         }
-        const result = doctor({ config, now: context.now(), bundles });
+        /*
+         * One call per workspace, and only for a credential that could possibly work.
+         *
+         * `--offline` exists because this is the only thing here that needs a network, and somebody diagnosing a
+         * machine with no network still deserves everything the files can tell them. Without the flag a failure
+         * to reach Slack is reported as not having asked, never as a problem with the install.
+         */
+        const identities = new Map<string, IdentityProbe>();
+        if (flags.offline !== true) {
+          for (const [alias, bundle] of bundles) {
+            if (bundle === null || bundle === 'unreadable') continue;
+            identities.set(alias, await probeIdentity(bundle, deps.probe ? { fetch: deps.probe } : {}));
+          }
+        }
+        const result = doctor({ config, now: context.now(), bundles, identities });
         if (!result.healthy) softExit = 78;
         writeResult(result, output(), () => renderDoctor(result, options.color), streams);
       }),

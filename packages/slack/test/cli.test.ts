@@ -60,6 +60,7 @@ async function cli(
       stdin: Object.assign(new PassThrough(), { isTTY: false }),
     },
     openBrowser: () => undefined,
+    probe: (input, init) => harness.probe(input, init),
     listenerCommand: {
       command: process.execPath,
       args: ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', CLI_ENTRY],
@@ -624,4 +625,95 @@ test('reauth send → send renews without asking anybody anything', async () => 
   );
   assert.equal(result.code, EXIT_CODES.OK, result.stderr);
   assert.equal((await harness.core.config.load()).accounts.acme?.mode, 'send');
+});
+
+test('doctor asks Slack who the token is, and fails when Slack says somebody else', async () => {
+  /*
+   * The only check here that can tell a revoked token from a working one. Everything else reads files this
+   * package wrote, so it can only confirm we still agree with ourselves — a token revoked in Slack's own admin
+   * screens looks perfect from disk.
+   *
+   * A token that works and is *somebody else's* is worse than a broken one: every later command would act as
+   * that account while naming this one.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', workspaceId: 'T0001', userId: 'U0001' });
+  harness.authTest = () => new Response(JSON.stringify({ ok: true, team_id: 'T0001', user_id: 'U9999' }));
+
+  const result = await cli(harness, ['--json', 'doctor']);
+  assert.equal(result.code, EXIT_CODES.CONFIG);
+  const checks = result.json<Envelope<{ checks: { id: string; status: string; detail: string }[] }>>().data?.checks;
+  const identity = checks?.find((check) => check.id === 'identity');
+  assert.equal(identity?.status, 'fail');
+  assert.match(identity?.detail ?? '', /U9999/);
+});
+
+test('doctor reports a revoked token as revoked, with the command that replaces it', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  harness.authTest = () => new Response(JSON.stringify({ ok: false, error: 'token_revoked' }));
+
+  const result = await cli(harness, ['--json', 'doctor']);
+  assert.equal(result.code, EXIT_CODES.CONFIG);
+  const identity = result
+    .json<Envelope<{ checks: { id: string; status: string; detail: string; fix: string | null }[] }>>()
+    .data?.checks.find((check) => check.id === 'identity');
+  assert.equal(identity?.status, 'fail');
+  assert.match(identity?.detail ?? '', /token_revoked/);
+  assert.match(identity?.fix ?? '', /reauth acme/);
+});
+
+test('doctor on a machine with no network says it did not ask, and stays healthy', async () => {
+  // An install is not broken because a laptop is on a train, and a `doctor` that fails on a plane is one people
+  // learn to ignore.
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  harness.probe = () => Promise.reject(new Error('getaddrinfo ENOTFOUND slack.com'));
+
+  const result = await cli(harness, ['--json', 'doctor']);
+  assert.equal(result.code, EXIT_CODES.OK);
+  const identity = result
+    .json<Envelope<{ checks: { id: string; status: string; detail: string }[] }>>()
+    .data?.checks.find((check) => check.id === 'identity');
+  assert.equal(identity?.status, 'unknown');
+  assert.match(identity?.detail ?? '', /ENOTFOUND/);
+});
+
+test('--offline asks Slack nothing at all', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  harness.probe = () => assert.fail('--offline reached the network');
+
+  const result = await cli(harness, ['--json', 'doctor', '--offline']);
+  assert.equal(result.code, EXIT_CODES.OK);
+  const identity = result
+    .json<Envelope<{ checks: { id: string; status: string; detail: string }[] }>>()
+    .data?.checks.find((check) => check.id === 'identity');
+  assert.equal(identity?.status, 'unknown');
+  assert.equal(identity?.detail, 'not asked');
+});
+
+test('scope drift is measured against what Slack reports, when Slack reports it', async () => {
+  /*
+   * Comparing the recorded scopes against the mode they were recorded for can only agree with itself. An admin
+   * narrowing an app is exactly the drift this check is named for, and it is invisible from disk.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  harness.authTest = () =>
+    new Response(JSON.stringify({ ok: true, team_id: 'T0001', user_id: 'U0001' }), {
+      headers: {
+        'x-oauth-scopes': scopesForMode('read')
+          .filter((s) => s !== 'search:read')
+          .join(','),
+      },
+    });
+
+  const result = await cli(harness, ['--json', 'doctor']);
+  assert.equal(result.code, EXIT_CODES.CONFIG);
+  const scopes = result
+    .json<Envelope<{ checks: { id: string; status: string; detail: string }[] }>>()
+    .data?.checks.find((check) => check.id === 'scopes');
+  assert.equal(scopes?.status, 'fail');
+  assert.match(scopes?.detail ?? '', /missing search:read/);
 });

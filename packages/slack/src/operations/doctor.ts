@@ -33,6 +33,12 @@ export interface DoctorResult {
   readonly checks: readonly Check[];
 }
 
+/** What one `auth.test` came back with, or why it could not be made. */
+export type IdentityProbe =
+  | { readonly kind: 'ok'; readonly workspaceId: string; readonly userId: string; readonly scopes?: readonly string[] }
+  | { readonly kind: 'rejected'; readonly error: string }
+  | { readonly kind: 'unreachable'; readonly why: string };
+
 export interface DoctorInput {
   readonly config: Config;
   readonly now: Date;
@@ -61,6 +67,14 @@ export interface DoctorInput {
    * that never happened would be a clean bill of health for something nobody looked at.
    */
   readonly otherSlackServers?: readonly string[] | undefined;
+  /**
+   * What Slack says about each stored credential, when it was asked.
+   *
+   * Absent for an alias means nothing asked — offline, or no usable token — and that is reported as unknown
+   * rather than as health. This is the one network call `doctor` makes, and it is the whole difference between
+   * "a credential is stored" and "the credential works, and belongs to who this says it does".
+   */
+  readonly identities?: ReadonlyMap<string, IdentityProbe> | undefined;
 }
 
 export function doctor(input: DoctorInput): DoctorResult {
@@ -146,6 +160,62 @@ export function doctor(input: DoctorInput): DoctorResult {
     }
 
     /*
+     * What Slack says this credential is, which is the only check here that can tell a revoked token from a
+     * working one.
+     *
+     * Everything else reads files this package wrote, so it can only ever confirm that we still agree with
+     * ourselves. A token revoked in Slack's own admin screens, or one belonging to somebody who has left the
+     * workspace, looks perfect from disk.
+     *
+     * Not reaching Slack is reported as not having asked. An install is not broken because a laptop is on a
+     * train, and a `doctor` that fails on a plane is one people learn to ignore.
+     */
+    const identity = input.identities?.get(workspace.alias);
+    if (identity === undefined || identity.kind === 'unreachable') {
+      checks.push({
+        id: 'identity',
+        title: `Slack's view of ${workspace.alias}`,
+        status: 'unknown',
+        detail: identity ? `could not ask Slack: ${identity.why}` : 'not asked',
+        fix: null,
+        workspace: workspace.alias,
+      });
+    } else if (identity.kind === 'rejected') {
+      checks.push({
+        id: 'identity',
+        title: `Slack's view of ${workspace.alias}`,
+        status: 'fail',
+        detail: `Slack refused the stored token: ${identity.error}`,
+        fix: `agent-slack workspace reauth ${workspace.alias}`,
+        workspace: workspace.alias,
+      });
+    } else if (identity.workspaceId !== workspace.workspaceId || identity.userId !== workspace.userId) {
+      /*
+       * The token works and is somebody else's.
+       *
+       * Worse than a broken one, and invisible from disk: every later command would act as that account while
+       * naming this one, and the audit trail would say what the configuration says rather than what happened.
+       */
+      checks.push({
+        id: 'identity',
+        title: `Slack's view of ${workspace.alias}`,
+        status: 'fail',
+        detail: `the stored token acts as ${identity.userId} in ${identity.workspaceId}, not ${workspace.userId} in ${workspace.workspaceId}`,
+        fix: `agent-slack workspace remove ${workspace.alias}, then add it again`,
+        workspace: workspace.alias,
+      });
+    } else {
+      checks.push({
+        id: 'identity',
+        title: `Slack's view of ${workspace.alias}`,
+        status: 'ok',
+        detail: `Slack agrees: ${identity.userId} in ${identity.workspaceId}`,
+        fix: null,
+        workspace: workspace.alias,
+      });
+    }
+
+    /*
      * The 30-day one, warned about before it bites.
      *
      * Slack expires refresh tokens issued to a PKCE app after 30 days. A workspace nobody has touched for a
@@ -182,7 +252,15 @@ export function doctor(input: DoctorInput): DoctorResult {
      * person grant less than was asked for. `read` claiming to be unable to post is only true while this holds.
      */
     const mode = (workspace.mode ?? 'read') as InstallMode;
-    const { missing, extra } = scopeMismatch(mode, workspace.grantedScopes);
+    /*
+     * Slack's list when Slack gave one, ours otherwise.
+     *
+     * Comparing the recorded scopes against the mode they were recorded for can only ever agree with itself —
+     * it catches a bug in this package and nothing that happened in Slack. An admin narrowing an app is exactly
+     * the drift this check is named for, and it is invisible from disk.
+     */
+    const observed = identity?.kind === 'ok' ? identity.scopes : undefined;
+    const { missing, extra } = scopeMismatch(mode, observed ?? workspace.grantedScopes);
     if (missing.length > 0 || extra.length > 0) {
       checks.push({
         id: 'scopes',
@@ -202,7 +280,9 @@ export function doctor(input: DoctorInput): DoctorResult {
         id: 'scopes',
         title: `Permissions for ${workspace.alias}`,
         status: 'ok',
-        detail: `${mode}: ${workspace.grantedScopes.length} scopes, exactly as recorded at sign-in`,
+        detail: observed
+          ? `${mode}: ${observed.length} scopes, exactly as Slack reports them`
+          : `${mode}: ${workspace.grantedScopes.length} scopes, exactly as recorded at sign-in`,
         fix: null,
         workspace: workspace.alias,
       });
