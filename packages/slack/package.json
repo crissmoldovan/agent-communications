@@ -34,7 +34,7 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --experimental-strip-types --test \"test/**/*.test.ts\""
+    "test": "node --experimental-strip-types --test --test-timeout=60000 \"test/**/*.test.ts\""
   },
   "optionalDependencies": {
     "@napi-rs/keyring": "2.1.0"
