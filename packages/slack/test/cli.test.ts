@@ -1087,6 +1087,9 @@ test('the identify scope Slack adds to every user token is not reported as drift
     .json<Envelope<{ checks: { id: string; status: string; detail: string }[] }>>()
     .data?.checks.find((check) => check.id === 'scopes');
   assert.equal(scopes?.status, 'ok', scopes?.detail);
+  // And it says so, rather than calling the filtered eleven "exactly as Slack reports them" when Slack sent twelve.
+  assert.match(scopes?.detail ?? '', /the 11 scopes it asked for/);
+  assert.match(scopes?.detail ?? '', /plus identify, which Slack adds to every user token/);
   assert.equal(result.code, EXIT_CODES.OK);
 });
 

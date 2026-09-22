@@ -1,4 +1,4 @@
-# Slack S2: the things only a real workspace can settle
+# Slack S2: the live verification, and how to rerun it
 
 **Status: run 2026-09-22, against a real workspace.** Sign-in, exchange, rotation and `doctor`'s identity
 check all worked first time. It found one real bug — `doctor` reported the `identify` scope Slack adds to
@@ -6,19 +6,23 @@ every user token as drift — fixed in the same change that recorded these resul
 §1.4a of [the platform research](2026-09-19-slack-platform.md); the checklist below stays, for the next
 workspace or the next Slack change.
 
-It started as four unknowns. One of them — how an app opts into PKCE — turned out to be documented all
-along, in two places, and the code now sets `oauth_config.pkce_enabled`. It was recorded as unknown
-because a first pass over the docs did not find it, and "the docs do not mention it" was written down
-as though it were a fact about Slack rather than about the search. What remains below is genuinely
-open.
+**What the run showed.** The manifest's `pkce_enabled` and `token_rotation_enabled` both take effect,
+with nothing switched on by hand; `oauth.v2.access` is the right exchange endpoint; the grant held exactly
+the scopes asked for, with a refresh token and a twelve-hour expiry; and `auth.test` confirmed the token's
+identity and returned the scope header. Before the run there were four open questions — one of them, how an
+app opts into PKCE, had been documented all along and was recorded as unknown only because a first search
+missed it.
+
+The rest of this page is kept as the procedure for the next workspace, or for the next time Slack changes
+something: what to run, and what each possible outcome means.
 
 It takes about ten minutes and needs a Slack workspace you can install an app into. Nothing here
 posts a message, joins a channel, or changes anything in the workspace: the whole run is a sign-in
 and a read of your own identity.
 
-> **Why this blocks S3, not S2.** S2 is the sign-in machinery and it is complete and reviewed. S3
-> is the first phase that *reads* Slack, and every read depends on holding a token this flow
-> produced. Building S3 on unverified assumptions means discovering them through S3's bugs.
+> **Why it mattered.** S3 is the first phase that *reads* Slack, and every read depends on holding a
+> token this flow produced. Building S3 on unverified assumptions would have meant discovering them
+> through S3's bugs. They are verified now, so S3 is not blocked on this.
 
 ---
 
@@ -63,9 +67,10 @@ purpose.
 
 ### 1. Does the manifest's `pkce_enabled` actually take effect
 
-**Settled by documentation, not yet by a sign-in.** The manifest sets `oauth_config.pkce_enabled: true`,
-which both the PKCE guide and the manifest reference document. What has not been seen is Slack applying
-it to an app created from a pasted manifest.
+**Observed 2026-09-22: it does.** The manifest sets `oauth_config.pkce_enabled: true`, which both the PKCE
+guide and the manifest reference document, and Slack applied it to an app created from the pasted manifest:
+the `localhost` redirect was accepted and the exchange succeeded with no client secret. The table is what a
+rerun should do if that ever stops being true.
 
 Worth two seconds at step 2: after creating the app, open **OAuth & Permissions** and check the PKCE
 setting is on. The guide says that is where the same switch lives for standard apps.
@@ -78,19 +83,21 @@ setting is on. The guide says that is where the same switch lives for standard a
 
 ### 2. `oauth.v2.access` or `oauth.v2.user.access`
 
-Both are documented, both accept `code_verifier`, and the docs do not say which a user-scope-only
-PKCE app should call. The code calls `oauth.v2.access`, which is the one Slack's own PKCE page
-names.
+**Observed 2026-09-22: `oauth.v2.access` works** for a user-scope-only PKCE app. Both methods are documented
+and both accept `code_verifier`; the code calls the one Slack's own PKCE page names, and it returned a user
+token under `authed_user` and no bot token.
 
-A failure here shows up as *Slack refused the sign-in* with Slack's own error string. If that
+If a later run fails here, it shows up as *Slack refused the sign-in* with Slack's own error string. If that
 string suggests the method is wrong, change the one line in
 [`packages/slack/src/context.ts`](../../packages/slack/src/context.ts) (`postExchange`) and add
 `oauth.v2.user.access` to the method registry's `auth` group.
 
 ### 3. Does `token_rotation_enabled` in the manifest actually work
 
-**This one is new, and it is the most likely to fail.** The research describes token rotation as
-something you *enable in app settings*; the manifest key may or may not do it.
+**Observed 2026-09-22: the manifest key is enough.** The research described token rotation as something
+you *enable in app settings*, and it was the likeliest of the four to fail. It did not: the grant carried a
+refresh token and a twelve-hour `expires_in`. The rest of this section is what a rerun will see if that
+changes.
 
 The code refuses a grant with no refresh token rather than storing one, so you will know
 immediately:
@@ -114,22 +121,23 @@ about.
 
 ---
 
-## What `doctor` should say at step 4
+## What `doctor` said at step 4
 
 ```
 ok    Sign-in for live: access token valid until <12 hours out>
 ok    Slack's view of live: Slack agrees: U… in T…
-ok    Permissions for live: read: 11 scopes, exactly as Slack reports them
+ok    Permissions for live: read: the 11 scopes it asked for, as Slack reports them (plus identify, which Slack adds to every user token)
 ?     Rate limit: expected Tier 3 for an internal app; not yet observed
 ?     Other Slack MCP servers: not checked on this machine
 ```
 
 Three things to look at rather than skim past:
 
-- **"exactly as Slack reports them"** rather than "as recorded at sign-in" means the
-  `x-oauth-scopes` header was present, and the drift check is comparing against Slack rather than
-  against itself. If it says "as recorded at sign-in", the header is not there and §6 of the
-  review's scope-drift fix is weaker than intended.
+- **"as Slack reports them"** rather than "as recorded at sign-in" means the `x-oauth-scopes` header was
+  present, and the drift check is comparing against Slack rather than against itself. It was present.
+- **`identify`** is not in the manifest, and Slack adds it to every user token anyway. The first run
+  reported it as drift; `IMPLICIT_USER_SCOPES` exists because of that. Any *other* extra scope is real
+  drift.
 - **`Slack agrees`** is the whole point of the identity probe. Anything else means the token does
   not act as the account the config names.
 - The two `?` lines are correct. They mean nobody has looked, not that everything is fine.
@@ -138,10 +146,10 @@ Three things to look at rather than skim past:
 
 ## Afterwards
 
-Update [`2026-09-19-slack-platform.md`](2026-09-19-slack-platform.md) §1.4a with what was actually
-observed, replacing "must be confirmed against a real workspace" with the answer and the date.
-Then remove the three-unknowns note from the phase table in
-[the design spec](../superpowers/specs/2026-09-19-slack-design.md), and S3 can start.
+The 2026-09-22 results are recorded in §1.4a of
+[the platform research](2026-09-19-slack-platform.md) and in the phase note of
+[the design spec](../superpowers/specs/2026-09-19-slack-design.md). A later run that disagrees with them
+should update both, with the date.
 
 Step 5 removes the workspace from this machine. It does **not** uninstall the Slack app — do that
 in the workspace's own app settings if you do not want it sitting there.
