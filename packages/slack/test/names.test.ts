@@ -8,11 +8,12 @@ import {
   CommsError,
   type ConfigV2,
   planNamesMigration,
+  renameEntry,
   resolveName,
   type SecretStore,
 } from '@agentcomms/core';
 import { SlackContext } from '../src/context.ts';
-import { type StartedSignIn, startSignIn } from '../src/operations/signin.ts';
+import { finishSignIn, type StartedSignIn, startSignIn } from '../src/operations/signin.ts';
 import { removeWorkspace, requireWorkspace } from '../src/operations/workspaces.ts';
 import { type Harness, newHarness, slackOk, TEST_CLIENT_ID } from './support/harness.ts';
 
@@ -120,6 +121,58 @@ test('a reauth started before the migration and finished after it follows the wo
   assert.equal(await secrets.get(original.secretRef), null);
 });
 
+test('the credential deleted after a reauth is the one the replaced row held under the lock, not the snapshot’s', async () => {
+  const harness = await newHarness();
+  const context = contextFor(harness);
+  const original = await harness.addWorkspace({ alias: 'acme' });
+  const real = await harness.core.secrets('file');
+  // Between the snapshot and the write, the same account's credential moves to another reference.
+  let moved = false;
+  const store: SecretStore = {
+    ...real,
+    kind: real.kind,
+    get: (ref) => real.get(ref),
+    delete: (ref) => real.delete(ref),
+    invalidate: (ref) => real.invalidate(ref),
+    async set(ref: string, value: string) {
+      await real.set(ref, value);
+      if (moved) return;
+      moved = true;
+      await real.set('slack/token/moved', 'the same account, stored elsewhere');
+      await harness.core.config.update((config) => {
+        const held = config.accounts.acme as AccountConfig;
+        return { ...config, accounts: { acme: { ...held, secretRef: 'slack/token/moved' } } };
+      });
+    },
+  };
+  context.secrets = async () => store;
+  await finish(await reauthStart(context, 'acme', original));
+  assert.equal(await real.get('slack/token/moved'), null, 'the reference the replaced row held was deleted');
+});
+
+test('finishing a reauth by name: the current name finishes it, a former one is refused with the current', async () => {
+  const harness = await newHarness();
+  const context = contextFor(harness);
+  const original = await harness.addWorkspace({ alias: 'live' });
+  const started = await reauthStart(context, 'live', original);
+  await migrate(harness, ['live=cue/slack']);
+  const listener = started.listener as NonNullable<StartedSignIn['listener']>;
+  const url = new URL(started.authUrl);
+  const back = new URL(url.searchParams.get('redirect_uri') as string);
+  back.searchParams.set('state', url.searchParams.get('state') as string);
+  back.searchParams.set('code', 'fake-authorisation-code');
+  try {
+    await assert.rejects(
+      finishSignIn(context, { flowId: started.flowId, expectAlias: 'live', url: back.href }),
+      is('NOT_FOUND', /renamed to "cue\/slack"/),
+    );
+    const view = await finishSignIn(context, { flowId: started.flowId, expectAlias: 'cue/slack', url: back.href });
+    assert.equal(view.alias, 'cue/slack');
+  } finally {
+    await listener.close();
+  }
+});
+
 test('a former name is refused with the new one when a workspace is looked up', async () => {
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'live' });
@@ -140,7 +193,11 @@ test('on a migrated config, a new workspace needs an organisation/slack name tha
   await assert.rejects(start('rgc'), is('USAGE', /acme\/slack/));
   await assert.rejects(start('rgc/gmail'), is('USAGE', /ends in \/gmail/));
   await assert.rejects(start('cue/slack'), is('CONFIG', /already connected/));
-  await assert.rejects(start('live'), is('USAGE'));
+
+  // A former name that is valid version-2 syntax — the only kind whose reuse the grammar alone would not stop.
+  const renamed = renameEntry((await harness.core.config.load()) as ConfigV2, 'account', 'cue/slack', 'cue/slack-main');
+  await writeFile(harness.core.config.path, `${JSON.stringify(renamed, null, 2)}\n`);
+  await assert.rejects(start('cue/slack'), is('CONFIG', /cannot be used again/));
 
   harness.reply = () => slackOk({ team: { id: 'T0002', name: 'RGC' }, authed_user: { id: 'U0002' } });
   const view = await finish(await start('rgc/slack'));

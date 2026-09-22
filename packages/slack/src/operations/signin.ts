@@ -398,7 +398,7 @@ export interface FinishOptions {
 export async function finishSignIn(context: SlackContext, options: FinishOptions): Promise<WorkspaceView> {
   const flow = await context.flows.get(options.flowId);
   const kind = flow.expect ? 'reauth' : 'add';
-  if (options.expectAlias && options.expectAlias !== flow.alias) {
+  if (options.expectAlias && !(await namesThisFlow(context, flow, options.expectAlias))) {
     throw new CommsError('USAGE', `that sign-in is for "${flow.alias}", not "${options.expectAlias}"`, {
       hint: `Finish it as \`agent-slack workspace ${kind === 'reauth' ? `reauth ${flow.alias}` : 'add'} --finish ${
         options.flowId
@@ -466,6 +466,22 @@ async function waitForOutcome(
 }
 
 /** The code out of a pasted redirect URL, with the same `state` check the listener would have made. */
+/**
+ * Whether the name given to `--finish` is the workspace this sign-in is for.
+ *
+ * A reauth is bound to the account it set out to renew, not to the words it was started with: after a migration
+ * renames `live` to `cue/slack`, finishing with `cue/slack` is right, and finishing with `live` is refused with what it
+ * is called now — the same answer as every other lookup of a former name. The name it was started with also still
+ * binds it, even when that name now holds a newer account: whether this sign-in may still overwrite anything is the
+ * in-lock check's question, and it answers "changed while this sign-in was being completed", which is the truth. A
+ * new workspace has no account yet, so its name is compared as given.
+ */
+async function namesThisFlow(context: SlackContext, flow: SlackFlow, name: string): Promise<boolean> {
+  if (!flow.expect) return name === flow.alias;
+  const named = requireWorkspace(await context.config(), name);
+  return named.account.id === flow.expect.accountId || name === flow.alias;
+}
+
 function codeFromUrl(raw: string, flow: SlackFlow): string {
   let url: URL;
   try {
