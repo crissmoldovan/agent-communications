@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.2.0
 
 **This release can read the next config format, and never writes it.** Accounts are about to be named
 `organisation/platform` — `cue/gmail`, `cue/slack`, `wf/gmail-tech` — in version 2 of the config file, which
@@ -30,6 +30,21 @@ suggesting it be deleted, so it can no longer advise deleting a mailbox's live c
 **`inbox import --rename <legacy-name>=<name>`** imports a mailbox under a name of your choosing, and every bad name
 is reported together before anything is written. An import under a client name another Google project already
 uses is refused rather than overwriting that project's secret.
+
+**Registering an OAuth client is now as careful as connecting a mailbox.** `client add` and `client remove` hold
+the same lock as everything else that touches stored credentials, so an import and a `client add` racing for one
+name can no longer overwrite each other's secret; a replacement is refused once mailboxes depend on the client;
+and a write that did not land puts the secret store back exactly as it was. Where an outcome cannot be confirmed —
+a keychain that timed out and then refuses to answer — nothing is undone and what is unknown is said, with the
+reference and the command to run.
+
+**Writing rules follow a mailbox that is renamed.** A per-mailbox writing profile lives in a file named after the
+mailbox, so a rename would have left the rules you wrote behind. They keep applying until you write new ones, and
+`doctor` mentions downloads still sitting under a former name without moving anything.
+
+**The generated CLI reference is right again.** It is built from the real `--help` output, and long descriptions
+wrap — which the generator read as new rows, inventing commands such as `agent-gmail draft would` and cutting
+option defaults in half. It now joins them back together.
 
 **The page at the end of a sign-in now says what it was for.** It read "Signed in — you can close this tab" and
 nothing else, so connecting six mailboxes in a row showed the same six words six times, with no way to tell which
