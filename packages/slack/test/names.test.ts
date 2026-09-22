@@ -10,9 +10,11 @@ import {
   planNamesMigration,
   renameEntry,
   resolveName,
+  retargetFormerNames,
   type SecretStore,
 } from '@agentcomms/core';
 import { SlackContext } from '../src/context.ts';
+import { scopesForMode } from '../src/manifest.ts';
 import { finishSignIn, type StartedSignIn, startSignIn } from '../src/operations/signin.ts';
 import { removeWorkspace, requireWorkspace } from '../src/operations/workspaces.ts';
 import { type Harness, newHarness, slackOk, TEST_CLIENT_ID } from './support/harness.ts';
@@ -291,4 +293,54 @@ test('a reauth that followed a rename, whose write committed and then reported f
   const account = (await harness.core.config.load()).accounts['cue/slack'];
   const secrets = await harness.core.secrets('file');
   assert.ok(account && (await secrets.get(account.secretRef)), 'the credential the config names is still there');
+});
+
+test('a read → send reauth approved before the migration is still approved after it', async () => {
+  const harness = await newHarness();
+  const context = contextFor(harness);
+  const original = await harness.addWorkspace({ alias: 'live', mode: 'read' });
+  // The person typed the challenge for `accounts.live.mode`, before the rename.
+  const started = await startSignIn(context, {
+    mode: 'send',
+    alias: 'live',
+    clientId: TEST_CLIENT_ID,
+    port: await freePort(),
+    detached: false,
+    expect: expectFor(original),
+    consent: { kind: 'loosening-consent', paths: ['accounts.live.mode'] },
+  });
+  await migrate(harness, ['live=cue/slack']);
+  harness.reply = () => slackOk({ scopes: scopesForMode('send') });
+  const view = await finish(started);
+  assert.equal(view.alias, 'cue/slack');
+  assert.equal((await harness.core.config.load()).accounts['cue/slack']?.mode, 'send');
+});
+
+test('finishing by the current name after a rename and a renewal is refused as changed, not as a usage error', async () => {
+  const harness = await newHarness();
+  const context = contextFor(harness);
+  const original = await harness.addWorkspace({ alias: 'live' });
+  const started = await reauthStart(context, 'live', original);
+  await migrate(harness, ['live=cue/slack']);
+  // Another sign-in renews it meanwhile: same person, same workspace, new id — its former names carried along.
+  const renewed = (await harness.core.config.load()) as ConfigV2;
+  const next = retargetFormerNames(renewed, 'account', original.id, 'acc_RRRRRRRRRRRRRRRR');
+  const account = next.accounts['cue/slack'] as AccountConfig;
+  await writeFile(
+    harness.core.config.path,
+    `${JSON.stringify({ ...next, accounts: { 'cue/slack': { ...account, id: 'acc_RRRRRRRRRRRRRRRR' } } }, null, 2)}\n`,
+  );
+  const listener = started.listener as NonNullable<StartedSignIn['listener']>;
+  const url = new URL(started.authUrl);
+  const back = new URL(url.searchParams.get('redirect_uri') as string);
+  back.searchParams.set('state', url.searchParams.get('state') as string);
+  back.searchParams.set('code', 'fake-authorisation-code');
+  try {
+    await assert.rejects(
+      finishSignIn(context, { flowId: started.flowId, expectAlias: 'cue/slack', url: back.href }),
+      is('CONFIG', /changed while this sign-in was being completed/),
+    );
+  } finally {
+    await listener.close();
+  }
 });

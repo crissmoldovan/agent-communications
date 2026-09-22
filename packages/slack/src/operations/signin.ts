@@ -479,7 +479,26 @@ async function waitForOutcome(
 async function namesThisFlow(context: SlackContext, flow: SlackFlow, name: string): Promise<boolean> {
   if (!flow.expect) return name === flow.alias;
   const named = requireWorkspace(await context.config(), name);
-  return named.account.id === flow.expect.accountId || name === flow.alias;
+  if (named.account.id === flow.expect.accountId || name === flow.alias) return true;
+  // Renamed *and* renewed since this started: the same person in the same workspace is still the workspace this was
+  // for, and the in-lock check is the one that says whether it may still be overwritten.
+  return named.account.workspace === flow.expect.workspaceId && named.account.userId === flow.expect.userId;
+}
+
+/**
+ * The person's consent, carried to the name the workspace has now.
+ *
+ * Consent is given for a path — `accounts.live.mode` — and a migration between starting and finishing renames the
+ * account under it, so the widening it approved would be refused as `accounts.cue/slack.mode`. It is the same
+ * account (the reauth is bound to it by id), so the paths are offered under both names; any other path is not.
+ */
+function consentUnder(consent: LooseningConsent, flow: SlackFlow, current: string | undefined): LooseningConsent {
+  if (!current || current === flow.alias) return consent;
+  const before = `accounts.${flow.alias}.`;
+  const moved = consent.paths
+    .filter((path) => path.startsWith(before))
+    .map((path) => `accounts.${current}.${path.slice(before.length)}`);
+  return { ...consent, paths: [...consent.paths, ...moved] };
 }
 
 function codeFromUrl(raw: string, flow: SlackFlow): string {
@@ -759,7 +778,7 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
         },
         // A reauth may narrow what a workspace can do freely; widening it is gated before we get here, and the
         // proof is carried in so the config layer can tell the two apart.
-        flow.consent ? { consent: flow.consent } : {},
+        flow.consent ? { consent: consentUnder(flow.consent, flow, existing?.alias) } : {},
       );
     } catch (error) {
       /*
