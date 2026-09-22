@@ -1,11 +1,12 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { CommsError } from './errors.ts';
 import { writeFileAtomic } from './fs.ts';
-import { withFileLock } from './lock.ts';
+import { withCredentialsLock, withFileLock } from './lock.ts';
+import { NAME_MESSAGE, NAME_PATTERN, parseName } from './name-grammar.ts';
 import { expandHome } from './paths.ts';
 
 /**
@@ -13,7 +14,24 @@ import { expandHome } from './paths.ts';
  * by the provider package. No secret ever appears in it — only references into the secret store.
  */
 
-export const CONFIG_VERSION = 1;
+/**
+ * The versions this release reads.
+ *
+ * Version 1 is strictly additive and names accounts with one plain word. Version 2 names every account
+ * `organisation/platform[-qualifier]` and records the names it replaced (see `name-grammar.ts`). A release reads a
+ * version or refuses it outright; it never guesses at a shape it does not know.
+ */
+export const READABLE_CONFIG_VERSIONS: readonly ConfigVersion[] = [1, 2];
+
+/**
+ * The version a brand-new config is created at.
+ *
+ * Still 1. Nothing may write version 2 until every reader that shares the file can read it, so this release reads
+ * version 2 and never creates it; the migration command and this constant move together, in a later release.
+ */
+export const NEW_CONFIG_VERSION: ConfigVersion = 1;
+
+export type ConfigVersion = 1 | 2;
 
 export const ALIAS_PATTERN: RegExp = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const ALIAS_MESSAGE = 'names must be 1–32 lowercase letters, digits or hyphens, starting with a letter or digit';
@@ -112,8 +130,7 @@ export interface AccountConfig {
   mode?: string | undefined;
 }
 
-export interface Config {
-  version: typeof CONFIG_VERSION;
+interface ConfigBody {
   /**
    * The one secret backend for this config directory: client secrets, refresh tokens and the approval key. Absent
    * until the first command that stores a secret chooses it.
@@ -126,7 +143,37 @@ export interface Config {
   defaults: Defaults;
 }
 
+export interface ConfigV1 extends ConfigBody {
+  version: 1;
+}
+
+/** A name an account used to have, and the account that had it. */
+export interface FormerName {
+  /** What it was renamed to — at the time. The account's current name is found by `id`, so a later rename is followed. */
+  name: string;
+  id: string;
+}
+
+/**
+ * Names that were replaced, per kind, and never reusable.
+ *
+ * Per kind because version 1 lets a mailbox and a workspace share a word: `work` the mailbox and `work` the workspace
+ * become `work/gmail` and `work/slack`, and one flat record could not say which old `work` is which.
+ */
+export interface FormerNames {
+  inboxes: Record<string, FormerName>;
+  accounts: Record<string, FormerName>;
+}
+
+export interface ConfigV2 extends ConfigBody {
+  version: 2;
+  formerNames: FormerNames;
+}
+
+export type Config = ConfigV1 | ConfigV2;
+
 const aliasSchema = z.string().regex(ALIAS_PATTERN, ALIAS_MESSAGE);
+const nameSchema = z.string().regex(NAME_PATTERN, NAME_MESSAGE);
 const BASE32 = 'ABCDEFGHJKMNPQRSTVWXYZ0123456789';
 export const INBOX_ID_PATTERN: RegExp = /^ibx_[A-Z0-9]{16}$/;
 
@@ -208,14 +255,39 @@ const defaultsSchema = z.looseObject({
 
 export const RESERVED_ALIASES: ReadonlySet<string> = new Set(['all']);
 
+/** Within one map, a reserved alias or a duplicate id is a hard error in every version. */
+function checkWithinMaps(
+  config: { inboxes: Record<string, { id: string }>; accounts: Record<string, { id: string }> },
+  ctx: z.RefinementCtx,
+): void {
+  const check = (map: 'inboxes' | 'accounts', entries: Record<string, { id: string }>) => {
+    const ids = new Map<string, string>();
+    for (const [alias, entry] of Object.entries(entries)) {
+      if (RESERVED_ALIASES.has(alias)) {
+        ctx.addIssue({ code: 'custom', path: [map, alias], message: `"${alias}" is reserved` });
+      }
+      const other = ids.get(entry.id);
+      if (other) {
+        ctx.addIssue({ code: 'custom', path: [map, alias, 'id'], message: `duplicates the id of "${other}"` });
+      }
+      ids.set(entry.id, alias);
+    }
+  };
+  check('inboxes', config.inboxes);
+  check('accounts', config.accounts);
+}
+
 /**
  * Unknown keys are kept, never dropped. Two versions of this software share one config file — an MCP server started
  * last week, a CLI installed today — and a reader that silently discarded what it did not understand would quietly
  * undo settings the other one wrote. Within `version: 1` every change is additive for that reason.
+ *
+ * This is the version-1 schema exactly as every earlier release has it. Tightening it would make files those
+ * releases wrote unreadable here.
  */
-export const configSchema: z.ZodType<Config, unknown> = z
+export const configV1Schema: z.ZodType<ConfigV1, unknown> = z
   .looseObject({
-    version: z.literal(CONFIG_VERSION),
+    version: z.literal(1),
     secrets: z.looseObject({ store: storeKindSchema }).optional(),
     clients: z.record(aliasSchema, clientSchema).default({}),
     inboxes: z.record(aliasSchema, inboxSchema).default({}),
@@ -223,31 +295,97 @@ export const configSchema: z.ZodType<Config, unknown> = z
     defaults: defaultsSchema.default(defaultsSchema.parse({})),
   })
   .superRefine((config, ctx) => {
-    // Within one map these are hard errors, as they always were: a reserved alias or a duplicate id inside
-    // `inboxes` is something every released version already refuses to write.
-    //
-    // Across the two maps they cannot be. A v1 invariant may not depend on old writers enforcing a rule they have
-    // never heard of: 0.1.2 can rename a mailbox onto an alias this version gave an account, and it will, because
-    // nothing in it can see the account. Refusing to parse the result would turn a name clash into a configuration
-    // that cannot be read at all — every mailbox gone, on a file the user never touched. So a persisted collision
-    // is tolerated here and reported by `aliasConflicts`, and the lookup that cannot answer refuses at the point
-    // somebody asks it something ambiguous.
-    const check = (map: 'inboxes' | 'accounts', entries: Record<string, { id: string }>) => {
-      const ids = new Map<string, string>();
-      for (const [alias, entry] of Object.entries(entries)) {
-        if (RESERVED_ALIASES.has(alias)) {
-          ctx.addIssue({ code: 'custom', path: [map, alias], message: `"${alias}" is reserved` });
-        }
-        const other = ids.get(entry.id);
-        if (other) {
-          ctx.addIssue({ code: 'custom', path: [map, alias, 'id'], message: `duplicates the id of "${other}"` });
-        }
-        ids.set(entry.id, alias);
-      }
-    };
-    check('inboxes', config.inboxes);
-    check('accounts', config.accounts);
+    // Across the two maps a collision cannot be an error. A v1 invariant may not depend on old writers enforcing a
+    // rule they have never heard of: 0.1.2 can rename a mailbox onto an alias this version gave an account, and it
+    // will, because nothing in it can see the account. Refusing to parse the result would turn a name clash into a
+    // configuration that cannot be read at all — every mailbox gone, on a file the user never touched. So a
+    // persisted collision is tolerated here and reported by `aliasConflicts`, and the lookup that cannot answer
+    // refuses at the point somebody asks it something ambiguous.
+    checkWithinMaps(config, ctx);
   });
+
+const formerNameSchema = z.looseObject({ name: nameSchema, id: z.string().min(1) });
+// A former name is whatever the account was called before: a version-1 alias, or an earlier version-2 name.
+const formerKeySchema = z.string().refine((key) => ALIAS_PATTERN.test(key) || NAME_PATTERN.test(key), {
+  message: 'a former name must have been a valid name',
+});
+
+/**
+ * Version 2: every account named `organisation/platform[-qualifier]`, the platform checked against the account, and
+ * names unique across both maps.
+ *
+ * Version 2 can afford what version 1 could not. No release that writes it predates the rule, and every release
+ * that predates version 2 refuses to read the file at all — so nothing that cannot see the other map can put a
+ * clash into it.
+ */
+export const configV2Schema: z.ZodType<ConfigV2, unknown> = z
+  .looseObject({
+    version: z.literal(2),
+    secrets: z.looseObject({ store: storeKindSchema }).optional(),
+    // OAuth clients keep plain names. One client is shared by mailboxes across organisations, so an organisation
+    // prefix on it would be wrong.
+    clients: z.record(aliasSchema, clientSchema).default({}),
+    inboxes: z.record(nameSchema, inboxSchema).default({}),
+    accounts: z.record(nameSchema, accountSchema).default({}),
+    defaults: defaultsSchema.default(defaultsSchema.parse({})),
+    formerNames: z
+      .looseObject({
+        inboxes: z.record(formerKeySchema, formerNameSchema).default({}),
+        accounts: z.record(formerKeySchema, formerNameSchema).default({}),
+      })
+      .default({ inboxes: {}, accounts: {} }),
+  })
+  .superRefine((config, ctx) => {
+    checkWithinMaps(config, ctx);
+    for (const [name, inbox] of Object.entries(config.inboxes)) {
+      const platform = parseName(name)?.platform;
+      if (platform !== undefined && platform !== inbox.provider) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['inboxes', name],
+          message: `ends in /${platform}, but it is a ${inbox.provider} mailbox`,
+        });
+      }
+    }
+    for (const [name, account] of Object.entries(config.accounts)) {
+      const platform = parseName(name)?.platform;
+      if (platform !== undefined && platform !== account.platform) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['accounts', name],
+          message: `ends in /${platform}, but it is a ${account.platform} account`,
+        });
+      }
+      if (config.inboxes[name]) {
+        ctx.addIssue({ code: 'custom', path: ['accounts', name], message: 'names a mailbox too' });
+      }
+    }
+    const inboxIds = new Set(Object.values(config.inboxes).map((inbox) => inbox.id));
+    for (const [name, account] of Object.entries(config.accounts)) {
+      if (inboxIds.has(account.id)) {
+        ctx.addIssue({ code: 'custom', path: ['accounts', name, 'id'], message: 'duplicates the id of a mailbox' });
+      }
+    }
+    // A former name is never reusable. Checked here, on every write, rather than only where names are proposed: a
+    // lookup of a former name is refused with its replacement, so an account that took one would be unreachable
+    // by it — or worse, reached by somebody who meant the old one.
+    const live = new Set([...Object.keys(config.inboxes), ...Object.keys(config.accounts)]);
+    for (const map of ['inboxes', 'accounts'] as const) {
+      for (const former of Object.keys(config.formerNames[map])) {
+        if (live.has(former)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['formerNames', map, former],
+            message: `"${former}" was renamed and cannot be used again`,
+          });
+        }
+      }
+    }
+  });
+
+function schemaFor(version: ConfigVersion): z.ZodType<Config, unknown> {
+  return version === 2 ? configV2Schema : configV1Schema;
+}
 
 /**
  * Aliases, or ids, that name something in both maps at once.
@@ -335,8 +473,31 @@ export function isValidAlias(alias: string): boolean {
   return ALIAS_PATTERN.test(alias);
 }
 
-export function emptyConfig(): Config {
-  return configSchema.parse({ version: CONFIG_VERSION });
+/** A config with nothing in it, at `version` — by default the version a new config is created at. */
+export function emptyConfig(version: ConfigVersion = NEW_CONFIG_VERSION): Config {
+  return schemaFor(version).parse({ version });
+}
+
+/**
+ * A digest of the whole configuration, in canonical form.
+ *
+ * The whole thing, not the parts a caller happens to be interested in: the migration shows a preview and applies it
+ * later, and anything that changed in between — a policy, a domain list, a key this release does not even know — has
+ * to count as a change, or the apply writes over it.
+ */
+export function configFingerprint(config: Config): string {
+  return createHash('sha256').update(canonicalJson(config)).digest('hex');
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 /** The send policy that applies to an inbox: its own, else the default. */
@@ -344,15 +505,15 @@ export function effectiveSendPolicy(config: Config, inbox: string): SendPolicy {
   return config.inboxes[inbox]?.sendPolicy ?? config.defaults.sendPolicy;
 }
 
-function describeIssues(error: z.ZodError): string {
+function describeIssues(error: z.ZodError, version: ConfigVersion): string {
   return error.issues
     .slice(0, 5)
     .map((issue) => {
       const where = issue.path.join('.') || '(root)';
       // zod reports a bad record key as "Invalid key in record"; say what a valid name looks like instead.
-      return issue.code === 'invalid_key'
-        ? `${where}: inbox and client ${ALIAS_MESSAGE}`
-        : `${where}: ${issue.message}`;
+      if (issue.code !== 'invalid_key') return `${where}: ${issue.message}`;
+      if (version === 2 && issue.path[0] !== 'clients') return `${where}: ${NAME_MESSAGE}`;
+      return `${where}: ${version === 2 ? 'client' : 'inbox and client'} ${ALIAS_MESSAGE}`;
     })
     .join('; ');
 }
@@ -366,17 +527,19 @@ export function parseConfig(text: string, source = 'config.json'): Config {
     throw new CommsError('CONFIG', `${source} is not valid JSON`, { cause: error });
   }
   const version = (raw as { version?: unknown } | null)?.version;
-  if (version !== CONFIG_VERSION) {
+  if (version !== 1 && version !== 2) {
     throw new CommsError(
       'CONFIG',
-      `${source} has version ${String(version)}; this release reads version ${CONFIG_VERSION}`,
+      `${source} has version ${String(version)}; this release reads versions ${READABLE_CONFIG_VERSIONS.join(' and ')}`,
       {
         hint: 'Upgrade agent-communications, or restore a config written by this version.',
       },
     );
   }
-  const parsed = configSchema.safeParse(raw);
-  if (!parsed.success) throw new CommsError('CONFIG', `${source} is invalid: ${describeIssues(parsed.error)}`);
+  const parsed = schemaFor(version).safeParse(raw);
+  if (!parsed.success) {
+    throw new CommsError('CONFIG', `${source} is invalid: ${describeIssues(parsed.error, version)}`);
+  }
   return parsed.data;
 }
 
@@ -420,9 +583,21 @@ export class ConfigStore {
       this.#cache = null;
       const current = structuredClone(await this.load());
       const next = await mutator(structuredClone(current));
-      const parsed = configSchema.safeParse(next);
+      // An ordinary write keeps the version it found. Changing it is a migration — it renames every account and
+      // decides which releases can still read the file — and has exactly one door, `migrateNames`.
+      if ((next as { version?: unknown }).version !== current.version) {
+        throw new CommsError(
+          'CONFIG',
+          `refusing to change the config version from ${current.version} to ${String((next as { version?: unknown }).version)}`,
+          { hint: 'Only `agentcomms names migrate` changes the version. This is a bug — please report it.' },
+        );
+      }
+      const parsed = schemaFor(current.version).safeParse(next);
       if (!parsed.success) {
-        throw new CommsError('CONFIG', `refusing to write invalid config: ${describeIssues(parsed.error)}`);
+        throw new CommsError(
+          'CONFIG',
+          `refusing to write invalid config: ${describeIssues(parsed.error, current.version)}`,
+        );
       }
       const { loosened } = classifyChange(current, parsed.data);
       const allowed = new Set(options.consent?.paths ?? []);
@@ -438,6 +613,72 @@ export class ConfigStore {
       return parsed.data;
     });
   }
+
+  /**
+   * The one way a version-1 config becomes version 2.
+   *
+   * Under the credentials lock and then the config lock — the order everything takes them in — so it cannot land
+   * between a removal's read and its write, or in the middle of moving secrets between backends.
+   *
+   * `expected` is the fingerprint of the config the caller previewed. The file is read again inside the locks, and
+   * if it is not that config any more the whole thing is refused: somebody confirmed a mapping computed from
+   * something else. Nothing waits for a person while holding a lock; the preview happens before this is called.
+   *
+   * `build` produces version 2 from the locked snapshot. What it may change is checked rather than trusted: the same
+   * accounts, byte for byte, under new keys — a rename grants nothing, so a build that changed anything else is a
+   * bug and is refused before it is written.
+   *
+   * Idempotent. A retry after a write that committed — even one whose lock release then failed — finds version 2
+   * and says so.
+   */
+  async migrateNames(
+    expected: string,
+    build: (current: ConfigV1) => ConfigV2,
+  ): Promise<{ status: 'migrated' | 'already-migrated'; config: ConfigV2 }> {
+    return withCredentialsLock(dirname(this.path), () =>
+      withFileLock(this.#lockPath, async () => {
+        this.#cache = null;
+        const current = structuredClone(await this.load());
+        if (current.version === 2) return { status: 'already-migrated' as const, config: current };
+        if (configFingerprint(current) !== expected) {
+          throw new CommsError('TRANSIENT', 'the configuration changed after the preview was made', {
+            hint: 'Run `agentcomms names migrate` again to see the mapping for the configuration as it is now.',
+          });
+        }
+        const parsed = configV2Schema.safeParse(build(structuredClone(current)));
+        if (!parsed.success) {
+          throw new CommsError('CONFIG', `refusing to write invalid config: ${describeIssues(parsed.error, 2)}`);
+        }
+        const unchanged = onlyKeysRenamed(current, parsed.data);
+        if (unchanged !== null) {
+          throw new CommsError('CONFIG', `refusing a migration that changes more than names: ${unchanged}`, {
+            hint: 'This is a bug — please report it.',
+          });
+        }
+        await writeFileAtomic(this.path, `${JSON.stringify(parsed.data, null, 2)}\n`);
+        this.#cache = null;
+        return { status: 'migrated' as const, config: parsed.data };
+      }),
+    );
+  }
+}
+
+/**
+ * Null when `after` is `before` with only account keys changed — plus the version and the record of former names —
+ * or a description of the first other difference.
+ */
+function onlyKeysRenamed(before: ConfigV1, after: ConfigV2): string | null {
+  for (const map of ['inboxes', 'accounts'] as const) {
+    const was = new Map(Object.values(before[map]).map((row) => [row.id, canonicalJson(row)]));
+    const now = Object.values(after[map]);
+    if (now.length !== was.size) return `the number of ${map} changed`;
+    for (const row of now) {
+      if (was.get(row.id) !== canonicalJson(row)) return `${map} row ${row.id} changed`;
+    }
+  }
+  const { version: _v1, inboxes: _i1, accounts: _a1, ...restBefore } = before;
+  const { version: _v2, inboxes: _i2, accounts: _a2, formerNames: _f, ...restAfter } = after;
+  return canonicalJson(restBefore) === canonicalJson(restAfter) ? null : 'a setting other than a name changed';
 }
 
 /** The default `internalDomains` for a new inbox: its own domain, unless that is a public mailbox provider. */
@@ -514,15 +755,23 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
      * an unrelated workspace B under the same alias read as B loosening A's policy, which is a finding about a
      * workspace B never had. A reauth keeps the platform, the workspace and the user; a replacement does not.
      */
-    const sameAccountUnder = (name: string): AccountConfig | undefined => {
-      const held = before.accounts[name];
-      return held &&
-        held.platform === account.platform &&
-        held.workspace === account.workspace &&
-        held.userId === account.userId
+    const sameAccount = (held: AccountConfig | undefined): AccountConfig | undefined =>
+      held &&
+      held.platform === account.platform &&
+      held.workspace === account.workspace &&
+      held.userId === account.userId
         ? held
         : undefined;
-    };
+    /*
+     * Under this name first, then under any name.
+     *
+     * A reauth and a rename can land in one write — the migration renames every key, and an account re-authorised
+     * just before it has a new id — and a fallback that only looked under the new name would find nothing there
+     * and measure the account against the default. The same person in the same workspace is the same account
+     * whatever it is called.
+     */
+    const sameAccountUnder = (name: string): AccountConfig | undefined =>
+      sameAccount(before.accounts[name]) ?? Object.values(before.accounts).find((held) => sameAccount(held));
     /*
      * By id, and failing that by alias.
      *
@@ -631,16 +880,4 @@ export function duplicateInbox(
     if (inbox.email.toLowerCase() === email) return alias;
   }
   return null;
-}
-
-/** Looks up an inbox by alias or fails with the list of known aliases. */
-export function requireInbox(config: Config, alias: string): InboxConfig {
-  const inbox = config.inboxes[alias];
-  if (inbox) return inbox;
-  const known = Object.keys(config.inboxes);
-  throw new CommsError('NOT_FOUND', `no inbox called "${alias}"`, {
-    hint: known.length
-      ? `Known inboxes: ${known.join(', ')}.`
-      : 'No inboxes yet: add one with `agent-gmail inbox add`.',
-  });
 }

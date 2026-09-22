@@ -9,6 +9,7 @@ import { CommsError } from './errors.ts';
 import { isGroupOrWorldAccessible } from './fs.ts';
 import { APPROVAL_KEY_REF } from './keys.ts';
 import { withCredentialsLock } from './lock.ts';
+import { resolveName } from './names.ts';
 import {
   keychainNamespace,
   loadKeyringModule,
@@ -51,9 +52,7 @@ function usage(message: string): CommsError {
 
 function inboxIdFor(config: Config, alias: string | undefined): string | undefined {
   if (!alias) return undefined;
-  const inbox = config.inboxes[alias];
-  if (!inbox) throw new CommsError('NOT_FOUND', `no inbox called "${alias}"`);
-  return inbox.id;
+  return resolveName(config, 'inbox', alias, () => new CommsError('NOT_FOUND', `no inbox called "${alias}"`)).inbox.id;
 }
 
 interface Check {

@@ -98,8 +98,8 @@ formerNames: {
 ### Refusing a former name
 
 Every lookup by name goes through two core helpers, **`resolveName(config, kind, name)`** and
-**`nameAvailable(config, kind, name)`**, and nothing else looks names up directly. `kind` is `inbox` or
-`account`. `resolveName` returns the account, or refuses:
+**`nameAvailable(config, kind, name, platform)`**, and nothing else looks names up directly. `kind` is `inbox`
+or `account`; `platform` is what the account is (`gmail`, `slack`), which a version-2 name has to end in. `resolveName` returns the account, or refuses:
 
 > error: `cue` was renamed to `cue/gmail`
 > hint: Use `cue/gmail`.

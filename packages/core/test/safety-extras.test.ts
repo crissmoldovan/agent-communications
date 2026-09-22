@@ -6,7 +6,7 @@ import {
   type Config,
   ConfigStore,
   classifyChange,
-  configSchema,
+  configV1Schema,
   connectedAccounts,
   defaultInternalDomains,
   emptyConfig,
@@ -316,7 +316,7 @@ test('classifyChange: a new inbox may trust its own domain, but not somebody els
   // Domains are case-insensitive: writing one in capitals is not a change of meaning, so it needs no consent.
   const shouted = structuredClone(before);
   shouted.inboxes.work = { ...row, email: 'Jo@Company.TEST', internalDomains: ['Company.TEST'] };
-  assert.deepEqual(classifyChange(before, configSchema.parse(shouted)).loosened, []);
+  assert.deepEqual(classifyChange(before, configV1Schema.parse(shouted)).loosened, []);
 });
 
 test('classifyChange: loosening the default policy counts even when there are no inboxes yet', async () => {

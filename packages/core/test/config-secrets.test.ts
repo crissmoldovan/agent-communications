@@ -13,10 +13,10 @@ import {
   type InboxConfig,
   newInboxId,
   parseConfig,
-  requireInbox,
 } from '../src/config.ts';
 import { CommsError } from '../src/errors.ts';
 import { withFileLock } from '../src/lock.ts';
+import { requireInbox } from '../src/names.ts';
 import {
   FileSecretStore,
   KeychainSecretStore,
@@ -80,7 +80,7 @@ test('parseConfig refuses bad JSON, unknown versions and invalid aliases with CO
     () => parseConfig('{'),
     (e: unknown) => e instanceof CommsError && e.code === 'CONFIG',
   );
-  assert.throws(() => parseConfig('{"version":2}'), /version 2; this release reads version 1/);
+  assert.throws(() => parseConfig('{"version":3}'), /version 3; this release reads versions 1 and 2/);
   assert.throws(
     () => parseConfig(JSON.stringify({ version: 1, inboxes: { 'Bad Alias': inbox() } })),
     /lowercase letters, digits or hyphens/,
