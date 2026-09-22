@@ -5,9 +5,9 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { type CommsError, classifyChange, parseConfig } from '@agentcomms/core';
+import { type CommsError, classifyChange, parseConfig, type SecretStore } from '@agentcomms/core';
 import { SlackContext } from '../src/context.ts';
-import { releaseChannel, resolveListenerEntry, startSignIn } from '../src/operations/signin.ts';
+import { releaseChannel, resolveListenerEntry, type StartedSignIn, startSignIn } from '../src/operations/signin.ts';
 import { newHarness, TEST_CLIENT_ID, tempDir } from './support/harness.ts';
 
 /*
@@ -32,7 +32,14 @@ after(() => {
 
 async function freePort(): Promise<number> {
   const server = createServer();
-  await new Promise<void>((settle) => server.listen(0, '127.0.0.1', () => settle()));
+  /*
+   * `localhost`, the same host the listener binds — not `127.0.0.1`.
+   *
+   * On this machine `localhost` resolves to `::1` first. Probing IPv4 and then binding IPv6 checks one address
+   * family and uses the other, so a port free on the first can already be held on the second by another test
+   * file running concurrently. It showed up as a rare, unrepeatable failure in two unrelated tests.
+   */
+  await new Promise<void>((settle) => server.listen(0, 'localhost', () => settle()));
   const { port } = server.address() as { port: number };
   await new Promise<void>((settle) => server.close(() => settle()));
   return port;
@@ -205,3 +212,85 @@ test('a port already in use leaves no sign-in behind', async () => {
     await new Promise<void>((settle) => blocker.close(() => settle()));
   }
 });
+
+test('a name taken between the snapshot and the write is caught by the check inside the lock', async () => {
+  /*
+   * Isolating the in-lock re-check, which no CLI test can.
+   *
+   * `completeSignIn` checks the alias twice: once on a snapshot read before the exchange, and again inside the
+   * config lock. Any collision arranged before `--finish` runs is caught by the first, so the second looks
+   * redundant and mutating it away leaves every test green — while the window it actually covers, between the
+   * snapshot and the write, stays open.
+   *
+   * The sequence is: read config → exchange → validate → **store the credential** → update config. So a store
+   * that takes the name on its way past lands in exactly that window, and nothing else can.
+   */
+  const harness = await newHarness();
+  const context = new SlackContext({ core: harness.core, env: harness.env, exchange: (p) => harness.exchange(p) });
+
+  const real = await harness.core.secrets('file');
+  let taken = false;
+  const meddling: SecretStore = {
+    ...real,
+    kind: real.kind,
+    get: (ref) => real.get(ref),
+    delete: (ref) => real.delete(ref),
+    invalidate: (ref) => real.invalidate(ref),
+    async set(ref: string, value: string) {
+      await real.set(ref, value);
+      if (taken) return;
+      taken = true;
+      await harness.core.config.update((config) => ({
+        ...config,
+        inboxes: { ...config.inboxes, acme: inboxFixture() },
+      }));
+    },
+  };
+  context.secrets = async () => meddling;
+
+  const port = await freePort();
+  const started = await startSignIn(context, {
+    mode: 'read',
+    alias: 'acme',
+    clientId: TEST_CLIENT_ID,
+    port,
+    detached: false,
+  });
+  const listener = started.listener as NonNullable<StartedSignIn['listener']>;
+  await redirectTo(started.authUrl);
+
+  await assert.rejects(listener.result, (error: CommsError) => {
+    assert.match(error.message, /already connected/);
+    return true;
+  });
+  await listener.close();
+
+  // And the credential staged into that failed attempt is not left behind.
+  assert.equal((await harness.core.config.load()).accounts.acme, undefined);
+});
+
+/** A Gmail inbox, for the one test that needs the shared namespace to collide. */
+function inboxFixture() {
+  return {
+    id: 'ibx_AAAAAAAAAAAAAAAA',
+    provider: 'gmail',
+    email: 'jo@example.test',
+    identity: 'oidc' as const,
+    client: 'default',
+    tier: 'organize',
+    contacts: true,
+    grantedScopes: [] as string[],
+    secretRef: 'gmail:refresh:ibx_AAAAAAAAAAAAAAAA',
+    internalDomains: [] as string[],
+    createdAt: '2026-09-22T12:00:00.000Z',
+  };
+}
+
+/** Follows the authorisation URL the way a browser would. */
+async function redirectTo(authUrl: string): Promise<void> {
+  const url = new URL(authUrl);
+  const back = new URL(url.searchParams.get('redirect_uri') as string);
+  back.searchParams.set('state', url.searchParams.get('state') as string);
+  back.searchParams.set('code', 'fake-authorisation-code');
+  await fetch(back);
+}

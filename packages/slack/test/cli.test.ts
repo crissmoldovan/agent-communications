@@ -88,7 +88,14 @@ async function cli(
 /** A port nothing is listening on right now. Slack needs one fixed in advance, so the tests must choose too. */
 async function freePort(): Promise<number> {
   const server = createServer();
-  await new Promise<void>((settle) => server.listen(0, '127.0.0.1', () => settle()));
+  /*
+   * `localhost`, the same host the listener binds — not `127.0.0.1`.
+   *
+   * On this machine `localhost` resolves to `::1` first. Probing IPv4 and then binding IPv6 checks one address
+   * family and uses the other, so a port free on the first can already be held on the second by another test
+   * file running concurrently. It showed up as a rare, unrepeatable failure in two unrelated tests.
+   */
+  await new Promise<void>((settle) => server.listen(0, 'localhost', () => settle()));
   const { port } = server.address() as { port: number };
   await new Promise<void>((settle) => server.close(() => settle()));
   return port;
@@ -808,4 +815,92 @@ test('a widening a person approved actually goes through', async () => {
 
   assert.equal(result.code, EXIT_CODES.OK, result.stderr);
   assert.equal((await harness.core.config.load()).accounts.acme?.mode, 'send');
+});
+
+test('two reauths of the same workspace: the second cannot overwrite what the first minted', async () => {
+  /*
+   * The case the in-lock check exists for, and the one it originally missed.
+   *
+   * Both sign-ins are for the same person in the same workspace, so every identity check passes for both. What
+   * separates them is *which* account each set out to renew. Comparing against a snapshot read after the
+   * exchange only asks "has the alias changed since I looked", which both answer yes to — so the one that
+   * started first and finished second would overwrite a credential minted in between, and strand it.
+   */
+  const harness = await newHarness();
+  const original = await harness.addWorkspace({ alias: 'acme' });
+  const portA = await freePort();
+  const portB = await freePort();
+
+  // Two flows started against the same account, before either finishes.
+  const first = await startDetached(harness, ['workspace', 'reauth', 'acme', '--port', String(portA)]);
+  const second = await startDetached(harness, ['workspace', 'reauth', 'acme', '--port', String(portB)]);
+
+  await redirect(second.authUrl);
+  assert.equal(
+    (await cli(harness, ['workspace', 'reauth', 'acme', '--finish', second.flowId, '--wait', '20'])).code,
+    0,
+  );
+  const renewed = (await harness.core.config.load()).accounts.acme;
+  assert.notEqual(renewed?.id, original.id, 'the first finish did not replace the account');
+
+  // Now the older flow arrives. It set out to renew an account that no longer holds the alias.
+  await redirect(first.authUrl);
+  const late = await cli(harness, ['--json', 'workspace', 'reauth', 'acme', '--finish', first.flowId, '--wait', '20']);
+  assert.equal(late.code, EXIT_CODES.CONFIG);
+  assert.match(late.json<Envelope<never>>().error?.message ?? '', /changed while this sign-in was being completed/);
+
+  const after = (await harness.core.config.load()).accounts.acme;
+  assert.equal(after?.id, renewed?.id, 'a stale sign-in overwrote a newer credential');
+  const secrets = await harness.core.secrets('file');
+  assert.ok(await secrets.get(after?.secretRef as string), 'the live credential was stranded');
+});
+
+test('a mailbox taking the name mid-sign-in is caught too, because the two share one namespace', async () => {
+  /*
+   * S1 decided `inboxes` and `accounts` share a namespace rather than renaming `inboxes`, so a mailbox called
+   * `work` and a workspace called `work` cannot both exist — otherwise every later lookup by alias is
+   * ambiguous.
+   *
+   * The in-lock re-check therefore has to be `checkAliasFree`, which consults both maps, and not merely "is
+   * there an account under this name". Weakening it to the latter left every other test passing, because they
+   * all collide through `accounts`.
+   */
+  const harness = await newHarness();
+  const port = await freePort();
+  const start = await startDetached(harness, [
+    'workspace',
+    'add',
+    'acme',
+    '--client-id',
+    TEST_CLIENT_ID,
+    '--port',
+    String(port),
+  ]);
+
+  // A Gmail inbox takes the name while the browser is still open.
+  await harness.core.config.update((config) => ({
+    ...config,
+    inboxes: {
+      ...config.inboxes,
+      acme: {
+        id: 'ibx_AAAAAAAAAAAAAAAA',
+        provider: 'gmail',
+        email: 'jo@example.test',
+        identity: 'oidc',
+        client: 'default',
+        tier: 'organize',
+        contacts: true,
+        grantedScopes: [],
+        secretRef: 'gmail:refresh:ibx_AAAAAAAAAAAAAAAA',
+        internalDomains: [],
+        createdAt: '2026-09-22T12:00:00.000Z',
+      },
+    },
+  }));
+
+  await redirect(start.authUrl);
+  const finished = await cli(harness, ['--json', 'workspace', 'add', '--finish', start.flowId, '--wait', '20']);
+  assert.equal(finished.code, EXIT_CODES.CONFIG);
+  assert.match(finished.json<Envelope<never>>().error?.message ?? '', /already connected/);
+  assert.equal((await harness.core.config.load()).accounts.acme, undefined);
 });

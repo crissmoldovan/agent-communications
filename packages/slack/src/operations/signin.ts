@@ -565,16 +565,31 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
            * one made is re-stated here, where the file cannot move underneath it.
            */
           const held = current.accounts[flow.alias];
-          if (existing) {
-            if (!held || held.id !== existing.account.id) {
+          if (flow.expect) {
+            /*
+             * Compared against the flow, not against the snapshot read a moment ago.
+             *
+             * `existing` was read *after* the exchange and is as stale as everything else here. Comparing
+             * against it only asks "has the alias changed since I looked", which two reauths of the same
+             * account both answer yes to — so the second, started first and finishing second, would overwrite
+             * a credential minted in between and strand it. `flow.expect.accountId` is what this sign-in set
+             * out to renew, written before the browser opened and unchangeable since.
+             */
+            if (!held || held.id !== flow.expect.accountId) {
               throw new CommsError('CONFIG', `"${flow.alias}" changed while this sign-in was being completed`, {
                 hint: `Check it with \`agent-slack workspace show ${flow.alias}\`, then re-authorise if it is still yours.`,
               });
             }
-          } else if (held) {
-            throw new CommsError('CONFIG', `"${flow.alias}" was connected while this sign-in was being completed`, {
-              hint: `Choose another name, or renew that one with \`agent-slack workspace reauth ${flow.alias}\`.`,
-            });
+          } else {
+            /*
+             * The same checks `add` made before the network call, re-run where they hold.
+             *
+             * `held` alone is not the question. `checkAliasFree` also covers the `inboxes` map, which shares
+             * one namespace with `accounts`, and `validateExchange` refuses the same workspace-and-person
+             * under a second name — both of which a concurrent command can make true in the gap.
+             */
+            checkAliasFree(current, flow.alias);
+            validateExchange({ token, mode: flow.mode, flow, config: current });
           }
           return { ...current, accounts: { ...current.accounts, [flow.alias]: account } };
         },
