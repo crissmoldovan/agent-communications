@@ -305,6 +305,27 @@ exercised on something where a mistake costs embarrassment rather than money, be
 message. Under `chat`, naming the emoji and the message and waiting for a yes is proportionate. Under `confirm`,
 the same typed approval as a message — because a reaction from the user's account is still the user speaking.
 
+### D14 — keyword search on the legacy scope, knowingly
+
+Slack labels `search:read` **legacy** and points AI-enabled apps at Real-time Search — `assistant.search.context`
+with granular `search:read.public`, `search:read.private`, `search:read.im`, `search:read.mpim` scopes. Internal
+customer-built apps, which is what D8 makes this, are eligible for it.
+
+v1 keeps `search:read` anyway, and this is a decision rather than an oversight. Three reasons:
+
+1. **The two return different things.** `search.messages` returns messages, which is the shape every downstream
+   piece of this design is written against — S3's search, the citation rules, the skills. `assistant.search.context`
+   returns assistant *context*. Adopting it is not a manifest edit; it is a different S3.
+2. **The research could not verify its behaviour end to end**, and §3.4 records a bot-token `action_token`
+   requirement whose user-token equivalent is unestablished. D13 refused to build on an unverified subscription
+   for exactly this reason; the same restraint applies here.
+3. **Legacy is not withdrawn.** It is documented and working, and the cost of being wrong is bounded: one
+   re-authorisation, which `doctor` can warn about before it is forced.
+
+The cost is stated rather than discovered: **changing this later forces every connected workspace to
+re-authorise**, because the scope set lives in the manifest the person installed. That is the price of picking
+either one now, and it is why this is settled in S2 rather than deferred to S3.
+
 ### D13 — no Socket Mode in v1
 
 Reading is on demand, so nothing in v1 needs events. The one feature that would want them — "what needs my

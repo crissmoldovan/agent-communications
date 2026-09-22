@@ -35,18 +35,31 @@ export type MethodClass =
    * carry: these are the calls that *produce* the credential, so sending one with them would be circular.
    */
   | 'auth'
+  /**
+   * A step towards a write that publishes nothing by itself.
+   *
+   * `files.getUploadURLExternal` asks Slack where to put bytes; the file becomes visible only when
+   * `files.completeUploadExternal` names a channel. Classifying it `write` spent the one-shot permit on the
+   * preparation, so the call that actually publishes then found the door shut — the gate would have blocked the
+   * post while letting the upload through, which is precisely backwards.
+   */
+  | 'prepare'
   /** Deliberately unreachable. Listed so the decision is recorded rather than implied by absence. */
   | 'refused';
 
 export interface MethodRule {
   readonly kind: MethodClass;
   /**
-   * The user scope this method needs, when it needs one.
+   * The user scopes this method needs — **any one of them is enough**, which is why it is a list.
+   *
+   * Slack's conversation methods take whichever of `channels:history`, `groups:history`, `im:history` and
+   * `mpim:history` matches the conversation being read, so a single-scope field could not describe
+   * `conversations.history` at all. Better to find that out here than when S3 adds it.
    *
    * Here rather than in a second table beside the manifests, so "the manifest enables everything the allowlist
    * can reach" is checkable from one source. Two lists of the same fact drift; this one cannot.
    */
-  readonly requiredScope?: string | undefined;
+  readonly requiredScopes?: readonly string[] | undefined;
   /** Why, for the `refused` ones — printed when something tries, so the answer is in the error and not only here. */
   readonly note?: string;
 }
@@ -77,18 +90,20 @@ const RULES: Readonly<Record<string, MethodRule>> = {
   },
 
   // ── Writes: everything that puts a message in front of somebody ───────────────────────────────────────────
-  'chat.postMessage': { kind: 'write', requiredScope: 'chat:write' },
+  'chat.postMessage': { kind: 'write', requiredScopes: ['chat:write'] },
   // Editing a message that people have already read changes what they saw, after they saw it.
-  'chat.update': { kind: 'write', requiredScope: 'chat:write' },
-  'chat.delete': { kind: 'write', requiredScope: 'chat:write' },
-  'chat.meMessage': { kind: 'write', requiredScope: 'chat:write' },
-  'chat.scheduleMessage': { kind: 'write', requiredScope: 'chat:write' },
-  'chat.deleteScheduledMessage': { kind: 'write', requiredScope: 'chat:write' },
+  'chat.update': { kind: 'write', requiredScopes: ['chat:write'] },
+  'chat.delete': { kind: 'write', requiredScopes: ['chat:write'] },
+  'chat.meMessage': { kind: 'write', requiredScopes: ['chat:write'] },
+  'chat.scheduleMessage': { kind: 'write', requiredScopes: ['chat:write'] },
+  'chat.deleteScheduledMessage': { kind: 'write', requiredScopes: ['chat:write'] },
   // A file share is a post. `initial_comment` is a message, and it arrives without `chat:write` anywhere.
-  'files.completeUploadExternal': { kind: 'write', requiredScope: 'files:write' },
-  'files.getUploadURLExternal': { kind: 'write', requiredScope: 'files:write' },
-  'reactions.add': { kind: 'write', requiredScope: 'reactions:write' },
-  'reactions.remove': { kind: 'write', requiredScope: 'reactions:write' },
+  'files.completeUploadExternal': { kind: 'write', requiredScopes: ['files:write'] },
+  // Publishes nothing on its own: it asks Slack where to put bytes. The permit belongs to the call that
+  // makes the file visible, not to this one.
+  'files.getUploadURLExternal': { kind: 'prepare', requiredScopes: ['files:write'] },
+  'reactions.add': { kind: 'write', requiredScopes: ['reactions:write'] },
+  'reactions.remove': { kind: 'write', requiredScopes: ['reactions:write'] },
 
   // ── Refused: never requested in any manifest, and unreachable even if a token somehow carried the scope ───
   'chat.postEphemeral': {
@@ -132,20 +147,25 @@ export function writeMethods(): string[] {
  * somebody's memory of it. A method classified `write` with no scope recorded is a gap, and `requiredScopes`
  * would hide it — so {@link unscopedWriteMethods} names those instead of silently dropping them.
  */
-export function requiredScopes(kind: MethodClass): string[] {
+export function scopesFor(kinds: readonly MethodClass[]): string[] {
   return [
     ...new Set(
       Object.values(RULES)
-        .filter((rule) => rule.kind === kind && rule.requiredScope)
-        .map((rule) => rule.requiredScope as string),
+        .filter((rule) => kinds.includes(rule.kind))
+        .flatMap((rule) => rule.requiredScopes ?? []),
     ),
   ].sort();
 }
 
-/** Write methods with no scope recorded. Must be empty: a write nobody attached a scope to is a write nobody checked. */
-export function unscopedWriteMethods(): string[] {
+/**
+ * Methods that reach Slack with no scope recorded.
+ *
+ * Must be empty for everything but `read` — `auth.test` and the OAuth calls genuinely need none. A write or a
+ * prepare with no scope attached is one nobody checked, and `scopesFor` would hide it by returning the others.
+ */
+export function unscopedMethods(): string[] {
   return Object.entries(RULES)
-    .filter(([, rule]) => rule.kind === 'write' && !rule.requiredScope)
+    .filter(([, rule]) => (rule.kind === 'write' || rule.kind === 'prepare') && !rule.requiredScopes?.length)
     .map(([method]) => method)
     .sort();
 }

@@ -32,25 +32,19 @@ export function closedPermit(): WritePermit {
 
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-export interface GuardOptions {
-  /**
-   * The origin every request must go to. Defaults to Slack's.
-   *
-   * A test needs a fake Slack somewhere else, and the alternative — a flag that turns the check off — is a mode
-   * in which the guard does not guard. This way the check always runs; only what it holds to moves, and moving
-   * it is an explicit argument at the one place a transport is built.
-   */
-  origin?: string | undefined;
-}
-
 /**
  * Wraps `fetch` so every Slack call is classified before it leaves.
  *
  * `permit` is read at call time rather than captured, so opening and closing it around a single request is enough
  * to scope what that request may do.
+ *
+ * **The origin is hardcoded, and there is no argument for it.** The first attempt made it an option defaulting to
+ * Slack's, on the reasoning that the check still always ran and only its target moved. That reasoning was wrong:
+ * the type was exported from the package root, so any caller could name any origin, which is precisely the
+ * production override it claimed not to be. A test reaches a fake Slack by rewriting an already-validated URL in
+ * the *inner* fetch — after this has approved it — so there is no mode, anywhere, in which the check is off.
  */
-export function guardSlackRequests(inner: FetchLike, permit: WritePermit, options: GuardOptions = {}): FetchLike {
-  const origin = options.origin ?? SLACK_ORIGIN;
+export function guardSlackRequests(inner: FetchLike, permit: WritePermit): FetchLike {
   return async (input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
 
@@ -72,11 +66,13 @@ export function guardSlackRequests(inner: FetchLike, permit: WritePermit, option
         hint: 'This is a bug — please report it.',
       });
     }
-    if (actual !== origin) {
+    if (actual !== SLACK_ORIGIN) {
       // The origin is named; the rest of the URL is not, because a query can carry a token.
-      throw new CommsError('SEND_REFUSED', `this package only calls ${origin}, and that request went to ${actual}`, {
-        hint: 'This is a bug — please report it.',
-      });
+      throw new CommsError(
+        'SEND_REFUSED',
+        `this package only calls ${SLACK_ORIGIN}, and that request went to ${actual}`,
+        { hint: 'This is a bug — please report it.' },
+      );
     }
 
     const method = methodOfUrl(url);
@@ -102,6 +98,14 @@ export function guardSlackRequests(inner: FetchLike, permit: WritePermit, option
       });
     }
 
+    /*
+     * `prepare` is not a write and must not spend the permit.
+     *
+     * `files.getUploadURLExternal` asks Slack where to put bytes and publishes nothing. Classifying it `write`
+     * burned the one-shot permit on the preparation, so `files.completeUploadExternal` — the call that actually
+     * makes the file visible — then found the door shut. The gate would have blocked the post and allowed the
+     * upload, which is exactly backwards.
+     */
     if (rule.kind === 'write') {
       if (permit.approvalId === null) {
         throw new CommsError('SEND_REFUSED', `${method} would post, and no approval is open`, {

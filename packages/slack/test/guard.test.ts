@@ -6,8 +6,8 @@ import {
   classifiedMethods,
   methodOfUrl,
   methodRule,
-  requiredScopes,
-  unscopedWriteMethods,
+  scopesFor,
+  unscopedMethods,
   writeMethods,
 } from '../src/api/methods.ts';
 
@@ -155,14 +155,31 @@ test('the host is checked, not just the path that names the method', async () =>
   });
 });
 
-test('a test can point the guard somewhere else without turning the check off', async () => {
-  // The alternative — a flag that disables the origin check — is a mode in which the guard does not guard.
-  const { calls, inner } = recorder();
-  const fetch = guardSlackRequests(inner, closedPermit(), { origin: 'https://fake.test' });
-  await fetch('https://fake.test/api/auth.test');
-  assert.equal(calls.length, 1);
-  // The check still runs; only what it holds to moved.
-  await assert.rejects(fetch('https://slack.com/api/auth.test'), /only calls https:\/\/fake\.test/);
+test('there is no way to tell the guard to accept another origin', async () => {
+  /*
+   * The first version of this made the origin an argument defaulting to Slack's, reasoning that the check still
+   * always ran and only its target moved. The type was exported from the package root, so any caller could name
+   * any origin — which is the production override it claimed not to be.
+   *
+   * A test reaches a fake Slack by rewriting the URL in the **inner** fetch, after the guard has already
+   * approved the real one. The guard never sees the fake origin, and nothing it exports can move it.
+   */
+  const seen: string[] = [];
+  const fake = 'http://127.0.0.1:65535';
+  const rewritingInner: typeof globalThis.fetch = async (input) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    // Only ever a URL the guard has already validated as Slack's.
+    assert.ok(url.startsWith('https://slack.com/'), url);
+    seen.push(url.replace('https://slack.com', fake));
+    return new Response('{"ok":true}');
+  };
+
+  const fetch = guardSlackRequests(rewritingInner, closedPermit());
+  await fetch('https://slack.com/api/auth.test');
+  assert.deepEqual(seen, [`${fake}/api/auth.test`], 'the inner fetch is where a test redirects, not the guard');
+
+  // And the guard itself takes no second argument that could relax it.
+  assert.equal(guardSlackRequests.length, 2, 'guardSlackRequests grew a parameter that could move the origin');
 });
 
 test('a query string cannot hide the method from the guard', () => {
@@ -189,15 +206,27 @@ test('every classified method is read, write or refused, and every write is name
   for (const method of methods) {
     const rule = methodRule(method);
     assert.ok(rule, method);
-    assert.ok(['read', 'write', 'auth', 'refused'].includes(rule.kind), `${method} is ${rule.kind}`);
+    assert.ok(['read', 'write', 'auth', 'prepare', 'refused'].includes(rule.kind), `${method} is ${rule.kind}`);
     if (rule.kind === 'refused') assert.ok(rule.note, `${method} is refused without saying why`);
   }
 
   // Every write says which scope it needs, so the manifest can be checked against this table rather than
   // against a second one somebody keeps in step by hand. A write with no scope recorded is a write nobody
   // checked, and `requiredScopes` would hide it by returning the others.
-  assert.deepEqual(unscopedWriteMethods(), [], 'a write method has no required scope recorded');
-  assert.deepEqual(requiredScopes('write'), ['chat:write', 'files:write', 'reactions:write']);
+  assert.deepEqual(unscopedMethods(), [], 'a method that reaches Slack has no required scope recorded');
+  assert.deepEqual(scopesFor(['write', 'prepare']), ['chat:write', 'files:write', 'reactions:write']);
+
+  /*
+   * Getting an upload URL publishes nothing, and must not spend the one-shot permit.
+   *
+   * Classified `write`, the preparation consumed the approval and `files.completeUploadExternal` — the call that
+   * makes the file visible — found the door shut. The gate would have blocked the post and allowed the upload.
+   */
+  assert.equal(methodRule('files.getUploadURLExternal')?.kind, 'prepare');
+  assert.equal(methodRule('files.completeUploadExternal')?.kind, 'write');
+
+  // A scope field that held one string could not describe `conversations.history`, which takes any of four.
+  assert.ok(Array.isArray(methodRule('chat.postMessage')?.requiredScopes));
 
   // Getting a token is neither a read nor a write: there is no approval to attach a permit to, and no account
   // token to carry, because these are the calls that produce the credential.
@@ -215,4 +244,25 @@ test('every classified method is read, write or refused, and every write is name
   }
   assert.ok(writeMethods().includes('chat.postMessage'));
   assert.equal(writeMethods().includes('auth.test'), false);
+});
+
+test('preparing an upload does not spend the permit the publish needs', async () => {
+  /*
+   * The two-call file flow: ask Slack where to put the bytes, then name a channel and make it visible. Only the
+   * second is a post. Classified `write`, the first one consumed the one-shot permit and the second was refused
+   * — the gate blocking the publish while waving the upload through.
+   */
+  const { calls, inner } = recorder();
+  const permit = closedPermit();
+  const fetch = guardSlackRequests(inner, permit);
+
+  await spendOn(permit, 'apr_1', 'files.completeUploadExternal', async () => {
+    await fetch(`${API}/files.getUploadURLExternal`);
+    await fetch(`${API}/files.completeUploadExternal`);
+  });
+
+  assert.deepEqual(
+    calls.map((c) => c.split('/api/')[1]),
+    ['files.getUploadURLExternal', 'files.completeUploadExternal'],
+  );
 });

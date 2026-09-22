@@ -160,6 +160,17 @@ user scopes (no bot scopes)" and also takes `refresh_token`. Which of the two to
 user-scope-only PKCE app is **not settled by the documentation alone** and must be confirmed
 against a real workspace before anything depends on it.
 
+**Refresh tokens expire after 30 days on a PKCE app.** Verbatim: "all refresh tokens issued to your app will
+expire in 30 days instead of lasting indefinitely." This is *not* the 12-hour access-token expiry of §1.5; it is
+the refresh token itself. A workspace nothing has touched for a month therefore needs a new authorisation, and
+the design has to say so before the month passes rather than after.
+
+**`localhost`, not `127.0.0.1`.** The promise is made about one spelling: "Redirects to `localhost` (e.g.
+`http://localhost:8080/auth`) are treated as desktop redirects". Nothing on the page extends it to the literal
+address. This matters because the Gmail side deliberately uses `127.0.0.1` — `localhost` can resolve to whatever
+a name service says, which is the reason to avoid it — so the two packages will differ here, and the reason is
+that Slack documents one and not the other. Verify against a real workspace before the manifests are fixed.
+
 Sources: <https://docs.slack.dev/authentication/using-pkce/>,
 <https://docs.slack.dev/reference/methods/oauth.v2.user.access/>
 
