@@ -344,3 +344,38 @@ test('finishing by the current name after a rename and a renewal is refused as c
     await listener.close();
   }
 });
+
+test('an approved widening survives a migration that lands while its credential is being written', async () => {
+  const harness = await newHarness();
+  const context = contextFor(harness);
+  const original = await harness.addWorkspace({ alias: 'live', mode: 'read' });
+  // After every snapshot this sign-in reads, before its config write: the rename happens mid-credential-write.
+  const real = await harness.core.secrets('file');
+  let migrated = false;
+  context.secrets = async () => ({
+    ...real,
+    kind: real.kind,
+    get: (ref) => real.get(ref),
+    delete: (ref) => real.delete(ref),
+    invalidate: (ref) => real.invalidate(ref),
+    async set(ref: string, value: string) {
+      await real.set(ref, value);
+      if (migrated) return;
+      migrated = true;
+      await migrate(harness, ['live=cue/slack']);
+    },
+  });
+  const started = await startSignIn(context, {
+    mode: 'send',
+    alias: 'live',
+    clientId: TEST_CLIENT_ID,
+    port: await freePort(),
+    detached: false,
+    expect: expectFor(original),
+    consent: { kind: 'loosening-consent', paths: ['accounts.live.mode'] },
+  });
+  harness.reply = () => slackOk({ scopes: scopesForMode('send') });
+  const view = await finish(started);
+  assert.equal(view.alias, 'cue/slack');
+  assert.equal((await harness.core.config.load()).accounts['cue/slack']?.mode, 'send');
+});

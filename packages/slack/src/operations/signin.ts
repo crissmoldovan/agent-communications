@@ -492,6 +492,36 @@ async function namesThisFlow(context: SlackContext, flow: SlackFlow, name: strin
  * account under it, so the widening it approved would be refused as `accounts.cue/slack.mode`. It is the same
  * account (the reauth is bound to it by id), so the paths are offered under both names; any other path is not.
  */
+/**
+ * The config write, carrying the person's consent — under the name the workspace has now.
+ *
+ * A reauth may narrow what a workspace can do freely; widening it is gated before this point, and the proof is carried
+ * in so the config layer can tell the two apart. The proof names a path, and the path contains the workspace's name,
+ * which a migration can change between the snapshot this was prepared from and the write itself. Consent is passed
+ * before the write runs, so the name the write actually used is only known afterwards: if the write is refused as a
+ * loosening under a name the snapshot did not have, it is tried once more with the consent offered under that name.
+ * Only this account's paths move — it is bound to the account by id — and nothing is offered that was not approved.
+ */
+async function writeWithConsent(
+  context: SlackContext,
+  flow: SlackFlow,
+  snapshotAlias: string | undefined,
+  writtenKey: () => string,
+  mutator: (config: Config) => Config,
+): Promise<void> {
+  if (!flow.consent) {
+    await context.core.config.update(mutator);
+    return;
+  }
+  try {
+    await context.core.config.update(mutator, { consent: consentUnder(flow.consent, flow, snapshotAlias) });
+  } catch (error) {
+    const key = writtenKey();
+    if (!(error instanceof CommsError) || error.code !== 'LOOSENING_REFUSED' || key === snapshotAlias) throw error;
+    await context.core.config.update(mutator, { consent: consentUnder(flow.consent, flow, key) });
+  }
+}
+
 function consentUnder(consent: LooseningConsent, flow: SlackFlow, current: string | undefined): LooseningConsent {
   if (!current || current === flow.alias) return consent;
   const before = `accounts.${flow.alias}.`;
@@ -698,7 +728,11 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
        * the write has settled and is authoritative about it.
        */
       await secrets.set(secretRefFor(accountId), serialiseBundle(bundleFrom(token, at)));
-      await context.core.config.update(
+      await writeWithConsent(
+        context,
+        flow,
+        existing?.alias,
+        () => writtenAlias,
         (current) => {
           /*
            * The check that counts, because this one runs under the lock.
@@ -776,9 +810,6 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
           writtenAlias = flow.alias;
           return { ...current, accounts: { ...current.accounts, [flow.alias]: written } };
         },
-        // A reauth may narrow what a workspace can do freely; widening it is gated before we get here, and the
-        // proof is carried in so the config layer can tell the two apart.
-        flow.consent ? { consent: consentUnder(flow.consent, flow, existing?.alias) } : {},
       );
     } catch (error) {
       /*
