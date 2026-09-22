@@ -379,3 +379,19 @@ test('an approved widening survives a migration that lands while its credential 
   assert.equal(view.alias, 'cue/slack');
   assert.equal((await harness.core.config.load()).accounts['cue/slack']?.mode, 'send');
 });
+
+test('finishing with a name that is nothing at all says which sign-in it is, not that the name is unknown', async () => {
+  const harness = await newHarness();
+  const context = contextFor(harness);
+  const original = await harness.addWorkspace({ alias: 'acme' });
+  const started = await reauthStart(context, 'acme', original);
+  const listener = started.listener as NonNullable<StartedSignIn['listener']>;
+  try {
+    await assert.rejects(
+      finishSignIn(context, { flowId: started.flowId, expectAlias: 'never-connected', waitSeconds: 0, pollMs: 10 }),
+      is('USAGE', /that sign-in is for "acme", not "never-connected"/),
+    );
+  } finally {
+    await listener.close();
+  }
+});

@@ -478,20 +478,22 @@ async function waitForOutcome(
  */
 async function namesThisFlow(context: SlackContext, flow: SlackFlow, name: string): Promise<boolean> {
   if (!flow.expect) return name === flow.alias;
-  const named = requireWorkspace(await context.config(), name);
+  let named: { alias: string; account: AccountConfig };
+  try {
+    named = requireWorkspace(await context.config(), name);
+  } catch (error) {
+    // A former name is refused with what it is called now. A name that is nothing at all is not this flow's, and
+    // the caller says so in the words it always used: "that sign-in is for X, not Y".
+    if (error instanceof CommsError && (error.details as { currentName?: string } | undefined)?.currentName)
+      throw error;
+    return false;
+  }
   if (named.account.id === flow.expect.accountId || name === flow.alias) return true;
   // Renamed *and* renewed since this started: the same person in the same workspace is still the workspace this was
   // for, and the in-lock check is the one that says whether it may still be overwritten.
   return named.account.workspace === flow.expect.workspaceId && named.account.userId === flow.expect.userId;
 }
 
-/**
- * The person's consent, carried to the name the workspace has now.
- *
- * Consent is given for a path — `accounts.live.mode` — and a migration between starting and finishing renames the
- * account under it, so the widening it approved would be refused as `accounts.cue/slack.mode`. It is the same
- * account (the reauth is bound to it by id), so the paths are offered under both names; any other path is not.
- */
 /**
  * The config write, carrying the person's consent — under the name the workspace has now.
  *
@@ -518,10 +520,24 @@ async function writeWithConsent(
   } catch (error) {
     const key = writtenKey();
     if (!(error instanceof CommsError) || error.code !== 'LOOSENING_REFUSED' || key === snapshotAlias) throw error;
+    /*
+     * The same mutator, run a second time.
+     *
+     * It sets `written`, `writtenAlias` and `replacedRef` in the enclosing scope, so running it twice is only safe
+     * because the first run wrote nothing — a refused loosening is refused before the write — and the second runs on
+     * the same configuration, so it recomputes exactly the same values.
+     */
     await context.core.config.update(mutator, { consent: consentUnder(flow.consent, flow, key) });
   }
 }
 
+/**
+ * The person's consent, carried to the name the workspace has now.
+ *
+ * Consent is given for a path — `accounts.live.mode` — and a migration between starting and finishing renames the
+ * account under it, so the widening it approved would be refused as `accounts.cue/slack.mode`. It is the same
+ * account (the reauth is bound to it by id), so the paths are offered under both names; any other path is not.
+ */
 function consentUnder(consent: LooseningConsent, flow: SlackFlow, current: string | undefined): LooseningConsent {
   if (!current || current === flow.alias) return consent;
   const before = `accounts.${flow.alias}.`;
@@ -768,7 +784,9 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
              */
             if (!held) {
               throw new CommsError('CONFIG', `"${flow.alias}" changed while this sign-in was being completed`, {
-                hint: `Check it with \`agent-slack workspace show ${flow.alias}\`, then re-authorise if it is still yours.`,
+                // `list`, not `show <the name it started with>`: after a migration that name is refused, so the
+                // command in the hint would answer with a second refusal rather than with the workspace.
+                hint: 'Check it with `agent-slack workspace list`, then re-authorise if it is still yours.',
               });
             }
           } else {
