@@ -1584,3 +1584,45 @@ test('client add --replace: a secret write that lands and then reports failure i
     'the registered client’s secret is back',
   );
 });
+
+test('client add --replace rotating one client’s secret: a write that never stored is not called a success', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const json = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    json,
+    JSON.stringify({
+      installed: { client_id: 'project-a.apps.googleusercontent.com', client_secret: 'fake-secret-a' },
+    }),
+  );
+  await clientAdd(context, { path: json, name: 'desktop', store: 'file', noProbe: true });
+  // The same client, a new secret — and the store refuses before writing anything.
+  const rotated = join(tempDir(), 'rotated.json');
+  await writeFile(
+    rotated,
+    JSON.stringify({
+      installed: { client_id: 'project-a.apps.googleusercontent.com', client_secret: 'fake-secret-a2' },
+    }),
+  );
+  const secrets = await harness.core.secrets('file');
+  const store = secrets.set.bind(secrets);
+  secrets.set = async (ref, value) => {
+    if (ref === clientSecretRef('desktop')) throw new CommsError('SECRET_STORE_UNAVAILABLE', 'the keychain is locked');
+    return store(ref, value);
+  };
+  await assert.rejects(
+    clientAdd(context, { path: rotated, name: 'desktop', replace: true, store: 'file', noProbe: true, move: true }),
+    (error: unknown) => error instanceof CommsError,
+  );
+  secrets.set = store;
+  // The old secret is untouched, and the file holding the new one was not deleted.
+  assert.equal(await secrets.get(clientSecretRef('desktop')), 'fake-secret-a');
+  assert.equal(
+    await readFile(rotated, 'utf8').then(
+      () => true,
+      () => false,
+    ),
+    true,
+    'the downloaded JSON is still there',
+  );
+});

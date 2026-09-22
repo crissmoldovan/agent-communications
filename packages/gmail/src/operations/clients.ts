@@ -183,11 +183,20 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
         return { ...current, secrets: { store: chosen }, clients: { ...current.clients, [name]: row } };
       });
     } catch (error) {
-      // A rejected write may have committed (see `writeOutcome` in core). Only put the old secret back when it did
-      // not, and say so if that fails: a client whose secret is the other one's cannot renew anything.
-      const landed = await writeOutcome(
-        async () => (await context.config()).clients[name]?.clientId === parsed.clientId,
-      );
+      /*
+       * A rejected write may have committed (see `writeOutcome` in core) — but "committed" has to mean *this* write.
+       *
+       * Rotating one client's secret writes a row identical to the one already there, so asking whether a row with
+       * this client id exists is answered "yes" before anything happens: a secret write that failed before storing
+       * would read as success, the error would be swallowed, and `--move` would then delete the only copy of the new
+       * secret. So the row must match completely *and* the store must hold the new secret, read fresh.
+       */
+      const landed = await writeOutcome(async () => {
+        const held = (await context.config()).clients[name];
+        if (!held || JSON.stringify(held) !== JSON.stringify(row)) return false;
+        secrets.invalidate(secretRef);
+        return (await secrets.get(secretRef)) === parsed.clientSecret;
+      });
       if (landed === 'unknown') throw keepAndReport(error, secretRef, 'Run `agent-gmail client list`.');
       if (landed === 'absent') {
         // Exactly as it was: the previous secret, or nothing when there was none.
