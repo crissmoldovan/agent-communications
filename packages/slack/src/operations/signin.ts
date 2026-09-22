@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { access, mkdir, open } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CommsError, type LooseningConsent, newAccountId } from '@agentcomms/core';
+import { CommsError, type LooseningConsent, newAccountId, type SecretStore } from '@agentcomms/core';
 import { buildAuthorizeUrl, readExchange } from '../auth/authorize.ts';
 import { serialiseBundle } from '../auth/bundle.ts';
 import { FLOW_TTL_MS, newFlowId, type SlackFlow } from '../auth/flow.ts';
@@ -421,7 +421,13 @@ export async function finishSignIn(context: SlackContext, options: FinishOptions
     return await completeSignIn(context, flow.flowId, code);
   } finally {
     stopListener(flow, context.now());
-    await context.flows.discard(flow.flowId);
+    /*
+     * No `discard` here. Only the caller that won the claim may clean up, and `completeSignIn` does that itself.
+     *
+     * This used to discard unconditionally — including when `completeSignIn` threw because *this* caller lost
+     * the claim. The loser then deleted the winner's marker and record while the winner was mid-exchange, and a
+     * third caller could claim the flow again. Cleanup belongs to ownership, not to whoever reaches a `finally`.
+     */
   }
 }
 
@@ -509,6 +515,39 @@ function stopListener(flow: SlackFlow, now: Date): void {
  * only moment it can be established is before the token is stored. Afterwards the label is a claim about
  * something nobody re-examined.
  */
+/**
+ * Takes back a credential that was stored for an attempt that then failed, and says so if it cannot.
+ *
+ * This used to be `delete().catch(() => undefined)`, and the commit that introduced it claimed the credential
+ * "is deleted". It was deleted when the delete worked. When it did not — a keychain whose prompt is refused is
+ * the realistic case — a live Slack token was left in the secret store under a reference nothing names, and
+ * the only error anyone saw was the original one, which said nothing about it.
+ *
+ * So: one retry, because a keychain prompt dismissed by accident is common and a second chance is cheap; and
+ * if that fails too, the original error comes back **with the stranded reference attached**, so the leak is
+ * something a person is told about rather than something they would have to already know to look for.
+ *
+ * A `false` from `delete` is not a failure here. It means nothing was stored under that reference, and for a
+ * rollback there is then nothing to take back.
+ */
+async function withdrawStaged(secrets: SecretStore, ref: string, original: unknown): Promise<unknown> {
+  let last: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await secrets.delete(ref);
+      return original;
+    } catch (error) {
+      last = error;
+    }
+  }
+  const base = original instanceof CommsError ? original : new CommsError('UNEXPECTED', String(original));
+  return new CommsError(base.code, base.message, {
+    hint: `${base.hint ? `${base.hint} ` : ''}A credential stored for this attempt could not be removed: delete \`${ref}\` from your secret store.`,
+    details: { strandedSecretRef: ref, cleanupError: (last as Error)?.message },
+    cause: original,
+  });
+}
+
 export async function completeSignIn(context: SlackContext, flowId: string, code: string): Promise<WorkspaceView> {
   // Claimed first, so two `--finish` calls cannot both spend one code. The claim is a file, so it is cleaned up
   // however this ends — the interactive path has no `--finish` above it to do that.
@@ -600,8 +639,7 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
     } catch (error) {
       // Nothing points at the credential just stored — whether the write failed or the guard above refused it.
       // Left behind, it would be a live Slack token in the secret store that no command lists or removes.
-      await secrets.delete(secretRefFor(accountId)).catch(() => undefined);
-      throw error;
+      throw await withdrawStaged(secrets, secretRefFor(accountId), error);
     }
 
     /*

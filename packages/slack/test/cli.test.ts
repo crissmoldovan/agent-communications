@@ -904,3 +904,18 @@ test('a mailbox taking the name mid-sign-in is caught too, because the two share
   assert.match(finished.json<Envelope<never>>().error?.message ?? '', /already connected/);
   assert.equal((await harness.core.config.load()).accounts.acme, undefined);
 });
+
+test('doctor still asks about a token with minutes left, because Slack would still accept it', async () => {
+  // Skipping on `isDue` skipped the identity check for any token within ten minutes of expiry — tokens that
+  // work — while the comment beside it said only expired ones were skipped.
+  const harness = await newHarness();
+  const minutes = new Date(Date.now() + 5 * 60_000).toISOString();
+  await harness.addWorkspace({ alias: 'acme', bundle: { accessExpiresAt: minutes } });
+  let asked = 0;
+  harness.probe = () => {
+    asked += 1;
+    return Promise.resolve(harness.authTest());
+  };
+  await cli(harness, ['--json', 'doctor']);
+  assert.equal(asked, 1, 'a token Slack would still accept was not asked about');
+});

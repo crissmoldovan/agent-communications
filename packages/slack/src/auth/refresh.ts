@@ -6,6 +6,7 @@ import {
   attemptAbandoned,
   BUNDLE_VERSION,
   isDue,
+  isExpired,
   parseBundle,
   refreshExpired,
   serialiseBundle,
@@ -107,7 +108,7 @@ export async function accessTokenFor(
      * The same reasoning covers `refreshing`: another process renewing this credential is not a reason to stop
      * using the one we already hold.
      */
-    if (!isDue(current, deps.now())) return current;
+    if (stillUsable(current, deps.now())) return current;
 
     return withFileLock(lockPathFor(deps.stateDir, accountId), () => refreshUnderLock(deps, secretRef), {
       staleMs: LOCK_STALE_MS,
@@ -122,6 +123,18 @@ export async function accessTokenFor(
   } finally {
     inFlight.delete(accountId);
   }
+}
+
+/**
+ * Whether the token in hand should be used as it is.
+ *
+ * Two different thresholds, because the two situations want different things. A `ready` token is renewed ten
+ * minutes early, so nothing goes out carrying a token that dies in flight. Any other state cannot be renewed
+ * right now — a refresh is in flight, or one may already have been spent — so the token is used until it has
+ * actually expired, rather than being refused with minutes left on it.
+ */
+function stillUsable(bundle: TokenBundle, now: Date): boolean {
+  return bundle.state === 'ready' ? !isDue(bundle, now) : !isExpired(bundle, now);
 }
 
 function requireBundle(raw: string | null): TokenBundle {
@@ -146,7 +159,7 @@ async function refreshUnderLock(deps: RefreshDeps, secretRef: string): Promise<T
   const current = requireBundle(await deps.secrets.get(secretRef));
   const now = deps.now();
 
-  if (!isDue(current, now)) return current;
+  if (stillUsable(current, now)) return current;
 
   if (current.state === 'refresh-uncertain') {
     throw new CommsError('AUTH_REQUIRED', 'a previous token refresh did not finish, and cannot be retried safely', {

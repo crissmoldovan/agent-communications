@@ -102,6 +102,19 @@ export function isDue(bundle: TokenBundle, now: Date): boolean {
   return Date.parse(bundle.accessExpiresAt) - now.getTime() <= REFRESH_SKEW_MS;
 }
 
+/**
+ * True when the access token no longer works at all. Not the same question as `isDue`.
+ *
+ * `isDue` answers "should a `ready` token be renewed yet", and answers it ten minutes early on purpose, so a
+ * request never goes out carrying a token that dies in flight. That skew is wrong for every other use: a token
+ * with nine minutes left still works, and treating it as spent refused a `refresh-uncertain` credential that
+ * could have kept a workspace reading, and skipped `doctor`'s identity check for a token Slack would have
+ * accepted. Reusing one predicate for two questions made both answers wrong for one of them.
+ */
+export function isExpired(bundle: TokenBundle, now: Date): boolean {
+  return Date.parse(bundle.accessExpiresAt) <= now.getTime();
+}
+
 /** True when the refresh token itself has expired, which no refresh can recover from. */
 export function refreshExpired(bundle: TokenBundle, now: Date): boolean {
   if (!bundle.refreshExpiresAt) return false;

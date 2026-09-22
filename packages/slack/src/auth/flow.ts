@@ -180,10 +180,37 @@ export function openFlowStore(stateDir: string, now: () => Date): FlowStore {
 
     async claim(flowId) {
       const path = flowPath(stateDir, flowId);
+      const marker = flowPath(stateDir, flowId, '.claim');
+      /*
+       * Acquire first, read second — the order is the guarantee.
+       *
+       * `wx` is `O_EXCL`: the kernel creates the file for exactly one caller and fails for everybody else. But a
+       * marker only helps if nothing is trusted before it exists. Reading the record first let a delayed caller
+       * hold the flow in memory, wait while the winner finished and `discard` removed both files, then create a
+       * fresh marker and exchange the same code with the copy it already had.
+       *
+       * Holding the marker before reading closes that: a caller arriving after the winner has discarded
+       * acquires a marker for a flow that no longer exists, finds nothing, and lets the marker go. The record's
+       * absence *is* the tombstone — which is also why `discard` removes the record before the marker.
+       */
+      await mkdir(flowDir(stateDir), { recursive: true, mode: 0o700 });
+      try {
+        const handle = await open(marker, 'wx', 0o600);
+        await handle.writeFile(JSON.stringify({ pid: process.pid, at: now().toISOString() }));
+        await handle.close();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        throw new CommsError('NOT_FOUND', 'that sign-in has already been finished', {
+          hint: 'Each sign-in completes once. Start another with `agent-slack workspace add`.',
+        });
+      }
+
       let flow: SlackFlow;
       try {
         flow = JSON.parse(await readFile(path, 'utf8')) as SlackFlow;
       } catch {
+        // Nothing to claim after all — let the marker go, so it does not stand as a claim on nothing.
+        await rm(marker, { force: true });
         throw new CommsError('NOT_FOUND', 'that sign-in is not waiting to be finished', {
           hint: 'It may have been completed already, or expired. Start again with `agent-slack workspace add`.',
         });
@@ -194,32 +221,18 @@ export function openFlowStore(stateDir: string, now: () => Date): FlowStore {
           hint: 'Sign-ins last ten minutes. Start again with `agent-slack workspace add`.',
         });
       }
-      /*
-       * `wx` is `O_EXCL`: the kernel creates this file for exactly one caller and fails for everybody else.
-       *
-       * That is the whole claim, and it has to be a create rather than a delete. An earlier version read the
-       * record and then removed it, calling that atomic — it is not. Two processes can both finish the read
-       * before either removal runs, and both removals then succeed, so both go on to exchange the same code.
-       * Slack refuses the second while the first has already stored a credential: a failure reported for a
-       * sign-in that worked, which is the one outcome this must never produce.
-       */
-      await mkdir(flowDir(stateDir), { recursive: true, mode: 0o700 });
-      try {
-        const handle = await open(flowPath(stateDir, flowId, '.claim'), 'wx', 0o600);
-        await handle.writeFile(JSON.stringify({ pid: process.pid, at: now().toISOString() }));
-        await handle.close();
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        throw new CommsError('NOT_FOUND', 'that sign-in has already been finished', {
-          hint: 'Each sign-in completes once. Start another with `agent-slack workspace add`.',
-        });
-      }
       return flow;
     },
 
     async discard(flowId) {
-      // Every trace, not just the record: an outcome file left behind would be collected by the next flow to be
-      // handed the same id, and the log is the listener's and outlives it.
+      /*
+       * Every trace, and **the record before the marker**.
+       *
+       * The order is load-bearing, not tidy. `claim` acquires the marker and then reads the record; if the marker
+       * went first, a caller arriving between the two removals would acquire it, still find the record, and
+       * exchange a code that has already been spent. Record first means the record's absence is what a late
+       * caller finds.
+       */
       for (const suffix of ['.json', '.outcome.json', '.claim', '.log']) {
         await rm(flowPath(stateDir, flowId, suffix), { force: true });
       }

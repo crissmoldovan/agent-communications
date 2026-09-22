@@ -482,3 +482,38 @@ test('a sign-in that changed which app it goes through cannot renew an account',
     'a sign-in through another app renewed the account anyway',
   );
 });
+
+test('removing does not delete a workspace that was renewed in the meantime', async () => {
+  /*
+   * The credential is deleted from a snapshot, and the config entry is removed afterwards. A reauth finishing in
+   * between installs a new account under the same alias, with a new credential. Removing by name alone would
+   * delete that entry and leave its fresh credential in the secret store, named by nothing.
+   */
+  const stale = account();
+  const renewed = account({ id: newAccountId() });
+  const deleted: string[] = [];
+  let written: Config | undefined;
+
+  await assert.rejects(
+    removeWorkspace(
+      {
+        config: { ...emptyConfig(), accounts: { acme: stale } },
+        secrets: {
+          async delete(ref) {
+            deleted.push(ref);
+            return true;
+          },
+        },
+        // What the lock sees: the renewal already landed.
+        async update(mutator) {
+          written = mutator({ ...emptyConfig(), accounts: { acme: renewed } });
+          return written;
+        },
+      },
+      'acme',
+    ),
+    /renewed while it was being removed/,
+  );
+  assert.deepEqual(deleted, [stale.secretRef], 'it deleted a credential other than the one it looked at');
+  assert.equal(written, undefined, 'the renewed workspace was removed');
+});

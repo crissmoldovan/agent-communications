@@ -305,6 +305,20 @@ export async function removeWorkspace(deps: RemovalDeps, alias: string): Promise
   const found = requireWorkspace(deps.config, alias);
   await deps.secrets.delete(found.account.secretRef);
   await deps.update((config) => {
+    /*
+     * Remove the account that was looked at, not whatever holds the name now.
+     *
+     * The credential above was deleted from a snapshot. A reauth finishing in between installs a *new* account
+     * under the same alias with a new credential — and removing by name alone would then delete that entry
+     * while leaving its fresh credential in the secret store, named by nothing. So the entry is removed only if
+     * it is still the one whose credential was just deleted; otherwise the renewal wins and remove says so.
+     */
+    const held = config.accounts[alias];
+    if (!held || held.id !== found.account.id) {
+      throw new CommsError('CONFIG', `"${alias}" was renewed while it was being removed`, {
+        hint: `It is connected again. Run \`agent-slack workspace remove ${alias}\` once more if you still want it gone.`,
+      });
+    }
     const { [alias]: _removed, ...rest } = config.accounts;
     return { ...config, accounts: rest };
   });

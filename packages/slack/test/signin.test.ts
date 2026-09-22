@@ -6,8 +6,15 @@ import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { type CommsError, classifyChange, parseConfig, type SecretStore } from '@agentcomms/core';
+import { newFlowId, type SlackFlow } from '../src/auth/flow.ts';
 import { SlackContext } from '../src/context.ts';
-import { releaseChannel, resolveListenerEntry, type StartedSignIn, startSignIn } from '../src/operations/signin.ts';
+import {
+  finishSignIn,
+  releaseChannel,
+  resolveListenerEntry,
+  type StartedSignIn,
+  startSignIn,
+} from '../src/operations/signin.ts';
 import { newHarness, TEST_CLIENT_ID, tempDir } from './support/harness.ts';
 
 /*
@@ -294,3 +301,124 @@ async function redirectTo(authUrl: string): Promise<void> {
   back.searchParams.set('code', 'fake-authorisation-code');
   await fetch(back);
 }
+
+test('two finishers racing one sign-in: one exchanges, the loser leaves the winner alone', async () => {
+  /*
+   * The operation-level race, which the primitive test cannot reach.
+   *
+   * Eight `claim()` calls in a row prove `O_EXCL` works while the first marker exists. They say nothing about
+   * what happens around it: the loser's cleanup used to run in a `finally` it reached by losing, deleting the
+   * winner's marker and record while the winner was still exchanging — so a third caller could claim again.
+   *
+   * The exchange is held open here until both finishers have made their attempt, so the race is real rather
+   * than sequential.
+   */
+  const harness = await newHarness();
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((settle) => {
+    release = settle;
+  });
+  let exchanges = 0;
+  const context = new SlackContext({
+    core: harness.core,
+    env: harness.env,
+    exchange: async (params) => {
+      exchanges += 1;
+      await held;
+      return harness.exchange(params);
+    },
+  });
+
+  const flowId = newFlowIdFor(context);
+  await context.flows.save(await pendingFlow(context, flowId));
+  await context.flows.recordOutcome(flowId, { code: 'fake-authorisation-code' });
+
+  const winner = finishSignIn(context, { flowId, waitSeconds: 5 });
+  // Give the winner time to take the claim and reach the held exchange.
+  await new Promise((settle) => setTimeout(settle, 100));
+
+  await assert.rejects(finishSignIn(context, { flowId, waitSeconds: 5 }), (error: CommsError) => {
+    assert.match(error.message, /already been finished/);
+    return true;
+  });
+
+  // The loser has come and gone. The winner's claim must still be standing: a third caller is refused too.
+  await assert.rejects(context.flows.claim(flowId), /already been finished/);
+
+  release();
+  const view = await winner;
+  assert.equal(view.alias, 'acme');
+  assert.equal(exchanges, 1, `${exchanges} exchanges for one authorisation code`);
+});
+
+function newFlowIdFor(_context: SlackContext): string {
+  return newFlowId();
+}
+
+async function pendingFlow(context: SlackContext, flowId: string): Promise<SlackFlow> {
+  const at = context.now();
+  return {
+    flowId,
+    mode: 'read',
+    alias: 'acme',
+    clientId: TEST_CLIENT_ID,
+    verifier: 'fake-verifier-not-a-real-one',
+    state: 'fake-state',
+    redirectUrl: 'http://localhost:1/slack/callback',
+    port: 1,
+    createdAt: at.toISOString(),
+    expiresAt: new Date(at.getTime() + 10 * 60_000).toISOString(),
+  };
+}
+
+test('a credential that cannot be taken back after a failed attempt is named, not silently left', async () => {
+  /*
+   * The rollback was `delete().catch(() => undefined)`. When the delete failed — a keychain whose prompt is
+   * refused is the realistic case — a live Slack token stayed in the secret store under a reference nothing
+   * names, and the only error anyone saw was the original one, which said nothing about it.
+   *
+   * Arranged here by making the attempt fail in the config lock (the name is taken on the way past) while the
+   * secret store refuses every delete.
+   */
+  const harness = await newHarness();
+  const context = new SlackContext({ core: harness.core, env: harness.env, exchange: (p) => harness.exchange(p) });
+  const real = await harness.core.secrets('file');
+  let deletes = 0;
+  const stubborn: SecretStore = {
+    kind: real.kind,
+    get: (ref) => real.get(ref),
+    invalidate: (ref) => real.invalidate(ref),
+    async delete() {
+      deletes += 1;
+      throw new Error('the keychain said no');
+    },
+    async set(ref: string, value: string) {
+      await real.set(ref, value);
+      await harness.core.config.update((config) => ({
+        ...config,
+        inboxes: { ...config.inboxes, acme: inboxFixture() },
+      }));
+    },
+  };
+  context.secrets = async () => stubborn;
+
+  const started = await startSignIn(context, {
+    mode: 'read',
+    alias: 'acme',
+    clientId: TEST_CLIENT_ID,
+    port: await freePort(),
+    detached: false,
+  });
+  const listener = started.listener as NonNullable<StartedSignIn['listener']>;
+  await redirectTo(started.authUrl);
+
+  await assert.rejects(listener.result, (error: CommsError) => {
+    // The real cause is still the headline — the name was taken — and the leak rides along with it.
+    assert.match(error.message, /already connected/);
+    assert.match(error.hint ?? '', /could not be removed/);
+    assert.match(String(error.details?.strandedSecretRef), /^slack\/token\/acc_/);
+    return true;
+  });
+  await listener.close();
+  assert.equal(deletes, 2, 'the rollback was not retried once before giving up');
+});

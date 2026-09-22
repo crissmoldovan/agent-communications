@@ -12,7 +12,7 @@ import {
   writeResult,
 } from '@agentcomms/core';
 import { Command, CommanderError, Option } from 'commander';
-import { isDue, parseBundle, type TokenBundle } from '../auth/bundle.ts';
+import { isExpired, parseBundle, type TokenBundle } from '../auth/bundle.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { type InstallMode, renderManifest } from '../manifest.ts';
 import { doctor, type IdentityProbe } from '../operations/doctor.ts';
@@ -366,7 +366,7 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
              * `credential-state` check above already says so. Asking anyway would turn "this is fine" into
              * "re-authorise", which is the one piece of advice that throws away a working refresh token.
              */
-            if (isDue(bundle, context.now())) continue;
+            if (isExpired(bundle, context.now())) continue;
             identities.set(alias, await probeIdentity(bundle, deps.probe ? { fetch: deps.probe } : {}));
           }
         }

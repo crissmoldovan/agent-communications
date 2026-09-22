@@ -291,3 +291,39 @@ test('a credential that is not a bundle says reauth rather than pretending there
     return true;
   });
 });
+
+test('an uncertain credential with minutes left is still used, not refused ten minutes early', async () => {
+  /*
+   * `isDue` answers "should a ready token be renewed yet", ten minutes early on purpose. That skew is wrong for a
+   * credential that *cannot* be renewed: a token with nine minutes left still works, and refusing it turns an
+   * interrupted refresh into an outage nine minutes sooner than it has to be.
+   */
+  const nineMinutesLeft = new Date(NOW.getTime() + 9 * 60_000).toISOString();
+  const secrets = store(serialiseBundle(bundle({ state: 'refresh-uncertain', accessExpiresAt: nineMinutesLeft })));
+  const guard = neverExchanges();
+  const d = await deps(secrets, guard.exchange);
+  const { token } = await accessTokenFor(d, ACCOUNT, REF);
+  assert.equal(token, 'fake-access-old');
+  assert.equal(guard.calls(), 0);
+});
+
+test('a ready credential with minutes left is renewed early, which is what the skew is for', async () => {
+  // The other half: the ten-minute margin still applies where it belongs, so nothing goes out carrying a token
+  // that dies in flight.
+  const nineMinutesLeft = new Date(NOW.getTime() + 9 * 60_000).toISOString();
+  const secrets = store(serialiseBundle(bundle({ state: 'ready', accessExpiresAt: nineMinutesLeft })));
+  let renewed = 0;
+  const d = await deps(secrets, async () => {
+    renewed += 1;
+    return {
+      accessToken: 'fake-access-new',
+      accessExpiresAt: '2026-09-23T00:00:00.000Z',
+      refreshToken: 'fake-refresh-2',
+      refreshExpiresAt: '2026-10-22T12:00:00.000Z',
+      issuedAt: NOW.toISOString(),
+    };
+  });
+  const { token } = await accessTokenFor(d, ACCOUNT, REF);
+  assert.equal(renewed, 1, 'a ready token inside the margin was not renewed');
+  assert.equal(token, 'fake-access-new');
+});
