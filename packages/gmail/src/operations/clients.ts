@@ -5,10 +5,12 @@ import {
   CommsError,
   expandHome,
   homeDirectory,
+  keepAndReport,
   probeKeychain,
   type StoreKind,
   secretsStoreOf,
   withCredentialsLock,
+  writeOutcome,
 } from '@agentcomms/core';
 import { parseClientJson, probeClientCredentials } from '../auth/oauth.ts';
 import { clientSecretRef } from '../auth/session.ts';
@@ -129,6 +131,12 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
         hint: 'Run the command again to see what is there now.',
       });
     }
+    // Re-checked here, not only on the snapshot: a sign-in completing in between can attach a mailbox to it.
+    if (held && options.replace && held.clientId !== parsed.clientId && inboxesOf(fresh.inboxes, name).length > 0) {
+      throw new CommsError('CONFIG', `"${name}" is a different OAuth client, and mailboxes use it`, {
+        hint: 'Add the new client under another name, then `inbox reauth` each mailbox onto it.',
+      });
+    }
     if (held && options.replace && held.clientId !== existing?.clientId) {
       throw new CommsError('CONFIG', `the OAuth client "${name}" changed while this ran`, {
         hint: 'Run the command again to see what is there now.',
@@ -227,17 +235,33 @@ async function removeClientLocked(context: GmailContext, name: string): Promise<
       hint: `Remove them first (${users.join(', ')}), or move them to another client with \`agent-gmail inbox reauth\`.`,
     });
   }
-  await context.core.config.update((current) => {
-    // The row this read, not whatever holds the name now.
-    if (current.clients[name]?.clientId !== client.clientId) {
-      throw new CommsError('CONFIG', `the OAuth client "${name}" changed while it was being removed`, {
-        hint: 'Run the command again to see what is there now.',
-      });
-    }
-    const clients = { ...current.clients };
-    delete clients[name];
-    return { ...current, clients };
-  });
+  try {
+    await context.core.config.update((current) => {
+      // The row this read, not whatever holds the name now.
+      if (current.clients[name]?.clientId !== client.clientId) {
+        throw new CommsError('CONFIG', `the OAuth client "${name}" changed while it was being removed`, {
+          hint: 'Run the command again to see what is there now.',
+        });
+      }
+      // And still used by nothing: a sign-in completing in between attaches a mailbox to it.
+      const attached = inboxesOf(current.inboxes, name);
+      if (attached.length > 0) {
+        throw new CommsError(
+          'CONFIG',
+          `${attached.length} inbox(es) began using "${name}" while it was being removed`,
+          { hint: `Remove them first (${attached.join(', ')}), or move them with \`agent-gmail inbox reauth\`.` },
+        );
+      }
+      const clients = { ...current.clients };
+      delete clients[name];
+      return { ...current, clients };
+    });
+  } catch (error) {
+    // A rejected write may have committed (see `writeOutcome` in core): only skip the deletion if the row is there.
+    const gone = await writeOutcome(async () => (await context.config()).clients[name] === undefined);
+    if (gone === 'absent') throw error;
+    if (gone === 'unknown') throw keepAndReport(error, client.secretRef, 'Run `agent-gmail client list`.');
+  }
   const secrets = await context.core.secrets();
   await secrets.delete(client.secretRef);
   return { name };

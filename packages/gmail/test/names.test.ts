@@ -1166,3 +1166,201 @@ test('client remove refuses when the client under the name changed since it was 
   assert.ok((await harness.core.config.load()).clients.desktop, 'the other client’s row is still there');
   assert.notEqual(await secrets.get(clientSecretRef('desktop')), null, 'and its secret was not deleted');
 });
+
+test('a sign-in whose OAuth client was replaced while it ran saves nothing', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const secrets = await harness.core.secrets('file');
+  const seen = recordSecrets(secrets);
+  // `client add --replace` landing between the exchange and the write: the token belongs to the old client.
+  meddleAfterStoring(
+    secrets,
+    (ref) => ref.startsWith('gmail:refresh:'),
+    () =>
+      harness.core.config.update((config) => ({
+        ...config,
+        clients: {
+          default: { ...(config.clients.default as ClientConfig), clientId: 'replaced.apps.googleusercontent.com' },
+        },
+      })),
+  );
+  const started = await startSignIn(context, { mode: 'add', alias: 'work', detached: false });
+  await fetch(harness.google.consent(started.authUrl, { sub: 'sub-1' }));
+  await assert.rejects(
+    started.listener?.result ?? Promise.resolve(),
+    is('CONFIG', /changed while this sign-in was being completed/),
+  );
+  const token = seen.set.find((ref) => ref.startsWith('gmail:refresh:'));
+  assert.ok(token && seen.deleted.includes(token), 'the token taken back');
+  assert.deepEqual(await inboxList(context), []);
+});
+
+test('client remove refuses when a mailbox started using the client while it ran', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const json = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    json,
+    JSON.stringify({
+      installed: { client_id: 'project-a.apps.googleusercontent.com', client_secret: 'fake-secret-a' },
+    }),
+  );
+  await clientAdd(context, { path: json, name: 'desktop', store: 'file', noProbe: true });
+  const secrets = await harness.core.secrets('file');
+  const read = context.config.bind(context);
+  let attached = false;
+  context.config = async () => {
+    const config = await read();
+    if (!attached) {
+      attached = true;
+      // Only a mailbox row, leaving the client row exactly as it is: the client's own check must not be what fires.
+      await harness.core.config.update((current) => ({
+        ...current,
+        inboxes: {
+          ...current.inboxes,
+          work: {
+            id: 'ibx_WWWWWWWWWWWWWWWW',
+            provider: 'gmail',
+            email: 'jo@example.test',
+            identity: 'oidc' as const,
+            sub: 'sub-1',
+            client: 'desktop',
+            tier: 'read',
+            contacts: false,
+            grantedScopes: [],
+            secretRef: 'gmail:refresh:ibx_WWWWWWWWWWWWWWWW',
+            internalDomains: [],
+            createdAt: '2026-09-22T00:00:00.000Z',
+          },
+        },
+      }));
+    }
+    return config;
+  };
+  await assert.rejects(clientRemove(context, 'desktop'), is('CONFIG', /began using "desktop"/));
+  context.config = read;
+  assert.ok((await harness.core.config.load()).clients.desktop);
+  assert.notEqual(await secrets.get(clientSecretRef('desktop')), null, 'its secret was not deleted');
+});
+
+test('client remove: a write that committed and then reported failure still deletes the secret', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const json = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    json,
+    JSON.stringify({
+      installed: { client_id: 'project-a.apps.googleusercontent.com', client_secret: 'fake-secret-a' },
+    }),
+  );
+  await clientAdd(context, { path: json, name: 'desktop', store: 'file', noProbe: true });
+  const secrets = await harness.core.secrets('file');
+  commitThenReject(harness);
+  await clientRemove(context, 'desktop');
+  assert.equal((await harness.core.config.load()).clients.desktop, undefined);
+  assert.equal(await secrets.get(clientSecretRef('desktop')), null);
+});
+
+test('import: an account connected under another name while it ran is not connected twice', async () => {
+  const harness = await newHarness(twoAccounts);
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const directory = await legacyDirectory(harness);
+  await harness.core.config.update((config) => ({ ...config, secrets: { store: 'file' } }));
+  const secrets = await harness.core.secrets('file');
+  const seen = recordSecrets(secrets);
+  meddleAfterStoring(
+    secrets,
+    (ref) => ref.startsWith('gmail:refresh:'),
+    async () => {
+      // The same account, under another name, from somewhere that holds no lock.
+      await harness.addInbox({
+        alias: 'elsewhere',
+        email: 'jo@home.test',
+        sub: 'sub-2',
+        refreshToken: 'rt',
+        client: 'imported',
+      });
+    },
+  );
+  await assert.rejects(importLegacy(context, { dir: directory, store: 'file' }), is('CONFIG', /while this ran/));
+  // The import's own token is the first one stored; the mailbox connected meanwhile stores one too.
+  const token = seen.set.find((ref) => ref.startsWith('gmail:refresh:'));
+  assert.ok(token && seen.deleted.includes(token), 'its token taken back');
+});
+
+test('a reauth whose OAuth client was replaced while it ran saves nothing, and restores the old token', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = await withClient(harness);
+  const id = await connectBySignIn(harness, context, 'work', 'read');
+  const secrets = await harness.core.secrets('file');
+  const before = await secrets.get(`gmail:refresh:${id}`);
+  meddleAfterStoring(
+    secrets,
+    (ref) => ref === `gmail:refresh:${id}`,
+    () =>
+      harness.core.config.update((config) => ({
+        ...config,
+        clients: {
+          default: { ...(config.clients.default as ClientConfig), clientId: 'replaced.apps.googleusercontent.com' },
+        },
+      })),
+  );
+  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', tier: 'organize', detached: false });
+  await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
+  await assert.rejects(
+    reauth.listener?.result ?? Promise.resolve(),
+    is('CONFIG', /changed while this sign-in was being completed/),
+  );
+  assert.equal(await secrets.get(`gmail:refresh:${id}`), before, 'the old token is back');
+  assert.equal((await inboxList(context))[0]?.tier, 'read');
+});
+
+test('client add --replace refuses when a mailbox attached to the client while it waited for the lock', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const first = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    first,
+    JSON.stringify({
+      installed: { client_id: 'project-a.apps.googleusercontent.com', client_secret: 'fake-secret-a' },
+    }),
+  );
+  await clientAdd(context, { path: first, name: 'desktop', store: 'file', noProbe: true });
+  const second = join(tempDir(), 'other_secret.json');
+  await writeFile(
+    second,
+    JSON.stringify({
+      installed: { client_id: 'project-b.apps.googleusercontent.com', client_secret: 'fake-secret-b' },
+    }),
+  );
+  let running: Promise<unknown> | undefined;
+  await withFileLock(credentialsLockPath(harness.configDir), async () => {
+    running = clientAdd(context, { path: second, name: 'desktop', replace: true, store: 'file', noProbe: true });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // A sign-in completing meanwhile attaches a mailbox to the client being replaced.
+    await harness.core.config.update((current) => ({
+      ...current,
+      inboxes: {
+        ...current.inboxes,
+        work: {
+          id: 'ibx_QQQQQQQQQQQQQQQQ',
+          provider: 'gmail',
+          email: 'jo@example.test',
+          identity: 'oidc' as const,
+          sub: 'sub-1',
+          client: 'desktop',
+          tier: 'read',
+          contacts: false,
+          grantedScopes: [],
+          secretRef: 'gmail:refresh:ibx_QQQQQQQQQQQQQQQQ',
+          internalDomains: [],
+          createdAt: '2026-09-22T00:00:00.000Z',
+        },
+      },
+    }));
+  });
+  await assert.rejects(running ?? Promise.resolve(), is('CONFIG', /mailboxes use it/));
+  const registered = (await harness.core.config.load()).clients.desktop;
+  assert.equal(registered?.clientId, 'project-a.apps.googleusercontent.com', 'the client the mailbox uses is intact');
+  assert.equal(await (await harness.core.secrets('file')).get(clientSecretRef('desktop')), 'fake-secret-a');
+});

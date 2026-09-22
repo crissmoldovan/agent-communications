@@ -64,8 +64,8 @@ export async function completeConsent(context: GmailContext, flow: OAuthFlow, co
   const config = await context.config();
 
   return flow.mode === 'reauth'
-    ? reauthorise(context, flow, config, tokens, identity, granted, missingScopes)
-    : addInbox(context, flow, config, tokens, identity, granted, missingScopes);
+    ? reauthorise(context, flow, config, tokens, identity, granted, missingScopes, client.clientId)
+    : addInbox(context, flow, config, tokens, identity, granted, missingScopes, client.clientId);
 }
 
 async function clientSecret(context: GmailContext, client: ClientConfig, name: string): Promise<string> {
@@ -111,6 +111,7 @@ async function addInbox(
   identity: VerifiedIdentity,
   granted: string[],
   missingScopes: string[],
+  clientId: string,
 ): Promise<ConsentResult> {
   if (flow.expect.email && flow.expect.email.toLowerCase() !== identity.email.toLowerCase()) {
     refuseWrongAccount(flow.expect.email, identity.email, flow.alias);
@@ -158,6 +159,7 @@ async function addInbox(
        * one any more, and the flow is refused here rather than writing a name the file no longer allows.
        */
       requireNewInboxName(current, flow.alias);
+      requireSameClient(current, flow.clientName, clientId);
       // The backend the token went into must still be the one in force: `secrets migrate` switches backends, and a
       // row written after the switch would name a credential that only exists in the store nothing reads any more.
       if (secretsStoreOf(current) !== secrets.kind) {
@@ -208,6 +210,7 @@ async function reauthorise(
   identity: VerifiedIdentity,
   granted: string[],
   missingScopes: string[],
+  clientId: string,
 ): Promise<ConsentResult> {
   // Whether the row still exists is decided inside the lock below, not on the snapshot `config` was read into.
   void config;
@@ -230,7 +233,7 @@ async function reauthorise(
   try {
     result = await withCredentialsLock(context.core.paths.configDir, () => {
       entered = true;
-      return writeReauth(context, flow, inboxId, tokens, identity, granted);
+      return writeReauth(context, flow, inboxId, tokens, identity, granted, clientId);
     });
   } catch (error) {
     // Only a lock that could not be taken means nothing was saved. A timeout from inside — the config lock, after
@@ -297,6 +300,7 @@ async function writeReauth(
   tokens: TokenResponse,
   identity: VerifiedIdentity,
   granted: string[],
+  clientId: string,
 ): Promise<{ alias: string; inbox: InboxConfig }> {
   // Read inside the lock, by id: the row as it is now, under whatever name it has now.
   const config = await context.config();
@@ -342,6 +346,7 @@ async function writeReauth(
       // By id, under whatever key it holds now: a rename is followed rather than undone.
       const now = findById(current, 'inbox', inboxId);
       if (!now) throw inboxGone();
+      requireSameClient(current, flow.clientName, clientId);
       written = { alias: now.alias, inbox: { ...now.inbox, ...grantFields(flow, identity, granted, now.inbox) } };
       return { ...current, inboxes: { ...current.inboxes, [now.alias]: written.inbox } };
     });
@@ -392,6 +397,23 @@ async function restorePrevious(
       cause: original,
     });
   }
+}
+
+/**
+ * Refuses a row whose OAuth client is no longer the one this sign-in exchanged its code with.
+ *
+ * The row records a client by name, and the token it names belongs to whichever client actually issued it — so a
+ * `client add --replace` or a `client remove` landing in between would leave a mailbox pointing at a client that
+ * cannot renew its token.
+ */
+function requireSameClient(config: Config, name: string, clientId: string): void {
+  const held = config.clients[name];
+  if (held?.clientId === clientId) return;
+  throw new CommsError('CONFIG', `the OAuth client "${name}" changed while this sign-in was being completed`, {
+    hint: held
+      ? `Run \`agent-gmail inbox reauth\` for this mailbox again, through the client it should use.`
+      : `Register it again with \`agent-gmail client add\`, then run the sign-in again.`,
+  });
 }
 
 /** Whether two rows are the same, field for field, whatever order their keys were written in. */

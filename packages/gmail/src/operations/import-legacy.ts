@@ -301,6 +301,14 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
             // Checked again under the lock: the names were chosen from a snapshot, before any network call.
             requireNewInboxName(existing, alias, 'Run the import again.');
             requireStore(existing, secrets.kind);
+            // Re-checked under the lock: another add or import can connect the same account meanwhile, and two rows
+            // for one account would share — and overwrite — one grant.
+            const raced = duplicateInbox(existing, { client: clientKey, email });
+            if (raced) {
+              throw new CommsError('CONFIG', `${email} was connected as "${raced}" while this ran`, {
+                hint: 'Run the import again.',
+              });
+            }
             // And the client these tokens were issued by is still the one registered under that name.
             if (existing.clients[clientKey]?.clientId !== parsedClient.clientId) {
               throw new CommsError('CONFIG', `the OAuth client "${clientKey}" changed while this ran`, {
