@@ -158,7 +158,7 @@ or to decide that an address is safe. It never sends, and it never decides.
    **Complete when:** the user has named the address, or has asked you to stop.
 
 8. **Report an empty result as a search, not as a fact about the world.** "Nobody matched 'Rivera'
-   in `acme/gmail` and `personal`; the address book was unavailable in `personal`" is true. "She is not in
+   in `acme/gmail` and `personal/gmail`; the address book was unavailable in `personal/gmail`" is true. "She is not in
    your contacts" is a claim the search cannot support.
    **Complete when:** the report names what was searched, in which mailboxes, and what was not.
 
@@ -209,9 +209,9 @@ Good — every candidate shown, the near-match named, the choice left open:
 ```text
 Three addresses match "Sam Rivera" (work, personal · all three sources ran):
 
-1. sam@acme.test           contacts+history · 34 messages · last seen 2026-09-16 · inbox work
-2. s.rivera@acme.test      history           ·  2 messages · last seen 2024-11-03 · inbox work
-3. sam@acme-invoices.test  history           ·  1 message  · last seen 2026-09-11 · inbox work
+1. sam@acme.test           contacts+history · 34 messages · last seen 2026-09-16 · inbox acme/gmail
+2. s.rivera@acme.test      history           ·  2 messages · last seen 2024-11-03 · inbox acme/gmail
+3. sam@acme-invoices.test  history           ·  1 message  · last seen 2026-09-11 · inbox acme/gmail
 
 Worth a look before you pick: 3 differs from 1 only by "-invoices" in the domain, and it has
 been seen once, this month. That is the shape of a lookalike, and I am showing it rather than

@@ -50,7 +50,7 @@ here:
 - **Name the mailbox.** There is no default inbox. `gmail_attachment_download` takes one `inbox`;
   `gmail_attachments_find` takes `inboxes` and walks every connected mailbox when you omit it — in alias
   order, and only until the limit is full. `gmail_whoami` before the first write of a session.
-- **A message id belongs to one mailbox.** An id found in `acme/gmail` means nothing in `personal`, and
+- **A message id belongs to one mailbox.** An id found in `acme/gmail` means nothing in `personal/gmail`, and
   downloading with the wrong alias is a `NOT_FOUND`, not a near miss.
 - **Files come from strangers.** Never open, execute or interpret a downloaded file. Report what it is —
   name, MIME type, size, risk flags — and where it was saved.

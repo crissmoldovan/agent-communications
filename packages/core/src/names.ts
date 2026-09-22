@@ -267,7 +267,7 @@ export interface NamesMigrationRow {
 
 export type NamesMigrationPlan =
   | { status: 'already-migrated' }
-  | { status: 'ready'; fingerprint: string; rows: NamesMigrationRow[] };
+  | { status: 'ready'; fingerprint: string; result: string; rows: NamesMigrationRow[] };
 
 /**
  * What the migration would do to `config`, or a refusal listing every problem at once.
@@ -277,8 +277,10 @@ export type NamesMigrationPlan =
  * problem is collected before anything is refused, so a person fixes them in one pass instead of one per run; and a
  * plan with a problem is never partly applied.
  *
- * The fingerprint is of the whole configuration this was computed from. `migrateNames` refuses to apply the plan to
- * anything else.
+ * `fingerprint` is of the whole configuration this was computed from, and `result` of the one it would produce.
+ * `migrateNames` refuses to apply the plan to anything else, and refuses to call it already done unless what it
+ * finds is what this plan would have written — two people mapping the same names differently are not each other's
+ * retry.
  */
 export function planNamesMigration(config: Config, renames: readonly string[] = []): NamesMigrationPlan {
   if (config.version === 2) return { status: 'already-migrated' };
@@ -358,7 +360,12 @@ export function planNamesMigration(config: Config, renames: readonly string[] = 
     );
   }
   rows.sort((a, b) => (a.kind === b.kind ? a.from.localeCompare(b.from) : a.kind === 'inbox' ? -1 : 1));
-  return { status: 'ready', fingerprint: configFingerprint(config), rows };
+  return {
+    status: 'ready',
+    fingerprint: configFingerprint(config),
+    result: configFingerprint(applyNamesMigration(config, rows)),
+    rows,
+  };
 }
 
 /** Version 2 from version 1 and a plan made from it: every key renamed, every old name recorded. Nothing else. */
@@ -395,5 +402,5 @@ export function migrateNames(
   store: ConfigStore,
   plan: Extract<NamesMigrationPlan, { status: 'ready' }>,
 ): Promise<{ status: 'migrated' | 'already-migrated'; config: ConfigV2 }> {
-  return store.migrateNames(plan.fingerprint, (current) => applyNamesMigration(current, plan.rows));
+  return store.migrateNames(plan.fingerprint, plan.result, (current) => applyNamesMigration(current, plan.rows));
 }

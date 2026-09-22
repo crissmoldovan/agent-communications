@@ -162,8 +162,8 @@ line that carries the point and cite the id.
 
 Three things make a claim checkable, and all three are cheap:
 
-1. **The mailbox alias.** Ids belong to one account. A thread id from `work` means nothing in
-   `personal`, and the same conversation read from a second mailbox is a different thread with different
+1. **The mailbox alias.** Ids belong to one account. A thread id from `acme/gmail` means nothing in
+   `personal/gmail`, and the same conversation read from a second mailbox is a different thread with different
    ids.
 2. **The id.** A message id for a claim about one message; the thread id for a claim about the
    conversation. The timeline index (`m4`) is a useful shorthand *alongside* the id, not instead of it —
@@ -174,8 +174,8 @@ Three things make a claim checkable, and all three are cheap:
 A briefing line that does all three:
 
 ```text
-Ana asked for the revised figures on 14 Sep (m4, `work` / 18f2c1a…). We answered 98 minutes later
-saying we would come back with numbers (m5, `work` / 18f2c4b…) and nothing has been sent since.
+Ana asked for the revised figures on 14 Sep (m4, `acme/gmail` / 18f2c1a…). We answered 98 minutes later
+saying we would come back with numbers (m5, `acme/gmail` / 18f2c4b…) and nothing has been sent since.
 
 Read: 5 of 7 messages — the thread read hit its budget, so I took m6 and m7 individually by id.
 Quoted history was collapsed throughout; m5 omitted 31 lines and I re-read it with quoting on,

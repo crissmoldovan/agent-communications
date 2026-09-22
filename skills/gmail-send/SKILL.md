@@ -194,7 +194,7 @@ Good — the whole preview, the flag named, nothing added that competes with it:
 ```text
 Here is exactly what would be sent. Nothing has gone yet.
 
-    SEND PREVIEW · inbox work · approval ap_7K2Q… · draft r_88… · nothing has been sent
+    SEND PREVIEW · inbox acme/gmail · approval ap_7K2Q… · draft r_88… · nothing has been sent
     From:     Jo Example <jo@example.com>
     To:       sam@partner.test     EXTERNAL
               ana@partner.test     EXTERNAL · FIRST-TIME

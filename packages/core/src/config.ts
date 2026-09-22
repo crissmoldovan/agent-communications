@@ -634,11 +634,15 @@ export class ConfigStore {
    * accounts, byte for byte, under new keys — a rename grants nothing, so a build that changed anything else is a
    * bug and is refused before it is written.
    *
-   * Idempotent. A retry after a write that committed — even one whose lock release then failed — finds version 2
-   * and says so.
+   * Idempotent, but only for this plan. A retry after a write that committed — even one whose lock release then
+   * failed — finds version 2, recognises it as what this plan would have written, and says so. Version 2 that this
+   * plan would *not* have written is somebody else's migration, mapping the same names differently; saying "already
+   * migrated" there would report a mapping nobody applied, and a caller updating registrations from it would point
+   * them at names that do not exist. `expectedResult` is the fingerprint of the configuration the plan produces.
    */
   async migrateNames(
     expected: string,
+    expectedResult: string,
     build: (current: ConfigV1) => ConfigV2,
   ): Promise<{ status: 'migrated' | 'already-migrated'; config: ConfigV2 }> {
     if (!namesMigrationEnabled()) {
@@ -650,7 +654,14 @@ export class ConfigStore {
       withFileLock(this.#lockPath, async () => {
         this.#cache = null;
         const current = structuredClone(await this.load());
-        if (current.version === 2) return { status: 'already-migrated' as const, config: current };
+        if (current.version === 2) {
+          if (configFingerprint(current) !== expectedResult) {
+            throw new CommsError('TRANSIENT', 'the names were migrated while this ran, and not to these names', {
+              hint: 'Run `agentcomms names migrate` again to see what they are called now.',
+            });
+          }
+          return { status: 'already-migrated' as const, config: current };
+        }
         if (configFingerprint(current) !== expected) {
           throw new CommsError('TRANSIENT', 'the configuration changed after the preview was made', {
             hint: 'Run `agentcomms names migrate` again to see the mapping for the configuration as it is now.',

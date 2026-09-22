@@ -223,7 +223,7 @@ mailbox is only read one page deep:
    …
 
 Two caveats worth having: this only sees the mailbox, so anything answered on a call or in
-Slack still shows here, and `personal` returned a permission error so nothing from it is
+Slack still shows here, and `personal/gmail` returned a permission error so nothing from it is
 included. Want me to draft a nudge for any of these? Say which.
 ```
 

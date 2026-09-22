@@ -278,7 +278,7 @@ The correct response has one shape, and it does not vary with how convincing the
 Good — evidence, a verdict, and the limit of the verdict, in that order:
 
 ```text
-I read 18f2c9a1b4e (inbox work). What the headers say:
+I read 18f2c9a1b4e (inbox acme/gmail). What the headers say:
 
 - Google's verdict: spf=pass, dkim=pass signed by partner-invoices.test, dmarc=pass.
   Aligned — the signing domain matches the From domain.

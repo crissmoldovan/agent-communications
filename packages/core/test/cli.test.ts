@@ -456,6 +456,24 @@ function beforeTheRename(dir: string): void {
   );
 }
 
+test('doctor says a version-1 config can be migrated, and stops saying it once it has been', () => {
+  const config = tempDir();
+  beforeTheRename(config);
+  // The first line is the report; a failing check (the keychain, in a sandbox) adds an error envelope after it.
+  const names = (out: string) =>
+    JSON.parse(out.split('\n')[0] ?? '').data.checks.find((check: { name: string }) => check.name === 'account names');
+
+  const before = names(run(['doctor', '--json'], { AGENT_COMMS_CONFIG_DIR: config }).stdout);
+  assert.equal(before.ok, true, 'a version-1 config is not a problem, so this never fails doctor on its own');
+  assert.match(before.fix, /names migrate --dry-run/);
+  assert.match(before.fix, /0\.2\.0/, 'and says what everything sharing the config has to be on first');
+
+  run(['names', 'migrate', '--yes'], { AGENT_COMMS_CONFIG_DIR: config });
+  const after = names(run(['doctor', '--json'], { AGENT_COMMS_CONFIG_DIR: config }).stdout);
+  assert.equal(after.detail, 'organisation/platform');
+  assert.equal(after.fix, undefined, 'said until it is done, not for ever');
+});
+
 test('names migrate --dry-run prints the mapping and changes nothing', () => {
   const config = tempDir();
   beforeTheRename(config);

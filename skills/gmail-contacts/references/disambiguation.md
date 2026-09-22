@@ -61,7 +61,7 @@ saying it is correct.
 |---|---|---|
 | `j.smith@gmail.com` and `jsmith@gmail.com` | One Gmail mailbox. This search does no dot folding, so it shows two rows | Say they are likely the same mailbox at Gmail, and let the user pick the one they want written on the message |
 | `sam@acme.test` and `sam+invoices@acme.test` | Almost always one mailbox with a tag. No plus folding happens here either | Ask which the user wants the reply to carry; the tag may be how they file it |
-| The same address in `work` and in `personal` | One address, seen by two mailboxes. The rows differ only by which mailbox found them | Pick the mailbox the reply should come **from**, which is a different question from which address to write to |
+| The same address in `acme/gmail` and in `personal/gmail` | One address, seen by two mailboxes. The rows differ only by which mailbox found them | Pick the mailbox the reply should come **from**, which is a different question from which address to write to |
 | The same address with different display names in different rows | One address; the names came from different senders' headers or from an address-book entry | The address is the identity. Names are decoration, and forgeable decoration |
 
 ## Narrowing with evidence rather than judgement

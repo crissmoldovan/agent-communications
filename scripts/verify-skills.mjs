@@ -299,6 +299,44 @@ for (const file of walk(root)) {
   if (absolutePath.test(source)) fail(`${relativeFile}: contains a machine-specific absolute path`);
 }
 
+/*
+ * Account names in the material people copy from.
+ *
+ * Every account is `organisation/platform` now, and a config created today refuses anything else — so an example
+ * that still says `--inbox work` is a command that cannot work, and one a reader will copy before they find out.
+ * This looks only at name positions, because most of these words are ordinary English everywhere else: `archive`
+ * is an action, `personal` is an adjective, and `work` is what the software does.
+ *
+ * Historical material is exempt on purpose: a spec records what was decided at the time, and the changelog records
+ * what the old names were. Tests are exempt too — a version-1 fixture is legitimately flat.
+ */
+// A legal version-1 alias, minus the English words that follow these verbs in prose ("inbox add and reauth").
+const FLAT_NAME = String.raw`(?!(?:and|or|the|an?)\b)[a-z][a-z0-9-]*`;
+const NAME_POSITIONS = [
+  new RegExp(String.raw`--(?:inbox|workspace)[ =](${FLAT_NAME})(?![\w/-])`, 'g'),
+  new RegExp(String.raw`\binbox[:=] ?['"](${FLAT_NAME})['"]`, 'g'),
+  new RegExp(String.raw`\b(?:inbox|workspace) (${FLAT_NAME}) ·`, 'g'),
+  new RegExp(String.raw`\b(?:inbox|workspace) (?:add|remove|reauth|finish) (${FLAT_NAME})(?![\w/-])`, 'g'),
+];
+const userFacing = (relativeFile) =>
+  (relativeFile.startsWith('skills/') ||
+    relativeFile.startsWith('docs/') ||
+    relativeFile === 'README.md' ||
+    /^packages\/[^/]+\/README\.md$/.test(relativeFile)) &&
+  !relativeFile.startsWith('docs/superpowers/') &&
+  !relativeFile.startsWith('docs/research/');
+
+for (const file of walk(root)) {
+  const relativeFile = show(file);
+  if (!userFacing(relativeFile) || !relativeFile.endsWith('.md')) continue;
+  const source = readFileSync(file, 'utf8');
+  for (const pattern of NAME_POSITIONS) {
+    for (const [, name] of source.matchAll(pattern)) {
+      fail(`${relativeFile}: "${name}" is a flat account name; every account is organisation/platform`);
+    }
+  }
+}
+
 if (failures.length) {
   console.error(`Skill verification failed (${failures.length} issue${failures.length === 1 ? '' : 's'}):`);
   for (const message of failures) console.error(`- ${message}`);

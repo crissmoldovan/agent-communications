@@ -29,7 +29,9 @@ They live in a `compose/` directory inside the configuration directory, which re
    directory on Windows.
 
 The platform file is named after the platform — `gmail.md` for this package — and the inbox file after
-the mailbox alias, so a mailbox connected as `work` reads `compose/inbox-work.md`.
+the mailbox, with the `/` written as `__` — a mailbox connected as `acme/gmail` reads
+`compose/inbox-acme__gmail.md`. (A mailbox renamed since the file was written still reads the file under its old
+name, until one is written under the new one.)
 
 ## How they combine
 
@@ -76,7 +78,7 @@ Pass `includeProfile: true` (CLI: `--profile`) on a draft call — `gmail_draft_
 field. Ask for it **before** you write, not after: it is a specification, not a review checklist.
 
 The platform is always `gmail` here, and the inbox layer is always the alias you are drafting in, so a
-draft in `work` and a draft in `personal` can be governed by different files with no extra argument.
+draft in `acme/gmail` and a draft in `personal/gmail` can be governed by different files with no extra argument.
 
 ## The built-in default
 

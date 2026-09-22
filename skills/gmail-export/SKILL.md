@@ -239,7 +239,7 @@ Bad — the export happened and then the point of it was thrown away:
 Exported the thread. Here it is:
 
     # Phase 2 rollout plan
-    38 messages · jo@example.com, sam@partner.test, ana@partner.test · exported from work
+    38 messages · jo@example.com, sam@partner.test, ana@partner.test · exported from acme/gmail
     ## Re: Phase 2 rollout plan
     - **From:** sam@partner.test
     …

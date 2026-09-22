@@ -33,7 +33,7 @@ Three things follow from the order that are easy to get wrong:
 - **An id beats a name.** If a user label were somehow named `INBOX`, rule 1 would resolve the system label
   first. This is theoretical, but it explains why the resolved ids are worth reading back rather than assumed.
 
-Label sets are **per mailbox**. `Invoices` in `work` and `Invoices` in `personal` are different labels with
+Label sets are **per mailbox**. `Invoices` in `acme/gmail` and `Invoices` in `personal/gmail` are different labels with
 different ids, and an id from one mailbox is meaningless in the other.
 
 ## The system labels
@@ -117,7 +117,7 @@ Every `gmail_organise` result — including a dry run — carries `addLabelIds` 
 That is the cheapest available check that the operation you described is the operation about to happen:
 
 ```text
-Would change 314 messages in work: -INBOX.
+Would change 314 messages in acme/gmail: -INBOX.
 ```
 
 `removeLabelIds: ["INBOX"]` is what archiving is. `addLabelIds: ["Label_8821"]` for a label the user called

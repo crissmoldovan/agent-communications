@@ -235,27 +235,27 @@ Classifying four hundred threads by reading four hundred bodies is not a triage,
 Good — the window stated, counts honest, one line per thread, the proposal separate:
 
 ```text
-Triage · in:inbox after:2026/09/17 (from 2026-09-17 00:00 Europe/London) · mailboxes work, personal
+Triage · in:inbox after:2026/09/17 (from 2026-09-17 00:00 Europe/London) · mailboxes acme/gmail, personal/gmail
 40 of an estimated 310 threads · more remain (hasMore) · read 6 bodies · all mailboxes returned
 
 REPLY NEEDED (3)
-  work · sam@partner.test · Re: Phase 2 plan — asks if Tuesday works · 18f2c9a1b
-  work · ana@partner.test · Invoice 4412 query — asks which PO to bill · 18f2b74d0
-  personal · j.reed@example.com · Saturday — asks for a yes or no by Friday · 18f2a01ce
+  acme/gmail · sam@partner.test · Re: Phase 2 plan — asks if Tuesday works · 18f2c9a1b
+  acme/gmail · ana@partner.test · Invoice 4412 query — asks which PO to bill · 18f2b74d0
+  personal/gmail · j.reed@example.com · Saturday — asks for a yes or no by Friday · 18f2a01ce
 
 REVIEW (2)
-  work · billing@saas.test · Renewal 2026-10-01, PDF attached · 18f29d55a
-  work · legal@partner.test · Draft MSA v3, DOCX attached · 18f28c117
+  acme/gmail · billing@saas.test · Renewal 2026-10-01, PDF attached · 18f29d55a
+  acme/gmail · legal@partner.test · Draft MSA v3, DOCX attached · 18f28c117
 
 FYI (9)
-  work · ci@build.test · 4 nightly build reports · 18f2… (and 8 more, ids below)
+  acme/gmail · ci@build.test · 4 nightly build reports · 18f2… (and 8 more, ids below)
 
 NOISE (26)
   Promotions category, never written to from either mailbox · 26 threads · ids below
 
 Proposed, nothing applied yet:
-  archive 26 threads in Noise (work 19, personal 7)
-  add label "Review" to 2 threads in work — that label does not exist yet and would be created
+  archive 26 threads in Noise (acme/gmail 19, personal/gmail 7)
+  add label "Review" to 2 threads in acme/gmail — that label does not exist yet and would be created
 gmail-organize would dry-run this first and keep the reversing change. Approve the batch?
 ```
 

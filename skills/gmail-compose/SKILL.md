@@ -270,7 +270,7 @@ Good — the preview shown whole, the warning named, and the handover made expli
 ```text
 Drafted as a reply-all in the work mailbox. Nothing has been sent.
 
-    MESSAGE PREVIEW · inbox work · draft r_88214 · nothing has been sent
+    MESSAGE PREVIEW · inbox acme/gmail · draft r_88214 · nothing has been sent
     From:     jo@example.com
     To:       sam@partner.test
     Cc:       ana@partner.test

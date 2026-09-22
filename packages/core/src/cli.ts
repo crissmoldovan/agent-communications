@@ -119,6 +119,25 @@ async function doctor(core: Core): Promise<{ checks: Check[]; ok: boolean }> {
     });
   }
 
+  /*
+   * The one thing on this machine that nothing else announces.
+   *
+   * A version-1 config is not broken — every command reads and writes it unchanged — so this never fails. It is
+   * here because the migration has no symptom until an old name is used somewhere that has already moved on, and
+   * because the release requirement is the part people get wrong: one config is shared by everything on a machine,
+   * and a program older than 0.2.0 refuses the migrated file outright.
+   */
+  checks.push({
+    name: 'account names',
+    ok: true,
+    detail: config.version === 1 ? 'the old flat names, which still work' : 'organisation/platform',
+    ...(config.version === 1
+      ? {
+          fix: 'See what they would become with `agentcomms names migrate --dry-run`, once everything sharing this config is on 0.2.0 or later.',
+        }
+      : {}),
+  });
+
   const keyring = await loadKeyringModule();
   const probe = await probeKeychain(keyring, keychainNamespace(core.paths.configDir));
   const usesKeychain = secretsStoreOf(config) === 'keychain';

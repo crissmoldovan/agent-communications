@@ -196,7 +196,7 @@ Four checks, in the order they most often find the problem:
    the search still looks like a whole answer.
 
 Then say what you ran, not just what you found: "no rows for `from:sam invoice after:2026-08-01` in
-`work` and `personal`" is checkable, and "Sam never sent an invoice" is not.
+`acme/gmail` and `personal/gmail`" is checkable, and "Sam never sent an invoice" is not.
 
 ## Where this lives in the code
 

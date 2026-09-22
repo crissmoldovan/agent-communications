@@ -238,7 +238,7 @@ guarantee and the rest of this section is about its limits, but it is not the sa
 a token that physically cannot send.
 
 If you want the stronger one, connect the mailbox at `read` and accept that drafting is not
-available from it: `agent-gmail inbox add archive --tier read --start`.
+available from it: `agent-gmail inbox add acme/gmail-archive --tier read --start`.
 
 [`SECURITY.md`](SECURITY.md) has the full threat model.
 

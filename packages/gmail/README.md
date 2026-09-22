@@ -100,7 +100,7 @@ Or embed it:
 ```js
 import { createGmailMcpServer } from '@agentcomms/gmail';
 
-const server = await createGmailMcpServer({ inbox: 'work' });
+const server = await createGmailMcpServer({ inbox: 'acme/gmail' });
 await server.connectStdio();
 ```
 

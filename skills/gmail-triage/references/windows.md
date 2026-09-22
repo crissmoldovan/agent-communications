@@ -115,16 +115,16 @@ Plus:
 A header that does all of that:
 
 ```text
-Triage · in:inbox after:2026/09/17 (from 2026-09-17 00:00 Europe/London) · mailboxes work, personal
+Triage · in:inbox after:2026/09/17 (from 2026-09-17 00:00 Europe/London) · mailboxes acme/gmail, personal/gmail
 40 of an estimated 310 threads · more remain · read 6 bodies · all mailboxes returned
 ```
 
 And when one did not:
 
 ```text
-Triage · in:inbox newer_than:2d · mailboxes work, personal, archive
+Triage · in:inbox newer_than:2d · mailboxes acme/gmail, personal/gmail, acme/gmail-archive
 40 of an estimated 310 threads · more remain · read 6 bodies
-`archive` returned SCOPE_MISSING and is not in any bucket below — nothing from it was classified.
+`acme/gmail-archive` returned SCOPE_MISSING and is not in any bucket below — nothing from it was classified.
 ```
 
 ## Do not page for completeness

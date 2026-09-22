@@ -589,8 +589,8 @@ test('a write that committed and then reported failure is found already done on 
   const plan = ready(planNamesMigration(await store.load()));
   // The write lands and the call rejects anyway — what a failed lock release does after a committed write.
   const original = store.migrateNames.bind(store);
-  store.migrateNames = async (expected, build) => {
-    await original(expected, build);
+  store.migrateNames = async (expected, expectedResult, build) => {
+    await original(expected, expectedResult, build);
     throw new CommsError('LOCK_TIMEOUT', 'the lock could not be released');
   };
   await assert.rejects(migrateNames(store, plan), isError('LOCK_TIMEOUT'));
@@ -600,6 +600,23 @@ test('a write that committed and then reported failure is found already done on 
   const before = readFileSync(store.path, 'utf8');
   assert.equal((await migrateNames(store, plan)).status, 'already-migrated');
   assert.equal(readFileSync(store.path, 'utf8'), before, 'and the retry changes nothing');
+});
+
+test('two people mapping the same names differently: the loser is not told its mapping is already in place', async () => {
+  const store = storeWith(machine());
+  const current = await store.load();
+  // Both previewed the same version-1 config, so both carry the same `fingerprint`. Only the mappings differ.
+  const mine = ready(planNamesMigration(current, ['gmail=personal/gmail']));
+  const theirs = ready(planNamesMigration(current, ['gmail=home/gmail']));
+  assert.equal(mine.fingerprint, theirs.fingerprint, 'the same configuration was previewed twice');
+
+  assert.equal((await migrateNames(store, theirs)).status, 'migrated');
+  // Mine arrives second. It must not report "already migrated" — its rows say `personal/gmail`, and nothing on
+  // disk was ever called that; a caller updating its registrations from them would point them at nothing.
+  await assert.rejects(migrateNames(store, mine), isError('TRANSIENT', /not to these names/));
+  assert.equal(Object.hasOwn(JSON.parse(readFileSync(store.path, 'utf8')).inboxes, 'home/gmail'), true);
+  // The same plan applied twice is still its own retry.
+  assert.equal((await migrateNames(store, theirs)).status, 'already-migrated');
 });
 
 test('a renamed row between preview and apply refuses the migration, and writes nothing', async () => {
@@ -655,19 +672,25 @@ test('a build that changes more than names is refused before it is written', asy
     next.inboxes['cue/gmail'] = { ...present(next.inboxes['cue/gmail']), sendPolicy: 'chat' };
     return next;
   };
-  await assert.rejects(store.migrateNames(plan.fingerprint, widened), isError('CONFIG', /changes more than names/));
+  await assert.rejects(
+    store.migrateNames(plan.fingerprint, plan.result, widened),
+    isError('CONFIG', /changes more than names/),
+  );
   const dropped = (config: ConfigV1): ConfigV2 => {
     const next = applyNamesMigration(config, plan.rows);
     delete next.inboxes['cue/gmail'];
     return next;
   };
-  await assert.rejects(store.migrateNames(plan.fingerprint, dropped), isError('CONFIG', /number of inboxes changed/));
+  await assert.rejects(
+    store.migrateNames(plan.fingerprint, plan.result, dropped),
+    isError('CONFIG', /number of inboxes changed/),
+  );
   const defaults = (config: ConfigV1): ConfigV2 => ({
     ...applyNamesMigration(config, plan.rows),
     defaults: { ...config.defaults, sendPolicy: 'never' },
   });
   await assert.rejects(
-    store.migrateNames(plan.fingerprint, defaults),
+    store.migrateNames(plan.fingerprint, plan.result, defaults),
     isError('CONFIG', /a setting other than a name/),
   );
   assert.equal(JSON.parse(readFileSync(store.path, 'utf8')).version, 1);
@@ -881,7 +904,7 @@ test('a migration that forges, omits or adds a former name is refused', async ()
     ['extra', (f) => Object.assign(f.inboxes, { ghost: { name: 'cue/gmail', id: 'ibx_CCCCCCCCCCCCCCCC' } })],
   ];
   for (const [label, edit] of cases) {
-    await assert.rejects(store.migrateNames(plan.fingerprint, tamper(edit)), isError('CONFIG'), label);
+    await assert.rejects(store.migrateNames(plan.fingerprint, plan.result, tamper(edit)), isError('CONFIG'), label);
   }
   assert.equal(JSON.parse(readFileSync(store.path, 'utf8')).version, 1);
 });
