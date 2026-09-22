@@ -14,6 +14,8 @@ export * from './jail.ts';
 export * from './keys.ts';
 export * from './ledger.ts';
 export * from './lock.ts';
+export * from './name-grammar.ts';
+export * from './names.ts';
 export * from './output.ts';
 export * from './paths.ts';
 export * from './plans.ts';

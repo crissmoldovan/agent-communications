@@ -5,6 +5,14 @@ together under one version.
 
 ## Unreleased
 
+**This release can read the next config format, and never writes it.** Accounts are about to be named
+`organisation/platform` — `cue/gmail`, `cue/slack`, `wf/gmail-tech` — in version 2 of the config file, which
+also remembers the names it replaced, so an old name is refused with the new one rather than reported as unknown.
+Nothing creates or migrates to version 2 yet. It arrives in two steps on purpose: first a release that can read
+it, installed everywhere, and only then one that writes it. An older release refuses a version-2 file outright,
+and one config file is shared by everything on a machine — an MCP server started last week reads the file a CLI
+updated today.
+
 **The page at the end of a sign-in now says what it was for.** It read "Signed in — you can close this tab" and
 nothing else, so connecting six mailboxes in a row showed the same six words six times, with no way to tell which
 one you had just approved. It now carries the package's name, the mailbox being connected, the address the flow

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -61,6 +61,41 @@ test('audit tail and approvals list work on an empty config', () => {
   assert.deepEqual(JSON.parse(approvals.stdout).data, []);
   const missing = run(['approvals', 'list', '--inbox', 'nope', '--json']);
   assert.equal(missing.status, 66);
+});
+
+test('audit tail --inbox and approvals list --inbox refuse a former name with the current one', () => {
+  const config = tempDir();
+  writeFileSync(
+    join(config, 'config.json'),
+    JSON.stringify({
+      version: 2,
+      inboxes: {
+        'acme/gmail': {
+          id: 'ibx_AAAAAAAAAAAAAAAA',
+          provider: 'gmail',
+          email: 'jo@example.test',
+          identity: 'oidc',
+          client: 'desktop',
+          tier: 'read',
+          secretRef: 'gmail:refresh:ibx_AAAAAAAAAAAAAAAA',
+          createdAt: NOW,
+        },
+      },
+      formerNames: { inboxes: { work: { name: 'acme/gmail', id: 'ibx_AAAAAAAAAAAAAAAA' } }, accounts: {} },
+    }),
+  );
+  for (const command of [
+    ['audit', 'tail'],
+    ['approvals', 'list'],
+  ]) {
+    const refused = run([...command, '--inbox', 'work', '--json'], { AGENT_COMMS_CONFIG_DIR: config });
+    assert.equal(refused.status, 66, command.join(' '));
+    const error = JSON.parse(refused.stdout).error;
+    assert.match(error.message, /"work" was renamed to "acme\/gmail"/);
+    assert.equal(error.details.currentName, 'acme/gmail');
+    const current = run([...command, '--inbox', 'acme/gmail', '--json'], { AGENT_COMMS_CONFIG_DIR: config });
+    assert.equal(current.status, 0, current.stderr);
+  }
 });
 
 test('secrets migrate to file on an empty config records the backend without a keychain', () => {

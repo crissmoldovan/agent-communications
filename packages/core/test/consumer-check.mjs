@@ -2,10 +2,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
+import * as installed from '@agentcomms/core';
 import {
   CommsError,
   emptyConfig,
   messageDigest,
+  NEW_CONFIG_VERSION,
   openCore,
   sanitizeHtmlToText,
   VERSION,
@@ -40,4 +42,16 @@ assert.equal(run('--version').trim(), VERSION);
 const paths = JSON.parse(run('paths', '--json'));
 assert.equal(paths.ok, true);
 assert.equal(paths.data.configDir, process.env.AGENT_COMMS_CONFIG_DIR);
-console.log('core consumer check: imports, sanitiser, digest, core wiring and the agentcomms bin OK');
+// This release reads version 2 of the config and writes nothing at it — the installed package, not only the source.
+// The switch core's own tests use to exercise the transition must not be reachable from here: exported, it would be a
+// public v2 writer with one extra call in front of it.
+assert.equal('enableNamesMigrationForTests' in installed, false);
+assert.equal('namesMigrationEnabled' in installed, false);
+assert.equal(NEW_CONFIG_VERSION, 1);
+assert.equal(emptyConfig().version, 1);
+await assert.rejects(
+  openCore().config.migrateNames('any', (config) => config),
+  (error) => error instanceof CommsError && /does not write it/.test(error.message),
+);
+
+console.log('core consumer check: imports, sanitiser, digest, core wiring, the agentcomms bin and no v2 writer OK');
