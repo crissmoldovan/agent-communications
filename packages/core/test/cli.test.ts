@@ -198,7 +198,10 @@ test('a migration does not switch backends when a credential appeared or vanishe
  * `failSet` writes and then throws, which is what a keychain timeout that landed anyway looks like from outside.
  * `failDelete` refuses every delete, which is what a keychain whose prompt is dismissed looks like.
  */
-function memoryStore(kind: 'keychain' | 'file', options: { failSet?: string; failDelete?: boolean } = {}) {
+function memoryStore(
+  kind: 'keychain' | 'file',
+  options: { failSet?: string; failDelete?: boolean; deleteDelayMs?: number } = {},
+) {
   const values = new Map<string, string>();
   return {
     values,
@@ -212,6 +215,7 @@ function memoryStore(kind: 'keychain' | 'file', options: { failSet?: string; fai
         if (options.failSet === ref) throw new Error('timed out waiting for the keychain');
       },
       async delete(ref: string) {
+        if (options.deleteDelayMs) await new Promise((settle) => setTimeout(settle, options.deleteDelayMs));
         if (options.failDelete) throw new Error('the keychain said no');
         return values.delete(ref);
       },
@@ -331,4 +335,51 @@ test('a migration whose switch committed but whose lock release failed keeps the
   assert.equal(target.values.get('slack/token/acc_BBBBBBBBBBBBBBBB'), 'fake-token-two', 'the live copy was deleted');
   assert.equal(result.moved, 2);
   assert.equal(await source.get('slack/token/acc_AAAAAAAAAAAAAAAA'), null, 'the original was not tidied up');
+});
+
+test('two opposite migrations at once cannot leave a credential in neither backend', async () => {
+  /*
+   * Reproduced by review, entirely in memory: A (file → keychain) switches, then cleans its originals out of the
+   * file store; B (keychain → file) starts after A's switch and copies back into the file store. A's cleanup then
+   * deletes what B just verified, B switches to file, and B cleans the keychain out. The active backend is file,
+   * and the credential is in neither.
+   *
+   * A's cleanup is slowed so that interleaving happens reliably whenever nothing serialises the two. With the
+   * credentials lock, B waits for A to finish entirely, reads the backend A left, and moves everything back.
+   */
+  const { migrateSecrets } = await import('../src/cli.ts');
+  const { core } = await coreWithTwoSlackTokens();
+  /*
+   * keychain → file moves secrets into plain files, which `classifyChange` rightly treats as a loosening, and
+   * `migrateSecrets` gathers no consent — so today that direction is always refused, and this race cannot finish.
+   * The lock has to hold regardless of which direction happens to be gated, so the downgrade is consented to
+   * here, as it would be once the command can ask a person for it.
+   */
+  const update = core.config.update.bind(core.config);
+  core.config.update = ((mutator: Parameters<typeof update>[0]) =>
+    update(mutator, { consent: { kind: 'loosening-consent', paths: ['secrets.store'] } })) as typeof core.config.update;
+  const file = memoryStore('file', { deleteDelayMs: 150 });
+  const keychain = memoryStore('keychain');
+  file.values.set('slack/token/acc_AAAAAAAAAAAAAAAA', 'fake-token-one');
+  file.values.set('slack/token/acc_BBBBBBBBBBBBBBBB', 'fake-token-two');
+
+  const a = migrateSecrets(core, 'keychain', { source: file.store, target: keychain.store });
+  // Start B only once A has switched, which is the window the race needs.
+  for (let i = 0; i < 200 && (await core.config.load()).secrets?.store !== 'keychain'; i += 1) {
+    await new Promise((settle) => setTimeout(settle, 5));
+  }
+  const b = migrateSecrets(core, 'file', { source: keychain.store, target: file.store });
+  await Promise.all([a, b]);
+
+  assert.equal((await core.config.load()).secrets?.store, 'file');
+  assert.equal(
+    file.values.get('slack/token/acc_AAAAAAAAAAAAAAAA'),
+    'fake-token-one',
+    'a credential is in neither backend',
+  );
+  assert.equal(
+    file.values.get('slack/token/acc_BBBBBBBBBBBBBBBB'),
+    'fake-token-two',
+    'a credential is in neither backend',
+  );
 });

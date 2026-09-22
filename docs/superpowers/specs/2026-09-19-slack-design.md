@@ -317,10 +317,17 @@ distinct `acc_` / `ibx_` prefixes mean an id alone still says which it is.
 >
 > It cannot happen in S2: the only Slack writes to an existing reference are in `auth/refresh.ts`, reachable
 > only through `accessTokenFor`, which nothing calls yet — every sign-in writes to a fresh reference. It becomes
-> real the moment S3's transport calls `accessTokenFor`. So before that: a core-level credential lock that both
-> a refresh and a migration take, rather than a value re-check that narrows the window without closing it and
-> would read as a fix. **Gmail is exposed to the same race today** — an inbox reauth rewrites its reference in
-> place — and that is a shipped-package change, not this phase's.
+> real the moment S3's transport calls `accessTokenFor`. **The lock now exists**: `withCredentialsLock` in
+> `@agentcomms/core`, which `secrets migrate` holds from reading the configuration to its last cleanup. It went in
+> during S2 because two *opposite* migrations could already interleave and leave a credential in neither backend.
+> S3's refresh must take the same lock around its read-rotate-write before `accessTokenFor` is wired to
+> anything — rather than a value re-check that narrows the window without closing it and would read as a fix.
+> **Gmail is exposed to the same race today** — an inbox reauth rewrites its reference in place without this
+> lock — and that is a shipped-package change, not this phase's.
+>
+> Found on the way, also not this phase's: `agentcomms secrets migrate --to file` is always refused on an install
+> that already records the keychain. Moving secrets into plain files is correctly a loosening, and the command
+> gathers no consent, so it cannot do half of what its help says. Safe by accident rather than by design.
 >
 > *A durable transaction journal across the secret store and the config* was proposed for the window between
 > writing a credential and pointing at it. Declined: the window is now closed by a compare-and-swap inside the

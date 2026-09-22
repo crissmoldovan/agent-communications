@@ -8,6 +8,7 @@ import { type Core, openCore } from './core.ts';
 import { CommsError } from './errors.ts';
 import { isGroupOrWorldAccessible } from './fs.ts';
 import { APPROVAL_KEY_REF } from './keys.ts';
+import { withCredentialsLock } from './lock.ts';
 import {
   keychainNamespace,
   loadKeyringModule,
@@ -199,10 +200,27 @@ async function takeBack(
  *
  * `stores` exists for the tests. The only other backend is the real keychain, and a test must never write to it.
  */
-export async function migrateSecrets(
+export function migrateSecrets(
   core: Core,
   to: SecretStoreKind,
   stores: { source?: SecretStore; target?: SecretStore } = {},
+): Promise<MigrationResult> {
+  /*
+   * The whole migration under one lock — reading the configuration included.
+   *
+   * Two opposite migrations used to interleave: one copied into a backend while the other was cleaning that same
+   * backend out, and the credential ended up in neither. Everything this does is a sequence of steps that are
+   * each correct alone and wrong in combination, so no finer lock would do. The configuration is read inside
+   * the lock as well, so a migration that waited sees the backend the previous one left, rather than the one it
+   * saw before it queued.
+   */
+  return withCredentialsLock(core.paths.configDir, () => migrateUnderLock(core, to, stores));
+}
+
+async function migrateUnderLock(
+  core: Core,
+  to: SecretStoreKind,
+  stores: { source?: SecretStore; target?: SecretStore },
 ): Promise<MigrationResult> {
   const config = await core.config.load();
   const from = secretsStoreOf(config);

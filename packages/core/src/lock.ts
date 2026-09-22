@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { link, open, readFile, rename, rm, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { CommsError } from './errors.ts';
 import { ensurePrivateDir } from './fs.ts';
@@ -136,4 +136,35 @@ export async function withFileLock<T>(lockPath: string, fn: () => Promise<T>, op
     const current = await readLock(lockPath);
     if (current?.token === token) await rm(lockPath, { force: true });
   }
+}
+
+/**
+ * The lock every operation that rewrites stored credentials in bulk must hold.
+ *
+ * Next to the configuration rather than in the state directory, because it guards the same thing the config lock
+ * does from a different angle: which backend holds which credential. The config lock serialises writes to the
+ * file; this serialises the operations that move secrets *between* backends around those writes, which take far
+ * longer than a config write and must not interleave with each other.
+ *
+ * Two opposite migrations were the case that forced it. One copied into a backend while the other was cleaning
+ * the same backend out, and the result was a credential in neither — the active backend empty, and the one it
+ * had been copied from emptied too.
+ *
+ * **S3's token refresh must take this lock too**, before it is wired to anything. A refresh rewrites a credential
+ * under the same reference, which a migration's own checks cannot see; holding this lock is what serialises the
+ * two. Recorded in the Slack design spec next to the phase table.
+ */
+export function credentialsLockPath(configDir: string): string {
+  return join(configDir, '.credentials.lock');
+}
+
+/**
+ * Runs `fn` holding the credentials lock.
+ *
+ * A long stale window, because what runs under it can wait on a keychain prompt a person has not answered yet;
+ * a short timeout, because a second migration arriving while one is running should be told so promptly rather
+ * than queue behind a prompt.
+ */
+export function withCredentialsLock<T>(configDir: string, fn: () => Promise<T>): Promise<T> {
+  return withFileLock(credentialsLockPath(configDir), fn, { staleMs: 10 * 60_000, timeoutMs: 5_000 });
 }
