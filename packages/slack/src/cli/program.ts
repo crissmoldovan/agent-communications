@@ -19,7 +19,7 @@ import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
 import { doctor, type IdentityProbe } from '../operations/doctor.ts';
 import { type ProbeFetch, probeIdentity } from '../operations/identity.ts';
 import { modeReport, narrowingSteps, wideningSteps } from '../operations/mode.ts';
-import { listChannels, listPeople, readChannel, readThread, searchMessages } from '../operations/read.ts';
+import { listChannels, listFiles, listPeople, readChannel, readThread, searchMessages } from '../operations/read.ts';
 import { openWorkspace } from '../operations/session.ts';
 import {
   finishSignIn,
@@ -35,6 +35,7 @@ import {
   renderChannels,
   renderConnected,
   renderDoctor,
+  renderFiles,
   renderHistory,
   renderManifestHelp,
   renderMode,
@@ -540,13 +541,16 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
     .option('--limit <n>', 'how many messages', (value: string) => Number(value), 50)
     .option('--oldest <ts>', 'only messages at or after this Slack timestamp')
     .option('--latest <ts>', 'only messages at or before this Slack timestamp')
+    .option('--cursor <cursor>', 'resume where an earlier, incomplete read stopped')
     .action(
       act(async (context, options, channel: string, flags: Options) => {
-        const { call, name } = await session(context, String(flags.workspace));
+        const { call, name, teamId } = await session(context, String(flags.workspace));
         const result = await readChannel(call, name, channel, {
           limit: Number(flags.limit),
           oldest: flags.oldest as string | undefined,
           latest: flags.latest as string | undefined,
+          cursor: flags.cursor as string | undefined,
+          ourTeamId: teamId,
         });
         writeResult(result, output(), () => renderHistory(result, options.color), streams);
       }),
@@ -555,10 +559,15 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
   workspaceOption(program.command('thread <channel> <ts>'))
     .description('one thread, parent first')
     .option('--limit <n>', 'how many replies', (value: string) => Number(value), 100)
+    .option('--cursor <cursor>', 'resume where an earlier, incomplete read stopped')
     .action(
       act(async (context, options, channel: string, ts: string, flags: Options) => {
-        const { call, name } = await session(context, String(flags.workspace));
-        const result = await readThread(call, name, channel, ts, { limit: Number(flags.limit) });
+        const { call, name, teamId } = await session(context, String(flags.workspace));
+        const result = await readThread(call, name, channel, ts, {
+          limit: Number(flags.limit),
+          cursor: flags.cursor as string | undefined,
+          ourTeamId: teamId,
+        });
         writeResult(result, output(), () => renderThread(result, options.color), streams);
       }),
     );
@@ -566,11 +575,32 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
   workspaceOption(program.command('search <query>'))
     .description('Slack’s own search, in Slack’s syntax, over this workspace')
     .option('--limit <n>', 'how many matches', (value: string) => Number(value), 20)
+    .option('--page <n>', 'which page of results; `nextPage` in an incomplete result says which is next')
     .action(
       act(async (context, options, query: string, flags: Options) => {
         const { call, name } = await session(context, String(flags.workspace));
-        const result = await searchMessages(call, name, query, { limit: Number(flags.limit) });
+        const result = await searchMessages(call, name, query, {
+          limit: Number(flags.limit),
+          page: flags.page === undefined ? undefined : Number(flags.page),
+        });
         writeResult(result, output(), () => renderSearch(result, options.color), streams);
+      }),
+    );
+
+  workspaceOption(program.command('files'))
+    .description('files shared in this workspace')
+    .option('--channel <id>', 'only files in one channel')
+    .option('--limit <n>', 'how many', (value: string) => Number(value), 50)
+    .option('--page <n>', 'which page; an incomplete result says which is next')
+    .action(
+      act(async (context, options, flags: Options) => {
+        const { call } = await session(context, String(flags.workspace));
+        const result = await listFiles(call, {
+          channel: flags.channel as string | undefined,
+          limit: Number(flags.limit),
+          page: flags.page === undefined ? undefined : Number(flags.page),
+        });
+        writeResult(result, output(), () => renderFiles(result, options.color), streams);
       }),
     );
 

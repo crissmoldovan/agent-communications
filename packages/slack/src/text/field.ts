@@ -13,7 +13,7 @@ import { type DecodedText, decodeSlackText, type ReferenceNames } from './decode
  *
  * Decode, then cut, then neutralise. Each order is load-bearing and
  * `docs/superpowers/specs/2026-09-19-slack-design.md` §D5.4 says why: cutting before decoding can split an entity
- * or a span in half, and neutralising before decoding sees nothing to defuse in `&lt;/untrusted-email-content&gt;`.
+ * or a span in half, and neutralising before decoding sees nothing to defuse in `&lt;/untrusted-content&gt;`.
  */
 
 /** How much of a short field is worth carrying. A name or a topic longer than this is somebody making a point. */
@@ -56,10 +56,25 @@ export interface SenderBody extends SenderField {
   readonly references: DecodedText['references'];
 }
 
-export function senderBody(raw: string, names: ReferenceNames = {}, limit = 16_000): SenderBody {
-  const { text: decoded, references } = decodeSlackText(raw, names);
-  const truncated = decoded.length > limit;
-  const cut = truncated ? decoded.slice(0, limit) : decoded;
+export const BODY_LIMIT = 16_000;
+
+/**
+ * The second half of the pipeline, for text that has already been decoded exactly once.
+ *
+ * Separate from {@link senderBody} because decoding twice is not a harmless repetition — it is the bug this
+ * module exists to prevent, running backwards. A person who types `&lt;@U1|x&gt;` gets `<@U1|x>` from the first
+ * decode, which is the characters they typed; a second decode reads that as a *span* and turns it into a real
+ * mention of U1. The message pipeline reconciles `text` against `blocks` before anything else, and both halves
+ * come back decoded, so what follows must cut and neutralise and nothing more.
+ */
+export function finishField(decoded: DecodedText, limit: number = BODY_LIMIT): SenderBody {
+  const truncated = decoded.text.length > limit;
+  const cut = truncated ? decoded.text.slice(0, limit) : decoded.text;
   const { text, tokensNeutralised } = neutralise(cut);
-  return { text, truncated, tokensNeutralised, references };
+  return { text, truncated, tokensNeutralised, references: decoded.references };
+}
+
+/** Decode once, then finish. For a raw body that has not been through the reconciler. */
+export function senderBody(raw: string, names: ReferenceNames = {}, limit: number = BODY_LIMIT): SenderBody {
+  return finishField(decodeSlackText(raw, names), limit);
 }

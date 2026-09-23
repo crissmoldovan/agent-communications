@@ -28,6 +28,8 @@ export interface WorkspaceSession {
   /** The name this account is known by, for the envelope and for anything the reader prints. */
   readonly name: string;
   readonly accountId: string;
+  /** Slack's id for this workspace, so a message from another one is reported as external. */
+  readonly teamId: string;
   readonly call: SlackCall;
 }
 
@@ -36,6 +38,18 @@ export interface WorkspaceSession {
  *
  * `oauth.v2.access` with `grant_type=refresh_token` and no client secret — the same PKCE-shaped exchange the
  * sign-in uses, and for the same reason: this package never stores a client secret, so there is none to send.
+ *
+ * The response is parsed here rather than through `readExchange`, which is the sign-in's parser and rightly
+ * insists on the identity a sign-in establishes — the workspace id, the user id, the granted scopes. A refresh
+ * re-establishes none of that; it renews a credential for an account that was identified once already. Sending
+ * it through the sign-in's parser would refuse a perfectly good renewal for missing a `team` Slack had no reason
+ * to send.
+ *
+ * What it does insist on is the three fields a bundle cannot be built without. Getting that wrong is expensive in
+ * a way most parse errors are not: the refresh token is single-use, so by the time this runs Slack has already
+ * retired the old one, and a throw here leaves the account with a credential nobody can renew. An earlier version
+ * of this function handed Slack's snake_case straight to `bundleFrom`, whose input is camelCase — `expiresInSeconds`
+ * arrived `undefined`, the expiry became an invalid date, and the renewal threw *after* the token was spent.
  */
 function refreshExchange(context: SlackContext, clientId: string) {
   return async (refreshToken: string) => {
@@ -49,12 +63,20 @@ function refreshExchange(context: SlackContext, clientId: string) {
         hint: 'Re-authorise this workspace with `agent-slack workspace reauth <name>`.',
       });
     }
-    /*
-     * Slack answers a user-token refresh under `authed_user`, the same envelope the sign-in gets back — so this
-     * reuses `bundleFrom` rather than parsing the shape a second time, which is how the two drift.
-     */
-    const user = (raw.authed_user ?? raw) as Parameters<typeof bundleFrom>[0];
-    const bundle = bundleFrom(user, context.now());
+    // A user-token renewal comes back under `authed_user`, as the sign-in's does; some shapes put it at the top.
+    const user = (raw.authed_user ?? raw) as Record<string, unknown>;
+    const accessToken = typeof user.access_token === 'string' ? user.access_token : undefined;
+    const newRefresh = typeof user.refresh_token === 'string' ? user.refresh_token : undefined;
+    const expiresIn = typeof user.expires_in === 'number' ? user.expires_in : undefined;
+    if (!accessToken || !newRefresh || expiresIn === undefined || expiresIn <= 0) {
+      throw new CommsError('AUTH_REQUIRED', 'Slack’s token renewal did not include a usable credential', {
+        hint: 'Re-authorise this workspace with `agent-slack workspace reauth <name>`.',
+      });
+    }
+    const bundle = bundleFrom(
+      { accessToken, refreshToken: newRefresh, expiresInSeconds: expiresIn } as Parameters<typeof bundleFrom>[0],
+      context.now(),
+    );
     const { v: _v, state: _state, attempt: _attempt, ...rest } = bundle;
     return rest;
   };
@@ -89,6 +111,7 @@ export async function openWorkspace(
   return {
     name,
     accountId: account.id,
+    teamId: account.workspace,
     call: { token, fetch: deps.fetch, baseUrl: deps.baseUrl },
   };
 }

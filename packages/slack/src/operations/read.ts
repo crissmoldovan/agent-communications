@@ -73,6 +73,8 @@ export interface HistoryResult {
 }
 
 export interface HistoryOptions {
+  /** This workspace's own team id, so an author from another one is reported as external. */
+  ourTeamId?: string | undefined;
   limit?: number | undefined;
   oldest?: string | undefined;
   latest?: string | undefined;
@@ -85,7 +87,7 @@ async function rowsFrom(
   call: SlackCall,
   raws: Raw[],
   book: NameBook,
-  options: { resolveNames: boolean; accountName: string },
+  options: { resolveNames: boolean; accountName: string; ourTeamId?: string | undefined },
 ): Promise<ReadRow[]> {
   if (options.resolveNames) {
     // Two passes: learn every id this page mentions or was written by, then render with a book that knows them.
@@ -105,7 +107,7 @@ async function rowsFrom(
 
   const boundary = newBoundary();
   return raws.map((raw) => {
-    const message = readMessage(raw, book.names());
+    const message = readMessage(raw, book.names(), options.ourTeamId);
     const author = message.userId ? book.person(message.userId) : undefined;
     return {
       message,
@@ -144,6 +146,7 @@ export async function readChannel(
   const rows = await rowsFrom(call, page.items, book, {
     resolveNames: options.resolveNames ?? true,
     accountName,
+    ourTeamId: options.ourTeamId,
   });
   return {
     channel,
@@ -159,6 +162,8 @@ export interface ThreadResult {
   readonly parent?: ReadRow | undefined;
   readonly replies: readonly ReadRow[];
   readonly complete: boolean;
+  /** Where to resume when the bound stopped the read. Without it a long thread could not be finished. */
+  readonly cursor?: string | undefined;
 }
 
 /**
@@ -172,7 +177,12 @@ export async function readThread(
   accountName: string,
   channelId: string,
   threadTs: string,
-  options: { limit?: number | undefined; resolveNames?: boolean | undefined } = {},
+  options: {
+    limit?: number | undefined;
+    resolveNames?: boolean | undefined;
+    cursor?: string | undefined;
+    ourTeamId?: string | undefined;
+  } = {},
 ): Promise<ThreadResult> {
   const book = new NameBook();
   const page = await paginate(
@@ -180,14 +190,15 @@ export async function readThread(
     'conversations.replies',
     { channel: channelId, ts: threadTs },
     (response) => list(response.messages),
-    { limit: options.limit ?? 100 },
+    { limit: options.limit ?? 100, cursor: options.cursor },
   );
   const rows = await rowsFrom(call, page.items, book, {
     resolveNames: options.resolveNames ?? true,
     accountName,
+    ourTeamId: options.ourTeamId,
   });
   const [parent, ...replies] = rows;
-  return { channelId, parent, replies, complete: page.complete };
+  return { channelId, parent, replies, complete: page.complete, ...(page.cursor ? { cursor: page.cursor } : {}) };
 }
 
 export interface SearchHit extends ReadRow {
@@ -201,6 +212,8 @@ export interface SearchResult {
   readonly hits: readonly SearchHit[];
   readonly total?: number | undefined;
   readonly complete: boolean;
+  /** The next page to ask for when more remain. Slack's search pages by number, not by cursor. */
+  readonly nextPage?: number | undefined;
 }
 
 /**
@@ -242,7 +255,8 @@ export async function searchMessages(
   const paging = (matches.paging as Raw | undefined) ?? {};
   const pages = typeof paging.pages === 'number' ? paging.pages : 1;
   const current = typeof paging.page === 'number' ? paging.page : 1;
-  return { query, hits, total, complete: current >= pages };
+  const complete = current >= pages;
+  return { query, hits, total, complete, ...(complete ? {} : { nextPage: current + 1 }) };
 }
 
 export interface PeopleResult {
@@ -261,4 +275,80 @@ export async function listPeople(
     cursor: options.cursor,
   });
   return { people: page.items, complete: page.complete, ...(page.cursor ? { cursor: page.cursor } : {}) };
+}
+
+/** One file shared in the workspace. Every name and title is sender-controlled, like everything else here. */
+export interface SharedFile {
+  readonly id: string;
+  readonly name?: string | undefined;
+  readonly title?: string | undefined;
+  readonly mimetype?: string | undefined;
+  readonly size?: number | undefined;
+  readonly userId?: string | undefined;
+  readonly created?: number | undefined;
+  /** Slack's own flag. A file anyone with the link can open is worth seeing as such. */
+  readonly publicUrlShared?: boolean | undefined;
+  /**
+   * Where the bytes are.
+   *
+   * Carried, never fetched: downloading is S4's business and needs the jail core already has. A URL here is a
+   * URL Slack gave us, and it is shown so a person can decide, not followed because it was in a message.
+   */
+  readonly urlPrivate?: string | undefined;
+}
+
+function fileOf(raw: Raw): SharedFile {
+  const str_ = (value: unknown) => (typeof value === 'string' && value !== '' ? value : undefined);
+  const num_ = (value: unknown) => (typeof value === 'number' ? value : undefined);
+  return {
+    id: str_(raw.id) ?? '',
+    name: senderField(str_(raw.name))?.text,
+    title: senderField(str_(raw.title))?.text,
+    mimetype: str_(raw.mimetype),
+    size: num_(raw.size),
+    userId: str_(raw.user),
+    created: num_(raw.created),
+    ...(typeof raw.public_url_shared === 'boolean' ? { publicUrlShared: raw.public_url_shared } : {}),
+    urlPrivate: str_(raw.url_private),
+  };
+}
+
+export interface FilesResult {
+  readonly files: readonly SharedFile[];
+  readonly complete: boolean;
+  readonly page?: number | undefined;
+}
+
+/** The files this account can see, newest first, bounded. */
+export async function listFiles(
+  call: SlackCall,
+  options: {
+    channel?: string | undefined;
+    user?: string | undefined;
+    limit?: number | undefined;
+    page?: number | undefined;
+  } = {},
+): Promise<FilesResult> {
+  const limit = Math.min(options.limit ?? 50, 200);
+  const response = await callSlack(call, 'files.list', {
+    channel: options.channel,
+    user: options.user,
+    count: limit,
+    page: options.page ?? 1,
+  });
+  const paging = (response.paging as Raw | undefined) ?? {};
+  const pages = typeof paging.pages === 'number' ? paging.pages : 1;
+  const current = typeof paging.page === 'number' ? paging.page : 1;
+  const complete = current >= pages;
+  return {
+    files: list(response.files).map(fileOf),
+    complete,
+    ...(complete ? {} : { page: current + 1 }),
+  };
+}
+
+/** Everything Slack knows about one file. */
+export async function fileInfo(call: SlackCall, fileId: string): Promise<SharedFile> {
+  const response = await callSlack(call, 'files.info', { file: fileId });
+  return fileOf((response.file as Raw | undefined) ?? {});
 }

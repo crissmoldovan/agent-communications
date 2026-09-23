@@ -158,7 +158,7 @@ export class NameBook {
    *
    * Returns the *neutralised* display name, because that name is about to be spliced into a body that will be
    * neutralised again — and neutralising twice is harmless where neutralising once too few is the bug. A person
-   * whose display name is `</untrusted-email-content>` cannot close the envelope around the message they are in.
+   * whose display name is `</untrusted-content>` cannot close the envelope around the message they are in.
    */
   names(): ReferenceNames {
     return {

@@ -1,4 +1,4 @@
-import { decodeSlackText, type ReferenceNames } from './decode.ts';
+import { type DecodedText, decodeSlackText, type ReferenceNames, type SlackReference } from './decode.ts';
 
 /**
  * Block Kit, rendered to the text a person sees — and compared with the `text` field that claims to say the same.
@@ -31,7 +31,7 @@ function list(value: unknown): Block[] {
  * than the `<@U…>` spans the `text` field uses — so the same reference arrives in two different encodings
  * depending on which half of the message you read. Both end up at the same names here.
  */
-function renderRichElement(element: Block, names: ReferenceNames): string {
+function renderRichElement(element: Block, names: ReferenceNames, into: SlackReference[]): string {
   const type = str(element.type);
   switch (type) {
     case 'text':
@@ -39,18 +39,22 @@ function renderRichElement(element: Block, names: ReferenceNames): string {
     case 'link': {
       const url = str(element.url) ?? '';
       const label = str(element.text);
+      into.push({ kind: 'link', id: url, ...(label === undefined ? {} : { label }) });
       return label === undefined || label === url ? url : `${label} (${url})`;
     }
     case 'user': {
       const id = str(element.user_id) ?? '';
+      into.push({ kind: 'user', id });
       return `@${names.user?.(id) ?? id}`;
     }
     case 'channel': {
       const id = str(element.channel_id) ?? '';
+      into.push({ kind: 'channel', id });
       return `#${names.channel?.(id) ?? id}`;
     }
     case 'usergroup': {
       const id = str(element.usergroup_id) ?? '';
+      into.push({ kind: 'usergroup', id });
       return `@${names.usergroup?.(id) ?? id}`;
     }
     case 'emoji':
@@ -63,40 +67,51 @@ function renderRichElement(element: Block, names: ReferenceNames): string {
   }
 }
 
-function renderRich(block: Block, names: ReferenceNames): string {
+function renderRich(block: Block, names: ReferenceNames, into: SlackReference[]): string {
   const lines: string[] = [];
   for (const section of list(block.elements)) {
-    const inner = list(section.elements)
-      .map((element) => renderRichElement(element, names))
-      .join('');
-    switch (str(section.type)) {
-      case 'rich_text_quote':
-        lines.push(
-          inner
-            .split('\n')
-            .map((line) => `> ${line}`)
-            .join('\n'),
-        );
-        break;
-      case 'rich_text_preformatted':
-        lines.push(inner);
-        break;
-      case 'rich_text_list':
-        lines.push(inner);
-        break;
-      default:
-        lines.push(inner);
+    /*
+     * A list's children are sections of their own, not elements.
+     *
+     * Rendering `elements` directly produced the empty string for every bulleted list — and an empty render was
+     * then read as "this message has no blocks", which substituted the notification fallback and reported no
+     * mismatch. So the one block type people use most turned the mismatch check off for that message.
+     */
+    if (str(section.type) === 'rich_text_list') {
+      for (const item of list(section.elements)) {
+        const text = list(item.elements)
+          .map((element) => renderRichElement(element, names, into))
+          .join('');
+        lines.push(`• ${text}`);
+      }
+      continue;
     }
+    const inner = list(section.elements)
+      .map((element) => renderRichElement(element, names, into))
+      .join('');
+    if (str(section.type) === 'rich_text_quote') {
+      lines.push(
+        inner
+          .split('\n')
+          .map((line) => `> ${line}`)
+          .join('\n'),
+      );
+      continue;
+    }
+    lines.push(inner);
   }
   return lines.join('\n');
 }
 
 /** A `text` object on a block: `plain_text` is literal, `mrkdwn` carries spans that have to be decoded. */
-function renderTextObject(value: unknown, names: ReferenceNames): string {
+function renderTextObject(value: unknown, names: ReferenceNames, into: SlackReference[]): string {
   if (typeof value !== 'object' || value === null) return '';
   const block = value as Block;
   const raw = str(block.text) ?? '';
-  return str(block.type) === 'plain_text' ? raw : decodeSlackText(raw, names).text;
+  if (str(block.type) === 'plain_text') return raw;
+  const decoded = decodeSlackText(raw, names);
+  into.push(...decoded.references);
+  return decoded.text;
 }
 
 /**
@@ -106,36 +121,47 @@ function renderTextObject(value: unknown, names: ReferenceNames): string {
  * renderer that tried to be faithful would differ from `text` for formatting reasons and make every message look
  * like a mismatch, which would train a reader to ignore the one signal this is for.
  */
-export function renderBlocks(blocks: unknown, names: ReferenceNames = {}): string {
+export interface RenderedBlocks extends DecodedText {
+  /** True when there were blocks at all — distinct from whether anything could be rendered from them. */
+  readonly present: boolean;
+  /** True when blocks were present and carried content, but nothing renderable came out of them. */
+  readonly unrenderable: boolean;
+}
+
+export function renderBlocksFull(blocks: unknown, names: ReferenceNames = {}): RenderedBlocks {
+  const references: SlackReference[] = [];
   const out: string[] = [];
-  for (const block of list(blocks)) {
+  const blockList = list(blocks);
+  for (const block of blockList) {
     switch (str(block.type)) {
       case 'rich_text':
-        out.push(renderRich(block, names));
+        out.push(renderRich(block, names, references));
         break;
       case 'section': {
-        const body = renderTextObject(block.text, names);
+        const body = renderTextObject(block.text, names, references);
         const fields = list(block.fields)
-          .map((field) => renderTextObject(field, names))
+          .map((field) => renderTextObject(field, names, references))
           .filter(Boolean);
         out.push([body, ...fields].filter(Boolean).join('\n'));
         break;
       }
       case 'header':
-        out.push(renderTextObject(block.text, names));
+        out.push(renderTextObject(block.text, names, references));
         break;
       case 'context':
         out.push(
           list(block.elements)
             .map((element) =>
-              str(element.type) === 'image' ? (str(element.alt_text) ?? '') : renderTextObject(element, names),
+              str(element.type) === 'image'
+                ? (str(element.alt_text) ?? '')
+                : renderTextObject(element, names, references),
             )
             .filter(Boolean)
             .join(' '),
         );
         break;
       case 'image': {
-        const title = renderTextObject(block.title, names);
+        const title = renderTextObject(block.title, names, references);
         const alt = str(block.alt_text) ?? '';
         out.push([title, alt && `[image: ${alt}]`].filter(Boolean).join('\n'));
         break;
@@ -143,7 +169,7 @@ export function renderBlocks(blocks: unknown, names: ReferenceNames = {}): strin
       case 'actions':
         out.push(
           list(block.elements)
-            .map((element) => renderTextObject(element.text, names))
+            .map((element) => renderTextObject(element.text, names, references))
             .filter(Boolean)
             .map((label) => `[${label}]`)
             .join(' '),
@@ -153,10 +179,29 @@ export function renderBlocks(blocks: unknown, names: ReferenceNames = {}): strin
         break;
       default:
         // Unknown block types still carry text somebody sees.
-        out.push(renderTextObject(block.text, names));
+        out.push(renderTextObject(block.text, names, references));
     }
   }
-  return out.filter((part) => part !== '').join('\n\n');
+  const text = out.filter((part) => part !== '').join('\n\n');
+  /*
+   * "No blocks" and "blocks that rendered to nothing" are different facts.
+   *
+   * Collapsing them made an unrenderable payload look like a plain-text message, which substituted the
+   * notification fallback and reported no mismatch — turning the check off for exactly the message whose
+   * visible half nobody could read. A divider on its own is legitimately empty and is not a failure to render.
+   */
+  const meaningful = blockList.filter((block) => str(block.type) !== 'divider');
+  return {
+    text,
+    references,
+    present: blockList.length > 0,
+    unrenderable: text === '' && meaningful.length > 0,
+  };
+}
+
+/** The text alone, for callers that only want to read it. */
+export function renderBlocks(blocks: unknown, names: ReferenceNames = {}): string {
+  return renderBlocksFull(blocks, names).text;
 }
 
 /*
@@ -171,23 +216,37 @@ function forComparison(text: string): string {
 }
 
 export interface Reconciliation {
-  /** What a person reads: the blocks when there are any, otherwise `text`. */
-  readonly shown: string;
-  /** The notification fallback, decoded. */
-  readonly fallback: string;
+  /** What a person reads, decoded exactly once, with the references it carried. */
+  readonly shown: DecodedText;
+  /** The notification fallback, decoded exactly once. */
+  readonly fallback: DecodedText;
   /** True when the two say different things beyond whitespace. A signal about the message, never an error. */
   readonly mismatch: boolean;
+  /** True when blocks were present and carried content that produced nothing readable. */
+  readonly unrenderable: boolean;
 }
 
 /**
  * What the message says, and whether its two halves agree.
  *
- * When there are no blocks there is nothing to disagree with and `text` is the message. When there are, the blocks
- * are what a person reads — so they are `shown`, and `text` being different is the thing worth saying out loud.
+ * Both halves come back **decoded, once**. Everything downstream cuts and neutralises them and decodes nothing:
+ * a second decode would read the characters a person typed as Slack's own encoding, and `&lt;@U1|x&gt;` — which
+ * is somebody typing angle brackets — would become a real mention of U1.
+ *
+ * When there are no blocks, `text` is the message and there is nothing to disagree with. When blocks are present
+ * but nothing renderable came out of them, that is reported: the fallback is shown because it is all there is,
+ * and `unrenderable` says the visible half could not be read, rather than pretending the message was plain text.
  */
 export function reconcile(text: string | undefined, blocks: unknown, names: ReferenceNames = {}): Reconciliation {
-  const fallback = decodeSlackText(text ?? '', names).text;
-  const rendered = renderBlocks(blocks, names);
-  if (rendered === '') return { shown: fallback, fallback, mismatch: false };
-  return { shown: rendered, fallback, mismatch: forComparison(rendered) !== forComparison(fallback) };
+  const fallback = decodeSlackText(text ?? '', names);
+  const rendered = renderBlocksFull(blocks, names);
+  if (rendered.text === '') {
+    return { shown: fallback, fallback, mismatch: false, unrenderable: rendered.unrenderable };
+  }
+  return {
+    shown: { text: rendered.text, references: rendered.references },
+    fallback,
+    mismatch: forComparison(rendered.text) !== forComparison(fallback.text),
+    unrenderable: false,
+  };
 }

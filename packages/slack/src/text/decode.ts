@@ -14,7 +14,7 @@
  *
  * Then, and only then, may the result be cut and neutralised — in that order, which is
  * `docs/superpowers/specs/2026-09-19-slack-design.md` §D5.4. Cutting first can halve a span or an entity;
- * neutralising first sees `&lt;/untrusted-email-content&gt;` as nothing to defuse and the decode that follows
+ * neutralising first sees `&lt;/untrusted-content&gt;` as nothing to defuse and the decode that follows
  * hands the reader a live closing tag.
  */
 

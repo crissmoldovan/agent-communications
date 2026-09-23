@@ -25,7 +25,7 @@ assert.equal(new CommsError('APPROVAL_REQUIRED', 'x').exitCode, 10);
 const { text, report } = sanitizeHtmlToText('<p>Hi</p><div style="display:none">hidden</div>');
 assert.equal(text, 'Hi');
 assert.equal(report.hiddenElements, 1);
-assert.match(wrapUntrusted('x', { field: 'body' }, 'b1'), /^<untrusted-email-content boundary="b1"/);
+assert.match(wrapUntrusted('x', { field: 'body' }, 'b1'), /^<untrusted-content boundary="b1"/);
 assert.equal(
   messageDigest({
     from: 'a@b.test',

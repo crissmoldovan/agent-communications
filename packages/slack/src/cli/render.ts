@@ -3,6 +3,7 @@ import type { DoctorResult } from '../operations/doctor.ts';
 import type { ModeReport } from '../operations/mode.ts';
 import type {
   ChannelsResult,
+  FilesResult,
   HistoryResult,
   PeopleResult,
   ReadRow,
@@ -338,5 +339,19 @@ export function renderPeople(result: PeopleResult, color: boolean): string {
     );
   }
   if (!result.complete) lines.push('', paint(color, 'dim', 'More remain.'));
+  return lines.join('\n');
+}
+
+export function renderFiles(result: FilesResult, color: boolean): string {
+  if (result.files.length === 0) return paint(color, 'dim', 'No files this account can see.');
+  const lines = [paint(color, 'bold', `${'NAME'.padEnd(36)} ${'TYPE'.padEnd(24)} SIZE      ID`)];
+  for (const file of result.files) {
+    const size = file.size === undefined ? '' : `${Math.ceil(file.size / 1024)} KB`;
+    const shared = file.publicUrlShared ? paint(color, 'yellow', ' · public link') : '';
+    lines.push(
+      `${cell(file.name ?? file.title ?? file.id, 36).padEnd(36)} ${cell(file.mimetype ?? '', 24).padEnd(24)} ${size.padStart(8)}  ${file.id}${shared}`,
+    );
+  }
+  if (!result.complete) lines.push('', paint(color, 'dim', `More remain — ask for page ${result.page}.`));
   return lines.join('\n');
 }
