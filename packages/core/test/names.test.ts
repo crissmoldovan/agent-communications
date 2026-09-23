@@ -1038,7 +1038,8 @@ test('a Slack rename and an id rotation in one write is still the same account',
     'accounts.cue/slack.mode',
     'accounts.cue/slack.sendPolicy',
   ]);
-  // A different workspace under the new name is not that account.
+  // A different workspace under the new name is not that account: nothing of the one that left is attributed to it.
+  // It is a new account that can post, which is a widening of its own and nothing more.
   const unrelated = v2({ accounts: { 'cue/slack': account(ACC_B, { workspace: 'T_ELSE', mode: 'send' }) } });
-  assert.deepEqual(classifyChange(before, unrelated).loosened, []);
+  assert.deepEqual(classifyChange(before, unrelated).loosened, ['accounts.cue/slack.mode']);
 });

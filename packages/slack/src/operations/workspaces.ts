@@ -14,6 +14,7 @@ import { type ExchangedToken, scopeMismatch } from '../auth/authorize.ts';
 import { BUNDLE_VERSION, serialiseBundle, type TokenBundle } from '../auth/bundle.ts';
 import type { SlackFlow } from '../auth/flow.ts';
 import type { InstallMode } from '../manifest.ts';
+import { OUTWARD_SCOPES } from './mode.ts';
 
 /**
  * Connecting, inspecting and disconnecting workspaces.
@@ -134,6 +135,20 @@ export function validateExchange(options: {
     });
   }
   if (extra.length > 0) {
+    /*
+     * Asking for `read` and getting posting back is not a broken app. Slack adds every scope a person has granted this
+     * app before to each new token, and takes none away until the app's installation is removed — so this is what a
+     * narrowing looks like until that has happened. The advice here used to be to re-create the app, which changes no
+     * installation and so would have met this same refusal again.
+     */
+    if (mode === 'read' && extra.every((scope) => OUTWARD_SCOPES.includes(scope))) {
+      throw new CommsError('CONFIG', `Slack returned posting scopes it granted this app before: ${extra.join(', ')}`, {
+        hint: existing
+          ? `Slack never takes a scope back from a token. \`agent-slack workspace mode ${existing.alias} read --port ${flow.port}\` says how to remove the app's installation first.`
+          : 'Slack never takes a scope back from a token. Remove the app from the workspace in Slack (Workspace settings → Manage apps → the app → Remove app), then connect it again.',
+        details: { returned: extra },
+      });
+    }
     throw new CommsError('CONFIG', `Slack granted more than "${mode}" asks for: ${extra.join(', ')}`, {
       hint: `The app requests more than this mode allows. Re-create it from \`agent-slack manifest --mode ${mode}\`.`,
     });

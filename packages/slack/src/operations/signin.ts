@@ -77,6 +77,24 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
     requireWorkspace(config, options.alias);
   } else {
     checkAliasFree(config, options.alias);
+    /*
+     * Connecting a workspace in `send` mode is a widening, and this is the earliest place it is refused.
+     *
+     * Core classifies a new `send` account as loosening its mode and would refuse the config write in the end — but
+     * only after Slack had issued a token that can post. Refusing here, before any flow exists, means the person is
+     * never sent to a consent screen for a grant nobody will record, and a library caller meets the rule as the CLI
+     * does. `workspace remove` then `workspace add --mode send` used to be an agent's way to a posting token.
+     */
+    const path = `accounts.${options.alias}.mode`;
+    if (options.mode === 'send' && !options.consent?.paths.includes(path)) {
+      throw new CommsError(
+        'LOOSENING_REFUSED',
+        `connecting "${options.alias}" able to post needs a person to confirm it`,
+        {
+          hint: `Run \`agent-slack workspace add ${options.alias} --mode send\` in a terminal, or connect it in read mode.`,
+        },
+      );
+    }
   }
   if (!options.clientId) {
     throw new CommsError('USAGE', 'the Slack app’s Client ID is needed', {
@@ -687,6 +705,20 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
   // however this ends — the interactive path has no `--finish` above it to do that.
   const flow = await context.flows.claim(flowId);
   try {
+    /*
+     * A new workspace that can post, finished without a person's consent — a flow started before this was gated, or
+     * by something other than the CLI. Refused before the code is exchanged, so Slack never issues the token: the
+     * configuration would refuse to record it anyway, but only after it existed.
+     */
+    if (!flow.expect && flow.mode === 'send' && !flow.consent?.paths.includes(`accounts.${flow.alias}.mode`)) {
+      throw new CommsError(
+        'LOOSENING_REFUSED',
+        `connecting "${flow.alias}" able to post needs a person to confirm it`,
+        {
+          hint: `Start again at a terminal: \`agent-slack workspace add ${flow.alias} --mode send\`.`,
+        },
+      );
+    }
     const token = readExchange(
       await context.exchange({
         client_id: flow.clientId,

@@ -1,5 +1,6 @@
 import { paint, stripInvisible } from '@agentcomms/core';
 import type { DoctorResult } from '../operations/doctor.ts';
+import type { ModeReport } from '../operations/mode.ts';
 import type { StartedSignIn } from '../operations/signin.ts';
 import type { WorkspaceView } from '../operations/workspaces.ts';
 
@@ -162,11 +163,32 @@ export function renderSignInStarted(started: StartedSignIn, reauth: boolean, col
  * and a sign-in run with another fails at the redirect with a message about the redirect URI and no hint that two
  * numbers had to match. Printing the exact next command, port included, is the fix.
  */
+/** A workspace's mode, what its recorded grant can do, and what moving it either way takes. */
+export function renderMode(report: ModeReport, color: boolean): string {
+  const lines = [
+    `${paint(color, 'bold', report.alias)} is connected in ${paint(color, 'bold', report.mode)} mode.`,
+    report.canActOutward
+      ? `The grant recorded at sign-in can act in Slack: ${report.outwardScopes.join(', ')}.`
+      : 'The grant recorded at sign-in cannot post, upload or react — Slack refuses it.',
+  ];
+  const steps = (title: string, list: readonly string[]) =>
+    list.length === 0 ? [] : ['', title, ...list.map((step, i) => `  ${i + 1}. ${step}`)];
+  lines.push(...steps('To let it post (a person does this; an agent cannot):', report.toSend));
+  lines.push(...steps('To take posting away again:', report.toRead));
+  return lines.join('\n');
+}
+
+export function renderSteps(title: string, steps: readonly string[], color: boolean): string {
+  return [paint(color, 'bold', title), ...steps.map((step, i) => `  ${i + 1}. ${step}`)].join('\n');
+}
+
 export function renderManifestHelp(mode: string, port: number, color: boolean): string {
   return [
     paint(color, 'bold', `A Slack app for "${mode}" access`),
     '',
     '1. Open https://api.slack.com/apps and choose "Create New App" → "From a manifest".',
+    '   (Changing the mode of a workspace already connected? Open its existing app → "App Manifest" instead,',
+    '   replace the manifest with the JSON below and save — the same app, not a new one.)',
     '2. Pick your workspace, then paste the JSON below.',
     '3. Create the app. On "Basic Information", copy the Client ID.',
     '',
@@ -177,5 +199,17 @@ export function renderManifestHelp(mode: string, port: number, color: boolean): 
     `  agent-slack workspace add <name> --client-id <the Client ID> --port ${port}`,
     '',
     paint(color, 'dim', `Keep --port ${port}: Slack matches the redirect URL in this manifest exactly.`),
+    '',
+    mode === 'read'
+      ? paint(
+          color,
+          'dim',
+          `This app can read, search and draft, and Slack itself refuses it any post. For one that can post after your approval, print \`agent-slack manifest --mode send --port ${port}\` — and for a workspace already connected, update this same app with it first: a token can only be granted what its app offers.`,
+        )
+      : paint(
+          color,
+          'dim',
+          `This app can post, upload and react, each only after your approval. \`agent-slack manifest --mode read --port ${port}\` prints one that cannot post at all. To move an existing workspace from read, update its app with this manifest first, then run \`agent-slack workspace mode <name> send --port ${port}\`.`,
+        ),
   ].join('\n');
 }

@@ -294,8 +294,142 @@ test('a grant wider than the mode is refused, because the label would otherwise 
     browserOn(),
   );
   assert.equal(result.code, EXIT_CODES.CONFIG);
-  assert.match(result.json<Envelope<never>>().error?.message ?? '', /chat:write/);
+  const error = result.json<Envelope<never>>().error;
+  // Posting scopes on a `read` sign-in are what Slack's accumulated grant looks like, and the advice says so:
+  // removing the app's installation, never re-creating the app, which changes no installation.
+  assert.match(error?.message ?? '', /posting scopes it granted this app before: chat:write/);
+  assert.match(error?.hint ?? '', /Manage apps → the app → Remove app/);
+  assert.doesNotMatch(error?.hint ?? '', /Re-create/);
   assert.deepEqual((await harness.core.config.load()).accounts, {});
+});
+test('a scope beyond both modes still points at the app, which is where it came from', async () => {
+  const harness = await newHarness();
+  harness.reply = () => slackOk({ scopes: [...scopesForMode('read'), 'admin'] });
+  const port = await freePort();
+  const result = await cli(
+    harness,
+    ['--json', 'workspace', 'add', 'acme', '--client-id', TEST_CLIENT_ID, '--port', String(port), '--no-browser'],
+    browserOn(),
+  );
+  assert.equal(result.code, EXIT_CODES.CONFIG);
+  assert.match(
+    result.json<Envelope<never>>().error?.hint ?? '',
+    /Re-create it from `agent-slack manifest --mode read`/,
+  );
+});
+
+test('workspace mode counts each posting scope on its own, and none as none', async () => {
+  // A report that only recognised one of the three would pass any test that granted them together.
+  const harness = await newHarness();
+  const cases: Array<[string, string[]]> = [
+    ['chat:write', ['chat:write']],
+    ['files:write', ['files:write']],
+    ['reactions:write', ['reactions:write']],
+    ['none', []],
+  ];
+  let n = 1;
+  for (const [label, extra] of cases) {
+    n += 1;
+    const alias = `w${n}`;
+    await harness.addWorkspace({
+      alias,
+      workspaceId: `T00${n}0`,
+      userId: `U00${n}0`,
+      grantedScopes: [...scopesForMode('read'), ...extra],
+    });
+    const report = (await cli(harness, ['--json', 'workspace', 'mode', alias])).json<
+      Envelope<{ canActOutward: boolean; outwardScopes: string[] }>
+    >().data;
+    assert.deepEqual(report?.outwardScopes, extra, label);
+    assert.equal(report?.canActOutward, extra.length > 0, label);
+  }
+});
+
+test('workspace mode says what a workspace can do, from its recorded grant', async () => {
+  const harness = await newHarness();
+  // Three different workspaces: the configuration treats the same person in the same workspace as one account.
+  await harness.addWorkspace({ alias: 'acme' });
+  await harness.addWorkspace({ alias: 'loud', mode: 'send', workspaceId: 'T0002', userId: 'U0002' });
+  // Labelled read, but the recorded grant includes a reaction scope: the report believes the grant.
+  await harness.addWorkspace({
+    alias: 'odd',
+    workspaceId: 'T0003',
+    userId: 'U0003',
+    grantedScopes: [...scopesForMode('read'), 'reactions:write'],
+  });
+
+  type Report = { mode: string; canActOutward: boolean; outwardScopes: string[]; toSend: string[]; toRead: string[] };
+  const reportOf = async (alias: string) =>
+    (await cli(harness, ['--json', 'workspace', 'mode', alias], { env: { CLAUDECODE: '1' } })).json<Envelope<Report>>()
+      .data as Report;
+
+  const read = await reportOf('acme');
+  assert.equal(read.canActOutward, false);
+  assert.equal(read.toSend.length, 2, 'the app first, then the sign-in');
+  assert.deepEqual(read.toRead, []);
+
+  const send = await reportOf('loud');
+  assert.deepEqual(send.outwardScopes, ['chat:write', 'files:write', 'reactions:write']);
+  assert.match(send.toRead.join('\n'), /Remove app/);
+  assert.match(send.toRead.join('\n'), /workspace reauth loud --mode read/);
+
+  const odd = await reportOf('odd');
+  assert.equal(odd.mode, 'read');
+  assert.equal(odd.canActOutward, true);
+  assert.deepEqual(odd.outwardScopes, ['reactions:write']);
+  assert.ok(odd.toRead.length > 0, 'and says how to take it away, although the label says read');
+});
+
+test('workspace mode read changes nothing and says what does; mode send needs a port and a person', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'loud', mode: 'send' });
+  await harness.addWorkspace({ alias: 'acme' });
+  const before = JSON.stringify(await harness.core.config.load());
+
+  const read = await cli(harness, ['--json', 'workspace', 'mode', 'loud', 'read', '--port', '51234'], {
+    env: { CLAUDECODE: '1' },
+  });
+  assert.equal(read.code, EXIT_CODES.OK, read.stderr);
+  const data = read.json<Envelope<{ changed: boolean; steps: string[] }>>().data;
+  assert.equal(data?.changed, false);
+  assert.match(data?.steps.join('\n') ?? '', /workspace reauth loud --mode read --port 51234/);
+  assert.equal(JSON.stringify(await harness.core.config.load()), before, 'nothing was written');
+
+  const noPort = await cli(harness, ['--json', 'workspace', 'mode', 'acme', 'send']);
+  assert.equal(noPort.code, EXIT_CODES.USAGE);
+  // Both procedures name the port, which the configuration does not keep.
+  const noPortRead = await cli(harness, ['--json', 'workspace', 'mode', 'loud', 'read']);
+  assert.equal(noPortRead.code, EXIT_CODES.USAGE);
+
+  const port = String(await freePort());
+  const agent = await cli(harness, ['--json', 'workspace', 'mode', 'acme', 'send', '--port', port, '--start'], {
+    env: { CLAUDECODE: '1' },
+  });
+  assert.equal(agent.code, EXIT_CODES.APPROVAL, agent.stderr);
+  assert.match(agent.stderr, /existing app/, 'the two steps are shown before the refusal');
+  assert.equal(JSON.stringify(await harness.core.config.load()), before);
+
+  // A record from before workspaces remembered their app cannot be re-authorised, and is told what works instead.
+  await harness.addWorkspace({ alias: 'old', mode: 'send', workspaceId: 'T0009', userId: 'U0009' });
+  await harness.core.config.update((config) => {
+    const { oauthClientId: _dropped, ...legacyRow } = config.accounts.old as NonNullable<
+      (typeof config.accounts)['old']
+    >;
+    return { ...config, accounts: { ...config.accounts, old: legacyRow } };
+  });
+  const legacy = await cli(harness, ['--json', 'workspace', 'mode', 'old', 'read', '--port', '51234']);
+  const legacySteps = legacy.json<Envelope<{ steps: string[] }>>().data?.steps.join('\n') ?? '';
+  assert.match(legacySteps, /workspace remove old/);
+  assert.doesNotMatch(legacySteps, /workspace reauth old/);
+});
+
+test('the manifest names the other mode and what switching to it takes', async () => {
+  const harness = await newHarness();
+  const read = await cli(harness, ['manifest', '--port', '51234']);
+  assert.match(read.stdout, /agent-slack manifest --mode send --port 51234/);
+  assert.match(read.stdout, /update this same app with it first/);
+  const send = await cli(harness, ['manifest', '--mode', 'send', '--port', '51234']);
+  assert.match(send.stdout, /agent-slack workspace mode <name> send --port 51234/);
 });
 
 test('a bot token in the reply is refused, not dropped', async () => {
@@ -1118,4 +1252,115 @@ test('every name the command suggests is one a config made today would accept', 
   const missing = await cli(harness, ['workspace', 'add', '--json']);
   assert.equal(missing.code, EXIT_CODES.USAGE);
   assert.match(missing.json<Envelope<never>>().error?.hint ?? '', /workspace add acme\/slack/);
+});
+
+test('an agent cannot turn a read workspace into one that can post by removing it and adding it back', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  const port = String(await freePort());
+  assert.equal((await cli(harness, ['--json', 'workspace', 'remove', 'acme'])).code, EXIT_CODES.OK);
+
+  const add = ['--json', 'workspace', 'add', 'acme', '--mode', 'send', '--client-id', TEST_CLIENT_ID, '--port', port];
+  const asAgent = await cli(harness, [...add, '--start'], { env: { CLAUDECODE: '1' } });
+  assert.equal(asAgent.code, EXIT_CODES.APPROVAL, asAgent.stderr);
+  assert.match(asAgent.json<Envelope<never>>().error?.message ?? '', /not an agent's to do/);
+
+  const noTerminal = await cli(harness, [...add, '--start']);
+  assert.equal(noTerminal.code, EXIT_CODES.APPROVAL, noTerminal.stderr);
+  assert.match(noTerminal.json<Envelope<never>>().error?.message ?? '', /needs a terminal/);
+
+  // Read mode is still anybody's to connect.
+  await startDetached(harness, ['workspace', 'add', 'acme', '--client-id', TEST_CLIENT_ID, '--port', port]);
+});
+
+test('a person at a terminal can connect a workspace that can post: the key works, not only the lock', async () => {
+  // Consent collected by `confirmPosting` has to reach the classifier, which now refuses a new posting workspace
+  // without it. Dropping it anywhere would turn "a person must approve this" into "this can never happen".
+  const harness = await newHarness();
+  harness.reply = () => slackOk({ scopes: scopesForMode('send') });
+  const port = await freePort();
+  const result = await cli(
+    harness,
+    [
+      'workspace',
+      'add',
+      'acme',
+      '--mode',
+      'send',
+      '--client-id',
+      TEST_CLIENT_ID,
+      '--port',
+      String(port),
+      '--no-browser',
+    ],
+    { ...browserOn(), tty: true, answerChallenge: true },
+  );
+  assert.equal(result.code, EXIT_CODES.OK, result.stderr);
+  assert.equal((await harness.core.config.load()).accounts.acme?.mode, 'send');
+});
+
+test('workspace mode send without a terminal is refused before any network call', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  let exchanges = 0;
+  harness.reply = () => {
+    exchanges += 1;
+    return slackOk({ scopes: scopesForMode('send') });
+  };
+  const port = String(await freePort());
+  const result = await cli(harness, ['--json', 'workspace', 'mode', 'acme', 'send', '--port', port]);
+  assert.equal(result.code, EXIT_CODES.APPROVAL, result.stderr);
+  assert.match(result.json<Envelope<never>>().error?.message ?? '', /needs a terminal/);
+  assert.equal(exchanges, 0);
+  assert.equal((await harness.core.config.load()).accounts.acme?.mode, 'read');
+});
+
+test('the command a narrowing refusal prints is one that works', async () => {
+  // Slack returns the union: posting scopes on a `read` reauth of a `send` workspace. The hint names a command, and
+  // following it must print the procedure rather than fail for a missing port.
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'loud', mode: 'send' });
+  harness.reply = () => slackOk({ scopes: scopesForMode('send') });
+  const port = await freePort();
+  const refused = await cli(
+    harness,
+    ['--json', 'workspace', 'reauth', 'loud', '--mode', 'read', '--port', String(port), '--no-browser'],
+    browserOn(),
+  );
+  const hint = refused.json<Envelope<never>>().error?.hint ?? '';
+  const printed = /`agent-slack (workspace mode loud read --port \d+)`/.exec(hint)?.[1];
+  assert.ok(printed, hint);
+  const followed = await cli(harness, ['--json', ...printed.split(' ')]);
+  assert.equal(followed.code, EXIT_CODES.OK, followed.stderr);
+  assert.match(followed.json<Envelope<{ steps: string[] }>>().data?.steps.join('\n') ?? '', /Remove app/);
+});
+
+test('workspace mode send at a terminal widens the workspace it names', async () => {
+  // The refusals were tested and this was not — and it could never have worked: without the account's identity the
+  // sign-in was an add, which refuses a name already connected.
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  harness.reply = () => slackOk({ scopes: scopesForMode('send') });
+  const port = await freePort();
+  const result = await cli(harness, ['workspace', 'mode', 'acme', 'send', '--port', String(port), '--no-browser'], {
+    ...browserOn(),
+    tty: true,
+    answerChallenge: true,
+  });
+  assert.equal(result.code, EXIT_CODES.OK, result.stderr);
+  const account = (await harness.core.config.load()).accounts.acme;
+  assert.equal(account?.mode, 'send');
+  assert.ok(account?.grantedScopes?.includes('chat:write'));
+});
+
+test('the command a refused widening names is one that works as printed', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  const port = String(await freePort());
+  const refused = await cli(harness, ['--json', 'workspace', 'reauth', 'acme', '--mode', 'send', '--port', port]);
+  assert.equal(refused.code, EXIT_CODES.APPROVAL);
+  assert.match(
+    refused.json<Envelope<never>>().error?.hint ?? '',
+    new RegExp(`workspace reauth acme --mode send --port ${port}`),
+  );
 });
