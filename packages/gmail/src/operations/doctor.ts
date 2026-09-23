@@ -357,11 +357,13 @@ async function orphanedSecretsCheck(context: GmailContext): Promise<Check> {
   } catch {
     // Unreadable config: nothing can be confirmed unreferenced, so nothing is advised for deletion below.
   }
-  const unreferenced = [
-    ...new Set(refs.filter((ref): ref is string => typeof ref === 'string' && held !== null && !held.has(ref))),
-  ];
-  const inUse = refs.filter((ref) => typeof ref === 'string' && held?.has(ref)).length;
-  const unchecked = held === null ? lines.length : refs.filter((ref) => typeof ref !== 'string').length;
+  // Counted as tokens, not as lines: a removal that failed twice records the same token twice, and "2 recorded
+  // tokens belong to a connected mailbox" about one token sends somebody looking for a second that is not there.
+  const recorded = [...new Set(refs.filter((ref): ref is string => typeof ref === 'string'))];
+  const unparseable = refs.filter((ref) => typeof ref !== 'string').length;
+  const unreferenced = held === null ? [] : recorded.filter((ref) => !held.has(ref));
+  const inUse = held === null ? 0 : recorded.filter((ref) => held.has(ref)).length;
+  const unchecked = held === null ? recorded.length + unparseable : unparseable;
 
   if (unreferenced.length === 0 && unchecked === 0) {
     return {
