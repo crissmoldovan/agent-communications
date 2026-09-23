@@ -168,6 +168,11 @@ const HIDDEN_CASES: [string, string][] = [
   ['title', `<head><title>${INJECTION}</title></head>`],
   ['noscript', `<noscript>${INJECTION}</noscript>`],
   ['template', `<template>${INJECTION}</template>`],
+  // The WHATWG rendering spec hides these by default, and every one of them reached the model.
+  ['noembed', `<noembed><p>${INJECTION}</p></noembed>`],
+  ['noframes', `<noframes><p>${INJECTION}</p></noframes>`],
+  ['datalist', `<datalist><option>${INJECTION}</option></datalist>`],
+  ['rp', `<ruby>漢<rp>${INJECTION}</rp><rt>kan</rt></ruby>`],
   ['nested hidden', `<div style="display:none"><p><b>${INJECTION}</b></p></div>`],
 ];
 
@@ -192,6 +197,14 @@ test('an injection in a comment or a template leaves a count behind', () => {
 
   const templated = sanitizeHtmlToText(`<p>Hi</p><template>${INJECTION}</template>`);
   assert.equal(templated.report.hiddenElements, 1);
+
+  // So are the elements a browser's own stylesheet hides: removed, and counted, because an instruction a person
+  // cannot see is exactly what the count is for.
+  for (const tag of ['noembed', 'noframes', 'datalist', 'rp']) {
+    const hidden = sanitizeHtmlToText(`<p>Hi</p><${tag}>${INJECTION}</${tag}>`);
+    assert.doesNotMatch(hidden.text, /IGNORE PREVIOUS/, tag);
+    assert.equal(hidden.report.hiddenElements, 1, tag);
+  }
 
   // A stylesheet is machinery, not content: counting every message's CSS would make the number meaningless.
   const styled = sanitizeHtmlToText('<style>.a{color:red}</style><p>Hi</p>');

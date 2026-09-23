@@ -31,6 +31,19 @@ const DROP_TAGS = new Set([
   'textarea',
   'svg',
   'math',
+  /*
+   * The rest of the WHATWG rendering spec's `display: none` list that can carry text.
+   *
+   * Every one of these reached the model while no mail client shows it to a person — the exact channel this file
+   * exists to close. `<noembed>` and `<noframes>` are fallbacks for features every client has; a `<datalist>` holds
+   * suggestions for an input and is never drawn; `<rp>` is the parenthesis a browser without ruby support would
+   * show, and every current one has it. The spec's other entries (`area`, `param`, `basefont`) are void elements
+   * with no text of their own.
+   */
+  'noembed',
+  'noframes',
+  'datalist',
+  'rp',
 ]);
 
 const URL_SHORTENERS = new Set([
