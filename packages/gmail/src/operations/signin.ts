@@ -1,9 +1,9 @@
-import { spawn } from 'node:child_process';
+import { type ChildProcess, spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, mkdir, open } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CommsError, requireInbox } from '@agentcomms/core';
+import { CommsError, findById, lookupName, requireInbox } from '@agentcomms/core';
 import type { OAuthFlow } from '../auth/flows.ts';
 import { aboutFlow } from '../auth/flows.ts';
 import { startLoopback } from '../auth/loopback.ts';
@@ -257,10 +257,22 @@ async function startDetached(
     });
   }
 
-  child.disconnect();
-  child.unref();
+  detachListener(child);
   const updated = await context.flows.get(flow.flowId);
   return { redirectUri: updated.redirectUri, listener: undefined };
+}
+
+/**
+ * Lets the listener outlive this process, whoever closed the channel first.
+ *
+ * The listener disconnects itself straight after saying it is ready, so by the time this runs the channel may
+ * already be closed from the other end — and `disconnect()` on a closed channel throws. It did, on a busy machine:
+ * a pause of a few tens of milliseconds between "ready" and here was enough, every time, and a sign-in whose
+ * listener was alive and waiting for the browser was reported as an unexpected failure.
+ */
+export function detachListener(child: Pick<ChildProcess, 'connected' | 'disconnect' | 'unref'>): void {
+  if (child.connected) child.disconnect();
+  child.unref();
 }
 
 function listenerEnv(context: GmailContext, port: number | undefined): NodeJS.ProcessEnv {
@@ -336,9 +348,19 @@ export interface FinishOptions {
    * changing a mailbox somebody else was in the middle of re-authorising, through a tool whose whole permission
    * to exist is that it only ever adds.
    *
-   * The CLI leaves it unset: it finishes whatever it started.
+   * The CLI sets it to its own subcommand, so `inbox add --finish` cannot quietly complete a reauth. Every finish
+   * command this package prints names the flow's own mode, so nothing it tells anybody to type is refused.
    */
   onlyMode?: 'add' | 'reauth' | undefined;
+  /**
+   * Refuse a flow for a different mailbox.
+   *
+   * `--finish` takes a flow id and used to ignore a name given beside it, so `inbox reauth acme/gmail --finish …`
+   * finished whatever that flow was — possibly connecting a different mailbox — while the person who typed it
+   * believed they had re-authorised the one they named. A name is optional, and the printed commands omit it; one
+   * that is given has to be the flow's.
+   */
+  onlyAlias?: string | undefined;
   /** The address bar URL, pasted back on a machine with no browser of its own. */
   url?: string | undefined;
   /** How long to wait for the detached listener, in seconds. */
@@ -361,6 +383,28 @@ export async function finishSignIn(context: GmailContext, options: FinishOptions
         hint: `Finish it where it was started: \`agent-gmail inbox ${flow.mode} --finish ${options.flowId}\`.`,
       },
     );
+  }
+
+  if (options.onlyAlias !== undefined) {
+    /*
+     * The same mailbox, not the same spelling.
+     *
+     * A reauth is bound to an inbox id and writes by it, so the name given is resolved to the mailbox it names now
+     * and compared by id. Comparing strings refused the current name of a mailbox renamed since the sign-in began,
+     * and — worse, under version 1, where a name can be given to another mailbox — accepted the old name while the
+     * write went to the original. An add has no id yet: its name is the one it will create, so that is compared as
+     * written.
+     */
+    const expected = flow.mode === 'reauth' ? flow.expect.inboxId : undefined;
+    const config = expected === undefined ? null : await context.config();
+    const named = config ? lookupName(config, 'inbox', options.onlyAlias) : undefined;
+    const same = expected === undefined ? flow.alias === options.onlyAlias : named?.id === expected;
+    if (!same) {
+      const current = config && expected ? (findById(config, 'inbox', expected)?.alias ?? flow.alias) : flow.alias;
+      throw new CommsError('USAGE', `that sign-in is for "${current}", not "${options.onlyAlias}"`, {
+        hint: `Finish it without a name — \`agent-gmail inbox ${flow.mode} --finish ${options.flowId}\` — or start a sign-in for "${options.onlyAlias}".`,
+      });
+    }
   }
 
   let code: string;

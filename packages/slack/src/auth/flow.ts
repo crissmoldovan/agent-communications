@@ -77,10 +77,10 @@ const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
  * `randomInt`, not `byte % 62`.
  *
  * 256 is not a multiple of 62, so reducing a random byte modulo 62 makes the first eight characters of the
- * alphabet one part in thirty-one likelier than the rest. Small, and a flow id is not what secures a sign-in —
+ * alphabet a quarter likelier than the rest (5 chances in 256 against 4). Small, and a flow id is not what secures a sign-in —
  * the `state` and the PKCE verifier are — but it is the kind of small that code scanning is right to refuse, and
- * `randomInt` rejects the out-of-range values instead of folding them back in. `@agentcomms/core` already does it
- * this way for challenges; the Gmail package's flow ids have the same bias and are not changed here.
+ * `randomInt` rejects the out-of-range values instead of folding them back in. `@agentcomms/core` does it this way
+ * for challenges, and the Gmail package for its own flow ids.
  */
 export function newFlowId(): string {
   let out = '';

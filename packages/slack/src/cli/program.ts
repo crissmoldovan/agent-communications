@@ -1,13 +1,11 @@
 import {
-  agentMarker,
-  askChallenge,
   CommsError,
-  canPrompt,
   colorEnabled,
   type LooseningConsent,
   lookupName,
   type OutputOptions,
   paint,
+  requirePerson,
   runCommand,
   type Streams,
   withCredentialsLock,
@@ -439,21 +437,14 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
    * The consent travels on the flow, because the sign-in this gates may be finished by a different process.
    */
   async function confirmWidening(options: GlobalOptions, alias: string): Promise<LooseningConsent> {
-    const marker = agentMarker(env);
-    if (marker) {
-      throw new CommsError('LOOSENING_REFUSED', `widening "${alias}" from read to send is not an agent's to do`, {
-        hint: `Ask the user to run \`agent-slack workspace reauth ${alias} --mode send\` in their own terminal.`,
-        details: { marker },
-      });
-    }
-    if (!canPrompt(env, streams, { json: globals().json, noInput: false })) {
-      throw new CommsError('LOOSENING_REFUSED', 'widening a workspace from read to send needs a terminal', {
-        hint: `Run \`agent-slack workspace reauth ${alias} --mode send\` directly in a terminal.`,
-      });
-    }
-    await askChallenge(streams, {
+    await requirePerson(env, streams, {
+      refusedToAgent: `widening "${alias}" from read to send is not an agent's to do`,
+      refusedWithoutTerminal: 'widening a workspace from read to send needs a terminal',
+      command: `agent-slack workspace reauth ${alias} --mode send`,
       prompt: `This replaces "${alias}"'s token with one that can post to Slack (read → send).`,
       color: options.color,
+      json: globals().json,
+      noInput: false,
     });
     return { kind: 'loosening-consent', paths: [`accounts.${alias}.mode`] };
   }

@@ -1,6 +1,5 @@
 import {
   agentMarker,
-  askChallenge,
   CommsError,
   canPrompt,
   colorEnabled,
@@ -8,6 +7,7 @@ import {
   type LooseningConsent,
   type OutputOptions,
   paint,
+  requirePerson,
   resolveName,
   runCommand,
   type SendPolicy,
@@ -328,6 +328,8 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     if (options.finish) {
       const result = await finishSignIn(context, {
         flowId: String(options.finish),
+        onlyMode: mode,
+        onlyAlias: alias,
         url: options.url ? String(options.url) : undefined,
         waitSeconds: Number(options.wait ?? 60),
       });
@@ -909,23 +911,16 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .description('trust a client that has just passed the probe')
     .action(
       act(async (context, globalOptions, name: string) => {
-        const marker = agentMarker(env);
-        if (marker) {
-          throw new CommsError('LOOSENING_REFUSED', 'only a person can decide which clients they trust', {
-            hint: `Ask the user to run \`agent-gmail confirm-clients add ${name}\` in their own terminal.`,
-            details: { marker },
-          });
-        }
-        if (!canPrompt(env, streams, { json: globalOptions.json, noInput: globalOptions.noInput })) {
-          throw new CommsError('LOOSENING_REFUSED', 'this needs an interactive terminal', {
-            hint: `Run \`agent-gmail confirm-clients add ${name}\` directly in a terminal.`,
-          });
-        }
-        await askChallenge(streams, {
+        await requirePerson(env, streams, {
+          refusedToAgent: 'only a person can decide which clients they trust',
+          refusedWithoutTerminal: 'this needs an interactive terminal',
+          command: `agent-gmail confirm-clients add ${name}`,
           prompt:
             `This lets "${name}" ask you to approve a send in its own window, instead of in a terminal.\n` +
             'Only say yes if you just answered its probe form yourself.',
           color: globalOptions.color,
+          json: globalOptions.json,
+          noInput: globalOptions.noInput,
         });
         const clients = await addConfirmClient(context, name, {
           kind: 'loosening-consent',
@@ -1641,21 +1636,14 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     // default — which would skip the consent a loosening of the renamed mailbox needs.
     const current = resolveName(config, 'inbox', alias).inbox.sendPolicy ?? config.defaults.sendPolicy;
     if (rank[wanted] >= rank[current]) return undefined;
-    const marker = agentMarker(env);
-    if (marker) {
-      throw new CommsError('LOOSENING_REFUSED', 'only a person can make sending easier, not an agent', {
-        hint: `Ask the user to run \`agent-gmail inbox policy ${alias} --send ${wanted}\` in their own terminal.`,
-        details: { marker },
-      });
-    }
-    if (!canPrompt(env, streams, { json: globalOptions.json, noInput: globalOptions.noInput })) {
-      throw new CommsError('LOOSENING_REFUSED', 'making sending easier needs an interactive terminal', {
-        hint: `Run \`agent-gmail inbox policy ${alias} --send ${wanted}\` directly in a terminal.`,
-      });
-    }
-    await askChallenge(streams, {
+    await requirePerson(env, streams, {
+      refusedToAgent: 'only a person can make sending easier, not an agent',
+      refusedWithoutTerminal: 'making sending easier needs an interactive terminal',
+      command: `agent-gmail inbox policy ${alias} --send ${wanted}`,
       prompt: `This makes sending from "${alias}" easier (${current} → ${wanted}).`,
       color: globalOptions.color,
+      json: globalOptions.json,
+      noInput: globalOptions.noInput,
     });
     return { kind: 'loosening-consent', paths: [`inboxes.${alias}.sendPolicy`] };
   };

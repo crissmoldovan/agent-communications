@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomBytes } from 'node:crypto';
 import { access, constants, stat } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { publicView } from './approvals.ts';
@@ -8,12 +9,13 @@ import {
   colorEnabled,
   defaultStreams,
   type OutputOptions,
+  requirePerson,
   runCommand,
   type Streams,
   writeError,
   writeResult,
 } from './cli-runtime.ts';
-import { type Config, emptyConfig, secretsStoreOf } from './config.ts';
+import { type Config, classifyChange, emptyConfig, type LooseningConsent, secretsStoreOf } from './config.ts';
 import { type Core, openCore } from './core.ts';
 import { CommsError } from './errors.ts';
 import { isGroupOrWorldAccessible } from './fs.ts';
@@ -237,11 +239,16 @@ async function takeBack(
  * migration had simply worked.
  *
  * `stores` exists for the tests. The only other backend is the real keychain, and a test must never write to it.
+ *
+ * Moving out of the keychain is a loosening — the credentials go from the operating system's store to files — so
+ * the switch needs `consent` for `secrets.store`, which only the command gets, from a person at a terminal. Without
+ * it the switch is refused and the copies are taken back, as for any other failure before the switch.
  */
-export function migrateSecrets(
+export async function migrateSecrets(
   core: Core,
   to: SecretStoreKind,
   stores: { source?: SecretStore; target?: SecretStore } = {},
+  consent?: LooseningConsent,
 ): Promise<MigrationResult> {
   /*
    * The whole migration under one lock — reading the configuration included.
@@ -252,17 +259,56 @@ export function migrateSecrets(
    * the lock as well, so a migration that waited sees the backend the previous one left, rather than the one it
    * saw before it queued.
    */
-  return withCredentialsLock(core.paths.configDir, () => migrateUnderLock(core, to, stores));
+  return withCredentialsLock(core.paths.configDir, () => migrateUnderLock(core, to, stores, consent));
+}
+
+/**
+ * One line in the audit log for a credential migration.
+ *
+ * Machine-wide, so no inbox, as `confirm-clients` records its changes. Where every credential lives is a safety
+ * setting, and out of the keychain is a loosening the design says leaves an audit entry.
+ */
+function recordMigration(
+  core: Core,
+  migration: string,
+  outcome: 'started' | 'ok' | 'failed',
+  reason: string,
+  options: { durable?: boolean } = {},
+): Promise<unknown> {
+  return core.audit.append(
+    { inboxId: '', operation: 'secrets.migrate', outcome, surface: 'cli', reason, ids: { migration } },
+    options,
+  );
 }
 
 async function migrateUnderLock(
   core: Core,
   to: SecretStoreKind,
   stores: { source?: SecretStore; target?: SecretStore },
+  consent: LooseningConsent | undefined,
 ): Promise<MigrationResult> {
   const config = await core.config.load();
   const from = secretsStoreOf(config);
   if (from === to) return { from, to, moved: 0, leftovers: [] };
+  /*
+   * Consent is checked again here, under the lock, before any store is opened.
+   *
+   * The command decides whether to ask from a read made before this lock was taken. If a credential appeared in
+   * between, that read said "nothing to loosen" and nobody was asked — and without this, the copy would begin, the
+   * keychain would be read, and only the final switch would refuse. The refusal belongs before the first secret moves.
+   */
+  if (
+    classifyChange(config, { ...config, secrets: { store: to } }).loosened.includes('secrets.store') &&
+    !consent?.paths.includes('secrets.store')
+  ) {
+    throw new CommsError(
+      'LOOSENING_REFUSED',
+      'moving credentials out of the system keychain needs a person to confirm it',
+      {
+        hint: `Run \`agentcomms secrets migrate --to ${to}\` in a terminal.`,
+      },
+    );
+  }
   const source = stores.source ?? (await core.secrets(from));
   const target =
     stores.target ??
@@ -278,6 +324,25 @@ async function migrateUnderLock(
   const refs = secretRefsOf(config);
   const attempted: string[] = [];
   let moved = 0;
+  let announced = false;
+  // Ties the records of one migration together: two can run one after another, and their lines interleave with
+  // anything else in the log.
+  const migration = `mg_${randomBytes(8).toString('hex')}`;
+  /*
+   * How a switched migration ended, recorded under the lock — so nothing can come between it and the record that
+   * announced it — and best-effort: the switch is already recorded, durably, and a failure to write this line
+   * changes nothing that happened.
+   */
+  const finished = async (leftovers: MigrationLeftover[]): Promise<MigrationResult> => {
+    const left = leftovers.length;
+    await recordMigration(
+      core,
+      migration,
+      left === 0 ? 'ok' : 'failed',
+      `${from} → ${to}: ${moved} moved${left === 0 ? '' : `, ${left} left behind in a backend nothing reads`}`,
+    ).catch(() => undefined);
+    return { from, to, moved, leftovers };
+  };
   try {
     for (const ref of refs) {
       const value = await source.get(ref);
@@ -288,12 +353,25 @@ async function migrateUnderLock(
         throw new CommsError('CONFIG', `could not verify a migrated secret (${ref})`);
       moved += 1;
     }
-    await core.config.update((current) => {
-      // Under the lock, where it holds. See `migrationConflict`.
-      const conflict = migrationConflict(current, from, refs);
-      if (conflict) throw new CommsError('TRANSIENT', conflict, { hint: 'Nothing was switched. Run it again.' });
-      return { ...current, secrets: { store: to } };
-    });
+    /*
+     * Recorded before the switch, and required.
+     *
+     * Written after it, a failure to append left the migration done and the command reporting failure — and a retry
+     * then found the backend already switched and returned early, so the move was never recorded at all. Here, a
+     * record that cannot be written stops the migration before anything is switched, and the copies are taken back
+     * below; a switch that then fails is recorded as failed. Nothing can be switched without a line saying so.
+     */
+    await recordMigration(core, migration, 'started', `${from} → ${to}: switching, ${moved} copied`, { durable: true });
+    announced = true;
+    await core.config.update(
+      (current) => {
+        // Under the lock, where it holds. See `migrationConflict`.
+        const conflict = migrationConflict(current, from, refs);
+        if (conflict) throw new CommsError('TRANSIENT', conflict, { hint: 'Nothing was switched. Run it again.' });
+        return { ...current, secrets: { store: to } };
+      },
+      consent ? { consent } : {},
+    );
   } catch (error) {
     /*
      * Whether anything was switched is read, not assumed.
@@ -312,9 +390,15 @@ async function migrateUnderLock(
     }
     if (switched === true) {
       const leftovers = await takeBack(source, from, attempted);
-      return { from, to, moved, leftovers };
+      return finished(leftovers);
     }
     if (switched === undefined) {
+      await recordMigration(
+        core,
+        migration,
+        'failed',
+        `${from} → ${to}: whether the switch happened could not be confirmed`,
+      ).catch(() => undefined);
       const base = error instanceof CommsError ? error : new CommsError('UNEXPECTED', String(error));
       throw new CommsError(base.code, base.message, {
         hint:
@@ -327,6 +411,12 @@ async function migrateUnderLock(
     // Not switched, so every copy is a duplicate of a secret still in the source — a live credential in a backend
     // nothing reads from. Take them back, and name any that will not go.
     const leftovers = await takeBack(target, to, attempted);
+    // A failure the log already heard about — the switch was announced — or one that left copies behind is recorded.
+    // One that stopped before either changed nothing, and says nothing.
+    if (announced || leftovers.length > 0) {
+      const tail = leftovers.length > 0 ? `, ${leftovers.length} copies left in ${to}` : '';
+      await recordMigration(core, migration, 'failed', `${from} → ${to}: not switched${tail}`).catch(() => undefined);
+    }
     if (leftovers.length === 0) throw error;
     const base = error instanceof CommsError ? error : new CommsError('UNEXPECTED', String(error));
     throw new CommsError(base.code, base.message, {
@@ -339,7 +429,7 @@ async function migrateUnderLock(
   // actually copied have an original to remove — the rest held nothing, and "could not delete nothing" reported a
   // credential left behind that never existed.
   const leftovers = await takeBack(source, from, attempted);
-  return { from, to, moved, leftovers };
+  return finished(leftovers);
 }
 
 /**
@@ -546,7 +636,27 @@ export async function main(
         if (sub !== 'migrate' || (values.to !== 'keychain' && values.to !== 'file')) {
           throw usage('usage: agentcomms secrets migrate --to keychain|file');
         }
-        const result = await migrateSecrets(core, values.to);
+        /*
+         * Out of the keychain is a loosening, and a loosening is a person's to make.
+         *
+         * `doctor` recommends exactly this command when the keychain is unavailable, and until now it could never
+         * work: the switch was refused as unconsented every time, after copying every credential and before taking
+         * the copies back. Asked here, before the migration takes its lock — nothing waits for a person while
+         * holding one. Into the keychain tightens, and needs nobody; and a configuration with nothing stored yet
+         * loosens nothing by choosing files, so it is not asked either — the same judgement `ConfigStore.update`
+         * will make, because it is the same function making it.
+         */
+        const current = await core.config.load();
+        const loosens = classifyChange(current, { ...current, secrets: { store: values.to } }).loosened.includes(
+          'secrets.store',
+        );
+        const consent = loosens
+          ? await confirmLoosening(env, { json: values.json, color: output.color }, 'secrets.store', {
+              prompt: 'This moves every credential out of the system keychain and into files on this disk.',
+              command: 'agentcomms secrets migrate --to file',
+            })
+          : undefined;
+        const result = await migrateSecrets(core, values.to, {}, consent);
         /*
          * One document, whichever way it went.
          *
@@ -595,6 +705,30 @@ function renderMapping(rows: readonly NamesMigrationRow[]): string {
  * nothing. Exported so the rule can be tested directly — a subprocess test cannot hand the CLI a terminal, and a
  * rule that only ever runs without one is a rule nobody has checked.
  */
+/**
+ * A person's typed consent to one loosening, or a refusal saying who has to give it.
+ *
+ * Agents are refused outright — the challenge is a speed bump for a person, never a security boundary, and an agent
+ * that can run commands can type an answer — and so is anything with no terminal to ask at.
+ */
+export async function confirmLoosening(
+  env: NodeJS.ProcessEnv,
+  output: { json?: boolean | undefined; color?: boolean | undefined },
+  path: string,
+  ask: { prompt: string; command: string },
+  streams: Streams = defaultStreams,
+): Promise<LooseningConsent> {
+  await requirePerson(env, streams, {
+    refusedToAgent: `${ask.prompt.replace(/\.$/, '')} — that is not an agent's to do`,
+    refusedWithoutTerminal: 'this loosens how credentials are kept, so it needs a terminal',
+    command: ask.command,
+    prompt: ask.prompt,
+    color: output.color ?? colorEnabled(env, streams.stderr),
+    json: output.json,
+  });
+  return { kind: 'loosening-consent', paths: [path] };
+}
+
 export function needsYes(env: NodeJS.ProcessEnv, streams: Streams, options: { json?: boolean }): boolean {
   return agentMarker(env) !== null || !canPrompt(env, streams, options);
 }

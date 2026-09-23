@@ -56,12 +56,44 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
   }
 }
 
-/** Appends one line to a file created with owner-only permissions. Used for append-only logs. */
-export async function appendPrivateLine(path: string, line: string): Promise<void> {
+/**
+ * Appends one line to a file created with owner-only permissions. Used for append-only logs.
+ *
+ * `durable` flushes it to disk before returning, for a line that has to survive whatever is written next: a record
+ * made before a change is only a record of it if a power cut cannot keep the change and lose the line.
+ */
+export async function appendPrivateLine(
+  path: string,
+  line: string,
+  options: { durable?: boolean } = {},
+): Promise<void> {
   await ensurePrivateDir(dirname(path));
   const handle = await open(path, 'a', FILE_MODE);
   try {
     await handle.appendFile(line.endsWith('\n') ? line : `${line}\n`);
+    if (options.durable) await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  // The file's bytes are on disk; its name may not be. A log created this month — or a directory created on a fresh
+  // install — exists only as a directory entry until that directory is synced too, and a crash could keep what was
+  // written next while losing the file this line went into.
+  if (options.durable) {
+    await syncDirectory(dirname(path));
+    await syncDirectory(dirname(dirname(path)));
+  }
+}
+
+/**
+ * Flushes a directory's entries to disk, so a file just created or renamed in it survives a crash.
+ *
+ * POSIX only: Windows cannot open a directory for this, and NTFS journals its metadata instead.
+ */
+export async function syncDirectory(path: string): Promise<void> {
+  if (process.platform === 'win32') return;
+  const handle = await open(path, 'r');
+  try {
+    await handle.sync();
   } finally {
     await handle.close();
   }

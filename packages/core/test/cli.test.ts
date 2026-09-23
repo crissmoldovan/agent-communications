@@ -6,7 +6,8 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { needsYes } from '../src/cli.ts';
 import type { Streams } from '../src/cli-runtime.ts';
-import type { CommsError } from '../src/errors.ts';
+import { secretsStoreOf } from '../src/config.ts';
+import { CommsError } from '../src/errors.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /** A fixed timestamp, so a fixture never depends on when the suite ran. */
@@ -337,18 +338,89 @@ test('a migration that switched but could not remove an original reports it rath
     'file:slack/token/acc_AAAAAAAAAAAAAAAA',
     'file:slack/token/acc_BBBBBBBBBBBBBBBB',
   ]);
+  // Announced before the switch, then recorded as a failure with how many were left, so it outlives the terminal.
+  const migrations = (await core.audit.tail({})).filter((e) => e.operation === 'secrets.migrate');
+  assert.deepEqual(
+    migrations.map((e) => `${e.outcome}: ${e.reason}`),
+    [
+      'started: file → keychain: switching, 2 copied',
+      'failed: file → keychain: 2 moved, 2 left behind in a backend nothing reads',
+    ],
+  );
 });
 
 test('a clean migration moves everything and leaves nothing behind', async () => {
   const { migrateSecrets } = await import('../src/cli.ts');
   const { core, source } = await coreWithTwoSlackTokens();
   const target = memoryStore('keychain');
+  // The line written before the switch has to reach the disk before the switch does: a power cut must not be able
+  // to keep the change and lose its record.
+  const durability: Array<[string, boolean]> = [];
+  const append = core.audit.append.bind(core.audit);
+  core.audit.append = (record, options) => {
+    durability.push([record.outcome, options?.durable === true]);
+    return append(record, options);
+  };
 
   const result = await migrateSecrets(core, 'keychain', { source, target: target.store });
   assert.equal(result.moved, 2);
   assert.deepEqual(result.leftovers, []);
   assert.equal(target.values.get('slack/token/acc_AAAAAAAAAAAAAAAA'), 'fake-token-one');
   assert.equal(await source.get('slack/token/acc_AAAAAAAAAAAAAAAA'), null, 'an original was left in the old backend');
+  const migrations = (await core.audit.tail({})).filter((e) => e.operation === 'secrets.migrate');
+  assert.deepEqual(
+    migrations.map((e) => `${e.outcome}: ${e.reason}`),
+    ['started: file → keychain: switching, 2 copied', 'ok: file → keychain: 2 moved'],
+  );
+  assert.deepEqual(durability, [
+    ['started', true],
+    ['ok', false],
+  ]);
+  // One migration, two lines, tied by an id — other lines, including another migration's, can sit between them.
+  assert.ok(String(migrations[0]?.ids?.migration).startsWith('mg_'));
+  assert.equal(migrations[0]?.ids?.migration, migrations[1]?.ids?.migration);
+});
+
+test('a migration that cannot record itself does not switch, and a retry records it', async () => {
+  /*
+   * The record used to be written after the switch. When the append failed, the command reported failure over a
+   * migration that had happened, and a retry found the backend already switched and returned early — so the move
+   * was never recorded. It is written before the switch now, and a failure to write it stops the switch.
+   */
+  const { migrateSecrets } = await import('../src/cli.ts');
+  const { core, source } = await coreWithTwoSlackTokens();
+  const target = memoryStore('keychain');
+  const append = core.audit.append.bind(core.audit);
+  core.audit.append = async () => {
+    throw new Error('the audit log is on a full disk');
+  };
+  await assert.rejects(migrateSecrets(core, 'keychain', { source, target: target.store }), /full disk/);
+  assert.equal(secretsStoreOf(await core.config.load()), 'file', 'nothing was switched');
+  assert.equal(target.values.size, 0, 'and the copies were taken back');
+  assert.equal(await source.get('slack/token/acc_AAAAAAAAAAAAAAAA'), 'fake-token-one', 'the originals are untouched');
+
+  core.audit.append = append;
+  const retried = await migrateSecrets(core, 'keychain', { source, target: target.store });
+  assert.equal(retried.moved, 2);
+  const migrations = (await core.audit.tail({})).filter((e) => e.operation === 'secrets.migrate');
+  assert.equal(migrations[0]?.reason, 'file → keychain: switching, 2 copied');
+});
+
+test('a switch refused after it was announced is recorded as failed', async () => {
+  const { migrateSecrets } = await import('../src/cli.ts');
+  const { core, source } = await coreWithTwoSlackTokens();
+  const target = memoryStore('keychain');
+  const update = core.config.update.bind(core.config);
+  core.config.update = (async () => {
+    throw new CommsError('TRANSIENT', 'something else changed the configuration');
+  }) as typeof core.config.update;
+  await assert.rejects(migrateSecrets(core, 'keychain', { source, target: target.store }), /something else changed/);
+  core.config.update = update;
+  const migrations = (await core.audit.tail({})).filter((e) => e.operation === 'secrets.migrate');
+  assert.deepEqual(
+    migrations.map((e) => `${e.outcome}: ${e.reason}`),
+    ['started: file → keychain: switching, 2 copied', 'failed: file → keychain: not switched'],
+  );
 });
 
 test('a migration whose switch committed but whose lock release failed keeps the new backend’s copies', async () => {
@@ -386,15 +458,8 @@ test('two opposite migrations at once cannot leave a credential in neither backe
    */
   const { migrateSecrets } = await import('../src/cli.ts');
   const { core } = await coreWithTwoSlackTokens();
-  /*
-   * keychain → file moves secrets into plain files, which `classifyChange` rightly treats as a loosening, and
-   * `migrateSecrets` gathers no consent — so today that direction is always refused, and this race cannot finish.
-   * The lock has to hold regardless of which direction happens to be gated, so the downgrade is consented to
-   * here, as it would be once the command can ask a person for it.
-   */
-  const update = core.config.update.bind(core.config);
-  core.config.update = ((mutator: Parameters<typeof update>[0]) =>
-    update(mutator, { consent: { kind: 'loosening-consent', paths: ['secrets.store'] } })) as typeof core.config.update;
+  // keychain → file is a loosening, which the command gets a person's consent for; B carries that consent here.
+  const downgrade = { kind: 'loosening-consent', paths: ['secrets.store'] } as const;
   const file = memoryStore('file', { deleteDelayMs: 150 });
   const keychain = memoryStore('keychain');
   file.values.set('slack/token/acc_AAAAAAAAAAAAAAAA', 'fake-token-one');
@@ -405,7 +470,7 @@ test('two opposite migrations at once cannot leave a credential in neither backe
   for (let i = 0; i < 200 && (await core.config.load()).secrets?.store !== 'keychain'; i += 1) {
     await new Promise((settle) => setTimeout(settle, 5));
   }
-  const b = migrateSecrets(core, 'file', { source: keychain.store, target: file.store });
+  const b = migrateSecrets(core, 'file', { source: keychain.store, target: file.store }, downgrade);
   await Promise.all([a, b]);
 
   assert.equal((await core.config.load()).secrets?.store, 'file');
@@ -418,6 +483,87 @@ test('two opposite migrations at once cannot leave a credential in neither backe
     file.values.get('slack/token/acc_BBBBBBBBBBBBBBBB'),
     'fake-token-two',
     'a credential is in neither backend',
+  );
+});
+
+test('moving credentials out of the keychain needs consent, and with it goes through', async () => {
+  // `doctor` recommends `agentcomms secrets migrate --to file` when the keychain is unavailable, and it never
+  // worked: the switch was refused as unconsented every time, after every credential had been copied.
+  const { migrateSecrets } = await import('../src/cli.ts');
+  const { core } = await coreWithTwoSlackTokens();
+  // Keychain-backed, as most installs are. Into the keychain is a tightening, so this needs no consent itself.
+  await core.config.update((c) => ({ ...c, secrets: { store: 'keychain' } }));
+  const keychain = memoryStore('keychain');
+  const file = memoryStore('file');
+  keychain.values.set('slack/token/acc_AAAAAAAAAAAAAAAA', 'fake-token-one');
+  keychain.values.set('slack/token/acc_BBBBBBBBBBBBBBBB', 'fake-token-two');
+
+  // Refused under the lock before either store is opened — so a command that asked nobody, because its own earlier
+  // read found nothing to loosen, still cannot start copying. Stores that fail on any touch prove it.
+  const untouchable = (kind: 'keychain' | 'file') => {
+    const touched = () => {
+      throw new Error(`the ${kind} store was touched`);
+    };
+    return { kind, get: touched, set: touched, delete: touched, invalidate: () => {} };
+  };
+  await assert.rejects(
+    migrateSecrets(core, 'file', { source: untouchable('keychain'), target: untouchable('file') }),
+    (error: CommsError) => error.code === 'LOOSENING_REFUSED',
+  );
+  assert.equal(secretsStoreOf(await core.config.load()), 'keychain', 'nothing was switched');
+
+  const moved = await migrateSecrets(
+    core,
+    'file',
+    { source: keychain.store, target: file.store },
+    {
+      kind: 'loosening-consent',
+      paths: ['secrets.store'],
+    },
+  );
+  assert.equal(moved.moved, 2);
+  assert.deepEqual(moved.leftovers, []);
+  assert.equal(secretsStoreOf(await core.config.load()), 'file');
+  assert.equal(file.values.get('slack/token/acc_AAAAAAAAAAAAAAAA'), 'fake-token-one');
+  assert.equal(keychain.values.size, 0, 'and the keychain no longer holds them');
+});
+
+test('secrets migrate --to file is refused to an agent and to anything without a terminal, before copying', () => {
+  // A config that holds a credential, so choosing files really does loosen something. Both runs are refused before
+  // any store is opened, so neither can touch the real keychain.
+  const config = tempDir();
+  writeFileSync(
+    join(config, 'config.json'),
+    `${JSON.stringify({
+      version: 2,
+      accounts: {
+        'acme/slack': {
+          id: 'acc_AAAAAAAAAAAAAAAA',
+          platform: 'slack',
+          workspace: 'T0001',
+          userId: 'U0001',
+          tier: 'read',
+          secretRef: 'slack/token/acc_AAAAAAAAAAAAAAAA',
+          createdAt: NOW,
+        },
+      },
+    })}\n`,
+  );
+  const agent = run(['secrets', 'migrate', '--to', 'file', '--json'], {
+    AGENT_COMMS_CONFIG_DIR: config,
+    CLAUDECODE: '1',
+  });
+  assert.equal(agent.status, 10, agent.stderr);
+  assert.match(JSON.parse(agent.stdout).error.message, /not an agent's to do/);
+  assert.match(JSON.parse(agent.stdout).error.hint, /in their own terminal/);
+
+  const piped = run(['secrets', 'migrate', '--to', 'file', '--json'], { AGENT_COMMS_CONFIG_DIR: config });
+  assert.equal(piped.status, 10, piped.stderr);
+  assert.match(JSON.parse(piped.stdout).error.message, /needs a terminal/);
+  assert.equal(
+    JSON.parse(readFileSync(join(config, 'config.json'), 'utf8')).secrets,
+    undefined,
+    'nothing was switched',
   );
 });
 
@@ -555,4 +701,41 @@ test('an agent is never asked, even with a terminal: it can answer its own quest
   assert.equal(needsYes({}, terminal, { json: true }), true, '--json is never interactive');
   const piped = { ...terminal, stdin: { isTTY: false } } as unknown as Streams;
   assert.equal(needsYes({}, piped, {}), true, 'a pipe cannot answer');
+});
+
+test('requirePerson refuses an agent before it asks about a terminal, and names the command either way', async () => {
+  const { requirePerson } = await import('../src/cli-runtime.ts');
+  const gate = {
+    refusedToAgent: 'not an agent’s to do',
+    refusedWithoutTerminal: 'needs a terminal',
+    command: 'agentcomms do-the-thing',
+    prompt: 'This does the thing.',
+    color: false,
+  };
+  const quiet = {
+    stdin: { isTTY: false },
+    stdout: { isTTY: false, write: () => true },
+    stderr: { isTTY: false, write: () => true },
+  } as unknown as Streams;
+
+  // An agent at a real terminal is still refused: the marker is checked first, and a challenge an agent can type
+  // proves nothing.
+  const tty = {
+    stdin: { isTTY: true },
+    stdout: { isTTY: true, write: () => true },
+    stderr: { isTTY: true, write: () => true },
+  } as unknown as Streams;
+  await assert.rejects(requirePerson({ CLAUDECODE: '1' }, tty, gate), (error: CommsError) => {
+    assert.equal(error.code, 'LOOSENING_REFUSED');
+    assert.equal(error.message, 'not an agent’s to do');
+    assert.equal(error.hint, 'Ask the user to run `agentcomms do-the-thing` in their own terminal.');
+    assert.deepEqual(error.details, { marker: 'CLAUDECODE' });
+    return true;
+  });
+
+  await assert.rejects(requirePerson({}, quiet, gate), (error: CommsError) => {
+    assert.equal(error.message, 'needs a terminal');
+    assert.equal(error.hint, 'Run `agentcomms do-the-thing` directly in a terminal.');
+    return true;
+  });
 });

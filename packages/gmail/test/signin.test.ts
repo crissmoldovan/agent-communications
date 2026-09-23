@@ -5,13 +5,13 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { CommsError } from '@agentcomms/core';
-import { FLOW_ID_PATTERN } from '../src/auth/flows.ts';
+import { FLOW_ID_PATTERN, newFlowId } from '../src/auth/flows.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { renderSignInStarted } from '../src/cli/render.ts';
 import { GmailContext } from '../src/context.ts';
 import { clientAdd } from '../src/operations/clients.ts';
 import { inboxList } from '../src/operations/inboxes.ts';
-import { finishSignIn, resolveListenerEntry, startSignIn } from '../src/operations/signin.ts';
+import { detachListener, finishSignIn, resolveListenerEntry, startSignIn } from '../src/operations/signin.ts';
 import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
 
 const CLI_ENTRY = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
@@ -484,4 +484,44 @@ test('a detached sign-in with no listener injected still starts: the wiring, not
   await fetch(harness.google.consent(started.authUrl));
   const signedIn = await finishSignIn(context, { flowId: started.flowId, waitSeconds: 20 });
   assert.equal(signedIn.inbox.email, 'jo@example.test');
+});
+
+test('a listener that already closed its end of the channel is detached, not reported as a failure', () => {
+  // The listener disconnects itself right after "ready". On a busy machine that lands before this side gets here,
+  // and `disconnect()` on a closed channel throws — a working sign-in reported as an unexpected failure.
+  const calls: string[] = [];
+  const closed = {
+    connected: false,
+    disconnect: () => {
+      throw Object.assign(new Error('IPC channel is already disconnected'), { code: 'ERR_IPC_DISCONNECTED' });
+    },
+    unref: () => calls.push('unref'),
+  };
+  assert.doesNotThrow(() => detachListener(closed as never));
+  assert.deepEqual(calls, ['unref'], 'still let go of, so this process can exit');
+
+  const open = {
+    connected: true,
+    disconnect: () => calls.push('disconnect'),
+    unref: () => calls.push('unref'),
+  };
+  detachListener(open as never);
+  assert.deepEqual(calls, ['unref', 'disconnect', 'unref']);
+});
+
+test('flow ids draw every character of the alphabet evenly', () => {
+  // `byte % 62` gave the first eight characters 5 chances in 256 and the rest 4: a quarter likelier. Over enough
+  // ids that shows.
+  const counts = new Map<string, number>();
+  const ids = 20_000;
+  for (let i = 0; i < ids; i += 1) {
+    for (const char of newFlowId().slice(3)) counts.set(char, (counts.get(char) ?? 0) + 1);
+  }
+  const expected = (ids * 22) / 62;
+  const first = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].map((c) => counts.get(c) ?? 0);
+  const rest = [...counts.entries()].filter(([c]) => !'ABCDEFGH'.includes(c)).map(([, n]) => n);
+  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  // Biased, the first eight sit 25% above the rest. Unbiased, the ratio's noise is about half a percent, so a 10%
+  // bound fails every biased run and no fair one.
+  assert.ok(Math.abs(mean(first) / mean(rest) - 1) < 0.1, `${mean(first)} vs ${mean(rest)} (expected ~${expected})`);
 });
