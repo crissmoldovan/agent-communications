@@ -210,6 +210,22 @@ function withWorkspace(alias: string, id: string, mode: string): Config {
   );
 }
 
+test('the store will not record a new workspace that can post without a person’s consent, whatever writes it', async () => {
+  // The classifier is only half of it: this is the write every surface ends in, so a sign-in path that forgot to
+  // ask — or one that does not exist yet — still cannot put a posting token in the configuration unannounced.
+  const store = new ConfigStore(tempDir());
+  const add = (mode: string) => (config: Config) => ({
+    ...config,
+    accounts: { ...config.accounts, 'zed/slack': { ...accountFixture('acc_DDDDDDDDDDDDDDDD'), tier: mode, mode } },
+  });
+  await assert.rejects(store.update(add('send') as never), (error: CommsError) => error.code === 'LOOSENING_REFUSED');
+  assert.deepEqual((await store.load()).accounts, {});
+  await store.update(add('send') as never, {
+    consent: { kind: 'loosening-consent', paths: ['accounts.zed/slack.mode'] },
+  });
+  assert.equal((await store.load()).accounts['zed/slack']?.mode, 'send');
+});
+
 test('classifyChange: re-authorising a read workspace as send is a loosening', () => {
   /*
    * `mode` is not a policy sitting in front of a token that could post; it is a claim that the token cannot.
@@ -227,7 +243,7 @@ test('classifyChange: re-authorising a read workspace as send is a loosening', (
   assert.deepEqual(loosened, ['accounts.acme.mode']);
 });
 
-test('classifyChange: narrowing a workspace, or connecting a new one, needs nobody’s consent', () => {
+test('classifyChange: narrowing a workspace needs nobody’s consent; connecting one that can post does', () => {
   const send = withWorkspace('acme', 'acc_AAAAAAAAAAAAAAAA', 'send');
 
   // send → read is a tightening.
@@ -236,8 +252,14 @@ test('classifyChange: narrowing a workspace, or connecting a new one, needs nobo
   // Renewing a send workspace as send is not a change at all.
   assert.deepEqual(classifyChange(send, withWorkspace('acme', 'acc_CCCCCCCCCCCCCCCC', 'send')).loosened, []);
 
-  // A name nobody has decided anything about: choosing `send` while connecting *is* the decision.
-  assert.deepEqual(classifyChange(emptyConfig(), withWorkspace('zed', 'acc_DDDDDDDDDDDDDDDD', 'send')).loosened, []);
+  // A new workspace that can post is a widening from `read`, the floor every new account starts at. This used to be
+  // free — "choosing `send` while connecting is the decision" — and that left remove-then-add as a way for an agent
+  // to a posting token with nobody's consent.
+  assert.deepEqual(classifyChange(emptyConfig(), withWorkspace('zed', 'acc_DDDDDDDDDDDDDDDD', 'send')).loosened, [
+    'accounts.zed.mode',
+  ]);
+  // Connecting one that cannot post is still nobody's business but the person connecting it.
+  assert.deepEqual(classifyChange(emptyConfig(), withWorkspace('zed', 'acc_DDDDDDDDDDDDDDDD', 'read')).loosened, []);
 });
 
 test('classifyChange: a path that climbs back out is not inside the directory it starts in', () => {
@@ -616,6 +638,8 @@ test('classifyChange: a different workspace taking the name is not a loosening o
       },
     }),
   );
-  // Measured as the new account it is, against the default — which is `chat`, so no loosening.
-  assert.deepEqual(classifyChange(before, replaced).loosened, []);
+  // Measured as the new account it is: its policy against the default — `chat`, so nothing loosened there — and its
+  // mode against the floor every new account starts from, `read`. It arrives able to post, so that much is a widening,
+  // of its own; nothing about the workspace that left is attributed to it.
+  assert.deepEqual(classifyChange(before, replaced).loosened, ['accounts.acme.mode']);
 });

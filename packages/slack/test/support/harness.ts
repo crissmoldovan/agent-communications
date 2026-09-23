@@ -170,10 +170,11 @@ export async function newHarness(): Promise<Harness> {
         ...options.bundle,
       };
       await secrets.set(account.secretRef, serialiseBundle(bundle));
-      await core.config.update((config) => ({
-        ...config,
-        accounts: { ...config.accounts, [options.alias]: account },
-      }));
+      // A workspace planted able to post stands for one a person connected and confirmed, so it carries that consent.
+      await core.config.update(
+        (config) => ({ ...config, accounts: { ...config.accounts, [options.alias]: account } }),
+        { consent: { kind: 'loosening-consent', paths: [`accounts.${options.alias}.mode`] } },
+      );
       return account;
     },
   };

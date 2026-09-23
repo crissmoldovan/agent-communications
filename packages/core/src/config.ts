@@ -953,10 +953,15 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
      *
      * **Matched by alias, not by id.** Re-authorising mints a new account id precisely so the new credential can
      * be staged beside the old one, so an id lookup finds nothing and would read every renewal as a brand-new
-     * account — which is exactly the case this must not miss. A genuinely new account is not a loosening: nobody
-     * decided anything about that name before, and choosing `send` when connecting is the decision itself.
+     * account — which is exactly the case this must not miss.
+     *
+     * **A new account arriving as `send` is a widening too.** This once read "choosing `send` when connecting is the
+     * decision itself" — true of a person, but the decision is exactly the one an agent may not make, and treating
+     * it as free left `workspace remove` then `workspace add --mode send` as a way to a posting token with nobody's
+     * consent. Measured against nothing, a new account's floor is `read`.
      */
-    if (previous && (previous.mode ?? previous.tier) === 'read' && (account.mode ?? account.tier) === 'send') {
+    const wasMode = previous ? (previous.mode ?? previous.tier) : 'read';
+    if (wasMode === 'read' && (account.mode ?? account.tier) === 'send') {
       loosened.push(`accounts.${alias}.mode`);
     }
   }

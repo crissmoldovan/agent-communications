@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { type CommsError, classifyChange, parseConfig, type SecretStore } from '@agentcomms/core';
+import { CommsError, classifyChange, parseConfig, type SecretStore } from '@agentcomms/core';
 import { newFlowId, type SlackFlow } from '../src/auth/flow.ts';
 import { SlackContext } from '../src/context.ts';
 import {
@@ -592,4 +592,91 @@ test('a sign-in that cannot tell whether it was saved keeps the credential and n
   await listener.close();
   const secrets = await harness.core.secrets('file');
   assert.ok(await secrets.get(ref), 'the credential was deleted when nobody could say it was unused');
+});
+
+test('a workspace connected able to post needs a person, however the sign-in is started', async () => {
+  /*
+   * `workspace remove` then `workspace add --mode send` used to turn a read-only workspace into one that can post with
+   * no person at a terminal. Core now refuses to record one without consent; this is the earlier refusal, before a
+   * flow exists, so nobody is sent to Slack's consent screen for a grant that will not be recorded.
+   */
+  const harness = await newHarness();
+  const context = new SlackContext({ core: harness.core, env: harness.env, exchange: (p) => harness.exchange(p) });
+  const port = await freePort();
+  await assert.rejects(
+    startSignIn(context, { mode: 'send', alias: 'acme', clientId: TEST_CLIENT_ID, port }),
+    (error: unknown) => error instanceof CommsError && error.code === 'LOOSENING_REFUSED',
+  );
+  // Consent for a different workspace is not consent for this one.
+  await assert.rejects(
+    startSignIn(context, {
+      mode: 'send',
+      alias: 'acme',
+      clientId: TEST_CLIENT_ID,
+      port,
+      consent: { kind: 'loosening-consent', paths: ['accounts.other.mode'] },
+    }),
+    (error: unknown) => error instanceof CommsError && error.code === 'LOOSENING_REFUSED',
+  );
+  assert.deepEqual(
+    await readdir(join(harness.core.paths.stateDir, 'slack', 'flows')).catch(() => []),
+    [],
+    'no flow was created',
+  );
+
+  // With the person's consent, and in read mode without it, the sign-in starts as before.
+  const started = await startSignIn(context, {
+    mode: 'send',
+    alias: 'acme',
+    clientId: TEST_CLIENT_ID,
+    port,
+    detached: false,
+    consent: { kind: 'loosening-consent', paths: ['accounts.acme.mode'] },
+  });
+  await started.listener?.close();
+  assert.match(started.authUrl, /chat%3Awrite/);
+
+  const read = await startSignIn(context, {
+    mode: 'read',
+    alias: 'other',
+    clientId: TEST_CLIENT_ID,
+    port: await freePort(),
+    detached: false,
+  });
+  await read.listener?.close();
+  assert.doesNotMatch(read.authUrl, /chat%3Awrite/, 'a read sign-in needs no consent, and asks for no posting');
+});
+
+test('a flow to connect a posting workspace, left over from before the gate, is refused before Slack issues a token', async () => {
+  const harness = await newHarness();
+  let exchanges = 0;
+  const context = new SlackContext({
+    core: harness.core,
+    env: harness.env,
+    exchange: async (params) => {
+      exchanges += 1;
+      return harness.exchange(params);
+    },
+  });
+  // Written as a flow started before this gate existed: `send`, a new workspace, and no consent on it.
+  const flowId = newFlowIdFor(context);
+  await context.flows.save({ ...(await pendingFlow(context, flowId)), mode: 'send' });
+  await context.flows.recordOutcome(flowId, { code: 'fake-authorisation-code' });
+
+  await assert.rejects(finishSignIn(context, { flowId, waitSeconds: 5 }), (error: CommsError) => {
+    assert.equal(error.code, 'LOOSENING_REFUSED');
+    return true;
+  });
+  assert.equal(exchanges, 0, 'the code was never exchanged, so no token exists');
+  assert.deepEqual((await harness.core.config.load()).accounts, {});
+  assert.equal(await context.flows.peek(flowId), null, 'and the flow is gone');
+});
+
+test('the package does not hand out the sign-in operations, so the gated paths are the only way in', async () => {
+  // Anything exported here is a door a library caller can walk through without the CLI's questions. The core and
+  // operation-level refusals hold regardless, but there is no reason to offer the door.
+  const root = await import('../src/index.ts');
+  for (const name of ['startSignIn', 'completeSignIn', 'finishSignIn']) {
+    assert.equal(name in root, false, `${name} is exported from the package root`);
+  }
 });

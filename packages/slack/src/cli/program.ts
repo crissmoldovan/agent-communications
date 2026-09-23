@@ -17,6 +17,7 @@ import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
 import { doctor, type IdentityProbe } from '../operations/doctor.ts';
 import { type ProbeFetch, probeIdentity } from '../operations/identity.ts';
+import { modeReport, narrowingSteps, wideningSteps } from '../operations/mode.ts';
 import {
   finishSignIn,
   type ListenerEntry,
@@ -31,8 +32,10 @@ import {
   renderConnected,
   renderDoctor,
   renderManifestHelp,
+  renderMode,
   renderRemoved,
   renderSignInStarted,
+  renderSteps,
   renderWorkspace,
   renderWorkspaces,
 } from './render.ts';
@@ -237,9 +240,19 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
             hint: 'Create the app first: `agent-slack manifest --port 51234`. The Client ID is not a secret.',
           });
         }
+        const mode = String(flags.mode) as InstallMode;
+        // A new workspace that can post is a widening from nothing, and asked about as one. See `startSignIn`.
+        const consent =
+          mode === 'send'
+            ? await confirmPosting(options, alias, {
+                command: `agent-slack workspace add ${alias} --mode send --client-id ${String(flags.clientId)} --port ${portOf(flags)}`,
+                prompt: `This connects "${alias}" with a token that can post to Slack.`,
+              })
+            : undefined;
         await signIn(context, options, {
           alias,
-          mode: String(flags.mode) as InstallMode,
+          mode,
+          ...(consent ? { consent } : {}),
           clientId: String(flags.clientId),
           port: portOf(flags),
           start: flags.start === true,
@@ -266,6 +279,82 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
         const found = requireWorkspace(await context.config(), alias);
         const view = viewOf(found.alias, found.account);
         writeResult(view, output(), () => renderWorkspace(view, options.color), streams);
+      }),
+    );
+
+  /*
+   * The mode, and moving it — one command for what `show`, `reauth` and the Slack admin pages each hold part of.
+   *
+   * Reporting is anybody's. `send` is the gated widening under a name people look for, and only a person runs it.
+   * `read` changes nothing: Slack cannot take a scope back from a token, only removing the app's installation resets
+   * it, and that is in Slack's settings — so this says exactly how, in the order that keeps the workspace's name.
+   */
+  workspace
+    .command('mode <alias> [mode]')
+    .description('what a workspace can do, and how to change it: `mode <name> send`, or `mode <name> read`')
+    .option('--port <port>', 'the loopback port in the app’s manifest')
+    .option('--start', 'print the sign-in link and return, instead of waiting', false)
+    .option('--no-browser', 'print the link instead of opening it')
+    .action(
+      act(async (context, options, alias: string, target: string | undefined, flags: Options) => {
+        const found = requireWorkspace(await context.config(), alias);
+        const port = flags.port === undefined ? undefined : portOf(flags);
+        const report = modeReport(found.alias, found.account, port);
+        if (target === undefined || target === report.mode) {
+          writeResult(report, output(), () => renderMode(report, options.color), streams);
+          return;
+        }
+        if (target === 'read') {
+          // The port is in two of the steps and the configuration does not keep it, so it is asked for, as for `send`.
+          const steps = narrowingSteps(found.alias, portOf(flags), {
+            knowsItsApp: found.account.oauthClientId !== undefined,
+          });
+          writeResult(
+            { alias: found.alias, mode: report.mode, changed: false, steps },
+            output(),
+            () =>
+              renderSteps(
+                `Slack cannot take posting away from "${found.alias}"'s token. Removing the app's installation does:`,
+                steps,
+                options.color,
+              ),
+            streams,
+          );
+          return;
+        }
+        if (target !== 'send') {
+          throw new CommsError('USAGE', `"${target}" is not a mode`, { hint: 'The modes are `read` and `send`.' });
+        }
+        if (!found.account.oauthClientId) {
+          throw new CommsError('CONFIG', `"${found.alias}" does not record which Slack app it was connected through`, {
+            hint: `Remove and add it again: \`agent-slack workspace remove ${found.alias}\`.`,
+          });
+        }
+        // Both steps name the port, and the configuration does not keep it, so it is asked for rather than guessed.
+        const chosen = portOf(flags);
+        streams.stderr.write(
+          `${renderSteps('Moving to send takes two steps:', wideningSteps(found.alias, chosen), options.color)}\n`,
+        );
+        const consent = await confirmWidening(options, found.alias, chosen);
+        // A reauth, bound to this account as `workspace reauth` binds it: without `expect` the sign-in is an add,
+        // and an add refuses a name that is already connected.
+        const { account } = found;
+        await signIn(context, options, {
+          alias: found.alias,
+          mode: 'send',
+          consent,
+          clientId: found.account.oauthClientId,
+          port: chosen,
+          start: flags.start === true,
+          browser: flags.browser !== false,
+          expect: {
+            accountId: account.id,
+            workspaceId: account.workspace,
+            userId: account.userId,
+            oauthClientId: account.oauthClientId,
+            ...(account.appId ? { appId: account.appId } : {}),
+          },
+        });
       }),
     );
 
@@ -332,7 +421,8 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
          */
         const was = parseMode(account.mode ?? account.tier, `"${alias}"`);
         const mode = command.getOptionValueSource('mode') === 'default' ? was : (String(flags.mode) as InstallMode);
-        const consent = mode === 'send' && was === 'read' ? await confirmWidening(options, alias) : undefined;
+        const consent =
+          mode === 'send' && was === 'read' ? await confirmWidening(options, alias, portOf(flags)) : undefined;
         await signIn(context, options, {
           alias,
           mode,
@@ -436,11 +526,30 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
    *
    * The consent travels on the flow, because the sign-in this gates may be finished by a different process.
    */
-  async function confirmWidening(options: GlobalOptions, alias: string): Promise<LooseningConsent> {
+  /** The same gate for a workspace connected able to post from the start: no earlier mode, but the same risk. */
+  async function confirmPosting(
+    options: GlobalOptions,
+    alias: string,
+    ask: { command: string; prompt: string },
+  ): Promise<LooseningConsent> {
+    await requirePerson(env, streams, {
+      refusedToAgent: `connecting "${alias}" able to post to Slack is not an agent's to do`,
+      refusedWithoutTerminal: 'connecting a workspace that can post needs a terminal',
+      command: ask.command,
+      prompt: ask.prompt,
+      color: options.color,
+      json: globals().json,
+      noInput: false,
+    });
+    return { kind: 'loosening-consent', paths: [`accounts.${alias}.mode`] };
+  }
+
+  async function confirmWidening(options: GlobalOptions, alias: string, port: number): Promise<LooseningConsent> {
     await requirePerson(env, streams, {
       refusedToAgent: `widening "${alias}" from read to send is not an agent's to do`,
       refusedWithoutTerminal: 'widening a workspace from read to send needs a terminal',
-      command: `agent-slack workspace reauth ${alias} --mode send`,
+      // With the port: the command is copied as printed, and without one it is a usage error.
+      command: `agent-slack workspace reauth ${alias} --mode send --port ${port}`,
       prompt: `This replaces "${alias}"'s token with one that can post to Slack (read → send).`,
       color: options.color,
       json: globals().json,
