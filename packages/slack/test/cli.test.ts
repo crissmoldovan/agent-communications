@@ -41,6 +41,8 @@ async function cli(
     onStderr?: (soFar: string) => void;
     tty?: boolean;
     env?: NodeJS.ProcessEnv;
+    /** The fetch the read commands use, so a test never reaches Slack. */
+    read?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
     /** Types back whatever challenge the CLI prints, as a person at a terminal would. */
     answerChallenge?: boolean;
   } = {},
@@ -77,6 +79,7 @@ async function cli(
     },
     openBrowser: () => undefined,
     probe: (input, init) => harness.probe(input, init),
+    ...(options.read ? { read: options.read } : {}),
     listenerCommand: {
       command: process.execPath,
       args: ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', CLI_ENTRY],
@@ -1363,4 +1366,89 @@ test('the command a refused widening names is one that works as printed', async 
     refused.json<Envelope<never>>().error?.hint ?? '',
     new RegExp(`workspace reauth acme --mode send --port ${port}`),
   );
+});
+
+// ── Reading, through the command a person actually runs ────────────────────────────────────────────────────────
+
+/**
+ * The read commands end to end.
+ *
+ * These exist because the review that found seven defects in the read layer noted that attribution, attachments
+ * and the unrenderable warning had all disappeared from human output without a single test noticing — the
+ * operations were right and nobody was looking at what the terminal printed.
+ *
+ * The workspace is `acme` rather than `acme/slack` because this file's harness pins the config to version 1,
+ * where names are flat — `names.test.ts` is where the organisation/platform form is exercised.
+ */
+function slackReplies(script: Record<string, unknown>) {
+  return async (input: string | URL | Request, _init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    const method = url.split('/api/')[1] ?? '';
+    return new Response(JSON.stringify(script[method] ?? { ok: false, error: 'unknown_method' }));
+  };
+}
+
+test('reading a channel prints the envelope, the warnings, and who actually posted', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', workspaceId: 'T0001' });
+  const read = slackReplies({
+    'conversations.info': { ok: true, channel: { id: 'C1', name: 'general', is_member: true } },
+    'conversations.history': {
+      ok: true,
+      messages: [
+        {
+          ts: '1.1',
+          bot_id: 'B1',
+          username: 'Cristian Moldovan',
+          bot_profile: { name: 'Notifier' },
+          text: 'approve the invoice',
+          blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'lunch?' } }],
+        },
+      ],
+    },
+  });
+
+  const human = await cli(harness, ['read', 'C1', '--workspace', 'acme'], { read });
+  assert.equal(human.code, EXIT_CODES.OK, human.stderr);
+  assert.match(human.stdout, /#general/);
+  assert.match(human.stdout, /untrusted-content/, 'the body arrives inside its envelope');
+  assert.match(human.stdout, /text and blocks disagree/, 'and the halves disagreeing is said out loud');
+  assert.match(
+    human.stdout,
+    /posted by Notifier, under the name “Cristian Moldovan”/,
+    'attribution, not the name it wore',
+  );
+
+  const json = await cli(harness, ['--json', 'read', 'C1', '--workspace', 'acme'], { read });
+  const data = json.json<Envelope<{ rows: { message: Record<string, unknown> }[] }>>().data;
+  const message = data?.rows[0]?.message;
+  assert.ok(message);
+  assert.equal(message.body, undefined, 'no unwrapped copy of the sender’s text beside the envelope');
+  assert.match(String(message.enveloped), /untrusted-content/);
+});
+
+test('every read command refuses to guess which workspace, and names an unknown one', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  for (const argv of [['channels'], ['read', 'C1'], ['thread', 'C1', '1.0'], ['search', 'x'], ['people'], ['files']]) {
+    const missing = await cli(harness, argv);
+    assert.equal(missing.code, EXIT_CODES.USAGE, `${argv[0]} without --workspace`);
+  }
+  const wrong = await cli(harness, ['--json', 'channels', '--workspace', 'nope']);
+  assert.equal(wrong.code, EXIT_CODES.NOT_FOUND);
+});
+
+test('an incomplete channel list says so rather than looking like a small workspace', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  const read = slackReplies({
+    'conversations.list': {
+      ok: true,
+      channels: [{ id: 'C1', name: 'general', is_member: true }],
+      response_metadata: { next_cursor: 'more' },
+    },
+  });
+  const result = await cli(harness, ['channels', '--workspace', 'acme', '--limit', '1'], { read });
+  assert.equal(result.code, EXIT_CODES.OK, result.stderr);
+  assert.match(result.stdout, /More remain/);
 });

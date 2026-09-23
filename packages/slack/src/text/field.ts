@@ -71,7 +71,21 @@ export function finishField(decoded: DecodedText, limit: number = BODY_LIMIT): S
   const truncated = decoded.text.length > limit;
   const cut = truncated ? decoded.text.slice(0, limit) : decoded.text;
   const { text, tokensNeutralised } = neutralise(cut);
-  return { text, truncated, tokensNeutralised, references: decoded.references };
+  /*
+   * The labels too.
+   *
+   * A reference's label is the half of `<url|label>` or `<@U1|label>` that the sender chose, and it was being
+   * handed back raw beside a body that had been carefully defused — so `</untrusted-content>` was neutralised in
+   * the text a model reads and live in the reference list beside it. The same field, twice, defused once.
+   */
+  let labelTokens = 0;
+  const references = decoded.references.map((reference) => {
+    if (reference.label === undefined) return reference;
+    const safe = neutralise(reference.label);
+    labelTokens += safe.tokensNeutralised;
+    return { ...reference, label: safe.text };
+  });
+  return { text, truncated, tokensNeutralised: tokensNeutralised + labelTokens, references };
 }
 
 /** Decode once, then finish. For a raw body that has not been through the reconciler. */

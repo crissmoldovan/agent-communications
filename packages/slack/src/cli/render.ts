@@ -257,14 +257,21 @@ function renderRow(row: ReadRow, color: boolean): string {
   const head = `${paint(color, 'bold', cell(who, 24))}  ${paint(color, 'dim', row.message.ts)}`;
   const marks: string[] = [];
   if (row.message.mismatch) marks.push(paint(color, 'yellow', 'text and blocks disagree'));
+  if (row.message.unrenderable) marks.push(paint(color, 'yellow', 'part of this message could not be shown'));
+  if (row.message.attribution.app) {
+    const app = row.message.attribution.appName?.text ?? row.message.attribution.botId ?? 'an app';
+    const chosen = row.message.attribution.chosenName?.text;
+    marks.push(paint(color, 'yellow', chosen ? `posted by ${app}, under the name “${chosen}”` : `posted by ${app}`));
+  }
+  if (row.message.attribution.external) marks.push(paint(color, 'yellow', 'from outside this workspace'));
   if (row.message.tokensNeutralised > 0) {
     marks.push(paint(color, 'yellow', `${row.message.tokensNeutralised} token(s) defused`));
   }
   if (row.message.truncated) marks.push(paint(color, 'dim', 'truncated'));
   if (row.message.editedTs) marks.push(paint(color, 'dim', 'edited'));
-  const body = row.message.body
+  const body = row.message.enveloped
     .split('\n')
-    .map((line) => `  ${cell(line, 110)}`)
+    .map((line: string) => `  ${cell(line, 110)}`)
     .join('\n');
   const parts = [`${head}${marks.length > 0 ? `  ${marks.join(' · ')}` : ''}`, body];
   if (row.message.mismatch && row.message.fallback) {

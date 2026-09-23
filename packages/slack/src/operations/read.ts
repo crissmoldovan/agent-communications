@@ -1,4 +1,4 @@
-import { newBoundary, wrapUntrusted } from '@agentcomms/core';
+import { newBoundary } from '@agentcomms/core';
 import { callSlack, paginate, type SlackCall } from '../api/call.ts';
 import { senderField } from '../text/field.ts';
 import { type ReadMessage, readMessage } from '../text/message.ts';
@@ -49,18 +49,17 @@ export async function listChannels(call: SlackCall, options: ChannelsOptions = {
   return { channels, complete: page.complete, ...(page.cursor ? { cursor: page.cursor } : {}) };
 }
 
-/** One message with its author resolved, ready to hand to a model or print. */
+/**
+ * One message with its author resolved, ready to hand to a model or print.
+ *
+ * The message carries its own envelope — see {@link ReadMessage.enveloped}. There is deliberately no second,
+ * unwrapped copy of the same text on this row: the Gmail audit's worst cluster was read paths that returned
+ * sender-controlled strings beside a carefully enveloped body, and a row that offers both makes the envelope
+ * something a caller opts into.
+ */
 export interface ReadRow {
   readonly message: ReadMessage;
   readonly author?: Person | undefined;
-  /**
-   * The body inside the untrusted envelope, with this read's boundary.
-   *
-   * Built here rather than by each caller, because the Gmail audit's worst cluster was three read paths that
-   * returned sender-controlled strings *beside* a carefully enveloped body. A row that carries its own enveloped
-   * form cannot be handed to a model half-wrapped.
-   */
-  readonly enveloped: string;
 }
 
 export interface HistoryResult {
@@ -96,7 +95,12 @@ async function rowsFrom(
     for (const raw of raws) {
       const author = typeof raw.user === 'string' ? raw.user : undefined;
       if (author) userIds.add(author);
-      for (const reference of readMessage(raw).references) {
+      /*
+       * Both halves. A mention that appears only in the notification text still names somebody, and resolving
+       * from the shown half alone left those as bare ids in the very place a reader is told the halves disagree.
+       */
+      const seen = readMessage(raw);
+      for (const reference of [...seen.references, ...seen.fallbackReferences]) {
         if (reference.kind === 'user') userIds.add(reference.id);
         if (reference.kind === 'channel') channelIds.add(reference.id);
       }
@@ -105,15 +109,17 @@ async function rowsFrom(
     await book.learnChannels(call, channelIds);
   }
 
+  // One boundary for the whole response, so a model sees a consistent marker across every message in it.
   const boundary = newBoundary();
   return raws.map((raw) => {
-    const message = readMessage(raw, book.names(), options.ourTeamId);
+    const message = readMessage(raw, {
+      names: book.names(),
+      ourTeamId: options.ourTeamId,
+      boundary,
+      accountName: options.accountName,
+    });
     const author = message.userId ? book.person(message.userId) : undefined;
-    return {
-      message,
-      author,
-      enveloped: wrapUntrusted(message.body, { field: 'body', inbox: options.accountName, id: message.ts }, boundary),
-    };
+    return { message, author };
   });
 }
 
@@ -197,7 +203,16 @@ export async function readThread(
     accountName,
     ourTeamId: options.ourTeamId,
   });
-  const [parent, ...replies] = rows;
+  /*
+   * The parent is the row whose own timestamp is the thread's — not simply the first one.
+   *
+   * Slack returns the parent first *on the first page*. On a continuation page the first row is the next reply,
+   * and taking it as the parent both invented a parent and removed a reply from the list. So it is identified by
+   * identity, and a continuation page correctly reports no parent rather than promoting one.
+   */
+  const parentIndex = rows.findIndex((row) => row.message.ts === threadTs);
+  const parent = parentIndex === -1 ? undefined : rows[parentIndex];
+  const replies = rows.filter((_row, index) => index !== parentIndex);
   return { channelId, parent, replies, complete: page.complete, ...(page.cursor ? { cursor: page.cursor } : {}) };
 }
 
@@ -227,7 +242,7 @@ export async function searchMessages(
   call: SlackCall,
   accountName: string,
   query: string,
-  options: { limit?: number | undefined; page?: number | undefined } = {},
+  options: { limit?: number | undefined; page?: number | undefined; ourTeamId?: string | undefined } = {},
 ): Promise<SearchResult> {
   const limit = Math.min(options.limit ?? 20, 100);
   const response = await callSlack(call, 'search.messages', {
@@ -238,7 +253,7 @@ export async function searchMessages(
   const matches = (response.messages as Raw | undefined) ?? {};
   const raws = list(matches.matches);
   const book = new NameBook();
-  const rows = await rowsFrom(call, raws, book, { resolveNames: true, accountName });
+  const rows = await rowsFrom(call, raws, book, { resolveNames: true, accountName, ourTeamId: options.ourTeamId });
 
   const hits: SearchHit[] = rows.map((row, index) => {
     const raw = raws[index] ?? {};

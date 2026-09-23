@@ -1,5 +1,5 @@
-import { analyseLink, type SanitizedLink } from '@agentcomms/core';
-import { reconcile, renderBlocks } from './blocks.ts';
+import { analyseLink, newBoundary, type SanitizedLink, wrapUntrusted } from '@agentcomms/core';
+import { reconcile, renderBlocksFull } from './blocks.ts';
 import type { ReferenceNames, SlackReference } from './decode.ts';
 import { finishField, type SenderField, senderField } from './field.ts';
 
@@ -50,8 +50,16 @@ export interface Attribution {
 
 /** Content the message's author attached themselves — not an unfurl, and not to be labelled as one. */
 export interface AuthoredAttachment {
+  /** Shown above the attachment in the client. */
+  readonly pretext?: SenderField | undefined;
+  readonly authorName?: SenderField | undefined;
   readonly title?: SenderField | undefined;
   readonly text?: SenderField | undefined;
+  /** Slack's legacy `fields`, which render as a small table inside the attachment. */
+  readonly fields: readonly { title?: SenderField | undefined; value?: SenderField | undefined }[];
+  readonly footer?: SenderField | undefined;
+  /** True when the attachment carried blocks this renderer could not show. */
+  readonly unrenderable: boolean;
 }
 
 /** Content Slack attached that the message's author did not write. */
@@ -72,8 +80,20 @@ export interface ReadMessage {
   readonly botId?: string | undefined;
   /** Who said it, from the fields an app cannot choose. */
   readonly attribution: Attribution;
-  /** What a person reads, safe to hand to a model. */
-  readonly body: string;
+  /**
+   * Everything sender-controlled in this message, inside one envelope.
+   *
+   * One, and no bare copy beside it. An envelope exists to tell a model that what it is reading is data rather
+   * than instruction; returning the same text unwrapped in the next field makes that marking optional, and a
+   * caller serialising the result hands over both. So the body, the notification fallback when it disagrees, the
+   * author's own attachments and anything Slack unfurled all arrive here, each under a heading that says what it
+   * is and — for an unfurl — whose page it came from.
+   *
+   * Short metadata is different and stays outside: a file name, a channel name, an app's name. Those are
+   * neutralised where they are read, as the Gmail package does with a filename, because a table of them inside an
+   * envelope would be unreadable and they are not prose anybody argues with.
+   */
+  readonly enveloped: string;
   /** True when the message was longer than the body limit. */
   readonly truncated: boolean;
   /** Control tokens and envelope-shaped runs defused across the body and every field of this message. */
@@ -95,6 +115,13 @@ export interface ReadMessage {
   /** The notification fallback, neutralised, kept when it disagrees so a reader can see both halves. */
   readonly fallback?: string | undefined;
   readonly references: readonly SlackReference[];
+  /**
+   * What the notification half referred to, when it disagrees.
+   *
+   * Kept separate rather than merged: they are references in text nobody in the channel read, and a caller
+   * resolving names needs them without treating them as part of the message.
+   */
+  readonly fallbackReferences: readonly SlackReference[];
   /** Every link in the body, with core's own analysis: punycode, lookalikes, text/domain mismatch. */
   readonly links: readonly SanitizedLink[];
   /** Content Slack attached that the author never wrote. Never merged into `body`. */
@@ -133,26 +160,44 @@ function classifyAttachment(
   attachment: Raw,
   names: ReferenceNames,
 ): { unfurl: Unfurl } | { authored: AuthoredAttachment } {
-  const blocks = renderBlocks(attachment.blocks, names);
-  const text = blocks !== '' ? blocks : str(attachment.text);
+  /*
+   * An attachment's blocks are rendered — which decodes them — so what comes back must be *finished*, not decoded
+   * a second time. Running it through `senderField` again turned a typed `&lt;@U1|literal&gt;` inside an
+   * attachment into a resolved mention: the same double-decode the top-level body had, one level down.
+   */
+  const rendered = renderBlocksFull(attachment.blocks, names);
+  const fromBlocks = rendered.text !== '' ? finishField(rendered, 2_000) : undefined;
+  const text = fromBlocks ?? senderField(str(attachment.text), names, 2_000);
+
   const url = str(attachment.from_url) ?? str(attachment.original_url) ?? str(attachment.app_unfurl_url);
   if (!url && attachment.is_app_unfurl !== true) {
     /*
-     * The poster's own attachment, kept.
+     * The poster's own attachment, kept whole.
      *
-     * An earlier version returned nothing here, so a legacy attachment's title and text — content a person in the
-     * channel plainly reads — vanished from every read. Not labelling it as somebody else's was right; dropping it
-     * was a different error in the same line.
+     * An earlier version returned nothing here, so its title and text vanished; the version after that kept two
+     * fields and dropped the rest. Everything a person reads in the channel is carried: Slack's legacy attachment
+     * shows `pretext` above it, `author_name` beside it, `fields` as a table inside it and `footer` below.
      */
     return {
-      authored: { title: senderField(str(attachment.title), names), text: senderField(text, names, 2_000) },
+      authored: {
+        pretext: senderField(str(attachment.pretext), names),
+        authorName: senderField(str(attachment.author_name), names),
+        title: senderField(str(attachment.title), names),
+        text,
+        fields: list(attachment.fields).map((field) => ({
+          title: senderField(str(field.title), names),
+          value: senderField(str(field.value), names, 1_000),
+        })),
+        footer: senderField(str(attachment.footer), names),
+        unrenderable: rendered.unrenderable,
+      },
     };
   }
   return {
     unfurl: {
       url: url ?? '(an app’s own unfurl, with no source URL)',
       title: senderField(str(attachment.title), names),
-      text: senderField(text, names, 2_000),
+      text,
       service: senderField(str(attachment.service_name), names),
     },
   };
@@ -162,7 +207,12 @@ function classifyAttachment(
 function attributionOf(raw: Raw, names: ReferenceNames, ourTeamId?: string): Attribution {
   const botProfile = (raw.bot_profile as Raw | undefined) ?? {};
   const botId = str(raw.bot_id);
-  const teamId = str(raw.team) ?? str(raw.user_team) ?? str(raw.source_team);
+  /*
+   * Slack puts the author's workspace in different places depending on the shape: `user_team` on a Slack Connect
+   * message, `team` on an ordinary one, `source_team` on some search results. Reading only one of them reported
+   * an outsider as a colleague, which is the direction that matters.
+   */
+  const teamId = str(raw.user_team) ?? str(raw.team) ?? str(raw.source_team);
   return {
     userId: str(raw.user),
     botId,
@@ -181,7 +231,19 @@ function attributionOf(raw: Raw, names: ReferenceNames, ourTeamId?: string): Att
  * than borrowing the label Slack carried — that label is sender-controlled and is exactly where an impersonation
  * would put a name.
  */
-export function readMessage(raw: Raw, names: ReferenceNames = {}, ourTeamId?: string): ReadMessage {
+export interface ReadMessageOptions {
+  names?: ReferenceNames | undefined;
+  /** This workspace's own team id, so an author from another one is reported as external. */
+  ourTeamId?: string | undefined;
+  /** One boundary per response, so a model sees a consistent marker across every message in it. */
+  boundary?: string | undefined;
+  /** The account name, for the envelope — a model reading two workspaces needs to tell them apart. */
+  accountName?: string | undefined;
+}
+
+export function readMessage(raw: Raw, options: ReadMessageOptions = {}): ReadMessage {
+  const names = options.names ?? {};
+  const ourTeamId = options.ourTeamId;
   const { shown, fallback, mismatch, unrenderable } = reconcile(str(raw.text), raw.blocks, names);
   /*
    * Cut and neutralise. No second decode — `reconcile` already decoded both halves exactly once, and decoding
@@ -239,19 +301,55 @@ export function readMessage(raw: Raw, names: ReferenceNames = {}, ourTeamId?: st
     .filter((reference) => reference.kind === 'link')
     .map((reference) => analyseLink(reference.label ?? reference.id, reference.id));
 
+  /*
+   * The parts, in the order a person meets them, each labelled.
+   *
+   * The labels matter as much as the wrapping: an unfurl is a stranger's page and a fallback is the half nobody
+   * reads, and a model that cannot tell them from the author's own words has been handed a message that is not
+   * the one that was sent.
+   */
+  const sections = [body.text];
+  if (fallbackField)
+    sections.push(`--- notification text, which differs from what is shown ---\n${fallbackField.text}`);
+  for (const attachment of attachments) {
+    const parts = [
+      attachment.pretext?.text,
+      attachment.authorName?.text && `by ${attachment.authorName.text}`,
+      attachment.title?.text,
+      attachment.text?.text,
+      ...attachment.fields.map((field) => [field.title?.text, field.value?.text].filter(Boolean).join(': ')),
+      attachment.footer?.text,
+    ].filter((part) => part !== undefined && part !== '');
+    if (parts.length > 0) sections.push(`--- attached by the author ---\n${parts.join('\n')}`);
+  }
+  for (const unfurl of unfurls) {
+    const parts = [unfurl.title?.text, unfurl.text?.text].filter((part) => part !== undefined && part !== '');
+    sections.push(`--- unfurled from ${unfurl.url} — the author did not write this ---\n${parts.join('\n')}`);
+  }
+  const enveloped = wrapUntrusted(
+    sections.join('\n\n'),
+    {
+      field: 'message',
+      id: str(raw.ts) ?? '',
+      ...(options.accountName === undefined ? {} : { inbox: options.accountName }),
+    },
+    options.boundary ?? newBoundary(),
+  );
+
   return {
     ts: str(raw.ts) ?? '',
     threadTs: str(raw.thread_ts),
     userId: str(raw.user),
     botId: str(raw.bot_id),
     attribution,
-    body: body.text,
+    enveloped,
     truncated: body.truncated,
     tokensNeutralised,
     mismatch,
     ...(fallbackField ? { fallback: fallbackField.text } : {}),
     unrenderable,
     references: body.references,
+    fallbackReferences: fallbackField?.references ?? [],
     links,
     unfurls,
     attachments,

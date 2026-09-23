@@ -128,12 +128,31 @@ export interface RenderedBlocks extends DecodedText {
   readonly unrenderable: boolean;
 }
 
+/*
+ * Block types this renderer understands.
+ *
+ * Everything else is *visible content it cannot show*, which is a different thing from an empty block and has to
+ * be reported as such. Slack adds block types — `markdown`, `table`, `video`, `file` are all current — and a
+ * renderer that silently drops one while another renders successfully hands a reader a message with a hole in it
+ * and no indication there is a hole. `divider` is visible but carries no text, so it is not a hole.
+ */
+const RENDERABLE = new Set(['rich_text', 'section', 'header', 'context', 'image', 'actions', 'divider']);
+
 export function renderBlocksFull(blocks: unknown, names: ReferenceNames = {}): RenderedBlocks {
   const references: SlackReference[] = [];
   const out: string[] = [];
   const blockList = list(blocks);
+  let missed = false;
   for (const block of blockList) {
-    switch (str(block.type)) {
+    const type = str(block.type);
+    if (type !== undefined && !RENDERABLE.has(type)) {
+      missed = true;
+      // Still try for text, so a block we cannot lay out at least contributes what it says.
+      const salvaged = renderTextObject(block.text, names, references);
+      if (salvaged !== '') out.push(salvaged);
+      continue;
+    }
+    switch (type) {
       case 'rich_text':
         out.push(renderRich(block, names, references));
         break;
@@ -175,27 +194,25 @@ export function renderBlocksFull(blocks: unknown, names: ReferenceNames = {}): R
             .join(' '),
         );
         break;
-      case 'divider':
-        break;
       default:
-        // Unknown block types still carry text somebody sees.
-        out.push(renderTextObject(block.text, names, references));
+        break;
     }
   }
   const text = out.filter((part) => part !== '').join('\n\n');
   /*
-   * "No blocks" and "blocks that rendered to nothing" are different facts.
+   * "No blocks", "blocks that rendered to nothing" and "blocks that partly rendered" are three different facts.
    *
-   * Collapsing them made an unrenderable payload look like a plain-text message, which substituted the
-   * notification fallback and reported no mismatch — turning the check off for exactly the message whose
-   * visible half nobody could read. A divider on its own is legitimately empty and is not a failure to render.
+   * The first two were collapsed once, which made an unrenderable payload look like a plain-text message and
+   * turned the mismatch check off for it. The third is subtler and was wrong for longer: a message with one
+   * section and one `video` block rendered the section, produced non-empty text, and reported nothing missing —
+   * so a reader saw part of a message with no sign that the rest existed.
    */
   const meaningful = blockList.filter((block) => str(block.type) !== 'divider');
   return {
     text,
     references,
     present: blockList.length > 0,
-    unrenderable: text === '' && meaningful.length > 0,
+    unrenderable: missed || (text === '' && meaningful.length > 0),
   };
 }
 
@@ -241,12 +258,18 @@ export function reconcile(text: string | undefined, blocks: unknown, names: Refe
   const fallback = decodeSlackText(text ?? '', names);
   const rendered = renderBlocksFull(blocks, names);
   if (rendered.text === '') {
-    return { shown: fallback, fallback, mismatch: false, unrenderable: rendered.unrenderable };
+    /*
+     * Nothing rendered. Whether that is fine depends on whether there were blocks at all: a plain-text message
+     * has none and the fallback *is* the message, while blocks that produced nothing mean the half a person
+     * reads could not be read here — and the mismatch check could not run, so reporting `false` would be a
+     * claim nobody checked.
+     */
+    return { shown: fallback, fallback, mismatch: false, unrenderable: rendered.present };
   }
   return {
     shown: { text: rendered.text, references: rendered.references },
     fallback,
     mismatch: forComparison(rendered.text) !== forComparison(fallback.text),
-    unrenderable: false,
+    unrenderable: rendered.unrenderable,
   };
 }

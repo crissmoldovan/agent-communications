@@ -52,9 +52,9 @@ import {
 /**
  * The `agent-slack` command.
  *
- * S2 is the setup surface and deliberately nothing else: make an app, connect a workspace, see what is connected,
- * and be told what is broken. Reading, drafting and posting arrive in later phases, and a command that pretended
- * to do them now would be worse than one that is not there.
+ * Setup and reading: make an app, connect a workspace, see what is connected, be told what is broken — and read
+ * channels, threads, search, people and files. Drafting and posting arrive in later phases, and a command that
+ * pretended to do them now would be worse than one that is not there.
  *
  * Both a person and an agent run this, so every command prints a readable summary by default and the whole result
  * under `--json`, with the same exit codes either way.
@@ -99,7 +99,7 @@ export async function run(argv: readonly string[], deps: CliDeps = {}): Promise<
 
   program
     .name('agent-slack')
-    .description('Slack for coding agents: connect a workspace and check it works. Reading and posting come later.')
+    .description('Slack for coding agents: connect a workspace, check it works, and read it. Posting comes later.')
     .version(VERSION, '-v, --version')
     .option('--json', 'print the result as {"ok":true,"schemaVersion":1,"data":…}', false)
     .option('--no-color', 'never colour the output')
@@ -114,6 +114,8 @@ Getting started:
   agent-slack manifest --port 51234        the app to create in Slack, and how
   agent-slack workspace add acme/slack --client-id <id> --port 51234
   agent-slack doctor                       what works and what does not
+  agent-slack channels --workspace acme/slack
+  agent-slack read <channel> --workspace acme/slack
 
 Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in · 64 usage ·
 65 bad data · 66 not found · 69 provider or secret store unavailable · 75 temporary
