@@ -103,7 +103,16 @@ function renderRich(block: Block, names: ReferenceNames, into: SlackReference[])
   return lines.join('\n');
 }
 
-/** A `text` object on a block: `plain_text` is literal, `mrkdwn` carries spans that have to be decoded. */
+/**
+ * A `text` object on a block: `plain_text` is literal, `mrkdwn` carries spans that have to be decoded.
+ *
+ * **Open question, deliberately left alone.** Slack documents escaping of `&`, `<` and `>` for message text; it
+ * does not say whether a `plain_text` object arrives escaped too. Unescaping one that was not would invent
+ * characters in the text of anybody who typed `&amp;` literally; leaving one that was escaped shows `&amp;`
+ * where a person sees `&`. The first corrupts content, the second is a display nit, so this takes the second
+ * until a real workspace settles it — the same way `docs/research/2026-09-22-slack-live-verification.md`
+ * settled PKCE.
+ */
 function renderTextObject(value: unknown, names: ReferenceNames, into: SlackReference[]): string {
   if (typeof value !== 'object' || value === null) return '';
   const block = value as Block;
