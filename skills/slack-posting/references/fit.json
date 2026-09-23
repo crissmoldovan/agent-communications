@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "Draft a Slack message and take it through the approval gate, including how many people a post would interrupt."
+}

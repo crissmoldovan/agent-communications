@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "Read a Slack workspace — channels, threads, search, people and files — and report what was read without overstating it."
+}

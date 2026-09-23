@@ -30,7 +30,10 @@
         "./skills/gmail-triage",
         "./skills/gmail-follow-ups",
         "./skills/gmail-export",
-        "./skills/gmail-security"
+        "./skills/gmail-security",
+        "./skills/slack-setup",
+        "./skills/slack-reading",
+        "./skills/slack-posting"
       ],
       "mcpServers": {
         "gmail": {

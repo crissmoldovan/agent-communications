@@ -56,8 +56,16 @@ function useWhenFor(meta) {
 }
 
 const contract = await readFile(CONTRACT, 'utf8');
+/*
+ * Every skill directory, not every `gmail-` one.
+ *
+ * The prefix was the discovery rule while mail was the only platform, so the three Slack skills were written,
+ * committed, and silently not synced: no contract copied into them, no README row, and `verify:skills` failing
+ * for a reason that named the symptom rather than the cause. A skill is a directory with a `SKILL.md`; `_shared`
+ * holds the contract they are given and is not one.
+ */
 const names = (await readdir(SKILLS, { withFileTypes: true }))
-  .filter((entry) => entry.isDirectory() && entry.name.startsWith('gmail-'))
+  .filter((entry) => entry.isDirectory() && !entry.name.startsWith('_'))
   .map((entry) => entry.name)
   .sort();
 
