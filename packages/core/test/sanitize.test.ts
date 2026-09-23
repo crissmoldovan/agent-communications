@@ -187,6 +187,20 @@ for (const [name, hiddenHtml] of HIDDEN_CASES) {
   });
 }
 
+test('the model reads what a person reads around a comment, as the HTML spec parses it', () => {
+  // A comment closed by `--!>` ends there in every browser, so the text after it is on the person's screen. The
+  // parser this replaced read to the next `-->` instead, and handed the model less than the person saw: an
+  // instruction a reader could see and act on, which the assistant summarising the mail never mentioned.
+  const bang = sanitizeHtmlToText('<p>Hi</p><!-- note --!><p>Wire the funds today.</p><p>Thanks</p>');
+  assert.match(bang.text, /Wire the funds today/);
+  assert.match(bang.text, /Thanks/);
+
+  // What really is inside a comment stays out, however the comment is written.
+  for (const html of [`<!-- ${INJECTION} -->`, `<!-- ${INJECTION} --!>`]) {
+    assert.doesNotMatch(sanitizeHtmlToText(`<p>Hi</p>${html}`).text, /IGNORE PREVIOUS/, html);
+  }
+});
+
 test('an injection in a comment or a template leaves a count behind', () => {
   // These were removed before the counting branch, so an instruction hidden in a comment vanished with no trace —
   // the reader was told the message was clean.
