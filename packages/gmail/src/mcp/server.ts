@@ -167,10 +167,19 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     throw new CommsError('NOT_FOUND', `the mailbox this server was pinned to, "${pinned}", was removed`);
   };
   if (pinnedId) {
-    // Every tool, without touching each: the check wraps the handler as the tool is registered.
+    /*
+     * Every tool, without touching each: the check wraps the handler as the tool is registered.
+     *
+     * This assumes `registerTool(name, config, handler)`, which the SDK's types cannot promise across versions — an
+     * added overload, or a handler in another position, would have this wrap the wrong argument. That would not be
+     * a crash but a pinned server silently skipping the check that keeps it to its one mailbox. So the shape is
+     * checked on every registration, and anything else stops the server starting: loud, at startup, in the tests
+     * that start one.
+     */
     const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
     (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (...args: unknown[]) => {
-      const [name, config, handler] = args as [unknown, unknown, (...inner: unknown[]) => unknown];
+      assertRegistrationShape(args);
+      const [name, config, handler] = args as [string, object, (...inner: unknown[]) => unknown];
       return register(name, config, async (...inner: unknown[]) => {
         try {
           await checkPin(name);
@@ -1623,4 +1632,19 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       await server.close();
     },
   };
+}
+
+/**
+ * `registerTool(name, config, handler)`, or an error saying the pin check can no longer wrap it.
+ *
+ * Exported for its test: the SDK today only ever takes this shape, so nothing else would reach the throw.
+ */
+export function assertRegistrationShape(args: readonly unknown[]): void {
+  const [name, config, handler] = args;
+  if (args.length === 3 && typeof name === 'string' && typeof config === 'object' && config !== null) {
+    if (typeof handler === 'function') return;
+  }
+  throw new Error(
+    `registerTool was called as (${args.map((arg) => (arg === null ? 'null' : typeof arg)).join(', ')}); the mailbox pin wraps (string, object, function) and cannot check this tool. Update the pin wrapper for this SDK.`,
+  );
 }

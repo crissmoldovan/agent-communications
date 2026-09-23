@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { GmailContext } from '../src/context.ts';
 import { mcpBoolean, mcpInboxes, mcpInteger, mcpStringArray } from '../src/mcp/schemas.ts';
-import { buildInstructions, createGmailMcpServer } from '../src/mcp/server.ts';
+import { assertRegistrationShape, buildInstructions, createGmailMcpServer } from '../src/mcp/server.ts';
 import { migrateNamesForTest, newHarness, tempDir } from './support/harness.ts';
 
 interface ToolResult {
@@ -526,5 +526,34 @@ test('a pinned server whose mailbox was removed and replaced under the same name
     }
   } finally {
     await close();
+  }
+});
+
+test('the mailbox pin refuses to wrap a registration it does not understand, rather than skipping its check', () => {
+  // The pin wraps `registerTool(name, config, handler)`. An SDK that added an overload or moved the handler would
+  // have it wrap the wrong argument, and a pinned server would quietly stop keeping to its one mailbox.
+  const handler = () => undefined;
+  assert.doesNotThrow(() => assertRegistrationShape(['gmail_search', { description: 'x' }, handler]));
+  for (const shape of [
+    ['gmail_search', handler],
+    ['gmail_search', { description: 'x' }, { handler }],
+    ['gmail_search', { description: 'x' }, handler, { extra: true }],
+    [{ name: 'gmail_search' }, handler],
+    ['gmail_search', null, handler],
+  ]) {
+    assert.throws(() => assertRegistrationShape(shape), /cannot check this tool/, JSON.stringify(shape.map(String)));
+  }
+});
+
+test('a pinned server stops at a registration its pin cannot wrap', async () => {
+  // The check has to sit where the wrapping happens, not only in a helper nothing calls.
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1' });
+  const built = await createGmailMcpServer({ core: harness.core, env: harness.env, inbox: 'work' });
+  try {
+    const register = built.server.registerTool as unknown as (...args: unknown[]) => unknown;
+    assert.throws(() => register.call(built.server, 'gmail_extra', () => undefined), /cannot check this tool/);
+  } finally {
+    await built.close();
   }
 });

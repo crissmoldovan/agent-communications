@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import {
   type ClientConfig,
@@ -637,6 +637,21 @@ test('remove: when nobody can tell whether it worked, the token is kept, and doc
   assert.equal(orphans?.status, 'ok');
   assert.match(orphans?.detail ?? '', /belong to a connected mailbox/);
   assert.equal(orphans?.fix, undefined);
+});
+
+test('doctor counts a token recorded twice as one token', async () => {
+  // A removal that failed twice records the same token twice. Counted as lines, doctor said two recorded tokens
+  // belonged to a connected mailbox — and somebody went looking for a second one that was never there.
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const inbox = await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt' });
+  const line = `${JSON.stringify({ secretRef: inbox.secretRef, inboxId: inbox.id, unconfirmed: true })}\n`;
+  await mkdir(dirname(orphanedSecretsPath(context)), { recursive: true });
+  await writeFile(orphanedSecretsPath(context), line + line);
+
+  const orphans = (await doctor(context)).checks.find((check) => check.id === 'orphaned-secrets');
+  assert.equal(orphans?.status, 'ok');
+  assert.match(orphans?.detail ?? '', /none — 1 recorded token\(s\) belong/);
 });
 
 // ── The legacy import ───────────────────────────────────────────────────────────────────────────────────────────
