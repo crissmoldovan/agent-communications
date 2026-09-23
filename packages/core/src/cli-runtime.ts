@@ -143,3 +143,46 @@ export async function askChallenge(streams: Streams, options: ChallengeOptions):
   }
   throw new CommsError('LOOSENING_REFUSED', 'the change was not confirmed, so nothing was changed');
 }
+
+/** What a loosening says when it has to be refused, and what it asks when it does not. */
+export interface PersonGate {
+  /** The refusal when an agent runs it, e.g. "only a person can decide which clients they trust". */
+  refusedToAgent: string;
+  /** The refusal when there is no terminal to ask at. */
+  refusedWithoutTerminal: string;
+  /** The command the person should run themselves, named in both refusals. */
+  command: string;
+  /** The one line said before the challenge. */
+  prompt: string;
+  color: boolean;
+  json?: boolean | undefined;
+  noInput?: boolean | undefined;
+}
+
+/**
+ * The gate every loosening goes through: an agent is refused, anything without a terminal is refused, and a person
+ * types the challenge back.
+ *
+ * One function because it was four copies — two in Gmail, one in Slack, one in the core CLI — each with the same
+ * three steps and its own wording, and a security gate kept in four places is one that will eventually differ in
+ * one of them. The callers keep their own messages and build their own consent; the order of the checks, the hint
+ * wording and the challenge are here.
+ */
+export async function requirePerson(env: NodeJS.ProcessEnv, streams: Streams, gate: PersonGate): Promise<void> {
+  const marker = agentMarker(env);
+  if (marker) {
+    throw new CommsError('LOOSENING_REFUSED', gate.refusedToAgent, {
+      hint: `Ask the user to run \`${gate.command}\` in their own terminal.`,
+      details: { marker },
+    });
+  }
+  const prompting: { json?: boolean; noInput?: boolean } = {};
+  if (gate.json !== undefined) prompting.json = gate.json;
+  if (gate.noInput !== undefined) prompting.noInput = gate.noInput;
+  if (!canPrompt(env, streams, prompting)) {
+    throw new CommsError('LOOSENING_REFUSED', gate.refusedWithoutTerminal, {
+      hint: `Run \`${gate.command}\` directly in a terminal.`,
+    });
+  }
+  await askChallenge(streams, { prompt: gate.prompt, color: gate.color });
+}

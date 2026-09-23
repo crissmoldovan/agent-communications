@@ -13,7 +13,8 @@ export interface AuditRecord {
   inboxId: string;
   alias?: string;
   operation: string;
-  outcome: 'ok' | 'refused' | 'failed';
+  /** `started` marks the first half of a change recorded before it is made; a later record for the same ids ends it. */
+  outcome: 'ok' | 'refused' | 'failed' | 'started';
   ids?: Record<string, string | string[] | CondensedIds>;
   recipientDomains?: string[];
   /**
@@ -64,14 +65,17 @@ export class AuditLog {
     this.#now = now;
   }
 
-  async append(record: Omit<AuditRecord, 'at'> & { at?: string }): Promise<AuditRecord> {
+  async append(
+    record: Omit<AuditRecord, 'at'> & { at?: string },
+    options: { durable?: boolean } = {},
+  ): Promise<AuditRecord> {
     const at = record.at ?? this.#now().toISOString();
     const full: AuditRecord = {
       ...record,
       at,
       ...(record.ids ? { ids: condense(record.ids) as NonNullable<AuditRecord['ids']> } : {}),
     };
-    await appendPrivateLine(join(this.directory, `${at.slice(0, 7)}.jsonl`), JSON.stringify(full));
+    await appendPrivateLine(join(this.directory, `${at.slice(0, 7)}.jsonl`), JSON.stringify(full), options);
     return full;
   }
 

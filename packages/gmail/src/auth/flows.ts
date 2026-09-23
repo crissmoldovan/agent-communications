@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomInt } from 'node:crypto';
 import { open, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CommsError, ensurePrivateDir, writeFileAtomic } from '@agentcomms/core';
@@ -39,10 +39,15 @@ export const FLOW_TTL_MS: number = 10 * 60_000;
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
-/** `fl_` + 22 base62 characters: 130 bits, and no characters that could confuse a file name. */
+/**
+ * `fl_` + 22 base62 characters: 130 bits, and no characters that could confuse a file name.
+ *
+ * `randomInt`, not `byte % 62`: 256 is not a multiple of 62, so a reduced byte gives the first eight characters 5
+ * chances in 256 and the rest 4 — a quarter likelier. The Slack package's flow ids already do it this way.
+ */
 export function newFlowId(): string {
   let out = 'fl_';
-  for (const byte of randomBytes(22)) out += BASE62[byte % BASE62.length];
+  for (let i = 0; i < 22; i += 1) out += BASE62[randomInt(BASE62.length)];
   return out;
 }
 

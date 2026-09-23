@@ -153,6 +153,69 @@ test('client add stores the secret out of sight and reports what it did', async 
   assert.equal(listed.json<Envelope<Array<{ name: string }>>>().data?.[0]?.name, 'default');
 });
 
+test('--finish finishes only the sign-in the command names', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  const path = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    path,
+    JSON.stringify({ installed: { client_id: TEST_CLIENT_ID, client_secret: TEST_CLIENT_SECRET } }),
+  );
+  await cli(harness, ['client', 'add', path, '--store', 'file', '--json']);
+  const started = await cli(harness, ['inbox', 'add', 'work', '--start', '--email', 'jo@example.test', '--json']);
+  const flow = dataOf(started.json<Envelope<{ flowId: string; authUrl: string }>>());
+  await fetch(harness.google.consent(flow.authUrl));
+
+  // A name beside --finish used to be ignored: this would have connected "work" while the person asked for "home".
+  const otherName = await cli(harness, ['inbox', 'add', 'home', '--finish', flow.flowId, '--wait', '10', '--json']);
+  assert.equal(otherName.code, 64);
+  assert.match(otherName.json<Envelope<never>>().error?.message ?? '', /is for "work", not "home"/);
+
+  // And a reauth cannot finish an add, or the other way round.
+  const otherMode = await cli(harness, ['inbox', 'reauth', '--finish', flow.flowId, '--wait', '10', '--json']);
+  assert.equal(otherMode.code, 64);
+  assert.match(otherMode.json<Envelope<never>>().error?.hint ?? '', /inbox add --finish/);
+
+  // Neither refusal used the flow up: the command it was started with still finishes it, with or without the name.
+  const finished = await cli(harness, ['inbox', 'add', 'work', '--finish', flow.flowId, '--wait', '10', '--json']);
+  assert.equal(finished.code, 0, finished.stderr);
+  assert.equal(finished.json<Envelope<{ inbox: { email: string } }>>().data?.inbox.email, 'jo@example.test');
+});
+
+test('--finish on a reauth follows the mailbox, not the spelling of its name', async () => {
+  const harness = await newHarness({
+    accounts: [
+      { sub: 'sub-1', email: 'jo@example.test' },
+      { sub: 'sub-2', email: 'sam@example.test' },
+    ],
+  });
+  const path = join(tempDir(), 'client_secret.json');
+  await writeFile(
+    path,
+    JSON.stringify({ installed: { client_id: TEST_CLIENT_ID, client_secret: TEST_CLIENT_SECRET } }),
+  );
+  await cli(harness, ['client', 'add', path, '--store', 'file', '--json']);
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1' });
+
+  const started = await cli(harness, ['inbox', 'reauth', 'work', '--start', '--json']);
+  assert.equal(started.code, 0, started.stderr);
+  const flow = dataOf(started.json<Envelope<{ flowId: string; authUrl: string }>>());
+  await fetch(harness.google.consent(flow.authUrl));
+
+  // Renamed while the sign-in was open, and the old name given to somebody else's mailbox.
+  assert.equal((await cli(harness, ['inbox', 'rename', 'work', 'main', '--json'])).code, 0);
+  await harness.connectInbox({ alias: 'work', email: 'sam@example.test', sub: 'sub-2' });
+
+  // The old spelling now names a different mailbox. This used to pass — and re-authorise "main" regardless.
+  const reused = await cli(harness, ['inbox', 'reauth', 'work', '--finish', flow.flowId, '--wait', '10', '--json']);
+  assert.equal(reused.code, 64);
+  assert.match(reused.json<Envelope<never>>().error?.message ?? '', /is for "main", not "work"/);
+
+  // Its current name finishes it. This used to be refused.
+  const current = await cli(harness, ['inbox', 'reauth', 'main', '--finish', flow.flowId, '--wait', '10', '--json']);
+  assert.equal(current.code, 0, current.stderr);
+  assert.equal(current.json<Envelope<{ inbox: { email: string } }>>().data?.inbox.email, 'jo@example.test');
+});
+
 test('the two-step sign-in works end to end through the CLI', async () => {
   const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
   const path = join(tempDir(), 'client_secret.json');
