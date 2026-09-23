@@ -3,6 +3,23 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**A Slack workspace cannot be connected in `send` mode without a person saying so.** The config store now counts a
+new account arriving in `send` as loosening `accounts.<name>.mode`, measured from `read`, and will not record one
+unless a person consented at a terminal — whatever wrote it. Re-authorising a workspace into `send` was already
+gated; connecting one was not, so removing a read-only workspace and adding it back with `--mode send` reached a
+token that can post with only Slack's own consent screen in the way. That route is closed at every step: before a
+sign-in starts, before Slack's code is exchanged for a token, and in the store.
+
+**`agent-slack workspace mode <name>` says what a workspace can do.** It reports the mode and whether the grant
+Slack recorded can post, upload or react. `mode <name> send --port <port>` prints the two steps a widening takes —
+edit the existing Slack app's manifest first, then a re-authorisation a person confirms — and runs the second.
+`mode <name> read --port <port>` changes nothing and says why: Slack adds scopes to a token and never removes one,
+so going back to read-only means removing the app's installation in Slack yourself and re-authorising in `read`,
+and the command prints exactly that path. (The port is the loopback port in the app's manifest; both paths name
+it.) The manifest's help names both modes and says to edit the existing app rather than create another.
+
 ## 0.3.1
 
 **Four elements a browser never shows no longer reach the model.** `<noembed>`, `<noframes>`, `<datalist>` and
