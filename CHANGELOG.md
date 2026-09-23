@@ -3,6 +3,31 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.3.1
+
+**Four elements a browser never shows no longer reach the model.** `<noembed>`, `<noframes>`, `<datalist>` and
+`<rp>` are hidden by every mail client's default stylesheet, and their text was handed to the model anyway — the
+channel the sanitiser exists to close: an instruction aimed at an assistant that the person reading the mail never
+sees. They are now removed and counted as hidden content, in received mail and in drafts.
+
+**The HTML parser under the sanitiser follows the HTML spec.** htmlparser2 12, domhandler 6 and dom-serializer 3.
+One behaviour changed, and it is a correction: a comment closed by `--!>` now ends there, as it does in every
+browser, so text after it that a person can see is no longer missing from what the model reads.
+
+**`agentcomms secrets migrate --to file` works.** On any install using the system keychain it used to copy every
+credential and then refuse — always — while `doctor` recommended exactly this command when the keychain is
+unavailable. It now asks the person at the terminal to confirm (an agent cannot), checks again under its lock
+before touching a store, and records the move in the audit log.
+
+**`--finish` finishes only what the command names.** `agent-gmail inbox reauth <name> --finish <id>` used to
+finish whatever the flow was, ignoring the name; it now refuses a flow for another mailbox and follows a mailbox
+renamed since the sign-in began. `inbox add --finish` cannot complete a reauth, or the other way round.
+
+**Smaller fixes.** A sign-in could be reported as failed while its listener was running normally, on a busy
+machine. A pinned MCP server refuses to start rather than silently skipping its mailbox check if a future SDK
+changes how tools are registered. `doctor` counts a token recorded twice as one. Gmail's sign-in ids are drawn
+evenly.
+
 ## 0.3.0
 
 **Accounts are named `organisation/platform` now, and `agentcomms names migrate` renames yours.** A mailbox is
