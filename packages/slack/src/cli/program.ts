@@ -12,12 +12,15 @@ import {
   writeResult,
 } from '@agentcomms/core';
 import { Command, CommanderError, Option } from 'commander';
+import type { FetchLike } from '../api/guard.ts';
 import { isExpired, parseBundle, type TokenBundle } from '../auth/bundle.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
 import { doctor, type IdentityProbe } from '../operations/doctor.ts';
 import { type ProbeFetch, probeIdentity } from '../operations/identity.ts';
 import { modeReport, narrowingSteps, wideningSteps } from '../operations/mode.ts';
+import { listChannels, listPeople, readChannel, readThread, searchMessages } from '../operations/read.ts';
+import { openWorkspace } from '../operations/session.ts';
 import {
   finishSignIn,
   type ListenerEntry,
@@ -29,13 +32,18 @@ import { listWorkspaces, removeWorkspace, requireWorkspace, viewOf } from '../op
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
 import {
+  renderChannels,
   renderConnected,
   renderDoctor,
+  renderHistory,
   renderManifestHelp,
   renderMode,
+  renderPeople,
   renderRemoved,
+  renderSearch,
   renderSignInStarted,
   renderSteps,
+  renderThread,
   renderWorkspace,
   renderWorkspaces,
 } from './render.ts';
@@ -59,6 +67,10 @@ export interface CliDeps extends SlackContextOptions {
   openBrowser?: (url: string) => unknown;
   /** The fetch `doctor` asks Slack with. Injected so a test never reaches the real one. */
   probe?: ProbeFetch;
+  /** The fetch the read commands use. Injected the same way, and for the same reason. */
+  read?: FetchLike;
+  /** Where Slack is, for a test that stands one up locally rather than relaxing the origin check. */
+  slackBaseUrl?: string;
 }
 
 interface GlobalOptions {
@@ -496,6 +508,80 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
         const result = doctor({ config, now: context.now(), bundles, identities });
         if (!result.healthy) softExit = 78;
         writeResult(result, output(), () => renderDoctor(result, options.color), streams);
+      }),
+    );
+
+  // ── Reading ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * One option on every read, for the same reason Gmail's commands take `--inbox`: there is no default workspace.
+   * A machine with two of them would otherwise pick one, and a person reading the output could not tell which.
+   */
+  const workspaceOption = (command: Command): Command =>
+    command.requiredOption('--workspace <name>', 'which workspace to read, as `organisation/slack`');
+
+  const session = (context: SlackContext, alias: string) =>
+    openWorkspace(context, alias, { fetch: deps.read, baseUrl: deps.slackBaseUrl });
+
+  workspaceOption(program.command('channels'))
+    .description('the channels and conversations this account can see')
+    .option('--all', 'include channels this account is not a member of', false)
+    .option('--limit <n>', 'how many to return', (value: string) => Number(value), 100)
+    .action(
+      act(async (context, options, flags: Options) => {
+        const { call } = await session(context, String(flags.workspace));
+        const result = await listChannels(call, { all: flags.all === true, limit: Number(flags.limit) });
+        writeResult(result, output(), () => renderChannels(result, options.color), streams);
+      }),
+    );
+
+  workspaceOption(program.command('read <channel>'))
+    .description('a channel’s recent messages, newest first')
+    .option('--limit <n>', 'how many messages', (value: string) => Number(value), 50)
+    .option('--oldest <ts>', 'only messages at or after this Slack timestamp')
+    .option('--latest <ts>', 'only messages at or before this Slack timestamp')
+    .action(
+      act(async (context, options, channel: string, flags: Options) => {
+        const { call, name } = await session(context, String(flags.workspace));
+        const result = await readChannel(call, name, channel, {
+          limit: Number(flags.limit),
+          oldest: flags.oldest as string | undefined,
+          latest: flags.latest as string | undefined,
+        });
+        writeResult(result, output(), () => renderHistory(result, options.color), streams);
+      }),
+    );
+
+  workspaceOption(program.command('thread <channel> <ts>'))
+    .description('one thread, parent first')
+    .option('--limit <n>', 'how many replies', (value: string) => Number(value), 100)
+    .action(
+      act(async (context, options, channel: string, ts: string, flags: Options) => {
+        const { call, name } = await session(context, String(flags.workspace));
+        const result = await readThread(call, name, channel, ts, { limit: Number(flags.limit) });
+        writeResult(result, output(), () => renderThread(result, options.color), streams);
+      }),
+    );
+
+  workspaceOption(program.command('search <query>'))
+    .description('Slack’s own search, in Slack’s syntax, over this workspace')
+    .option('--limit <n>', 'how many matches', (value: string) => Number(value), 20)
+    .action(
+      act(async (context, options, query: string, flags: Options) => {
+        const { call, name } = await session(context, String(flags.workspace));
+        const result = await searchMessages(call, name, query, { limit: Number(flags.limit) });
+        writeResult(result, output(), () => renderSearch(result, options.color), streams);
+      }),
+    );
+
+  workspaceOption(program.command('people'))
+    .description('the members of this workspace')
+    .option('--limit <n>', 'how many', (value: string) => Number(value), 200)
+    .action(
+      act(async (context, options, flags: Options) => {
+        const { call } = await session(context, String(flags.workspace));
+        const result = await listPeople(call, { limit: Number(flags.limit) });
+        writeResult(result, output(), () => renderPeople(result, options.color), streams);
       }),
     );
 

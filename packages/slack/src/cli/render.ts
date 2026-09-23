@@ -1,6 +1,14 @@
 import { paint, stripInvisible } from '@agentcomms/core';
 import type { DoctorResult } from '../operations/doctor.ts';
 import type { ModeReport } from '../operations/mode.ts';
+import type {
+  ChannelsResult,
+  HistoryResult,
+  PeopleResult,
+  ReadRow,
+  SearchResult,
+  ThreadResult,
+} from '../operations/read.ts';
 import type { StartedSignIn } from '../operations/signin.ts';
 import type { WorkspaceView } from '../operations/workspaces.ts';
 
@@ -212,4 +220,123 @@ export function renderManifestHelp(mode: string, port: number, color: boolean): 
           `This app can post, upload and react, each only after your approval. \`agent-slack manifest --mode read --port ${port}\` prints one that cannot post at all. To move an existing workspace from read, update its app with this manifest first, then run \`agent-slack workspace mode <name> send --port ${port}\`.`,
         ),
   ].join('\n');
+}
+
+// ── Reading ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A read, printed.
+ *
+ * Two things are non-negotiable in everything below. The bound is always stated — a list that stopped early says
+ * so, because "nothing else was said" and "nothing else was read" look identical in a terminal and only one of
+ * them is usually true. And a message whose two halves disagree is marked where it is shown, not in a footnote:
+ * that mismatch is the shape an instruction takes when it is meant for a model and not for the room.
+ */
+
+export function renderChannels(result: ChannelsResult, color: boolean): string {
+  if (result.channels.length === 0) {
+    return paint(color, 'dim', 'No channels. `agent-slack channels --all` includes ones you are not in.');
+  }
+  const lines = [paint(color, 'bold', `${'CHANNEL'.padEnd(30)} ${'KIND'.padEnd(9)} MEMBERS  TOPIC`)];
+  for (const channel of result.channels) {
+    const kind = channel.isIm ? 'dm' : channel.isMpim ? 'group dm' : channel.isPrivate ? 'private' : 'public';
+    const name = channel.isIm ? `(dm ${channel.withUserId ?? '?'})` : `#${channel.name?.text ?? channel.id}`;
+    const members = channel.memberCount === undefined ? '' : String(channel.memberCount);
+    lines.push(
+      `${cell(name, 30).padEnd(30)} ${kind.padEnd(9)} ${members.padStart(7)}  ${cell(channel.topic?.text ?? '', 40)}`,
+    );
+  }
+  if (!result.complete) lines.push('', paint(color, 'dim', 'More remain. Ask for a larger --limit to see further.'));
+  return lines.join('\n');
+}
+
+function renderRow(row: ReadRow, color: boolean): string {
+  const who =
+    row.author?.displayName?.text ?? row.author?.realName?.text ?? row.message.userId ?? row.message.botId ?? 'unknown';
+  const head = `${paint(color, 'bold', cell(who, 24))}  ${paint(color, 'dim', row.message.ts)}`;
+  const marks: string[] = [];
+  if (row.message.mismatch) marks.push(paint(color, 'yellow', 'text and blocks disagree'));
+  if (row.message.tokensNeutralised > 0) {
+    marks.push(paint(color, 'yellow', `${row.message.tokensNeutralised} token(s) defused`));
+  }
+  if (row.message.truncated) marks.push(paint(color, 'dim', 'truncated'));
+  if (row.message.editedTs) marks.push(paint(color, 'dim', 'edited'));
+  const body = row.message.body
+    .split('\n')
+    .map((line) => `  ${cell(line, 110)}`)
+    .join('\n');
+  const parts = [`${head}${marks.length > 0 ? `  ${marks.join(' · ')}` : ''}`, body];
+  if (row.message.mismatch && row.message.fallback) {
+    parts.push(paint(color, 'dim', `  notification said: ${cell(row.message.fallback, 100)}`));
+  }
+  for (const unfurl of row.message.unfurls) {
+    parts.push(
+      paint(
+        color,
+        'dim',
+        `  ↳ unfurled from ${cell(unfurl.url, 60)}: ${cell(unfurl.title?.text ?? unfurl.text?.text ?? '', 60)}`,
+      ),
+    );
+  }
+  if (row.message.replyCount)
+    parts.push(
+      paint(color, 'dim', `  ${row.message.replyCount} repl${row.message.replyCount === 1 ? 'y' : 'ies'} in thread`),
+    );
+  return parts.join('\n');
+}
+
+export function renderHistory(result: HistoryResult, color: boolean): string {
+  const name = result.channel?.name?.text ? `#${result.channel.name.text}` : (result.channel?.id ?? 'channel');
+  const window = [
+    `newest ${result.rows.length} of up to ${result.window.limit}`,
+    result.window.oldest ? `since ${result.window.oldest}` : null,
+    result.window.latest ? `until ${result.window.latest}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const lines = [paint(color, 'bold', `${name} · ${window}`), ''];
+  if (result.rows.length === 0) lines.push(paint(color, 'dim', 'Nothing in the window read.'));
+  lines.push(...result.rows.map((row) => renderRow(row, color)));
+  if (!result.complete) {
+    lines.push('', paint(color, 'dim', 'More remain beyond this window — this is not the whole channel.'));
+  }
+  return lines.join('\n\n');
+}
+
+export function renderThread(result: ThreadResult, color: boolean): string {
+  const lines: string[] = [];
+  if (result.parent) lines.push(renderRow(result.parent, color));
+  lines.push(paint(color, 'dim', `— ${result.replies.length} repl${result.replies.length === 1 ? 'y' : 'ies'} —`));
+  lines.push(...result.replies.map((row) => renderRow(row, color)));
+  if (!result.complete) lines.push(paint(color, 'dim', 'More replies remain.'));
+  return lines.join('\n\n');
+}
+
+export function renderSearch(result: SearchResult, color: boolean): string {
+  const head = paint(
+    color,
+    'bold',
+    `${result.hits.length} shown${result.total === undefined ? '' : ` of about ${result.total}`} · ${cell(result.query, 60)}`,
+  );
+  if (result.hits.length === 0) {
+    return [head, paint(color, 'dim', 'Nothing matched the query as Slack read it.')].join('\n');
+  }
+  const lines = [head, ''];
+  for (const hit of result.hits) {
+    lines.push(`${paint(color, 'dim', `#${hit.channelName ?? hit.channelId ?? '?'}`)}\n${renderRow(hit, color)}`);
+  }
+  if (!result.complete) lines.push('', paint(color, 'dim', 'More pages remain.'));
+  return lines.join('\n\n');
+}
+
+export function renderPeople(result: PeopleResult, color: boolean): string {
+  const lines = [paint(color, 'bold', `${'NAME'.padEnd(28)} ${'REAL NAME'.padEnd(28)} KIND`)];
+  for (const person of result.people) {
+    const kind = person.deleted ? 'deactivated' : person.isBot ? 'bot' : person.isAdmin ? 'admin' : 'member';
+    lines.push(
+      `${cell(person.displayName?.text ?? person.id, 28).padEnd(28)} ${cell(person.realName?.text ?? '', 28).padEnd(28)} ${kind}`,
+    );
+  }
+  if (!result.complete) lines.push('', paint(color, 'dim', 'More remain.'));
+  return lines.join('\n');
 }
