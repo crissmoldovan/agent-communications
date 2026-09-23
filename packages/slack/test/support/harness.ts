@@ -6,6 +6,9 @@ import { BUNDLE_VERSION, serialiseBundle, type TokenBundle } from '../../src/aut
 import { type InstallMode, scopesForMode } from '../../src/manifest.ts';
 import { secretRefFor } from '../../src/operations/workspaces.ts';
 
+const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
+
 /**
  * A config directory, a file secret store, and a stand-in for Slack's token exchange.
  *
@@ -147,14 +150,23 @@ export async function newHarness(): Promise<Harness> {
         createdAt: new Date('2026-09-22T12:00:00.000Z').toISOString(),
       };
       const secrets = await core.secrets('file');
+      /*
+       * Issued now, as a real sign-in's bundle is — never a fixed date.
+       *
+       * The command under test reads the real clock, and this used to store a fixed expiry: midnight UTC on
+       * 2026-09-23. Every doctor test passed until that moment and failed for ever after it, which is how the
+       * 0.3.0 release found it — on the one run that happened to start after midnight, with nothing in the change
+       * to blame. A test that means an expired token says so with its own `bundle`.
+       */
+      const issued = Date.now();
       const bundle: TokenBundle = {
         v: BUNDLE_VERSION,
         state: 'ready',
         accessToken: 'fake-user-token-0',
-        accessExpiresAt: '2026-09-23T00:00:00.000Z',
+        accessExpiresAt: new Date(issued + 12 * HOUR).toISOString(),
         refreshToken: 'fake-refresh-token-0',
-        refreshExpiresAt: '2026-10-22T12:00:00.000Z',
-        issuedAt: '2026-09-22T12:00:00.000Z',
+        refreshExpiresAt: new Date(issued + 30 * DAY).toISOString(),
+        issuedAt: new Date(issued).toISOString(),
         ...options.bundle,
       };
       await secrets.set(account.secretRef, serialiseBundle(bundle));
