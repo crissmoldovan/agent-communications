@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import { CommsError, type SecretStore, withFileLock } from '@agentcomms/core';
+import { CommsError, type SecretStore, withCredentialsLock, withFileLock } from '@agentcomms/core';
 import {
   ATTEMPT_ABANDONED_MS,
   attemptAbandoned,
@@ -45,7 +45,19 @@ import {
  */
 
 export interface RefreshDeps {
+  /** The store as it is now: only for the read that decides whether a refresh is due at all. */
   secrets: SecretStore;
+  /**
+   * The store the credential lives in *now*, resolved under the credentials lock.
+   *
+   * A refresh writes a rotated, single-use refresh token. Written through a store picked before the lock, it could
+   * land in a backend `agentcomms secrets migrate` had just switched away from — which the migration then empties —
+   * leaving the workspace with a token Slack has already retired. So the write goes wherever the configuration says
+   * the credentials are at the moment it is made, with every migration held off until it is done.
+   */
+  openSecrets(): Promise<SecretStore>;
+  /** The config directory, whose credentials lock every change to a stored credential takes first. */
+  configDir: string;
   /** Where the per-account lock file lives. Not the config lock: this one is held across a network call. */
   stateDir: string;
   now(): Date;
@@ -110,10 +122,22 @@ export async function accessTokenFor(
      */
     if (stillUsable(current, deps.now())) return current;
 
-    return withFileLock(lockPathFor(deps.stateDir, accountId), () => refreshUnderLock(deps, secretRef), {
-      staleMs: LOCK_STALE_MS,
-      timeoutMs: LOCK_TIMEOUT_MS,
-    });
+    /*
+     * The credentials lock first, then this account's: the order everything takes them in — credentials before
+     * config, credentials before anything narrower — so a refresh can never hold one while waiting for the other in
+     * the opposite order to a migration or a removal. Held across the Slack call, and renewed while it runs, because
+     * the write it protects is the one that call produces.
+     */
+    return withCredentialsLock(
+      deps.configDir,
+      () =>
+        withFileLock(
+          lockPathFor(deps.stateDir, accountId),
+          async () => refreshUnderLock({ ...deps, secrets: await deps.openSecrets() }, secretRef),
+          { staleMs: LOCK_STALE_MS, timeoutMs: LOCK_TIMEOUT_MS },
+        ),
+      { timeoutMs: LOCK_TIMEOUT_MS },
+    );
   })();
 
   inFlight.set(accountId, work);

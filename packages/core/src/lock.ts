@@ -193,9 +193,18 @@ export function credentialsLockPath(configDir: string): string {
  * outlast. With renewal the window only has to cover a holder that has actually died, which is also why it can be
  * short: a crashed migration stops blocking the next one in two minutes rather than ten.
  *
- * A short timeout, because a second caller arriving while one is running should be told so promptly rather than
- * queue behind a prompt nobody is answering.
+ * A short timeout by default, because a second caller arriving while one is running should be told so promptly
+ * rather than queue behind a prompt nobody is answering. A caller that is not a person — a token refresh behind
+ * another workspace's refresh, whose holder is waiting on a network call rather than on anybody — may wait longer.
  */
-export function withCredentialsLock<T>(configDir: string, fn: () => Promise<T>): Promise<T> {
-  return withFileLock(credentialsLockPath(configDir), fn, { staleMs: 2 * 60_000, renewMs: 20_000, timeoutMs: 5_000 });
+export function withCredentialsLock<T>(
+  configDir: string,
+  fn: () => Promise<T>,
+  options: { timeoutMs?: number } = {},
+): Promise<T> {
+  return withFileLock(credentialsLockPath(configDir), fn, {
+    staleMs: 2 * 60_000,
+    renewMs: 20_000,
+    timeoutMs: options.timeoutMs ?? 5_000,
+  });
 }
