@@ -2,7 +2,7 @@
 name: gmail-compose
 description: "Write a message into Gmail Drafts — new, reply, reply-all or forward — and hand the draft id to gmail-send. Symptoms: 'draft a reply to Sam', 'write back to that email', 'forward this to accounts', 'make that draft shorter'. Not for sending — gmail-send does that."
 license: MIT
-compatibility: "@agentcomms/gmail@0.3.1"
+compatibility: "@agentcomms/gmail@0.3.2"
 metadata:
   group: communications
   lifecycle: release

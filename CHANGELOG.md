@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.3.2
 
 **A Slack workspace cannot be connected in `send` mode without a person saying so.** The config store now counts a
 new account arriving in `send` as loosening `accounts.<name>.mode`, measured from `read`, and will not record one

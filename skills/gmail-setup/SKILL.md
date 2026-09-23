@@ -2,7 +2,7 @@
 name: gmail-setup
 description: "Install agent-gmail and connect mailboxes: the Google Cloud OAuth client, inbox add and reauth, importing a legacy Gmail MCP setup, doctor, and wiring MCP clients. Symptoms: 'set up Gmail', 'connect my work inbox', 'no mailbox is connected', 'it stopped working after a week'. Not for reading or writing mail — gmail-search and gmail-compose do that."
 license: MIT
-compatibility: "@agentcomms/gmail@0.3.1"
+compatibility: "@agentcomms/gmail@0.3.2"
 metadata:
   group: communications
   lifecycle: release
