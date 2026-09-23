@@ -8,8 +8,9 @@ import type { SlackCall } from '../src/api/call.ts';
 import { closedPermit } from '../src/api/guard.ts';
 import { compose } from '../src/compose/blocks.ts';
 import { openDraftStore } from '../src/compose/drafts.ts';
-import { NameBook } from '../src/operations/people.ts';
-import { postPrepared, preparePost, react } from '../src/operations/send.ts';
+import { mentionedUserIds, notifiesOf } from '../src/compose/preview.ts';
+import { NameBook, personOf } from '../src/operations/people.ts';
+import { postPrepared, preparePost, prepareReaction, reactPrepared } from '../src/operations/send.ts';
 
 /**
  * The gate.
@@ -261,17 +262,70 @@ test('a failed post is recorded rather than left in flight', async () => {
 
 // ── Reactions ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('a reaction goes through the permit, and `never` refuses it like anything else', async () => {
-  const { sent, call } = fakeSlack();
-  const permit = closedPermit();
-  await react({ call, permit, policy: 'chat', approvalId: 'ap_x' }, { channel: 'C1', ts: '1.1', name: 'eyes' });
-  assert.equal(sent[0]?.method, 'reactions.add');
-  assert.equal(permit.approvalId, null, 'and the door is shut again');
+test('a reaction is a real approval, claimed once, not a permit opened on a bare string', async () => {
+  /*
+   * The version this replaces took an `approvalId` and never created or claimed one, so any string opened the
+   * door. D6's lower ceremony is about the *preview* — one line rather than a rendered message — not about the
+   * gate.
+   */
+  const { deps } = await setUp();
+  const wanted = { channel: 'C1', ts: '1.1', name: 'eyes' };
+  const prepared = await prepareReaction(deps, wanted);
+  assert.match(prepared.approvalId, /^ap_/);
 
+  await reactPrepared(deps, prepared.approvalId, wanted);
+  assert.equal(deps.permit.approvalId, null, 'the door is shut again');
+
+  // Single-use, like every other approval.
+  await assert.rejects(reactPrepared(deps, prepared.approvalId, wanted), /nothing was sent/);
+
+  // And an approval for one emoji does not permit another.
+  const other = await prepareReaction(deps, wanted);
   await assert.rejects(
-    react({ call, permit, policy: 'never', approvalId: 'ap_x' }, { channel: 'C1', ts: '1.1', name: 'eyes' }),
-    /posting is turned off/,
+    reactPrepared(deps, other.approvalId, { ...wanted, name: 'rocket' }),
+    /nothing was sent/,
+    'the approval is bound to this emoji on this message',
   );
+});
+
+test('`never` refuses a reaction before an approval is even made', async () => {
+  const { deps } = await setUp({ policy: 'never' });
+  await assert.rejects(prepareReaction(deps, { channel: 'C1', ts: '1.1', name: 'eyes' }), /posting is turned off/);
+});
+
+test('the gate writes what it did, so `audit tail` can answer what was posted', async () => {
+  const { deps, draft, book } = await setUp();
+  const written: { operation: string; outcome: string }[] = [];
+  const audited = {
+    ...deps,
+    audit: { append: async (r: { operation: string; outcome: string }) => void written.push(r) },
+  };
+  const prepared = await preparePost(audited, draft, book);
+  await postPrepared(audited, draft, prepared.approvalId, prepared.expect, book);
+  assert.deepEqual(
+    written.map((row) => `${row.operation}:${row.outcome}`),
+    ['slack.post.prepare:started', 'slack.post:ok'],
+  );
+});
+
+test('the digest binds mentioned ids, not the display names the preview shows', async () => {
+  /*
+   * `CanonicalChannelMessage.notifies.users` is documented "user ids"; the preview's `notifies.users` is
+   * documented "resolved to display names". An earlier version fed the second into the first, binding the
+   * approval to a mutable string its owner does not control.
+   *
+   * The *rendered* text still binds, and that is deliberate rather than an oversight: `visibleText` is what the
+   * person read, and if a mention will render differently by the time it posts, they read something else. A
+   * rename inside the approval's ten-minute window therefore voids it — a refusal, which is the safe direction.
+   * What this test pins is that the identity half of the digest is an id.
+   */
+  assert.deepEqual(mentionedUserIds('<@U1> and <@U2> and <@U1>'), ['U1', 'U2'], 'ids, sorted and de-duplicated');
+  assert.deepEqual(mentionedUserIds('no mentions here'), []);
+
+  // And the preview, by contrast, shows names — the two are different jobs on the same message.
+  const book = new NameBook();
+  book.add(personOf({ id: 'U1', profile: { display_name: 'sam' } }));
+  assert.deepEqual(notifiesOf({ text: '<@U1> ping' }, book, 3, undefined).users, ['sam']);
 });
 
 test('every posting method is refused without an open permit', async () => {

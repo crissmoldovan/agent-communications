@@ -1,10 +1,13 @@
 import {
+  agentMarker,
   CommsError,
+  canPrompt,
   colorEnabled,
   type LooseningConsent,
   lookupName,
   type OutputOptions,
   paint,
+  renderChannelPreview,
   requirePerson,
   runCommand,
   type Streams,
@@ -13,13 +16,19 @@ import {
 } from '@agentcomms/core';
 import { Command, CommanderError, Option } from 'commander';
 import type { FetchLike } from '../api/guard.ts';
+import { closedPermit } from '../api/guard.ts';
 import { isExpired, parseBundle, type TokenBundle } from '../auth/bundle.ts';
+import { compose, type Mention } from '../compose/blocks.ts';
+import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
+import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
 import { doctor, type IdentityProbe } from '../operations/doctor.ts';
 import { type ProbeFetch, probeIdentity } from '../operations/identity.ts';
 import { modeReport, narrowingSteps, wideningSteps } from '../operations/mode.ts';
+import { NameBook } from '../operations/people.ts';
 import { listChannels, listFiles, listPeople, readChannel, readThread, searchMessages } from '../operations/read.ts';
+import { postPrepared, preparePost, prepareReaction, reactPrepared } from '../operations/send.ts';
 import { openWorkspace } from '../operations/session.ts';
 import {
   finishSignIn,
@@ -31,6 +40,7 @@ import {
 import { listWorkspaces, removeWorkspace, requireWorkspace, viewOf } from '../operations/workspaces.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
+import { askFor } from './prompt.ts';
 import {
   renderChannels,
   renderConnected,
@@ -614,6 +624,198 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
         const { call } = await session(context, String(flags.workspace));
         const result = await listPeople(call, { limit: Number(flags.limit) });
         writeResult(result, output(), () => renderPeople(result, options.color), streams);
+      }),
+    );
+
+  // ── Drafting and posting ────────────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * Everything the gate needs, assembled once.
+   *
+   * The audit sink and the surface go in here rather than at each call site: an operation that records what it
+   * did in three places out of four is an operation whose log cannot be trusted, and the missing one is always
+   * the interesting one.
+   */
+  const gateDeps = async (context: SlackContext, alias: string) => {
+    const config = await context.config();
+    const { alias: name, account } = requireWorkspace(config, alias);
+    const { call, teamId } = await openWorkspace(context, name, { fetch: deps.read, baseUrl: deps.slackBaseUrl });
+    return {
+      call,
+      accountId: account.id,
+      workspaceId: teamId,
+      workspaceName: name,
+      postingAs: account.userId,
+      policy: account.sendPolicy ?? config.defaults.sendPolicy,
+      approvals: context.core.approvals,
+      audit: context.core.audit,
+      surface: 'cli' as const,
+      permit: closedPermit(),
+    };
+  };
+
+  const draft = program.command('draft').description('compose and keep messages locally; nothing reaches Slack');
+
+  workspaceOption(draft.command('create'))
+    .description('write a draft. It lives on this machine — Slack has no server-side draft')
+    .requiredOption('--channel <id>', 'the channel or conversation id')
+    .requiredOption('--text <text>', 'what to say. Markup in it is shown, not interpreted')
+    .option('--thread <ts>', 'reply inside this thread')
+    .option('--mention <userId...>', 'mention someone, by id — a name is ambiguous')
+    .option('--broadcast <who>', '`here`, `channel` or `everyone`; always needs a person to approve')
+    .action(
+      act(async (context, options, flags: Options) => {
+        const { account } = requireWorkspace(await context.config(), String(flags.workspace));
+        const mentions: Mention[] = [
+          ...((flags.mention as string[] | undefined) ?? []).map((id) => ({ kind: 'user' as const, id })),
+          ...(flags.broadcast
+            ? [{ kind: 'broadcast' as const, who: String(flags.broadcast) as 'here' | 'channel' | 'everyone' }]
+            : []),
+        ];
+        const store = openDraftStore(context.core.paths.stateDir, context.now);
+        const created = await store.create(
+          account.id,
+          compose({
+            channel: String(flags.channel),
+            text: String(flags.text),
+            threadTs: flags.thread as string | undefined,
+            mentions,
+          }),
+          String(flags.text),
+        );
+        writeResult(
+          created,
+          output(),
+          (data) =>
+            `Draft ${data.draftId}. Nothing has reached Slack.\nPreview it with: agent-slack post prepare --workspace ${flags.workspace} --draft ${data.draftId}`,
+          streams,
+        );
+      }),
+    );
+
+  workspaceOption(draft.command('list'))
+    .description('the drafts held for this workspace')
+    .action(
+      act(async (context, options, flags: Options) => {
+        const { account } = requireWorkspace(await context.config(), String(flags.workspace));
+        const store = openDraftStore(context.core.paths.stateDir, context.now);
+        const drafts = await store.list(account.id);
+        writeResult(
+          drafts,
+          output(),
+          (rows) =>
+            rows.length === 0
+              ? 'No drafts.'
+              : rows.map((row) => `${row.draftId}  ${row.payload.channel}  ${row.source.slice(0, 60)}`).join('\n'),
+          streams,
+        );
+      }),
+    );
+
+  draft
+    .command('delete <draftId>')
+    .description('throw a draft away')
+    .action(
+      act(async (context, _options, draftId: string) => {
+        await openDraftStore(context.core.paths.stateDir, context.now).remove(draftId);
+        writeResult({ draftId, deleted: true }, output(), () => `Deleted ${draftId}.`, streams);
+      }),
+    );
+
+  const post = program.command('post').description('take a draft through the approval gate');
+
+  workspaceOption(post.command('prepare'))
+    .description('show what would be posted, and how many people it interrupts. Posts nothing')
+    .requiredOption('--draft <draftId>', 'the draft to prepare')
+    .action(
+      act(async (context, options, flags: Options) => {
+        const gate = await gateDeps(context, String(flags.workspace));
+        const store = openDraftStore(context.core.paths.stateDir, context.now);
+        const target = await store.get(String(flags.draft));
+        const prepared = await preparePost(gate, target, new NameBook());
+        writeResult(prepared, output(), (data) => renderChannelPreview(data.preview), streams);
+      }),
+    );
+
+  workspaceOption(post.command('send'))
+    .description('post a prepared draft. Refuses unless the approval, the draft and the room are what they were')
+    .requiredOption('--draft <draftId>', 'the draft')
+    .requiredOption('--approval <approvalId>', 'the approval `post prepare` returned')
+    .requiredOption('--expect-channel <id>', 'the channel you believe this goes to')
+    .action(
+      act(async (context, options, flags: Options) => {
+        const gate = await gateDeps(context, String(flags.workspace));
+        const store = openDraftStore(context.core.paths.stateDir, context.now);
+        const target = await store.get(String(flags.draft));
+        const posted = await postPrepared(
+          gate,
+          target,
+          String(flags.approval),
+          { to: [String(flags.expectChannel)], cc: [], bcc: [], subject: '' },
+          new NameBook(),
+        );
+        writeResult(posted, output(), (data) => `Posted to ${data.channel} at ${data.ts}.`, streams);
+      }),
+    );
+
+  workspaceOption(program.command('react'))
+    .description('add or remove a reaction. Behind the same gate, at lower ceremony')
+    .requiredOption('--channel <id>', 'the channel')
+    .requiredOption('--ts <ts>', 'the message timestamp')
+    .requiredOption('--emoji <name>', 'the emoji name, without colons')
+    .option('--remove', 'take one off instead', false)
+    .action(
+      act(async (context, options, flags: Options) => {
+        const gate = await gateDeps(context, String(flags.workspace));
+        const wanted = {
+          channel: String(flags.channel),
+          ts: String(flags.ts),
+          name: String(flags.emoji),
+          remove: flags.remove === true,
+        };
+        const prepared = await prepareReaction(gate, wanted);
+        const done = await reactPrepared(gate, prepared.approvalId, wanted);
+        writeResult(done, output(), () => `:${wanted.name}: on ${wanted.ts}.`, streams);
+      }),
+    );
+
+  program
+    .command('approve <approvalId>')
+    .description('approve a post at this terminal: read it, then type the code back')
+    .action(
+      act(async (context, globalOptions, approvalId: string) => {
+        /*
+         * The one command an agent may not run for the user.
+         *
+         * A shell agent can defeat this — `script -q /dev/null` makes any command see a terminal — and this is a
+         * speed bump against the ordinary case, not a boundary. The boundary for an agent with a shell is the
+         * `never` policy, and a workspace installed in `read` mode, whose token cannot post at all.
+         */
+        const marker = agentMarker(env);
+        if (marker) {
+          throw new CommsError('APPROVAL_REQUIRED', 'only a person can approve a post, not an agent', {
+            hint: `Ask the user to run \`agent-slack approve ${approvalId}\` in their own terminal.`,
+            details: { marker },
+          });
+        }
+        if (!canPrompt(env, streams, { json: globalOptions.json })) {
+          throw new CommsError('APPROVAL_REQUIRED', 'approving a post needs an interactive terminal', {
+            hint: `Run \`agent-slack approve ${approvalId}\` directly in a terminal.`,
+          });
+        }
+        void (await workspaceForApproval(context, approvalId));
+        const prompt = await beginApproval(context, approvalId);
+        streams.stdout.write(`${prompt.preview}\n\n`);
+        const answer = await askFor(streams, {
+          question: `Type ${paint(globalOptions.color, 'bold', prompt.challenge)} to approve this, or press Enter to cancel: `,
+        });
+        if (!answer.trim()) {
+          await revokeApproval(context, approvalId);
+          streams.stdout.write('Cancelled. Nothing was posted.\n');
+          return;
+        }
+        await finishApproval(context, approvalId, answer);
+        streams.stdout.write('Approved. This command approves; it does not post.\n');
       }),
     );
 

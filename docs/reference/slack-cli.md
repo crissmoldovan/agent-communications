@@ -43,6 +43,10 @@ Scripts should read these rather than parse output.
 | [`search`](#agent-slack-search) | Slack’s own search, in Slack’s syntax, over this workspace |
 | [`files`](#agent-slack-files) | files shared in this workspace |
 | [`people`](#agent-slack-people) | the members of this workspace |
+| [`draft`](#agent-slack-draft) | compose and keep messages locally; nothing reaches Slack |
+| [`post`](#agent-slack-post) | take a draft through the approval gate |
+| [`react`](#agent-slack-react) | add or remove a reaction. Behind the same gate, at lower ceremony |
+| [`approve`](#agent-slack-approve) | approve a post at this terminal: read it, then type the code back |
 | [`mcp`](#agent-slack-mcp) | run the MCP server on stdio, for a coding agent to connect to |
 
 ### `agent-slack manifest`
@@ -238,6 +242,111 @@ agent-slack people [options]
 |---|---|---|
 | `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
 | `--limit <n>` | how many | `200` |
+
+### `agent-slack draft`
+
+compose and keep messages locally; nothing reaches Slack
+
+```
+agent-slack draft [options] [command]
+```
+
+### `agent-slack draft create`
+
+write a draft. It lives on this machine — Slack has no server-side draft
+
+```
+agent-slack draft create [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
+| `--channel <id>` | the channel or conversation id | — |
+| `--text <text>` | what to say. Markup in it is shown, not interpreted | — |
+| `--thread <ts>` | reply inside this thread | — |
+| `--mention <userId...>` | mention someone, by id — a name is ambiguous | — |
+| `--broadcast <who>` | `here`, `channel` or `everyone`; always needs a person to approve | — |
+
+### `agent-slack draft list`
+
+the drafts held for this workspace
+
+```
+agent-slack draft list [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
+
+### `agent-slack draft delete`
+
+throw a draft away
+
+```
+agent-slack draft delete [options] <draftId>
+```
+
+### `agent-slack post`
+
+take a draft through the approval gate
+
+```
+agent-slack post [options] [command]
+```
+
+### `agent-slack post prepare`
+
+show what would be posted, and how many people it interrupts. Posts nothing
+
+```
+agent-slack post prepare [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
+| `--draft <draftId>` | the draft to prepare | — |
+
+### `agent-slack post send`
+
+post a prepared draft. Refuses unless the approval, the draft and the room are what they were
+
+```
+agent-slack post send [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
+| `--draft <draftId>` | the draft | — |
+| `--approval <approvalId>` | the approval `post prepare` returned | — |
+| `--expect-channel <id>` | the channel you believe this goes to | — |
+
+### `agent-slack react`
+
+add or remove a reaction. Behind the same gate, at lower ceremony
+
+```
+agent-slack react [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
+| `--channel <id>` | the channel | — |
+| `--ts <ts>` | the message timestamp | — |
+| `--emoji <name>` | the emoji name, without colons | — |
+| `--remove` | take one off instead | `false` |
+
+### `agent-slack approve`
+
+approve a post at this terminal: read it, then type the code back
+
+```
+agent-slack approve [options] <approvalId>
+```
 
 ### `agent-slack mcp`
 

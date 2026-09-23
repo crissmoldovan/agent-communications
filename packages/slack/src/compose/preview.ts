@@ -77,6 +77,22 @@ export function notifiesOf(
   };
 }
 
+/**
+ * The user ids a post mentions, for the digest.
+ *
+ * Ids, not the display names {@link notifiesOf} produces. The preview shows names because a person reads names;
+ * the digest binds ids because a name is a mutable, sender-controlled string and an id is not. Feeding the
+ * preview's names into the digest — which an earlier version did — made somebody renaming themselves between the
+ * preview and the post void a perfectly good approval, and bound the approval to something its owner does not
+ * control.
+ */
+export function mentionedUserIds(text: string): string[] {
+  const { references } = decodeSlackText(text);
+  return [
+    ...new Set(references.filter((reference) => reference.kind === 'user').map((reference) => reference.id)),
+  ].sort();
+}
+
 /** Every link in the outgoing text, in full — a shortener or a tracker is only visible with its query string. */
 function linksOf(text: string): string[] {
   const { references } = decodeSlackText(text);

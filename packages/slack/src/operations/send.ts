@@ -12,7 +12,7 @@ import {
 import { callSlack, type SlackCall } from '../api/call.ts';
 import { spendOn, type WritePermit } from '../api/guard.ts';
 import type { SlackDraft } from '../compose/drafts.ts';
-import { previewOf } from '../compose/preview.ts';
+import { mentionedUserIds, previewOf } from '../compose/preview.ts';
 import { decodeSlackText } from '../text/decode.ts';
 import { type Channel, channelOf, type NameBook } from './people.ts';
 
@@ -59,8 +59,30 @@ export interface PreparedPost {
   readonly expiresAt: string;
 }
 
+/**
+ * Where the gate writes what it did.
+ *
+ * Gmail records every operation; the first version of this file recorded none, so `agentcomms audit tail` showed
+ * nothing at all for a Slack workspace and there was no answer to "what did it post, and when". Optional only so
+ * a unit test can leave it out; every real caller passes one.
+ */
+export interface AuditSink {
+  append(record: {
+    inboxId: string;
+    alias?: string;
+    operation: string;
+    outcome: 'ok' | 'refused' | 'failed' | 'started';
+    ids?: Record<string, string | string[]>;
+    approvalId?: string;
+    reason?: string;
+    surface?: 'cli' | 'mcp';
+  }): Promise<unknown>;
+}
+
 export interface PrepareDeps {
   readonly call: SlackCall;
+  readonly audit?: AuditSink | undefined;
+  readonly surface?: 'cli' | 'mcp' | undefined;
   readonly accountId: string;
   readonly workspaceId: string;
   readonly workspaceName: string;
@@ -156,7 +178,8 @@ export async function preparePost(deps: PrepareDeps, draft: SlackDraft, book: Na
     notifies: {
       here: preview.notifies.here,
       channel: preview.notifies.channel,
-      users: [...preview.notifies.users].sort(),
+      // Ids, not the names the preview shows — see `mentionedUserIds`.
+      users: mentionedUserIds(payload.text),
       estimated: preview.notifies.estimated,
     },
     attachments: [],
@@ -181,6 +204,16 @@ export async function preparePost(deps: PrepareDeps, draft: SlackDraft, book: Na
     requiredPolicy,
     riskFlags,
     expect: expectationFor(payload, preview.notifies),
+  });
+
+  await deps.audit?.append({
+    inboxId: deps.accountId,
+    alias: deps.workspaceName,
+    operation: 'slack.post.prepare',
+    outcome: 'started',
+    ids: { channel: payload.channel, draftId: draft.draftId },
+    approvalId: record.approvalId,
+    ...(deps.surface ? { surface: deps.surface } : {}),
   });
 
   return {
@@ -274,7 +307,7 @@ export async function postPrepared(
     notifies: {
       here: preview.notifies.here,
       channel: preview.notifies.channel,
-      users: [...preview.notifies.users].sort(),
+      users: mentionedUserIds(payload.text),
       estimated: preview.notifies.estimated,
     },
     attachments: [],
@@ -302,10 +335,29 @@ export async function postPrepared(
     );
     const ts = typeof response.ts === 'string' ? response.ts : '';
     await deps.approvals.complete(approvalId, { sentMessageId: ts });
+    await deps.audit?.append({
+      inboxId: deps.accountId,
+      alias: deps.workspaceName,
+      operation: 'slack.post',
+      outcome: 'ok',
+      ids: { channel: payload.channel, ts },
+      approvalId,
+      ...(deps.surface ? { surface: deps.surface } : {}),
+    });
     return { approvalId, channel: payload.channel, ts };
   } catch (error) {
     // Recorded before it is rethrown: an approval left in `sending` is one whose outcome nobody knows.
     await deps.approvals.complete(approvalId, { error: (error as Error).message });
+    await deps.audit?.append({
+      inboxId: deps.accountId,
+      alias: deps.workspaceName,
+      operation: 'slack.post',
+      outcome: 'failed',
+      ids: { channel: payload.channel },
+      approvalId,
+      reason: (error as Error).message,
+      ...(deps.surface ? { surface: deps.surface } : {}),
+    });
     throw error;
   }
 }
@@ -313,25 +365,123 @@ export async function postPrepared(
 /**
  * A reaction, at lower ceremony — D6.
  *
- * Adding one notifies a person and is attributed to them, so it is a post and goes behind the same permit. It is
- * not a message, though, and putting it through the full preview-and-approve flow would make the feature useless
- * and train people to approve without reading, which costs more safety than it buys. So under `chat` an agent
- * says which emoji and where, in one line, and waits for a yes; under `confirm` it needs the same typed approval
- * as a message; under `read` the scope is absent and the question never arises.
+ * Adding one notifies a person and is attributed to them, so it is a post and goes through the same approval
+ * machinery as a message: an approval bound to this emoji, on this message, claimed once. What is *lower* about
+ * the ceremony is the preview, not the gate — a reaction is one line rather than a rendered message, and putting
+ * it through the full preview-and-approve flow would train people to approve without reading, which costs more
+ * safety than it buys.
+ *
+ * An earlier version took an `approvalId` and never created or claimed one, so any string opened the door. The
+ * distinction D6 draws between `chat` and `confirm` was not implemented either: both simply went.
  */
-export async function react(
-  deps: { call: SlackCall; permit: WritePermit; policy: SendPolicy; approvalId: string },
-  options: { channel: string; ts: string; name: string; remove?: boolean | undefined },
-): Promise<void> {
+export interface PreparedReaction {
+  readonly approvalId: string;
+  readonly channel: string;
+  readonly ts: string;
+  readonly name: string;
+  readonly remove: boolean;
+  readonly requiredPolicy: SendPolicy;
+  readonly expect: Expectation;
+}
+
+/** What a reaction's approval is bound to: this emoji, on this message, in this workspace, as this account. */
+function reactionDigest(deps: { workspaceId: string; postingAs: string }, options: ReactionOptions): string {
+  return sha256Hex(
+    JSON.stringify({
+      kind: 'reaction',
+      workspace: deps.workspaceId,
+      postingAs: deps.postingAs,
+      channel: options.channel,
+      ts: options.ts,
+      name: options.name,
+      remove: options.remove === true,
+    }),
+  );
+}
+
+export interface ReactionOptions {
+  readonly channel: string;
+  readonly ts: string;
+  readonly name: string;
+  readonly remove?: boolean | undefined;
+}
+
+function reactionExpectation(options: ReactionOptions): Expectation {
+  return { to: [options.channel], cc: [], bcc: [], subject: `:${options.name}: on ${options.ts}` };
+}
+
+export async function prepareReaction(deps: PrepareDeps, options: ReactionOptions): Promise<PreparedReaction> {
   if (deps.policy === 'never') {
     throw new CommsError('POLICY_NEVER', 'posting is turned off for this workspace (policy: never)');
   }
+  const digest = reactionDigest(deps, options);
+  const record = await deps.approvals.create({
+    inboxId: deps.accountId,
+    inboxSub: deps.postingAs,
+    draftId: `reaction:${options.channel}:${options.ts}`,
+    // No draft to edit, so the reaction's own digest stands in: the same value means the same act.
+    draftMessageId: digest,
+    digest,
+    policy: deps.policy,
+    /*
+     * A reaction never raises its own ceremony.
+     *
+     * A message can, because a broadcast reaches a room. A reaction reaches the one person who wrote the
+     * message, so the workspace's own policy decides: `chat` is a yes in the conversation, `confirm` is the same
+     * typed approval a message needs.
+     */
+    requiredPolicy: 'chat',
+    riskFlags: options.remove ? ['removes-reaction'] : [],
+    expect: reactionExpectation(options),
+  });
+  return {
+    approvalId: record.approvalId,
+    channel: options.channel,
+    ts: options.ts,
+    name: options.name,
+    remove: options.remove === true,
+    requiredPolicy: 'chat',
+    expect: record.expect,
+  };
+}
+
+/** Applies one prepared reaction, once, through the permit. */
+export async function reactPrepared(
+  deps: PostDeps,
+  approvalId: string,
+  options: ReactionOptions,
+): Promise<{ approvalId: string }> {
+  const digest = reactionDigest(deps, options);
+  await deps.approvals.claimForSend(approvalId, {
+    draftMessageId: digest,
+    digest,
+    inboxId: deps.accountId,
+    inboxSub: deps.postingAs,
+    policy: deps.policy,
+    expect: reactionExpectation(options),
+  });
   const method = options.remove ? 'reactions.remove' : 'reactions.add';
-  await spendOn(deps.permit, deps.approvalId, method, () =>
-    callSlack({ ...deps.call, permit: deps.permit }, method, {
-      channel: options.channel,
-      timestamp: options.ts,
-      name: options.name,
-    }),
-  );
+  try {
+    await spendOn(deps.permit, approvalId, method, () =>
+      callSlack({ ...deps.call, permit: deps.permit }, method, {
+        channel: options.channel,
+        timestamp: options.ts,
+        name: options.name,
+      }),
+    );
+    await deps.approvals.complete(approvalId, { sentMessageId: options.ts });
+    await deps.audit?.append({
+      inboxId: deps.accountId,
+      alias: deps.workspaceName,
+      operation: options.remove ? 'slack.reaction.remove' : 'slack.reaction.add',
+      outcome: 'ok',
+      ids: { channel: options.channel, ts: options.ts, emoji: options.name },
+      approvalId,
+      ...(deps.surface ? { surface: deps.surface } : {}),
+    });
+    return { approvalId };
+  } catch (error) {
+    await deps.approvals.complete(approvalId, { error: (error as Error).message });
+    throw error;
+  }
 }
