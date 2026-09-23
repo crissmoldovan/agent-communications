@@ -3,7 +3,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import type { CommsError, SecretStore } from '@agentcomms/core';
+import { type CommsError, type SecretStore, withCredentialsLock } from '@agentcomms/core';
 import { BUNDLE_VERSION, parseBundle, serialiseBundle, type TokenBundle } from '../src/auth/bundle.ts';
 import { accessTokenFor, type RefreshDeps } from '../src/auth/refresh.ts';
 
@@ -69,7 +69,8 @@ function bundle(over: Partial<TokenBundle> = {}): TokenBundle {
 }
 
 async function deps(secrets: SecretStore, exchange: RefreshDeps['exchange']): Promise<RefreshDeps> {
-  return { secrets, stateDir: await mkdtemp(join(tmpdir(), 'slack-refresh-')), now: () => NOW, exchange };
+  const stateDir = await mkdtemp(join(tmpdir(), 'slack-refresh-'));
+  return { secrets, openSecrets: async () => secrets, configDir: stateDir, stateDir, now: () => NOW, exchange };
 }
 
 /**
@@ -326,4 +327,62 @@ test('a ready credential with minutes left is renewed early, which is what the s
   const { token } = await accessTokenFor(d, ACCOUNT, REF);
   assert.equal(renewed, 1, 'a ready token inside the margin was not renewed');
   assert.equal(token, 'fake-access-new');
+});
+
+test('a refresh waits for a credential migration, and writes to the store the migration left', async () => {
+  /*
+   * A refresh writes a rotated, single-use token. Taken through a store chosen before any lock, it could land in
+   * the backend `secrets migrate` had just switched away from — which the migration then empties — leaving the
+   * workspace holding a token Slack has already retired. Here the "migration" holds the credentials lock, moves the
+   * credential to a new store, and switches; the refresh has to wait for it, and write where it points afterwards.
+   */
+  const due = serialiseBundle(bundle({ accessExpiresAt: '2026-09-22T12:01:00.000Z' }));
+  const before = store(due);
+  const after = store();
+  let current: SecretStore = before;
+  let exchanged = false;
+  const d = await deps(before, async () => {
+    exchanged = true;
+    return {
+      accessToken: 'fake-access-new',
+      accessExpiresAt: '2026-09-23T00:00:00.000Z',
+      refreshToken: 'fake-refresh-2',
+      refreshExpiresAt: '2026-10-22T12:00:00.000Z',
+      issuedAt: NOW.toISOString(),
+    };
+  });
+  d.openSecrets = async () => current;
+
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let migrating: Promise<void> = Promise.resolve();
+  const locked = new Promise<void>((entered) => {
+    migrating = withCredentialsLock(d.configDir, async () => {
+      entered();
+      await held;
+    });
+  });
+  await locked;
+
+  const refreshing = accessTokenFor(d, ACCOUNT, REF);
+  await new Promise((settle) => setTimeout(settle, 300));
+  assert.equal(exchanged, false, 'the refresh went ahead while a migration held the credentials');
+
+  // The migration copies the credential across, switches, and empties the old store.
+  await after.set(REF, due);
+  current = after;
+  await before.delete(REF);
+  release();
+  await migrating;
+
+  const { token } = await refreshing;
+  assert.equal(token, 'fake-access-new');
+  assert.equal(
+    parseBundle(await after.get(REF))?.refreshToken,
+    'fake-refresh-2',
+    'the rotated token is where it lives now',
+  );
+  assert.equal(await before.get(REF), null, 'and nothing was written to the store the migration left behind');
 });
