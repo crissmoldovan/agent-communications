@@ -617,6 +617,19 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
       }),
     );
 
+  program
+    .command('mcp')
+    .description('run the MCP server on stdio, for a coding agent to connect to')
+    .option('--workspace <name>', 'pin the server to one workspace; every tool then acts on it and no other')
+    .action(async (flags: Options) => {
+      ran = true;
+      const { startSlackStdioServer } = await import('../mcp/stdio-entry.ts');
+      await startSlackStdioServer({
+        env,
+        ...(flags.workspace ? { workspace: String(flags.workspace) } : {}),
+      });
+    });
+
   // ── the hidden half of a two-step sign-in ───────────────────────────────────────────────────────────────────
 
   program
