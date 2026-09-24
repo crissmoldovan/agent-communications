@@ -36,7 +36,7 @@ if (!/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version)) {
 }
 
 // The published packages, in lockstep. They depend on each other by exact version, so a mismatch is a broken install.
-const packages = ['core', 'gmail', 'gmail-mcp'];
+const packages = ['core', 'gmail', 'gmail-mcp', 'slack'];
 for (const name of packages) {
   const path = join(ROOT, 'packages', name, 'package.json');
   const manifest = JSON.parse(await readFile(path, 'utf8'));

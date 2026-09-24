@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const check = process.argv.includes('--check');
-const PACKAGES = ['core', 'gmail', 'gmail-mcp'];
+const PACKAGES = ['core', 'gmail', 'gmail-mcp', 'slack'];
 const LICENCE_FILES = ['LICENSE', 'LICENSE.md', 'LICENCE', 'LICENCE.md', 'LICENSE.txt', 'license'];
 const problems = [];
 

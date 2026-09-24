@@ -63,7 +63,7 @@ send({
 const initialized = await waitFor(1);
 assert.equal(initialized.result.serverInfo.name, 'agent-gmail');
 assert.equal(initialized.result.serverInfo.version, version);
-assert.match(initialized.result.instructions, /untrusted-email-content/);
+assert.match(initialized.result.instructions, /untrusted-content/);
 
 send({ jsonrpc: '2.0', method: 'notifications/initialized' });
 send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });

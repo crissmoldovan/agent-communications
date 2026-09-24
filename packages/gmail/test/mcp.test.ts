@@ -269,7 +269,7 @@ test('the instructions tell the model the three things it must know, and stay un
   const context = new GmailContext({ core: harness.core, env: harness.env });
   const instructions = await buildInstructions(context, undefined);
   assert.ok(Buffer.byteLength(instructions) < 2048, 'Claude Code truncates instructions at 2 KB');
-  assert.match(instructions, /untrusted-email-content/);
+  assert.match(instructions, /untrusted-content/);
   assert.match(instructions, /approve/);
   assert.match(instructions, /Pass `inbox` on every call/);
   assert.match(instructions, /work/);

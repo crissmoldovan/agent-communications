@@ -41,6 +41,8 @@ async function cli(
     onStderr?: (soFar: string) => void;
     tty?: boolean;
     env?: NodeJS.ProcessEnv;
+    /** The fetch the read commands use, so a test never reaches Slack. */
+    read?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
     /** Types back whatever challenge the CLI prints, as a person at a terminal would. */
     answerChallenge?: boolean;
   } = {},
@@ -77,6 +79,7 @@ async function cli(
     },
     openBrowser: () => undefined,
     probe: (input, init) => harness.probe(input, init),
+    ...(options.read ? { read: options.read } : {}),
     listenerCommand: {
       command: process.execPath,
       args: ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', CLI_ENTRY],
@@ -1363,4 +1366,228 @@ test('the command a refused widening names is one that works as printed', async 
     refused.json<Envelope<never>>().error?.hint ?? '',
     new RegExp(`workspace reauth acme --mode send --port ${port}`),
   );
+});
+
+// ── Reading, through the command a person actually runs ────────────────────────────────────────────────────────
+
+/**
+ * The read commands end to end.
+ *
+ * These exist because the review that found seven defects in the read layer noted that attribution, attachments
+ * and the unrenderable warning had all disappeared from human output without a single test noticing — the
+ * operations were right and nobody was looking at what the terminal printed.
+ *
+ * The workspace is `acme` rather than `acme/slack` because this file's harness pins the config to version 1,
+ * where names are flat — `names.test.ts` is where the organisation/platform form is exercised.
+ */
+function slackReplies(script: Record<string, unknown>) {
+  return async (input: string | URL | Request, _init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    const method = url.split('/api/')[1] ?? '';
+    return new Response(JSON.stringify(script[method] ?? { ok: false, error: 'unknown_method' }));
+  };
+}
+
+test('reading a channel prints the envelope, the warnings, and who actually posted', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', workspaceId: 'T0001' });
+  const read = slackReplies({
+    'conversations.info': { ok: true, channel: { id: 'C1', name: 'general', is_member: true } },
+    'conversations.history': {
+      ok: true,
+      messages: [
+        {
+          ts: '1.1',
+          bot_id: 'B1',
+          username: 'Cristian Moldovan',
+          bot_profile: { name: 'Notifier' },
+          text: 'approve the invoice',
+          blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'lunch?' } }],
+        },
+      ],
+    },
+  });
+
+  const human = await cli(harness, ['read', 'C1', '--workspace', 'acme'], { read });
+  assert.equal(human.code, EXIT_CODES.OK, human.stderr);
+  assert.match(human.stdout, /#general/);
+  assert.match(human.stdout, /untrusted-content/, 'the body arrives inside its envelope');
+  assert.match(human.stdout, /text and blocks disagree/, 'and the halves disagreeing is said out loud');
+  assert.match(
+    human.stdout,
+    /posted by Notifier, under the name “Cristian Moldovan”/,
+    'attribution, not the name it wore',
+  );
+
+  const json = await cli(harness, ['--json', 'read', 'C1', '--workspace', 'acme'], { read });
+  const data = json.json<Envelope<{ rows: { message: Record<string, unknown> }[] }>>().data;
+  const message = data?.rows[0]?.message;
+  assert.ok(message);
+  assert.equal(message.body, undefined, 'no unwrapped copy of the sender’s text beside the envelope');
+  assert.match(String(message.enveloped), /untrusted-content/);
+});
+
+test('every read command refuses to guess which workspace, and names an unknown one', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  for (const argv of [['channels'], ['read', 'C1'], ['thread', 'C1', '1.0'], ['search', 'x'], ['people'], ['files']]) {
+    const missing = await cli(harness, argv);
+    assert.equal(missing.code, EXIT_CODES.USAGE, `${argv[0]} without --workspace`);
+  }
+  const wrong = await cli(harness, ['--json', 'channels', '--workspace', 'nope']);
+  assert.equal(wrong.code, EXIT_CODES.NOT_FOUND);
+});
+
+test('an incomplete channel list says so rather than looking like a small workspace', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  const read = slackReplies({
+    'conversations.list': {
+      ok: true,
+      channels: [{ id: 'C1', name: 'general', is_member: true }],
+      response_metadata: { next_cursor: 'more' },
+    },
+  });
+  const result = await cli(harness, ['channels', '--workspace', 'acme', '--limit', '1'], { read });
+  assert.equal(result.code, EXIT_CODES.OK, result.stderr);
+  assert.match(result.stdout, /More remain/);
+});
+
+// ── The gate, through the commands a person actually runs ──────────────────────────────────────────────────────
+
+/**
+ * Draft → prepare → send, end to end.
+ *
+ * The operations underneath had thorough tests and the CLI had none, so `post send` shipped constructing an
+ * expectation that could never match the one `post prepare` had stored — the command refused every post it was
+ * given, and every test passed. This is the coverage that catches that class: the commands, in order, as a person
+ * runs them.
+ */
+test('a draft can be written, previewed and posted through the commands themselves', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', workspaceId: 'T0001', userId: 'U0001' });
+  const read = slackReplies({
+    'conversations.info': { ok: true, channel: { id: 'C1', name: 'general', num_members: 4, is_member: true } },
+    'chat.postMessage': { ok: true, ts: '1700000000.000100' },
+  });
+
+  const written = await cli(
+    harness,
+    ['--json', 'draft', 'create', '--workspace', 'acme', '--channel', 'C1', '--text', 'ready when you are'],
+    { read },
+  );
+  assert.equal(written.code, EXIT_CODES.OK, written.stderr);
+  const draftId = written.json<Envelope<{ draftId: string }>>().data?.draftId;
+  assert.ok(draftId, 'the draft was written');
+
+  const prepared = await cli(
+    harness,
+    ['--json', 'post', 'prepare', '--workspace', 'acme', '--draft', String(draftId)],
+    { read },
+  );
+  assert.equal(prepared.code, EXIT_CODES.OK, prepared.stderr);
+  const approvalId = prepared.json<Envelope<{ approvalId: string }>>().data?.approvalId;
+  assert.ok(approvalId);
+
+  const posted = await cli(
+    harness,
+    [
+      '--json',
+      'post',
+      'send',
+      '--workspace',
+      'acme',
+      '--draft',
+      String(draftId),
+      '--approval',
+      String(approvalId),
+      '--expect-channel',
+      'C1',
+    ],
+    { read },
+  );
+  assert.equal(posted.code, EXIT_CODES.OK, posted.stderr);
+  assert.equal(posted.json<Envelope<{ ts: string }>>().data?.ts, '1700000000.000100');
+});
+
+test('posting to a channel the caller did not expect is refused before anything is sent', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', workspaceId: 'T0001', userId: 'U0001' });
+  let posts = 0;
+  const read = async (input: string | URL | Request, _init?: RequestInit) => {
+    const method = String(input instanceof Request ? input.url : input).split('/api/')[1] ?? '';
+    if (method === 'chat.postMessage') posts += 1;
+    return new Response(
+      JSON.stringify(
+        method === 'conversations.info'
+          ? { ok: true, channel: { id: 'C1', name: 'general', num_members: 4, is_member: true } }
+          : { ok: true, ts: '1.1' },
+      ),
+    );
+  };
+
+  const written = await cli(
+    harness,
+    ['--json', 'draft', 'create', '--workspace', 'acme', '--channel', 'C1', '--text', 'hello'],
+    { read },
+  );
+  const draftId = written.json<Envelope<{ draftId: string }>>().data?.draftId;
+  const prepared = await cli(
+    harness,
+    ['--json', 'post', 'prepare', '--workspace', 'acme', '--draft', String(draftId)],
+    { read },
+  );
+  const approvalId = prepared.json<Envelope<{ approvalId: string }>>().data?.approvalId;
+
+  const wrong = await cli(
+    harness,
+    [
+      '--json',
+      'post',
+      'send',
+      '--workspace',
+      'acme',
+      '--draft',
+      String(draftId),
+      '--approval',
+      String(approvalId),
+      '--expect-channel',
+      'C_SOMEWHERE_ELSE',
+    ],
+    { read },
+  );
+  assert.notEqual(wrong.code, EXIT_CODES.OK);
+  assert.equal(posts, 0, 'nothing reached Slack');
+});
+
+test('approving is refused to an agent, and needs a terminal', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  const asAgent = await cli(harness, ['--json', 'approve', 'ap_00000000000000000000000000'], {
+    env: { CLAUDECODE: '1' },
+  });
+  assert.equal(asAgent.code, EXIT_CODES.APPROVAL);
+  assert.match(asAgent.stdout + asAgent.stderr, /only a person can approve/);
+});
+
+test('one workspace cannot prepare or post another’s draft', async () => {
+  // Drafts share one directory keyed by id. Without a check, naming workspace A reaches workspace B's draft —
+  // and on two workspaces of one organisation, which share channel ids, Slack would not refuse it either.
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', workspaceId: 'T0001', userId: 'U0001' });
+  await harness.addWorkspace({ alias: 'zeta', workspaceId: 'T0002', userId: 'U0002' });
+  const read = slackReplies({
+    'conversations.info': { ok: true, channel: { id: 'C1', name: 'general', num_members: 4, is_member: true } },
+  });
+
+  const written = await cli(
+    harness,
+    ['--json', 'draft', 'create', '--workspace', 'acme', '--channel', 'C1', '--text', 'internal'],
+    { read },
+  );
+  const draftId = String(written.json<Envelope<{ draftId: string }>>().data?.draftId);
+
+  const stolen = await cli(harness, ['--json', 'post', 'prepare', '--workspace', 'zeta', '--draft', draftId], { read });
+  assert.equal(stolen.code, EXIT_CODES.NOT_FOUND);
+  assert.match(JSON.stringify(stolen.json<Envelope<never>>()), /no draft/);
 });

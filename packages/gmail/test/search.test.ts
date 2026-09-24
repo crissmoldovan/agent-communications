@@ -189,7 +189,7 @@ test('rows carry what a reader needs to choose, with sender text kept in the env
   assert.match(row?.webLink ?? '', /^https:\/\/mail\.google\.com\//);
 
   // The subject and snippet are sender-controlled, so the model-facing rendering is enveloped.
-  assert.match(result.enveloped, /^<untrusted-email-content boundary="[^"]+" field="search-results">/);
+  assert.match(result.enveloped, /^<untrusted-content boundary="[^"]+" field="search-results">/);
   assert.match(result.enveloped, /Invoice 42/);
 });
 

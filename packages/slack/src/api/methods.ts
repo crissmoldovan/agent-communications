@@ -89,6 +89,45 @@ const RULES: Readonly<Record<string, MethodRule>> = {
     note: 'removing an installation is something a person does in Slack, not something an agent does for them',
   },
 
+  // ── Reads ─────────────────────────────────────────────────────────────────────────────────────────────────
+  /*
+   * Four scopes each, and any one of them is enough.
+   *
+   * Slack's conversation methods take whichever of `channels:`, `groups:`, `im:` and `mpim:` matches the
+   * conversation being read: a public channel needs `channels:history`, a private one `groups:history`, a DM
+   * `im:history`. There is no single scope that covers a method, which is why `requiredScopes` was a list before
+   * anything needed it to be.
+   */
+  'conversations.list': {
+    kind: 'read',
+    requiredScopes: ['channels:read', 'groups:read', 'im:read', 'mpim:read'],
+  },
+  'conversations.info': {
+    kind: 'read',
+    requiredScopes: ['channels:read', 'groups:read', 'im:read', 'mpim:read'],
+  },
+  'conversations.members': {
+    kind: 'read',
+    requiredScopes: ['channels:read', 'groups:read', 'im:read', 'mpim:read'],
+  },
+  'conversations.history': {
+    kind: 'read',
+    requiredScopes: ['channels:history', 'groups:history', 'im:history', 'mpim:history'],
+  },
+  'conversations.replies': {
+    kind: 'read',
+    requiredScopes: ['channels:history', 'groups:history', 'im:history', 'mpim:history'],
+  },
+  'users.info': { kind: 'read', requiredScopes: ['users:read'] },
+  'users.list': { kind: 'read', requiredScopes: ['users:read'] },
+  /*
+   * `search.messages` is a user-token method and has no bot equivalent, which is one of the reasons this package
+   * installs as a user token at all.
+   */
+  'search.messages': { kind: 'read', requiredScopes: ['search:read'] },
+  'files.info': { kind: 'read', requiredScopes: ['files:read'] },
+  'files.list': { kind: 'read', requiredScopes: ['files:read'] },
+
   // ── Writes: everything that puts a message in front of somebody ───────────────────────────────────────────
   'chat.postMessage': { kind: 'write', requiredScopes: ['chat:write'] },
   // Editing a message that people have already read changes what they saw, after they saw it.

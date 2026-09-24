@@ -25,8 +25,16 @@ test('the plugin manifest lists every skill that exists, and only those', async 
   assert.ok(manifest.description?.length > 40, 'the marketplace needs a description');
   assert.ok(plugin.description?.length > 40, 'and so does the plugin');
 
+  /*
+   * Every skill directory, not every `gmail-` one.
+   *
+   * This test exists to catch a skill that was added and not listed — and it could not, because it discovered
+   * skills by the same prefix the manifest happened to use. Three Slack skills were on disk, absent from the
+   * plugin, and this passed. A skill is a directory with a `SKILL.md`; `_shared` holds the contract they are
+   * given and is not one.
+   */
   const onDisk = (await readdir(join(ROOT, 'skills'), { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith('gmail-'))
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('_'))
     .map((entry) => `./skills/${entry.name}`)
     .sort();
   assert.deepEqual(

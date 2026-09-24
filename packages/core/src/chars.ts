@@ -46,7 +46,7 @@ export function isDangerous(codePoint: number): boolean {
  * characters from sender-controlled text; returns the text and how many were removed. CRLF becomes LF first.
  *
  * This lives beside the table rather than in the sanitiser because `neutralise` needs it too, and the two must not
- * drift: a pattern that looks for `</untrusted-email-content` cannot see it through a zero-width space, so stripping
+ * drift: a pattern that looks for `</untrusted-content` cannot see it through a zero-width space, so stripping
  * has to happen before any such pattern runs, on every path, not only on the ones that render a body.
  */
 export function stripInvisible(text: string): { text: string; removed: number } {

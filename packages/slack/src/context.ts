@@ -34,10 +34,17 @@ export interface SlackContextOptions {
  */
 async function postExchange(params: Record<string, string>): Promise<unknown> {
   const send = guardSlackRequests(fetch, closedPermit());
+  /*
+   * Bounded, because a refresh makes this call while holding the credentials lock and the account's own lock.
+   * Without a deadline a Slack endpoint that accepts the connection and then says nothing would hold both for as
+   * long as the socket stayed open — blocking every credential operation on the machine, not just this one. The
+   * refresh contract asks the caller to bound the exchange; this is the caller.
+   */
   const response = await send(new URL('/api/oauth.v2.access', SLACK_ORIGIN), {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded;charset=utf-8' },
     body: new URLSearchParams(params).toString(),
+    signal: AbortSignal.timeout(30_000),
   });
   // Slack answers 200 with `ok:false` for a refusal, so the status is not the thing to read — but a 5xx has no
   // JSON body at all, and letting `json()` throw would report a parse error for an outage.

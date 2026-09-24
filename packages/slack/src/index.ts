@@ -22,3 +22,5 @@ export const PACKAGE_NAME = '@agentcomms/slack';
  * since knowing a method's name grants nothing.
  */
 export * from './api/methods.ts';
+
+export { createSlackMcpServer, type SlackMcpOptions, type SlackMcpServer } from './mcp/server.ts';

@@ -35,11 +35,11 @@ Every string a sender controls — body, subject, snippet, display name, filenam
 an attachment — reaches a model inside an envelope:
 
 ```text
-<untrusted-email-content boundary="hQ7c1Ax9" field="body" inbox="acme/gmail" id="18f2c9a1b4e">
+<untrusted-content boundary="hQ7c1Ax9" field="body" inbox="acme/gmail" id="18f2c9a1b4e">
 Subject: Invoice 4471
 
 Please find the invoice attached…
-</untrusted-email-content boundary="hQ7c1Ax9">
+</untrusted-content boundary="hQ7c1Ax9">
 ```
 
 Four things about it are deliberate.
@@ -56,7 +56,7 @@ match is refused with an error rather than escaped, because a tag built from sen
 is exactly the hole the envelope exists to close.
 
 **Anything shaped like the tag itself is rewritten.** Text inside that contains
-`<untrusted-email-content` or `</untrusted-email-content`, with or without whitespace, has its angle
+`<untrusted-content` or `</untrusted-content`, with or without whitespace, has its angle
 bracket replaced by `&lt;` so it cannot be mistaken for structure.
 
 **Control tokens and role markers are neutralised.** Chat-template control tokens — the

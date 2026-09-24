@@ -1,9 +1,8 @@
 {
   "name": "@agentcomms/slack",
-  "version": "0.1.2",
-  "description": "Slack for coding agents: the agent-slack CLI, an MCP server and a library \u2014 read, search and analyse conversations across workspaces, with posting gated by approval.",
+  "version": "0.3.2",
+  "description": "Slack for coding agents: read channels, threads and search across workspaces, and draft messages nothing posts without a person.",
   "type": "module",
-  "private": true,
   "license": "MIT",
   "author": "Criss Moldovan",
   "engines": {
@@ -41,6 +40,12 @@
   },
   "devDependencies": {
     "@agentcomms/core": "workspace:*",
-    "commander": "^15.0.0"
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "commander": "^15.0.0",
+    "zod": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

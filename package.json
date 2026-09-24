@@ -25,7 +25,7 @@
     "verify": "pnpm lint && pnpm build && pnpm typecheck && pnpm test && pnpm verify:skills && pnpm verify:versions && pnpm verify:licenses && pnpm verify:reference && pnpm verify:packages",
     "release": "node scripts/release.mjs",
     "release:publish": "node scripts/release.mjs --publish",
-    "verify:packages": "node scripts/verify-package.mjs packages/core && node scripts/verify-package.mjs packages/gmail && node scripts/verify-package.mjs packages/gmail-mcp",
+    "verify:packages": "node scripts/verify-package.mjs packages/core && node scripts/verify-package.mjs packages/gmail && node scripts/verify-package.mjs packages/gmail-mcp && node scripts/verify-package.mjs packages/slack",
     "sync:skills": "node scripts/sync-skills.mjs",
     "sync:versions": "node scripts/sync-versions.mjs",
     "verify:versions": "node scripts/sync-versions.mjs --check",
