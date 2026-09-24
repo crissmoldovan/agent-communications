@@ -3,6 +3,41 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.4.0
+
+**Slack arrives.** `@agentcomms/slack` reads channels, threads, search, people and files across one or more
+workspaces, drafts messages, and takes them through an approval gate — and nothing posts without a person.
+
+**Read-only means read-only, and Slack enforces it.** Slack's read and write scopes are disjoint: a token holding
+only history and read scopes cannot call `chat.postMessage` at all. A workspace connected in the default `read`
+mode cannot post even if this software has a bug. That promise is exactly "this package cannot post" — a second
+Slack server holding a write token posts without going near this one, and `doctor` reports the ones it can see.
+
+**You bring your own Slack app.** `agent-slack manifest` prints one to create in your own workspace, so the scopes
+are visible before anything is granted and your admins keep control. No client secret is stored anywhere: the
+sign-in is PKCE and the verifier never leaves your machine.
+
+**Nothing posts without a person.** An agent prepares; a person approves at a terminal. The preview shows what the
+recipient will read and **how many people it interrupts** — `@channel` is eight characters whether the room holds
+three people or four hundred, and that number is inside the approval. If the room grows between the preview and
+the post, the words did not change but who reads them did, and the approval is void.
+
+**Everything a sender controls arrives inside an envelope**, and the tag no longer says "email": it is
+`untrusted-content`, because Slack messages were being announced to a model as mail. Mail already in a mailbox
+predates the rename, so the old form is still defused.
+
+Two flags are worth acting on when reading. `mismatch` means the message says one thing in the channel and
+another in its notification text — the gap through which an instruction reaches a model that nobody in the room
+can see. `unrenderable` means part of the message could not be shown.
+
+**Attribution comes from what an app cannot choose.** `chat:write.customize` lets an app post under any name it
+likes; the payload still carries `bot_id` and `user`. A name an app picked for a message is reported as the name
+it wore, never as identity.
+
+**Three new skills** — `slack-setup`, `slack-reading`, `slack-posting` — and a Slack MCP server whose tools cannot
+post. An agent may report a workspace's mode and may ask to widen it, and gets back the steps a person must take,
+with nothing changed.
+
 ## 0.3.2
 
 **A Slack workspace cannot be connected in `send` mode without a person saying so.** The config store now counts a

@@ -2,7 +2,7 @@
 name: gmail-attachments
 description: "Find files people sent, save them to disk with a manifest of what came from where, and attach a local file to a draft. Symptoms: 'find the invoice Sam sent', 'download the attachments from that thread', 'save those PDFs', 'attach the contract to that draft', 'why won't it attach that file'. Not for writing or sending the message — gmail-compose writes drafts and gmail-send sends them."
 license: MIT
-compatibility: "@agentcomms/gmail@0.3.2"
+compatibility: "@agentcomms/gmail@0.4.0"
 metadata:
   group: communications
   lifecycle: release

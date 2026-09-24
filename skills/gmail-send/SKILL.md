@@ -2,7 +2,7 @@
 name: gmail-send
 description: "Send a Gmail draft the user has approved, under the approval policy their mailbox is set to. Symptoms: 'send it', 'ok send that', 'go ahead and send the reply', 'why won't it send', 'it says approval required'. Not for writing the message — gmail-compose writes drafts and hands them here."
 license: MIT
-compatibility: "@agentcomms/gmail@0.3.2"
+compatibility: "@agentcomms/gmail@0.4.0"
 metadata:
   group: communications
   lifecycle: release
