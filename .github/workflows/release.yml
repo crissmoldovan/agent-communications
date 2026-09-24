@@ -8,8 +8,12 @@ name: Release
 # standing risk, and it would also remove the only reason this is allowed to publish at all.
 #
 # It could not always work this way. npm will not configure a trusted publisher for a package that does not exist,
-# so the first release of each package had to happen from a maintainer's machine. That is done; from 0.1.1 the
-# registry knows these three and this workflow is the publisher it trusts.
+# so the **first** release of each package has to happen from a maintainer's machine, after which the registry
+# knows it and this workflow is the publisher it trusts. That was done for core, gmail and gmail-mcp at 0.1.1, and
+# has to be done once more for any package added later — `@agentcomms/slack` is the first such, and 0.4.0 published
+# the other three while it was still missing from the list below. `test/release-packages.test.mjs` now fails if a
+# publishable package is not named here, so the omission cannot repeat; the first publish itself still cannot be
+# done by CI, and that is npm's rule rather than a choice made here.
 #
 # **A pushed `v*` tag publishes.** There was a required reviewer on the `release` environment for one release; it
 # was removed, because in practice it was opened on instruction rather than as an independent check, and a gate
@@ -117,7 +121,7 @@ jobs:
             *)   tag=latest ;;
           esac
           echo "publishing $version under the \"$tag\" dist-tag"
-          for package in core gmail gmail-mcp; do
+          for package in core gmail gmail-mcp slack; do
             echo "::group::@agentcomms/$package"
             pnpm --filter "@agentcomms/$package" publish --access public --no-git-checks --provenance --tag "$tag"
             echo "::endgroup::"
@@ -131,7 +135,7 @@ jobs:
         run: |
           set -euo pipefail
           version=$(node -p "require('./package.json').version")
-          missing="core gmail gmail-mcp"
+          missing="core gmail gmail-mcp slack"
           for attempt in $(seq 1 20); do
             still=""
             for package in $missing; do
