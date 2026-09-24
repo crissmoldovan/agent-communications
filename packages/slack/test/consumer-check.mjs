@@ -1,6 +1,7 @@
 // Runs inside a fresh project that installed the packed tarball (scripts/verify-package.mjs).
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 import { createSlackMcpServer, PACKAGE_NAME, VERSION } from '@agentcomms/slack';
 
 assert.equal(PACKAGE_NAME, '@agentcomms/slack');
@@ -10,7 +11,14 @@ assert.match(VERSION, /^\d+\.\d+\.\d+/);
 const server = await createSlackMcpServer();
 assert.equal(typeof server.connectStdio, 'function');
 
-const bin = ['node_modules', '.bin', process.platform === 'win32' ? 'agent-slack.cmd' : 'agent-slack'].join('/');
+/*
+ * `join`, not a '/'-joined literal.
+ *
+ * On Windows the shell resolves `node_modules\\.bin\\agent-slack.cmd`; handed forward slashes it finds nothing,
+ * `execFileSync` throws, and the catch below turns that into an empty stdout — so the version assertion failed
+ * with `'' !== '0.3.2'` and said nothing about the path. The Gmail consumer check has always used `join`.
+ */
+const bin = join('node_modules', '.bin', process.platform === 'win32' ? 'agent-slack.cmd' : 'agent-slack');
 
 /** Runs the bin and returns what it printed with the status it exited with: a refusal is an answer, not a crash. */
 function run(...args) {
