@@ -288,6 +288,10 @@ throw a draft away
 agent-slack draft delete [options] <draftId>
 ```
 
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
+
 ### `agent-slack post`
 
 take a draft through the approval gate

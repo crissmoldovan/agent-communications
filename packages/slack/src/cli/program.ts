@@ -654,6 +654,23 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
     };
   };
 
+  /**
+   * A draft, if it belongs to the workspace being asked about.
+   *
+   * Drafts are stored by id in one directory shared by every workspace, so without this a caller naming workspace
+   * A could prepare and post workspace B's draft. Slack would probably refuse the channel id, which is luck
+   * rather than a check — and on the two workspaces of one organisation that share channel ids, it would not.
+   */
+  const ownDraft = async (store: ReturnType<typeof openDraftStore>, accountId: string, draftId: string) => {
+    const found = await store.get(draftId);
+    if (found.accountId !== accountId) {
+      throw new CommsError('NOT_FOUND', `no draft "${draftId}" in this workspace`, {
+        hint: 'List this workspace’s drafts with `agent-slack draft list --workspace <name>`.',
+      });
+    }
+    return found;
+  };
+
   const draft = program.command('draft').description('compose and keep messages locally; nothing reaches Slack');
 
   workspaceOption(draft.command('create'))
@@ -712,12 +729,14 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
       }),
     );
 
-  draft
-    .command('delete <draftId>')
+  workspaceOption(draft.command('delete <draftId>'))
     .description('throw a draft away')
     .action(
-      act(async (context, _options, draftId: string) => {
-        await openDraftStore(context.core.paths.stateDir, context.now).remove(draftId);
+      act(async (context, _options, draftId: string, flags: Options) => {
+        const { account } = requireWorkspace(await context.config(), String(flags.workspace));
+        const store = openDraftStore(context.core.paths.stateDir, context.now);
+        await ownDraft(store, account.id, draftId);
+        await store.remove(draftId);
         writeResult({ draftId, deleted: true }, output(), () => `Deleted ${draftId}.`, streams);
       }),
     );
@@ -731,7 +750,7 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
       act(async (context, options, flags: Options) => {
         const gate = await gateDeps(context, String(flags.workspace));
         const store = openDraftStore(context.core.paths.stateDir, context.now);
-        const target = await store.get(String(flags.draft));
+        const target = await ownDraft(store, gate.accountId, String(flags.draft));
         const prepared = await preparePost(gate, target, new NameBook());
         writeResult(prepared, output(), (data) => renderChannelPreview(data.preview), streams);
       }),
@@ -746,12 +765,12 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
       act(async (context, options, flags: Options) => {
         const gate = await gateDeps(context, String(flags.workspace));
         const store = openDraftStore(context.core.paths.stateDir, context.now);
-        const target = await store.get(String(flags.draft));
+        const target = await ownDraft(store, gate.accountId, String(flags.draft));
         const posted = await postPrepared(
           gate,
           target,
           String(flags.approval),
-          { to: [String(flags.expectChannel)], cc: [], bcc: [], subject: '' },
+          String(flags.expectChannel),
           new NameBook(),
         );
         writeResult(posted, output(), (data) => `Posted to ${data.channel} at ${data.ts}.`, streams);

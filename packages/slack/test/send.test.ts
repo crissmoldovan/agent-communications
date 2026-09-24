@@ -142,13 +142,13 @@ test('a workspace on `never` cannot prepare at all, and is told how to send it b
 test('a prepared post goes once, through a permit that is open for exactly that request', async () => {
   const { deps, draft, book, sent } = await setUp();
   const prepared = await preparePost(deps, draft, book);
-  const posted = await postPrepared(deps, draft, prepared.approvalId, prepared.expect, book);
+  const posted = await postPrepared(deps, draft, prepared.approvalId, 'C1', book);
   assert.equal(posted.ts, '1700000000.000100');
   assert.ok(sent.some((call) => call.method === 'chat.postMessage'));
   assert.equal(deps.permit.approvalId, null, 'closed again afterwards');
 
   // The same approval cannot be spent twice: the claim marker is single-use across processes.
-  await assert.rejects(postPrepared(deps, draft, prepared.approvalId, prepared.expect, book), /nothing was sent/);
+  await assert.rejects(postPrepared(deps, draft, prepared.approvalId, 'C1', book), /nothing was sent/);
 });
 
 test('an edit between the preview and the post voids the approval', async () => {
@@ -160,7 +160,7 @@ test('an edit between the preview and the post voids the approval', async () => 
     'something else',
   );
   await assert.rejects(
-    postPrepared(deps, edited, prepared.approvalId, prepared.expect, book),
+    postPrepared(deps, edited, prepared.approvalId, 'C1', book),
     /nothing was sent/,
     'the bytes approved are the bytes posted, or nothing is',
   );
@@ -186,7 +186,7 @@ test('a payload change the visible text does not show still voids the approval',
   };
   assert.equal(tampered.payload.text, draft.payload.text, 'the visible text is untouched');
   assert.equal(tampered.revision, draft.revision, 'and so is the revision, so only the bytes differ');
-  await assert.rejects(postPrepared(deps, tampered, prepared.approvalId, prepared.expect, book), /nothing was sent/);
+  await assert.rejects(postPrepared(deps, tampered, prepared.approvalId, 'C1', book), /nothing was sent/);
 });
 
 test('a room that grew between the preview and the post voids the approval', async () => {
@@ -226,17 +226,14 @@ test('a room that grew between the preview and the post voids the approval', asy
   };
   const prepared = await preparePost(deps, draft, new NameBook());
   members = 412;
-  await assert.rejects(
-    postPrepared(deps, draft, prepared.approvalId, prepared.expect, new NameBook()),
-    /nothing was sent/,
-  );
+  await assert.rejects(postPrepared(deps, draft, prepared.approvalId, 'C1', new NameBook()), /nothing was sent/);
 });
 
 test('an approval prepared for one account cannot be spent by another', async () => {
   const { deps, draft, book } = await setUp();
   const prepared = await preparePost(deps, draft, book);
   await assert.rejects(
-    postPrepared({ ...deps, postingAs: 'U9' }, draft, prepared.approvalId, prepared.expect, book),
+    postPrepared({ ...deps, postingAs: 'U9' }, draft, prepared.approvalId, 'C1', book),
     /nothing was sent/,
     'two accounts in one workspace are two different people saying the same words',
   );
@@ -245,17 +242,14 @@ test('an approval prepared for one account cannot be spent by another', async ()
 test('a caller that restates the wrong destination cannot post', async () => {
   const { deps, draft, book } = await setUp();
   const prepared = await preparePost(deps, draft, book);
-  await assert.rejects(
-    postPrepared(deps, draft, prepared.approvalId, { ...prepared.expect, to: ['C_OTHER'] }, book),
-    /nothing was sent/,
-  );
+  await assert.rejects(postPrepared(deps, draft, prepared.approvalId, 'C_OTHER', book), /nothing was sent/);
 });
 
 test('a failed post is recorded rather than left in flight', async () => {
   const { deps, draft, book, approvals } = await setUp();
   const prepared = await preparePost(deps, draft, book);
   const failing = { ...deps, call: fakeSlack({ 'chat.postMessage': { ok: false, error: 'channel_not_found' } }).call };
-  await assert.rejects(postPrepared(failing, draft, prepared.approvalId, prepared.expect, book));
+  await assert.rejects(postPrepared(failing, draft, prepared.approvalId, 'C1', book));
   const record = await approvals.get(prepared.approvalId);
   assert.notEqual(record?.state, 'sending', 'an approval left in `sending` is one whose outcome nobody knows');
 });
@@ -301,7 +295,7 @@ test('the gate writes what it did, so `audit tail` can answer what was posted', 
     audit: { append: async (r: { operation: string; outcome: string }) => void written.push(r) },
   };
   const prepared = await preparePost(audited, draft, book);
-  await postPrepared(audited, draft, prepared.approvalId, prepared.expect, book);
+  await postPrepared(audited, draft, prepared.approvalId, 'C1', book);
   assert.deepEqual(
     written.map((row) => `${row.operation}:${row.outcome}`),
     ['slack.post.prepare:started', 'slack.post:ok'],

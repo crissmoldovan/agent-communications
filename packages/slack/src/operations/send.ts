@@ -279,10 +279,28 @@ export async function postPrepared(
   deps: PostDeps,
   draft: SlackDraft,
   approvalId: string,
-  expect: Expectation,
+  expectChannel: string,
   book: NameBook,
 ): Promise<PostedMessage> {
   const payload = draft.payload;
+  /*
+   * The caller restates the destination; this builds the rest.
+   *
+   * It used to take the whole `Expectation`, which meant the CLI had to reconstruct a value `preparePost` had
+   * composed — and it reconstructed it wrongly, with an empty subject against the stored `reaches N`. The command
+   * therefore refused every post it was given, and no test saw it because the tests called this function directly
+   * with the value `preparePost` had returned. A caller can honestly say which channel it believes it is posting
+   * to; it cannot honestly restate a reach it did not measure, so it no longer pretends to.
+   */
+  if (expectChannel !== payload.channel) {
+    throw new CommsError(
+      'APPROVAL_VOID',
+      `nothing was sent: this draft posts to ${payload.channel}, not ${expectChannel}`,
+      {
+        hint: 'Check the channel in the preview, then pass that one.',
+      },
+    );
+  }
   const { channel, members, why } = await roomOf(deps.call, payload.channel);
   if (channel) book.addChannel(channel);
   const preview = previewOf({
@@ -319,7 +337,8 @@ export async function postPrepared(
     inboxId: deps.accountId,
     inboxSub: deps.postingAs,
     policy: deps.policy,
-    expect,
+    // Built from the live values, the same way `preparePost` built the stored one — one source, so they agree.
+    expect: expectationFor(payload, preview.notifies),
   });
 
   try {
