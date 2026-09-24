@@ -1,4 +1,6 @@
 import { isDangerous } from './chars.ts';
+import { paint } from './cli-runtime.ts';
+import type { InstallResult } from './mcp-install.ts';
 
 /**
  * One renderer for every surface a send preview is shown on — the chat, an elicitation form, a terminal. Text the
@@ -324,5 +326,38 @@ export function renderChannelPreview(preview: ChannelPreview): string {
 
   lines.push('', `── ${truncateDisplay(preview.channel, 60)} · ${describeNotifies(preview.notifies)}`);
   if (preview.policy) lines.push(escapeForDisplay(preview.policy));
+  return lines.join('\n');
+}
+
+/**
+ * What an MCP install did, or would do.
+ *
+ * Here rather than in either package: the result shape is `@agentcomms/core`'s, so a second renderer would be a
+ * second place for the same words to drift. Gmail re-exports it under its old name so nothing that imported it
+ * has to change.
+ */
+export function renderInstall(result: InstallResult, color: boolean): string {
+  const lines: string[] = [];
+  if (result.applied) {
+    lines.push(
+      paint(
+        color,
+        'green',
+        `Registered "${result.name}" with ${result.client}${result.method === 'file' ? ` in ${result.configPath}` : ''}.`,
+      ),
+      'Restart the client to pick it up.',
+    );
+  } else {
+    lines.push(
+      paint(color, 'bold', `Add this to ${result.configPath ?? `the MCP configuration of ${result.client}`}:`),
+      result.snippet.trimEnd(),
+    );
+  }
+  lines.push(
+    result.verified
+      ? paint(color, 'green', `Checked: ${result.verifyDetail}`)
+      : paint(color, 'yellow', `Not checked: ${result.verifyDetail ?? 'skipped'}`),
+  );
+  for (const warning of result.warnings) lines.push('', paint(color, 'red', warning));
   return lines.join('\n');
 }

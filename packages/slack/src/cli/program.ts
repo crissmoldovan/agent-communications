@@ -47,6 +47,7 @@ import {
   renderDoctor,
   renderFiles,
   renderHistory,
+  renderInstall,
   renderManifestHelp,
   renderMode,
   renderPeople,
@@ -838,7 +839,7 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
       }),
     );
 
-  program
+  const mcp = program
     .command('mcp')
     .description('run the MCP server on stdio, for a coding agent to connect to')
     .option('--workspace <name>', 'pin the server to one workspace; every tool then acts on it and no other')
@@ -850,6 +851,49 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
         ...(flags.workspace ? { workspace: String(flags.workspace) } : {}),
       });
     });
+
+  mcp
+    .command('install')
+    .description('register this server with an MCP client, and prove it starts')
+    .addOption(
+      new Option('--client <client>', 'which client to register with').choices([
+        'claude-code',
+        'claude-desktop',
+        'codex',
+        'cursor',
+        'gemini',
+        'vscode',
+        'json',
+      ]),
+    )
+    .option('--name <name>', 'the name the client will show', 'slack')
+    .option('--workspace <name>', 'pin the server to one workspace')
+    .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
+    .option('--no-verify', 'do not start the server to check the entry works')
+    .option('--force', 'replace an entry of the same name — this is how you upgrade', false)
+    .option('--print', 'only print what would be written', false)
+    .action(
+      act(async (context, options, flags: Options) => {
+        /*
+         * The parent's value counts too — see the note in the Gmail package, which had this bug shipped.
+         *
+         * `mcp` and `mcp install` both take `--workspace`, and Commander gives a repeated name to the parent, so
+         * the subcommand's own option is always undefined and the pin is silently dropped.
+         */
+        const pinned = (flags.workspace ?? mcp.opts().workspace) as string | undefined;
+        const { mcpInstall } = await import('../mcp/install.ts');
+        const result = await mcpInstall(context, {
+          client: (flags.client ?? 'claude-code') as Parameters<typeof mcpInstall>[1]['client'],
+          name: flags.name as string | undefined,
+          workspace: pinned,
+          launcher: flags.launcher as 'managed' | 'npx' | 'local' | undefined,
+          noVerify: flags.verify === false,
+          apply: flags.print !== true,
+          force: flags.force === true,
+        });
+        writeResult(result, output(), () => renderInstall(result, options.color), streams);
+      }),
+    );
 
   // ── the hidden half of a two-step sign-in ───────────────────────────────────────────────────────────────────
 

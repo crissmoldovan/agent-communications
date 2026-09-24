@@ -1591,3 +1591,48 @@ test('one workspace cannot prepare or post another’s draft', async () => {
   assert.equal(stolen.code, EXIT_CODES.NOT_FOUND);
   assert.match(JSON.stringify(stolen.json<Envelope<never>>()), /no draft/);
 });
+
+test('`mcp install --workspace` actually pins the registered server', async () => {
+  /*
+   * `mcp` and `mcp install` both take `--workspace`, and Commander gives a repeated name to the parent — so the
+   * subcommand's own option was always undefined and the pin was silently dropped. A server meant to reach one
+   * workspace was registered reaching every one on the machine, which is the opposite of what the flag is for.
+   * The Gmail package shipped the same bug at 0.4.0.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  const result = await cli(harness, [
+    '--json',
+    'mcp',
+    'install',
+    '--client',
+    'json',
+    '--launcher',
+    'local',
+    '--workspace',
+    'acme',
+    '--no-verify',
+  ]);
+  assert.equal(result.code, EXIT_CODES.OK, result.stderr);
+  const args = result.json<Envelope<{ entry: { args: string[] } }>>().data?.entry.args ?? [];
+  assert.ok(args.includes('--workspace'), `the pin reached the entry: ${args.join(' ')}`);
+  assert.equal(args[args.indexOf('--workspace') + 1], 'acme');
+});
+
+test('`mcp install` refuses a workspace that does not exist, before writing anything', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  const result = await cli(harness, [
+    '--json',
+    'mcp',
+    'install',
+    '--client',
+    'json',
+    '--launcher',
+    'local',
+    '--workspace',
+    'nope',
+    '--no-verify',
+  ]);
+  assert.equal(result.code, EXIT_CODES.NOT_FOUND);
+});

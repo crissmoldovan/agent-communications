@@ -11,6 +11,7 @@ import {
   type InboxConfig,
   isValidAlias,
   keepAndReport,
+  listRegisteredServers,
   nameAvailable,
   newInboxId,
   PUBLIC_MAILBOX_DOMAINS,
@@ -25,7 +26,7 @@ import { capabilitiesOf, parseGrantedScopes, tierOf } from '../auth/scopes.ts';
 import { clientSecretRef, refreshTokenRef } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';
 import { getProfileWithToken } from '../gmail-api/profile.ts';
-import { findUngatedGmailServers, type LegacyServerFinding, listRegisteredServers } from './client-configs.ts';
+import { findUngatedGmailServers, type LegacyServerFinding } from './client-configs.ts';
 import { requireNewInboxName } from './inbox-names.ts';
 import { readSmallFile } from './small-file.ts';
 

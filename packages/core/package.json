@@ -50,6 +50,7 @@
     "@napi-rs/keyring": "^2.1.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
     "@types/html-to-text": "^9.0.4"
   }
 }

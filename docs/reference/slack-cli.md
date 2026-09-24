@@ -357,7 +357,7 @@ agent-slack approve [options] <approvalId>
 run the MCP server on stdio, for a coding agent to connect to
 
 ```
-agent-slack mcp [options]
+agent-slack mcp [options] [command]
 ```
 
 | Option | What it does | Default |

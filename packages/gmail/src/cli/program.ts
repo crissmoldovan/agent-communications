@@ -1176,11 +1176,21 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             hint: 'For example: `agent-gmail mcp-install --client claude-code`.',
           });
         }
+        /*
+         * The parent's value counts too.
+         *
+         * `mcp` and `mcp install` both take this flag — one pins the server being *run*, the other the server
+         * being *registered* — and Commander gives a repeated name to the parent, so the subcommand's own option
+         * was always undefined. `mcp install --inbox work` therefore registered an **unpinned** server: one meant
+         * to reach a single mailbox reaching every one on the machine, silently, which is the opposite of what
+         * the flag is for. Shipped that way in 0.4.0.
+         */
+        const pinned = options.inbox ?? mcp.opts().inbox;
         const { mcpInstall } = await import('../mcp/install.ts');
         const result = await mcpInstall(context, {
           client: options.client as SupportedClient,
           name: String(options.name ?? 'gmail'),
-          inbox: options.inbox ? String(options.inbox) : undefined,
+          inbox: pinned ? String(pinned) : undefined,
           readOnly: Boolean(options.readOnly),
           launcher: options.launcher as Launcher | undefined,
           noVerify: options.verify === false,

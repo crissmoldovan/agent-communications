@@ -362,3 +362,6 @@ export function renderFiles(result: FilesResult, color: boolean): string {
   if (!result.complete) lines.push('', paint(color, 'dim', `More remain — ask for page ${result.page}.`));
   return lines.join('\n');
 }
+
+// Shared with the Gmail package, from core: one renderer for one result shape.
+export { renderInstall } from '@agentcomms/core';

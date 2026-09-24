@@ -222,32 +222,6 @@ export function renderImport(result: ImportResult, color: boolean): string {
   return lines.join('\n');
 }
 
-export function renderInstall(result: InstallResult, color: boolean): string {
-  const lines: string[] = [];
-  if (result.applied) {
-    lines.push(
-      paint(
-        color,
-        'green',
-        `Registered "${result.name}" with ${result.client}${result.method === 'file' ? ` in ${result.configPath}` : ''}.`,
-      ),
-      'Restart the client to pick it up.',
-    );
-  } else {
-    lines.push(
-      paint(color, 'bold', `Add this to ${result.configPath ?? `the MCP configuration of ${result.client}`}:`),
-      result.snippet.trimEnd(),
-    );
-  }
-  lines.push(
-    result.verified
-      ? paint(color, 'green', `Checked: ${result.verifyDetail}`)
-      : paint(color, 'yellow', `Not checked: ${result.verifyDetail ?? 'skipped'}`),
-  );
-  for (const warning of result.warnings) lines.push('', paint(color, 'red', warning));
-  return lines.join('\n');
-}
-
 export function renderSearch(result: SearchResult, color: boolean): string {
   const lines: string[] = [];
   if (result.query.rewrites.length > 0) {
@@ -740,3 +714,6 @@ export function renderSetupPlan(
 
   return lines.join('\n').trimEnd();
 }
+
+// Moved to `@agentcomms/core` when Slack needed the same renderer; re-exported so callers here are unchanged.
+export { renderInstall } from '@agentcomms/core';

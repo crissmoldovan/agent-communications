@@ -764,3 +764,32 @@ test('setup --launcher reaches the headless agent step, and the entry it writes 
   assert.match(written, /packages[/\\]+gmail[/\\]+(src|dist)[/\\]+cli\./, `${written}\n${result.stderr}`);
   assert.doesNotMatch(written, /node_modules/, `the managed default was used instead:\n${written}`);
 });
+
+test('`mcp install --inbox` actually pins the registered server', async () => {
+  /*
+   * `mcp` and `mcp install` both take `--inbox`, and Commander gives a repeated option name to the *parent* — so
+   * the subcommand's own value was always undefined and the pin was silently dropped. A server registered to
+   * reach one mailbox reached every one on the machine instead, which is the opposite of what the flag is for.
+   *
+   * It shipped that way in 0.4.0, and could not have been caught where the installer was already tested: those
+   * tests call `mcpInstall` directly, and the defect is entirely in how the CLI hands it the option.
+   */
+  const harness = await newHarness();
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1' });
+  const result = await cli(harness, [
+    '--json',
+    'mcp',
+    'install',
+    '--client',
+    'json',
+    '--launcher',
+    'local',
+    '--inbox',
+    'work',
+    '--no-verify',
+  ]);
+  assert.equal(result.code, 0, `${result.stdout}${result.stderr}`);
+  const args: string[] = JSON.parse(result.stdout).data.entry.args;
+  assert.ok(args.includes('--inbox'), `the pin reached the entry: ${args.join(' ')}`);
+  assert.equal(args[args.indexOf('--inbox') + 1], 'work');
+});

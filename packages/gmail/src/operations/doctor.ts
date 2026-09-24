@@ -8,15 +8,17 @@ import {
   formerNameRefusal,
   homeDirectory,
   isGroupOrWorldAccessible,
+  listRegisteredServers,
   lookupName,
   probeKeychain,
+  type RegisteredServer,
   secretsStoreOf,
 } from '@agentcomms/core';
 import { capabilitiesOf, scopesFor, TIERS, type Tier } from '../auth/scopes.ts';
 import { TokenSource } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';
 import { VERSION } from '../version.ts';
-import { findUngatedGmailServers, listRegisteredServers, type RegisteredServer } from './client-configs.ts';
+import { findUngatedGmailServers } from './client-configs.ts';
 
 /**
  * The version an argument pins, or null when it pins none.

@@ -1,9 +1,9 @@
 import { lstat, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { listRegisteredServers } from '@agentcomms/core';
 import { parseClientJson } from '../auth/oauth.ts';
 import type { GmailContext } from '../context.ts';
-import { listRegisteredServers } from './client-configs.ts';
 import { readSmallFile } from './small-file.ts';
 
 /**
