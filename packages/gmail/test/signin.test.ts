@@ -11,7 +11,13 @@ import { renderSignInStarted } from '../src/cli/render.ts';
 import { GmailContext } from '../src/context.ts';
 import { clientAdd } from '../src/operations/clients.ts';
 import { inboxList } from '../src/operations/inboxes.ts';
-import { detachListener, finishSignIn, resolveListenerEntry, startSignIn } from '../src/operations/signin.ts';
+import {
+  checkedWait,
+  detachListener,
+  finishSignIn,
+  resolveListenerEntry,
+  startSignIn,
+} from '../src/operations/signin.ts';
 import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
 
 const CLI_ENTRY = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
@@ -524,4 +530,18 @@ test('flow ids draw every character of the alphabet evenly', () => {
   // Biased, the first eight sit 25% above the rest. Unbiased, the ratio's noise is about half a percent, so a 10%
   // bound fails every biased run and no fair one.
   assert.ok(Math.abs(mean(first) / mean(rest) - 1) < 0.1, `${mean(first)} vs ${mean(rest)} (expected ~${expected})`);
+});
+
+test('a wait is whole seconds from 0 to the sign-in’s life, and nothing else, whoever passes it', () => {
+  // The surfaces hand over text (`--wait`) or a number the schema has already made whole; the check is also the
+  // operation's own, so a caller inside the package cannot hand it a wait no surface would accept.
+  assert.equal(checkedWait(undefined, 'cli'), 60);
+  for (const good of [0, 600, '0', ' 42 ', '600']) assert.equal(checkedWait(good, 'cli'), Number(good));
+  for (const bad of [1.5, -1, 601, Number.NaN, Number.POSITIVE_INFINITY, true, '', ' ', '1.5', '1e2', 'abc']) {
+    assert.throws(
+      () => checkedWait(bad, 'mcp'),
+      (error: unknown) => error instanceof CommsError && error.code === 'USAGE' && /is not a wait/.test(error.message),
+      `${String(bad)} was taken as a wait`,
+    );
+  }
 });
