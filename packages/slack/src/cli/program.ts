@@ -25,6 +25,7 @@ import {
 import { Command, CommanderError, Option } from 'commander';
 import type { FetchLike } from '../api/guard.ts';
 import { isDue, isExpired, parseBundle, type TokenBundle } from '../auth/bundle.ts';
+import { exitAfterRefreshes, type SignalHost, settleBeforeExit } from '../auth/exit.ts';
 import { compose, type Mention } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
@@ -92,6 +93,8 @@ export interface CliDeps extends SlackContextOptions {
   read?: FetchLike;
   /** Where Slack is, for a test that stands one up locally rather than relaxing the origin check. */
   slackBaseUrl?: string;
+  /** Where the hold on SIGINT and SIGTERM listens, and how it exits. Injected so a test is not killed by it. */
+  signals?: { host: SignalHost; exit(code: number): void };
 }
 
 interface GlobalOptions {
@@ -169,7 +172,20 @@ configuration problem.`,
       ran = true;
       softExit = null;
       const context = new SlackContext({ ...deps, env, surface: 'cli' });
-      exitCode = await runCommand(output(), () => body(context, globals(), ...args), streams);
+      /*
+       * Any command that reads may refresh a token, and the MCP server's two protections apply here for the same
+       * reason: Ctrl-C between Slack's reply and the write would lose the renewed token, and a token kept because
+       * the store failed is never written if the process simply ends — a command has no next call. So the command
+       * runs under the same signal hold, and before it returns, one more attempt is made to write down what it is
+       * holding, with a line on stderr naming the workspace if that fails too.
+       */
+      const release = exitAfterRefreshes({ ...deps.signals, stderr: streams.stderr });
+      try {
+        exitCode = await runCommand(output(), () => body(context, globals(), ...args), streams);
+        await settleBeforeExit(streams.stderr);
+      } finally {
+        release();
+      }
       if (exitCode === 0 && softExit !== null) exitCode = softExit;
     };
 

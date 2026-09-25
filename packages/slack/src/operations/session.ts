@@ -145,6 +145,7 @@ export async function openWorkspace(
     });
   }
   const secrets = await context.secrets();
+  const persist = deps.persist ?? context.persist;
   const refresh: RefreshDeps = {
     secrets,
     openSecrets: () => context.secrets(),
@@ -153,7 +154,7 @@ export async function openWorkspace(
     now: context.now,
     exchange: refreshExchange(context, account.oauthClientId),
     alias: name,
-    ...(deps.persist ? { persist: deps.persist } : {}),
+    ...(persist ? { persist } : {}),
   };
   const { token } = await accessTokenFor(refresh, account.id, account.secretRef);
   return {

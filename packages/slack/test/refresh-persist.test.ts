@@ -7,12 +7,12 @@ import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { callSlack } from '../src/api/call.ts';
 import { closedPermit } from '../src/api/guard.ts';
 import { serialiseBundle, type TokenBundle } from '../src/auth/bundle.ts';
+import { exitAfterRefreshes, type SignalHost } from '../src/auth/exit.ts';
 import { accessTokenFor } from '../src/auth/refresh.ts';
 import { run } from '../src/cli/program.ts';
-import { exitAfterRefreshes, type SignalHost } from '../src/mcp/server.ts';
 import { openWorkspace } from '../src/operations/session.ts';
 import { newHarness, slackOk } from './support/harness.ts';
-import { contextFor, expired, HOUR, QUICK, stored } from './support/refresh.ts';
+import { contextFor, expired, flakyStore, HOUR, QUICK, stored, until } from './support/refresh.ts';
 
 /**
  * Where the result goes: the error surfaces, a store that will not take it, a forced renewal, and shutdown.
@@ -79,26 +79,6 @@ test('Slack’s error code reaches the MCP error payload', async () => {
 });
 
 // ── A store that will not take the result ───────────────────────────────────────────────────────────────────────
-
-/** The harness's file store, with its writes switched off on demand and counted. */
-function flakyStore(inner: SecretStore) {
-  const self = {
-    failing: false,
-    attempts: 0,
-    kind: inner.kind,
-    get: (ref: string) => inner.get(ref),
-    delete: (ref: string) => inner.delete(ref),
-    invalidate: (ref: string) => inner.invalidate(ref),
-    async set(ref: string, value: string) {
-      if (self.failing) {
-        self.attempts += 1;
-        throw new CommsError('SECRET_STORE_UNAVAILABLE', 'the store is unavailable');
-      }
-      return inner.set(ref, value);
-    },
-  };
-  return self;
-}
 
 test('a store that keeps failing after Slack answered: the token is returned, kept, and written on the next call', async () => {
   /*
@@ -257,6 +237,132 @@ test('a kept result is written over the refresh-uncertain another process made o
   assert.equal(after?.refreshToken, 'fake-new-refresh');
 });
 
+test('while the store fails reads as well as writes, the renewed token this process holds is still used', async () => {
+  /*
+   * The keychain fails every call fast while one is held by a dialog — reads included — and a file store with a
+   * broken directory does the same. The token in hand is still the only live one, and hours from expiry.
+   */
+  const harness = await newHarness();
+  const account = await expired(harness);
+  const inner = await harness.core.secrets('file');
+  let failing = false;
+  const unavailable = () => new CommsError('KEYCHAIN_APPROVAL_PENDING', 'the keychain is waiting for a person');
+  const store: SecretStore = {
+    kind: 'file',
+    get: async (ref) => {
+      if (failing) throw unavailable();
+      return inner.get(ref);
+    },
+    delete: (ref) => inner.delete(ref),
+    invalidate: (ref) => inner.invalidate(ref),
+    async set(ref, value) {
+      if (failing) throw unavailable();
+      return inner.set(ref, value);
+    },
+  };
+  const context = contextFor(harness);
+  context.secrets = async () => store;
+  harness.reply = () => {
+    failing = true;
+    return slackOk({ authed_user: { access_token: 'fake-new-access', refresh_token: 'fake-new-refresh' } });
+  };
+
+  assert.equal((await openWorkspace(context, 'acme', { persist: QUICK })).call.token, 'fake-new-access');
+  const again = await openWorkspace(context, 'acme', { persist: QUICK });
+  assert.equal(again.call.token, 'fake-new-access', 'a failed read turned the token in hand into an error');
+
+  failing = false;
+  await openWorkspace(context, 'acme', { persist: QUICK });
+  assert.equal((await stored(harness, account.secretRef))?.refreshToken, 'fake-new-refresh');
+  assert.equal(harness.calls.length, 1, 'Slack was asked again to fix a storage problem');
+});
+
+/**
+ * The keychain's timeout, as it really behaves: the call is reported failed while the native write it started
+ * stays pending on an OS dialog, and lands when the person answers — `landsAfterMs` later. Reads fail fast while
+ * it is pending, and `settled()` resolves once it has landed.
+ */
+function markerLandsLate(inner: SecretStore, landsAfterMs: number): SecretStore & { settled(): Promise<void> } {
+  let landing: Promise<void> | null = null;
+  let busy = false;
+  const refuse = (): never => {
+    throw new CommsError('KEYCHAIN_APPROVAL_PENDING', 'the keychain is waiting for a person');
+  };
+  return {
+    kind: inner.kind,
+    async get(ref) {
+      if (busy) refuse();
+      return inner.get(ref);
+    },
+    delete: (ref) => inner.delete(ref),
+    invalidate: (ref) => inner.invalidate(ref),
+    async set(ref, value) {
+      if (busy) refuse();
+      if (landing === null) {
+        busy = true;
+        landing = (async () => {
+          await new Promise((resolve) => setTimeout(resolve, landsAfterMs));
+          await inner.set(ref, value);
+          busy = false;
+        })();
+        refuse();
+      }
+      return inner.set(ref, value);
+    },
+    settled: async () => {
+      await landing;
+    },
+  };
+}
+
+test('a marker whose write failed but landed later is taken back before anyone else can find it', async () => {
+  /*
+   * Nothing was sent — the exchange never started — but the marker arrives once the dialog is answered, with no
+   * process behind it. Left there, every call is told another process is refreshing, and two minutes later that a
+   * refresh was interrupted: a re-authorisation for a token that never left this machine.
+   */
+  const harness = await newHarness();
+  const account = await expired(harness);
+  const store = markerLandsLate(await harness.core.secrets('file'), 20);
+  const context = contextFor(harness);
+  context.secrets = async () => store;
+  harness.reply = () =>
+    slackOk({ authed_user: { access_token: 'fake-new-access', refresh_token: 'fake-new-refresh' } });
+
+  // A wait long enough that a loaded machine still sees the write land inside it.
+  const patient = { budgetMs: 5_000, backoffMs: [1] };
+  await assert.rejects(openWorkspace(context, 'acme', { persist: patient }), { code: 'KEYCHAIN_APPROVAL_PENDING' });
+  assert.equal(harness.calls.length, 0, 'the token was sent without its marker');
+  await store.settled();
+  const after = await stored(harness, account.secretRef);
+  assert.equal(after?.state, 'ready', 'a marker nobody is behind was left in the store');
+  assert.equal(after?.attempt, undefined);
+
+  const session = await openWorkspace(context, 'acme', { persist: QUICK });
+  assert.equal(session.call.token, 'fake-new-access');
+  assert.equal(harness.calls.length, 1);
+});
+
+test('a marker that lands after the wait for it is given up is taken back by the next call', async () => {
+  // The person answers the dialog later than this process waits. The next call here still owns the marker.
+  const harness = await newHarness();
+  const account = await expired(harness);
+  const store = markerLandsLate(await harness.core.secrets('file'), 400);
+  const context = contextFor(harness);
+  context.secrets = async () => store;
+  harness.reply = () =>
+    slackOk({ authed_user: { access_token: 'fake-new-access', refresh_token: 'fake-new-refresh' } });
+
+  await assert.rejects(openWorkspace(context, 'acme', { persist: QUICK }), { code: 'KEYCHAIN_APPROVAL_PENDING' });
+  await store.settled();
+  assert.equal((await stored(harness, account.secretRef))?.state, 'refreshing', 'the marker should have landed');
+
+  const session = await openWorkspace(context, 'acme', { persist: QUICK });
+  assert.equal(session.call.token, 'fake-new-access', 'the next call waited on a refresh nobody is making');
+  assert.equal((await stored(harness, account.secretRef))?.refreshToken, 'fake-new-refresh');
+  assert.equal(harness.calls.length, 1);
+});
+
 // ── A token Slack rejects before its recorded expiry ────────────────────────────────────────────────────────────
 
 /** A read fetch that rejects every token but `accepted`, and records which it was shown. */
@@ -338,15 +444,6 @@ test('a write is never retried after a rejection, because its permit is already 
   assert.equal(harness.calls.length, 0, 'a rejected post started a refresh');
   assert.equal(slack.shown.length, 1);
 });
-
-/** Polls for a condition rather than sleeping a fixed time, which a loaded machine makes too short. */
-async function until(condition: () => boolean, timeoutMs = 20_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
-    if (Date.now() > deadline) assert.fail('timed out waiting');
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
 
 // ── Shutdown ────────────────────────────────────────────────────────────────────────────────────────────────────
 

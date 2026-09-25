@@ -31,7 +31,7 @@ import {
  *
  *   ready ──(lock, re-read, still due)──> refreshing{attemptId} ──> one bounded call
  *     ├─ ok ─────────────────────────────> ready (new bundle), the store retried — never Slack
- *     ├─ not sent (DNS, refused, TLS) ───> ready again, unchanged: the token never left
+ *     ├─ not sent (DNS, connect, TLS) ───> ready again, unchanged: the token never left
  *     ├─ Slack refused without using it ─> ready again, unchanged, with Slack's code
  *     ├─ Slack said the token is dead ───> refresh-uncertain, reason `dead`
  *     └─ anything else ──────────────────> refresh-uncertain, reason `uncertain`
@@ -87,7 +87,7 @@ export interface PersistPolicy {
  *
  * Deliberately longer than everything done while it is held: a marker write (up to twelve seconds against a
  * keychain), the bounded Slack call (thirty), and the write afterwards (up to a minute of retries, then one more
- * call). The repository's lock documentation advises against network work inside a critical section for good
+ * call) — or, when the marker write fails, the same minute spent waiting to take it back. The repository's lock documentation advises against network work inside a critical section for good
  * reason — but the alternative here is releasing the lock around the one call that must not happen twice, so
  * instead the window is made wide enough that a normal refresh cannot outlive it, and the marker covers the
  * abnormal one.
@@ -115,21 +115,27 @@ const PERSIST: PersistPolicy = { budgetMs: 60_000, backoffMs: [250, 500, 1_000, 
  */
 const FORCED_RENEWAL_MIN_AGE_MS = 10 * 60_000;
 
-/** One in-flight refresh per account per process, so concurrent callers here share a result instead of racing. */
-const inFlight = new Map<string, Promise<TokenBundle>>();
+/**
+ * One in-flight refresh per account per process, so concurrent callers here share a result instead of racing. The
+ * workspace's name rides along, so an exit that cannot wait for one can say which workspace it left.
+ */
+const inFlight = new Map<string, { readonly work: Promise<TokenBundle>; readonly alias: string | undefined }>();
 
 /**
  * A result this process holds and could not write down, per account.
  *
  * After Slack answers, the old refresh token is spent; if every write of the new one fails, throwing it away
  * would leave the workspace with nothing anyone can renew. So it is kept here, used by this process, and written
- * on the next call — under both locks, and only over the marker it came from (see `settlePending`), because by
- * then something else may have written a credential that is newer than it.
+ * on the next call or as the process exits (see `settleRefreshes`) — under both locks, and only over the marker it
+ * came from (see `settlePending`), because by then something else may have written a credential that is newer
+ * than it.
  */
 interface PendingWrite {
   readonly secretRef: string;
   readonly attemptId: string;
   readonly bundle: TokenBundle;
+  /** Whether `bundle` is a credential Slack issued and nothing else holds, rather than an outcome to record. */
+  readonly renewed: boolean;
   readonly deps: RefreshDeps;
 }
 const pendingWrites = new Map<string, PendingWrite>();
@@ -188,7 +194,7 @@ async function withInFlight(
 ): Promise<TokenBundle> {
   const existing = inFlight.get(accountId);
   if (existing) {
-    const shared = await existing;
+    const shared = await existing.work;
     // A caller replacing a rejected token cannot settle for that same token back from somebody else's call.
     if (rejected === undefined || shared.accessToken !== rejected) return shared;
   }
@@ -238,11 +244,11 @@ async function withInFlight(
     );
   })();
 
-  inFlight.set(accountId, work);
+  inFlight.set(accountId, { work, alias: deps.alias });
   try {
     return await work;
   } finally {
-    if (inFlight.get(accountId) === work) inFlight.delete(accountId);
+    if (inFlight.get(accountId)?.work === work) inFlight.delete(accountId);
   }
 }
 
@@ -256,6 +262,13 @@ async function withInFlight(
  */
 function stillUsable(bundle: TokenBundle, now: Date): boolean {
   return bundle.state === 'ready' ? !isDue(bundle, now) : !isExpired(bundle, now);
+}
+
+/** Whether a result this process could not write down holds a token to use: current, and not the one Slack refused. */
+function keptTokenUsable(pending: PendingWrite, rejected: string | undefined, now: Date): boolean {
+  return (
+    pending.bundle.state === 'ready' && pending.bundle.accessToken !== rejected && stillUsable(pending.bundle, now)
+  );
 }
 
 function requireBundle(raw: string | null, alias?: string): TokenBundle {
@@ -282,10 +295,22 @@ async function refreshUnderLock(
    * that was replaced thirty seconds ago.
    */
   deps.secrets.invalidate(secretRef);
-  let current = requireBundle(await deps.secrets.get(secretRef), deps.alias);
   const now = deps.now();
-
   const pending = pendingWrites.get(accountId);
+  let raw: string | null;
+  try {
+    raw = await deps.secrets.get(secretRef);
+  } catch (error) {
+    /*
+     * A store that cannot be read is no more able to take the kept result than one that cannot be written, and the
+     * keychain is both at once while a dialog holds an earlier call — the very case a result gets kept for. So the
+     * token this process holds is used here too, rather than every call failing until the store comes back.
+     */
+    if (pending && keptTokenUsable(pending, rejected, now)) return pending.bundle;
+    throw error;
+  }
+  let current = requireBundle(raw, deps.alias);
+
   if (pending) {
     const outcome = await settlePending(deps.secrets, accountId, secretRef, pending, current);
     if (outcome === 'written') {
@@ -293,13 +318,7 @@ async function refreshUnderLock(
     } else if (outcome !== 'stale') {
       // Still unwritable. The token it holds is the only live one this workspace has, so while it lasts it is
       // used rather than refused; once it is due there is nothing safe left to do but say why.
-      if (
-        pending.bundle.state === 'ready' &&
-        pending.bundle.accessToken !== rejected &&
-        stillUsable(pending.bundle, now)
-      ) {
-        return pending.bundle;
-      }
+      if (keptTokenUsable(pending, rejected, now)) return pending.bundle;
       const renewed = pending.bundle.refreshToken !== current.refreshToken;
       throw new CommsError(
         'SECRET_STORE_UNAVAILABLE',
@@ -402,7 +421,12 @@ async function refreshNow(
   // The marker, written **before** the request. This is the durable part: after this line, anybody who finds it
   // knows a refresh token may already have been consumed.
   const attempt = { id: randomBytes(8).toString('hex'), startedAt: now.toISOString() };
-  await deps.secrets.set(secretRef, serialiseBundle({ ...current, state: 'refreshing', attempt, reason: undefined }));
+  try {
+    await deps.secrets.set(secretRef, serialiseBundle({ ...current, state: 'refreshing', attempt, reason: undefined }));
+  } catch (error) {
+    await withdrawMarker(deps, accountId, secretRef, current, attempt.id);
+    throw error;
+  }
 
   let fresh: Omit<TokenBundle, 'v' | 'state' | 'attempt'>;
   try {
@@ -434,7 +458,9 @@ async function refreshNow(
           },
         };
     const storeError = await persist(deps, secretRef, settled);
-    if (storeError !== null) pendingWrites.set(accountId, { secretRef, attemptId: attempt.id, bundle: settled, deps });
+    if (storeError !== null) {
+      pendingWrites.set(accountId, { secretRef, attemptId: attempt.id, bundle: settled, renewed: false, deps });
+    }
     throw failureError(failure, error, deps.alias);
   }
 
@@ -450,9 +476,42 @@ async function refreshNow(
    */
   const storeError = await persist(deps, secretRef, replacement);
   if (storeError !== null) {
-    pendingWrites.set(accountId, { secretRef, attemptId: attempt.id, bundle: replacement, deps });
+    pendingWrites.set(accountId, { secretRef, attemptId: attempt.id, bundle: replacement, renewed: true, deps });
   }
   return replacement;
+}
+
+/**
+ * Takes back a marker whose write was reported failed, if it landed anyway — before the locks are released.
+ *
+ * Nothing was sent: the exchange never started. But a keychain write that timed out is not a write that did not
+ * happen. The native call stays pending on the OS dialog, and when the person clicks Allow the marker lands with no
+ * process behind it. Everyone after that is told another process is refreshing, and two minutes later that a
+ * refresh was interrupted — a re-authorisation for a token that never left this machine. Releasing the locks first
+ * would be worse still: another process could refresh, and then have its result overwritten by the late marker.
+ *
+ * So this waits for the store to settle, for as long as the write after an exchange would and no longer, and
+ * looks. This attempt's marker, if it is there, goes back to `ready`. If the store still cannot say — the dialog is
+ * still up — the unchanged credential is kept as a pending write: the next call in this process, or its exit,
+ * writes it over the marker if it has landed by then, and drops it if it never does (see `settlePending`).
+ */
+async function withdrawMarker(
+  deps: RefreshDeps,
+  accountId: string,
+  secretRef: string,
+  current: TokenBundle,
+  attemptId: string,
+): Promise<void> {
+  const unchanged: TokenBundle = { ...current, state: 'ready', attempt: undefined, reason: undefined };
+  if (deps.secrets.settled) await within(deps.secrets.settled(), (deps.persist ?? PERSIST).budgetMs);
+  try {
+    deps.secrets.invalidate(secretRef);
+    const found = parseBundle(await deps.secrets.get(secretRef));
+    if (found?.state !== 'refreshing' || found.attempt?.id !== attemptId) return;
+    await deps.secrets.set(secretRef, serialiseBundle(unchanged));
+  } catch {
+    pendingWrites.set(accountId, { secretRef, attemptId, bundle: unchanged, renewed: false, deps });
+  }
 }
 
 /**
@@ -526,16 +585,31 @@ async function settlePending(
   return 'written';
 }
 
+/** A refresh an exiting process could not settle, as the person has to be told about it. Never the token itself. */
+export interface UnsettledRefresh {
+  /** The workspace's name, where the caller gave one. */
+  readonly workspace: string | undefined;
+  /**
+   * `renewed`: Slack issued a credential that only this process holds. `unrecorded`: nothing new was issued, but
+   * the store may still show a refresh in progress. `running`: the refresh had not finished.
+   */
+  readonly kind: 'renewed' | 'unrecorded' | 'running';
+  /** One line for stderr: which workspace, what happened, and what to do about it. */
+  readonly message: string;
+}
+
 /**
  * Waits, up to `timeoutMs`, for every refresh this process has started, and writes down any result it is holding.
  *
- * For shutdown. A refresh killed between Slack's reply and the write loses the only copy of the new token, and an
- * MCP client that wants its server gone sends SIGTERM without knowing one is in flight. Resolves true when nothing
- * is left outstanding.
+ * For shutdown, of every kind. A refresh killed between Slack's reply and the write loses the only copy of the new
+ * token, and an MCP client that wants its server gone sends SIGTERM without knowing one is in flight. A result
+ * kept because the store failed lives only in memory, and an ordinary exit — a CLI command finishing, a client
+ * closing stdin — is the last chance to write it. Resolves with what could not be settled, empty when nothing is
+ * left outstanding, so the caller can say so rather than exit as though all were well.
  */
-export async function settleRefreshes(timeoutMs: number): Promise<boolean> {
+export async function settleRefreshes(timeoutMs: number): Promise<UnsettledRefresh[]> {
   const deadline = Date.now() + timeoutMs;
-  await within(Promise.allSettled([...inFlight.values()]), timeoutMs);
+  await within(Promise.allSettled([...inFlight.values()].map(({ work }) => work)), timeoutMs);
   for (const [accountId, pending] of [...pendingWrites]) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) break;
@@ -559,7 +633,30 @@ export async function settleRefreshes(timeoutMs: number): Promise<boolean> {
       remaining,
     );
   }
-  return inFlight.size === 0 && pendingWrites.size === 0;
+  return [
+    ...[...inFlight.values()].map(({ alias }) => unsettled(alias, 'running')),
+    ...[...pendingWrites.values()].map(({ deps, renewed }) =>
+      unsettled(deps.alias, renewed ? 'renewed' : 'unrecorded'),
+    ),
+  ];
+}
+
+/**
+ * Says what was left, and what it will look like later.
+ *
+ * What the person will next see is not this line but a later command's "another process is refreshing", then "a
+ * token refresh was interrupted" — the marker this process leaves behind — so the warning names that, and the one
+ * way out of it.
+ */
+function unsettled(alias: string | undefined, kind: UnsettledRefresh['kind']): UnsettledRefresh {
+  const name = alias ? `“${alias}”` : 'a workspace';
+  const what = {
+    renewed: `could not save the renewed Slack credential for ${name}, and it may be lost as this process exits`,
+    unrecorded: `could not record in the secret store how the token refresh for ${name} ended`,
+    running: `a token refresh for ${name} was still running when this process exited`,
+  }[kind];
+  const next = 'If a later command says a refresh was interrupted, the workspace needs signing in again.';
+  return { workspace: alias, kind, message: `agent-slack: ${what}. ${next} ${reauthHint(alias)}` };
 }
 
 // ── Classifying a failed exchange ──────────────────────────────────────────────────────────────────────────────
@@ -571,7 +668,8 @@ export async function settleRefreshes(timeoutMs: number): Promise<boolean> {
  *
  * Deliberately a short, exact list. `ECONNRESET`, `ETIMEDOUT`, a socket closed mid-reply, an abort: all can happen
  * after the request was written, so none of them is here, and none of them is a prefix match either — an
- * `ERR_SSL_` code can come from a record mid-stream as easily as from the handshake.
+ * `ERR_SSL_` code can come from a record mid-stream as easily as from the handshake. When one of them comes from
+ * `connect`, that is proof enough on its own; `networkEvidence` reads the syscall for that.
  */
 const NOT_SENT_CODES: ReadonlySet<string> = new Set([
   'ENOTFOUND',
@@ -702,34 +800,64 @@ export function classifyRefreshFailure(error: unknown): RefreshFailure {
     if (stage === 'parse') return { kind: 'dead', stage, httpStatus };
     return { kind: 'ambiguous', stage: stage ?? 'network', slackError, httpStatus };
   }
-  const codes = networkCodes(error);
-  const networkCode = codes[0];
-  if (codes.length > 0 && codes.every((code) => NOT_SENT_CODES.has(code))) {
+  const found = networkEvidence(error);
+  const networkCode = found.find((one) => one.code !== undefined)?.code;
+  if (found.length > 0 && found.every((one) => one.notSent)) {
     return { kind: 'not-sent', stage: 'network', networkCode };
   }
   return { kind: 'ambiguous', stage: 'network', networkCode };
 }
 
+interface NetworkEvidence {
+  readonly code: string | undefined;
+  readonly notSent: boolean;
+}
+
 /**
- * Every string `code` in an error's cause chain, including each of an `AggregateError`'s errors.
+ * What each error in a cause chain says about the request, including each of an `AggregateError`'s errors.
  *
  * `fetch` rejects with `TypeError('fetch failed')` and puts the reason in `cause`; a connection tried over IPv4
- * and IPv6 fails with an `AggregateError` of both. Every code found has to prove "not sent" for the whole to, so
- * one attempt that got further than the others makes the answer `ambiguous`.
+ * and IPv6 fails with an `AggregateError` of both. Every error that carries a code or a syscall has to prove "not
+ * sent" for the whole to, so one attempt that got further than the others makes the answer `ambiguous`.
+ *
+ * An error proves it by its code (see {@link NOT_SENT_CODES}) or by where it happened. One raised by `connect`
+ * failed before there was a connection, so nothing can have been written to it — whatever its code says. That is
+ * what makes a happy-eyeballs failure provable: Node drops an address that has not connected within 250 ms with an
+ * `ETIMEDOUT` from `connect`, and the `AggregateError` it raises when every address has failed carries its first
+ * attempt's code and no syscall. The same `ETIMEDOUT` from `read` or `write`, or with no syscall at all, can follow
+ * a request that went, so it proves nothing. The aggregate counts as a `connect` failure only when every attempt
+ * inside it is one.
  */
-function networkCodes(error: unknown): string[] {
-  const codes: string[] = [];
+function networkEvidence(error: unknown): NetworkEvidence[] {
+  const found: NetworkEvidence[] = [];
   const seen = new Set<unknown>();
+  const failedToConnect = (value: unknown): boolean => {
+    if (value === null || typeof value !== 'object') return false;
+    const { syscall, errors } = value as { syscall?: unknown; errors?: unknown };
+    if (syscall === 'connect') return true;
+    return Array.isArray(errors) && errors.length > 0 && errors.every(failedToConnect);
+  };
   const visit = (value: unknown, depth: number): void => {
     if (value === null || typeof value !== 'object' || seen.has(value) || depth > 8) return;
     seen.add(value);
-    const { code, cause, errors } = value as { code?: unknown; cause?: unknown; errors?: unknown };
-    if (typeof code === 'string') codes.push(code);
+    const { code, syscall, cause, errors } = value as {
+      code?: unknown;
+      syscall?: unknown;
+      cause?: unknown;
+      errors?: unknown;
+    };
+    const named = typeof code === 'string' ? code : undefined;
+    if (named !== undefined || typeof syscall === 'string') {
+      found.push({
+        code: named,
+        notSent: failedToConnect(value) || (named !== undefined && NOT_SENT_CODES.has(named)),
+      });
+    }
     visit(cause, depth + 1);
     if (Array.isArray(errors)) for (const inner of errors) visit(inner, depth + 1);
   };
   visit(error, 0);
-  return codes;
+  return found;
 }
 
 function failureDetails(failure: RefreshFailure): Record<string, unknown> {

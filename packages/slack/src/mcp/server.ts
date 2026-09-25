@@ -1,8 +1,8 @@
 import { CommsError, toCommsError } from '@agentcomms/core';
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, type Transport } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { FetchLike } from '../api/guard.ts';
-import { settleRefreshes } from '../auth/refresh.ts';
+import { exitAfterRefreshes, settleBeforeExit, type WarningSink } from '../auth/exit.ts';
 import { compose } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
@@ -549,14 +549,8 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     /** Connects on stdio and resolves when the client disconnects, so the process does not outlive its client. */
     async connectStdio(): Promise<void> {
       const { StdioServerTransport } = await import('@modelcontextprotocol/server/stdio');
-      const transport = new StdioServerTransport();
-      const closed = new Promise<void>((resolve) => {
-        const previous = transport.onclose;
-        transport.onclose = () => {
-          previous?.();
-          resolve();
-        };
-        // A client that dies without closing the transport simply closes our stdin.
+      // A client that dies without closing the transport simply closes our stdin.
+      const stdinClosed = new Promise<void>((resolve) => {
         process.stdin.once('end', resolve);
         process.stdin.once('close', resolve);
       });
@@ -566,46 +560,33 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
        * Signal listeners do not keep the event loop alive, so a server with nothing in flight still exits as before.
        */
       exitAfterRefreshes();
-      await server.connect(transport);
-      await closed;
+      await serveUntilClosed(server, new StdioServerTransport(), { closed: stdinClosed });
     },
   };
 }
 
-/** What `exitAfterRefreshes` needs from the process, so a test can send the signal without being killed by it. */
-export interface SignalHost {
-  once(signal: 'SIGTERM' | 'SIGINT', listener: () => void): unknown;
-  removeListener(signal: 'SIGTERM' | 'SIGINT', listener: () => void): unknown;
-}
-
 /**
- * On SIGTERM or SIGINT, let any token refresh in flight finish before exiting — for up to `waitMs`.
+ * Serves on `transport` until it closes, or until `closed` resolves, then settles the refreshes this server made.
  *
- * A client that wants its server gone closes stdin and, if the server has not left promptly, sends SIGTERM.
- * Node's default for that is to die on the spot, and if the spot is between Slack's reply to a refresh and the
- * write that records it, the workspace's only renewed token dies with the process: Slack has already retired the
- * old one, and the marker left behind becomes `refresh-uncertain`, which means a re-authorisation. The window is one
- * round trip and one keychain write, and a busy server hits it eventually.
- *
- * Bounded, because a client is entitled to its server going away: 45 seconds covers the thirty-second exchange
- * and most of a store retry. Each signal is taken once, so a second one — a person pressing Ctrl-C again — gets
- * Node's default and ends the process immediately. Returns a function that removes the handlers.
+ * A client that is finished usually just closes the connection and sends no signal, so the SIGTERM hold never
+ * runs. A token Slack renewed while the store was failing may have been held here for hours, and the store may
+ * well have recovered since: the end of the connection is the last moment it can still be written, and if it
+ * cannot, stderr — the log the client keeps — says which workspace will need signing in again.
  */
-export function exitAfterRefreshes(
-  options: { host?: SignalHost; waitMs?: number; exit?: (code: number) => void } = {},
-): () => void {
-  const host: SignalHost = options.host ?? process;
-  const waitMs = options.waitMs ?? 45_000;
-  const exit = options.exit ?? ((code: number) => process.exit(code));
-  const on = (signal: 'SIGTERM' | 'SIGINT') => () => {
-    void settleRefreshes(waitMs).finally(() => exit(signal === 'SIGINT' ? 130 : 143));
-  };
-  const onTerm = on('SIGTERM');
-  const onInt = on('SIGINT');
-  host.once('SIGTERM', onTerm);
-  host.once('SIGINT', onInt);
-  return () => {
-    host.removeListener('SIGTERM', onTerm);
-    host.removeListener('SIGINT', onInt);
-  };
+export async function serveUntilClosed(
+  server: McpServer,
+  transport: Transport,
+  options: { closed?: Promise<void>; stderr?: WarningSink } = {},
+): Promise<void> {
+  const closed = new Promise<void>((resolve) => {
+    const previous = transport.onclose;
+    transport.onclose = () => {
+      previous?.();
+      resolve();
+    };
+    void options.closed?.then(resolve);
+  });
+  await server.connect(transport);
+  await closed;
+  await settleBeforeExit(options.stderr ?? process.stderr);
 }

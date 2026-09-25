@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { CommsError } from '@agentcomms/core';
+import { classifyRefreshFailure } from '../src/auth/refresh.ts';
 import { SlackContext } from '../src/context.ts';
 import { openWorkspace } from '../src/operations/session.ts';
 import { newHarness, slackOk } from './support/harness.ts';
-import { contextFor, expired, fetchFailed, stored } from './support/refresh.ts';
+import { attemptsFailed, contextFor, expired, fetchFailed, stored, syscallFailed } from './support/refresh.ts';
 
 /**
  * Every way a refresh can fail, and what each leaves in the store.
@@ -28,6 +29,10 @@ for (const [label, error] of [
   ['no route (ENETUNREACH)', fetchFailed('ENETUNREACH')],
   ['connect timeout (UND_ERR_CONNECT_TIMEOUT)', fetchFailed('UND_ERR_CONNECT_TIMEOUT')],
   ['certificate rejected (CERT_HAS_EXPIRED)', fetchFailed('CERT_HAS_EXPIRED')],
+  [
+    'one address timed out connecting, the other refused',
+    attemptsFailed(['ETIMEDOUT', 'connect'], ['ECONNREFUSED', 'connect']),
+  ],
 ] as const) {
   test(`not sent — ${label}: the credential goes back to ready, and the next call refreshes`, async () => {
     /*
@@ -56,6 +61,31 @@ for (const [label, error] of [
     assert.equal(harness.calls.length, 2);
   });
 }
+
+test('a connection that never opened is not sent, whatever its code; a timeout after one opened may have been', () => {
+  /*
+   * The shape Node really produces when one address hangs and the other refuses: the aggregate carries the first
+   * attempt's `ETIMEDOUT`, a code that also happens after a request was written. What proves nothing left is where
+   * each attempt failed — in `connect`, before there was a connection to write to.
+   */
+  assert.deepEqual(classifyRefreshFailure(attemptsFailed(['ETIMEDOUT', 'connect'], ['ECONNREFUSED', 'connect'])), {
+    kind: 'not-sent',
+    stage: 'network',
+    networkCode: 'ETIMEDOUT',
+  });
+  assert.equal(classifyRefreshFailure(syscallFailed('ECONNRESET', 'connect')).kind, 'not-sent');
+  assert.equal(classifyRefreshFailure(syscallFailed('ETIMEDOUT', 'connect')).kind, 'not-sent');
+
+  // After the connection opened, the same codes can follow a request that was written.
+  assert.equal(classifyRefreshFailure(syscallFailed('ETIMEDOUT', 'read')).kind, 'ambiguous');
+  assert.equal(classifyRefreshFailure(syscallFailed('ECONNRESET', 'write')).kind, 'ambiguous');
+  assert.equal(classifyRefreshFailure(fetchFailed('ETIMEDOUT')).kind, 'ambiguous');
+  // One attempt that got past `connect` is enough to make the whole ambiguous.
+  assert.equal(
+    classifyRefreshFailure(attemptsFailed(['ETIMEDOUT', 'connect'], ['ECONNRESET', 'read'])).kind,
+    'ambiguous',
+  );
+});
 
 test('the guard refusing the request is not sent either', async () => {
   const harness = await newHarness();
@@ -148,6 +178,12 @@ for (const slackError of [
 for (const [label, reply, stage] of [
   ['connection reset after sending', fetchFailed('ECONNRESET'), 'network'],
   ['one address refused, the other reset', fetchFailed('ECONNREFUSED', 'ECONNRESET'), 'network'],
+  ['a timeout reading the reply', syscallFailed('ETIMEDOUT', 'read'), 'network'],
+  [
+    'one address refused, the other timed out after connecting',
+    attemptsFailed(['ECONNREFUSED', 'connect'], ['ETIMEDOUT', 'read']),
+    'network',
+  ],
   ['an abort with no code', new DOMException('The operation was aborted due to timeout', 'TimeoutError'), 'network'],
   ['internal_error', { ok: false, error: 'internal_error' }, 'refused'],
   ['fatal_error', { ok: false, error: 'fatal_error' }, 'refused'],

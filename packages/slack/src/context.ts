@@ -2,6 +2,7 @@ import { CommsError, type Config, type Core, openCore, type SecretStore, secrets
 import { closedPermit, guardSlackRequests } from './api/guard.ts';
 import { SLACK_ORIGIN } from './api/methods.ts';
 import { type FlowStore, openFlowStore } from './auth/flow.ts';
+import type { PersistPolicy } from './auth/refresh.ts';
 
 /**
  * What every Slack operation needs, assembled once.
@@ -18,6 +19,11 @@ export interface SlackContextOptions {
   surface?: 'cli' | 'mcp';
   /** Exchanges an authorisation code. Injected so a test never reaches Slack. */
   exchange?: (params: Record<string, string>) => Promise<unknown>;
+  /**
+   * How patiently a renewed credential's write is retried, on every surface. Tests shorten the minute it takes in
+   * production, so a store that never recovers can be driven through a whole command.
+   */
+  persist?: PersistPolicy | undefined;
 }
 
 /**
@@ -85,6 +91,7 @@ export class SlackContext {
   readonly surface: 'cli' | 'mcp';
   readonly flows: FlowStore;
   readonly exchange: (params: Record<string, string>) => Promise<unknown>;
+  readonly persist: PersistPolicy | undefined;
 
   constructor(options: SlackContextOptions = {}) {
     this.env = options.env ?? process.env;
@@ -93,6 +100,7 @@ export class SlackContext {
     this.surface = options.surface ?? 'cli';
     this.flows = openFlowStore(this.core.paths.stateDir, this.now);
     this.exchange = options.exchange ?? postExchange;
+    this.persist = options.persist;
   }
 
   config(): Promise<Config> {
