@@ -84,32 +84,41 @@ test('the launcher needs no external command to say it cannot find Node', async 
   }
 
   assert.match(source, /could not find Node/, 'and it says so plainly');
-  assert.match(source, /agent-gmail mcp install/, 'and names the way out');
+  assert.match(source, /mcp install --client/, 'and names the way out');
   assert.match(source, /exit 127/, 'with the status a host reports for a missing interpreter');
 });
 
-test('the launcher prints the whole of its could-not-find-Node message', {
-  skip: process.platform === 'win32',
-}, async () => {
+test('the launcher prints the whole message when it finds no Node, and nothing else', async (t) => {
+  if (process.platform === 'win32') return t.skip('no /bin/sh');
   /*
-   * Run, with the search forced to find nothing, because reading the source did not catch this: a blank line
-   * inside the `printf` continuation ended the command after its first line, and the shell then tried to run the
-   * rest of the message as a command called "". A person saw one line and "command not found" — the opposite of
-   * the useful message the test above checks is written down.
+   * Run, with the search forced to come up empty.
+   *
+   * The search itself cannot be made to fail here (see above), so the copy replaces its one call with `false` and
+   * leaves every line of the failure path exactly as shipped. Reading the source was not enough: a blank line inside
+   * the `printf` continuation parsed cleanly under `sh -n`, and at run time turned everything after the first line
+   * into a command called "" — the person saw "could not find Node", then "command not found", and none of the
+   * explanation.
    */
   const source = await readFile(join(ROOT, 'bin', 'agent-gmail-launch'), 'utf8');
-  const probe = 'NODE_DIR=$(find_node_dir)';
-  assert.ok(source.includes(probe), 'the launcher still searches through find_node_dir');
-  const copy = join(await mkdtemp(join(tmpdir(), 'launcher-')), 'agent-gmail-launch');
-  await writeFile(copy, source.replace(probe, 'NODE_DIR=$(false)'));
-  const failed = await run('/bin/sh', [copy]).then(
-    () => assert.fail('it should exit when no Node is found'),
+  const call = 'if ! NODE_DIR=$(find_node_dir); then';
+  assert.ok(source.includes(call), 'the launcher still decides with one call to find_node_dir');
+  const directory = await mkdtemp(join(tmpdir(), 'launcher-'));
+  const copy = join(directory, 'agent-gmail-launch');
+  await writeFile(copy, source.replace(call, 'if ! NODE_DIR=$(false); then'));
+
+  const root = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
+  const result = await run('/bin/sh', [copy], { env: { PATH: '', HOME: directory } }).then(
+    () => assert.fail('it should have exited non-zero'),
     (error) => error,
   );
-  assert.equal(failed.code, 127);
-  assert.doesNotMatch(failed.stderr, /command not found/);
-  assert.match(failed.stderr, /could not find Node\.\n\nThis launcher looked on PATH/);
-  assert.match(failed.stderr, /agent-gmail mcp install --client <your client>\n$/);
+  assert.equal(result.code, 127);
+  assert.doesNotMatch(result.stderr, /not found|No such file/i, 'every line is part of one printf');
+  assert.match(result.stderr, /^agent-gmail: could not find Node\.\n\nThis launcher looked on PATH/);
+  assert.match(result.stderr, /Node 22\.12 or newer is required/);
+  assert.ok(
+    result.stderr.includes(`npx -y @agentcomms/gmail@${root.version} mcp install --client <your client>`),
+    `the way out, at the version this launcher runs:\n${result.stderr}`,
+  );
 });
 
 test('the Gemini extension launches the version it declares', async () => {

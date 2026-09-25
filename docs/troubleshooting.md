@@ -179,22 +179,31 @@ else.
 the machine cannot then change what your agents run underneath you. The cost is that publishing a new version does
 nothing for an already-registered client until you re-register it.
 
-Check what is registered against what you have:
+Check what is registered against the release you are asking about. `doctor` compares with its own version, so run
+the new one:
 
 ```bash
-agent-gmail doctor --json | jq '.data.checks[] | select(.id == "registered-server-version")'
+npx -y @agentcomms/gmail@latest doctor --json | jq '.data.checks[] | select(.id == "registered-server-version")'
 ```
 
-Re-register with `--force`, which replaces the entry of the same name — without it, `mcp install` refuses to
-overwrite one:
+Checks are selected by `id`, which is stable; `title` is wording and can change. A `warn` names each stale entry,
+and its `fix` is the command that re-registers that entry as it is — keeping its `--name`, `--inbox` and
+`--read-only` — rather than a default one. Run that fix with the new version:
 
 ```bash
-npx -y @agentcomms/gmail@latest mcp install --client claude-code --force
-npx -y @agentcomms/slack@latest mcp install --client claude-code --force   # the Slack server, the same way
+npx -y @agentcomms/gmail@latest mcp install --client claude-code --force    # plus the flags doctor's fix carries
+npx -y @agentcomms/slack@latest mcp install --client claude-code --force    # the Slack server, the same way
 ```
 
-Restart the client afterwards. The old runtime stays on disk under `<data dir>/runtime/`, in a directory named for
-its version; nothing depends on it once the entry points elsewhere, and it can be deleted.
+`--force` removes the existing entry of that name first; Claude Code refuses to add a server whose name is already
+taken, so without it the upgrade stops at "already exists". Check that the result says the entry was registered
+and the server verified: for Claude Code and Codex the entry is written through their own CLI, and if `claude` or
+`codex` is not on `PATH` the install prints the entry for you to add instead of registering it.
+
+Restart the client afterwards — a running client keeps the server it started. Each version installs into its own
+directory under `<data dir>/runtime/` (`npx -y @agentcomms/core@latest paths` shows the data dir):
+`<version>-gmail/` and `<version>-slack/`, or plain `<version>/` for a Gmail runtime an earlier release installed.
+Once nothing registers an old one and no client started before the upgrade is still open, it can be deleted.
 
 ### The server starts but every call fails
 

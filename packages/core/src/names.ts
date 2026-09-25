@@ -265,9 +265,16 @@ export interface NamesMigrationRow {
   platform: string;
 }
 
+/** A `--rename` for a name this configuration does not have, so it changes nothing here. */
+export interface NotApplicableRename {
+  rename: string;
+  source: string;
+  to: string;
+}
+
 export type NamesMigrationPlan =
   | { status: 'already-migrated' }
-  | { status: 'ready'; fingerprint: string; rows: NamesMigrationRow[] };
+  | { status: 'ready'; fingerprint: string; rows: NamesMigrationRow[]; notApplicable: NotApplicableRename[] };
 
 /**
  * What the migration would do to `config`, or a refusal listing every problem at once.
@@ -277,6 +284,12 @@ export type NamesMigrationPlan =
  * problem is collected before anything is refused, so a person fixes them in one pass instead of one per run; and a
  * plan with a problem is never partly applied.
  *
+ * A rename for a name this configuration does not have is not a problem: it is reported in `notApplicable` and
+ * changes nothing. One person's accounts are spread over several computers, and each has only some of them; when an
+ * absent name refused the whole plan, one mapping could not be run everywhere, and whoever trimmed it by hand for
+ * each machine was one slip away from dropping a rename — after which that account takes its default for good. What
+ * is skipped is shown beside the mapping, so a misspelt source is seen before anything is written.
+ *
  * The fingerprint is of the whole configuration this was computed from. `migrateNames` refuses to apply the plan to
  * anything else, and refuses to call it already done unless this plan's own rows are the ones in place — two people
  * mapping the same names differently are not each other's retry.
@@ -285,6 +298,7 @@ export function planNamesMigration(config: Config, renames: readonly string[] = 
   if (config.version === 2) return { status: 'already-migrated' };
   const problems: string[] = [];
   const overrides = new Map<string, string>();
+  const notApplicable: NotApplicableRename[] = [];
 
   for (const rename of renames) {
     const at = rename.indexOf('=');
@@ -299,11 +313,16 @@ export function planNamesMigration(config: Config, renames: readonly string[] = 
     if (qualified) {
       const [, kind = '', name = ''] = qualified;
       const exists = kind === 'inbox' ? own(config.inboxes, name) : own(config.accounts, name);
+      key = `${kind}:${name}`;
       if (!exists) {
-        problems.push(`there is no ${kind} called "${name}"`);
+        if (overrides.has(key)) {
+          problems.push(`"${source}" is renamed more than once`);
+          continue;
+        }
+        overrides.set(key, target);
+        notApplicable.push({ rename, source, to: target });
         continue;
       }
-      key = `${kind}:${name}`;
     } else {
       const inbox = own(config.inboxes, source);
       const account = own(config.accounts, source);
@@ -314,7 +333,14 @@ export function planNamesMigration(config: Config, renames: readonly string[] = 
         continue;
       }
       if (!inbox && !account) {
-        problems.push(`there is nothing called "${source}"`);
+        // Keyed by the bare word, so the same absent name given twice is still caught as a double rename.
+        key = `absent:${source}`;
+        if (overrides.has(key)) {
+          problems.push(`"${source}" is renamed more than once`);
+          continue;
+        }
+        overrides.set(key, target);
+        notApplicable.push({ rename, source, to: target });
         continue;
       }
       key = `${inbox ? 'inbox' : 'account'}:${source}`;
@@ -359,7 +385,7 @@ export function planNamesMigration(config: Config, renames: readonly string[] = 
     );
   }
   rows.sort((a, b) => (a.kind === b.kind ? a.from.localeCompare(b.from) : a.kind === 'inbox' ? -1 : 1));
-  return { status: 'ready', fingerprint: configFingerprint(config), rows };
+  return { status: 'ready', fingerprint: configFingerprint(config), rows, notApplicable };
 }
 
 /** Version 2 from version 1 and a plan made from it: every key renamed, every old name recorded. Nothing else. */
@@ -395,6 +421,6 @@ export function applyNamesMigration(config: ConfigV1, rows: readonly NamesMigrat
 export function migrateNames(
   store: ConfigStore,
   plan: Extract<NamesMigrationPlan, { status: 'ready' }>,
-): Promise<{ status: 'migrated' | 'already-migrated'; config: ConfigV2 }> {
+): Promise<{ status: 'migrated' | 'already-migrated'; config: ConfigV2; backup?: string }> {
   return store.migrateNames(plan.fingerprint, plan.rows, (current) => applyNamesMigration(current, plan.rows));
 }

@@ -65,6 +65,13 @@ find_node_dir() {
 if ! NODE_DIR=$(find_node_dir); then
   # `printf` is a builtin in every POSIX shell; `cat` is not, and this is the one message that has to survive an
   # environment with nothing on PATH.
+  #
+  # One command, every line a continuation: a blank line in the middle ends it, and the lines after it then run as
+  # a command called "" — so the explanation became "command not found" and nothing else.
+  #
+  # The way out is spelled with npx and the exact version, not `agent-gmail`: somebody who installed the plugin has
+  # no global `agent-gmail`, and that registration runs Node by its absolute path, so the PATH this client starts
+  # with stops mattering.
   printf '%s\n' >&2 \
 "agent-gmail: could not find Node." \
 "" \
@@ -72,9 +79,9 @@ if ! NODE_DIR=$(find_node_dir); then
 "directories, and found no node in any of them. Node 22.12 or newer is required." \
 "" \
 "If Node is installed somewhere else, add its directory to the PATH this client starts with, or" \
-"register the server directly with an absolute path:" \
+"register the server directly with an absolute path, from a terminal where node works:" \
 "" \
-"  agent-gmail mcp install --client <your client>"
+"  npx -y @agentcomms/gmail@$VERSION mcp install --client <your client>"
   exit 127
 fi
 

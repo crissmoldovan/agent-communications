@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import {
   type AccountConfig,
@@ -512,15 +512,15 @@ test('every problem is listed at once, and nothing is planned', () => {
         'live=cue/slack',
         'broken',
         'inbox:missing=a/gmail',
+        'nope=y/gmail',
       ]),
     (error: unknown) => {
       if (!(error instanceof CommsError) || error.code !== 'USAGE') return false;
       const problems = (error.details as { problems: string[] }).problems;
       const expected = [
-        /there is nothing called "nope"/,
         /"live" is renamed more than once/,
+        /"nope" is renamed more than once/,
         /"broken" is not source=name/,
-        /there is no inbox called "missing"/,
         /"work-" would become "work-\/gmail", which cannot be used .* --rename inbox:work-=<name>/,
         /"con" would become "con\/gmail".*Windows reserves it/,
         /"cue\/gmail" ends in \/gmail, but this is a slack account/,
@@ -533,6 +533,92 @@ test('every problem is listed at once, and nothing is planned', () => {
       assert.equal(problems.length, expected.length, problems.join('\n'));
       return true;
     },
+  );
+});
+
+test('a rename for a name this computer does not have is reported, and the rest of the plan stands', () => {
+  // The same mapping, run on a computer that has only some of the accounts it names.
+  const partial = v1({ inboxes: { gmail: inbox(IBX_A), cue: inbox(IBX_B) } });
+  const plan = ready(
+    planNamesMigration(partial, [
+      'gmail=personal/gmail',
+      'wf-tech=wf/gmail-tech',
+      'account:live=cue/slack',
+      'inbox:elsewhere=acme/gmail',
+    ]),
+  );
+  assert.deepEqual(Object.fromEntries(plan.rows.map((row) => [row.from, row.to])), {
+    cue: 'cue/gmail',
+    gmail: 'personal/gmail',
+  });
+  assert.deepEqual(
+    plan.notApplicable.map((skipped) => skipped.rename),
+    ['wf-tech=wf/gmail-tech', 'account:live=cue/slack', 'inbox:elsewhere=acme/gmail'],
+  );
+  assert.deepEqual(plan.notApplicable[0], { rename: 'wf-tech=wf/gmail-tech', source: 'wf-tech', to: 'wf/gmail-tech' });
+  // A name that is here but in the other map is still not applicable when qualified with the wrong kind.
+  assert.deepEqual(
+    ready(planNamesMigration(partial, ['account:gmail=personal/slack'])).notApplicable.map((s) => s.source),
+    ['account:gmail'],
+  );
+  // And one that matches everything has nothing to report.
+  assert.deepEqual(ready(planNamesMigration(partial, ['gmail=personal/gmail'])).notApplicable, []);
+});
+
+test('the migration backs up the file it replaces, byte for byte and owner-only, and says where', async () => {
+  // Written with odd spacing, so a copy re-serialised from the parsed config would not match.
+  const store = storeWith(machine());
+  const original = readFileSync(store.path, 'utf8').replace('{', '{   ');
+  writeFileSync(store.path, original);
+  const plan = ready(planNamesMigration(await store.load(), ['gmail=personal/gmail']));
+  const result = await migrateNames(store, plan);
+  assert.equal(result.status, 'migrated');
+  const backup = present(result.backup);
+  assert.match(backup, /config\.json\.before-names-migrate-\d{8}T\d{6}Z$/);
+  assert.equal(dirname(backup), dirname(store.path));
+  assert.equal(readFileSync(backup, 'utf8'), original);
+  if (process.platform !== 'win32') assert.equal(statSync(backup).mode & 0o777, 0o600);
+  assert.equal(JSON.parse(readFileSync(store.path, 'utf8')).version, 2);
+
+  // A retry finds it done, and does not back up the migrated file as if it were the original.
+  const again = await migrateNames(store, plan);
+  assert.equal(again.status, 'already-migrated');
+  assert.equal(again.backup, undefined);
+  assert.equal(readdirSync(dirname(store.path)).filter((f) => f.includes('before-names-migrate')).length, 1);
+});
+
+test('an existing backup is never overwritten', async () => {
+  const store = storeWith(machine());
+  const plan = ready(planNamesMigration(await store.load()));
+  // Every name this second could produce, and the next, already taken by something that must survive.
+  const stamp = (at: Date) =>
+    at
+      .toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\.\d+Z$/, 'Z');
+  const now = new Date();
+  for (const at of [now, new Date(now.getTime() + 1000)]) {
+    writeFileSync(`${store.path}.before-names-migrate-${stamp(at)}`, 'the only copy\n');
+  }
+  const result = await migrateNames(store, plan);
+  const backup = present(result.backup);
+  assert.match(backup, /-\d+$/, 'a suffix, not the taken name');
+  for (const at of [now, new Date(now.getTime() + 1000)]) {
+    assert.equal(readFileSync(`${store.path}.before-names-migrate-${stamp(at)}`, 'utf8'), 'the only copy\n');
+  }
+});
+
+test('a refused migration leaves no backup behind', async () => {
+  const store = storeWith(machine());
+  const plan = ready(planNamesMigration(await store.load()));
+  await store.update((config) => ({
+    ...config,
+    inboxes: { ...config.inboxes, cue: { ...present(config.inboxes.cue), sendPolicy: 'never' } },
+  }));
+  await assert.rejects(migrateNames(store, plan), isError('TRANSIENT'));
+  assert.deepEqual(
+    readdirSync(dirname(store.path)).filter((f) => f.includes('before-names-migrate')),
+    [],
   );
 });
 

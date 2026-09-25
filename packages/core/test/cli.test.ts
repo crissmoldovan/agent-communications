@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { needsYes } from '../src/cli.ts';
@@ -681,13 +681,72 @@ test('names migrate lists every problem at once, and applies none of them', () =
   );
   assert.equal(refused.status, 64);
   const problems = JSON.parse(refused.stdout).error.details.problems as string[];
-  assert.equal(problems.length, 2, problems.join(' | '));
+  assert.equal(problems.length, 1, problems.join(' | '));
   assert.ok(
     problems.some((p) => /ends in \/slack, but this is a gmail account/.test(p)),
     problems.join(' | '),
   );
-  assert.ok(problems.some((p) => /there is nothing called "nope"/.test(p)));
   assert.equal(JSON.parse(readFileSync(join(config, 'config.json'), 'utf8')).version, 1);
+  assert.deepEqual(
+    readdirSync(config).filter((f) => f.includes('before-names-migrate')),
+    [],
+    'and backs nothing up',
+  );
+});
+
+test('names migrate runs one mapping on a computer that has only some of its names, and saves the old file', () => {
+  const config = tempDir();
+  beforeTheRename(config);
+  const before = readFileSync(join(config, 'config.json'), 'utf8');
+  // One mapping for every computer: this one has `work`, `gmail` and `live`, and none of the other two.
+  const mapping = [
+    '--rename',
+    'gmail=personal/gmail',
+    '--rename',
+    'elsewhere=acme/gmail',
+    '--rename',
+    'live=cue/slack',
+    '--rename',
+    'account:other=rgc/slack',
+  ];
+
+  const dry = run(['names', 'migrate', '--dry-run', ...mapping], { AGENT_COMMS_CONFIG_DIR: config });
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stdout, /gmail\s+→\s+personal\/gmail/);
+  assert.match(dry.stdout, /Not applicable here/);
+  assert.match(dry.stdout, /--rename elsewhere=acme\/gmail/);
+  assert.match(dry.stdout, /--rename account:other=rgc\/slack/);
+  assert.equal(readFileSync(join(config, 'config.json'), 'utf8'), before, 'a dry run writes nothing');
+  assert.deepEqual(
+    readdirSync(config).filter((f) => f.includes('before-names-migrate')),
+    [],
+    'and backs nothing up',
+  );
+
+  const done = run(['names', 'migrate', '--yes', '--json', ...mapping], { AGENT_COMMS_CONFIG_DIR: config });
+  assert.equal(done.status, 0, done.stderr);
+  // The skipped renames are shown with the mapping, before the write, as well as returned.
+  assert.match(done.stderr, /--rename elsewhere=acme\/gmail/);
+  const data = JSON.parse(done.stdout).data;
+  assert.equal(data.status, 'migrated');
+  assert.deepEqual(
+    data.notApplicable.map((skipped: { source: string }) => skipped.source),
+    ['elsewhere', 'account:other'],
+  );
+  assert.match(data.backup, /config\.json\.before-names-migrate-\d{8}T\d{6}Z$/);
+  assert.equal(dirname(data.backup), config);
+  assert.equal(readFileSync(data.backup, 'utf8'), before, 'the file as it was, byte for byte');
+  if (process.platform !== 'win32') assert.equal(statSync(data.backup).mode & 0o777, 0o600);
+  const written = JSON.parse(readFileSync(join(config, 'config.json'), 'utf8'));
+  assert.deepEqual(Object.keys(written.inboxes).sort(), ['personal/gmail', 'work/gmail']);
+  assert.deepEqual(Object.keys(written.accounts), ['cue/slack']);
+
+  // The text form says where the copy is, too.
+  const other = tempDir();
+  beforeTheRename(other);
+  const text = run(['names', 'migrate', '--yes'], { AGENT_COMMS_CONFIG_DIR: other });
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /The configuration as it was is saved at .*config\.json\.before-names-migrate-/);
 });
 
 test('an agent is never asked, even with a terminal: it can answer its own question', () => {

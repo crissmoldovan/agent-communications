@@ -21,7 +21,13 @@ import { CommsError } from './errors.ts';
 import { isGroupOrWorldAccessible } from './fs.ts';
 import { APPROVAL_KEY_REF } from './keys.ts';
 import { withCredentialsLock } from './lock.ts';
-import { migrateNames, type NamesMigrationRow, planNamesMigration, resolveName } from './names.ts';
+import {
+  migrateNames,
+  type NamesMigrationRow,
+  type NotApplicableRename,
+  planNamesMigration,
+  resolveName,
+} from './names.ts';
 import {
   keychainNamespace,
   loadKeyringModule,
@@ -593,10 +599,10 @@ export async function main(
         }
         if (values['dry-run']) {
           writeResult(
-            { status: 'dry-run' as const, rows: plan.rows },
+            { status: 'dry-run' as const, rows: plan.rows, notApplicable: plan.notApplicable },
             output,
             (data) =>
-              `${renderMapping(data.rows)}\n\nNothing was changed. Run the same command without --dry-run to apply it.`,
+              `${renderMapping(data.rows, data.notApplicable)}\n\nNothing was changed. Run the same command without --dry-run to apply it.`,
           );
           return;
         }
@@ -608,7 +614,7 @@ export async function main(
          * record of what the old names were once the file no longer holds them. It goes to stderr so `--json`
          * keeps its one envelope on stdout.
          */
-        defaultStreams.stderr.write(`${renderMapping(plan.rows)}\n`);
+        defaultStreams.stderr.write(`${renderMapping(plan.rows, plan.notApplicable)}\n`);
         /*
          * A person at a terminal confirms; anything else passes `--yes`.
          *
@@ -625,10 +631,16 @@ export async function main(
           await confirm(defaultStreams);
         }
         const result = await migrateNames(core.config, plan);
-        writeResult({ status: result.status, rows: plan.rows }, output, (data) =>
-          data.status === 'already-migrated'
-            ? 'Names are already organisation/platform.'
-            : `Renamed ${data.rows.length} account(s). The old names no longer work; anything that uses one is told what it is called now.`,
+        writeResult(
+          { status: result.status, rows: plan.rows, notApplicable: plan.notApplicable, backup: result.backup ?? null },
+          output,
+          (data) =>
+            data.status === 'already-migrated'
+              ? 'Names are already organisation/platform.'
+              : [
+                  `Renamed ${data.rows.length} account(s). The old names no longer work; anything that uses one is told what it is called now.`,
+                  ...(data.backup ? [`The configuration as it was is saved at ${data.backup}.`] : []),
+                ].join('\n'),
         );
         return;
       }
@@ -687,14 +699,27 @@ export async function main(
   });
 }
 
-/** The mapping, one line per account, old name on the left. */
-function renderMapping(rows: readonly NamesMigrationRow[]): string {
+/**
+ * The mapping, one line per account, old name on the left — then any `--rename` that matched nothing here.
+ *
+ * Those are listed rather than dropped silently: one mapping is meant to run on every computer, so a source this one
+ * lacks is normal, but a misspelt source looks exactly the same, and the account it meant would take its default.
+ */
+function renderMapping(rows: readonly NamesMigrationRow[], notApplicable: readonly NotApplicableRename[] = []): string {
   const width = Math.max(...rows.map((row) => row.from.length), 0);
   const kind = (row: NamesMigrationRow) => (row.kind === 'inbox' ? 'mailbox  ' : 'workspace');
   return [
     `${rows.length} account(s) will be renamed:`,
     '',
     ...rows.map((row) => `  ${kind(row)}  ${row.from.padEnd(width)}  →  ${row.to}`),
+    ...(notApplicable.length > 0
+      ? [
+          '',
+          `Not applicable here — nothing on this computer is called that, so ${notApplicable.length === 1 ? 'this rename changes' : 'these renames change'} nothing:`,
+          '',
+          ...notApplicable.map((skipped) => `  --rename ${skipped.rename}`),
+        ]
+      : []),
   ].join('\n');
 }
 

@@ -179,6 +179,10 @@ npx -y @agentcomms/slack@latest mcp install --client claude-code --force
 `--force` is required because the client CLIs refuse to overwrite an existing entry. Restart the
 client afterwards. `agent-gmail doctor` warns when the registered Gmail server is older than what you have.
 
+Coming from an older release, or bringing another computer up to date — the rename to
+organisation/platform names, both MCP servers, and a prompt an agent there can follow:
+[Upgrading](docs/upgrading.md).
+
 > **Remove the other Gmail server once you have migrated.** Everything here assumes it owns the only route to
 > Gmail's send endpoints. A second server with an ungated `send_email` tool does not break that guarantee so much
 > as stand beside it — an agent simply uses the other one, and no approval is asked for. `doctor` lists any it
@@ -195,6 +199,7 @@ client afterwards. `agent-gmail doctor` warns when the registered Gmail server i
 | [MCP tool reference](docs/reference/mcp-tools.md) · [Slack](docs/reference/slack-mcp-tools.md) | every tool and argument |
 | [The skills](docs/skills.md) | what each is for, and when it fires |
 | [Troubleshooting](docs/troubleshooting.md) | by symptom |
+| [Upgrading](docs/upgrading.md) | from any earlier release, and on each of your other computers |
 | [Releasing](docs/RELEASING.md) | for maintainers |
 
 The reference pages are generated from the code by `pnpm sync:reference` and checked by `pnpm verify`, so they

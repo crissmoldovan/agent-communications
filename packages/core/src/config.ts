@@ -1,11 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
+import { chmod, open, readFile, stat } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { type ConfigVersion, NEW_CONFIG_VERSION } from './config-version.ts';
 import { CommsError } from './errors.ts';
-import { writeFileAtomic } from './fs.ts';
+import { FILE_MODE, writeFileAtomic } from './fs.ts';
 import { withCredentialsLock, withFileLock } from './lock.ts';
 import { NAME_MESSAGE, NAME_PATTERN, parseName } from './name-grammar.ts';
 import { expandHome } from './paths.ts';
@@ -643,12 +643,14 @@ export class ConfigStore {
    * committed write and its retry, something else may have changed a policy or a timezone, and a retry refused
    * over that would be idempotency in name only. The rows are checked here rather than by whoever built them,
    * for the same reason `build` is: a caller that could answer its own question could answer it wrongly.
+   *
+   * The file it replaces is copied beside it first — see `backUpBeforeMigration` — and the copy's path returned.
    */
   async migrateNames(
     expected: string,
     rows: readonly RenamedAccount[],
     build: (current: ConfigV1) => ConfigV2,
-  ): Promise<{ status: 'migrated' | 'already-migrated'; config: ConfigV2 }> {
+  ): Promise<{ status: 'migrated' | 'already-migrated'; config: ConfigV2; backup?: string }> {
     if (!namesMigrationEnabled()) {
       throw new CommsError('CONFIG', 'this release reads version 2 of the config but does not write it', {
         hint: 'Names are migrated by a later release, once every program that shares this config can read the result.',
@@ -657,7 +659,13 @@ export class ConfigStore {
     return withCredentialsLock(dirname(this.path), () =>
       withFileLock(this.#lockPath, async () => {
         this.#cache = null;
-        const current = structuredClone(await this.load());
+        /*
+         * The bytes, not only the parsed config: they are what the backup copies, and the fingerprint below is
+         * taken of exactly them. Loading and then reading the file a second time for the copy would leave a gap
+         * between the two reads, and a backup that is not quite the file that was replaced.
+         */
+        const raw = await readFileIfExists(this.path);
+        const current = raw === null ? emptyConfig() : parseConfig(raw, this.path);
         if (current.version === 2) {
           if (!migrationApplied(current, rows)) {
             throw new CommsError('TRANSIENT', 'the names were migrated while this ran, and not to these names', {
@@ -695,11 +703,60 @@ export class ConfigStore {
             hint: 'This is a bug — please report it.',
           });
         }
+        const backup = await backUpBeforeMigration(this.path, raw ?? '');
         await writeFileAtomic(this.path, `${JSON.stringify(parsed.data, null, 2)}\n`);
         this.#cache = null;
-        return { status: 'migrated' as const, config: parsed.data };
+        return { status: 'migrated' as const, config: parsed.data, backup };
       }),
     );
+  }
+}
+
+async function readFileIfExists(path: string): Promise<string | null> {
+  try {
+    return await readFile(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+/**
+ * Copies the version-1 file to `config.json.before-names-migrate-<UTC>`, owner-only, and returns its path.
+ *
+ * The migration cannot be undone by any command: the old names become tombstones and are refused for good. The one
+ * way back — a release that cannot read version 2, or a mapping somebody regrets — is the file as it was, and until
+ * now whoever wanted that had to remember to copy it by hand before running the command. Taken inside the locks,
+ * after every check has passed and before the write, so it is exactly what is replaced and nothing is left behind
+ * by a migration that was refused. The config holds no secret, only references to them, so the copy holds none
+ * either; it is 0600 anyway, like everything else in this directory.
+ *
+ * Exclusive, never overwritten: a second migration in the same second (after restoring the first backup, say) gets
+ * a suffix rather than replacing the only copy of the original.
+ */
+async function backUpBeforeMigration(path: string, raw: string): Promise<string> {
+  const stamp = new Date()
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d+Z$/, 'Z');
+  for (let attempt = 0; ; attempt += 1) {
+    const target = `${path}.before-names-migrate-${stamp}${attempt === 0 ? '' : `-${attempt}`}`;
+    let handle: Awaited<ReturnType<typeof open>>;
+    try {
+      handle = await open(target, 'wx', FILE_MODE);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST' && attempt < 99) continue;
+      throw error;
+    }
+    try {
+      await handle.writeFile(raw);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    // `open`'s mode passes through the umask; this does not.
+    if (process.platform !== 'win32') await chmod(target, FILE_MODE);
+    return target;
   }
 }
 
