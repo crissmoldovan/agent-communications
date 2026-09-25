@@ -77,7 +77,7 @@ async function unpublished(subcommand, version, commit) {
  * from another commit through without the check above, to be refused by npm only after the packages before it went.
  */
 async function registryManifest(full, version) {
-  const url = new URL(`/${full.replace('/', '%2f')}`, registryUrl());
+  const url = new URL(`/${full.replaceAll('/', '%2f')}`, registryUrl());
   let last = 'no answer';
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
@@ -182,7 +182,7 @@ async function exchange({ requestUrl, requestToken, audience, registry, full }) 
       const idToken = (await idResponse.json())?.value;
       if (typeof idToken !== 'string' || idToken === '') return 'GitHub answered without an ID token';
 
-      const escaped = full.replace('/', '%2f');
+      const escaped = full.replaceAll('/', '%2f');
       const response = await fetch(new URL(`/-/npm/v1/oidc/token/exchange/package/${escaped}`, registry), {
         method: 'POST',
         headers: { Accept: 'application/json', Authorization: `Bearer ${idToken}`, 'Content-Length': '0' },

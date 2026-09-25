@@ -320,7 +320,7 @@ test('another Slack server on this machine is reported, because it is a second r
   const check = find(result, 'other-slack-servers');
   assert.equal(check?.status, 'warn');
   assert.match(check?.detail ?? '', /"team-chat" in cursor/);
-  assert.match(check?.detail ?? '', /mcp\.slack\.com/);
+  assert.match(check?.detail ?? '', /\(https:\/\/mcp\.slack\.com\)/);
   assert.doesNotMatch(check?.detail ?? '', /"slack"/, 'our own entry is not another server');
   // Named, never shown: an entry's env is where these servers keep their tokens.
   assert.doesNotMatch(JSON.stringify(result), /fake-bot-token-2/);

@@ -568,7 +568,7 @@ test('a rename for a name this computer does not have is reported, and the rest 
 test('the migration backs up the file it replaces, byte for byte and owner-only, and says where', async () => {
   // Written with odd spacing, so a copy re-serialised from the parsed config would not match.
   const store = storeWith(machine());
-  const original = readFileSync(store.path, 'utf8').replace('{', '{   ');
+  const original = readFileSync(store.path, 'utf8').replace(/^\{/, '{   ');
   writeFileSync(store.path, original);
   const plan = ready(planNamesMigration(await store.load(), ['gmail=personal/gmail']));
   const result = await migrateNames(store, plan);

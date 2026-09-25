@@ -11,6 +11,9 @@ import { PACKAGES } from '../scripts/packages.mjs';
 import { isVisible } from '../scripts/release-confirm.mjs';
 import { tempDir } from './helpers/temp-dir.mjs';
 
+/** Text matched literally inside a RegExp: every character that means something there, backslash included. */
+const escapeRegExp = (text) => text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+
 /**
  * Every publishable package is released, by every path that releases, in an order that installs.
  *
@@ -450,7 +453,7 @@ test('the confirm step passes only what the registry records as published from t
   assert.equal(foreign.slept, 0, 'nothing to wait for: the commit a version records cannot change');
   assert.match(
     foreign.stderr,
-    new RegExp(`@agentcomms/${PACKAGES.at(-1)}@${version.replace(/\./g, '\\.')} was published from ${OTHER}`),
+    new RegExp(`@agentcomms/${PACKAGES.at(-1)}@${escapeRegExp(version)} was published from ${OTHER}`),
   );
 });
 
@@ -988,7 +991,7 @@ test('sync-versions bumps every skill, Slack included, and --check catches one l
   );
   for (const entry of skills) {
     const source = await readFile(join(dir, 'skills', entry.name, 'SKILL.md'), 'utf8');
-    assert.match(source, new RegExp(`^compatibility: "@agentcomms/[\\w-]+@${next.replace(/\./g, '\\.')}"$`, 'm'));
+    assert.match(source, new RegExp(`^compatibility: "@agentcomms/[\\w-]+@${escapeRegExp(next)}"$`, 'm'));
     assert.ok(!source.includes(`@${old}"`), `skills/${entry.name} still names ${old}`);
   }
   assert.equal((await runScript(sync, ['--check'])).status, 0);

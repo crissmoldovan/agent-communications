@@ -11,7 +11,7 @@
  * `--check` verifies without writing, which is what CI runs.
  */
 import { readdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PACKAGES } from './packages.mjs';
 
@@ -23,7 +23,10 @@ async function put(path, content, what) {
   const current = await readFile(path, 'utf8').catch(() => null);
   if (current === content) return;
   if (check) {
-    problems.push(`${path.replace(ROOT, '')}: ${what} is out of date — run \`pnpm sync:versions\``);
+    // Named as the repository names it, `/` on every platform: Windows printed `skills\slack-reading\…`, which is
+    // neither what a person types nor what anything matching on the message expects.
+    const shown = relative(ROOT, path).split(sep).join('/');
+    problems.push(`${shown}: ${what} is out of date — run \`pnpm sync:versions\``);
     return;
   }
   await writeFile(path, content);

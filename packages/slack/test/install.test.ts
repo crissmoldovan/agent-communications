@@ -438,7 +438,7 @@ test('a refusal names another server by where it is, never by what its URL carri
     () => assert.fail('not refused'),
     (error: CommsError) => `${error.message} ${error.hint ?? ''}`,
   );
-  assert.match(refusal, /https:\/\/mcp\.example\.net\b/);
+  assert.match(refusal, /\(it runs https:\/\/mcp\.example\.net\)/);
   const warned = await mcpInstall(context, {
     client: 'cursor',
     name: 'agent-slack',
