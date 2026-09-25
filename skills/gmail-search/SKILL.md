@@ -2,7 +2,7 @@
 name: gmail-search
 description: "Find mail across one or more mailboxes and read what you find, honestly about how much you read. Symptoms: 'find that email from Sam', 'what did the invoice actually say', 'search my inboxes for anything about Phase 2', 'read me that thread'. Not for judging what a conversation means — gmail-thread-analysis does that."
 license: MIT
-compatibility: "@agentcomms/gmail@0.4.2"
+compatibility: "@agentcomms/gmail@0.5.0"
 metadata:
   group: communications
   lifecycle: release

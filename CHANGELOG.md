@@ -3,6 +3,112 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.5.0
+
+**Changes are now approved in chat by default.** A change that loosens a setting, or cannot be undone — a looser
+send policy, connecting Slack in `send` mode, moving credentials out of the keychain, removing an account,
+registering an MCP server — is shown to you as a preview, and applied once you say yes in the conversation. In 0.4.x
+the same changes needed a code typed at a terminal. A configuration from an earlier release reads as `chat`.
+
+Why: in 0.4 an agent could read and draft from a conversation, but connecting an account, widening it or changing
+how it is approved needed a terminal, and so did every Slack post. A person being set up from a conversation could
+not finish there, and for someone watching their own agent the code protected little. So every command now has a
+tool and every tool a command, both approved the same way — and terminal approval is one command away for anyone who
+wants it.
+
+What it means for you: this is the 0.x minor release, where this project puts breaking changes. All four packages
+move to 0.5.0 together, on `latest`. Gmail and Slack each carry their own copy of core, so neither needs another
+package installed; `@agentcomms/gmail-mcp` 0.5.0 requires `@agentcomms/gmail` 0.5.0. A registered server keeps running the release it was registered with until you register it again. Reading, searching
+and drafting are unchanged from both surfaces. What breaks is listed under **Scripts** below, and the one change that
+happens with no action on your side is the default above.
+
+Under `chat` this software cannot tell your yes from an agent's. If an agent runs without you watching, go back to
+terminal approval before you let it loose:
+
+```sh
+npx -y @agentcomms/core@0.5.0 policy confirm                 # every account
+agent-gmail inbox policy <alias> --change confirm             # one mailbox
+agent-slack workspace policy <name> --change confirm          # one workspace
+```
+
+From chat, `comms_change_policy`, `gmail_inbox_policy` and `slack_workspace_policy` do the same. Tightening applies at
+once; going back to `chat` needs the terminal code. Under `confirm`, a change is approved with `agentcomms approve
+<id>` — or `agent-gmail approve` / `agent-slack approve`, which now approve changes as well as sends.
+
+**Everything the CLI does, an agent can do from chat, and the other way round.** Each change goes through the same
+approval from both. Gmail's MCP server goes from 32 tools to 44 — show, rename and re-authorise a mailbox, import and
+remove one, set its policies, and manage the OAuth clients and trusted confirm clients. Slack's goes from 14 to 26 —
+connect, widen, re-authorise and remove a workspace, set its policies, run `doctor` and print the app manifest.
+`capabilities.json` lists every command and the tool that mirrors it, and `pnpm verify` fails on a command without a
+tool unless the file says why it has none.
+
+**Agents can post and react in Slack.** `slack_post_send` posts a draft that `slack_post_prepare` made, and
+`slack_react` / `slack_react_send` add a reaction, after your yes under a workspace's `chat` policy, or after
+`agent-slack approve` under `confirm`. `@here` now always needs terminal approval, like `@channel` and a room of 50 or
+more: it reaches whoever is online, which nothing here can count. So does a mention the preview cannot count, such as
+a user group. `--broadcast` accepts only `here`, `channel` and `everyone`, and a `--mention` must be a user id: either
+could be made to carry a user-group mention that the preview counted as nobody, so a post that interrupted a whole
+group was approved as one that interrupted no one.
+
+**A core MCP server sets up the others.** `npx -y @agentcomms/core mcp install --client <client>` registers it once;
+from then on an agent can list which channels are available, register or prune the Gmail and Slack servers, set the
+change policy, migrate names and secrets, read the audit log and list or revoke approvals — 11 tools. It registers
+servers at its own version, so to upgrade, re-register the core server first. At a terminal the same commands are
+`agentcomms approve`, `policy`, `channels`, `mcp install` and `mcp prune`. The new `comms-onboarding` skill walks a
+person through the whole setup from a conversation; there are now sixteen skills.
+
+**A server pinned to one mailbox or workspace keeps to it.** Given another account's approval id, a pinned server
+voided it — so an agent talking to the `work` server could cancel an approval waiting for `home`. It is now refused
+before it is touched. A pinned `gmail_doctor` answers for its own mailbox only.
+
+**A mismatched credential store is refused.** On a computer with Slack credentials in the keychain but no store
+recorded, `agent-gmail client add --store file` was approved as "credentials will move", moved nothing, and left every
+Slack workspace signed out. A `--store` other than where credentials already are is now refused, with the command
+that moves them (`agentcomms secrets migrate`).
+
+**What a change approval binds.** An approval now binds every setting the change writes, tightenings included, so a
+claim cannot drop part of what the person was shown. Tightening the default change policy to `confirm` lists every
+mailbox or workspace still set to `chat`, with the command that tightens it.
+
+**Slack apps can be updated from the terminal.** `agent-slack app update` writes a workspace's manifest into its
+Slack app, and `app create` makes the app, with a Slack app configuration token read from a hidden prompt or
+`SLACK_APP_CONFIG_TOKEN`. The token is never stored and has no MCP tool, so it never passes through a conversation.
+
+**Scripts: a command that changes something may now stop for approval.** Without a person at a terminal, these exit
+10 (`APPROVAL_PENDING`) with the preview and an approval id, and run again with `--approval <id>` after the yes:
+
+- `agent-gmail client add|remove`, `inbox import|remove`, `confirm-clients add`, `inbox reauth` asking for more access,
+  `setup --client-json`, and `setup --mcp-client`
+- `agent-slack workspace remove`, `workspace add|reauth --mode send`
+- `agent-gmail mcp install|prune`, `agent-slack mcp install|prune`, `agentcomms mcp install|prune`
+- `agentcomms secrets migrate`, in both directions
+- any looser send, post or change policy
+
+A server name must be 1–64 letters, digits, `.`, `_` or `-`: the name is quoted in the preview you approve, and a
+name with quotes in it could make an unpinned server read as a pinned one. Headless `agent-gmail setup --mcp-client`
+stops at the registration and carries its approval with `--mcp-approval <id>`, since `--approval` is already the
+OAuth client's.
+
+`agent-gmail draft update` keeps a draft's body unless you give a new one with `--text` or `--file` (`--file -` reads
+standard input). It used to read standard input whenever it was not a terminal, so from an agent's shell it either
+exited "the message body was empty" or waited for ever.
+
+`agentcomms names migrate --yes` is refused (exit 64): the rename is shown and approved like any other change.
+`agent-slack workspace mode <name> send` now stops at the Slack app step until you pass `--app-updated`, so a
+sign-in never asks for scopes the app does not have.
+
+Under `confirm`, a change started from the Gmail or Slack CLI or server names `agent-gmail approve` or `agent-slack
+approve` — the command installed with it — rather than `agentcomms approve`. The tools return what the matching
+command's `--json` prints, and the sign-in tools take everything their commands do: `gmail_inbox_add` its client, port
+and domain, and both finish tools a pasted `url`, for a browser on another machine. The Slack MCP greeting fits in the
+2 KB a client keeps; the lines saying an agent cannot approve a post itself had been cut off.
+
+Approval records carry `kind: "change"` or `"send"`, and the audit log records each change prepared, claimed, approved
+and revoked, with the surface it came from.
+
+To upgrade, re-register each server with `--force` and restart your client, as [Upgrading](docs/upgrading.md)
+describes — and decide on `policy confirm` first.
+
 ## 0.4.2
 
 **A home directory passed in the environment is used.** `openCore` and `resolvePaths` took the

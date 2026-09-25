@@ -2,7 +2,7 @@
 name: gmail-organize
 description: "Move mail around inside a mailbox — labels, archive, read state, stars, the bin — dry-running anything bulk and keeping the change that reverses it. Symptoms: 'archive everything from this sender', 'label these as invoices', 'mark that thread read', 'delete these emails', 'put that back'. Not for writing or sending mail — gmail-compose and gmail-send do that."
 license: MIT
-compatibility: "@agentcomms/gmail@0.4.2"
+compatibility: "@agentcomms/gmail@0.5.0"
 metadata:
   group: communications
   lifecycle: release
