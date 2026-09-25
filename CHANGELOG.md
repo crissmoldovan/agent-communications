@@ -59,7 +59,8 @@ person through the whole setup from a conversation; there are now sixteen skills
 
 **A server pinned to one mailbox or workspace keeps to it.** Given another account's approval id, a pinned server
 voided it — so an agent talking to the `work` server could cancel an approval waiting for `home`. It is now refused
-before it is touched. A pinned `gmail_doctor` answers for its own mailbox only.
+before it is touched. A pinned `gmail_doctor` answers for its own mailbox only, and a pinned `gmail_send_list`
+refuses another mailbox instead of answering for its own.
 
 **A mismatched credential store is refused.** On a computer with Slack credentials in the keychain but no store
 recorded, `agent-gmail client add --store file` was approved as "credentials will move", moved nothing, and left every
@@ -92,6 +93,12 @@ OAuth client's.
 `agent-gmail draft update` keeps a draft's body unless you give a new one with `--text` or `--file` (`--file -` reads
 standard input). It used to read standard input whenever it was not a terminal, so from an agent's shell it either
 exited "the message body was empty" or waited for ever.
+
+A word a tool does not know — a policy, a store, a kind, a direction, a format, a mode — is refused as `USAGE` with
+the words it takes, as the command refuses it, rather than with the MCP library's uncoded error. `agent-gmail export`
+and `gmail_export` refuse a format other than `md`, `json` or `eml`; another word used to write Markdown under that
+extension. `--wait` takes whole seconds from 0 to 600 (`--wait abc` waited for ever), and a wait that outlives the
+sign-in stops when the sign-in expires, as `gmail_inbox_finish` does, instead of saying the link was still good.
 
 `agentcomms names migrate --yes` is refused (exit 64): the rename is shown and approved like any other change.
 `agent-slack workspace mode <name> send` now stops at the Slack app step until you pass `--app-updated`, so a
