@@ -55,6 +55,24 @@ test('elsewhere, state and secrets sit beside the configuration', () => {
   }
 });
 
+test('the home in the environment given is the one used, so a temporary HOME keeps everything inside it', () => {
+  /*
+   * `homedir()` reads the running process's own environment, not the one passed in. Every harness here sets a
+   * temporary HOME, and data and downloads still resolved to the real ones — install tests wrote their backups into
+   * the maintainer's data directory, hundreds a day. Nothing else passes `home`; the environment has to be enough.
+   */
+  const posix = resolvePaths({
+    env: { HOME: '/tmp/fake-home', AGENT_COMMS_CONFIG_DIR: '/tmp/fake-home/cfg' },
+    platform: 'linux',
+  });
+  assert.equal(posix.dataDir, resolve('/tmp/fake-home/.local/share/agent-communications'));
+  assert.equal(posix.downloadsDir, resolve('/tmp/fake-home/Downloads/agent-communications'));
+
+  // Windows reads USERPROFILE, as Node's own homedir() does there; a HOME set by a Unix-style shell is not it.
+  const windows = resolvePaths({ env: { USERPROFILE: 'C:\\Users\\fake', HOME: '/c/elsewhere' }, platform: 'win32' });
+  assert.ok(windows.downloadsDir.startsWith(resolve('C:\\Users\\fake')), windows.downloadsDir);
+});
+
 test('expandHome expands only a leading tilde', () => {
   assert.equal(expandHome('~', home), home);
   assert.equal(expandHome('~/Documents', home), join(home, 'Documents'));

@@ -34,7 +34,13 @@ export interface ResolvedPaths {
 export function resolvePaths(options: PathEnvironment = {}): ResolvedPaths {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
-  const home = options.home ?? homedir();
+  /*
+   * The home the environment names, which is where Node's own `homedir()` looks for the running process — `HOME`, or
+   * `USERPROFILE` on Windows. Asking `homedir()` directly ignored an environment passed in, so every test that gave
+   * the harness a temporary HOME still had its data and downloads resolved to the real ones: one day of test runs
+   * left 748 backups of fixture entries in the maintainer's own data directory.
+   */
+  const home = options.home ?? ((platform === 'win32' ? env.USERPROFILE : env.HOME) || homedir());
 
   const configDir = resolve(
     env.AGENT_COMMS_CONFIG_DIR ||
