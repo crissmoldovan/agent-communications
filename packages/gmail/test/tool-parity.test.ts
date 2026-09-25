@@ -7,6 +7,7 @@ import { managedRuntimeEntry } from '@agentcomms/core';
 import { GmailContext } from '../src/context.ts';
 import { createDraft, getDraft } from '../src/operations/drafts.ts';
 import { inboxPolicy, orphanedSecretsPath } from '../src/operations/inboxes.ts';
+import { prepareSend } from '../src/operations/send.ts';
 import { type Harness, newHarness } from './support/harness.ts';
 import { applied, approvalAsked, cli, connect, toolError, wire } from './support/surfaces.ts';
 
@@ -573,6 +574,126 @@ test('a tier that is not one is refused as USAGE by gmail_inbox_reauth, as `inbo
     assert.match(refused.hint ?? '', /read, draft, organize/);
     // Refused before anything was prepared: no approval stands for a tier that does not exist.
     assert.deepEqual(await harness.core.approvals.list(), []);
+  } finally {
+    await close();
+  }
+});
+
+// ── the tool answers with what the command prints ───────────────────────────────────────────────────────────
+
+test('gmail_inboxes_list, gmail_send_list and gmail_search answer with everything the command’s --json prints', async () => {
+  /*
+   * Each tool picked a few fields out of the operation's result, so an agent working over MCP saw less than one at a
+   * terminal: which client a mailbox signs in through and whether its policies are its own or the defaults'; what a
+   * prepared send would send (`expect`), its policy, and whether it is a send or a change; the search's `kind` and
+   * mailboxes, and each row's recipient count. None of it is a secret, so none of it is held back.
+   */
+  const harness = await newHarness({
+    accounts: [
+      {
+        sub: 'sub-1',
+        email: 'jo@example.test',
+        sendAs: [{ sendAsEmail: 'jo@example.test', displayName: 'Jo', isDefault: true, isPrimary: true }],
+        messages: {
+          m1: {
+            id: 'm1',
+            threadId: 't1',
+            labelIds: ['INBOX'],
+            snippet: 'About Tuesday',
+            internalDate: String(Date.parse('2026-09-17T09:00:00Z')),
+            payload: {
+              partId: '',
+              mimeType: 'text/plain',
+              headers: [
+                { name: 'From', value: 'Sam <sam@partner.test>' },
+                { name: 'To', value: 'Jo <jo@example.test>, kim@example.test' },
+                { name: 'Subject', value: 'Tuesday' },
+              ],
+              body: { size: 2, data: Buffer.from('hi', 'utf8').toString('base64url') },
+            },
+          },
+        },
+      },
+    ],
+  });
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', sendPolicy: 'confirm' });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const draft = await createDraft(context, 'work', { to: ['sam@partner.test'], subject: 'Tue', text: 'Tuesday.' });
+  await prepareSend(context, 'work', draft.draftId);
+  await inboxPolicy(context, 'work', { sendPolicy: 'never' });
+
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    // A change approval as well as a send, so `kind` has something to tell apart.
+    approvalAsked(await call('gmail_inbox_policy', { inbox: 'work', sendPolicy: 'chat' }));
+
+    const inboxes = (await cli(harness, ['inbox', 'list', '--json'])).envelope<unknown[]>().data;
+    assert.deepEqual(wire(await call('gmail_inboxes_list')).inboxes, inboxes);
+
+    const approvals = (await cli(harness, ['send', 'list', '--json'])).envelope<Array<{ kind?: string }>>().data;
+    assert.equal(approvals?.length, 2);
+    assert.deepEqual(approvals?.map((approval) => approval.kind ?? 'send').sort(), ['change', 'send']);
+    assert.deepEqual(wire(await call('gmail_send_list', {})).approvals, approvals);
+
+    const searched = (await cli(harness, ['search', 'Tuesday', '--json'])).envelope<Record<string, unknown>>().data;
+    const found = wire(await call('gmail_search', { query: 'Tuesday' }));
+    // `nextCursor` is null over MCP where the command leaves it out, and the envelope's boundary is drawn afresh for
+    // every answer; everything else is the same.
+    assert.equal(found.nextCursor, null);
+    const unbounded = (text: unknown) => String(text).replaceAll(/boundary="[^"]+"/g, 'boundary=""');
+    const { nextCursor: _cursor, ...rest } = found;
+    assert.deepEqual(
+      { ...rest, enveloped: unbounded(rest.enveloped) },
+      { ...searched, enveloped: unbounded(searched?.enveloped) },
+    );
+    assert.equal((rest.rows as Array<{ toCount: number }>)[0]?.toCount, 2);
+  } finally {
+    await close();
+  }
+});
+
+test('gmail_inbox_finish answers with the mailbox it connected, as `--finish --json` does, without its token’s place', async () => {
+  const harness = await readyToConnect();
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    const first = wire(await call('gmail_inbox_add', { alias: 'viatool', email: 'jo@example.test' }));
+    stopLater(harness, first.flowId);
+    const finished = wire(
+      await call('gmail_inbox_finish', {
+        flowId: first.flowId,
+        url: harness.google.consent(String(first.authUrl), { sub: 'sub-1' }),
+      }),
+    );
+
+    const second = wire(await call('gmail_inbox_add', { alias: 'viacli', email: 'sam@example.test' }));
+    stopLater(harness, second.flowId);
+    const byCommand = await cli(harness, [
+      'inbox',
+      'add',
+      '--finish',
+      String(second.flowId),
+      '--url',
+      harness.google.consent(String(second.authUrl), { sub: 'sub-2' }),
+      '--json',
+    ]);
+    const printed = byCommand.envelope<{ inbox: Record<string, unknown> }>().data;
+    assert.ok(printed);
+
+    // Every field the command prints, the tool answers — except where the refresh token is kept, which no tool names.
+    for (const key of Object.keys(printed)) assert.ok(key in finished, `the tool left out ${key}`);
+    const inbox = finished.inbox as Record<string, unknown>;
+    assert.deepEqual(
+      Object.keys(inbox).sort(),
+      Object.keys(printed.inbox)
+        .filter((key) => key !== 'secretRef')
+        .sort(),
+    );
+    assert.equal('secretRef' in inbox, false);
+    assert.equal(inbox.email, 'jo@example.test');
+    assert.equal(inbox.id, (await harness.core.config.load()).inboxes.viatool?.id);
+    // What it answered before stays where it was.
+    assert.equal(finished.email, 'jo@example.test');
+    assert.equal(finished.tier, inbox.tier);
   } finally {
     await close();
   }

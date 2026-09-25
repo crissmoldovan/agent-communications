@@ -142,12 +142,18 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     { instructions: await buildInstructions(context, pinned) },
   );
 
-  /** Every tool answers with the same envelope, and the text block mirrors it for clients that drop structured data. */
+  /**
+   * Every tool answers with the same envelope, and the text block mirrors it for clients that drop structured data.
+   *
+   * The structured half is the text half parsed back, so the two are the same document whatever the result holds: an
+   * operation's view passed through whole can carry a key whose value is `undefined`, which JSON leaves out — and a
+   * client reading one half would otherwise see a key the other half does not have.
+   */
   const reply = (
     data: unknown,
   ): { structuredContent: Record<string, unknown>; content: Array<{ type: 'text'; text: string }> } => {
-    const structured = data as Record<string, unknown>;
-    return { structuredContent: structured, content: [{ type: 'text', text: JSON.stringify(structured) }] };
+    const text = JSON.stringify(data);
+    return { structuredContent: JSON.parse(text) as Record<string, unknown>, content: [{ type: 'text', text }] };
   };
 
   const fail = (
@@ -339,17 +345,27 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     return requested;
   };
 
+  /** One mailbox as `inbox list --json` prints it: the operation's own view, which names no secret. */
   const inboxView = z.object({
     alias: z.string(),
+    id: z.string(),
     email: z.string(),
     tier: z.string(),
     capabilities: z.array(z.string()),
-    sendPolicy: z.string(),
-    /** How a loosening of this mailbox's settings is approved: chat or confirm. */
-    changePolicy: z.string(),
-    health: z.string(),
     /** Whether the address book was included in this grant. Without it, a contact search sees only past mail. */
     contacts: z.boolean(),
+    sendPolicy: z.string(),
+    sendPolicyInherited: z.boolean().describe('true when the send policy is the default rather than the mailbox’s own'),
+    /** How a loosening of this mailbox's settings is approved: chat or confirm. */
+    changePolicy: z.string(),
+    changePolicyInherited: z.boolean(),
+    client: z.string().describe('the OAuth client it signs in through, by name'),
+    identity: z.string(),
+    createdAt: z.string(),
+    lastRefreshOkAt: z.string().optional(),
+    lastUsedAt: z.string().optional(),
+    health: z.string(),
+    lastError: z.object({ code: z.string(), message: z.string(), at: z.string() }).optional(),
   });
 
   server.registerTool(
@@ -364,21 +380,10 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     },
     async () => {
       try {
+        // Passed through as `inbox list --json` prints it, as gmail_inbox_show passes `inbox show` through: the
+        // operation picks what a mailbox's view holds, so the two surfaces cannot drift apart a field at a time.
         const inboxes = await inboxList(context);
-        return reply({
-          inboxes: inboxes
-            .filter((inbox) => !pinned || inbox.alias === pinned)
-            .map((inbox) => ({
-              alias: inbox.alias,
-              email: inbox.email,
-              tier: inbox.tier,
-              capabilities: inbox.capabilities,
-              sendPolicy: inbox.sendPolicy,
-              changePolicy: inbox.changePolicy,
-              health: inbox.health,
-              contacts: inbox.contacts,
-            })),
-        });
+        return reply({ inboxes: inboxes.filter((inbox) => !pinned || inbox.alias === pinned) });
       } catch (error) {
         return fail(error);
       }
@@ -514,6 +519,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     messageId: z.string(),
     date: z.string().nullable(),
     from: z.object({ name: z.string(), address: z.string() }).nullable(),
+    toCount: z.number().describe('how many people it was addressed to'),
     subject: z.string(),
     snippet: z.string(),
     labels: z.array(z.string()),
@@ -537,20 +543,24 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         includeSpamTrash: mcpBoolean().optional(),
       }),
       outputSchema: z.object({
-        rows: z.array(rowSchema),
-        enveloped: z.string(),
         query: z.object({
           given: z.string(),
           compiled: z.string(),
           timezone: z.string(),
           rewrites: z.array(z.object({ operator: z.string(), from: z.string(), to: z.string() })),
         }),
+        kind: z.enum(['threads', 'messages']),
+        inboxes: z.array(z.string()).describe('the mailboxes searched'),
+        rows: z.array(rowSchema),
+        enveloped: z.string(),
         returned: z.number(),
         estimatedTotal: z.number(),
         hasMore: z.boolean(),
         nextCursor: z.string().nullable(),
         complete: z.boolean(),
-        errors: z.array(z.object({ inbox: z.string(), code: z.string(), message: z.string() })),
+        errors: z.array(
+          z.object({ inbox: z.string(), code: z.string(), message: z.string(), hint: z.string().optional() }),
+        ),
       }),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -564,17 +574,8 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           cursor,
           includeSpamTrash,
         });
-        return reply({
-          rows: result.rows,
-          enveloped: result.enveloped,
-          query: result.query,
-          returned: result.returned,
-          estimatedTotal: result.estimatedTotal,
-          hasMore: result.hasMore,
-          nextCursor: result.nextCursor ?? null,
-          complete: result.complete,
-          errors: result.errors.map((error) => ({ inbox: error.inbox, code: error.code, message: error.message })),
-        });
+        // What `search --json` prints, with `nextCursor` null rather than absent when there is no more.
+        return reply({ ...result, nextCursor: result.nextCursor ?? null });
       } catch (error) {
         return fail(error);
       }
@@ -1276,6 +1277,9 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
             tier: z.string(),
             reauthorised: z.boolean(),
             missingScopes: z.array(z.string()).describe('boxes they unticked; empty is the good case'),
+            inbox: z
+              .looseObject({ id: z.string(), email: z.string(), client: z.string(), tier: z.string() })
+              .describe('the mailbox as it was saved, as `--finish --json` prints it, without where its token is kept'),
           }),
           annotations: { readOnlyHint: false, openWorldHint: true },
         },
@@ -1297,12 +1301,16 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
               waitSeconds: waitSeconds ?? 60,
               signal: ctx.mcpReq.signal,
             });
+            // What `--finish --json` prints, less one field: `secretRef`, where the refresh token is kept, which no
+            // tool here names (gmail_inbox_show and gmail_clients_list leave it out too).
+            const { secretRef: _kept, ...saved } = result.inbox;
             return reply({
               alias: result.alias,
               email: result.inbox.email,
               tier: result.inbox.tier,
               reauthorised: result.reauthorised,
               missingScopes: result.missingScopes,
+              inbox: saved,
             });
           } catch (error) {
             return fail(error);
@@ -2181,16 +2189,29 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     {
       title: 'List prepared sends',
       description:
-        'Approvals that have been prepared and not yet used, with what each one would send and when it expires.',
+        'Approvals that have been prepared, with what each one would send and when it expires: a send’s recipients and subject in `expect`, or — `kind: "change"` — the change to an account a person was asked to approve. The same as `agent-gmail send list`.',
       inputSchema: z.object({ inbox: z.string().min(1).optional() }),
       outputSchema: z.object({
         approvals: z.array(
-          z.object({
+          // Loose: the record as `send list --json` prints it, which never includes the code a person types.
+          z.looseObject({
             approvalId: z.string(),
+            kind: z.string().optional().describe('"change" for a change to an account; absent for a send'),
             inbox: z.string(),
             state: z.string(),
             draftId: z.string(),
+            policy: z.string(),
+            requiredPolicy: z.string(),
             riskFlags: z.array(z.string()),
+            expect: z
+              .object({
+                to: z.array(z.string()),
+                cc: z.array(z.string()),
+                bcc: z.array(z.string()),
+                subject: z.string(),
+              })
+              .describe('what it would send; for a change, its summary as the subject'),
+            createdAt: z.string(),
             expiresAt: z.string(),
           }),
         ),
@@ -2202,17 +2223,9 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         // Pinned means pinned. Every other tool in this file forces `pinned` or refuses a mismatch; these two were
         // the exceptions, so a server started with `--inbox work` could still enumerate — and cancel — approvals
         // standing against a mailbox it was explicitly not given.
-        const records = await listApprovals(context, { inbox: pinned ?? inbox });
-        return reply({
-          approvals: records.map((record) => ({
-            approvalId: record.approvalId,
-            inbox: record.inbox,
-            state: record.state,
-            draftId: record.draftId,
-            riskFlags: record.riskFlags,
-            expiresAt: record.expiresAt,
-          })),
-        });
+        // The records as `send list --json` prints them: the store's public view, which leaves out the hash of the
+        // code a person types, and nothing else is a secret.
+        return reply({ approvals: await listApprovals(context, { inbox: pinned ?? inbox }) });
       } catch (error) {
         return fail(error);
       }

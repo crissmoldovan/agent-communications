@@ -57,7 +57,7 @@ names it `from`. There is no default mailbox.
 | [`gmail_confirm_client_remove`](#gmail_confirm_client_remove) | Take a client off the list of those trusted to show a person an approval form. |
 | [`gmail_send_cancel`](#gmail_send_cancel) | Cancel a prepared send. |
 | [`gmail_confirm_clients`](#gmail_confirm_clients) | The MCP clients whose approval forms are trusted to reach a person, so a send from a `confirm` mailbox can be approved in a form instead of at a terminal. |
-| [`gmail_send_list`](#gmail_send_list) | Approvals that have been prepared and not yet used, with what each one would send and when it expires. |
+| [`gmail_send_list`](#gmail_send_list) | Approvals that have been prepared, with what each one would send and when it expires: a send’s recipients and subject in `expect`, or — `kind: "change"` — the change to an account a person was asked to approve. |
 
 ### `gmail_inboxes_list`
 
@@ -604,7 +604,7 @@ Takes no arguments.
 
 ### `gmail_send_list`
 
-Approvals that have been prepared and not yet used, with what each one would send and when it expires.
+Approvals that have been prepared, with what each one would send and when it expires: a send’s recipients and subject in `expect`, or — `kind: "change"` — the change to an account a person was asked to approve. The same as `agent-gmail send list`.
 
 *read-only*
 
