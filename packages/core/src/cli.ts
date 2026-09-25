@@ -55,7 +55,8 @@ Usage:
   agentcomms approvals revoke <approvalId>
   agentcomms approve <approvalId>          approve a configuration change at this terminal: read it, type the code
   agentcomms policy [--account <name> | --inbox <name>] [chat|confirm] [--approval <id>]
-                                           report or set the change policy: how a loosening is approved
+                                           report or set the change policy: how a loosening is approved;
+                                           confirm applies at once, chat is approved first
   agentcomms channels                      which channel servers exist, which are installed, and where they are registered
   agentcomms mcp                           run the core MCP server on stdio (what an MCP client starts)
   agentcomms mcp install --client <client> [--name <name>] [--launcher managed|npx|local] [--force]
@@ -66,10 +67,11 @@ Usage:
   agentcomms secrets migrate --to keychain|file [--approval <id>]
   agentcomms names migrate [--rename <old>=<new>] [--dry-run] [--approval <id>]
 
-Changes — policy, mcp install and prune, secrets and names migrate — are shown before they happen. At a terminal you
-approve them there; anything else gets the preview and an approval id (exit 10), and runs the command again with
---approval <id> once the person has agreed: in the chat under the \`chat\` change policy, with \`agentcomms approve\`
-under \`confirm\`.
+A change that loosens something or cannot be taken back — policy chat, mcp install and prune, secrets and names
+migrate — is shown before it happens. At a terminal you approve it there; anything else gets the preview and an
+approval id (exit 10), and runs the command again with --approval <id> once the person has agreed: in the chat under
+the \`chat\` change policy, with \`agentcomms approve\` under \`confirm\`. A tightening — policy confirm — applies at
+once and asks nobody, and a --dry-run changes nothing.
 
 Options:
   --json        print the versioned JSON envelope

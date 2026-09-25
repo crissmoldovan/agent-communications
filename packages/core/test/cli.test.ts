@@ -31,6 +31,11 @@ test('--version and --help print and exit 0', () => {
   assert.equal(help.status, 0);
   assert.match(help.stdout, /agentcomms paths/);
   assert.match(help.stdout, /Exit codes:/);
+  // It said every policy change is "shown before it happens"; `policy confirm` tightens, and applies at once.
+  const prose = help.stdout.replace(/\s+/g, ' ');
+  assert.match(prose, /confirm applies at once, chat is approved first/);
+  assert.match(prose, /A tightening — policy confirm — applies at once and asks nobody/);
+  assert.doesNotMatch(prose, /Changes — policy,/);
 });
 
 test('paths --json prints the versioned envelope with the overridden config dir', () => {
