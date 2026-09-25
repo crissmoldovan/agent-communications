@@ -396,7 +396,7 @@ configuration problem.`,
   const approvalOption = (command: Command): Command =>
     command.option(
       '--approval <approvalId>',
-      'apply a change a person approved: said yes to in chat, or approved with `agentcomms approve`',
+      'apply a change a person approved: said yes to in chat, or approved with `agent-slack approve`',
     );
 
   /**
@@ -413,6 +413,7 @@ configuration problem.`,
       env,
       output: output(),
       command,
+      approveCommand: 'agent-slack approve',
       streams,
     });
 

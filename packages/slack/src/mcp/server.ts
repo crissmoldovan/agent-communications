@@ -52,7 +52,7 @@ import { VERSION } from '../version.ts';
  * signing it in again, moving it to `send`, setting its policies and removing it are tools here too, each the
  * operation its `agent-slack workspace` command runs, through core's change flow: a change that loosens or cannot be
  * taken back returns a preview and an approval id, and is applied on the call that claims it — after the person's yes
- * under the `chat` change policy, after `agentcomms approve` at their terminal under `confirm`. Every sign-in stops at
+ * under the `chat` change policy, after `agent-slack approve` at their terminal under `confirm`. Every sign-in stops at
  * the link: Slack's consent screen is the person's.
  *
  * What is left off, deliberately, and asserted absent by the tests: approving. Approving under `confirm` is what that
@@ -145,7 +145,7 @@ async function buildInstructions(context: SlackContext, pinned: string | undefin
     '',
     `Changing a workspace (\`send\` mode, a looser policy${pinned ? '' : ', removing one'}) returns \`approvalRequired\``,
     'and a preview: show it and ask. Under the `chat` change policy call again with `approvalId` after their yes;',
-    'under `confirm` they run `agentcomms approve <id>` first — you cannot approve it yourself.',
+    'under `confirm` they run `agent-slack approve <id>` first — you cannot approve it yourself.',
     'Tightening applies at once.',
   ].join('\n');
 }
@@ -789,7 +789,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
    * `gatedChange`: what loosens nothing applies at once, and what loosens or cannot be taken back returns a preview and
    * an approval id, and is applied by the same tool called again with that id. The approval is bound to the change
    * as the preview showed it, claimed once, and refused if the workspace moved in between. None of these approves:
-   * under `confirm` the claim waits for `agentcomms approve` at the person's terminal and says so.
+   * under `confirm` the claim waits for `agent-slack approve` at the person's terminal and says so.
    *
    * Every sign-in is detached, because a tool call cannot sit waiting on a browser: the tool returns the link and
    * `slack_workspace_finish` collects the result, as `--start` and `--finish` do at the CLI.
@@ -810,9 +810,15 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
 
   /** A gated change, run and shaped for a tool, with a started sign-in reported as both surfaces report it. */
   const runChange = async <T>(change: GatedChange<T>, approvalId: string | undefined) =>
-    changeToolResult(await gatedChange(context.core, change, { surface: 'mcp', approvalId }));
+    changeToolResult(
+      await gatedChange(context.core, change, { surface: 'mcp', approvalId, approveCommand: 'agent-slack approve' }),
+    );
   const runSignIn = async (change: GatedChange<StartedSignIn>, approvalId: string | undefined, reauth: boolean) => {
-    const outcome = await gatedChange(context.core, change, { surface: 'mcp', approvalId });
+    const outcome = await gatedChange(context.core, change, {
+      surface: 'mcp',
+      approvalId,
+      approveCommand: 'agent-slack approve',
+    });
     return changeToolResult(
       outcome.status === 'applied' ? { status: 'applied', result: signInStarted(outcome.result, reauth) } : outcome,
     );
@@ -831,7 +837,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       {
         title: 'Connect a workspace',
         description:
-          'Start connecting a Slack workspace through the person’s own app, in `read` (the default: its token cannot post, and Slack enforces that) or `send`. `read` starts at once. `send` is a change a person approves first: this returns `approvalRequired` with a preview — show it in full and ask; call again with `approvalId` once they say yes (under the `confirm` change policy, once they have run `agentcomms approve <id>` at their terminal; you cannot approve it yourself). Once started it returns a sign-in link and stops: give the person the link to approve in Slack, then call slack_workspace_finish. The same as `agent-slack workspace add`.',
+          'Start connecting a Slack workspace through the person’s own app, in `read` (the default: its token cannot post, and Slack enforces that) or `send`. `read` starts at once. `send` is a change a person approves first: this returns `approvalRequired` with a preview — show it in full and ask; call again with `approvalId` once they say yes (under the `confirm` change policy, once they have run `agent-slack approve <id>` at their terminal; you cannot approve it yourself). Once started it returns a sign-in link and stops: give the person the link to approve in Slack, then call slack_workspace_finish. The same as `agent-slack workspace add`.',
         inputSchema: {
           workspace: z.string().describe('the name to connect it under, as `organisation/slack`'),
           clientId: z.string().describe('the app’s Client ID, from its Basic Information page; not a secret'),
@@ -867,7 +873,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       {
         title: 'Disconnect a workspace',
         description:
-          'Disconnect a workspace from this machine and delete its token. It cannot be taken back, so it is a change a person approves first: this returns `approvalRequired` with a preview — show it and ask; call again with `approvalId` once they say yes (under `confirm`, once they have run `agentcomms approve <id>`). The Slack app stays installed in the workspace; removing it there is the person’s step in Slack. The same as `agent-slack workspace remove`.',
+          'Disconnect a workspace from this machine and delete its token. It cannot be taken back, so it is a change a person approves first: this returns `approvalRequired` with a preview — show it and ask; call again with `approvalId` once they say yes (under `confirm`, once they have run `agent-slack approve <id>`). The Slack app stays installed in the workspace; removing it there is the person’s step in Slack. The same as `agent-slack workspace remove`.',
         inputSchema: { ...workspaceArg, ...approvalArg },
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
       },
@@ -923,7 +929,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     {
       title: 'Sign a workspace in again',
       description:
-        'Start signing a workspace in again, through the app it was connected with: to renew its grant, or with `mode` to change its access. The same person, workspace and app must come back, or nothing is recorded. Renewing, and `read`, start at once. `read` → `send` is a change a person approves first — this returns `approvalRequired` with a preview; show it, ask, and call again with `approvalId` once they say yes (under `confirm`, once they have run `agentcomms approve <id>`). The app’s manifest must already be `send` — slack_mode_set checks that first. Returns a sign-in link: the person approves it in Slack, then call slack_workspace_finish. The same as `agent-slack workspace reauth`.',
+        'Start signing a workspace in again, through the app it was connected with: to renew its grant, or with `mode` to change its access. The same person, workspace and app must come back, or nothing is recorded. Renewing, and `read`, start at once. `read` → `send` is a change a person approves first — this returns `approvalRequired` with a preview; show it, ask, and call again with `approvalId` once they say yes (under `confirm`, once they have run `agent-slack approve <id>`). The app’s manifest must already be `send` — slack_mode_set checks that first. Returns a sign-in link: the person approves it in Slack, then call slack_workspace_finish. The same as `agent-slack workspace reauth`.',
       inputSchema: {
         ...workspaceArg,
         mode: z.enum(['read', 'send']).optional().describe('the access to ask for; its own when left out'),
@@ -957,7 +963,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     {
       title: 'Move a workspace between read and send',
       description:
-        'Move a workspace to `send` (its token can post, upload and react, each still only with a person’s approval) or back to `read`. `send`, while the recorded grant cannot show its app offers posting: returns `appUpdateNeeded` with the manifest and the link to that app’s manifest page, and starts nothing — the person pastes it there and saves (or runs the `terminalAlternative` themselves; never ask for an app configuration token in chat); call again with `appUpdated: true` once they say they have. Then it is a change a person approves: `approvalRequired` and a preview — show it, ask, call again with `approvalId` (and `appUpdated`) once they say yes (under `confirm`, once they have run `agentcomms approve <id>`). Then a sign-in link: they approve it in Slack, then call slack_workspace_finish. `read` returns the procedure and changes nothing: Slack never removes a scope from a token. The same as `agent-slack workspace mode <name> send|read`.',
+        'Move a workspace to `send` (its token can post, upload and react, each still only with a person’s approval) or back to `read`. `send`, while the recorded grant cannot show its app offers posting: returns `appUpdateNeeded` with the manifest and the link to that app’s manifest page, and starts nothing — the person pastes it there and saves (or runs the `terminalAlternative` themselves; never ask for an app configuration token in chat); call again with `appUpdated: true` once they say they have. Then it is a change a person approves: `approvalRequired` and a preview — show it, ask, call again with `approvalId` (and `appUpdated`) once they say yes (under `confirm`, once they have run `agent-slack approve <id>`). Then a sign-in link: they approve it in Slack, then call slack_workspace_finish. `read` returns the procedure and changes nothing: Slack never removes a scope from a token. The same as `agent-slack workspace mode <name> send|read`.',
       inputSchema: {
         ...workspaceArg,
         mode: z.enum(['read', 'send']).describe('the mode to move it to'),
@@ -994,7 +1000,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     {
       title: 'How a workspace’s posts and changes are approved',
       description:
-        'Report or set how this workspace’s posts and reactions are approved (`sendPolicy`: `chat`, `confirm` or `never`) and how changes to it are approved (`changePolicy`: `chat` or `confirm`). With neither, it reports. Tightening — towards `never`, towards `confirm` — applies at once. Loosening is a change a person approves first, under the change policy in force before it: this returns `approvalRequired` with a preview; show it, ask, and call again with `approvalId` once they say yes — or, under `confirm`, once they have run `agentcomms approve <id>` at their terminal. Never loosen a policy the person did not ask to loosen. The same as `agent-slack workspace policy`.',
+        'Report or set how this workspace’s posts and reactions are approved (`sendPolicy`: `chat`, `confirm` or `never`) and how changes to it are approved (`changePolicy`: `chat` or `confirm`). With neither, it reports. Tightening — towards `never`, towards `confirm` — applies at once. Loosening is a change a person approves first, under the change policy in force before it: this returns `approvalRequired` with a preview; show it, ask, and call again with `approvalId` once they say yes — or, under `confirm`, once they have run `agent-slack approve <id>` at their terminal. Never loosen a policy the person did not ask to loosen. The same as `agent-slack workspace policy`.',
       inputSchema: {
         ...workspaceArg,
         sendPolicy: z.enum(['chat', 'confirm', 'never']).optional().describe('how a post or reaction is approved'),

@@ -366,7 +366,7 @@ export class ApprovalStore {
           'USAGE',
           `approval ${id} is for a configuration change, not a send`,
           record,
-          `A person approves it with \`agentcomms approve ${id}\`, and it permits only the change it was prepared for.`,
+          `A person approves it with \`agentcomms approve ${id}\` — or \`agent-gmail approve\` or \`agent-slack approve\`, whichever is installed — and it permits only the change it was prepared for.`,
         )
       : refuseChange(
           'USAGE',

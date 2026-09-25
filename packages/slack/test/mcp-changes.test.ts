@@ -216,11 +216,11 @@ test('under the confirm change policy the agent cannot claim it until a person a
     const args = { workspace: 'acme', clientId: TEST_CLIENT_ID, port, mode: 'send' };
     const asked = prepared(await call('slack_workspace_add', args));
     assert.equal(asked.policy, 'confirm');
-    assert.match(asked.next, new RegExp(`agentcomms approve ${asked.approvalId}`));
+    assert.match(asked.next, new RegExp(`agent-slack approve ${asked.approvalId}`));
 
     const early = failed(await call('slack_workspace_add', { ...args, approvalId: asked.approvalId }));
     assert.equal(early.code, 'APPROVAL_PENDING');
-    assert.match(early.hint ?? '', new RegExp(`agentcomms approve ${asked.approvalId}`));
+    assert.match(early.hint ?? '', new RegExp(`agent-slack approve ${asked.approvalId}`));
     assert.deepEqual(await pendingFlows(harness), []);
 
     await approveAtTerminal(harness, asked.approvalId);
@@ -545,7 +545,7 @@ test('the greeting says how a change is approved, and a pinned one offers no way
     /`send` mode, a looser policy, removing one/,
     /approvalRequired/,
     /`approvalId` after their yes/,
-    /agentcomms approve <id>/,
+    /agent-slack approve <id>/,
     /you cannot approve it yourself/,
     /Tightening applies at once/,
   ]) {

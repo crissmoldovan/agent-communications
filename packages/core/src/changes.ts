@@ -64,6 +64,17 @@ export interface ChangeRequest extends ChangeSpec {
 export interface ChangeOptions {
   /** Where the call came from, for the audit trail. */
   surface: ChangeSurface;
+  /**
+   * The command a person runs to approve a change under `confirm`, as it is installed beside whatever asked: `agent-gmail
+   * approve` and `agent-slack approve` approve changes too, and `agentcomms` is not installed with either package, so
+   * naming it there sends the person to a command they do not have. `agentcomms approve` when left out.
+   */
+  approveCommand?: string | undefined;
+}
+
+/** The terminal command that approves a change, for the channel that asked. */
+export function approveCommandOf(options: Pick<ChangeOptions, 'approveCommand'>): string {
+  return options.approveCommand ?? 'agentcomms approve';
 }
 
 export interface PreparedChange {
@@ -199,7 +210,7 @@ export async function prepareChange(
       effects: binding.effects,
       preview: renderChangePreview({ ...record, change: binding }),
       expiresAt: record.expiresAt,
-      next: nextStep(record.approvalId, policy),
+      next: nextStep(record.approvalId, policy, approveCommandOf(options)),
     };
   } catch (error) {
     await auditRefusal(core, 'change.prepare', error, {
@@ -234,7 +245,13 @@ export async function claimChange(
     // The summary is not bound — the settings and the effects are — so none is needed to claim.
     binding = bindChange(expect, '');
     policy = governingChangePolicy(await core.config.load(), binding);
-    const record = await core.approvals.claimForChange(approvalId, { change: binding, policy });
+    const record = await core.approvals.claimForChange(
+      approvalId,
+      { change: binding, policy },
+      {
+        pendingHint: `Ask the user to run \`${approveCommandOf(options)} ${approvalId}\` in their own terminal, then try again with the same approval.`,
+      },
+    );
     const decided = stricterPolicy(policy, record.requiredPolicy) === 'chat' ? 'chat' : 'confirm';
     await auditChange(core, {
       operation: 'change.claim',
@@ -403,10 +420,10 @@ function changePolicyOf(record: Pick<ApprovalRecord, 'requiredPolicy'>): ChangeP
   return record.requiredPolicy === 'chat' ? 'chat' : 'confirm';
 }
 
-function nextStep(approvalId: string, policy: ChangePolicy): string {
+function nextStep(approvalId: string, policy: ChangePolicy, approveCommand: string): string {
   return policy === 'chat'
     ? `Show this preview to the user and ask. If they say yes, claim approval ${approvalId} and apply the change; if not, revoke it.`
-    : `The change policy is confirm: ask the user to run \`agentcomms approve ${approvalId}\` in their own terminal and type the code it shows. Then claim approval ${approvalId} and apply the change.`;
+    : `The change policy is confirm: ask the user to run \`${approveCommand} ${approvalId}\` in their own terminal and type the code it shows. Then claim approval ${approvalId} and apply the change.`;
 }
 
 interface ChangeAuditEntry {

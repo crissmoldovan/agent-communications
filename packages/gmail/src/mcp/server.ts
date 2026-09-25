@@ -179,7 +179,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       policy: z
         .enum(['chat', 'confirm'])
         .optional()
-        .describe('chat: the user says yes here; confirm: they run `agentcomms approve <id>` at a terminal first'),
+        .describe('chat: the user says yes here; confirm: they run `agent-gmail approve <id>` at a terminal first'),
       summary: z.string().optional(),
       preview: z.string().optional().describe('show this to the user exactly as it is, before asking'),
       expiresAt: z.string().optional(),
@@ -197,7 +197,11 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     change: GatedChange<T>,
     approvalId: string | undefined,
   ): Promise<ReturnType<typeof reply>> =>
-    reply(changeToolResult(await gatedChange(context.core, change, { surface: 'mcp', approvalId })));
+    reply(
+      changeToolResult(
+        await gatedChange(context.core, change, { surface: 'mcp', approvalId, approveCommand: 'agent-gmail approve' }),
+      ),
+    );
 
   /**
    * Whether the pinned name still names the mailbox this server was started for.
@@ -1301,7 +1305,11 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         async ({ inbox, tier, contacts, client, approvalId }) => {
           try {
             const change = inboxReauthChange(context, { alias: inbox, tier, contacts, client, detached: true });
-            const outcome = await gatedChange(context.core, change, { surface: 'mcp', approvalId });
+            const outcome = await gatedChange(context.core, change, {
+              surface: 'mcp',
+              approvalId,
+              approveCommand: 'agent-gmail approve',
+            });
             if (outcome.status !== 'applied') return reply(changeToolResult(outcome));
             const { flowId, authUrl, redirectUri, expiresAt, expectedEmail } = outcome.result;
             return reply(

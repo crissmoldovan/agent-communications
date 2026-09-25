@@ -197,7 +197,7 @@ test('moving a mailbox off the confirm change policy is approved at a terminal, 
     // Loosening it back is governed by the policy in force before the change: confirm.
     const asked = approvalAsked(await call('gmail_inbox_policy', { inbox: 'work', changePolicy: 'chat' }));
     assert.equal(asked.policy, 'confirm');
-    assert.match(asked.next, new RegExp(`agentcomms approve ${asked.approvalId}`));
+    assert.match(asked.next, new RegExp(`agent-gmail approve ${asked.approvalId}`));
     assert.match(asked.preview, /work change policy: confirm → chat/);
 
     // The agent cannot claim it on the person's behalf: refused, and the approval left for the person.

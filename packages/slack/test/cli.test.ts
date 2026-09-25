@@ -927,7 +927,10 @@ test('under the confirm change policy, an agent cannot claim its own widening be
   const asked = await cli(harness, argv, { env: { CLAUDECODE: '1' } });
   const pending = pendingOf(asked);
   assert.equal(pending.policy, 'confirm');
-  assert.match(asked.json<Envelope<never>>().error?.hint ?? '', new RegExp(`agentcomms approve ${pending.approvalId}`));
+  assert.match(
+    asked.json<Envelope<never>>().error?.hint ?? '',
+    new RegExp(`agent-slack approve ${pending.approvalId}`),
+  );
 
   const claimed = await cli(harness, [...argv, '--approval', pending.approvalId], { env: { CLAUDECODE: '1' } });
   assert.equal(claimed.code, EXIT_CODES.APPROVAL);

@@ -1,4 +1,5 @@
 import {
+  approveCommandOf,
   beginChangeApproval,
   type ChangeRequest,
   type ChangeSurface,
@@ -46,16 +47,25 @@ export type GatedOutcome<T> =
 export async function gatedChange<T>(
   core: Core,
   change: GatedChange<T>,
-  options: { surface: ChangeSurface; approvalId?: string | undefined },
+  options: { surface: ChangeSurface; approvalId?: string | undefined; approveCommand?: string | undefined },
 ): Promise<GatedOutcome<T>> {
   const request = await change.plan(await core.config.load());
   const loosens = classifyChange(request.before, request.after).loosened.length > 0;
   const acts = (request.effects ?? []).length > 0;
   if (!loosens && !acts) return { status: 'applied', result: await change.apply(undefined, request) };
   if (!options.approvalId) {
-    return { status: 'approval-required', prepared: await prepareChange(core, request, { surface: options.surface }) };
+    return {
+      status: 'approval-required',
+      prepared: await prepareChange(core, request, {
+        surface: options.surface,
+        approveCommand: options.approveCommand,
+      }),
+    };
   }
-  const consent = await claimChange(core, options.approvalId, request, { surface: options.surface });
+  const consent = await claimChange(core, options.approvalId, request, {
+    surface: options.surface,
+    approveCommand: options.approveCommand,
+  });
   return { status: 'applied', result: await change.apply(consent, request) };
 }
 
@@ -103,11 +113,14 @@ export async function gatedChangeAtTerminal<T>(
      * with `--mcp-approval`, because its `--approval` is already the OAuth client's, a different change.
      */
     approvalFlag?: string | undefined;
+    /** The command that approves a change beside this CLI — see `ChangeOptions.approveCommand`. */
+    approveCommand?: string | undefined;
     streams?: Streams | undefined;
   },
 ): Promise<T> {
   const streams = options.streams ?? defaultStreams;
-  const first = await gatedChange(core, change, { surface: 'cli', approvalId: options.approvalId });
+  const { approveCommand } = options;
+  const first = await gatedChange(core, change, { surface: 'cli', approvalId: options.approvalId, approveCommand });
   if (first.status === 'applied') return first.result;
 
   const { prepared } = first;
@@ -120,7 +133,11 @@ export async function gatedChangeAtTerminal<T>(
      */
     if (options.output.json !== true) streams.stdout.write(`${prepared.preview}\n\n`);
     throw new CommsError('APPROVAL_PENDING', `this change needs approval first: ${prepared.summary}`, {
-      hint: approvalHint(prepared, `${options.command} ${options.approvalFlag ?? '--approval'} ${prepared.approvalId}`),
+      hint: approvalHint(
+        prepared,
+        `${options.command} ${options.approvalFlag ?? '--approval'} ${prepared.approvalId}`,
+        approveCommand,
+      ),
       details: {
         approvalId: prepared.approvalId,
         policy: prepared.policy,
@@ -141,7 +158,7 @@ export async function gatedChangeAtTerminal<T>(
       throw cancelled();
     }
   }
-  const second = await gatedChange(core, change, { surface: 'cli', approvalId: prepared.approvalId });
+  const second = await gatedChange(core, change, { surface: 'cli', approvalId: prepared.approvalId, approveCommand });
   if (second.status !== 'applied') throw new CommsError('UNEXPECTED', 'the approved change asked for approval again');
   return second.result;
 }
@@ -153,9 +170,13 @@ export async function gatedChangeAtTerminal<T>(
  * Shared with a command that reports a waiting change rather than failing on it — `agent-gmail setup`, which stops at
  * its registration step and says why in its report — so the two say it in the same words.
  */
-export function approvalHint(prepared: Pick<PreparedChange, 'approvalId' | 'policy'>, rerun: string): string {
+export function approvalHint(
+  prepared: Pick<PreparedChange, 'approvalId' | 'policy'>,
+  rerun: string,
+  approveCommand?: string | undefined,
+): string {
   return prepared.policy === 'confirm'
-    ? `Show the person the preview. They run \`agentcomms approve ${prepared.approvalId}\`; then run \`${rerun}\`.`
+    ? `Show the person the preview. They run \`${approveCommandOf({ approveCommand })} ${prepared.approvalId}\`; then run \`${rerun}\`.`
     : `Show the person the preview. Once they say yes, run \`${rerun}\`.`;
 }
 

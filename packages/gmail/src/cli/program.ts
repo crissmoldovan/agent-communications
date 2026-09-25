@@ -308,6 +308,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       // to decide whether a person could answer a question — so both say the same thing to it.
       output: { json: globalOptions.json || globalOptions.noInput, color: globalOptions.color },
       command: again(),
+      approveCommand: 'agent-gmail approve',
       streams,
     });
 
@@ -1566,13 +1567,18 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
               const outcome = await gatedChange(context.core, await registration(which), {
                 surface: 'cli',
                 approvalId: mcpApproval,
+                approveCommand: 'agent-gmail approve',
               });
               if (outcome.status === 'approval-required') {
                 const { prepared } = outcome;
                 blocked = {
                   step: 'mcp',
                   needs: `a person's approval to register the server with ${which}`,
-                  hint: approvalHint(prepared, `${againForMcp()} --mcp-approval ${prepared.approvalId}`),
+                  hint: approvalHint(
+                    prepared,
+                    `${againForMcp()} --mcp-approval ${prepared.approvalId}`,
+                    'agent-gmail approve',
+                  ),
                   approvalId: prepared.approvalId,
                   policy: prepared.policy,
                   preview: prepared.preview,
@@ -1851,6 +1857,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
                   output: { json: globalOptions.json || globalOptions.noInput, color: globalOptions.color },
                   command: againForMcp(),
                   approvalFlag: '--mcp-approval',
+                  approveCommand: 'agent-gmail approve',
                   streams,
                 })
               : await (await import('../mcp/install.ts')).mcpInstall(context, {
