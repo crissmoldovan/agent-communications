@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CommsError, type SecretStore } from '@agentcomms/core';
+import { type AccountConfig, CommsError, type SecretStore } from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { callSlack } from '../src/api/call.ts';
 import { closedPermit } from '../src/api/guard.ts';
-import { serialiseBundle, type TokenBundle } from '../src/auth/bundle.ts';
+import { BUNDLE_VERSION, serialiseBundle, type TokenBundle } from '../src/auth/bundle.ts';
 import { exitAfterRefreshes } from '../src/auth/exit.ts';
-import { accessTokenFor } from '../src/auth/refresh.ts';
+import { accessTokenFor, settleRefreshes } from '../src/auth/refresh.ts';
 import { run } from '../src/cli/program.ts';
 import { openWorkspace } from '../src/operations/session.ts';
 import { newHarness, slackOk } from './support/harness.ts';
@@ -284,6 +284,71 @@ test('while the store fails reads as well as writes, the renewed token this proc
   await openWorkspace(context, 'acme', { persist: QUICK });
   assert.equal((await stored(harness, account.secretRef))?.refreshToken, 'fake-new-refresh');
   assert.equal(harness.calls.length, 1, 'Slack was asked again to fix a storage problem');
+});
+
+test('a renewed token kept for one credential is never used for the credential a reauth replaced it with', async () => {
+  /*
+   * A reauth keeps the account's id and gives it a new credential. A token this process kept because the store would
+   * not take it belongs to the credential it was renewed from, and a store that cannot be read is no reason to answer a
+   * call on the new credential with it: the two can differ in what they may do, a narrowing to `read` being exactly
+   * that. The call fails as the store does, and the kept token is left for the credential it belongs to.
+   */
+  const harness = await newHarness();
+  const account = await expired(harness, { accessToken: 'fake-send-access' });
+  const inner = await harness.core.secrets('file');
+  let failing = false;
+  const unavailable = () => new CommsError('KEYCHAIN_APPROVAL_PENDING', 'the keychain is waiting for a person');
+  const store: SecretStore = {
+    kind: 'file',
+    get: async (ref) => {
+      if (failing) throw unavailable();
+      return inner.get(ref);
+    },
+    delete: (ref) => inner.delete(ref),
+    invalidate: (ref) => inner.invalidate(ref),
+    async set(ref, value) {
+      if (failing) throw unavailable();
+      return inner.set(ref, value);
+    },
+  };
+  const context = contextFor(harness);
+  context.secrets = async () => store;
+  harness.reply = () => {
+    failing = true;
+    return slackOk({ authed_user: { access_token: 'fake-send-renewed', refresh_token: 'fake-send-refresh' } });
+  };
+  assert.equal((await openWorkspace(context, 'acme', { persist: QUICK })).call.token, 'fake-send-renewed');
+
+  // Renewed meanwhile by another process: the same id, a new credential.
+  const renewedRef = `${account.secretRef}/renewed`;
+  const issued = Date.now();
+  await inner.set(
+    renewedRef,
+    serialiseBundle({
+      v: BUNDLE_VERSION,
+      state: 'ready',
+      accessToken: 'fake-read-access',
+      accessExpiresAt: new Date(issued + 12 * HOUR).toISOString(),
+      refreshToken: 'fake-read-refresh',
+      refreshExpiresAt: new Date(issued + 720 * HOUR).toISOString(),
+      issuedAt: new Date(issued).toISOString(),
+    }),
+  );
+  await harness.core.config.update((config) => ({
+    ...config,
+    accounts: { ...config.accounts, acme: { ...(config.accounts.acme as AccountConfig), secretRef: renewedRef } },
+  }));
+
+  await assert.rejects(
+    openWorkspace(context, 'acme', { persist: QUICK }),
+    (error: unknown) => error instanceof CommsError && error.code === 'KEYCHAIN_APPROVAL_PENDING',
+    'a call on the new credential was answered with the token kept for the old one',
+  );
+
+  // Put right for the files after this one: the kept token is written to the credential it belongs to.
+  failing = false;
+  assert.deepEqual(await settleRefreshes(5_000), []);
+  assert.equal((await stored(harness, account.secretRef))?.accessToken, 'fake-send-renewed');
 });
 
 test('a marker whose write failed but landed later is taken back before anyone else can find it', async () => {

@@ -36,6 +36,14 @@ export interface SlackFlow {
         readonly userId: string;
         readonly oauthClientId?: string | undefined;
         readonly appId?: string | undefined;
+        /**
+         * The credential this renewal replaces.
+         *
+         * A renewal keeps the account's id, so the id cannot say whether another renewal landed first; this can. A
+         * flow started by an earlier version has none, and is bound to the id alone — which still strands nothing,
+         * because the credential a renewal replaces is read under the config lock.
+         */
+        readonly secretRef?: string | undefined;
       }
     | undefined;
   readonly clientId: string;

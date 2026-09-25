@@ -7,8 +7,10 @@ import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { openFlowStore } from '../src/auth/flow.ts';
 import { run } from '../src/cli/program.ts';
+import { SlackContext } from '../src/context.ts';
 import { scopesForMode } from '../src/manifest.ts';
 import { createSlackMcpServer } from '../src/mcp/server.ts';
+import { createDraft } from '../src/operations/drafts.ts';
 import { type Harness, newHarness, slackOk, TEST_CLIENT_ID } from './support/harness.ts';
 import { LISTENER_COMMAND, stopListeners } from './support/listener.ts';
 
@@ -488,6 +490,96 @@ test('a pinned server neither connects another workspace nor removes its own, an
     assert.equal(view.alias, 'acme');
   } finally {
     await Promise.all([unpinned.close(), pinned.close()]);
+  }
+});
+
+test('a pinned server keeps serving its workspace after its own reauth, drafts and all', async () => {
+  /*
+   * A reauth gave the account a new id, and the pin is to an id — so the server's own `slack_workspace_reauth` left
+   * every later call refused as "no longer connected" until the client was restarted, and the workspace's drafts,
+   * filed under the old id, belonged to nobody. The renewal is the same person in the same workspace through the same
+   * app, checked before anything is written; it keeps the id and replaces only the credential.
+   */
+  const harness = await newHarness();
+  const original = await harness.addWorkspace({ alias: 'acme', redirectPort: await freePort() });
+  const context = new SlackContext({ core: harness.core, env: harness.env });
+  const draft = await createDraft(context, 'acme', { channel: 'C1', text: 'written before the renewal' });
+  const pinned = await connect(harness, { workspace: 'acme' });
+  try {
+    const renewal = applied<Started>(await pinned.call('slack_workspace_reauth', {}));
+    await track(harness, renewal.flowId);
+    await approveInSlack(renewal);
+    ok(await pinned.call('slack_workspace_finish', { flowId: renewal.flowId, waitSeconds: 20 }));
+
+    const shown = ok<{ alias: string; accountId: string }>(await pinned.call('slack_workspace_show', {}));
+    assert.equal(shown.alias, 'acme', 'the pinned server still serves the workspace it was started for');
+    const listed = ok<{ workspaces: { alias: string }[] }>(await pinned.call('slack_workspaces_list', {}));
+    assert.deepEqual(
+      listed.workspaces.map((workspace) => workspace.alias),
+      ['acme'],
+    );
+    const drafts = ok<{ drafts: { draftId: string }[] }>(await pinned.call('slack_draft_list', {}));
+    assert.deepEqual(
+      drafts.drafts.map((row) => row.draftId),
+      [draft.draftId],
+      'and its drafts are still its own',
+    );
+
+    const renewed = (await harness.core.config.load()).accounts.acme;
+    assert.equal(renewed?.id, original.id, 'the same account, renewed');
+    assert.notEqual(renewed?.secretRef, original.secretRef, 'with its new credential beside the old, not over it');
+    const secrets = await harness.core.secrets('file');
+    assert.equal(await secrets.get(original.secretRef), null, 'and the superseded one removed');
+  } finally {
+    await pinned.close();
+  }
+});
+
+test('a pinned server refuses its name once it holds another workspace, or the same one connected again', async () => {
+  /*
+   * What the pin is for. Removed and connected again under the same name is a different connection — another
+   * workspace, or this one with whatever mode and policy it was given this time — and a pinned server that followed
+   * the name would serve it without anybody having pinned it to that. Only a renewal, checked to be the same person,
+   * workspace and app, keeps the account the pin names.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', redirectPort: await freePort() });
+  const pinned = await connect(harness, { workspace: 'acme' });
+  const drop = () =>
+    harness.core.config.update((config) => {
+      const { acme: _gone, ...rest } = config.accounts;
+      return { ...config, accounts: rest };
+    });
+  const refusedEverywhere = async (why: string) => {
+    for (const [tool, args] of [
+      ['slack_workspace_show', {}],
+      ['slack_workspace_show', { workspace: 'acme' }],
+      ['slack_draft_list', {}],
+      ['slack_mode', {}],
+    ] as const) {
+      const refused = failed(await pinned.call(tool, args));
+      assert.equal(refused.code, 'CONFIG', `${why}: ${tool} ${JSON.stringify(refused)}`);
+      assert.match(refused.message, /was removed, and "acme" now names another/, `${why}: ${tool}`);
+      assert.match(refused.hint ?? '', /Restart the client/, `${why}: ${tool}`);
+    }
+    const listed = ok<{ workspaces: unknown[] }>(await pinned.call('slack_workspaces_list', {}));
+    assert.deepEqual(listed.workspaces, [], `${why}: nor does it describe what took the name`);
+  };
+  try {
+    await drop();
+    await harness.addWorkspace({ alias: 'acme', workspaceId: 'T0002', userId: 'U0002', appId: 'A0002' });
+    await refusedEverywhere('another workspace under the name');
+
+    await drop();
+    await harness.addWorkspace({ alias: 'acme' });
+    await refusedEverywhere('the same workspace, connected again');
+
+    await drop();
+    const gone = failed(await pinned.call('slack_workspace_show', {}));
+    assert.equal(gone.code, 'NOT_FOUND');
+    assert.match(gone.message, /the workspace this server was pinned to, "acme", was removed/);
+  } finally {
+    await pinned.close();
   }
 });
 

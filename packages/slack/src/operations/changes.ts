@@ -236,6 +236,8 @@ export function reauthWorkspace(context: SlackContext, input: ReauthInput): Gate
           userId: account.userId,
           oauthClientId: clientId,
           ...(account.appId ? { appId: account.appId } : {}),
+          // The credential it replaces: the renewal keeps the id, so this is what says another renewal came first.
+          secretRef: account.secretRef,
         },
         ...(consent ? { consent } : {}),
         ...(input.listenerCommand ? { listenerCommand: input.listenerCommand } : {}),

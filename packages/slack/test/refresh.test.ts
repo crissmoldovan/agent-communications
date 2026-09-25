@@ -283,6 +283,46 @@ test('three callers at once cause exactly one refresh', async () => {
   for (const { token } of results) assert.equal(token, 'fake-access-new');
 });
 
+test('a refresh in flight for one credential is never handed to a caller holding another of the same account', async () => {
+  /*
+   * A renewal keeps the account's id and gives it a new credential, and the two can differ in what they may do: a
+   * narrowing to `read` is exactly that. Callers sharing one refresh per *account* would hand whoever arrived during a
+   * refresh of the superseded credential its token — one that can post, for a workspace now recorded as unable to.
+   */
+  const OLD = 'slack/token/acc_AAAAAAAAAAAAAAAA';
+  const NEW = `${OLD}/renewed`;
+  const secrets = store();
+  await secrets.set(OLD, serialiseBundle(bundle({ accessToken: 'fake-access-send', accessExpiresAt: DUE })));
+  await secrets.set(NEW, serialiseBundle(bundle({ accessToken: 'fake-access-read' })));
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((settle) => {
+    release = settle;
+  });
+  let exchanging: () => void = () => undefined;
+  const started = new Promise<void>((settle) => {
+    exchanging = settle;
+  });
+  const d = await deps(secrets, async () => {
+    exchanging();
+    await held;
+    return {
+      accessToken: 'fake-access-send-renewed',
+      accessExpiresAt: '2026-09-23T00:00:00.000Z',
+      refreshToken: 'fake-refresh-2',
+      refreshExpiresAt: '2026-10-22T12:00:00.000Z',
+      issuedAt: NOW.toISOString(),
+    };
+  });
+
+  const superseded = accessTokenFor(d, ACCOUNT, OLD);
+  await started;
+  const current = accessTokenFor(d, ACCOUNT, NEW);
+  release();
+  const [before, after] = await Promise.all([superseded, current]);
+  assert.equal(after.token, 'fake-access-read', 'a caller was handed another credential’s token');
+  assert.equal(before.token, 'fake-access-send-renewed');
+});
+
 test('a credential that is not a bundle says reauth rather than pretending there is none', async () => {
   const secrets = store('not json at all');
   const d = await deps(secrets, async () => assert.fail('unreachable'));

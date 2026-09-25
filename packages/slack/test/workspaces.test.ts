@@ -520,6 +520,41 @@ test('removing does not delete a workspace that was renewed in the meantime', as
   assert.equal(written, undefined, 'the renewed workspace was removed');
 });
 
+test('removing does not delete a renewal that kept the account’s id, and strands nothing', async () => {
+  /*
+   * A renewal keeps the account's id and gives it a new credential. The entry is removed by id under the lock, so one
+   * landing between the credential's deletion and that write still holds the id this looked at — and removing it then
+   * would leave its fresh credential in the secret store, named by nothing. The credential it holds decides too.
+   */
+  const stale = account();
+  const renewed = account({ secretRef: `${stale.secretRef}/renewed` });
+  const deleted: string[] = [];
+  let written: Config | undefined;
+
+  await assert.rejects(
+    removeWorkspace(
+      {
+        config: { ...emptyConfig(), accounts: { acme: stale } },
+        secrets: {
+          async delete(ref) {
+            deleted.push(ref);
+            return true;
+          },
+        },
+        async update(mutator) {
+          written = mutator({ ...emptyConfig(), accounts: { acme: renewed } });
+          return written;
+        },
+      },
+      'acme',
+      { expectId: stale.id },
+    ),
+    /renewed while it was being removed/,
+  );
+  assert.deepEqual(deleted, [stale.secretRef], 'it deleted a credential other than the one it looked at');
+  assert.equal(written, undefined, 'the renewed workspace was removed, and its credential left behind');
+});
+
 test('removing refuses a workspace that is not the account whose removal was approved', async () => {
   /*
    * A removal is approved for the account that was shown, and the configuration is read again after the approval was

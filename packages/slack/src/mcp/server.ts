@@ -202,14 +202,26 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
    * A pinned server refuses any other name rather than quietly acting on the pinned one — a caller that named a
    * different workspace believed something false, and doing what it meant instead of what it said would hide that.
    * The pin is re-checked against the id on every call, because a rename can move the name under a running server.
+   *
+   * The id survives a renewal — a reauth keeps it, as Gmail's does — so the server's own `slack_workspace_reauth`
+   * leaves it serving the same workspace. It does not survive a removal: whatever is connected under the name
+   * afterwards, another workspace or this one again, is a new account that nobody pinned this server to.
    */
   const resolve = async (named: string | undefined): Promise<string> => {
     const config = await context.config();
     if (pinnedId !== undefined) {
       const current = Object.entries(config.accounts).find(([, account]) => account.id === pinnedId);
       if (!current) {
-        throw new CommsError('NOT_FOUND', 'the workspace this server was pinned to is no longer connected', {
-          hint: 'Restart the server, or reconnect that workspace.',
+        const restart = 'Restart the client so the server starts again for the workspace it should serve.';
+        if (pinned !== undefined && Object.hasOwn(config.accounts, pinned)) {
+          throw new CommsError(
+            'CONFIG',
+            `the workspace this server was pinned to was removed, and "${pinned}" now names another`,
+            { hint: restart },
+          );
+        }
+        throw new CommsError('NOT_FOUND', `the workspace this server was pinned to, "${pinned}", was removed`, {
+          hint: restart,
         });
       }
       const [name] = current;

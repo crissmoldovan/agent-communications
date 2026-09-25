@@ -116,8 +116,13 @@ const PERSIST: PersistPolicy = { budgetMs: 60_000, backoffMs: [250, 500, 1_000, 
 const FORCED_RENEWAL_MIN_AGE_MS = 10 * 60_000;
 
 /**
- * One in-flight refresh per account per process, so concurrent callers here share a result instead of racing. The
+ * One in-flight refresh per credential per process, so concurrent callers here share a result instead of racing. The
  * workspace's name rides along, so an exit that cannot wait for one can say which workspace it left.
+ *
+ * Per credential, by its secret reference, and not per account: a reauth keeps the account's id and gives it a new
+ * credential, which can differ from the old in what it may do — a narrowing to `read` is exactly that. Keyed by
+ * account, a caller holding the new credential that arrived during a refresh of the old one was handed the old one's
+ * token.
  */
 const inFlight = new Map<string, { readonly work: Promise<TokenBundle>; readonly alias: string | undefined }>();
 
@@ -192,7 +197,7 @@ async function withInFlight(
   secretRef: string,
   rejected: string | undefined,
 ): Promise<TokenBundle> {
-  const existing = inFlight.get(accountId);
+  const existing = inFlight.get(secretRef);
   if (existing) {
     const shared = await existing.work;
     // A caller replacing a rejected token cannot settle for that same token back from somebody else's call.
@@ -244,11 +249,11 @@ async function withInFlight(
     );
   })();
 
-  inFlight.set(accountId, { work, alias: deps.alias });
+  inFlight.set(secretRef, { work, alias: deps.alias });
   try {
     return await work;
   } finally {
-    if (inFlight.get(accountId)?.work === work) inFlight.delete(accountId);
+    if (inFlight.get(secretRef)?.work === work) inFlight.delete(secretRef);
   }
 }
 
@@ -305,8 +310,12 @@ async function refreshUnderLock(
      * A store that cannot be read is no more able to take the kept result than one that cannot be written, and the
      * keychain is both at once while a dialog holds an earlier call — the very case a result gets kept for. So the
      * token this process holds is used here too, rather than every call failing until the store comes back.
+     *
+     * Only for the credential it was renewed from. The map is per account, and a reauth keeps the account's id while
+     * replacing its credential: a token kept for the old one is not an answer for the new, which may be allowed less.
+     * `settlePending` drops it below, once the store can be read.
      */
-    if (pending && keptTokenUsable(pending, rejected, now)) return pending.bundle;
+    if (pending?.secretRef === secretRef && keptTokenUsable(pending, rejected, now)) return pending.bundle;
     throw error;
   }
   let current = requireBundle(raw, deps.alias);

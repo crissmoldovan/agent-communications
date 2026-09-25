@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { rm, writeFile } from 'node:fs/promises';
+import { readdir, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { test } from 'node:test';
 import {
@@ -93,7 +93,7 @@ async function finish(started: StartedSignIn) {
   }
 }
 
-test('after the migration, a reauth carries the workspace’s former names to its new id', async () => {
+test('after the migration, a reauth keeps the workspace’s id, so its former names still name it', async () => {
   const harness = await newHarness();
   const context = contextFor(harness);
   const original = await harness.addWorkspace({ alias: 'live' });
@@ -104,8 +104,9 @@ test('after the migration, a reauth carries the workspace’s former names to it
 
   const config = (await harness.core.config.load()) as ConfigV2;
   const renewed = config.accounts['cue/slack'];
-  assert.ok(renewed && renewed.id !== original.id, 'reauth mints a new id');
-  assert.equal(config.formerNames.accounts.live?.id, renewed.id);
+  assert.equal(renewed?.id, original.id, 'a renewal is the same account, with a new credential');
+  assert.notEqual(renewed?.secretRef, original.secretRef);
+  assert.equal(config.formerNames.accounts.live?.id, original.id);
   // So the old name still says what it is called now — not that it was removed.
   assert.throws(() => resolveName(config, 'account', 'live'), is('NOT_FOUND', /renamed to "cue\/slack"$/));
 });
@@ -125,6 +126,44 @@ test('a reauth started before the migration and finished after it follows the wo
   // And the superseded credential is gone.
   const secrets = await harness.core.secrets('file');
   assert.equal(await secrets.get(original.secretRef), null);
+});
+
+test('of two renewals started together, the one finishing second is refused, though the account keeps its id', async () => {
+  /*
+   * A renewal is bound to the credential it set out to replace. While a reauth minted a new id, one landing first made
+   * the other's account disappear, and that was the refusal. The id is kept now, so the credential is what says it: the
+   * second finds the account holding a credential it never saw, is refused, and takes back the one it staged.
+   */
+  const harness = await newHarness();
+  const context = contextFor(harness);
+  await harness.addWorkspace({ alias: 'acme' });
+  const renew = async (): Promise<StartedSignIn> => {
+    // As both surfaces start one: the operation `workspace reauth` and `slack_workspace_reauth` run.
+    const change = reauthWorkspace(context, { alias: 'acme', port: await freePort(), detached: false });
+    const outcome = await gatedChange(harness.core, change, { surface: 'cli' });
+    assert.equal(outcome.status, 'applied');
+    if (outcome.status !== 'applied') throw new Error('not started');
+    return outcome.result;
+  };
+  const first = await renew();
+  const second = await renew();
+
+  const token = (n: number) => ({
+    authed_user: { access_token: `fake-user-token-${n}`, refresh_token: `fake-r-${n}` },
+  });
+  harness.reply = () => slackOk(token(2));
+  await finish(second);
+  const kept = (await harness.core.config.load()).accounts.acme as AccountConfig;
+
+  harness.reply = () => slackOk(token(3));
+  await assert.rejects(finish(first), is('CONFIG', /changed while this sign-in was being completed/));
+
+  const now = (await harness.core.config.load()).accounts.acme;
+  assert.deepEqual(now, kept, 'the renewal that finished first is the one kept');
+  const secrets = await harness.core.secrets('file');
+  assert.equal(parseBundle(await secrets.get(kept.secretRef))?.accessToken, 'fake-user-token-2');
+  const refs = (await readdir(harness.core.paths.secretsDir)).filter((name) => name.endsWith('.json')).length;
+  assert.equal(refs, 1, 'and the refused one took back the credential it staged');
 });
 
 test('the credential deleted after a reauth is the one the replaced row held under the lock, not the snapshot’s', async () => {

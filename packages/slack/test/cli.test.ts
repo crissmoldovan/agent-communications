@@ -667,6 +667,8 @@ test('a successful reauth replaces the credential and removes the old one', asyn
   assert.equal(result.code, EXIT_CODES.OK, result.stderr);
 
   const after = (await harness.core.config.load()).accounts.acme;
+  // The same account, renewed: an MCP server pinned to it, and the drafts and approvals filed under it, still find it.
+  assert.equal(after?.id, before.id, 'the renewal replaced the account rather than its credential');
   assert.notEqual(after?.secretRef, before.secretRef, 'the new credential was written over the old reference');
   const secrets = await harness.core.secrets('file');
   assert.equal(await secrets.get(before.secretRef), null, 'the superseded credential was left behind');
@@ -1102,9 +1104,10 @@ test('two reauths of the same workspace: the second cannot overwrite what the fi
    * The case the in-lock check exists for, and the one it originally missed.
    *
    * Both sign-ins are for the same person in the same workspace, so every identity check passes for both. What
-   * separates them is *which* account each set out to renew. Comparing against a snapshot read after the
-   * exchange only asks "has the alias changed since I looked", which both answer yes to — so the one that
-   * started first and finished second would overwrite a credential minted in between, and strand it.
+   * separates them is *which* credential each set out to replace — the account keeps its id across a renewal.
+   * Comparing against a snapshot read after the exchange only asks "has the alias changed since I looked", which
+   * both answer yes to — so the one that started first and finished second would overwrite a credential minted in
+   * between.
    */
   const harness = await newHarness();
   const original = await harness.addWorkspace({ alias: 'acme' });
@@ -1121,16 +1124,17 @@ test('two reauths of the same workspace: the second cannot overwrite what the fi
     0,
   );
   const renewed = (await harness.core.config.load()).accounts.acme;
-  assert.notEqual(renewed?.id, original.id, 'the first finish did not replace the account');
+  assert.notEqual(renewed?.secretRef, original.secretRef, 'the first finish did not replace the credential');
+  assert.equal(renewed?.id, original.id, 'a renewal keeps the account');
 
-  // Now the older flow arrives. It set out to renew an account that no longer holds the alias.
+  // Now the older flow arrives. It set out to replace a credential the account no longer holds.
   await redirect(first.authUrl);
   const late = await cli(harness, ['--json', 'workspace', 'reauth', 'acme', '--finish', first.flowId, '--wait', '20']);
   assert.equal(late.code, EXIT_CODES.CONFIG);
   assert.match(late.json<Envelope<never>>().error?.message ?? '', /changed while this sign-in was being completed/);
 
   const after = (await harness.core.config.load()).accounts.acme;
-  assert.equal(after?.id, renewed?.id, 'a stale sign-in overwrote a newer credential');
+  assert.equal(after?.secretRef, renewed?.secretRef, 'a stale sign-in overwrote a newer credential');
   const secrets = await harness.core.secrets('file');
   assert.ok(await secrets.get(after?.secretRef as string), 'the live credential was stranded');
 });

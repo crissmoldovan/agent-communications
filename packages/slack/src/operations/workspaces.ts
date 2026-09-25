@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import {
   type AccountConfig,
   CommsError,
@@ -294,9 +295,23 @@ export function bundleFrom(token: ExchangedToken, now: Date): TokenBundle {
   };
 }
 
-/** Where a workspace's credential lives. Distinct per account id, so a reauth can stage a new one beside the old. */
+/** Where a newly connected workspace's credential lives. */
 export function secretRefFor(accountId: string): string {
   return `slack/token/${accountId}`;
+}
+
+/**
+ * Where a renewed credential lives: beside the one it replaces, never over it, under the same account id.
+ *
+ * A reauth stages the new credential under its own reference and moves the pointer in one config write, so the old
+ * credential is authoritative until the exact moment the new one is — the mode can change across a reauth, and an
+ * overwrite would open a window where the configuration says `read` while the credential behind it can post. It used
+ * to get that reference by minting a new account id, which also moved everything filed under the id: a server pinned
+ * to the workspace, its drafts, its approvals. Random rather than counted, so two renewals of one account racing each
+ * other never stage into the same reference.
+ */
+export function renewedSecretRefFor(accountId: string): string {
+  return `${secretRefFor(accountId)}/${randomBytes(9).toString('base64url')}`;
 }
 
 export function accountFrom(options: {
@@ -305,6 +320,8 @@ export function accountFrom(options: {
   flow: SlackFlow;
   accountId: string;
   now: Date;
+  /** Where its credential is stored; a new account's own reference when left out. */
+  secretRef?: string | undefined;
 }): AccountConfig {
   const { token, mode, flow, accountId, now } = options;
   return {
@@ -316,7 +333,7 @@ export function accountFrom(options: {
     tier: mode,
     mode,
     grantedScopes: [...token.scopes].sort(),
-    secretRef: secretRefFor(accountId),
+    secretRef: options.secretRef ?? secretRefFor(accountId),
     oauthClientId: flow.clientId,
     ...(token.appId ? { appId: token.appId } : {}),
     redirectPort: flow.port,
@@ -360,8 +377,10 @@ export async function removeWorkspace(
    * The workspace a person approved removing, and no other.
    *
    * A removal is approved for the account that was shown, and the configuration is read again here, after the approval
-   * was claimed. A renewal landing in between gives the name a new account id; a remove and an add, an unrelated
-   * account. Either way this is not what the person agreed to delete, so nothing is deleted and they are asked again.
+   * was claimed. A remove and an add in between put an unrelated account under the name, which is not what the person
+   * agreed to delete, so nothing is deleted and they are asked again. A renewal in between keeps the id: it is the same
+   * person in the same workspace through the same app, and removing it — with the credential it holds now — is what
+   * was agreed to.
    */
   if (options.expectId !== undefined && found.account.id !== options.expectId) {
     throw new CommsError('CONFIG', `"${alias}" changed after its removal was approved, so nothing was removed`, {
@@ -373,10 +392,10 @@ export async function removeWorkspace(
     /*
      * Remove the account that was looked at, not whatever holds the name now.
      *
-     * The credential above was deleted from a snapshot. A reauth finishing in between installs a *new* account
-     * under the same alias with a new credential — and removing by name alone would then delete that entry
-     * while leaving its fresh credential in the secret store, named by nothing. So the entry is removed only if
-     * it is still the one whose credential was just deleted; otherwise the renewal wins and remove says so.
+     * The credential above was deleted from a snapshot. A reauth finishing in between gives the account a new
+     * credential — under the same id, since a renewal keeps it — and removing it then would delete that entry while
+     * leaving its fresh credential in the secret store, named by nothing. So the entry is removed only if it still
+     * holds the credential that was just deleted; otherwise the renewal wins and remove says so.
      */
     /*
      * And the credential must have been deleted from the backend still in force.
@@ -392,7 +411,7 @@ export async function removeWorkspace(
     }
     // By id, under whatever key it holds now: nothing may depend on the name staying put between the read and here.
     const held = findById(config, 'account', found.account.id);
-    if (!held) {
+    if (!held || held.account.secretRef !== found.account.secretRef) {
       throw new CommsError('CONFIG', `"${alias}" was renewed while it was being removed`, {
         hint: `It is connected again. Run \`agent-slack workspace remove ${alias}\` once more if you still want it gone.`,
       });
