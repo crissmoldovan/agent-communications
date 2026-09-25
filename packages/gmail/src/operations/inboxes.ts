@@ -9,6 +9,7 @@ import {
   type LooseningConsent,
   RESERVED_ALIASES,
   renameEntry,
+  requireInbox,
   type SendPolicy,
   withCredentialsLock,
   writeOutcome,
@@ -110,9 +111,76 @@ export async function inboxRename(
   return { from, to, id: inbox.id };
 }
 
+const SEND_POLICIES: readonly SendPolicy[] = ['chat', 'confirm', 'never'];
+const POLICY_RANK: Record<SendPolicy, number> = { chat: 0, confirm: 1, never: 2 };
+
+/** A send policy as somebody typed it, or the refusal naming the three there are. */
+export function parseSendPolicy(value: string): SendPolicy {
+  if ((SEND_POLICIES as readonly string[]).includes(value)) return value as SendPolicy;
+  throw new CommsError('USAGE', `"${value}" is not a send policy`, { hint: 'Use chat, confirm or never.' });
+}
+
+export interface SendPolicyChange {
+  alias: string;
+  previous: SendPolicy;
+  sendPolicy: SendPolicy;
+  /** True when the change makes sending easier, which needs somebody's consent; tightening never does. */
+  loosens: boolean;
+  /** The config path a consent for this change has to name. */
+  path: string;
+}
+
+/**
+ * What setting a mailbox's send policy would do, without doing it.
+ *
+ * Here rather than in the CLI, because both surfaces have to agree on which direction is a loosening. The CLI asks
+ * a person at its terminal when this says so; the MCP server has nobody to ask yet and refuses. Measured against the
+ * policy in force — the mailbox's own, or the default it inherits — as the config store measures it, so the two
+ * cannot disagree about whether a mailbox on the default is being loosened.
+ */
+export async function sendPolicyChange(
+  context: GmailContext,
+  alias: string,
+  wanted: string,
+): Promise<SendPolicyChange> {
+  const sendPolicy = parseSendPolicy(wanted);
+  const config = await context.config();
+  // Resolved, so a former name is refused with its replacement here rather than silently measured against the
+  // default — which would skip the consent a loosening of the renamed mailbox needs. From the same read as the
+  // default it is compared with.
+  const previous = requireInbox(config, alias).sendPolicy ?? config.defaults.sendPolicy;
+  return {
+    alias,
+    previous,
+    sendPolicy,
+    loosens: POLICY_RANK[sendPolicy] < POLICY_RANK[previous],
+    path: `inboxes.${alias}.sendPolicy`,
+  };
+}
+
+/**
+ * The refusal a loosening gets when nobody has consented to it, from whichever surface asked.
+ *
+ * The config store would refuse it anyway — that is the enforcement, and it stays the only one — but its words are
+ * about config paths. This says what was asked, why it was not done, and the one way it can be done today.
+ */
+function needsChangeApproval(alias: string, from: SendPolicy, to: SendPolicy): CommsError {
+  return new CommsError(
+    'LOOSENING_REFUSED',
+    `making sending from "${alias}" easier (${from} → ${to}) needs a change approval`,
+    {
+      hint:
+        'Tightening needs nothing; this loosens. Approving a change from chat arrives in a later release — until ' +
+        `then a person runs \`agent-gmail inbox policy ${alias} --send ${to}\` in their own terminal and types the ` +
+        'code it shows. Do not retry this call.',
+      details: { alias, from, to, path: `inboxes.${alias}.sendPolicy` },
+    },
+  );
+}
+
 /**
  * Sets the send policy of one inbox. Tightening (chat → confirm → never) is always allowed; loosening needs the
- * consent the CLI obtains from a person at a terminal, and the config store refuses it otherwise.
+ * consent the CLI obtains from a person at a terminal, and is refused without it.
  */
 export async function inboxPolicy(
   context: GmailContext,
@@ -127,6 +195,10 @@ export async function inboxPolicy(
     (current) => {
       const now = findById(current, 'inbox', inbox.id);
       if (!now) throw new CommsError('NOT_FOUND', `no inbox called "${alias}"`);
+      // Measured under the lock, against the policy as it is now: one tightened since the snapshot above is what a
+      // change from it would loosen.
+      const was = now.inbox.sendPolicy ?? current.defaults.sendPolicy;
+      if (!consent && POLICY_RANK[sendPolicy] < POLICY_RANK[was]) throw needsChangeApproval(now.alias, was, sendPolicy);
       return { ...current, inboxes: { ...current.inboxes, [now.alias]: { ...now.inbox, sendPolicy } } };
     },
     consent ? { consent } : {},

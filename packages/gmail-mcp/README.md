@@ -31,7 +31,7 @@ npx @agentcomms/gmail mcp install --client claude-code --launcher npx
 
 ### Connecting a mailbox from the agent instead
 
-Three of the 32 tools do the onboarding, so an agent asked to "set up Gmail" need not send you to a terminal:
+Three of the 38 tools do the onboarding, so an agent asked to "set up Gmail" need not send you to a terminal:
 `gmail_setup` says what is missing and changes nothing, `gmail_inbox_add` returns a sign-in link and stops, and
 `gmail_inbox_finish` completes it once Google returns the grant. The grant is still yours to approve in your own
 browser — this server does not open one and cannot grant it.
@@ -39,6 +39,13 @@ browser — this server does not open one and cannot grant it.
 Those two writers are withheld from a server started `--read-only`, and from one pinned to a single mailbox with
 `--inbox`. `gmail_inbox_finish` refuses any flow that is not an add, so a re-authorisation started elsewhere
 cannot be completed through MCP.
+
+Six more manage what is connected, each the same operation as an `agent-gmail` command: `gmail_inbox_show`,
+`gmail_clients_list` and `gmail_confirm_clients` read; `gmail_inbox_rename`, `gmail_inbox_policy` and
+`gmail_confirm_client_remove` change only what needs nobody's approval — a name, a stricter policy, one client
+fewer trusted to show approval forms. Asked to make sending easier, `gmail_inbox_policy` refuses and names the
+command you run instead. The three writers are withheld from a `--read-only` server, and a pinned one does not
+rename.
 
 ## Options
 

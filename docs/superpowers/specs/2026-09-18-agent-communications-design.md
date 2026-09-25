@@ -205,7 +205,11 @@ permissions and ownership. On Windows the ACL defaults of `%APPDATA%` apply.
   then temp file + fsync + rename. **The only write an MCP server may make is adding an inbox**, through
   `gmail_inbox_finish`, under the same lock and subject to the bounds in §9 — a server that is `--read-only` or
   pinned does not offer it, it can finish only a flow it started as an `add`, and no MCP tool writes anything
-  else. Every other lifecycle write is CLI-only. Readers check the
+  else. Every other lifecycle write is CLI-only. *(Amended 2026-09-25 by the
+  [parity design](2026-09-25-cli-mcp-parity-design.md): an unpinned, writable server may also rename a mailbox,
+  and any writable server may tighten a send policy or take a client off the trusted-forms list — writes that
+  loosen nothing. Every loosening, removal and client registration is still CLI-only until change approvals
+  exist.)* Readers check the
   file's (inode, mtime, size) on every call rather than relying on `fs.watch` (which stops firing after the first
   rename on Linux), so a tightened policy applies to the next tool call of an already-running server.
 
@@ -707,7 +711,9 @@ TTL); execution requires that token. Trash always requires a plan token. Every w
   processes (e.g. Claude Desktop's chat and Cowork instances **[V: gap-5]**) cannot multiply them; over the cap
   → exit 10 with the reset time.
 - **Policy changes are CLI-only, and loosening needs a person.** No MCP tool changes policy, removes inboxes or
-  clients, or edits the elicitation allowlist. **Adding an inbox is the one exception, added deliberately in
+  clients, or edits the elicitation allowlist. *(Amended 2026-09-25: `gmail_inbox_policy` may tighten a policy
+  and `gmail_confirm_client_remove` may shorten the allowlist; both refuse or cannot express a loosening. See
+  the [parity design](2026-09-25-cli-mcp-parity-design.md) §6.1.)* **Adding an inbox is the one exception, added deliberately in
   0.1.4 — see below.** The core config store classifies every change and **refuses any
   that loosens a safety setting** unless the caller passes consent for exactly those settings — obtained by the CLI
   on an interactive TTY, with a typed challenge, no agent marker, and an audit entry. Loosening covers: an effective

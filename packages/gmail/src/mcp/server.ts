@@ -4,12 +4,13 @@ import { z } from 'zod';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
 import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts';
 import { downloadAttachments, findAttachments } from '../operations/attachments.ts';
-import { completeProbe, startProbe } from '../operations/confirm-clients.ts';
+import { clientList } from '../operations/clients.ts';
+import { completeProbe, listConfirmClients, removeConfirmClient, startProbe } from '../operations/confirm-clients.ts';
 import { followUps, searchContacts } from '../operations/contacts.ts';
 import { doctor } from '../operations/doctor.ts';
 import { createDraft, deleteDraft, getDraft, listDrafts, replyDraft, updateDraft } from '../operations/drafts.ts';
 import { exportMail } from '../operations/export.ts';
-import { inboxList, whoami } from '../operations/inboxes.ts';
+import { inboxList, inboxPolicy, inboxRename, inboxShow, whoami } from '../operations/inboxes.ts';
 import { applyUndo, createLabel, modify, trash } from '../operations/organise.ts';
 import { readMessage, readThread } from '../operations/read.ts';
 import { search } from '../operations/search.ts';
@@ -277,6 +278,48 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       try {
         const result = await whoami(context, targetInbox(inbox));
         return reply({ ...result, serverVersion: VERSION });
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  /*
+   * The same object `agent-gmail inbox show --json` prints, passed through rather than re-picked: the operation
+   * chooses what a mailbox's view contains, so the two surfaces cannot drift apart one field at a time. Nothing in
+   * it is a secret — the token is referred to by nothing here, and the client only by its name.
+   */
+  server.registerTool(
+    'gmail_inbox_show',
+    {
+      title: 'Show one mailbox',
+      description:
+        'Everything known about one mailbox: its address, tier and what it may do, how sending from it must be approved and whether that comes from the defaults, the OAuth client it signs in through, the scopes Google granted, its internal domains, and when it last refreshed. The same as `agent-gmail inbox show`. Makes no call to Google and changes nothing.',
+      inputSchema: z.object({ inbox: inboxArgument(Boolean(pinned)) }),
+      outputSchema: z.object({
+        alias: z.string(),
+        id: z.string(),
+        email: z.string(),
+        tier: z.string(),
+        capabilities: z.array(z.string()),
+        contacts: z.boolean(),
+        sendPolicy: z.string(),
+        sendPolicyInherited: z.boolean().describe('true when the policy is the default rather than set on the mailbox'),
+        client: z.string().describe('the OAuth client it signs in through, by name'),
+        identity: z.string(),
+        createdAt: z.string(),
+        lastRefreshOkAt: z.string().optional(),
+        lastUsedAt: z.string().optional(),
+        health: z.string(),
+        lastError: z.object({ code: z.string(), message: z.string(), at: z.string() }).optional(),
+        grantedScopes: z.array(z.string()),
+        internalDomains: z.array(z.string()),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ inbox }) => {
+      try {
+        return reply(await inboxShow(context, targetInbox(inbox)));
       } catch (error) {
         return fail(error);
       }
@@ -959,6 +1002,50 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     },
   );
 
+  server.registerTool(
+    'gmail_clients_list',
+    {
+      title: 'List OAuth clients',
+      description:
+        'The Google Cloud OAuth clients registered on this machine: the name, the client id, the Cloud project, when each was added, and which mailboxes sign in through it. Never the secret, and never where it is kept. The same as `agent-gmail client list`. Changes nothing.',
+      inputSchema: z.object({}),
+      outputSchema: z.object({
+        clients: z.array(
+          z.object({
+            name: z.string(),
+            clientId: z.string().describe('public: it appears in every sign-in link'),
+            projectId: z.string().optional(),
+            addedAt: z.string(),
+            inboxes: z.array(z.string()).describe('the mailboxes that sign in through it'),
+          }),
+        ),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () => {
+      try {
+        // The operation's own view: it picks the fields, and the secret's reference is not one of them. Passed
+        // through as it comes, so this and `client list --json` are the same list.
+        const clients = await clientList(context);
+        /*
+         * A pinned server names the client its mailbox signs in through, and only that mailbox under it — the rule
+         * `gmail_setup` follows. The other clients, and the mailboxes behind them, are the machine's business, not
+         * a server's that was narrowed to one mailbox. Filtered from the one read `clientList` made, so the client
+         * and the mailbox named under it cannot come from two different moments.
+         */
+        return reply({
+          clients: pinned
+            ? clients
+                .filter((client) => client.inboxes.includes(pinned))
+                .map((client) => ({ ...client, inboxes: [pinned] }))
+            : clients,
+        });
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
   /**
    * Everything past here changes the mailbox, so `readOnly` decides whether it exists at all.
    *
@@ -1067,7 +1154,75 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           }
         },
       );
+
+      /*
+       * Renaming, over MCP, and only from a server that is not pinned.
+       *
+       * A rename grants nothing — the account, its token, its tier and its policy stay exactly as they were, which
+       * is why the config store does not count it as a loosening — so it needs no approval. The rules on names are
+       * the operation's, the same ones `inbox rename` applies: a reserved word is refused, a taken name is refused,
+       * and once names are organisation/platform the old one is kept as a former name and can never be used again.
+       *
+       * Not on a pinned server. There it could only rename its own mailbox, and the pin names the old word, so every
+       * call after it would be refused as `checkPin` refuses a rename made anywhere else. A tool whose one possible
+       * use strands the server offering it is not worth offering there.
+       */
+      server.registerTool(
+        'gmail_inbox_rename',
+        {
+          title: 'Rename a mailbox',
+          description:
+            'Change the name a mailbox is known by. Only the name changes: the account, its token, its policy and its drafts stay as they are. Once names are organisation/platform, the old name is kept as a former name and can never be used again — and any server or registration pinned to it (`--inbox <old>`) has to be registered again under the new one. The same as `agent-gmail inbox rename`.',
+          inputSchema: z.object({
+            from: z.string().min(1).describe('the name it has now'),
+            to: z.string().min(1).describe('the name it should have: organisation/gmail once names have been migrated'),
+          }),
+          outputSchema: z.object({ from: z.string(), to: z.string(), id: z.string() }),
+          annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+        },
+        async ({ from, to }) => {
+          try {
+            return reply(await inboxRename(context, from, to));
+          } catch (error) {
+            return fail(error);
+          }
+        },
+      );
     }
+
+    /*
+     * Tightening how sending is approved, over MCP. Loosening is not offered here yet.
+     *
+     * Tightening needs nobody's consent anywhere in this package, so a chat can do it. Loosening needs a change
+     * approval, and those do not exist yet: until they do, this passes no consent at all, and the operation refuses
+     * a loosening with the one way it can be done today. That refusal is the operation's, not this tool's — a
+     * surface that forgot to check would still be refused, and the config store behind it refuses regardless.
+     */
+    server.registerTool(
+      'gmail_inbox_policy',
+      {
+        title: 'Tighten how sending is approved',
+        description:
+          'Set how sending from a mailbox must be approved: `chat` (the person says yes in this conversation), `confirm` (a code typed at a terminal, or into a trusted form) or `never` (not from here at all — the draft is sent from Gmail). Moving towards `never` needs nothing and applies from the next call. Moving towards `chat` loosens a safety setting: it is refused with LOOSENING_REFUSED and the command a person can run instead. Do not retry a refusal. The same as `agent-gmail inbox policy`.',
+        inputSchema: z.object({
+          inbox: inboxArgument(Boolean(pinned)),
+          sendPolicy: z.enum(['chat', 'confirm', 'never']).describe('chat, confirm or never'),
+        }),
+        outputSchema: z.object({
+          alias: z.string(),
+          sendPolicy: z.string(),
+          previous: z.string().describe('the policy in force before, whether set on the mailbox or inherited'),
+        }),
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+      async ({ inbox, sendPolicy }) => {
+        try {
+          return reply(await inboxPolicy(context, targetInbox(inbox), sendPolicy));
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
 
     server.registerTool(
       'gmail_draft_create',
@@ -1532,6 +1687,36 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       },
     );
 
+    /*
+     * The two halves of trusting a client's forms, and which surface each is on.
+     *
+     * `gmail_confirm_probe` above is the evidence: only an MCP client can raise a form, so it has no command. Adding a
+     * name to the list is the decision, and a loosening — it stays `agent-gmail confirm-clients add` at a terminal
+     * until change approvals exist, because a tool that added one would be trusting a client on the model's word.
+     * Taking a name off the list is a tightening, and needs nobody: it is this tool, and `confirm-clients remove`.
+     * Reading the list is `gmail_confirm_clients`, below, with the tools that change nothing.
+     */
+    server.registerTool(
+      'gmail_confirm_client_remove',
+      {
+        title: 'Stop trusting a client’s forms',
+        description:
+          'Take a client off the list of those trusted to show a person an approval form. Trusting fewer clients only makes sending stricter, so this needs no approval: a send from a `confirm` mailbox made in that client is then approved at a terminal instead. Removing a name that is not on the list changes nothing. The same as `agent-gmail confirm-clients remove`.',
+        inputSchema: z.object({
+          name: z.string().min(1).describe('the client name, as gmail_confirm_clients lists it'),
+        }),
+        outputSchema: z.object({ clients: z.array(z.string()).describe('the clients still trusted') }),
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+      async ({ name }) => {
+        try {
+          return reply({ clients: await removeConfirmClient(context, name) });
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+
     server.registerTool(
       'gmail_send_cancel',
       {
@@ -1564,6 +1749,27 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       },
     );
   }
+
+  server.registerTool(
+    'gmail_confirm_clients',
+    {
+      title: 'Clients trusted to show approval forms',
+      description:
+        'The MCP clients whose approval forms are trusted to reach a person, so a send from a `confirm` mailbox can be approved in a form instead of at a terminal. Empty by default. A client gets on the list in two steps: gmail_confirm_probe in that client (the evidence), then `agent-gmail confirm-clients add <name>` at a terminal (the decision). The same as `agent-gmail confirm-clients list`.',
+      inputSchema: z.object({}),
+      outputSchema: z.object({ clients: z.array(z.string()) }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () => {
+      try {
+        // The list is the machine's, not a mailbox's, so a pinned server reports it whole: it names MCP clients,
+        // and nothing about any other mailbox.
+        return reply({ clients: await listConfirmClients(context) });
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
 
   server.registerTool(
     'gmail_send_list',

@@ -1,6 +1,6 @@
 ---
 name: gmail-setup
-description: "Install agent-gmail and connect mailboxes: the Google Cloud OAuth client, inbox add and reauth, importing a legacy Gmail MCP setup, doctor, and wiring MCP clients. Symptoms: 'set up Gmail', 'connect my work inbox', 'no mailbox is connected', 'it stopped working after a week'. Not for reading or writing mail — gmail-search and gmail-compose do that."
+description: "Install agent-gmail and connect mailboxes: the Google Cloud OAuth client, inbox add and reauth, showing, renaming and tightening a mailbox from chat or a terminal, importing a legacy Gmail MCP setup, doctor, and wiring MCP clients. Symptoms: 'set up Gmail', 'connect my work inbox', 'no mailbox is connected', 'it stopped working after a week'. Not for reading or writing mail — gmail-search and gmail-compose do that."
 license: MIT
 compatibility: "@agentcomms/gmail@0.4.2"
 metadata:
@@ -43,9 +43,9 @@ here. `doctor` reports that as a failing check, not a warning, and so should you
 | Sending anything | `gmail-send` | Never sends. The smoke test at the end of setup is a search — a fresh connection is the worst moment to test a send path. |
 | Reading and searching mail | `gmail-search` | Runs exactly one search to prove the grant works, reports the count, and stops. |
 | Writing drafts | `gmail-compose` | Not touched. A mailbox that can read is connected before anything can be written. |
-| Loosening a send policy | the user, at a terminal | Tightens on request (`chat` → `confirm` → `never`); the other direction is refused with `LOOSENING_REFUSED` and reported, never worked around. |
+| Loosening a send policy | the user, at a terminal | Tightens on request, from chat or the CLI (`chat` → `confirm` → `never`); the other direction is refused with `LOOSENING_REFUSED`, whose hint names the command the user runs. Reported, never worked around. |
 | Deciding which Google account belongs to which alias | the user | Passes their answer as `--email` so a wrong pick is refused rather than saved. |
-| Trusting a client's approval forms | the user, with `gmail-send` | `agent-gmail confirm-clients add <name>` needs a person at a terminal; setup does not run it. |
+| Trusting a client's approval forms | the user, with `gmail-send` | `agent-gmail confirm-clients add <name>` needs a person at a terminal; setup does not run it. Showing the list and taking a client off it need nobody. |
 
 ## Contract
 
@@ -76,6 +76,29 @@ here:
   "connected `acme/gmail` as jo@example.com, `inbox-token` ok" can.
 - **Never echo a secret.** The client secret lives in the JSON and then in the secret store. Do not print
   it, do not paste it into the conversation, and do not read the downloaded file to "check" it.
+
+## From chat, or from a terminal
+
+The account work an agent may do is reachable both ways. Each row is one operation underneath, so a
+refusal on one surface is the same refusal on the other:
+
+| The job | MCP tool | CLI command |
+|---|---|---|
+| What setup still needs | `gmail_setup` | `agent-gmail setup --json` |
+| Connect a mailbox | `gmail_inbox_add`, then `gmail_inbox_finish` | `inbox add --start`, then `inbox add --finish` |
+| List mailboxes, or show one in full | `gmail_inboxes_list`, `gmail_inbox_show` | `inbox list`, `inbox show <alias>` |
+| Rename a mailbox | `gmail_inbox_rename` | `inbox rename <from> <to>` |
+| Make sending from it stricter | `gmail_inbox_policy` | `inbox policy <alias> --send confirm\|never` |
+| The OAuth clients, never their secrets | `gmail_clients_list` | `client list` |
+| Clients trusted to show approval forms | `gmail_confirm_clients`, `gmail_confirm_client_remove` | `confirm-clients list`, `confirm-clients remove` |
+| Check it works | `gmail_doctor`, `gmail_whoami` | `doctor`, `whoami --inbox <alias>` |
+
+Still the person's, at a terminal, until approving a change from chat exists: loosening a send policy,
+`client add` and `client remove`, `inbox reauth`, `inbox import`, `inbox remove`,
+`confirm-clients add`, and `mcp install` and `mcp prune`. A tool asked to loosen refuses with
+`LOOSENING_REFUSED` and a hint naming the command — pass that on and stop. A server started
+`--read-only` offers the reads in this table and none of the changes; one pinned with `--inbox` shows
+and tightens its own mailbox, and cannot rename it.
 
 ## When to Use
 
@@ -137,7 +160,8 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
 
    There is no MCP tool that registers the OAuth client, and that is deliberate — it reads a file of
    theirs and writes a secret. Ask them to run `agent-gmail client add <path>`, or `agent-gmail setup`,
-   which walks the console too.
+   which walks the console too. `gmail_clients_list` shows what is registered already, without the
+   secret, so you can tell "no client yet" from "a client nobody signs in through".
    **Complete when:** you have used `gmail_setup` to say what is next, or established you have a shell
    and are using the CLI instead.
 
@@ -202,11 +226,14 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    `--no-contacts` turns it off, neither leaves it as it was.
    **Complete when:** `missingScopes` is empty, or the user has decided to live with the narrower grant.
 
-7. **Set the send policy if the user wants it stricter than the default.**
-   `agent-gmail inbox policy <alias> --send confirm` (or `never`). Tightening needs nothing but the
-   command. Going the other way needs the user at their own terminal, and asking you to do it is a
-   refusal you report rather than a problem you solve.
-   **Complete when:** `gmail_inboxes_list` shows the policy the user asked for.
+7. **Set the send policy if the user wants it stricter than the default.** From chat,
+   `gmail_inbox_policy` with `sendPolicy` `confirm` (or `never`); at a terminal,
+   `agent-gmail inbox policy <alias> --send confirm`. Tightening needs nothing but the call, and applies
+   to the next send. Going the other way needs the user at their own terminal: the tool refuses with
+   `LOOSENING_REFUSED` — "needs a change approval" — and its hint is the command they run. Asking you to
+   do it is a refusal you report rather than a problem you solve.
+   **Complete when:** `gmail_inbox_show` shows the policy the user asked for, and
+   `sendPolicyInherited: false`.
 
 8. **Prove it works, without sending.** `agent-gmail doctor --inbox <name>`, then
    `agent-gmail whoami --inbox <name>` (MCP: `gmail_whoami`) to confirm the address Google reports
@@ -229,11 +256,16 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    **Complete when:** the result says `verified` with the tool count, and you have passed on any warning
    about another Gmail server registered with the same client.
 
-10. **Tidy up only on request.** `agent-gmail inbox rename <from> <to>` changes a name;
-    `agent-gmail inbox remove <alias>` disconnects and deletes the stored token. `--revoke` additionally
-    asks Google to revoke it, which can invalidate the whole account-and-client grant, including other
-    tools sharing it — so it is opt-in, and worth saying out loud before running.
-    **Complete when:** the user asked for this and knows what `--revoke` would also break.
+10. **Tidy up only on request.** `gmail_inbox_rename` (CLI: `agent-gmail inbox rename <from> <to>`)
+    changes a name and nothing else. Say two things before renaming: once names are
+    organisation/platform the old one can never be used again, and anything pinned to it — a server
+    registered with `--inbox <old>` — stops serving until it is registered again under the new name.
+    `agent-gmail inbox remove <alias>` disconnects and deletes the stored token, and is a terminal
+    command. `--revoke` additionally asks Google to revoke it, which can invalidate the whole
+    account-and-client grant, including other tools sharing it — so it is opt-in, and worth saying out
+    loud before running.
+    **Complete when:** the user asked for this and knows what a rename strands and what `--revoke`
+    would also break.
 
 ## The Google Cloud console, in the order you meet it
 
@@ -366,6 +398,7 @@ declines, the seven-day expiry is something to say plainly, not to discover late
 - [ ] Setup was proved with a search. No message was sent, and no send was prepared.
 - [ ] `mcp install` reported `verified`, and any `other-gmail-servers` finding was passed on as a failure.
 - [ ] No secret was printed into the conversation.
+- [ ] Anything refused as a loosening was handed to the user as the command in its hint, not retried.
 
 ## Deeper reading
 

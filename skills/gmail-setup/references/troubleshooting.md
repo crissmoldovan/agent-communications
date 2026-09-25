@@ -43,7 +43,7 @@ and this client id is not among them.
 
 **Fix.** Only an administrator can do it, under Admin console → Security → API controls → **Manage
 third-party app access**, by trusting the client id. Give them the client id from `agent-gmail
-client list` — it is not a secret. Nothing in the CLI works around this.
+client list` (MCP: `gmail_clients_list`) — it is not a secret. Nothing in the CLI works around this.
 
 The same policy can also appear later, on an ordinary call, as a 403 with reason `domainPolicy`;
 this package reports it as `AUTH_REQUIRED` (exit 77) with the same console path in the hint.

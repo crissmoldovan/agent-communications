@@ -57,6 +57,9 @@ test('the tool list is the same whatever is configured, and every tool says what
   assert.deepEqual(withoutInboxes, [
     'gmail_attachment_download',
     'gmail_attachments_find',
+    'gmail_clients_list',
+    'gmail_confirm_client_remove',
+    'gmail_confirm_clients',
     'gmail_confirm_probe',
     'gmail_contacts_search',
     'gmail_doctor',
@@ -73,6 +76,11 @@ test('the tool list is the same whatever is configured, and every tool says what
     // but tell the person to go and run a CLI, which is where most of them stop.
     'gmail_inbox_add',
     'gmail_inbox_finish',
+    // Account management is reachable from a chat as from a terminal (2026-09-25), within what a chat may approve:
+    // reading, renaming and tightening. Loosening and removal wait for change approvals.
+    'gmail_inbox_policy',
+    'gmail_inbox_rename',
+    'gmail_inbox_show',
     'gmail_inboxes_list',
     'gmail_label_create',
     'gmail_labels_list',
@@ -129,6 +137,10 @@ test('a read-only server does not offer the tools that would write', async () =>
       'gmail_inbox_finish',
       'gmail_send_cancel',
       'gmail_confirm_probe',
+      // Renaming, tightening and forgetting a trusted client all write the config.
+      'gmail_inbox_rename',
+      'gmail_inbox_policy',
+      'gmail_confirm_client_remove',
     ]) {
       assert.ok(!names.includes(withheld), `${withheld} must not be offered by a read-only server`);
     }

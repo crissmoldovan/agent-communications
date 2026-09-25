@@ -52,7 +52,8 @@ Each mailbox has one. `agent-gmail inbox list` shows it.
 | `never` | nothing sends; the draft waits in Gmail | mailboxes an agent should never speak for |
 
 Changing a policy to something weaker is a loosening: it needs a typed confirmation at a terminal, not a flag an
-agent can pass.
+agent can pass. Making it stricter needs nobody — `agent-gmail inbox policy <alias> --send confirm`, or the same
+change from chat with `gmail_inbox_policy`, which refuses the other direction and names the command instead.
 
 ### Risk escalation
 

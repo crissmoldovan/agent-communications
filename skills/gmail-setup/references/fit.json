@@ -1,5 +1,5 @@
 {
   "kind": "requestOnly",
   "group": "communications",
-  "useWhen": "Install agent-gmail and connect mailboxes: the Google Cloud OAuth client, inbox add and reauth, importing a legacy Gmail MCP setup, doctor, and wiring MCP clients."
+  "useWhen": "Install agent-gmail and connect mailboxes: the Google Cloud OAuth client, inbox add and reauth, showing, renaming and tightening a mailbox from chat or a terminal, importing a legacy Gmail MCP setup, doctor, and wiring MCP clients."
 }

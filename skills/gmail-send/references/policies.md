@@ -14,13 +14,11 @@ entirely in this package's own code.
 
 The policy that applies to a mailbox is its own `sendPolicy`, or `defaults.sendPolicy` when the
 mailbox has none. The shipped default is `chat`. `gmail_inboxes_list` reports the one in force, but
-not where it came from: its `sendPolicy` is already the resolved value, and the tool returns no
-field saying whether the mailbox set it or inherited it. The CLI does distinguish them —
-`agent-gmail inbox list` prints `chat (default)` in its SENDING column for an inherited policy and a
-bare `chat` for one the mailbox owns, `agent-gmail inbox show <alias>` writes `chat (from defaults)`
-on its `sending:` line, and `--json` on either carries `sendPolicyInherited`. So when the question
-is *where do I change this*, ask the user to run one of those rather than inferring it from the
-effective value, which reads identically either way.
+not where it came from: its `sendPolicy` is already the resolved value. `gmail_inbox_show` does say —
+it carries `sendPolicyInherited`, as `agent-gmail inbox show <alias> --json` does, and the CLI's human
+output writes `chat (from defaults)` on its `sending:` line (`inbox list` prints `chat (default)`).
+So when the question is *where do I change this*, read `gmail_inbox_show` rather than inferring it from
+the effective value, which reads identically either way.
 
 ### `chat`
 
@@ -67,7 +65,7 @@ There are exactly two channels:
 | Channel | How it happens | What stops an agent using it |
 |---|---|---|
 | Terminal | The user runs `agent-gmail approve <approvalId>`, reads the preview it prints, and types the code | The command refuses when an agent marker is present in the environment (`APPROVAL_REQUIRED`), and again when there is no interactive terminal |
-| Trusted client form | An MCP client raises a form carrying the preview and the code; the person types it back | The client's `clientInfo.name` must already be on `defaults.confirm.elicitationClients`, which is empty by default and can only be added to by a person at a terminal, after that client has passed a probe in the last ten minutes |
+| Trusted client form | An MCP client raises a form carrying the preview and the code; the person types it back | The client's `clientInfo.name` must already be on `defaults.confirm.elicitationClients`, which is empty by default and can only be added to by a person at a terminal, after that client has passed a probe in the last ten minutes. Taking a name off it needs nobody: `gmail_confirm_client_remove`, or `agent-gmail confirm-clients remove` |
 
 An un-allowlisted client asking to send under `confirm` gets `APPROVAL_REQUIRED` with the terminal
 command in the hint, and **the record is left pending** — being asked from the wrong client is not

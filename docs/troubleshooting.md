@@ -261,6 +261,9 @@ agent-gmail confirm-clients list
 agent-gmail confirm-clients remove <name>
 ```
 
+An agent can do the same from chat — `gmail_confirm_clients`, then `gmail_confirm_client_remove` — because
+trusting fewer clients needs nobody's approval.
+
 ## Reading and reporting
 
 ### A message body looks shorter than it should

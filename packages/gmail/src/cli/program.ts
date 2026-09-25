@@ -9,9 +9,7 @@ import {
   type OutputOptions,
   paint,
   requirePerson,
-  resolveName,
   runCommand,
-  type SendPolicy,
   type StoreKind,
   type Streams,
   writeResult,
@@ -29,7 +27,16 @@ import { doctor } from '../operations/doctor.ts';
 import { createDraft, deleteDraft, getDraft, listDrafts, replyDraft, updateDraft } from '../operations/drafts.ts';
 import { exportMail } from '../operations/export.ts';
 import { importLegacy } from '../operations/import-legacy.ts';
-import { inboxList, inboxPolicy, inboxRemove, inboxRename, inboxShow, whoami } from '../operations/inboxes.ts';
+import {
+  inboxList,
+  inboxPolicy,
+  inboxRemove,
+  inboxRename,
+  inboxShow,
+  type SendPolicyChange,
+  sendPolicyChange,
+  whoami,
+} from '../operations/inboxes.ts';
 import { runOauthListener } from '../operations/oauth-listen.ts';
 import { applyUndo, createLabel, modify, trash } from '../operations/organise.ts';
 import { readMessage, readThread } from '../operations/read.ts';
@@ -428,13 +435,11 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .requiredOption('--send <policy>', 'chat | confirm | never')
     .action(
       act(async (context, globalOptions, alias: string, options: Options) => {
-        const wanted = String(options.send);
-        if (wanted !== 'chat' && wanted !== 'confirm' && wanted !== 'never') {
-          throw new CommsError('USAGE', `"${wanted}" is not a send policy`, { hint: 'Use chat, confirm or never.' });
-        }
-        const consent = await consentForLoosening(context, alias, wanted, globalOptions);
+        // Which direction this goes is the operation's call, so `gmail_inbox_policy` cannot disagree with it.
+        const change = await sendPolicyChange(context, alias, String(options.send));
+        const consent = change.loosens ? await consentForLoosening(change, globalOptions) : undefined;
         writeResult(
-          await inboxPolicy(context, alias, wanted, consent),
+          await inboxPolicy(context, alias, change.sendPolicy, consent),
           output(),
           (data) => `Sending from "${data.alias}" now needs: ${data.sendPolicy} (was ${data.previous}).`,
           streams,
@@ -1670,29 +1675,24 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       }),
     );
 
-  /** Loosening a safety setting needs a person at a terminal typing a challenge; tightening never does. */
+  /**
+   * A loosening's consent: a person at this terminal typing a challenge. Only asked for once the operation has said
+   * the change loosens — tightening never asks anybody anything.
+   */
   const consentForLoosening = async (
-    context: GmailContext,
-    alias: string,
-    wanted: SendPolicy,
+    change: SendPolicyChange,
     globalOptions: GlobalOptions,
-  ): Promise<LooseningConsent | undefined> => {
-    const rank: Record<SendPolicy, number> = { chat: 0, confirm: 1, never: 2 };
-    const config = await context.config();
-    // Resolved, so a former name is refused with its replacement here rather than silently measured against the
-    // default — which would skip the consent a loosening of the renamed mailbox needs.
-    const current = resolveName(config, 'inbox', alias).inbox.sendPolicy ?? config.defaults.sendPolicy;
-    if (rank[wanted] >= rank[current]) return undefined;
+  ): Promise<LooseningConsent> => {
     await requirePerson(env, streams, {
       refusedToAgent: 'only a person can make sending easier, not an agent',
       refusedWithoutTerminal: 'making sending easier needs an interactive terminal',
-      command: `agent-gmail inbox policy ${alias} --send ${wanted}`,
-      prompt: `This makes sending from "${alias}" easier (${current} → ${wanted}).`,
+      command: `agent-gmail inbox policy ${change.alias} --send ${change.sendPolicy}`,
+      prompt: `This makes sending from "${change.alias}" easier (${change.previous} → ${change.sendPolicy}).`,
       color: globalOptions.color,
       json: globalOptions.json,
       noInput: globalOptions.noInput,
     });
-    return { kind: 'loosening-consent', paths: [`inboxes.${alias}.sendPolicy`] };
+    return { kind: 'loosening-consent', paths: [change.path] };
   };
 
   try {
