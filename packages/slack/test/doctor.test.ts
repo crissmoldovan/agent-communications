@@ -438,6 +438,7 @@ test("another server's URL is shown by host and path, never with what its query 
     ],
   });
   const check = find(result, 'other-slack-servers');
-  assert.match(check?.detail ?? '', /"pd" in claude-code \(https:\/\/mcp\.example\.net\/fake-id\/slack\)/);
-  assert.doesNotMatch(JSON.stringify(result), /fake-password-2|fake-secret-2|frag/);
+  assert.match(check?.detail ?? '', /"pd" in claude-code \(https:\/\/mcp\.example\.net\)/);
+  // The path too: some remote servers are addressed by a per-user id that is the credential.
+  assert.doesNotMatch(JSON.stringify(result), /fake-id|fake-password-2|fake-secret-2|frag/);
 });

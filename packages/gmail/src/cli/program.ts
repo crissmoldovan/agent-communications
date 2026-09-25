@@ -1218,10 +1218,18 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       'remove managed runtimes that no client config it can read names, no printed entry names, and no process runs',
     )
     .option('--dry-run', 'only say what would be removed', false)
+    .option(
+      '--include-printed',
+      'also remove runtimes kept only because an entry for them was printed (--client json, --print), once those entries are gone',
+      false,
+    )
     .action(
       act(async (context, globalOptions, options: Options) => {
         const { mcpPrune } = await import('../mcp/install.ts');
-        const result = await mcpPrune(context, { dryRun: options.dryRun === true });
+        const result = await mcpPrune(context, {
+          dryRun: options.dryRun === true,
+          includePrinted: options.includePrinted === true,
+        });
         writeResult(result, output(), (data) => renderPrune(data, globalOptions.color), streams);
       }),
     );

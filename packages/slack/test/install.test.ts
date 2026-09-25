@@ -279,7 +279,24 @@ test('warnings are about the client being installed, and see a URL-only Slack se
 
   const here = await mcpInstall(context, { client: 'cursor', launcher: 'local', noVerify: true });
   assert.equal(here.warnings.length, 1);
-  assert.match(here.warnings[0] ?? '', /"official" in cursor \(https:\/\/mcp\.slack\.com\/mcp\)/);
+  assert.match(here.warnings[0] ?? '', /"official" in cursor \(https:\/\/mcp\.slack\.com\)/);
+});
+
+test('codex that cannot be started is reported as that, not as codex declining to answer', NOT_ON_WINDOWS, async () => {
+  const { context, bin } = await setUp();
+  // Found on PATH and executable, but its interpreter does not exist: the spawn itself fails, as `codex.cmd` does
+  // on Windows.
+  await writeFile(join(bin, 'codex'), '#!/nonexistent/interpreter-for-this-test\n');
+  await chmod(join(bin, 'codex'), 0o755);
+  await assert.rejects(
+    mcpInstall(context, { client: 'codex', launcher: 'local', noVerify: true }),
+    (error: unknown) => {
+      assert.ok(error instanceof CommsError);
+      assert.match(error.message, /codex could not be started \(ENOENT\), so nothing was written/);
+      assert.doesNotMatch(error.message, /would not say/);
+      return true;
+    },
+  );
 });
 
 test(
@@ -421,16 +438,16 @@ test('a refusal names another server by where it is, never by what its URL carri
     () => assert.fail('not refused'),
     (error: CommsError) => `${error.message} ${error.hint ?? ''}`,
   );
-  assert.match(refusal, /mcp\.example\.net\/fake-path-id\/sse/);
+  assert.match(refusal, /https:\/\/mcp\.example\.net\b/);
   const warned = await mcpInstall(context, {
     client: 'cursor',
     name: 'agent-slack',
     launcher: 'local',
     noVerify: true,
   });
-  assert.match(warned.warnings.join('\n'), /"relay" in cursor \(https:\/\/mcp\.example\.net\/fake-path-id\/slack\)/);
+  assert.match(warned.warnings.join('\n'), /"relay" in cursor \(https:\/\/mcp\.example\.net\)/);
   for (const text of [refusal, ...warned.warnings]) {
-    assert.doesNotMatch(text, /fake-password-1|fake-secret-1|fake-fragment/, text);
+    assert.doesNotMatch(text, /fake-path-id|fake-password-1|fake-secret-1|fake-fragment/, text);
   }
 });
 

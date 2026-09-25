@@ -70,6 +70,9 @@ export function verifyEntry(entry: ServerEntry): Promise<{ ok: boolean; detail: 
 }
 
 /** Removes Slack's managed runtimes that nothing registers and nothing runs. */
-export function mcpPrune(context: SlackContext, options: { dryRun?: boolean } = {}): Promise<PruneResult> {
+export function mcpPrune(
+  context: SlackContext,
+  options: { dryRun?: boolean; includePrinted?: boolean } = {},
+): Promise<PruneResult> {
   return pruneManagedRuntimes(context, SLACK_MCP, options);
 }

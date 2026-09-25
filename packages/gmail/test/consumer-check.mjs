@@ -79,4 +79,6 @@ assert.equal(
   'owner-only files in the config directory',
 );
 
-console.log('gmail consumer check: library entry, agent-gmail bin, envelopes and doctor OK');
+// Straight to stdout: `createGmailMcpServer` above rerouted `console.log` to stderr, which verify-package discards, and
+// it requires this line.
+process.stdout.write('gmail consumer check: library entry, agent-gmail bin, envelopes and doctor OK\n');

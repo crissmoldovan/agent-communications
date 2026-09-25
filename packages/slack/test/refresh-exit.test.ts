@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/client';
-import { InMemoryTransport } from '@modelcontextprotocol/server';
+import { InMemoryTransport, type Transport } from '@modelcontextprotocol/server';
 import type { SignalHost } from '../src/auth/exit.ts';
 import { settleRefreshes } from '../src/auth/refresh.ts';
 import { run } from '../src/cli/program.ts';
@@ -175,6 +175,70 @@ test('an MCP client that closes the connection without a signal still gets the k
   await serving;
   const after = await stored(harness, account.secretRef);
   assert.equal(after?.state, 'ready', 'the renewed token was dropped when the client went away');
+  assert.equal(after?.refreshToken, 'fake-new-refresh');
+  assert.equal(stderr.text(), '');
+});
+
+test('an MCP client that just closes stdin still gets the kept token written down', async () => {
+  /*
+   * The production case. `StdioServerTransport` does not report stdin ending as a close, so the transport's own
+   * `onclose` never fires and only `closed` — stdin's end — can end the serving. This transport forwards messages
+   * and never says it closed.
+   */
+  const harness = await newHarness();
+  const account = await expired(harness);
+  const store = flakyStore(await harness.core.secrets('file'));
+  harness.reply = () => {
+    store.failing = true;
+    return renewed();
+  };
+  const { server } = await createSlackMcpServer({
+    core: { ...harness.core, secrets: async () => store },
+    env: harness.env,
+    exchange: (params) => harness.exchange(params),
+    persist: QUICK,
+    fetch: noChannels,
+  });
+  const [clientTransport, inner] = InMemoryTransport.createLinkedPair();
+  const silent: Transport = {
+    start: () => inner.start(),
+    // The two option types differ only in fields neither transport reads here.
+    send: (message, options) => inner.send(message, options as Parameters<typeof inner.send>[1]),
+    close: () => inner.close(),
+  };
+  // Messages go straight through; `onclose` is the one thing never passed on.
+  Object.defineProperty(silent, 'onmessage', {
+    get: () => inner.onmessage,
+    set: (handler: NonNullable<typeof inner.onmessage>) => {
+      inner.onmessage = handler;
+    },
+  });
+  let endStdin = () => {};
+  const stdinClosed = new Promise<void>((resolve) => {
+    endStdin = resolve;
+  });
+  const stderr = captured();
+  const serving = serveUntilClosed(server, silent, { closed: stdinClosed, stderr: stderr.stream });
+  const client = new Client({ name: 'test', version: '0' });
+  await client.connect(clientTransport);
+  await client.callTool({ name: 'slack_channels', arguments: { workspace: 'acme' } });
+  assert.equal((await stored(harness, account.secretRef))?.state, 'refreshing', 'nothing could have been written');
+
+  store.failing = false;
+  await client.close();
+  endStdin();
+  // Bounded: a serving that ignores stdin's end never finishes, and a hang would stall the suite, not fail it.
+  let timer: NodeJS.Timeout | undefined;
+  const ended = await Promise.race([
+    serving.then(() => true),
+    new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), 5000);
+    }),
+  ]);
+  clearTimeout(timer);
+  assert.ok(ended, 'the server kept serving after stdin closed');
+  const after = await stored(harness, account.secretRef);
+  assert.equal(after?.state, 'ready', 'the renewed token was dropped when stdin closed');
   assert.equal(after?.refreshToken, 'fake-new-refresh');
   assert.equal(stderr.text(), '');
 });

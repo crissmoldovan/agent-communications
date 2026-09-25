@@ -406,3 +406,4 @@ agent-slack mcp prune [options]
 | Option | What it does | Default |
 |---|---|---|
 | `--dry-run` | only say what would be removed | `false` |
+| `--include-printed` | also remove runtimes kept only because an entry for them was printed (--client json, --print), once those entries are gone | `false` |

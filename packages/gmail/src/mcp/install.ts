@@ -67,6 +67,9 @@ export function verifyEntry(entry: ServerEntry): Promise<{ ok: boolean; detail: 
 }
 
 /** Removes Gmail's managed runtimes that nothing registers and nothing runs. */
-export function mcpPrune(context: GmailContext, options: { dryRun?: boolean } = {}): Promise<PruneResult> {
+export function mcpPrune(
+  context: GmailContext,
+  options: { dryRun?: boolean; includePrinted?: boolean } = {},
+): Promise<PruneResult> {
   return pruneManagedRuntimes(context, GMAIL_MCP, options);
 }

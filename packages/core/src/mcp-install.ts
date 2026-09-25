@@ -633,8 +633,15 @@ async function codexRegistration(binary: string, name: string, path: string): Pr
   let answer: Awaited<ReturnType<typeof capture>>;
   try {
     answer = await capture(binary, ['mcp', 'get', name, '--json']);
-  } catch {
-    throw unknown();
+  } catch (error) {
+    /*
+     * Codex did not run at all, which is a different fact from codex not saying, and the one a person can act on.
+     * On Windows it is the usual case: codex is a `.cmd` script, which cannot be started without a shell.
+     */
+    const code = (error as NodeJS.ErrnoException).code ?? 'an error';
+    throw new CommsError('CONFIG', `codex could not be started (${code}), so nothing was written`, {
+      hint: `Check that \`codex --version\` runs from this shell. \`--print\` shows the entry, to add with \`codex mcp add\` yourself.`,
+    });
   }
   if (answer.code !== 0) {
     if (/no mcp server named/i.test(`${answer.stderr}\n${answer.stdout}`)) return null;
@@ -1011,8 +1018,9 @@ const RUNTIME_NAME = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$/;
  *  - never one an entry names in a client config `scanRegisteredServers` reads, in any scope. When one of those
  *    files is there and cannot be read, nothing is removed at all: a file skipped in silence looked exactly like
  *    one that registered nothing, and one comment in a VS Code `mcp.json` was enough to lose a runtime;
- *  - never one it handed out as an entry to paste (`--client json`, `--print`), which no scan can follow. When
- *    that record cannot be read, nothing is removed;
+ *  - never one it handed out as an entry to paste (`--client json`, `--print`), which no scan can follow — unless
+ *    `includePrinted` says those entries are gone, which only the person who pasted them can know. What that
+ *    removes leaves the record with it. When the record cannot be read, nothing is removed;
  *  - never one a running process names. When the processes cannot be listed, nothing is removed at all.
  *
  * What it cannot see is an entry in a file it does not read — a workspace `.vscode/mcp.json`, a config a client
@@ -1021,7 +1029,11 @@ const RUNTIME_NAME = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$/;
 export async function pruneManagedRuntimes(
   context: InstallContext,
   product: Pick<McpProduct, 'packageName' | 'version'>,
-  options: { dryRun?: boolean; processes?: () => Promise<readonly string[] | null> } = {},
+  options: {
+    dryRun?: boolean;
+    includePrinted?: boolean;
+    processes?: () => Promise<readonly string[] | null>;
+  } = {},
 ): Promise<PruneResult> {
   const runtimeDir = join(context.core.paths.dataDir, 'runtime');
   const result: PruneResult = { runtimeDir, dryRun: options.dryRun === true, removed: [], kept: [] };
@@ -1077,14 +1089,14 @@ export async function pruneManagedRuntimes(
   const current = managedRuntimeDir(context.core.paths.dataDir, product.packageName, product.version);
   for (const { path, version, aliases } of candidates) {
     const owner = registered.find((server) => [server.command, ...server.args].some((part) => mentions(aliases, part)));
-    const printed = handedOut.find((record) => mentions(aliases, record.runtime));
+    const printed = options.includePrinted ? undefined : handedOut.find((record) => mentions(aliases, record.runtime));
     const reason =
       path === current
         ? 'this release'
         : owner
           ? `registered with ${owner.client} as "${owner.name}"`
           : printed
-            ? `printed for ${printed.client} as "${printed.name}" on ${printed.at.slice(0, 10)}, and where that entry went cannot be read`
+            ? `printed for ${printed.client} as "${printed.name}" on ${printed.at.slice(0, 10)}, and where that entry went cannot be read; once it is gone, \`mcp prune --include-printed\` removes this`
             : processes.some((line) => mentions(aliases, line))
               ? 'a running process uses it'
               : null;
@@ -1095,6 +1107,17 @@ export async function pruneManagedRuntimes(
     // `rm` does not follow a link, so even a directory swapped for one since the scan loses only the link.
     if (!result.dryRun) await rm(path, { recursive: true });
     result.removed.push({ path, version });
+  }
+  /*
+   * The record forgets what was just removed, and only that. Gmail and Slack share it, and a line for the other
+   * product's runtime — or for one still kept here — is still somebody's pasted entry.
+   */
+  if (options.includePrinted && !result.dryRun && result.removed.length > 0) {
+    const gone = result.removed.map((item) => item.path);
+    const left = handedOut.filter((record) => !gone.some((path) => mentions([path], record.runtime)));
+    if (left.length !== handedOut.length) {
+      await writeFileAtomic(ledger, left.map((record) => `${JSON.stringify(record)}\n`).join(''));
+    }
   }
   return result;
 }

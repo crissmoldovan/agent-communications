@@ -87,10 +87,10 @@ export interface PersistPolicy {
  *
  * Deliberately longer than everything done while it is held: a marker write (up to twelve seconds against a
  * keychain), the bounded Slack call (thirty), and the write afterwards (up to a minute of retries, then one more
- * call) — or, when the marker write fails, the same minute spent waiting to take it back. The repository's lock documentation advises against network work inside a critical section for good
- * reason — but the alternative here is releasing the lock around the one call that must not happen twice, so
- * instead the window is made wide enough that a normal refresh cannot outlive it, and the marker covers the
- * abnormal one.
+ * call) — or, when the marker write fails, the same minute spent waiting to take it back. The repository's lock
+ * documentation advises against network work inside a critical section for good reason — but the alternative here
+ * is releasing the lock around the one call that must not happen twice, so instead the window is made wide enough
+ * that a normal refresh cannot outlive it, and the marker covers the abnormal one.
  */
 const LOCK_STALE_MS = 3 * 60_000;
 const LOCK_TIMEOUT_MS = 90_000;

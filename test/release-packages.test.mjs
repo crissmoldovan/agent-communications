@@ -299,7 +299,17 @@ test('the local release confirms a prerelease it published under next, not only 
 
   // And the script asks about the tag it published under, not a fixed one.
   const script = await readFile(join(ROOT, 'scripts', 'release.mjs'), 'utf8');
-  assert.match(script, /isVisible\(\{[^\n]*\bdistTag\b[^\n]*\}\)/, 'the confirmation must be told the dist-tag');
+  // The variable itself, by shorthand: `distTag: 'latest'` also contains the word, and asked a prerelease's
+  // confirmation about the wrong tag.
+  const call = /isVisible\(\{(.*)\}\)/.exec(script)?.[1] ?? '';
+  assert.match(
+    call,
+    /(^|,)\s*distTag\s*(,|$)/,
+    `the confirmation must be told the tag it was published under: ${call}`,
+  );
+  // …and the tag it tells a person to push names the commit that was published, not whatever HEAD is by then.
+  assert.match(script, /git tag v\$\{version\} \$\{local \?\? 'HEAD'\}/);
+  assert.match(script, /^const local = quiet\(\(\) => run\('git', \['rev-parse', 'HEAD'\]\)\);$/m);
 });
 
 test('the registry confirmation has room for the lag seen on real releases', async () => {
@@ -512,6 +522,22 @@ test('the preflight proves nothing for a package already out from this commit, s
   } finally {
     await partial.close();
   }
+});
+
+test('an empty package list fails the run, rather than reading as everything already published', async () => {
+  // The step used to refuse an empty list itself; now it asks `pending`, where "nothing left to send" is a real
+  // answer. So `pending` is what must tell the two apart.
+  const scratch = await tempDir('empty-list-');
+  await mkdir(join(scratch, 'scripts'), { recursive: true });
+  await cp(CI, join(scratch, 'scripts', 'release-ci.mjs'));
+  const shared = await readFile(join(ROOT, 'scripts', 'packages.mjs'), 'utf8');
+  const emptied = shared.replace(/Object\.freeze\(\[[^\]]*\]\)/, 'Object.freeze([])');
+  assert.notEqual(emptied, shared, 'the list is still declared as one frozen array');
+  await writeFile(join(scratch, 'scripts', 'packages.mjs'), emptied);
+  const result = await runScript(join(scratch, 'scripts', 'release-ci.mjs'), ['pending', VERSION, COMMIT]);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /lists no packages/);
 });
 
 test('a package already at the version from another commit stops the release before anything is sent', async () => {

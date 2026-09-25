@@ -163,9 +163,10 @@ test('codex: an [mcp_servers] table with inline entries is read, env and all', a
   assert.deepEqual(scan.servers.map((server) => server.name).sort(), ['quoted.name', 'sectioned', 'slack']);
 });
 
-test("another server's URL is shown by host and path only", () => {
-  assert.equal(displayUrl('https://mcp.slack.com/mcp'), 'https://mcp.slack.com/mcp');
-  const shown = displayUrl('https://someone:hunter2@mcp.example.net:8443/abc/slack?key=fake-secret-1#frag') ?? '';
-  assert.equal(shown, 'https://mcp.example.net:8443/abc/slack');
+test("another server's URL is shown by scheme and host only — a path can be the key", () => {
+  assert.equal(displayUrl('https://mcp.slack.com/mcp'), 'https://mcp.slack.com');
+  const shown =
+    displayUrl('https://someone:hunter2@mcp.example.net:8443/fake-path-key/slack?key=fake-secret-1#frag') ?? '';
+  assert.equal(shown, 'https://mcp.example.net:8443');
   assert.equal(displayUrl('not a url?key=fake-secret-2'), undefined, 'what cannot be parsed is not shown at all');
 });

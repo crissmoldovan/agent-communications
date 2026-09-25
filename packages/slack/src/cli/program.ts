@@ -1029,9 +1029,17 @@ configuration problem.`,
       'remove managed runtimes that no client config it can read names, no printed entry names, and no process runs',
     )
     .option('--dry-run', 'only say what would be removed', false)
+    .option(
+      '--include-printed',
+      'also remove runtimes kept only because an entry for them was printed (--client json, --print), once those entries are gone',
+      false,
+    )
     .action(
       act(async (context, options, flags: Options) => {
-        const result = await mcpPrune(context, { dryRun: flags.dryRun === true });
+        const result = await mcpPrune(context, {
+          dryRun: flags.dryRun === true,
+          includePrinted: flags.includePrinted === true,
+        });
         writeResult(result, output(), () => renderPrune(result, options.color), streams);
       }),
     );

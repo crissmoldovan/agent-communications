@@ -128,18 +128,20 @@ function urlOf(entry: ServerEntry): string | undefined {
 }
 
 /**
- * Another server's address, as far as it is safe to print: scheme, host and path.
+ * Another server's address, as far as it is safe to print: scheme and host.
  *
- * Never the userinfo, the query or the fragment. For a remote server the URL is often the credential — some
- * vendors put a key in the query, others ask for their URL to be kept like a password — and it was printed
- * whole in `mcp install`'s warnings, in its refusals and in `doctor`, which agents are told to run with `--json`
- * and so copy into their transcripts. What cannot be parsed as a URL is not printed at all.
+ * For a remote server the URL is often the credential, and it was printed whole in `mcp install`'s warnings, in
+ * its refusals and in `doctor`, which agents are told to run with `--json` and so copy into their transcripts.
+ * Some vendors put the key in the query; others put it in the path — a per-user id that is the only thing standing
+ * between anyone holding the URL and that person's connected accounts. So the path goes as well as the userinfo,
+ * the query and the fragment: the entry's name and client, printed beside this, say which server is meant. What
+ * cannot be parsed as a URL is not printed at all.
  */
 export function displayUrl(url: string): string | undefined {
   try {
     const parsed = new URL(url);
     if (!parsed.host) return undefined;
-    return `${parsed.protocol}//${parsed.host}${parsed.pathname === '/' ? '' : parsed.pathname}`;
+    return `${parsed.protocol}//${parsed.host}`;
   } catch {
     return undefined;
   }

@@ -217,8 +217,10 @@ is set) and the `.mcp.json` of each project listed in it, Claude Desktop's confi
 `CODEX_HOME` when that is set), Cursor's `~/.cursor/mcp.json`, Gemini CLI's `~/.gemini/settings.json` and VS
 Code's user `mcp.json`. If any of those is there and cannot be read, or the processes cannot be listed, it removes
 nothing at all and says which. What it cannot see is an entry you put by hand anywhere else — a workspace
-`.vscode/mcp.json` or `.cursor/mcp.json`, say — so check `--dry-run` first if you have one. Run it once the
-clients have been restarted:
+`.vscode/mcp.json` or `.cursor/mcp.json`, say — so check `--dry-run` first if you have one. A runtime kept only
+because its entry was printed stays until you say that entry is gone: `mcp prune --include-printed` removes those
+too, and still keeps anything a config it reads or a running process names. Run it once the clients have been
+restarted:
 
 ```bash
 npx -y @agentcomms/gmail@latest mcp prune --dry-run

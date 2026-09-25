@@ -41,6 +41,8 @@ function registryUrl() {
  */
 async function unpublished(subcommand, version, commit) {
   if (!version || !COMMIT.test(commit ?? '')) fail(`usage: release-ci.mjs ${subcommand} <version> <commit>`);
+  // An empty list would print nothing to publish, which the publish step reads as "all out already" and passes.
+  if (PACKAGES.length === 0) fail('scripts/packages.mjs lists no packages, so there is nothing this release can check');
   const todo = [];
   const done = [];
   const foreign = [];

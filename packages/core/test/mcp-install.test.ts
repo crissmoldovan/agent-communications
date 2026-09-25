@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -311,6 +311,65 @@ test('prune keeps a runtime it printed an entry for, because where that entry we
   const blind = await pruneManagedRuntimes(context(data, home), { ...product, version: '0.0.9' }, nothingRunning);
   assert.deepEqual(blind.removed, []);
   assert.ok(blind.refused?.includes(handedOutRuntimesPath(data)), `${blind.refused}`);
+});
+
+test('--include-printed removes a runtime kept only for a printed entry, and the record forgets only that one', async () => {
+  const { data, home, old, nothingRunning } = twoRuntimes();
+  const product: McpProduct = {
+    packageName: SLACK.packageName,
+    binary: 'agent-slack',
+    defaultServerName: 'slack',
+    npxPackage: SLACK.npxPackage,
+    version: '0.0.1',
+    moduleUrl: import.meta.url,
+    serverArgs: () => [],
+  };
+  await mcpInstall(context(data, home), product, { client: 'json', apply: false, noVerify: true });
+  // Somebody else's line, for the other product: forgetting 0.0.1 must not take it with it.
+  const other = {
+    at: '2026-09-01T00:00:00.000Z',
+    client: 'json',
+    name: 'gmail',
+    runtime: join(data, 'runtime', '0.0.1-gmail'),
+  };
+  writeFileSync(handedOutRuntimesPath(data), `${JSON.stringify(other)}\n`, { flag: 'a' });
+
+  const kept = await pruneManagedRuntimes(context(data, home), { ...product, version: '0.0.9' }, nothingRunning);
+  assert.match(kept.kept.find((item) => item.version === '0.0.1')?.reason ?? '', /--include-printed/);
+
+  const dry = await pruneManagedRuntimes(
+    context(data, home),
+    { ...product, version: '0.0.9' },
+    {
+      ...nothingRunning,
+      includePrinted: true,
+      dryRun: true,
+    },
+  );
+  assert.deepEqual(
+    dry.removed.map((item) => item.version),
+    ['0.0.1'],
+  );
+  await stat(old);
+
+  const gone = await pruneManagedRuntimes(
+    context(data, home),
+    { ...product, version: '0.0.9' },
+    {
+      ...nothingRunning,
+      includePrinted: true,
+    },
+  );
+  assert.deepEqual(
+    gone.removed.map((item) => item.version),
+    ['0.0.1'],
+  );
+  await assert.rejects(stat(old));
+  const left = readFileSync(handedOutRuntimesPath(data), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  assert.deepEqual(left, [other]);
 });
 
 test("the product's own published command, by name or by path, is ours; a package npx would fetch is not", () => {

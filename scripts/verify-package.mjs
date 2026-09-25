@@ -151,6 +151,19 @@ try {
     AGENT_COMMS_CONFIG_DIR: join(tempRoot, 'config'),
   });
   process.stdout.write(output);
+  /*
+   * A check proves itself by its last line, not by its exit code.
+   *
+   * Exiting 0 only says nothing threw. Gmail's check printed nothing here for a whole release — its library reroutes
+   * `console.log` to stderr, which this discards — and "printed nothing" reads exactly like "stopped half way and
+   * exited cleanly". Each check ends by naming itself and OK; a run that never reaches that line fails here.
+   */
+  const unscoped = manifest.name.split('/').pop();
+  if (!new RegExp(`^${unscoped} consumer check: .*\\bOK\\b`, 'm').test(output)) {
+    throw new Error(
+      `${manifest.name}: the consumer check exited without printing its "${unscoped} consumer check: … OK" line`,
+    );
+  }
   console.log(`package verification OK: ${manifest.name} (${basename(tarball)})`);
 } finally {
   await rm(tempRoot, { recursive: true, force: true });
