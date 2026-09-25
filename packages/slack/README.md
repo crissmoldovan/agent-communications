@@ -33,7 +33,7 @@ client secret is stored anywhere: the sign-in is PKCE, and the verifier never le
 agent-slack manifest --mode read --port 51234      # the app to create, and how
 agent-slack workspace add acme/slack --client-id <id> --port 51234
 agent-slack doctor
-agent-slack mcp install --client claude-code         # connect it to your agent
+agent-slack mcp install --client claude-code         # connect it to your agent, once you approve it
 ```
 
 The port must be the same number in both commands — Slack stores redirect URLs on the app and matches them
@@ -134,8 +134,16 @@ agent-slack mcp install --client claude-code                       # or codex, c
 agent-slack mcp install --client claude-code --workspace acme/slack # pinned to one workspace
 ```
 
+Registering hands your agent a new set of tools, so it is a change you approve — the same change as the core
+server's `comms_server_install` with `channel: "slack"`, and an approval from either is good on the other. At a
+terminal it shows what it will register and asks you to type `yes`; run by an agent, it exits `10` with the preview
+and an approval id, and registers when run again with `--approval <id>` after your yes. `--print` and `--client json`
+write nothing and ask nobody.
+
 The entry pins the exact version, so a newer release reaches the agent only when you register it again with
-`--force`, then restart the client. `agent-slack mcp --workspace acme/slack` runs the server on stdio directly.
+`--force`, then restart the client. `agent-slack mcp prune` then removes the runtimes old releases left behind, once
+you approve the list it shows (`--dry-run` only lists them). `agent-slack mcp --workspace acme/slack` runs the server
+on stdio directly.
 
 | Tools | What they do |
 |---|---|

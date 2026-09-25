@@ -73,7 +73,7 @@ here:
   waits for them.
 - **Every skill works without the MCP server.** That matters most here, because setup usually runs
   *before* any server is wired. The CLI with `--json` is the primary surface, and its exit codes are
-  stable: `0` ok, `10` a send was refused or needs approval, `64` usage, `65` bad data, `66` not found,
+  stable: `0` ok, `10` a send or a change was refused or needs approval, `64` usage, `65` bad data, `66` not found,
   `69` provider or secret store unavailable, `75` temporary, `77` sign-in or permission needed, `78`
   configuration problem.
 - **Cite what you read.** Quote the alias, the address Google reported, the `flowId`, the config path
@@ -121,7 +121,9 @@ again.
 
 Registering and pruning this server come from chat when the core server is connected:
 `comms_server_install` and `comms_server_prune` with `channel: "gmail"`, approved the same way; without it
-they are `mcp install` and `mcp prune` at a terminal. A server started `--read-only` offers the reads in
+they are `mcp install` and `mcp prune`, which are the same change and ask the same way — exit `10` with the
+preview and an approval id, then the same command with `--approval <id>` after the user's yes. An approval
+from either surface is good on the other, for the same request. A server started `--read-only` offers the reads in
 this table and none of the changes. One pinned with `--inbox` shows its own mailbox and sets its policies;
 it does not rename, re-authorise, import, remove, touch the OAuth clients or add a trusted client.
 
@@ -199,12 +201,16 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    agent-gmail setup --client-json <path> --json      # prepares the client's registration: exit 10
    agent-gmail setup --client-json <path> --json --approval <id>   # after the user's yes
    agent-gmail setup --inbox <name> --email <addr> --json
-   agent-gmail setup --mcp-client claude-code --json
+   agent-gmail setup --mcp-client claude-code --json   # stops at the registration: exit 10, `blocked`
+   agent-gmail setup --mcp-client claude-code --json --mcp-approval <id>   # after the user's yes
    ```
 
    Registering the client is `client add` underneath, approved the same way: the first run exits `10`
    with `APPROVAL_PENDING`, the preview in `error.details.preview` and the command to run again in the
-   hint.
+   hint. Registering the MCP server is `mcp install` underneath, and asks too, but as a stop rather than an
+   error: exit `10` with `blocked: { step: "mcp", approvalId, preview, hint }` in the report and nothing
+   registered. Show `preview`, and after the user's yes run the command in `hint` — it carries
+   `--mcp-approval <id>`, not `--approval`, which is the client's.
 
    The mailbox step is the boundary. Consent is granted on Google's own screen, in a browser this
    command does not drive, so that call returns `handoff: { authUrl, finish }` rather than waiting: give
@@ -282,7 +288,10 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    **Complete when:** `inbox-token` and `inbox-profile` are `ok` and the search returned without error.
 
 9. **Wire the MCP clients.** `agent-gmail mcp install --client claude-code` (also `claude-desktop`,
-   `codex`, `cursor`, `gemini`, `vscode`, or `json` to print the snippet). Add `--inbox <name>` to pin
+   `codex`, `cursor`, `gemini`, `vscode`, or `json` to print the snippet). Registering is a change
+   approval: the first run exits `10` with the preview — which server, which client, under which name,
+   pinned to what, replacing what — and an approval id; show the preview, and after the user's yes run the
+   same command with `--approval <id>`. `--print` and `--client json` write nothing and ask nobody. Add `--inbox <name>` to pin
    the server to one mailbox, `--read-only` to leave out every tool that changes the mailbox, and
    `--print` to see what would be written without writing it. `--read-only` gates the mailbox and not the
    disk — `gmail_attachment_download` and `gmail_export` are registered either way — so say it can write
@@ -290,7 +299,7 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    through the entry it just wrote and completes a handshake, so a registration that looks right but does
    not run is caught here. Tell the user to restart the client afterwards. Re-registering a newer version
    leaves the old runtime on disk; once the client is restarted, `agent-gmail mcp prune` removes those it
-   can show are unused: named in no client config it reads, never printed as an entry to paste, and not
+   can show are unused, once the user approves the list it shows: named in no client config it reads, never printed as an entry to paste, and not
    running. It removes nothing when one of those configs cannot be read, and it does not read a workspace's
    own `.vscode/mcp.json` or `.cursor/mcp.json` — run `--dry-run` first and tell the user what it lists.
    **Complete when:** the result says `verified` with the tool count, and you have passed on any warning
@@ -349,7 +358,7 @@ The console renames these pages every few months; the sequence has been stable.
 | `inbox-idle` | Unused for 150 days; Google drops a token unused for six months | `agent-gmail whoami --inbox <name>` |
 | `orphaned-secrets` | A token could not be deleted when an inbox was removed | Remove it from the keychain by hand, then delete the listed file |
 | `other-gmail-servers` | Another Gmail MCP server with send tools is registered: **nothing gates sending while it is there** | the removal command the check prints |
-| `mcp-command` | A registered server's command path no longer exists | the `fix` the check prints: `mcp install` with the entry's own `--name`, `--inbox` and `--read-only`, and `--force` |
+| `mcp-command` | A registered server's command path no longer exists | the `fix` the check prints: `mcp install` with the entry's own `--name`, `--inbox` and `--read-only`, and `--force` — a change approval, like any registration |
 
 A failing check is a finding, not a crash: the command still exits `0` and the detail is in the checks.
 Read `healthy` and the `fail` count, not the exit code.

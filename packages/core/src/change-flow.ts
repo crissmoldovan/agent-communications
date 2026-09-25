@@ -98,6 +98,11 @@ export async function gatedChangeAtTerminal<T>(
     output: { json?: boolean | undefined; color: boolean };
     /** The command to run again with `--approval <id>`, for the message an agent gets. */
     command: string;
+    /**
+     * The option that carries the approval on this command, when it is not `--approval`: `setup` registers a server
+     * with `--mcp-approval`, because its `--approval` is already the OAuth client's, a different change.
+     */
+    approvalFlag?: string | undefined;
     streams?: Streams | undefined;
   },
 ): Promise<T> {
@@ -115,10 +120,7 @@ export async function gatedChangeAtTerminal<T>(
      */
     if (options.output.json !== true) streams.stdout.write(`${prepared.preview}\n\n`);
     throw new CommsError('APPROVAL_PENDING', `this change needs approval first: ${prepared.summary}`, {
-      hint:
-        prepared.policy === 'confirm'
-          ? `Show the person the preview. They run \`agentcomms approve ${prepared.approvalId}\`; then run \`${options.command} --approval ${prepared.approvalId}\`.`
-          : `Show the person the preview. Once they say yes, run \`${options.command} --approval ${prepared.approvalId}\`.`,
+      hint: approvalHint(prepared, `${options.command} ${options.approvalFlag ?? '--approval'} ${prepared.approvalId}`),
       details: {
         approvalId: prepared.approvalId,
         policy: prepared.policy,
@@ -142,6 +144,19 @@ export async function gatedChangeAtTerminal<T>(
   const second = await gatedChange(core, change, { surface: 'cli', approvalId: prepared.approvalId });
   if (second.status !== 'applied') throw new CommsError('UNEXPECTED', 'the approved change asked for approval again');
   return second.result;
+}
+
+/**
+ * What an agent is told to do with a change that is waiting for a person: show the preview, get the approval the
+ * policy asks for, and run `rerun` — the same command, carrying the approval id.
+ *
+ * Shared with a command that reports a waiting change rather than failing on it — `agent-gmail setup`, which stops at
+ * its registration step and says why in its report — so the two say it in the same words.
+ */
+export function approvalHint(prepared: Pick<PreparedChange, 'approvalId' | 'policy'>, rerun: string): string {
+  return prepared.policy === 'confirm'
+    ? `Show the person the preview. They run \`agentcomms approve ${prepared.approvalId}\`; then run \`${rerun}\`.`
+    : `Show the person the preview. Once they say yes, run \`${rerun}\`.`;
 }
 
 /**

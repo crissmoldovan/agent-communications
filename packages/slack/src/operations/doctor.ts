@@ -1,9 +1,12 @@
 import {
   type Config,
+  describeOtherSlackServer,
+  findOtherSlackServers,
   isProductServer,
   listRegisteredServers,
   lookupName,
   missingEntryFile,
+  otherSlackServerRemoval,
   pinnedVersion,
   type RegisteredServer,
   type SecretStore,
@@ -16,7 +19,6 @@ import type { InstallMode } from '../manifest.ts';
 import { SLACK_MCP } from '../mcp/install.ts';
 import { VERSION } from '../version.ts';
 import { type ProbeFetch, probeIdentity } from './identity.ts';
-import { describeOtherSlackServer, findOtherSlackServers, removalFor } from './other-servers.ts';
 import { openWorkspace } from './session.ts';
 import { listWorkspaces, requireWorkspace } from './workspaces.ts';
 
@@ -635,7 +637,7 @@ function registrationChecks(input: DoctorInput): Check[] {
         ? `also registered: ${others.map(describeOtherSlackServer).join(', ')}; an agent can post through those without any approval here`
         : // What a config-file scan cannot see, said rather than implied away.
           'none in the MCP clients’ config files (servers added by plugins, claude.ai connectors or bridges are not visible from here)',
-    fix: others.length > 0 ? others.map(removalFor).join(' && ') : null,
+    fix: others.length > 0 ? others.map(otherSlackServerRemoval).join(' && ') : null,
     workspace: null,
   });
 

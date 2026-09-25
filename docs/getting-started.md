@@ -166,7 +166,11 @@ npx -y @agentcomms/gmail mcp install --client claude-code
 npx skills add crissmoldovan/agent-communications --skill '*'
 ```
 
-Restart the client afterwards. The skills work with the MCP server and also without it, falling back to the CLI.
+Registering the server hands your agent a new set of tools, so it is a change you approve: the command shows what
+it will register — which server, which client, under which name, pinned to what — and asks you to type `yes`. Run by
+an agent, it exits `10` with that preview and an approval id instead, and the agent runs the same command again with
+`--approval <id>` once you have agreed. Restart the client afterwards. The skills work with the MCP server and also
+without it, falling back to the CLI.
 
 Or register the core server instead, and let the agent install the rest from the conversation:
 
@@ -208,7 +212,7 @@ npm i -g @agentcomms/slack
 agent-slack manifest --port 51234        # the app to create, with every field explained
 agent-slack workspace add acme/slack --client-id <id> --port 51234
 agent-slack doctor
-agent-slack mcp install --client claude-code
+agent-slack mcp install --client claude-code   # shows what it registers; you type yes
 agent-slack channels --workspace acme/slack
 ```
 

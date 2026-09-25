@@ -2,11 +2,16 @@ import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { CommsError, listRegisteredServers, managedRuntimeEntry, secretsStoreOf } from '@agentcomms/core';
+import {
+  CommsError,
+  findUngatedGmailServers,
+  listRegisteredServers,
+  managedRuntimeEntry,
+  secretsStoreOf,
+} from '@agentcomms/core';
 import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { GmailContext } from '../src/context.ts';
-import { findUngatedGmailServers } from '../src/operations/client-configs.ts';
 import { doctor } from '../src/operations/doctor.ts';
 import { aliasFromCredentialsFile, importLegacy, parseLegacyCredentials } from '../src/operations/import-legacy.ts';
 import { inboxList, inboxRemove, orphanedSecretsPath } from '../src/operations/inboxes.ts';

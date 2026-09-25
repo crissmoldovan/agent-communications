@@ -1,5 +1,6 @@
 import {
   agentMarker,
+  approvalHint,
   approvalKind,
   approveChangeAtTerminal,
   CommsError,
@@ -7,6 +8,7 @@ import {
   colorEnabled,
   EXIT_CODES,
   type GatedChange,
+  gatedChange,
   gatedChangeAtTerminal,
   installExitStatus,
   type OutputOptions,
@@ -14,6 +16,8 @@ import {
   runCommand,
   type StoreKind,
   type Streams,
+  serverInstallChange,
+  serverPruneChange,
   writeResult,
 } from '@agentcomms/core';
 import { Command, CommanderError, Option } from 'commander';
@@ -263,17 +267,17 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
    *
    * From the arguments themselves rather than rebuilt per command, so every flag the person or agent gave is in it
    * — `--rename`, `--dir`, `--revoke` — and running it again prepares nothing new: it claims the approval for the
-   * same change.
+   * same change. `setup` leaves out its `--mcp-approval` too, the second approval it can carry.
    */
-  const again = (): string => {
+  const again = (approvalFlags: readonly string[] = ['--approval']): string => {
     const kept: string[] = [];
     for (let index = 0; index < argv.length; index++) {
       const arg = argv[index] ?? '';
-      if (arg === '--approval') {
+      if (approvalFlags.includes(arg)) {
         index++;
         continue;
       }
-      if (arg.startsWith('--approval=')) continue;
+      if (approvalFlags.some((flag) => arg.startsWith(`${flag}=`))) continue;
       kept.push(arg);
     }
     // Quoted for a POSIX shell wherever it holds anything a shell would read differently, `~` included: a path the
@@ -1265,13 +1269,18 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         'json',
       ]),
     )
-    .option('--name <name>', 'the name the client will show', 'gmail')
+    .option(
+      '--name <name>',
+      'the name the client will show: 1 to 64 letters, digits, dots, underscores or hyphens',
+      'gmail',
+    )
     .option('--inbox <alias>', 'serve only this mailbox')
     .option('--read-only', 'leave out every tool that changes the mailbox', false)
     .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
     .option('--no-verify', 'do not start the server to check the entry works')
     .option('--force', "replace this server's own earlier entry — this is how you upgrade", false)
     .option('--print', 'only print what would be written', false)
+    .option('--approval <id>', 'register the server this approval was given for')
     .action(
       act(async (context, globalOptions, options: Options) => {
         if (!options.client) {
@@ -1289,22 +1298,41 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
          * the flag is for. Shipped that way in 0.4.0.
          */
         const pinned = options.inbox ?? mcp.opts().inbox;
-        const { mcpInstall } = await import('../mcp/install.ts');
-        const result = await mcpInstall(context, {
-          client: options.client as SupportedClient,
-          name: String(options.name ?? 'gmail'),
-          inbox: pinned ? String(pinned) : undefined,
-          /*
-           * The same, for `--read-only`, which the `--inbox` fix above missed: `mcp install --read-only`
-           * registered a server with every tool that trashes, labels and drafts, and doctor's repair — which keeps
-           * `--read-only` precisely so a narrowed server stays narrow — lost it the same way.
-           */
-          readOnly: Boolean(options.readOnly || mcp.opts().readOnly),
-          launcher: options.launcher as Launcher | undefined,
-          noVerify: options.verify === false,
-          apply: options.print !== true,
-          force: Boolean(options.force),
-        });
+        /*
+         * Registering a server is a change a person approves (design §3.1), and this is the change
+         * `comms_server_install` makes, with this package's own product for its version and its code. It
+         * registered with no approval at all while the tool asked for one: the same operation, refused on one
+         * surface and not the other, and a way for an agent to hand a client a new set of tools unasked. So an
+         * approval an agent got from the tool is claimed here with `--approval`, and one from here by the tool.
+         * `--print` and `--client json` write nothing, and so ask nobody.
+         */
+        const { GMAIL_MCP } = await import('../mcp/install.ts');
+        const result = await changed(
+          context,
+          globalOptions,
+          serverInstallChange(
+            context.core,
+            env,
+            {
+              channel: 'gmail',
+              client: options.client as SupportedClient,
+              name: String(options.name ?? 'gmail'),
+              inbox: pinned ? String(pinned) : undefined,
+              /*
+               * The same, for `--read-only`, which the `--inbox` fix above missed: `mcp install --read-only`
+               * registered a server with every tool that trashes, labels and drafts, and doctor's repair — which
+               * keeps `--read-only` precisely so a narrowed server stays narrow — lost it the same way.
+               */
+              readOnly: Boolean(options.readOnly || mcp.opts().readOnly),
+              launcher: options.launcher as Launcher | undefined,
+              noVerify: options.verify === false,
+              print: options.print === true,
+              force: Boolean(options.force),
+            },
+            GMAIL_MCP,
+          ),
+          options.approval,
+        );
         // Asked to register and did not — the client's CLI is not on PATH — or registered an entry that did not
         // start. The result is still printed, but a zero exit told a script (or an agent) that it worked.
         const status = installExitStatus(result);
@@ -1324,13 +1352,23 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       'also remove runtimes kept only because an entry for them was printed (--client json, --print), once those entries are gone',
       false,
     )
+    .option('--approval <id>', 'remove the runtimes this approval was given for')
     .action(
       act(async (context, globalOptions, options: Options) => {
-        const { mcpPrune } = await import('../mcp/install.ts');
-        const result = await mcpPrune(context, {
-          dryRun: options.dryRun === true,
-          includePrinted: options.includePrinted === true,
-        });
+        // The change `comms_server_prune` makes: a dry run is free; removing is approved as the list it shows, and
+        // removes no more than that list, because a deleted runtime cannot be taken back.
+        const { GMAIL_MCP } = await import('../mcp/install.ts');
+        const result = await changed(
+          context,
+          globalOptions,
+          serverPruneChange(
+            context.core,
+            env,
+            { channel: 'gmail', dryRun: options.dryRun === true, includePrinted: options.includePrinted === true },
+            GMAIL_MCP,
+          ),
+          options.approval,
+        );
         writeResult(result, output(), (data) => renderPrune(data, globalOptions.color), streams);
       }),
     );
@@ -1372,6 +1410,12 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
     .option('--restart', 'walk the Google Cloud steps again even if a client is registered', false)
     .option('--approval <id>', 'register the client this approval was given for')
+    /*
+     * A second approval, and a second flag for it. The OAuth client and the server registration are two changes,
+     * each approved for exactly what it does, and one run can meet both: `--approval` is spent on the first, so the
+     * second could not be carried by the same flag without claiming one approval for the other change.
+     */
+    .option('--mcp-approval <id>', 'register the MCP server this approval was given for')
     .option('--no-tui', 'plain one-line prompts instead of lists and fields')
     .option('--no-browser', 'print the links instead of opening them')
     .action(
@@ -1380,6 +1424,33 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         const out = streams.stderr;
         const bold = (text: string) => paint(globalOptions.color, 'bold', text);
         const dim = (text: string) => paint(globalOptions.color, 'dim', text);
+
+        /**
+         * The agent connection as a change: the one `mcp install` and `comms_server_install` make, for this
+         * package's own server, with what `setup` has always registered. An approval for it from either of those
+         * is claimed here with `--mcp-approval`, and one from here by them.
+         */
+        const registration = async (client: string) => {
+          const { GMAIL_MCP } = await import('../mcp/install.ts');
+          return serverInstallChange(
+            context.core,
+            env,
+            {
+              channel: 'gmail',
+              client: client as SupportedClient,
+              // `force` removes an existing entry before adding its replacement. Doing that silently, from a
+              // headless run, would take somebody's working server away on the strength of a flag they passed for
+              // a different reason — so it needs asking for, exactly as `mcp install` makes you ask.
+              force: options.replaceServer === true,
+              ...(options.launcher ? { launcher: String(options.launcher) as Launcher } : {}),
+            },
+            GMAIL_MCP,
+          );
+        };
+        const mcpApproval = typeof options.mcpApproval === 'string' ? options.mcpApproval : undefined;
+        // This command again, without the approvals it carried: the OAuth client's is spent by the time the
+        // registration is reached, and the registration's is the one to put back.
+        const againForMcp = () => again(['--approval', '--mcp-approval']);
 
         const { interactionFor, askText, askChoice, askYesNo } = await import('./tui.ts');
         const mode = interactionFor({
@@ -1407,7 +1478,16 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           // What the install had to say — a pin it kept from the entry it replaced, another Gmail server with send
           // tools. The interactive branch prints them with the rest of the install; this one dropped them.
           const warnings: string[] = [];
-          let blocked: { step: string; needs: string; hint?: string } | null = null;
+          let blocked: {
+            step: string;
+            needs: string;
+            hint?: string;
+            /** A change waiting for a person: what they read, and the approval to run this again with. */
+            approvalId?: string;
+            policy?: string;
+            preview?: string;
+            expiresAt?: string;
+          } | null = null;
           let handoff: { authUrl: string; finish: string } | null = null;
 
           if (state.next === 'client') {
@@ -1474,26 +1554,45 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           if (!blocked && (state.next === 'mcp' || options.mcpClient)) {
             const which = options.mcpClient ? String(options.mcpClient) : '';
             if (which) {
-              const { mcpInstall } = await import('../mcp/install.ts');
-              // `force` removes an existing entry before adding its replacement. Doing that silently, from a
-              // headless run, would take somebody's working server away on the strength of a flag they passed for
-              // a different reason — so it needs asking for, exactly as `mcp install` makes you ask.
-              const result = await mcpInstall(context, {
-                client: which as SupportedClient,
-                apply: true,
-                force: options.replaceServer === true,
-                ...(options.launcher ? { launcher: String(options.launcher) as 'managed' | 'npx' | 'local' } : {}),
+              /*
+               * Registered through the change flow, as `mcp install` is — this step registered with nobody's
+               * approval while `mcp install` asked, so an agent could hand a client a new set of tools by calling
+               * `setup` instead. Nobody here can answer, so a registration that needs approval is not made: the
+               * step stops, the report carries the preview and the approval id, and running this again with
+               * `--mcp-approval <id>` once the person has agreed claims it. Reported rather than thrown, like every
+               * other step that waits for a person, so what this run did is still in `did`.
+               */
+              const outcome = await gatedChange(context.core, await registration(which), {
+                surface: 'cli',
+                approvalId: mcpApproval,
               });
-              warnings.push(...result.warnings);
-              // Only what happened. Reporting "registered" for an install that did not apply, or that failed its
-              // own start-up check, is the kind of claim the `did` list exists to make impossible.
-              if (result.applied && result.verified) did.push(`registered the server with ${which}`);
-              else
+              if (outcome.status === 'approval-required') {
+                const { prepared } = outcome;
                 blocked = {
                   step: 'mcp',
-                  needs: result.applied ? 'a server that starts' : 'a client this can write to',
-                  ...(result.verifyDetail ? { hint: result.verifyDetail } : {}),
+                  needs: `a person's approval to register the server with ${which}`,
+                  hint: approvalHint(prepared, `${againForMcp()} --mcp-approval ${prepared.approvalId}`),
+                  approvalId: prepared.approvalId,
+                  policy: prepared.policy,
+                  preview: prepared.preview,
+                  expiresAt: prepared.expiresAt,
                 };
+                // Exit 10, which every command here means as "waiting for an approval": a script that reads only
+                // the status must not take a registration nobody has approved for one that happened.
+                softExit = EXIT_CODES.APPROVAL;
+              } else {
+                const result = outcome.result;
+                warnings.push(...result.warnings);
+                // Only what happened. Reporting "registered" for an install that did not apply, or that failed its
+                // own start-up check, is the kind of claim the `did` list exists to make impossible.
+                if (result.applied && result.verified) did.push(`registered the server with ${which}`);
+                else
+                  blocked = {
+                    step: 'mcp',
+                    needs: result.applied ? 'a server that starts' : 'a client this can write to',
+                    ...(result.verifyDetail ? { hint: result.verifyDetail } : {}),
+                  };
+              }
               state = await setupState(context);
             } else {
               blocked = { step: 'mcp', needs: '--mcp-client <client>' };
@@ -1731,13 +1830,34 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
                 ],
                 initial: 'claude-code',
               }));
-            const { mcpInstall } = await import('../mcp/install.ts');
-            const result = await mcpInstall(context, {
-              client: which as SupportedClient,
-              apply: true,
-              force: options.replaceServer === true,
-              ...(options.launcher ? { launcher: String(options.launcher) as 'managed' | 'npx' | 'local' } : {}),
-            });
+            /*
+             * Two ways to get here, and they are asked differently.
+             *
+             * Answered: the person at this terminal has just said yes to "Connect this to an agent?" and picked the
+             * client, in this command, a moment ago. That answer is the approval, from the one who gives it, so the
+             * registration is made as it always was. Showing a preview and asking again for what they have just
+             * asked for teaches people to agree without reading, which is what an approval exists to prevent.
+             *
+             * Named: `--mcp-client` skips both questions, so nobody has been asked anything — and an interactive run
+             * proves a terminal, not a person: an agent can hold one. So a named client goes through the gate as
+             * `mcp install` does. A person here reads the preview and says yes; anything with an agent's marker
+             * gets the preview and the approval id, to run this again with `--mcp-approval` once the person agrees.
+             */
+            const result = named
+              ? await gatedChangeAtTerminal(context.core, await registration(which), {
+                  approvalId: mcpApproval,
+                  env,
+                  output: { json: globalOptions.json || globalOptions.noInput, color: globalOptions.color },
+                  command: againForMcp(),
+                  approvalFlag: '--mcp-approval',
+                  streams,
+                })
+              : await (await import('../mcp/install.ts')).mcpInstall(context, {
+                  client: which as SupportedClient,
+                  apply: true,
+                  force: options.replaceServer === true,
+                  ...(options.launcher ? { launcher: String(options.launcher) as Launcher } : {}),
+                });
             out.write(`\n${renderInstall(result, globalOptions.color)}\n`);
           }
         }

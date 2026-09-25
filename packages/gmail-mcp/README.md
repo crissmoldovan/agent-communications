@@ -29,6 +29,9 @@ To register it separately, or to move an existing registration to a new version:
 npx @agentcomms/gmail mcp install --client claude-code --launcher npx
 ```
 
+It shows what it will register and asks you to type `yes`; run by an agent, it exits `10` with the preview and an
+approval id, and registers when run again with `--approval <id>` once you have agreed.
+
 ### Connecting a mailbox from the agent instead
 
 An agent asked to "set up Gmail" need not send you to a terminal: `gmail_setup` says what is missing and changes

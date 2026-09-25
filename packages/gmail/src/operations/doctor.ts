@@ -5,6 +5,7 @@ import {
   type Config,
   expandHome,
   findById,
+  findUngatedGmailServers,
   formerNameRefusal,
   homeDirectory,
   isGroupOrWorldAccessible,
@@ -22,7 +23,6 @@ import { TokenSource } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';
 import { GMAIL_MCP } from '../mcp/install.ts';
 import { VERSION } from '../version.ts';
-import { findUngatedGmailServers } from './client-configs.ts';
 import { orphanedSecretsPath } from './inboxes.ts';
 
 /*

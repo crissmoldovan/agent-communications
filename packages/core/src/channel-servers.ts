@@ -1,4 +1,5 @@
 import type { McpProduct } from './mcp-install.ts';
+import { gmailServerWarnings, slackServerWarnings } from './other-servers.ts';
 
 /**
  * The MCP servers this suite ships, and what the shared installer needs to know to register each one.
@@ -8,14 +9,19 @@ import type { McpProduct } from './mcp-install.ts';
  * beside its own installer, and a second installer holding a copy would have been a second place for a package name,
  * a flag or an npx argument to drift — the Slack entry once started `agent-slack --workspace acme` with no command at
  * all, because a shared default was wrong for one product. So the channel packages spread these, and add only what
- * is theirs: the version they are, where their own code lives, and what they warn about.
+ * is theirs: the version they are, and where their own code lives.
+ *
+ * What each warns about is here too: the other servers for the same service that send with no approval step. It was
+ * the one fact the channels kept to themselves, so registering Gmail from chat warned about nothing while
+ * `agent-gmail mcp install` warned about exactly those servers — the same registration, telling a person less on one
+ * surface. The detectors are data about the services (`other-servers.ts`), not code from the channel packages.
  */
 export type Channel = 'core' | 'gmail' | 'slack';
 
 export const CHANNELS: readonly Channel[] = Object.freeze(['core', 'gmail', 'slack']);
 
-/** Everything about a server except the version being installed, where its code lives and its warnings. */
-export type ServerFacts = Omit<McpProduct, 'version' | 'moduleUrl' | 'warnAbout'>;
+/** Everything about a server except the version being installed and where its code lives. */
+export type ServerFacts = Omit<McpProduct, 'version' | 'moduleUrl'>;
 
 const flagValue = (args: readonly string[], flag: string): string | undefined =>
   args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined;
@@ -54,6 +60,8 @@ export const CHANNEL_SERVERS: Readonly<Record<Channel, ServerFacts>> = Object.fr
       const inbox = flagValue(args, '--inbox');
       return { ...(inbox ? { inbox } : {}), ...(args.includes('--read-only') ? { readOnly: true } : {}) };
     },
+    // Third-party Gmail servers whose send tools no approval gates.
+    warnAbout: gmailServerWarnings,
   },
   slack: {
     packageName: '@agentcomms/slack',
@@ -75,6 +83,13 @@ export const CHANNEL_SERVERS: Readonly<Record<Channel, ServerFacts>> = Object.fr
       const workspace = flagValue(args, '--workspace');
       return workspace ? { workspace } : {};
     },
+    /*
+     * Our own `read` token cannot post, whatever else is installed — but that was never the point. Another Slack
+     * server posts with *its* token, and an agent uses whichever tool it finds; every approval step here stands
+     * beside that route rather than in front of it. Told apart from this server by these same facts, read when a
+     * registration asks rather than while this table is being built.
+     */
+    warnAbout: (servers) => slackServerWarnings(servers, CHANNEL_SERVERS.slack),
   },
 });
 

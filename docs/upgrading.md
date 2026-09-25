@@ -110,9 +110,21 @@ npx -y @agentcomms/slack@$V mcp install --client claude-code --force
 npx -y @agentcomms/core@$V mcp install --client claude-code --force   # the core server, if you use it
 ```
 
-The core server's registration is a change a person approves, as the rename is: at a terminal you type `yes`, and
-without one it exits `10` with an approval id to run it again with. The core server exists from the release that adds
-`agentcomms mcp`; `npx -y @agentcomms/core@$V --help` lists it.
+Each registration is a change a person approves, as the rename is: at a terminal it shows what it will register —
+which server, which client, under which name, pinned to what, replacing what — and you type `yes` (or, under the
+`confirm` change policy, the code it shows). Anything without a terminal — an agent, a script — gets that preview and
+an approval id instead, exits `10`, and runs the same command again with `--approval <id>` once you have agreed:
+
+```bash
+npx -y @agentcomms/gmail@$V mcp install --client claude-code --force
+# without a terminal: exit 10, the preview and an approval id. Once you have said yes:
+npx -y @agentcomms/gmail@$V mcp install --client claude-code --force --approval <id>
+```
+
+The approval is for exactly the registration shown: run again with another flag, it is refused and nothing is
+written. Releases before this one registered the Gmail and Slack servers without asking and have no `--approval`
+there; `--help` on that command says which yours is. The core server exists from the release
+that adds `agentcomms mcp`; `npx -y @agentcomms/core@$V --help` lists it.
 
 For another client, change `--client` (`codex`, `cursor`, `claude-desktop`, `gemini`, `vscode`). `--force` replaces
 the entry that is already there, which is how an upgrade reaches a registered client.
@@ -164,8 +176,11 @@ account before running `prune`, or run it from a shell with that variable set. I
 ```bash
 npx -y @agentcomms/gmail@$V mcp prune
 npx -y @agentcomms/slack@$V mcp prune
-npx -y @agentcomms/core@$V mcp prune     # asks you to approve what it would remove
+npx -y @agentcomms/core@$V mcp prune
 ```
+
+Each asks you to approve the runtimes it lists before it deletes them, the way step 4 asks, and removes no more than
+that list; without a terminal it exits `10` with the list and an approval id, for `mcp prune --approval <id>`.
 
 ## Accounts this computer does not have yet
 
@@ -229,9 +244,11 @@ Rules:
 - Run the dry run first and show me its output, including anything "Not applicable here". Then run it without
   --dry-run: it exits 10 with a preview and an approval id. Show me the preview and wait for my yes, then run the
   same command again with --approval <id>. Tell me the backup path it prints.
-- Register the Gmail and Slack servers with --client claude-code --force, using the same V for both. Each result
-  must say registered and verified; if not, stop and show it. Register the core server the same way: it exits 10
-  with a preview first; show it to me, and after my yes run it again with --approval <id>.
+- Register the Gmail, Slack and core servers with --client claude-code --force, using the same V for all three. Each
+  one exits 10 with a preview and an approval id first, having registered nothing: show me that preview exactly as
+  it is and wait for my yes, then run the same command again with --approval <id>. Never pass an --approval I have
+  not agreed to, and if a rerun is refused, show me the new preview rather than retrying. Each result must say
+  registered and verified; if not, stop and show it.
 - Upgrade global @agentcomms commands only if they are already installed globally.
 - Run the checks in step 6. For each name in <ALL NEW NAMES> that this computer does not have, give me the one
   command that connects it, without running it.

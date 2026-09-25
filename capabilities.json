@@ -307,7 +307,7 @@
       "cli": "mcp install",
       "mcp": "comms_server_install",
       "status": "both",
-      "reason": "From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"gmail\"` is this command (design §5)."
+      "reason": "From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"gmail\"` is this command — the same change, `serverInstallChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     {
       "id": "gmail.mcp.prune",
@@ -315,7 +315,7 @@
       "cli": "mcp prune",
       "mcp": "comms_server_prune",
       "status": "both",
-      "reason": "From chat this is the core server's comms_server_prune, which prunes any channel's runtimes: `channel: \"gmail\"` is this command (design §5)."
+      "reason": "From chat this is the core server's comms_server_prune, which prunes any channel's runtimes: `channel: \"gmail\"` is this command — the same change, `serverPruneChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     { "id": "gmail.setup", "package": "gmail", "cli": "setup", "mcp": "gmail_setup", "status": "both" },
     { "id": "gmail.doctor", "package": "gmail", "cli": "doctor", "mcp": "gmail_doctor", "status": "both" },
@@ -471,7 +471,7 @@
       "cli": "mcp install",
       "mcp": "comms_server_install",
       "status": "both",
-      "reason": "From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"slack\"` is this command (design §5)."
+      "reason": "From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"slack\"` is this command — the same change, `serverInstallChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     {
       "id": "slack.mcp.prune",
@@ -479,7 +479,7 @@
       "cli": "mcp prune",
       "mcp": "comms_server_prune",
       "status": "both",
-      "reason": "From chat this is the core server's comms_server_prune, which prunes any channel's runtimes: `channel: \"slack\"` is this command (design §5)."
+      "reason": "From chat this is the core server's comms_server_prune, which prunes any channel's runtimes: `channel: \"slack\"` is this command — the same change, `serverPruneChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     {
       "id": "slack.app.update",

@@ -7,11 +7,13 @@ import {
   duplicateInbox,
   expandHome,
   findById,
+  findUngatedGmailServers,
   type GatedChange,
   homeDirectory,
   type InboxConfig,
   isValidAlias,
   keepAndReport,
+  type LegacyServerFinding,
   listRegisteredServers,
   nameAvailable,
   newInboxId,
@@ -27,7 +29,6 @@ import { capabilitiesOf, parseGrantedScopes, tierOf } from '../auth/scopes.ts';
 import { clientSecretRef, refreshTokenRef } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';
 import { getProfileWithToken } from '../gmail-api/profile.ts';
-import { findUngatedGmailServers, type LegacyServerFinding } from './client-configs.ts';
 import { requireNewInboxName } from './inbox-names.ts';
 import { readSmallFile } from './small-file.ts';
 

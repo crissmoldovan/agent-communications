@@ -712,13 +712,14 @@ agent-gmail mcp install [options]
 | Option | What it does | Default |
 |---|---|---|
 | `--client <client>` | which client to register with (choices: "claude-code", "claude-desktop", "codex", "cursor", "gemini", "vscode", "json") | — |
-| `--name <name>` | the name the client will show | `"gmail"` |
+| `--name <name>` | the name the client will show: 1 to 64 letters, digits, dots, underscores or hyphens | `"gmail"` |
 | `--inbox <alias>` | serve only this mailbox | — |
 | `--read-only` | leave out every tool that changes the mailbox | `false` |
 | `--launcher <launcher>` | how the server is started (choices: "managed", "npx", "local") | — |
 | `--no-verify` | do not start the server to check the entry works | — |
 | `--force` | replace this server's own earlier entry — this is how you upgrade | `false` |
 | `--print` | only print what would be written | `false` |
+| `--approval <id>` | register the server this approval was given for | — |
 
 ### `agent-gmail mcp prune`
 
@@ -732,6 +733,7 @@ agent-gmail mcp prune [options]
 |---|---|---|
 | `--dry-run` | only say what would be removed | `false` |
 | `--include-printed` | also remove runtimes kept only because an entry for them was printed (--client json, --print), once those entries are gone | `false` |
+| `--approval <id>` | remove the runtimes this approval was given for | — |
 
 ### `agent-gmail setup`
 
@@ -753,6 +755,7 @@ agent-gmail setup [options]
 | `--launcher <launcher>` | how the server is started (choices: "managed", "npx", "local") | — |
 | `--restart` | walk the Google Cloud steps again even if a client is registered | `false` |
 | `--approval <id>` | register the client this approval was given for | — |
+| `--mcp-approval <id>` | register the MCP server this approval was given for | — |
 | `--no-tui` | plain one-line prompts instead of lists and fields | — |
 | `--no-browser` | print the links instead of opening them | — |
 

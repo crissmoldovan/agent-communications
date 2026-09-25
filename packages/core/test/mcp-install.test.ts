@@ -137,6 +137,40 @@ test('--print builds the managed entry without installing anything', async () =>
   assert.match(result.verifyDetail ?? '', /--print installs nothing/);
 });
 
+test('the installer refuses a server name that is not plain, whoever calls it', async () => {
+  /*
+   * The last of three checks, for a caller that went round the other two — a library user, a surface added later.
+   * A name is quoted in the preview a person approves, so one that carries quotes and commas can make that preview
+   * describe a pin the entry does not have. Refused before anything is read, printed or written.
+   */
+  const data = tempDir();
+  const home = tempDir();
+  const product: McpProduct = {
+    packageName: '@agentcomms/no-such-package-for-tests',
+    binary: 'agent-test',
+    defaultServerName: 'test',
+    npxPackage: '@agentcomms/no-such-package-for-tests',
+    version: '0.0.1',
+    moduleUrl: import.meta.url,
+    serverArgs: () => [],
+    narrowingOf: () => ({}),
+  };
+  for (const name of ['test", pinned to the mailbox work, read-only, "', 'x'.repeat(65), 'two words']) {
+    await assert.rejects(
+      mcpInstall(context(data, home), product, { client: 'json', apply: false, noVerify: true, name }),
+      (error: Error & { code?: string }) => error.code === 'USAGE' && /a server name is 1 to 64/.test(error.message),
+    );
+  }
+  assert.deepEqual(readdirSync(data), [], 'nothing was recorded, printed or installed');
+  const plain = await mcpInstall(context(data, home), product, {
+    client: 'json',
+    apply: false,
+    noVerify: true,
+    name: 'x'.repeat(64),
+  });
+  assert.equal(plain.name, 'x'.repeat(64));
+});
+
 test('prune removes only unused runtimes of this product, and nothing else in the directory', async () => {
   const data = tempDir();
   const home = tempDir();

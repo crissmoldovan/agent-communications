@@ -630,8 +630,11 @@ export function renderSetupPlan(
     did?: readonly string[] | undefined;
     /** What a step it ran had to warn about: a pin the MCP install kept, another Gmail server. */
     warnings?: readonly string[] | undefined;
-    /** Why it stopped, if it did. */
-    blocked?: { step: string; needs: string; hint?: string | undefined } | null | undefined;
+    /** Why it stopped, if it did — with the preview, when what it waits for is a person approving a change. */
+    blocked?:
+      | { step: string; needs: string; hint?: string | undefined; preview?: string | undefined }
+      | null
+      | undefined;
     /** The link and the command, when the only thing left is a person approving it. */
     handoff?: { authUrl: string; finish: string } | null | undefined;
     /** A name the config accepts, for the examples: `acme/gmail` once names are organisation/platform. */
@@ -656,6 +659,19 @@ export function renderSetupPlan(
     lines.push('');
     lines.push('Then, once the browser flow has returned a grant:');
     lines.push(`  ${state.handoff.finish}`);
+    return lines.join('\n');
+  }
+
+  /*
+   * A registration waiting for a person, before "Already set up": a machine registered with one client and asked to
+   * register with another is `done` by the state's count, and the one thing to say is what the person must read.
+   */
+  if (state.blocked?.preview) {
+    lines.push(paint(color, 'bold', `Stopped at: ${state.blocked.step}`));
+    lines.push(`Needs ${state.blocked.needs}.`);
+    lines.push('');
+    lines.push(state.blocked.preview);
+    if (state.blocked.hint) lines.push('', state.blocked.hint);
     return lines.join('\n');
   }
 

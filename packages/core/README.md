@@ -28,6 +28,9 @@ A command that loosens something or cannot be undone — `policy chat`, `mcp ins
 `names migrate` — shows the change first (`policy confirm` tightens, so it applies at once). At a terminal you
 approve it there; anything else gets the preview and an
 approval id and exits `10`, and runs the same command again with `--approval <id>` once the person has agreed.
+`agent-gmail` and `agent-slack` register and prune their own servers through the same change, so an approval
+`comms_server_install` or `comms_server_prune` prepared is claimed by their `mcp install` or `mcp prune` for the same
+request, and the other way round.
 
 ## The core MCP server
 

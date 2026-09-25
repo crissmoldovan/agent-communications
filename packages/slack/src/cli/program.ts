@@ -15,6 +15,8 @@ import {
   renderPrune,
   runCommand,
   type Streams,
+  serverInstallChange,
+  serverPruneChange,
   writeResult,
 } from '@agentcomms/core';
 import { Command, CommanderError, Option } from 'commander';
@@ -24,7 +26,7 @@ import { compose, type Mention } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
-import { mcpInstall, mcpPrune } from '../mcp/install.ts';
+import { SLACK_MCP, type SupportedClient } from '../mcp/install.ts';
 import { createApp, updateApp } from '../operations/app.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
 import {
@@ -1021,12 +1023,17 @@ configuration problem.`,
         'json',
       ]),
     )
-    .option('--name <name>', 'the name the client will show', 'slack')
+    .option(
+      '--name <name>',
+      'the name the client will show: 1 to 64 letters, digits, dots, underscores or hyphens',
+      'slack',
+    )
     .option('--workspace <name>', 'pin the server to one workspace')
     .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
     .option('--no-verify', 'do not start the server to check the entry works')
     .option('--force', "replace this server's own earlier entry — this is how you upgrade", false)
     .option('--print', 'only print what would be written', false)
+    .option('--approval <approvalId>', 'register the server this approval was given for')
     .action(
       act(async (context, options, flags: Options) => {
         /*
@@ -1048,15 +1055,51 @@ configuration problem.`,
          * the subcommand's own option is always undefined and the pin is silently dropped.
          */
         const pinned = (flags.workspace ?? mcp.opts().workspace) as string | undefined;
-        const result = await mcpInstall(context, {
-          client: flags.client as Parameters<typeof mcpInstall>[1]['client'],
-          name: flags.name as string | undefined,
-          workspace: pinned,
-          launcher: flags.launcher as 'managed' | 'npx' | 'local' | undefined,
-          noVerify: flags.verify === false,
-          apply: flags.print !== true,
-          force: flags.force === true,
-        });
+        const launcher = flags.launcher as 'managed' | 'npx' | 'local' | undefined;
+        const name = flags.name as string | undefined;
+        /*
+         * Registering a server is a change a person approves (design §3.1), and this is the change
+         * `comms_server_install` makes, with this package's own product for its version and its code. It registered with no approval at all while the tool asked for one — the same
+         * operation, refused on one surface and not the other. An approval from the tool is claimed here with
+         * `--approval`, and one from here by the tool. `--print` and `--client json` write nothing, and ask nobody.
+         */
+        /*
+         * The command to run again, word for word, with nothing quoted: every word is a fixed one, a choice Commander
+         * checked, a server name the change refuses unless it is plain (`checkServerName`), or a workspace it refuses
+         * unless it is connected — and so named by the name grammar. None of it is used unless all of that held.
+         */
+        const again = [
+          'agent-slack',
+          'mcp',
+          'install',
+          '--client',
+          String(flags.client),
+          ...(name !== undefined && name !== 'slack' ? ['--name', name] : []),
+          ...(pinned !== undefined ? ['--workspace', pinned] : []),
+          ...(launcher !== undefined ? ['--launcher', launcher] : []),
+          ...(flags.verify === false ? ['--no-verify'] : []),
+          ...(flags.force === true ? ['--force'] : []),
+        ].join(' ');
+        const result = await changeAt(
+          context,
+          serverInstallChange(
+            context.core,
+            env,
+            {
+              channel: 'slack',
+              client: flags.client as SupportedClient,
+              name,
+              workspace: pinned,
+              launcher,
+              noVerify: flags.verify === false,
+              print: flags.print === true,
+              force: flags.force === true,
+            },
+            SLACK_MCP,
+          ),
+          flags,
+          again,
+        );
         // Asked to register and did not — the client's CLI is not on PATH — or registered an entry that did not
         // start. The result is still printed, but a zero exit told a script (or an agent) that it worked.
         const status = installExitStatus(result);
@@ -1076,12 +1119,22 @@ configuration problem.`,
       'also remove runtimes kept only because an entry for them was printed (--client json, --print), once those entries are gone',
       false,
     )
+    .option('--approval <approvalId>', 'remove the runtimes this approval was given for')
     .action(
       act(async (context, options, flags: Options) => {
-        const result = await mcpPrune(context, {
-          dryRun: flags.dryRun === true,
-          includePrinted: flags.includePrinted === true,
-        });
+        // The change `comms_server_prune` makes: a dry run is free; removing is approved as the list it shows, and
+        // removes no more than that list, because a deleted runtime cannot be taken back.
+        const result = await changeAt(
+          context,
+          serverPruneChange(
+            context.core,
+            env,
+            { channel: 'slack', dryRun: flags.dryRun === true, includePrinted: flags.includePrinted === true },
+            SLACK_MCP,
+          ),
+          flags,
+          `agent-slack mcp prune${flags.includePrinted === true ? ' --include-printed' : ''}`,
+        );
         writeResult(result, output(), () => renderPrune(result, options.color), streams);
       }),
     );

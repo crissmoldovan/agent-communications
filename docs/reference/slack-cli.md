@@ -447,12 +447,13 @@ agent-slack mcp install [options]
 | Option | What it does | Default |
 |---|---|---|
 | `--client <client>` | which client to register with (choices: "claude-code", "claude-desktop", "codex", "cursor", "gemini", "vscode", "json") | — |
-| `--name <name>` | the name the client will show | `"slack"` |
+| `--name <name>` | the name the client will show: 1 to 64 letters, digits, dots, underscores or hyphens | `"slack"` |
 | `--workspace <name>` | pin the server to one workspace | — |
 | `--launcher <launcher>` | how the server is started (choices: "managed", "npx", "local") | — |
 | `--no-verify` | do not start the server to check the entry works | — |
 | `--force` | replace this server's own earlier entry — this is how you upgrade | `false` |
 | `--print` | only print what would be written | `false` |
+| `--approval <approvalId>` | register the server this approval was given for | — |
 
 ### `agent-slack mcp prune`
 
@@ -466,3 +467,4 @@ agent-slack mcp prune [options]
 |---|---|---|
 | `--dry-run` | only say what would be removed | `false` |
 | `--include-printed` | also remove runtimes kept only because an entry for them was printed (--client json, --print), once those entries are gone | `false` |
+| `--approval <approvalId>` | remove the runtimes this approval was given for | — |

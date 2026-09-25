@@ -179,6 +179,12 @@ A plain `mcp install` is refused for a name that is already registered, and its 
 the entry as it is. When an entry is there and broken, its check's `fix` is that command too: `mcp install` with
 the entry's own `--name`, `--inbox` and `--read-only`, and `--force`. Run that `fix` as it is.
 
+Registering is a change you approve. At a terminal it shows what it will register and asks you to type `yes`. An
+agent running it gets exit `10`, `APPROVAL_PENDING`, the preview and an approval id; it shows you the preview and,
+after your yes, runs the same command again with `--approval <id>`. A rerun with different flags is refused and
+writes nothing: the approval is for the registration it previewed. `--print` and `--client json` write nothing and
+ask nobody.
+
 ### `mcp install` fails on Windows
 
 `agent-gmail mcp install --client claude-code` (and `--client codex`) appears not to work on Windows at all, for
@@ -219,7 +225,8 @@ npx -y @agentcomms/gmail@latest mcp install --client claude-code --force    # pl
 npx -y @agentcomms/slack@latest mcp install --client claude-code --force    # the Slack server, the same way
 ```
 
-`--force` removes the existing entry of that name first; Claude Code refuses to add a server whose name is already
+Each asks you to approve the registration it shows — `yes` at a terminal; from an agent, exit `10` and the same
+command again with `--approval <id>` after your yes. `--force` removes the existing entry of that name first; Claude Code refuses to add a server whose name is already
 taken, so without it the upgrade stops at "already exists". It never widens the entry it replaces: a pin
 (`--inbox`, `--workspace`) or `--read-only` that entry had and the command leaves out is kept, and the result says
 so in a warning; one you pass instead wins. To register a wider server on purpose, remove the entry with the
@@ -255,6 +262,11 @@ npx -y @agentcomms/gmail@latest mcp prune
 npx -y @agentcomms/slack@latest mcp prune
 ```
 
+A dry run changes nothing and asks nobody. Removing is a change you approve, as the list of runtimes it would delete —
+a deleted runtime cannot be taken back — and it removes no more than that list, even if another becomes unused
+meanwhile. From an agent it exits `10` with the list and an approval id, for `mcp prune --approval <id>` after your
+yes.
+
 ### The server starts but every call fails
 
 The server and the CLI share one config directory. If the CLI works and the server does not, the client is likely
@@ -268,7 +280,7 @@ agent-gmail mcp install --client <name> --force   # rewrites the entry with the 
 `--force` replaces only an entry this package wrote, and a plain `mcp install` is refused while one is there. It
 keeps the `--inbox` and `--read-only` of the entry it replaces unless you pass others. If the entry was registered
 under its own `--name`, pass that again — another name is another entry — or run the `fix` that `doctor` prints
-for it, which carries every one of them.
+for it, which carries every one of them. Like any registration it asks you to approve what it will write first.
 
 ### An agent asks for approval in a form instead of the terminal
 
@@ -325,7 +337,9 @@ The workspace is connected but the server is not registered with the client:
 agent-slack mcp install --client claude-code
 ```
 
-Then restart the client. Without the server the Slack skills fall back to `agent-slack … --json`.
+It shows what it will register and asks for your yes; run by an agent, it exits `10` with the preview and runs again
+with `--approval <id>` once you have agreed. Then restart the client. Without the server the Slack skills fall back
+to `agent-slack … --json`.
 
 ### It will not post
 

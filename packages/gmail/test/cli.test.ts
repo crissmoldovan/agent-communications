@@ -75,11 +75,31 @@ interface Envelope<T> {
  * default `chat` change policy that is the whole of it. A command that needed no approval, or was refused outright,
  * is returned from the first run.
  */
-async function approving(harness: Harness, argv: string[]): Promise<Captured> {
-  const first = await cli(harness, [...argv, '--json']);
+async function approving(harness: Harness, argv: string[], options: Parameters<typeof cli>[2] = {}): Promise<Captured> {
+  const first = await cli(harness, [...argv, '--json'], options);
   const error = first.code === EXIT_CODES.APPROVAL ? first.json<Envelope<never>>().error : undefined;
   if (error?.code !== 'APPROVAL_PENDING') return first;
-  return cli(harness, [...argv, '--json', '--approval', String(error.details?.approvalId)]);
+  return cli(harness, [...argv, '--json', '--approval', String(error.details?.approvalId)], options);
+}
+
+/**
+ * `setup` as an agent drives it through the registration step. The first run stops there — exit 10, and `blocked`
+ * carrying the preview and an approval id — having written nothing to the client; the second, with
+ * `--mcp-approval <id>` once the person has said yes, registers. Both runs are returned: the first for what the
+ * person was shown.
+ */
+async function settingUp(
+  harness: Harness,
+  argv: string[],
+  options: Parameters<typeof cli>[2] = {},
+): Promise<{ first: Captured; second: Captured }> {
+  const first = await cli(harness, [...argv, '--json'], options);
+  assert.equal(first.code, EXIT_CODES.APPROVAL, `${first.stdout}${first.stderr}`);
+  const blocked = first.json<Envelope<{ blocked?: { step: string; approvalId?: string } | null }>>().data?.blocked;
+  assert.equal(blocked?.step, 'mcp', first.stdout);
+  assert.match(String(blocked?.approvalId), /^ap_/);
+  const second = await cli(harness, [...argv, '--json', '--mcp-approval', String(blocked?.approvalId)], options);
+  return { first, second };
 }
 
 test('--json prints the versioned envelope, and human output goes to stdout without it', async () => {
@@ -285,15 +305,25 @@ test('tightening how sending is approved is free; loosening it waits for a chang
   assert.equal(unchanged.json<Envelope<{ sendPolicy: string }>>().data?.sendPolicy, 'never');
 });
 
-test('mcp install writes an entry that really starts the server', async () => {
+test('mcp install writes an entry that really starts the server, once the registration is approved', async () => {
   const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
   await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
   const home = tempDir();
+  const argv = ['mcp', 'install', '--client', 'cursor', '--launcher', 'local', '--json'];
 
-  const result = await cli(harness, ['mcp', 'install', '--client', 'cursor', '--launcher', 'local', '--json'], {
+  // Registering a server is a change a person approves: an agent gets the preview and an id, and nothing is written.
+  const asked = await cli(harness, argv, { env: { HOME: home } });
+  assert.equal(asked.code, EXIT_CODES.APPROVAL, asked.stdout);
+  const pending = asked.json<Envelope<never>>().error;
+  assert.equal(pending?.code, 'APPROVAL_PENDING');
+  assert.match(String(pending?.details?.preview), /registers the Gmail MCP server with cursor as "gmail"/);
+  await assert.rejects(readFile(join(home, '.cursor', 'mcp.json')), 'asking wrote nothing');
+
+  // Once the person has said yes, the same command with the approval registers it.
+  const result = await cli(harness, [...argv, '--approval', String(pending?.details?.approvalId)], {
     env: { HOME: home },
   });
-  assert.equal(result.code, 0);
+  assert.equal(result.code, 0, result.stdout);
   const data = dataOf(
     result.json<
       Envelope<{
@@ -353,10 +383,14 @@ test('mcp install warns when another Gmail server is registered with that client
     JSON.stringify({ mcpServers: { old: { command: 'npx', args: ['-y', '@artymclabin/gmail-mcp'] } } }),
   );
 
-  const result = await cli(
+  // Registered the way an agent does it — prepared, then run again with the approval — so the warning is proved to
+  // come through the change `comms_server_install` makes too, from the channel's facts in core.
+  const result = await approving(
     harness,
-    ['mcp', 'install', '--client', 'cursor', '--launcher', 'local', '--no-verify', '--json'],
-    { env: { HOME: home } },
+    ['mcp', 'install', '--client', 'cursor', '--launcher', 'local', '--no-verify'],
+    {
+      env: { HOME: home },
+    },
   );
   const data = dataOf(result.json<Envelope<{ warnings: string[] }>>());
   assert.equal(data.warnings.length, 1);
@@ -789,9 +823,13 @@ test('setup --launcher reaches the headless agent step, and the entry it writes 
   await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
   const home = tempDir();
 
-  const result = await cli(harness, ['setup', '--mcp-client', 'cursor', '--launcher', 'local', '--json'], {
-    env: { HOME: home, USERPROFILE: home },
-  });
+  const { first, second: result } = await settingUp(
+    harness,
+    ['setup', '--mcp-client', 'cursor', '--launcher', 'local'],
+    { env: { HOME: home, USERPROFILE: home } },
+  );
+  // The preview names the checkout it will start: the flag had arrived before anybody was asked.
+  assert.match(first.stdout, /will start it from .*packages[/\\]+gmail[/\\]+(src|dist)[/\\]+cli\./);
 
   const written = await readFile(join(home, '.cursor', 'mcp.json'), 'utf8');
   // `local` points at the checkout; the managed default would have written a runtime path under `node_modules`,
@@ -828,11 +866,13 @@ test('setup --replace-server keeps the mailbox pin and --read-only of the entry 
     }),
   );
 
-  const result = await cli(
+  const { first, second: result } = await settingUp(
     harness,
-    ['setup', '--mcp-client', 'cursor', '--launcher', 'local', '--replace-server', '--json'],
+    ['setup', '--mcp-client', 'cursor', '--launcher', 'local', '--replace-server'],
     { env: { HOME: home, USERPROFILE: home } },
   );
+  // What the person approved already said so: the replacement, and the narrowing it keeps.
+  assert.match(first.stdout, /replacing its own earlier entry of that name and keeping --inbox work --read-only/);
 
   const written = JSON.parse(await readFile(cursor, 'utf8')) as { mcpServers: { gmail: { args: string[] } } };
   assert.deepEqual(

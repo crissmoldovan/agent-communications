@@ -136,8 +136,11 @@ agent-gmail setup --client-json ~/Downloads/client_secret_*.json \
 ```
 
 The one step it cannot finish is the grant itself: it hands back the sign-in link and the command that
-completes it. The individual commands it wraps — `client add`, `inbox add`, `mcp install` — are all still
-there if you would rather drive them yourself.
+completes it. Registering the OAuth client and registering the MCP server are each a change you approve: at a
+terminal you read what it will do and type `yes`; run by an agent, it stops at that step with the preview and an
+approval id, and runs again with `--approval <id>` (the OAuth client) or `--mcp-approval <id>` (the MCP server) once
+you have agreed. The individual commands it wraps — `client add`, `inbox add`, `mcp install` — are all still there if
+you would rather drive them yourself.
 
 24 commands, `--json` on all of them, documented exit codes. [CLI reference](docs/reference/cli.md).
 
@@ -146,6 +149,11 @@ there if you would rather drive them yourself.
 ```bash
 npx -y @agentcomms/gmail mcp install --client claude-code
 ```
+
+Registering a server hands your agent a new set of tools, so it is a change you approve, the same one the core
+server's `comms_server_install` makes: at a terminal it shows what it will register and asks you to type `yes`; an
+agent running it gets the preview and an approval id (exit 10), and runs it again with `--approval <id>` once you have
+agreed. `--print` and `--client json` only show the entry, and ask nobody.
 
 44 tools over stdio — the same operations the CLI runs. Works with Claude Code, Codex, Cursor, Claude Desktop,
 Gemini CLI and anything else that speaks MCP. [MCP tool reference](docs/reference/mcp-tools.md).
@@ -175,7 +183,7 @@ moving a mailbox off `confirm` is itself approved that way ([the design](docs/su
 npm i -g @agentcomms/slack
 agent-slack manifest --port 51234                          # the Slack app to create, and how
 agent-slack workspace add acme/slack --client-id <id> --port 51234
-npx -y @agentcomms/slack mcp install --client claude-code  # connect it to your agent
+npx -y @agentcomms/slack mcp install --client claude-code  # connect it to your agent; you approve it
 ```
 
 You bring your own Slack app, made from the manifest this prints, so the scopes are visible before anything is
@@ -229,7 +237,8 @@ Each is a change you approve: at a terminal, type `yes` to what it shows; run by
 preview and an approval id, and the same command with `--approval <id>` registers it once you have agreed. From a
 chat, `comms_server_install` with `force` registers the version of the core server that is running, so it cannot
 upgrade anything past that core. Upgrade the core first at a terminal (the third command above), restart the
-client, and then it can bring Gmail and Slack to the same release.
+client, and then it can bring Gmail and Slack to the same release. An approval from either surface is good on the
+other for the same registration.
 
 `--force` is required because the client CLIs refuse to overwrite an existing entry. It keeps the
 pin (`--inbox`, `--workspace`) and `--read-only` of the entry it replaces unless you pass others, and

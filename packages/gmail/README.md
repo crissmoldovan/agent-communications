@@ -43,6 +43,9 @@ agent-gmail setup --client-json ~/Downloads/client_secret_*.json \
 ```
 
 The one step it cannot finish is the grant: it returns the sign-in link and the command that completes it.
+Registering the OAuth client and registering the MCP server are changes you approve. Run by an agent, `setup` stops
+at each with the preview and an approval id, and runs again with `--approval <id>` for the OAuth client or
+`--mcp-approval <id>` for the MCP server once you have said yes; at a terminal it asks you there.
 
 ### By hand
 
@@ -69,7 +72,8 @@ long. On a terminal, plain `agent-gmail inbox add acme/gmail` waits for the brow
 | `whoami --inbox <name>` | what Google says about a mailbox |
 | `doctor [--inbox <name>]` | check everything that has to work, and say how to fix what does not |
 | `mcp` | run the MCP server on stdio |
-| `mcp install --client claude-code\|claude-desktop\|codex\|cursor\|gemini\|vscode\|json` | register the server, and prove it starts |
+| `mcp install --client claude-code\|claude-desktop\|codex\|cursor\|gemini\|vscode\|json` | register the server, and prove it starts (approved first) |
+| `mcp prune [--dry-run]` | remove the runtimes old releases left behind (approved first) |
 
 Every command takes `--json` and prints `{"ok":true,"schemaVersion":1,"data":…}` or, on failure,
 `{"ok":false,"schemaVersion":1,"error":{"code","message","hint"}}` — with a documented exit code (`--help` lists
@@ -78,14 +82,17 @@ them). Data goes to stdout, messages to stderr.
 ### Changes that need your approval
 
 `client add` and `client remove`, `inbox import` and `inbox remove`, `confirm-clients add`, a looser
-`inbox policy`, and an `inbox reauth` that asks for more access than the mailbox has each loosen a safety setting
-or cannot be taken back, so each is approved before it happens. At a terminal the command shows exactly what will
+`inbox policy`, an `inbox reauth` that asks for more access than the mailbox has, `mcp install` (it hands a client
+a new set of tools) and `mcp prune` (a deleted runtime cannot be taken back) each loosen something or cannot be
+undone, so each is approved before it happens. At a terminal the command shows exactly what will
 change and asks you to type `yes` — or, under the `confirm` change policy, the code `agentcomms approve` shows.
 Run by an agent, or with no terminal, it prints the same preview with an approval id and exits `10`; once you have
 said yes, the same command with `--approval <id>` makes the change. Tightening a policy never asks.
 
 The MCP server offers each of these as a tool that asks the same way, and an approval prepared on one surface can be
-claimed on the other: it is one change.
+claimed on the other: it is one change. Registering and pruning are the core server's `comms_server_install` and
+`comms_server_prune` with `channel: "gmail"`, and the same holds between them and `mcp install` and `mcp prune`.
+`mcp install --print`, `--client json` and `mcp prune --dry-run` change nothing, and ask nobody.
 
 ## Coming from another Gmail MCP server
 
@@ -106,6 +113,9 @@ there too, and nothing in this package gates them.
 ```sh
 agent-gmail mcp install --client claude-code
 ```
+
+It shows what it will register and asks you to type `yes`; run by an agent, it exits `10` with that preview and an
+approval id, and registers when run again with `--approval <id>` after your yes.
 
 Or embed it:
 

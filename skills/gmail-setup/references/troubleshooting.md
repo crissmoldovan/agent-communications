@@ -297,6 +297,10 @@ agent-gmail mcp install --client claude-code
 agent-gmail mcp install --client claude-code --print   # see what would be written, write nothing
 ```
 
+Registering is a change the user approves. Run by an agent, the first command exits `10` with
+`APPROVAL_PENDING`, the preview and an approval id, and writes nothing: show the preview, and after the
+user's yes run the same command with `--approval <id>`. Every re-registration below asks the same way.
+
 Supported clients are `claude-code`, `claude-desktop`, `codex`, `cursor`, `gemini`, `vscode`, and
 `json` to print the snippet for anything else. Add `--inbox <alias>` to pin the server to one
 mailbox, and `--read-only` to leave out every tool that changes the mailbox. It gates the mailbox and

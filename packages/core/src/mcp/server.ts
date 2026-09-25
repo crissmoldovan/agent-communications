@@ -4,6 +4,7 @@ import { changeToolResult, type GatedChange, gatedChange } from '../change-flow.
 import { CHANNELS } from '../channel-servers.ts';
 import { type Core, openCore } from '../core.ts';
 import { type CommsError, toCommsError } from '../errors.ts';
+import { SERVER_NAME_MESSAGE, SERVER_NAME_PATTERN } from '../mcp-install.ts';
 import {
   CHANGE_POLICIES,
   changePolicyChange,
@@ -269,7 +270,13 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       inputSchema: {
         channel: z.enum(CHANNELS as [string, ...string[]]).describe('which server'),
         client: z.enum(CLIENTS as [string, ...string[]]).describe('which MCP client to register it with'),
-        name: z.string().optional().describe('the name the client shows; the channel’s own when left out'),
+        // Checked here, so a client sees the rule in the schema, and again by the change itself: the name is quoted
+        // in the preview the person approves, and a name that reads like a pin makes that preview lie.
+        name: z
+          .string()
+          .regex(SERVER_NAME_PATTERN, SERVER_NAME_MESSAGE)
+          .optional()
+          .describe('the name the client shows; the channel’s own when left out. 1–64 of A–Z a–z 0–9 . _ -'),
         inbox: z.string().optional().describe('Gmail only: serve this one mailbox'),
         workspace: z.string().optional().describe('Slack only: serve this one workspace'),
         readOnly: z.boolean().optional().describe('Gmail only: leave out every tool that changes a mailbox'),

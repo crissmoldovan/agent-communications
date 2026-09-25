@@ -786,6 +786,28 @@ export async function installTarget(
   return { cliName, binary, own, configPath, writes };
 }
 
+/**
+ * What a server may be called: 1 to 64 letters, digits, dots, underscores and hyphens.
+ *
+ * The name goes into the preview a person approves — `registers the Gmail MCP server with cursor as "gmail"` — and
+ * into a client's config. Unchecked, it was text the caller chose inside a sentence the person trusts: a name of
+ * `gmail", pinned to the mailbox work, read-only, "` made the preview say the server was pinned and read-only while
+ * the entry written was neither, and a name of a few hundred characters pushed the rest of the preview past where it
+ * is cut off. Every client accepts this much, and it is enough for any name worth choosing.
+ */
+export const SERVER_NAME_PATTERN: RegExp = /^[A-Za-z0-9_.-]{1,64}$/;
+
+export const SERVER_NAME_MESSAGE = 'a server name is 1 to 64 letters, digits, dots, underscores or hyphens';
+
+/** Refuses a server name outside `SERVER_NAME_PATTERN`, without repeating it: it may be built to mislead. */
+export function checkServerName(name: string): void {
+  if (!SERVER_NAME_PATTERN.test(name)) {
+    throw new CommsError('USAGE', SERVER_NAME_MESSAGE, {
+      hint: 'Choose a name like `gmail-work` or `slack_acme`. It is what the client shows, and it is in the preview a person approves.',
+    });
+  }
+}
+
 /** What an install found before it wrote anything: see `preflightInstall`. */
 export interface InstallPreflight {
   scan: Awaited<ReturnType<typeof scanRegisteredServers>>;
@@ -812,6 +834,8 @@ export async function preflightInstall(
   options: InstallOptions,
 ): Promise<InstallPreflight> {
   const name = options.name ?? product.defaultServerName;
+  // The last line of defence: every install, printed or written, from any caller, comes through here first.
+  checkServerName(name);
   const scan = await scanRegisteredServers(context.env);
   const existing = scan.servers;
   const target = await installTarget(context, options);

@@ -173,6 +173,33 @@ test('at the CLI an agent gets the preview and the approval id, and exits 10; --
   assert.equal(await gatedChangeAtTerminal(core, change, { ...options, approvalId }), 'chat');
 });
 
+test('a command whose --approval is taken by another change names the flag that carries this one', async () => {
+  /*
+   * `agent-gmail setup` registers the OAuth client under `--approval` and the MCP server under `--mcp-approval`. A
+   * hint saying `--approval <id>` for the registration sent an agent to hand the server's approval to the client's
+   * step, where it is never read — and the registration was prepared again, for ever.
+   */
+  const core = coreWith('never');
+  await assert.rejects(
+    gatedChangeAtTerminal(core, setSendPolicy(core, 'chat'), {
+      env: { CLAUDECODE: '1' },
+      output: { json: true, color: false },
+      command: 'agent-gmail setup --mcp-client cursor',
+      approvalFlag: '--mcp-approval',
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof CommsError);
+      const approvalId = String((error.details as { approvalId?: string }).approvalId);
+      assert.match(
+        error.hint ?? '',
+        new RegExp(`agent-gmail setup --mcp-client cursor --mcp-approval ${approvalId}\``),
+      );
+      assert.doesNotMatch(error.hint ?? '', / --approval /);
+      return true;
+    },
+  );
+});
+
 test('at the CLI a person at a terminal approves there: yes applies, anything else cancels and revokes', async () => {
   const yes = coreWith('never');
   const person = terminal('yes');

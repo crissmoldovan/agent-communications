@@ -93,7 +93,8 @@ however obvious the next step looks. Offer it and stop.
 ## 7. Every skill works without the MCP server.
 
 `npx skills add` installs skills, not servers. Connect the server with
-`agent-slack mcp install --client claude-code` (or `--client codex`, `cursor`, `gemini`, …). If the
+`agent-slack mcp install --client claude-code` (or `--client codex`, `cursor`, `gemini`, …) — a change the
+user approves: show the preview it returns, and after their yes run it again with `--approval <id>`. If the
 `slack_*` tools are not available, the same work goes through the CLI with `--json`:
 
 ```bash

@@ -12,7 +12,6 @@ import {
   verifyEntry as verify,
 } from '@agentcomms/core';
 import type { SlackContext } from '../context.ts';
-import { describeOtherSlackServer, findOtherSlackServers } from '../operations/other-servers.ts';
 import { requireWorkspace } from '../operations/workspaces.ts';
 import { VERSION } from '../version.ts';
 
@@ -27,24 +26,15 @@ export type { InstallOptions, InstallResult, Launcher, PruneResult, ServerEntry,
 /**
  * Exported for the doctor, which reads registered entries back with the same facts that wrote them.
  *
- * The facts themselves — the package, the `mcp` argument `npx` needs, the `--workspace` pin — are core's
- * `CHANNEL_SERVERS.slack`, which the core server's `comms_server_install` registers from too. What is added here is
- * what only this package knows: its own version and code, and the warning about other Slack servers.
+ * The facts themselves — the package, the `mcp` argument `npx` needs, the `--workspace` pin, and the warning about
+ * other Slack servers — are core's `CHANNEL_SERVERS.slack`, which the core server's `comms_server_install` registers
+ * from too, so both surfaces warn alike. What is added here is what only this package knows: its own version, and
+ * where its code is.
  */
 export const SLACK_MCP: McpProduct = {
   ...CHANNEL_SERVERS.slack,
   version: VERSION,
   moduleUrl: import.meta.url,
-  /*
-   * Our own `read` token cannot post, whatever else is installed — but that was never the point. Another Slack
-   * server posts with *its* token, and an agent uses whichever tool it finds; every approval step here stands
-   * beside that route rather than in front of it.
-   */
-  warnAbout: (servers) =>
-    findOtherSlackServers(servers, SLACK_MCP).map(
-      (server) =>
-        `${describeOtherSlackServer(server)} can post to Slack with no approval step from this package. Remove it if this is meant to be the only route.`,
-    ),
 };
 
 export async function mcpInstall(context: SlackContext, options: InstallOptions): Promise<InstallResult> {

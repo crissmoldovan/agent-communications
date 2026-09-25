@@ -129,18 +129,25 @@ agent-slack mcp install --client claude-code
 agent-slack mcp install --client cursor --workspace acme/slack   # pinned to one workspace
 ```
 
+Registering hands the agent a new set of tools, so it is a change approval, like the workspace changes above: run
+by an agent, the first command exits `10` with the preview — which server, which client, under which name, pinned
+to what — and an approval id, and registers nothing. Show the preview, and after the user's yes run the same
+command with `--approval <id>`. `--print` and `--client json` write nothing and ask nobody.
+
 `--client` also takes `codex`, `claude-desktop`, `gemini`, `vscode` and `json` (print the entry to paste by hand).
 The entry pins the exact version it was installed from, so a newer release reaches the agent only when it is
 registered again with `--force`; restart the client afterwards. Each version installs its own runtime, and the old
 one stays; `agent-slack mcp prune` removes those it can show are unused — named in no client config it reads, never
-printed as an entry to paste, and not running — and nothing at all when one of those configs cannot be read. It
+printed as an entry to paste, and not running — once the user approves the list it shows, and nothing at all when
+one of those configs cannot be read. It
 does not read a workspace's own `.vscode/mcp.json` or `.cursor/mcp.json`, so run `--dry-run` first and tell the
 user what it lists. Without the server the skills still work, through `agent-slack … --json`.
 
 From a chat with the core server connected, `comms_server_install` and `comms_server_prune` with
-`channel: "slack"` do the same. A registration, and a prune that would remove something, returns a preview and an
-approval id first: show the preview, and call again with the id once the user agrees. A prune dry run, or a prune
-with nothing to remove, asks nobody. The server appears after the client is restarted.
+`channel: "slack"` do the same — they are the same change, so an approval from either surface is good on the other
+for the same request. A registration, and a prune that would remove something, returns a preview and an approval id
+first: show the preview, and call again with the id once the user agrees. A prune dry run, or a prune with nothing to
+remove, asks nobody. The server appears after the client is restarted.
 
 What the agent gets is everything the CLI does except approving, and changing the Slack app itself. Posting and
 reacting go through the same approval gate as the CLI: under `chat` the person's yes in the conversation is the

@@ -6,12 +6,15 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
+import { gatedChange } from '../src/change-flow.ts';
 import { beginChangeApproval, finishChangeApproval } from '../src/changes.ts';
+import { CHANNEL_SERVERS } from '../src/channel-servers.ts';
 import type { AccountConfig, InboxConfig } from '../src/config.ts';
 import { type Core, openCore } from '../src/core.ts';
 import { CommsError } from '../src/errors.ts';
 import { type CoreMcpOptions, createCoreMcpServer } from '../src/mcp/server.ts';
-import { managedRuntimeDir, managedRuntimeEntry, pruneManagedRuntimes } from '../src/mcp-install.ts';
+import { type McpProduct, managedRuntimeDir, managedRuntimeEntry, pruneManagedRuntimes } from '../src/mcp-install.ts';
+import { serverInstallChange, serverPruneChange } from '../src/operations/servers.ts';
 import type { SecretStore } from '../src/secrets.ts';
 import { VERSION } from '../src/version.ts';
 import { tempDir } from './helpers/temp.ts';
@@ -611,6 +614,176 @@ test('`agentcomms mcp install` is the same change at the command line', NOT_ON_W
   assert.equal(printed.status, 0, 'a print asks nobody');
 });
 
+/** A channel's own product, as `agent-slack mcp install` passes `SLACK_MCP`: the facts, plus what only it knows. */
+function slackOwnProduct(warning: string): McpProduct {
+  return { ...CHANNEL_SERVERS.slack, version: VERSION, moduleUrl: '', warnAbout: () => [warning] };
+}
+
+test("a channel's own product registers with its own warnings, under the approval the core server prepared", async () => {
+  /*
+   * `agent-gmail mcp install` and `agent-slack mcp install` pass their own product, because it carries what core
+   * cannot know: the warning about other servers for the same service. The approval is bound to the preview's
+   * sentences, so those have to be the same whichever surface planned them — an approval an agent got from
+   * `comms_server_install` is claimed by the channel's own command, and a person's yes to one is not refused by the
+   * other.
+   */
+  const m = machine();
+  const request = { channel: 'slack', client: 'cursor', launcher: 'npx', noVerify: true } as const;
+  const own = slackOwnProduct('another Slack server posts with its own token');
+
+  const asked = await gatedChange(m.core, serverInstallChange(m.core, m.env, request), { surface: 'mcp' });
+  assert.equal(asked.status, 'approval-required');
+  if (asked.status !== 'approval-required') return;
+  assert.match(asked.prepared.preview, /registers the Slack MCP server with cursor as "slack"/);
+  assert.match(asked.prepared.preview, new RegExp(`will fetch @agentcomms/slack@${VERSION.replaceAll('.', '\\.')}`));
+  const config = await m.core.config.load();
+  assert.deepEqual(
+    (await serverInstallChange(m.core, m.env, request, own).plan(config)).effects,
+    asked.prepared.effects,
+    'the same words, whichever product planned them',
+  );
+
+  const done = await gatedChange(m.core, serverInstallChange(m.core, m.env, request, own), {
+    surface: 'cli',
+    approvalId: asked.prepared.approvalId,
+  });
+  assert.equal(done.status, 'applied');
+  if (done.status !== 'applied') return;
+  assert.equal(done.result.applied, true);
+  assert.deepEqual(done.result.warnings, ['another Slack server posts with its own token'], 'the channel’s warning');
+  const written = JSON.parse(readFileSync(join(m.home, '.cursor', 'mcp.json'), 'utf8'));
+  assert.deepEqual(written.mcpServers.slack.args.slice(0, 3), ['-y', `@agentcomms/slack@${VERSION}`, 'mcp']);
+});
+
+test('a product that is not the channel’s cannot register or prune that channel', () => {
+  // The preview names the channel's server; a product for another package would register something else under it.
+  const m = machine();
+  const slack = slackOwnProduct('unused');
+  const refused = (error: unknown) => {
+    assert.ok(error instanceof CommsError);
+    assert.equal(error.code, 'UNEXPECTED');
+    assert.match(error.message, /@agentcomms\/slack is not the Gmail server's package/);
+    return true;
+  };
+  assert.throws(() => serverInstallChange(m.core, m.env, { channel: 'gmail', client: 'cursor' }, slack), refused);
+  assert.throws(() => serverPruneChange(m.core, m.env, { channel: 'gmail' }, slack), refused);
+  // Its own channel's is accepted.
+  serverInstallChange(m.core, m.env, { channel: 'slack', client: 'cursor' }, slack);
+  serverPruneChange(m.core, m.env, { channel: 'slack' }, slack);
+});
+
+/** A server name built to read, inside the preview's quotes, as a pin and `--read-only` the entry will not have. */
+const SPOOF_NAME = 'gmail", pinned to the mailbox work, read-only, "';
+
+test('a server name that could rewrite the preview is refused on every surface, before anybody is asked', async () => {
+  /*
+   * The name is quoted in the sentence a person approves. Unchecked, `SPOOF_NAME` made the preview read "as "gmail",
+   * pinned to the mailbox work, read-only, """ over an entry that was neither; and a long one pushed what followed
+   * past the preview's cut-off. It is checked three times: in the tool's schema, where a client sees the rule; by the
+   * change, where every surface's request enters; and by the installer, for any caller that skipped both.
+   */
+  const m = machine({ inboxes: { 'acme/gmail': inbox() } });
+  const refused = (error: unknown) => {
+    assert.ok(error instanceof CommsError);
+    assert.equal(error.code, 'USAGE');
+    assert.match(error.message, /a server name is 1 to 64 letters, digits, dots, underscores or hyphens/);
+    assert.ok(!error.message.includes('pinned'), 'the name is not repeated back');
+    return true;
+  };
+  for (const name of [SPOOF_NAME, 'a'.repeat(65), '', 'gmail work']) {
+    assert.throws(() => serverInstallChange(m.core, m.env, { channel: 'gmail', client: 'cursor', name }), refused);
+  }
+  serverInstallChange(m.core, m.env, { channel: 'gmail', client: 'cursor', name: `gmail_work-2.${'a'.repeat(51)}` });
+
+  const { client, call, close } = await connect(m);
+  try {
+    const listed = await client.listTools();
+    const schema = listed.tools.find((tool) => tool.name === 'comms_server_install')?.inputSchema as {
+      properties: Record<string, { pattern?: string }>;
+    };
+    assert.equal(schema.properties.name?.pattern, '^[A-Za-z0-9_.-]{1,64}$', 'a client is told the rule');
+    const result = await call('comms_server_install', { channel: 'gmail', client: 'cursor', name: SPOOF_NAME });
+    assert.equal(result.isError, true);
+  } finally {
+    await close();
+  }
+
+  const command = cli(m, ['mcp', 'install', '--client', 'cursor', '--name', SPOOF_NAME, '--json'], {
+    CLAUDECODE: '1',
+  });
+  assert.equal(command.status, 64, command.stdout);
+  assert.equal(command.json().error.code, 'USAGE');
+  assert.deepEqual(await m.core.approvals.list(), [], 'nobody was asked about any of them');
+  assert.equal(existsSync(join(m.home, '.cursor', 'mcp.json')), false);
+});
+
+test('the preview says when a server reaches every mailbox, every tool or every workspace', async () => {
+  // The absence of a pin was implied by a pin not being mentioned, which reads the same to a person skimming it.
+  const m = machine({ inboxes: { 'acme/gmail': inbox() }, accounts: { 'acme/slack': account() } });
+  const config = await m.core.config.load();
+  const effects = async (request: Omit<Parameters<typeof serverInstallChange>[2], 'client'>) =>
+    (await serverInstallChange(m.core, m.env, { client: 'cursor', launcher: 'npx', ...request }).plan(config))
+      .effects ?? [];
+
+  assert.ok(
+    (await effects({ channel: 'gmail' })).includes(
+      'not pinned: it reaches every mailbox on this machine, with every tool',
+    ),
+  );
+  const readOnly = await effects({ channel: 'gmail', readOnly: true });
+  assert.ok(readOnly.includes('not pinned: it reaches every mailbox on this machine'), JSON.stringify(readOnly));
+  assert.ok(!readOnly.some((effect) => /every tool/.test(effect)));
+  assert.ok(
+    (await effects({ channel: 'gmail', inbox: 'acme/gmail' })).includes(
+      'not read-only: it has every tool for acme/gmail, including those that change it',
+    ),
+  );
+  const narrow = await effects({ channel: 'gmail', inbox: 'acme/gmail', readOnly: true });
+  assert.ok(!narrow.some((effect) => /^not /.test(effect)), JSON.stringify(narrow));
+
+  assert.ok((await effects({ channel: 'slack' })).includes('not pinned: it reaches every workspace on this machine'));
+  assert.ok(!(await effects({ channel: 'slack', workspace: 'acme/slack' })).some((effect) => /^not /.test(effect)));
+  // The core server reaches no account, so there is nothing to pin and nothing to say.
+  assert.ok(!(await effects({ channel: 'core' })).some((effect) => /^not /.test(effect)));
+});
+
+test('registering from chat warns about the servers that send with no approval, as the channel’s own command does', async () => {
+  // The detectors are the channels' facts in core, so `comms_server_install` — which cannot import a channel package —
+  // says what `agent-gmail mcp install` and `agent-slack mcp install` say.
+  const m = machine();
+  mkdirSync(join(m.home, '.cursor'), { recursive: true });
+  writeFileSync(
+    join(m.home, '.cursor', 'mcp.json'),
+    JSON.stringify({
+      mcpServers: {
+        'old-gmail': { command: 'npx', args: ['-y', '@artymclabin/gmail-mcp'] },
+        'team-slack': { command: 'npx', args: ['-y', '@modelcontextprotocol/server-slack'] },
+      },
+    }),
+  );
+  const { ok, close } = await connect(m);
+  try {
+    const warnings = async (channel: string) =>
+      (
+        (await ok('comms_server_install', { channel, client: 'cursor', print: true, noVerify: true })).result as {
+          warnings: string[];
+        }
+      ).warnings;
+    const gmail = await warnings('gmail');
+    assert.equal(gmail.length, 1, JSON.stringify(gmail));
+    assert.match(
+      gmail[0] ?? '',
+      /@artymclabin\/gmail-mcp is registered with cursor as "old-gmail": .*no approval step gates/,
+    );
+    const slack = await warnings('slack');
+    assert.equal(slack.length, 1, JSON.stringify(slack));
+    assert.match(slack[0] ?? '', /"team-slack" in cursor .*can post to Slack with no approval step/);
+    assert.deepEqual(await warnings('core'), []);
+  } finally {
+    await close();
+  }
+});
+
 // ── Pruning ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A managed runtime for `packageName` at `version`, as the installer leaves one. */
@@ -715,6 +888,33 @@ test('a prune removes no more than the list that was approved', async () => {
   );
   assert.match(result.kept[0]?.reason ?? '', /not in the removal that was approved/);
   assert.ok(existsSync(later));
+});
+
+test("a channel's own prune keeps its own release, and removes the rest only once approved", async () => {
+  // `agent-slack mcp prune` passes its product, so "this release" is the release of the command that was run.
+  const m = machine();
+  const theirs = runtime(m, '@agentcomms/slack', '0.0.1');
+  const own = runtime(m, '@agentcomms/slack', '0.0.2');
+  const product = { packageName: '@agentcomms/slack', version: '0.0.2' };
+  const request = { channel: 'slack', processes: nobodyRuns } as const;
+
+  const asked = await gatedChange(m.core, serverPruneChange(m.core, m.env, request, product), { surface: 'cli' });
+  assert.equal(asked.status, 'approval-required');
+  if (asked.status !== 'approval-required') return;
+  assert.deepEqual(asked.prepared.effects, [`deletes the unused Slack runtime 0.0.1 at ${theirs}`]);
+  assert.ok(existsSync(theirs), 'asking removed nothing');
+
+  const done = await gatedChange(m.core, serverPruneChange(m.core, m.env, request, product), {
+    surface: 'cli',
+    approvalId: asked.prepared.approvalId,
+  });
+  assert.equal(done.status, 'applied');
+  if (done.status !== 'applied') return;
+  assert.deepEqual(
+    done.result.kept.map((item) => [item.path, item.reason]),
+    [[own, 'this release']],
+  );
+  assert.ok(!existsSync(theirs) && existsSync(own));
 });
 
 test('`agentcomms mcp prune --dry-run` returns what the tool does', async () => {

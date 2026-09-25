@@ -7,13 +7,11 @@ import {
   type McpProduct,
   type PruneResult,
   pruneManagedRuntimes,
-  type RegisteredServer,
   type ServerEntry,
   type SupportedClient,
   verifyEntry as verify,
 } from '@agentcomms/core';
 import type { GmailContext } from '../context.ts';
-import { findUngatedGmailServers } from '../operations/client-configs.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -29,19 +27,15 @@ export type { InstallOptions, InstallResult, Launcher, PruneResult, ServerEntry,
 /**
  * Exported for the doctor, which reads registered entries back with the same facts that wrote them.
  *
- * The facts themselves — the package, its flags, how an entry is read back — are core's `CHANNEL_SERVERS.gmail`,
- * which the core server's `comms_server_install` registers from too. What is added here is what only this package
- * knows: its own version and code, and the warning about other Gmail servers whose send tools nothing gates.
+ * The facts themselves — the package, its flags, how an entry is read back, and the warning about other Gmail
+ * servers whose send tools nothing gates — are core's `CHANNEL_SERVERS.gmail`, which the core server's
+ * `comms_server_install` registers from too, so both surfaces warn alike. What is added here is what only this
+ * package knows: its own version, and where its code is.
  */
 export const GMAIL_MCP: McpProduct = {
   ...CHANNEL_SERVERS.gmail,
   version: VERSION,
   moduleUrl: import.meta.url,
-  warnAbout: (servers: readonly RegisteredServer[]) =>
-    findUngatedGmailServers(servers).map(
-      (finding) =>
-        `${finding.packageName} is registered with ${finding.client} as "${finding.name}": ${finding.reason}. Remove it: ${finding.removal}`,
-    ),
 };
 
 export async function mcpInstall(context: GmailContext, options: InstallOptions): Promise<InstallResult> {
