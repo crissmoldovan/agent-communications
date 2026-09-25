@@ -44,6 +44,16 @@ export type MethodClass =
    * post while letting the upload through, which is precisely backwards.
    */
   | 'prepare'
+  /**
+   * Rewrites a Slack app's own configuration — its manifest — with an app configuration token.
+   *
+   * Neither of the other two shapes fits. It posts nothing and changes no token already issued, so a post's approval
+   * is the wrong thing to ask for; but it changes what the app may ask for next, and the token it carries can rewrite
+   * every app its owner has, so leaving it reachable like a read would let any code in this package do that. It is
+   * reachable only while a configuration grant is open for exactly that method (`configureWith` in `guard.ts`), and
+   * the one place that opens one is `agent-slack app`.
+   */
+  | 'configure'
   /** Deliberately unreachable. Listed so the decision is recorded rather than implied by absence. */
   | 'refused';
 
@@ -87,6 +97,27 @@ const RULES: Readonly<Record<string, MethodRule>> = {
   'apps.uninstall': {
     kind: 'refused',
     note: 'removing an installation is something a person does in Slack, not something an agent does for them',
+  },
+
+  // ── The app itself: `agent-slack app update` and `app create`, with an app configuration token ──────────────
+  /*
+   * Classified `configure`, not `read` or `write`: the guard lets one through only inside a configuration grant for
+   * that exact method, which only `operations/app.ts` opens. The token on these calls is the person's app
+   * configuration token, typed at a hidden prompt for this one command, and never a workspace's own sign-in token.
+   *
+   * No `requiredScopes`, deliberately. Those are the user scopes a manifest has to ask for; these need
+   * `app_configurations:write`, which is a property of the configuration token, not of any app this package builds.
+   */
+  'apps.manifest.validate': { kind: 'configure' },
+  'apps.manifest.update': { kind: 'configure' },
+  'apps.manifest.create': { kind: 'configure' },
+  'apps.manifest.delete': {
+    kind: 'refused',
+    note: 'deleting a Slack app is something a person does at api.slack.com, not something this package does for them',
+  },
+  'tooling.tokens.rotate': {
+    kind: 'refused',
+    note: 'an app configuration token is used for one command and never kept, so there is nothing here to rotate',
   },
 
   // ── Reads ─────────────────────────────────────────────────────────────────────────────────────────────────

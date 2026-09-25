@@ -35,6 +35,7 @@ Scripts should read these rather than parse output.
 | Command | What it is for |
 |---|---|
 | [`manifest`](#agent-slack-manifest) | the Slack app to create, as a manifest you can paste |
+| [`app`](#agent-slack-app) | change the Slack app itself with an app configuration token, instead of on the api.slack.com page |
 | [`workspace`](#agent-slack-workspace) | connect, inspect and disconnect Slack workspaces |
 | [`doctor`](#agent-slack-doctor) | check everything that has to work, and say how to fix what does not |
 | [`channels`](#agent-slack-channels) | the channels and conversations this account can see |
@@ -55,6 +56,40 @@ the Slack app to create, as a manifest you can paste
 
 ```
 agent-slack manifest [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--mode <mode>` | how much access to ask Slack for (choices: "read", "send", default: "read") | — |
+| `--port <port>` | the loopback port its redirect will use | — |
+
+### `agent-slack app`
+
+change the Slack app itself with an app configuration token, instead of on the api.slack.com page
+
+```
+agent-slack app [options] [command]
+```
+
+### `agent-slack app update`
+
+replace a connected workspace's Slack app manifest with the one `agent-slack manifest` prints
+
+```
+agent-slack app update [options] <alias>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--mode <mode>` | which manifest to apply; the workspace's own mode if left out (choices: "read", "send") | — |
+| `--port <port>` | the loopback port for the app's redirect; the workspace's recorded one if left out | — |
+
+### `agent-slack app create`
+
+create a new Slack app from the manifest `agent-slack manifest` prints, and print the command that connects it
+
+```
+agent-slack app create [options] [alias]
 ```
 
 | Option | What it does | Default |

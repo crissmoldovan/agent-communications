@@ -1,4 +1,5 @@
 import { paint, stripInvisible } from '@agentcomms/core';
+import type { AppCreated, AppUpdated } from '../operations/app.ts';
 import type { DoctorResult } from '../operations/doctor.ts';
 import type { DeletedDraft } from '../operations/drafts.ts';
 import type { ModeReport } from '../operations/mode.ts';
@@ -230,6 +231,66 @@ export function renderManifestHelp(mode: string, port: number, color: boolean): 
           `This app can post, upload and react, each only after your approval. \`agent-slack manifest --mode read --port ${port}\` prints one that cannot post at all. To move an existing workspace from read, update its app with this manifest first, then run \`agent-slack workspace mode <name> send --port ${port}\`.`,
         ),
   ].join('\n');
+}
+
+// ── The app itself ───────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * What `app update` did, and — first, before the next step — what it did not do.
+ *
+ * The line people misread is the one about the token: an app updated to `send` sounds like a workspace that can
+ * post, and it is not one until a person signs in again. So that is said in words, with the workspace's actual mode.
+ */
+export function renderAppUpdated(result: AppUpdated, color: boolean): string {
+  const lines = [
+    `${paint(color, 'green', '✓')} Slack app ${result.appId} now carries the ${paint(color, 'bold', result.mode)} manifest for "${result.alias}".`,
+    `  redirect  ${result.redirectUrl}`,
+    `  manifest  ${result.manifestPage}`,
+  ];
+  if (result.permissionsUpdated !== undefined) {
+    lines.push(
+      `  Slack reports ${result.permissionsUpdated ? 'that its permissions changed' : 'no change to its permissions'}.`,
+    );
+  }
+  lines.push(
+    '',
+    `This changes what the app may ask for, not what any token already issued can do: "${result.alias}" is still in ${paint(color, 'bold', result.workspaceMode)} mode.`,
+  );
+  if (result.next.length === 0) {
+    lines.push(paint(color, 'dim', 'Nothing else to do.'));
+  } else {
+    lines.push('', 'Next:', ...result.next.map((step, i) => `  ${i + 1}. ${step}`));
+  }
+  return lines.join('\n');
+}
+
+/** What `app create` made, the one command to run next, and which of Slack's secrets were dropped unseen. */
+export function renderAppCreated(result: AppCreated, color: boolean): string {
+  const lines = [
+    `${paint(color, 'green', '✓')} Created Slack app ${result.appId} from the ${paint(color, 'bold', result.mode)} manifest.`,
+    `  Client ID  ${result.clientId}  ${paint(color, 'dim', '(not a secret)')}`,
+    `  redirect   ${result.redirectUrl}`,
+    `  manifest   ${result.manifestPage}`,
+  ];
+  if (result.secretsDiscarded.length > 0) {
+    lines.push(
+      '',
+      paint(
+        color,
+        'dim',
+        `Slack also returned its ${result.secretsDiscarded.join(', ')}. None was kept or shown: signing in with PKCE needs none of them.`,
+      ),
+    );
+  }
+  lines.push('', 'Connect a workspace through it:', `  ${result.next}`);
+  if (result.mode === 'send') {
+    lines.push(paint(color, 'dim', 'That asks you to type a code: a workspace that can post is a person’s decision.'));
+  }
+  lines.push(
+    '',
+    paint(color, 'dim', `Keep --port ${result.port}: Slack matches the redirect URL in this app exactly.`),
+  );
+  return lines.join('\n');
 }
 
 // ── Reading ──────────────────────────────────────────────────────────────────────────────────────────────────

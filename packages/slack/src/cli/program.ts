@@ -32,6 +32,7 @@ import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
 import { mcpInstall, mcpPrune, SLACK_MCP } from '../mcp/install.ts';
+import { createApp, updateApp } from '../operations/app.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
 import { doctor, type IdentityProbe, type StoreUnavailable } from '../operations/doctor.ts';
 import { deleteOwnDraft, ownDraft } from '../operations/drafts.ts';
@@ -49,11 +50,14 @@ import {
   type StartedSignIn,
   startSignIn,
 } from '../operations/signin.ts';
-import { listWorkspaces, removeWorkspace, requireWorkspace, viewOf } from '../operations/workspaces.ts';
+import { checkAliasFree, listWorkspaces, removeWorkspace, requireWorkspace, viewOf } from '../operations/workspaces.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
+import { readConfigurationToken } from './config-token.ts';
 import { askFor } from './prompt.ts';
 import {
+  renderAppCreated,
+  renderAppUpdated,
   renderChannels,
   renderConnected,
   renderDeletedDraft,
@@ -93,6 +97,11 @@ export interface CliDeps extends SlackContextOptions {
   probe?: ProbeFetch;
   /** The fetch the read commands use. Injected the same way, and for the same reason. */
   read?: FetchLike;
+  /**
+   * The fetch `app update` and `app create` use. Its own, not `read`'s: these calls change an app, carry a
+   * configuration token rather than a workspace's, and a test that scripts one should not be able to answer the other.
+   */
+  appConfig?: FetchLike;
   /** Where Slack is, for a test that stands one up locally rather than relaxing the origin check. */
   slackBaseUrl?: string;
   /**
@@ -108,6 +117,17 @@ interface GlobalOptions {
 }
 
 type Options = Record<string, unknown>;
+
+/**
+ * A usage error with the value of any `--option=value` it quotes taken out.
+ *
+ * Commander quotes an unknown `--option=value` back whole, value and all. No option here takes a secret, but somebody
+ * will try `--token=…` on `app update`, and the refusal must not print the token it refuses. The option's name is
+ * enough to say what was wrong.
+ */
+function withoutOptionValues(text: string): string {
+  return text.replace(/'(-{1,2}[^'=\s]+)=[^']*'/g, "'$1=…'");
+}
 
 export async function run(argv: readonly string[], deps: CliDeps = {}): Promise<number> {
   const streams: Streams = deps.streams ?? { stdout: process.stdout, stderr: process.stderr, stdin: process.stdin };
@@ -136,12 +156,15 @@ export async function run(argv: readonly string[], deps: CliDeps = {}): Promise<
     .configureOutput({
       writeOut: (text) => streams.stdout.write(text),
       writeErr: (text) => streams.stderr.write(text),
+      // Commander prints its own copy of a usage error before throwing it; that copy is redacted too.
+      outputError: (text, write) => write(withoutOptionValues(text)),
     })
     .addHelpText(
       'after',
       `
 Getting started:
   agent-slack manifest --port 51234        the app to create in Slack, and how
+  agent-slack app create --port 51234      or create it from here, with an app configuration token
   agent-slack workspace add acme/slack --client-id <id> --port 51234
   agent-slack doctor                       what works and what does not
   agent-slack mcp install --client claude-code
@@ -277,6 +300,95 @@ configuration problem.`,
           () => `${renderManifestHelp(mode, port, options.color)}\n\n${manifest}`,
           streams,
         );
+      }),
+    );
+
+  // ── app ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * The optional path beside `manifest`: the same manifest, sent to Slack from here with an app configuration token,
+   * so connecting or widening a workspace needs no visit to the app's page.
+   *
+   * The token comes from a hidden prompt or `SLACK_APP_CONFIG_TOKEN` and nowhere else — no option takes it, because a
+   * command line lands in shell history — and there is no MCP tool for either command, because a token typed into a
+   * chat stays in the transcript. Neither command writes anything to this machine's configuration.
+   */
+  const app = program
+    .command('app')
+    .description('change the Slack app itself with an app configuration token, instead of on the api.slack.com page');
+
+  app
+    .command('update <alias>')
+    .description("replace a connected workspace's Slack app manifest with the one `agent-slack manifest` prints")
+    .addOption(
+      new Option('--mode <mode>', "which manifest to apply; the workspace's own mode if left out").choices([
+        'read',
+        'send',
+      ]),
+    )
+    .option('--port <port>', "the loopback port for the app's redirect; the workspace's recorded one if left out")
+    .action(
+      act(async (context, options, alias: string, flags: Options) => {
+        const found = requireWorkspace(await context.config(), alias);
+        const mode =
+          flags.mode === undefined
+            ? parseMode(found.account.mode ?? found.account.tier, `"${found.alias}"`)
+            : (String(flags.mode) as InstallMode);
+        const port = portOf(flags, found.account.redirectPort);
+        const result = await updateApp({
+          alias: found.alias,
+          account: found.account,
+          mode,
+          port,
+          askToken: async () => {
+            /*
+             * Said before the token is asked for, because Slack's update replaces the app's whole configuration: an
+             * app somebody renamed by hand comes back as `agent-slack`, and the person should know before typing.
+             */
+            streams.stderr.write(
+              `This replaces the whole configuration of Slack app ${found.account.appId ?? ''} ("${found.alias}") with the ${mode} manifest — its name and description included.\n`,
+            );
+            return readConfigurationToken(env, streams, {
+              json: globals().json,
+              command: `agent-slack app update ${found.alias} --mode ${mode} --port ${port}`,
+            });
+          },
+          transport: { fetch: deps.appConfig, baseUrl: deps.slackBaseUrl },
+          audit: context.core.audit,
+          surface: 'cli',
+        });
+        writeResult(result, output(), () => renderAppUpdated(result, options.color), streams);
+      }),
+    );
+
+  app
+    .command('create [alias]')
+    .description(
+      'create a new Slack app from the manifest `agent-slack manifest` prints, and print the command that connects it',
+    )
+    .addOption(modeOption())
+    .option('--port <port>', 'the loopback port its redirect will use')
+    .action(
+      act(async (context, options, alias: string | undefined, flags: Options) => {
+        const mode = String(flags.mode) as InstallMode;
+        const port = portOf(flags);
+        // The name is only printed, in the command to run next — but a name that command would refuse is better
+        // refused now, before a token is typed and an app is made.
+        if (alias !== undefined) checkAliasFree(await context.config(), alias);
+        const result = await createApp({
+          mode,
+          port,
+          ...(alias === undefined ? {} : { alias }),
+          askToken: () =>
+            readConfigurationToken(env, streams, {
+              json: globals().json,
+              command: `agent-slack app create${alias === undefined ? '' : ` ${alias}`} --mode ${mode} --port ${port}`,
+            }),
+          transport: { fetch: deps.appConfig, baseUrl: deps.slackBaseUrl },
+          audit: context.core.audit,
+          surface: 'cli',
+        });
+        writeResult(result, output(), () => renderAppCreated(result, options.color), streams);
       }),
     );
 
@@ -1182,10 +1294,11 @@ configuration problem.`,
     if (error instanceof CommanderError) {
       // Commander prints help and version itself; anything else is a usage error.
       if (['commander.helpDisplayed', 'commander.help', 'commander.version'].includes(error.code)) return 0;
+      const message = withoutOptionValues(error.message.replace(/^error: /, ''));
       return runCommand(
         output(),
         async () => {
-          throw new CommsError('USAGE', error.message.replace(/^error: /, ''), {
+          throw new CommsError('USAGE', message, {
             hint: 'Run `agent-slack --help` to see the commands.',
           });
         },

@@ -24,10 +24,18 @@ export interface WritePermit {
   approvalId: string | null;
   /** The method the approval was for. A permit for a reaction does not open the door for a message. */
   method: string | null;
+  /**
+   * The one app-configuration method that may go out next, or null — which is always, except inside `configureWith`.
+   *
+   * On the same object as the post's permit so that every request meets both answers in one place, and kept apart
+   * from it so that neither lends the other anything: opening this leaves `approvalId` null, so a post attempted
+   * inside a configuration grant is refused exactly as it always was.
+   */
+  configuring: string | null;
 }
 
 export function closedPermit(): WritePermit {
-  return { approvalId: null, method: null };
+  return { approvalId: null, method: null, configuring: null };
 }
 
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -99,6 +107,28 @@ export function guardSlackRequests(inner: FetchLike, permit: WritePermit): Fetch
     }
 
     /*
+     * A Slack app's own configuration: only inside a grant for exactly this method, and only once.
+     *
+     * Before the write branch and separate from it, so that branch is untouched: a configuration grant opens no
+     * approval, and a post's approval opens no configuration grant. Without an open grant this refuses, whichever
+     * token the request carries — so a workspace session that somehow named `apps.manifest.update` meets the same
+     * door as a post with no approval.
+     */
+    if (rule.kind === 'configure') {
+      if (permit.configuring !== method) {
+        throw new CommsError(
+          'SEND_REFUSED',
+          `${method} changes a Slack app, and only \`agent-slack app\` may call it`,
+          {
+            hint: 'This is a bug — please report it.',
+          },
+        );
+      }
+      // One grant, one request, as with a post: the next call has to be opened on purpose.
+      permit.configuring = null;
+    }
+
+    /*
      * `prepare` is not a write and must not spend the permit.
      *
      * `files.getUploadURLExternal` asks Slack where to put bytes and publishes nothing. Classifying it `write`
@@ -158,5 +188,33 @@ export async function spendOn<T>(
   } finally {
     permit.approvalId = null;
     permit.method = null;
+  }
+}
+
+/**
+ * Opens a configuration grant for exactly one call to `method`, and closes it however `body` ends.
+ *
+ * The shape of `spendOn`, and deliberately not `spendOn`: changing an app is not a post, has no approval to name,
+ * and must not be able to borrow one. It refuses to open while a post's permit is open, and refuses a method the
+ * registry does not classify `configure`, so it cannot be used to open anything else.
+ *
+ * Not exported from the package root. `operations/app.ts` is the one caller, and a test fails if another appears.
+ */
+export async function configureWith<T>(permit: WritePermit, method: string, body: () => Promise<T>): Promise<T> {
+  if (methodRule(method)?.kind !== 'configure') {
+    throw new CommsError('SEND_REFUSED', `${method} is not a method that configures a Slack app`, {
+      hint: 'This is a bug — please report it.',
+    });
+  }
+  if (permit.approvalId !== null || permit.configuring !== null) {
+    throw new CommsError('SEND_REFUSED', 'a permit is already open; they do not nest', {
+      hint: 'This is a bug — please report it.',
+    });
+  }
+  permit.configuring = method;
+  try {
+    return await body();
+  } finally {
+    permit.configuring = null;
   }
 }

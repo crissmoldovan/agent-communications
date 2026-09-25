@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { CommsError } from '@agentcomms/core';
-import { closedPermit, guardSlackRequests, spendOn } from '../src/api/guard.ts';
+import { callSlack } from '../src/api/call.ts';
+import { closedPermit, configureWith, guardSlackRequests, spendOn } from '../src/api/guard.ts';
 import {
   classifiedMethods,
   methodOfUrl,
@@ -206,7 +207,10 @@ test('every classified method is read, write or refused, and every write is name
   for (const method of methods) {
     const rule = methodRule(method);
     assert.ok(rule, method);
-    assert.ok(['read', 'write', 'auth', 'prepare', 'refused'].includes(rule.kind), `${method} is ${rule.kind}`);
+    assert.ok(
+      ['read', 'write', 'auth', 'prepare', 'configure', 'refused'].includes(rule.kind),
+      `${method} is ${rule.kind}`,
+    );
     if (rule.kind === 'refused') assert.ok(rule.note, `${method} is refused without saying why`);
   }
 
@@ -310,7 +314,7 @@ test('the package root does not hand out the key to its own door', async () => {
    * API is not a boundary.
    */
   const surface = (await import('../src/index.ts')) as Record<string, unknown>;
-  for (const name of ['guardSlackRequests', 'closedPermit', 'spendOn', 'WritePermit']) {
+  for (const name of ['guardSlackRequests', 'closedPermit', 'spendOn', 'configureWith', 'WritePermit']) {
     assert.equal(surface[name], undefined, `${name} is exported from the package root`);
   }
   // The method registry stays: knowing a method's name grants nothing, and it is worth reading.
@@ -347,4 +351,136 @@ test('the method is still read the way it was: the last segment, when the one be
     ['https://slack.com/api/auth.test/extra', null],
   ];
   for (const [url, expected] of cases) assert.equal(methodOfUrl(url), expected, url);
+});
+
+// ── App configuration: on the allowlist, behind a grant of its own ─────────────────────────────────────────────
+
+const CONFIGURE = ['apps.manifest.validate', 'apps.manifest.update', 'apps.manifest.create'];
+
+test('the app-configuration methods are classified as exactly that, and the rest of the family is refused', () => {
+  /*
+   * On the allowlist deliberately, as `configure` rather than `read`: a read is reachable by anything in this package,
+   * and these rewrite an app. Deleting an app and rotating a configuration token are listed as refused, so the
+   * decision is recorded rather than implied by their absence.
+   */
+  for (const method of CONFIGURE) assert.equal(methodRule(method)?.kind, 'configure', method);
+  assert.equal(methodRule('apps.manifest.delete')?.kind, 'refused');
+  assert.equal(methodRule('tooling.tokens.rotate')?.kind, 'refused');
+  assert.equal(methodRule('apps.manifest.export'), null);
+
+  // Nothing about posting moved: the same writes, the same scopes, and no configuration method among the writes.
+  assert.deepEqual(writeMethods(), [
+    'chat.delete',
+    'chat.deleteScheduledMessage',
+    'chat.meMessage',
+    'chat.postMessage',
+    'chat.scheduleMessage',
+    'chat.update',
+    'files.completeUploadExternal',
+    'reactions.add',
+    'reactions.remove',
+  ]);
+  assert.deepEqual(scopesFor(['write', 'prepare']), ['chat:write', 'files:write', 'reactions:write']);
+  assert.deepEqual(scopesFor(['configure']), [], 'a configuration scope would end up in a manifest');
+});
+
+test('an app-configuration method is refused without a grant, whatever token rides on it', async () => {
+  const { calls, inner } = recorder();
+  const fetch = guardSlackRequests(inner, closedPermit());
+  for (const method of CONFIGURE) {
+    await assert.rejects(fetch(`${API}/${method}`), /only `agent-slack app` may call it/, method);
+    await assert.rejects(fetch(`${API}/${method}?pretty=1`), /only `agent-slack app` may call it/, method);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('a workspace session cannot reach apps.manifest.update, because nothing on its path opens a grant', async () => {
+  // `callSlack` with no permit is how every read goes out. It must meet the same door, before the network.
+  const { calls, inner } = recorder();
+  for (const method of CONFIGURE) {
+    await assert.rejects(
+      callSlack({ token: 'fake-user-token', fetch: inner, baseUrl: 'https://slack.com' }, method, { manifest: '{}' }),
+      /only `agent-slack app` may call it/,
+    );
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('a configuration grant opens one request of one method, and closes behind it', async () => {
+  const { calls, inner } = recorder();
+  const permit = closedPermit();
+  const fetch = guardSlackRequests(inner, permit);
+
+  await configureWith(permit, 'apps.manifest.validate', async () => {
+    // A grant for validation is not a grant for the update.
+    await assert.rejects(fetch(`${API}/apps.manifest.update`), /only `agent-slack app` may call it/);
+    await fetch(`${API}/apps.manifest.validate`);
+    // Spent: a second request inside the same grant finds the door shut.
+    await assert.rejects(fetch(`${API}/apps.manifest.validate`), /only `agent-slack app` may call it/);
+  });
+  assert.deepEqual(calls, [`${API}/apps.manifest.validate`]);
+  assert.equal(permit.configuring, null);
+  await assert.rejects(fetch(`${API}/apps.manifest.validate`), /only `agent-slack app` may call it/);
+});
+
+test('a configuration grant opens no post, and a post’s permit opens no configuration', async () => {
+  /*
+   * The two openings sit on one permit object and must lend each other nothing. Inside a configuration grant a post
+   * is refused exactly as it always was — no approval is open — and inside a post's permit an app cannot be changed.
+   */
+  const { calls, inner } = recorder();
+  const permit = closedPermit();
+  const fetch = guardSlackRequests(inner, permit);
+
+  await configureWith(permit, 'apps.manifest.update', async () => {
+    for (const method of ['chat.postMessage', 'files.completeUploadExternal', 'reactions.add']) {
+      await assert.rejects(fetch(`${API}/${method}`), /no approval is open/, method);
+    }
+  });
+  await spendOn(permit, 'ap_1', 'chat.postMessage', async () => {
+    await assert.rejects(fetch(`${API}/apps.manifest.update`), /only `agent-slack app` may call it/);
+    // And a grant cannot be opened inside a post's permit either.
+    await assert.rejects(
+      configureWith(permit, 'apps.manifest.update', async () => undefined),
+      /already open; they do not nest/,
+    );
+  });
+  assert.deepEqual(calls, []);
+});
+
+test('a configuration grant cannot be opened for anything that is not an app-configuration method', async () => {
+  const { calls, inner } = recorder();
+  const permit = closedPermit();
+  const fetch = guardSlackRequests(inner, permit);
+  for (const method of ['chat.postMessage', 'auth.test', 'apps.manifest.delete', 'apps.uninstall', 'nonsense']) {
+    await assert.rejects(
+      configureWith(permit, method, async () => fetch(`${API}/${method}`)),
+      /not a method that configures a Slack app/,
+      method,
+    );
+  }
+  assert.deepEqual(calls, []);
+  assert.equal(permit.configuring, null);
+});
+
+test('a configuration grant closes when the call inside it throws, and grants do not nest', async () => {
+  const { inner } = recorder();
+  const permit = closedPermit();
+  const fetch = guardSlackRequests(inner, permit);
+  await assert.rejects(
+    configureWith(permit, 'apps.manifest.update', async () => {
+      throw new Error('network died mid-update');
+    }),
+    /network died/,
+  );
+  assert.equal(permit.configuring, null, 'a failed update left a grant open behind it');
+  await assert.rejects(fetch(`${API}/apps.manifest.update`), /only `agent-slack app` may call it/);
+
+  await assert.rejects(
+    configureWith(permit, 'apps.manifest.validate', async () =>
+      configureWith(permit, 'apps.manifest.update', async () => undefined),
+    ),
+    /already open; they do not nest/,
+  );
+  assert.equal(permit.configuring, null);
 });

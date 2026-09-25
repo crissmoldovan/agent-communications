@@ -93,17 +93,45 @@ const ERRORS: Readonly<Record<string, { code: string; message: string; hint?: st
   invalid_arguments: { code: 'BAD_DATA', message: 'Slack refused the arguments' },
 };
 
-function fail(error: string): never {
+/** One problem Slack found, where it says more than one word: what is wrong, and where in what was sent. */
+export interface SlackProblem {
+  readonly message: string;
+  readonly pointer?: string | undefined;
+}
+
+/**
+ * The `errors` list Slack puts beside `error` on some refusals, as plain bounded strings.
+ *
+ * The manifest methods answer `invalid_manifest` with one entry per problem — a message and a JSON pointer into the
+ * manifest — and the one word alone tells a person nothing they can fix. Bounded and reduced to strings because it
+ * is still a reply this package did not write: twenty entries of a few hundred characters is plenty to act on.
+ */
+function problemsOf(response: SlackResponse | undefined): SlackProblem[] {
+  const listed = response?.errors;
+  if (!Array.isArray(listed)) return [];
+  const text = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.length > 0 ? value.slice(0, 300) : undefined;
+  const problems: SlackProblem[] = [];
+  for (const entry of listed.slice(0, 20)) {
+    const message = text((entry as { message?: unknown } | null)?.message);
+    if (message === undefined) continue;
+    const pointer = text((entry as { pointer?: unknown }).pointer);
+    problems.push(pointer === undefined ? { message } : { message, pointer });
+  }
+  return problems;
+}
+
+function fail(error: string, response?: SlackResponse): never {
+  const problems = problemsOf(response);
+  const details = { slackError: error, ...(problems.length > 0 ? { slackProblems: problems } : {}) };
   const known = ERRORS[error];
   if (known) {
     throw new CommsError(known.code as never, known.message, {
       ...(known.hint ? { hint: known.hint } : {}),
-      details: { slackError: error },
+      details,
     });
   }
-  throw new CommsError('PROVIDER_UNAVAILABLE', `Slack refused the request: ${error}`, {
-    details: { slackError: error },
-  });
+  throw new CommsError('PROVIDER_UNAVAILABLE', `Slack refused the request: ${error}`, { details });
 }
 
 /** Slack takes form-encoded parameters; `undefined` means "do not send", which is not the same as empty. */
@@ -201,7 +229,7 @@ async function callOnce(
       hint: 'Try again; if it persists, check https://status.slack.com.',
     });
   }
-  if (parsed.ok !== true) fail(parsed.error ?? 'unknown_error');
+  if (parsed.ok !== true) fail(parsed.error ?? 'unknown_error', parsed);
   return parsed;
 }
 

@@ -37,6 +37,28 @@ agent-slack mcp install --client claude-code         # connect it to your agent
 The port must be the same number in both commands — Slack stores redirect URLs on the app and matches them
 exactly.
 
+## Changing the app from the CLI
+
+Pasting the manifest on the app's page is the default. With an **app configuration token** — generated at
+https://api.slack.com/apps under "Your App Configuration Tokens", valid for twelve hours — the CLI can do that step
+itself:
+
+```sh
+agent-slack app create acme/slack --mode read --port 51234   # a new app; prints its Client ID and what to run next
+agent-slack app update acme/slack --mode send                # the app acme/slack signed in through, to the send manifest
+```
+
+Both ask Slack to validate the manifest first, and a refusal changes nothing. `app update` replaces the app's whole
+configuration with the manifest `agent-slack manifest` prints — a hand-set name or description included — and
+changes no token: a workspace updated to `send` still cannot post until you run `agent-slack workspace mode <name>
+send`, which it prints. `app create` keeps only the app id and Client ID from Slack's reply; the client secret and
+signing secret it also returns are dropped unseen, because the PKCE sign-in needs neither.
+
+The token is read from a hidden prompt, or from `SLACK_APP_CONFIG_TOKEN` for that one command, and is used for that
+command's calls only: never stored, logged or printed, and never accepted as an option, which would land in your
+shell history. Without a terminal or the variable, the command refuses. No MCP tool takes the token or changes an
+app — a token typed into a chat stays in the transcript — so an agent gives you the command to run instead.
+
 ## Reading
 
 ```sh
@@ -118,8 +140,8 @@ changed.
 | `read` (default) | history, read, users, files, search | **Slack** |
 | `send` | the above plus `chat:write`, `files:write`, `reactions:write` | this package's approval gate |
 
-Moving to `send` means editing your app's manifest and re-authorising — a new grant you approve in Slack's own
-UI. Going back means removing the app's installation in Slack first: Slack adds scopes to a token and never
+Moving to `send` means editing your app's manifest — on its page, or with `agent-slack app update <name> --mode
+send` — and re-authorising: a new grant you approve in Slack's own UI. Going back means removing the app's installation in Slack first: Slack adds scopes to a token and never
 removes one. `agent-slack workspace mode <name>` prints either path.
 
 ## Licence

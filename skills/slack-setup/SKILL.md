@@ -49,6 +49,25 @@ Two fields in that manifest are load-bearing: `oauth_config.pkce_enabled` and `t
 PKCE, Slack treats a loopback redirect like a server redirect and no sign-in can complete. Both were verified
 against a real workspace on 2026-09-22.
 
+### Or let the CLI make the app
+
+With an **app configuration token**, the CLI sends the same manifest to Slack itself, and nobody pastes JSON:
+
+```sh
+agent-slack app create acme/slack --mode read --port 51234
+```
+
+It asks Slack to validate the manifest first (a refusal changes nothing), creates the app, and prints its app id,
+its Client ID and the exact `workspace add` command to run next. Slack returns the app's client secret and signing
+secret with it; neither is kept or shown, because the PKCE sign-in needs neither.
+
+The token is a person's to give, at a terminal. They generate it at https://api.slack.com/apps under **Your App
+Configuration Tokens** (it lasts twelve hours), then type it at the hidden prompt or set `SLACK_APP_CONFIG_TOKEN` for
+that one command. It is used for that command's calls and never stored, logged or printed; no option takes it, and
+no MCP tool does. **Never ask the user to paste it into the chat**: the transcript would keep a credential that can
+rewrite every Slack app they own. Give them the command to run themselves; without a terminal or the variable it
+refuses.
+
 ## Connecting
 
 ```sh
@@ -96,8 +115,12 @@ This is a **widening**, and an agent never does it. It takes two steps, in this 
 
 1. Update the existing app's manifest at api.slack.com to the `send` one:
    `agent-slack manifest --mode send --port <port>`. Edit the app you already have — do not create another, which
-   changes no installation.
+   changes no installation. With an app configuration token, a person can do this step from a terminal instead:
+   `agent-slack app update <name> --mode send --port <port>` edits the app the workspace recorded when it signed in.
 2. `agent-slack workspace reauth <name> --mode send --port <port>`, which asks a person to type a challenge.
+
+Step 1 alone changes nothing a token can do: the app may *ask* for posting, and the workspace still cannot post until
+step 2. `app update` says so, and prints step 2 with the port filled in.
 
 `agent-slack workspace mode <name>` reports where a workspace stands and prints these steps. A workspace signed in
 with 0.4.1 or later remembers its port, so `--port` can be left out of `workspace reauth` and `workspace mode`,
@@ -137,7 +160,12 @@ the files can say.
 - **A port mismatch between the manifest and `workspace add`.** The sign-in completes at Slack and then fails to
   return. Check both numbers say the same thing.
 - **Creating a second app instead of editing the first.** A new app is a new installation; the old one still has
-  the old scopes and the workspace still behaves as it did.
+  the old scopes and the workspace still behaves as it did. For a workspace already connected, that is `app
+  update`, never `app create`.
+- **Reading an updated app as a widened workspace.** `app update --mode send` changes what the app may ask for,
+  not what the workspace's token can do.
+- **Forgetting that `app update` replaces the app's whole configuration.** Slack's update writes the manifest as
+  given, so a name or description somebody set by hand comes back as `agent-slack`.
 - **Reading `read` mode as a guarantee about the machine.** It is a guarantee about this package's token.
 - **Assuming a scope came back after a narrowing reauth.** It did not, unless the app's installation was removed
   in Slack first. That step is not optional and is the one people skip.
