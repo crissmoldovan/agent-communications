@@ -302,14 +302,15 @@ Begin connecting a Gmail account. Returns a sign-in link and stops — this serv
 
 ### `gmail_inbox_finish`
 
-Complete a sign-in started by gmail_inbox_add or gmail_inbox_reauth, once Google has returned a grant for it. APPROVAL_PENDING means the browser flow has not completed yet and the link is still good — wait and call again, do not start a new one.
+Complete a sign-in started by gmail_inbox_add or gmail_inbox_reauth, once Google has returned a grant for it. APPROVAL_PENDING means the browser flow has not completed yet and the link is still good — wait and call again, do not start a new one. When the browser is on another machine and its page could not load, pass the whole address it ended up at as `url`. The same as `agent-gmail inbox add --finish` (or `inbox reauth --finish`).
 
 *writes*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `flowId` | string | **yes** |  |
-| `waitSeconds` | integer | no | how long to wait for the grant; default 60 |
+| `url` | string | no | the whole address the browser ended up at after the consent screen, pasted back by the user; finishes without waiting |
+| `waitSeconds` | integer | no | how long to wait for the grant, default 60 and at most 600 — the sign-in itself lasts ten minutes. Many clients give up on a call after about a minute; if yours does, keep this under that and call again. A call the client gives up on stops waiting and leaves the sign-in as it was |
 
 ### `gmail_inbox_rename`
 

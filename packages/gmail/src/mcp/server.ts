@@ -10,6 +10,7 @@ import {
 } from '@agentcomms/core';
 import { acceptedContent, inputRequired, inputResponse, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { FLOW_TTL_MS } from '../auth/flows.ts';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
 import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts';
 import { downloadAttachments, findAttachments } from '../operations/attachments.ts';
@@ -1224,16 +1225,25 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         {
           title: 'Finish connecting a mailbox',
           description:
-            'Complete a sign-in started by gmail_inbox_add or gmail_inbox_reauth, once Google has returned a grant for it. APPROVAL_PENDING means the browser flow has not completed yet and the link is still good — wait and call again, do not start a new one.',
+            'Complete a sign-in started by gmail_inbox_add or gmail_inbox_reauth, once Google has returned a grant for it. APPROVAL_PENDING means the browser flow has not completed yet and the link is still good — wait and call again, do not start a new one. When the browser is on another machine and its page could not load, pass the whole address it ended up at as `url`. The same as `agent-gmail inbox add --finish` (or `inbox reauth --finish`).',
           inputSchema: z.object({
             flowId: z.string().min(1),
+            url: z
+              .string()
+              .min(1)
+              .optional()
+              .describe(
+                'the whole address the browser ended up at after the consent screen, pasted back by the user; finishes without waiting',
+              ),
             waitSeconds: z
               .number()
               .int()
               .min(0)
-              .max(120)
+              .max(FLOW_TTL_MS / 1000)
               .optional()
-              .describe('how long to wait for the grant; default 60'),
+              .describe(
+                'how long to wait for the grant, default 60 and at most 600 — the sign-in itself lasts ten minutes. Many clients give up on a call after about a minute; if yours does, keep this under that and call again. A call the client gives up on stops waiting and leaves the sign-in as it was',
+              ),
           }),
           outputSchema: z.object({
             alias: z.string(),
@@ -1244,7 +1254,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           }),
           annotations: { readOnlyHint: false, openWorldHint: true },
         },
-        async ({ flowId, waitSeconds }) => {
+        async ({ flowId, url, waitSeconds }, ctx) => {
           try {
             /*
              * Either kind of sign-in. This finished only new mailboxes while re-authorising one was a terminal's job,
@@ -1252,8 +1262,16 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
              * Now every re-authorisation that asks for more is approved before its link exists — from a terminal or
              * through gmail_inbox_reauth — so a flow that exists has already passed the one gate it needed, and
              * finishing it here asks for nothing that finishing it at the terminal would not.
+             *
+             * `url` is `--url`: the code in it is checked against the flow's `state`, and is useless without the PKCE
+             * verifier that never leaves this machine. The wait stops when the client gives up on the call.
              */
-            const result = await finishSignIn(context, { flowId, waitSeconds: waitSeconds ?? 60 });
+            const result = await finishSignIn(context, {
+              flowId,
+              url,
+              waitSeconds: waitSeconds ?? 60,
+              signal: ctx.mcpReq.signal,
+            });
             return reply({
               alias: result.alias,
               email: result.inbox.email,

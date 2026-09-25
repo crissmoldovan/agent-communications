@@ -4,7 +4,7 @@ import { afterEach, test } from 'node:test';
 import { GmailContext } from '../src/context.ts';
 import { createDraft, getDraft } from '../src/operations/drafts.ts';
 import { type Harness, newHarness } from './support/harness.ts';
-import { applied, cli, connect, wire } from './support/surfaces.ts';
+import { applied, cli, connect, toolError, wire } from './support/surfaces.ts';
 
 /*
  * Each tool held to the command it mirrors, where the two had drifted: what it takes, what it returns, and what it
@@ -260,6 +260,116 @@ test('gmail_inbox_reauth takes the address, the port and the domain `inbox reaut
       assert.equal(new URL(link).searchParams.get('hd'), 'example.test');
       assert.equal(new URL(link).searchParams.get('login_hint'), 'jo@example.test');
     }
+  } finally {
+    await close();
+  }
+});
+
+// ── finishing a sign-in: from a pasted address, and for as long as the sign-in lives ───────────────────────
+
+/** Two accounts Google knows, a client to sign in through, and nothing connected under the names used here. */
+async function readyToConnect(): Promise<Harness> {
+  const harness = await newHarness({
+    accounts: [
+      { sub: 'sub-1', email: 'jo@example.test' },
+      { sub: 'sub-2', email: 'sam@example.test' },
+      { sub: 'sub-3', email: 'kim@example.test' },
+    ],
+  });
+  // Registers the `default` client; the mailbox itself is a third account, out of the way.
+  await harness.addInbox({ alias: 'existing', email: 'kim@example.test', sub: 'sub-3', refreshToken: 'rt' });
+  return harness;
+}
+
+test('gmail_inbox_finish finishes from the address the browser ended up at, as `--finish --url` does', async () => {
+  /*
+   * A browser on another machine from the server — over SSH, in a container — cannot reach the loopback listener,
+   * so the sign-in can only finish from the address bar pasted back. The command has always taken it; the tool
+   * ignored a `url` and waited for a redirect that could never arrive. Nothing is given away by accepting it: the
+   * code in it is useless without the PKCE verifier, which never left this machine.
+   */
+  const harness = await readyToConnect();
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    const link = wire(await call('gmail_inbox_add', { alias: 'viatool', email: 'jo@example.test' }));
+    stopLater(harness, link.flowId);
+    // Consent given, and the browser's redirect NOT followed: its address is what the person pastes.
+    const pasted = harness.google.consent(String(link.authUrl), { sub: 'sub-1' });
+    const finished = wire(await call('gmail_inbox_finish', { flowId: link.flowId, url: pasted, waitSeconds: 0 }));
+    assert.equal(finished.alias, 'viatool');
+    assert.equal(finished.email, 'jo@example.test');
+    assert.equal((await harness.core.config.load()).inboxes.viatool?.email, 'jo@example.test');
+
+    const other = wire(await call('gmail_inbox_add', { alias: 'viacli', email: 'sam@example.test' }));
+    stopLater(harness, other.flowId);
+    const byCommand = await cli(harness, [
+      'inbox',
+      'add',
+      '--finish',
+      String(other.flowId),
+      '--url',
+      harness.google.consent(String(other.authUrl), { sub: 'sub-2' }),
+      '--json',
+    ]);
+    assert.equal(byCommand.code, 0, byCommand.stdout);
+    assert.equal(byCommand.envelope<{ alias: string }>().data?.alias, 'viacli');
+
+    // A pasted address is checked against the flow it claims to finish, as at the terminal.
+    const third = wire(await call('gmail_inbox_add', { alias: 'mismatch' }));
+    stopLater(harness, third.flowId);
+    const foreign = new URL(pasted);
+    foreign.searchParams.set('state', 'not-this-flow');
+    const refused = await call('gmail_inbox_finish', { flowId: third.flowId, url: foreign.toString() });
+    assert.equal(toolError(refused).code, 'AUTH_REQUIRED');
+  } finally {
+    await close();
+  }
+});
+
+test('gmail_inbox_finish waits as long as the sign-in can, and stops waiting when the client gives up', {
+  timeout: 60_000,
+}, async () => {
+  /*
+   * It capped the wait at two minutes; `--wait` has no cap. The sign-in itself lives ten minutes, so that is the
+   * longest wait that can mean anything, and the tool now takes it. A client may give up on a call long before —
+   * most do after a minute — and a wait nobody is listening for any more must not go on to claim the grant when it
+   * arrives: the answer would reach nobody, and the next finish would find the sign-in gone.
+   */
+  const harness = await readyToConnect();
+  const { client, call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    const link = wire(await call('gmail_inbox_add', { alias: 'patient', email: 'jo@example.test' }));
+    stopLater(harness, link.flowId);
+
+    // Not finished yet: the answer says to call the tool again, not to run a command this client may not have.
+    const pending = toolError(await call('gmail_inbox_finish', { flowId: link.flowId, waitSeconds: 0 }));
+    assert.equal(pending.code, 'APPROVAL_PENDING');
+    assert.match(pending.hint ?? '', /gmail_inbox_finish/);
+    assert.doesNotMatch(pending.hint ?? '', /agent-gmail/);
+
+    await assert.rejects(
+      client.callTool(
+        { name: 'gmail_inbox_finish', arguments: { flowId: link.flowId, waitSeconds: 600 } },
+        {
+          timeout: 1_000,
+        },
+      ),
+      /timed out|timeout/i,
+      'a ten-minute wait was refused, or returned before the client gave up',
+    );
+
+    // The browser comes back after the client gave up; the abandoned wait must not be the one that takes it.
+    const response = await fetch(harness.google.consent(String(link.authUrl), { sub: 'sub-1' }));
+    assert.equal(response.status, 200);
+    await new Promise((settle) => setTimeout(settle, 1_500));
+    assert.equal((await harness.core.config.load()).inboxes.patient, undefined, 'an abandoned wait connected it');
+
+    const finished = wire(await call('gmail_inbox_finish', { flowId: link.flowId, waitSeconds: 10 }));
+    assert.equal(finished.alias, 'patient');
+
+    // Beyond the sign-in's own life is refused rather than waited for.
+    const tooLong = await call('gmail_inbox_finish', { flowId: link.flowId, waitSeconds: 601 });
+    assert.equal(tooLong.isError, true);
   } finally {
     await close();
   }

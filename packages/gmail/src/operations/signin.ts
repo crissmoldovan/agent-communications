@@ -421,6 +421,14 @@ export interface FinishOptions {
   /** How long to wait for the detached listener, in seconds. */
   waitSeconds?: number;
   pollMs?: number;
+  /**
+   * Stops the wait when whoever asked has gone — an MCP client that gave up on the call.
+   *
+   * A wait nobody is listening for must not go on to claim the grant when it arrives: the result would reach nobody,
+   * and the next finish would find the sign-in already gone. Stopping leaves the flow exactly as a timed-out wait
+   * does, ready to be finished again.
+   */
+  signal?: AbortSignal | undefined;
 }
 
 /**
@@ -491,11 +499,17 @@ async function waitForOutcome(
   const deadline = context.now().getTime() + (options.waitSeconds ?? 60) * 1000;
   const pollMs = options.pollMs ?? 500;
   for (;;) {
-    const outcome = await context.flows.readOutcome(flow.flowId);
+    // Before the outcome is read: a caller that has gone never takes the grant, even one already waiting.
+    const abandoned = options.signal?.aborted === true;
+    const outcome = abandoned ? null : await context.flows.readOutcome(flow.flowId);
     if (outcome) return outcome;
-    if (context.now().getTime() >= deadline) {
+    if (abandoned || context.now().getTime() >= deadline) {
       throw new CommsError('APPROVAL_PENDING', 'nobody has finished signing in yet', {
-        hint: `Open the link, choose the account, then run \`agent-gmail inbox ${flow.mode === 'reauth' ? 'reauth' : 'add'} --finish ${flow.flowId} --wait 60\` again.`,
+        // Named for the surface asking: over MCP the next step is the tool, not a command it may not have.
+        hint:
+          context.surface === 'mcp'
+            ? `Open the link, choose the account, then call gmail_inbox_finish with flowId ${flow.flowId} again.`
+            : `Open the link, choose the account, then run \`agent-gmail inbox ${flow.mode === 'reauth' ? 'reauth' : 'add'} --finish ${flow.flowId} --wait 60\` again.`,
         details: { flowId: flow.flowId, expiresAt: flow.expiresAt },
       });
     }
