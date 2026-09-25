@@ -14,4 +14,5 @@
 - Anything a sender controls must pass through the HTML sanitiser and the untrusted-content envelope before it
   reaches a result.
 - Keep CLI and MCP in parity: both call the same function in `packages/*/src/operations`, and every command and
-  tool has a row in `capabilities.json` — see "Adding a capability" in `CONTRIBUTING.md`.
+  tool has a row in `capabilities.json` naming that function as its `operation` — see "Adding a capability" in
+  `CONTRIBUTING.md`. `pnpm verify:parity` runs both sides of every row against stand-ins to check it.
