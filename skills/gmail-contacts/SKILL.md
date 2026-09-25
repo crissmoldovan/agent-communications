@@ -144,8 +144,8 @@ or to decide that an address is safe. It never sends, and it never decides.
    **Complete when:** every pair of rows a careless reader could confuse has been pointed at.
 
 6. **Narrow with evidence, not with judgement.** If the user needs help choosing, fetch more facts
-   rather than forming an opinion: run `gmail_contacts_search` again scoped to `--sources history`
-   to see which address actually carries traffic, or `gmail_search` (CLI: `agent-gmail search
+   rather than forming an opinion: run `gmail_contacts_search` again with `sources: ["history"]`
+   (CLI: `--sources history`) to see which address actually carries traffic, or `gmail_search` (CLI: `agent-gmail search
    "from:<address>" --inbox <name>`) to find the thread that proves who they are, and quote the
    message id. Evidence the user can check beats a confident sentence they cannot.
    **Complete when:** each candidate has something checkable attached to it, or you have said there
