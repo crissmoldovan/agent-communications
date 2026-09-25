@@ -171,18 +171,29 @@ export interface PostView {
  * `text` by the composer that made it, and a draft that is not byte for byte that payload — blocks, flags, or a field
  * nothing here writes — is refused before anyone is shown anything. Checked here because preparing, the approval
  * screen and posting all come through `viewPost`: no surface can show or send a draft this has not passed.
+ *
+ * The thread is checked for being a string first, because it is the one field composed again *from* the file rather
+ * than against it: a `thread_ts` the file holds as a number went back into the payload as that number, compared equal
+ * to itself, and passed — to fail inside the digest as UNEXPECTED, where the gate's refusal belonged, and as `null` to
+ * prepare as a message outside any thread. The composer writes a string or nothing; anything else was written by hand.
+ * (`text` and `channel` are checked to be strings when the file is read — see `isDraftShaped`.)
  */
 export function postedPayload(draft: SlackDraft): ComposedPayload {
   const stored = draft.payload;
-  const posted = payloadOf(stored.text, stored.channel, stored.thread_ts);
-  if (canonicalJson(stored) !== canonicalJson(posted)) {
-    throw new CommsError(
-      'BAD_DATA',
-      `nothing was sent: draft "${draft.draftId}" is not what its text composes to, so its preview would not be what posts`,
-      { hint: changedOutsideHint(draft.draftId), details: { draftId: draft.draftId, reason: 'not-composed' } },
-    );
-  }
+  const threadTs: unknown = stored.thread_ts;
+  if (threadTs !== undefined && typeof threadTs !== 'string') throw notComposed(draft);
+  const posted = payloadOf(stored.text, stored.channel, threadTs);
+  if (canonicalJson(stored) !== canonicalJson(posted)) throw notComposed(draft);
   return posted;
+}
+
+/** The gate's refusal of a draft that is not what its text composes to — one wording, whichever part of it differs. */
+function notComposed(draft: SlackDraft): CommsError {
+  return new CommsError(
+    'BAD_DATA',
+    `nothing was sent: draft "${draft.draftId}" is not what its text composes to, so its preview would not be what posts`,
+    { hint: changedOutsideHint(draft.draftId), details: { draftId: draft.draftId, reason: 'not-composed' } },
+  );
 }
 
 /**

@@ -863,6 +863,7 @@ test('search and files refuse a limit above the page they read, by the command a
 interface ShownDraft {
   draftId: string;
   channel: string;
+  threadTs?: string;
   text?: string;
   payload?: { text: string; blocks: unknown[] };
   source?: string;
@@ -1018,6 +1019,114 @@ test('a draft whose blocks are not its text is refused by `draft show` and `slac
     // Another workspace is told there is no such draft, as for any draft of acme's: a refusal would say it exists.
     assert.equal(failed(await call('slack_draft_get', { workspace: 'zeta', draftId })).code, 'NOT_FOUND');
     assert.equal((await cliError(harness, ['draft', 'show', draftId, '--workspace', 'zeta'])).code, 'NOT_FOUND');
+  } finally {
+    await close();
+  }
+});
+
+test('a draft whose thread_ts is not a string is refused by show, list, prepare and post, in the gate’s words', async () => {
+  /*
+   * The gate composed the payload again from the file's own `thread_ts`, whatever it held, so a number compared equal
+   * to itself and the draft passed as composed. `draft show` and `slack_draft_get` showed it as a top-level message
+   * with no problem, and preparing or posting it failed inside the digest as UNEXPECTED — `threadTs?.trim is not a
+   * function` — rather than with the gate's refusal; `null` went further, and prepared as a message outside any thread.
+   * The composer only ever writes a string, so anything else is a file changed outside agent-slack: `not-composed`,
+   * from all of them, in the same words.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'send', sendPolicy: 'chat' });
+  const asked: string[] = [];
+  const room = slack();
+  const read: FakeFetch = async (input, init) => {
+    asked.push(
+      String(input instanceof Request ? input.url : input)
+        .split('/api/')[1]
+        ?.split('?')[0] ?? '',
+    );
+    return room(input, init);
+  };
+  const store = openDraftStore(harness.core.paths.stateDir, () => new Date());
+  const { call, close } = await connect(harness, { fetch: read });
+  try {
+    for (const threadTs of [1700000000.0001, null, true, { ts: '1700000000.000100' }, ['1700000000.000100']]) {
+      const label = JSON.stringify(threadTs);
+      const { draftId } = await cliData<{ draftId: string }>(harness, [
+        'draft',
+        'create',
+        '--workspace',
+        'acme',
+        '--channel',
+        'C1',
+        '--text',
+        'on it',
+        '--thread',
+        '1700000000.000100',
+      ]);
+      // Prepared while it was as written, so that posting it has an approval to claim.
+      const { approvalId } = ok<Prepared>(await call('slack_post_prepare', { workspace: 'acme', draftId }));
+      await handEdit(harness, draftId, (draft) => {
+        (draft.payload as Record<string, unknown>).thread_ts = threadTs;
+      });
+
+      const gate = failed(await call('slack_post_prepare', { workspace: 'acme', draftId }));
+      assert.equal(gate.code, 'BAD_DATA', label);
+      assert.equal(gate.details?.reason, 'not-composed', label);
+      const refusals = {
+        'post prepare': await cliError(harness, ['post', 'prepare', '--workspace', 'acme', '--draft', draftId], read),
+        'draft show': await cliError(harness, ['draft', 'show', draftId, '--workspace', 'acme'], read),
+        slack_draft_get: failed(await call('slack_draft_get', { workspace: 'acme', draftId })),
+        'post send': await cliError(
+          harness,
+          [
+            'post',
+            'send',
+            '--workspace',
+            'acme',
+            '--draft',
+            draftId,
+            '--approval',
+            approvalId,
+            '--expect-channel',
+            'C1',
+          ],
+          read,
+        ),
+        slack_post_send: failed(
+          await call('slack_post_send', { workspace: 'acme', draftId, approvalId, expectChannel: 'C1' }),
+        ),
+      };
+      for (const [where, refused] of Object.entries(refusals)) {
+        assert.deepEqual(
+          [refused.code, refused.message, refused.hint, refused.details?.reason],
+          [gate.code, gate.message, gate.hint, 'not-composed'],
+          `${where}, thread_ts ${label}`,
+        );
+      }
+
+      // Listed with the gate's words, and with no thread, text or payload offered as what it would post.
+      const listed = await cliData<ShownDraft[]>(harness, ['draft', 'list', '--workspace', 'acme'], read);
+      assert.deepEqual(
+        listed.map((row) => [row.draftId, row.channel, row.threadTs, row.problem, row.text, row.payload]),
+        [
+          [
+            draftId,
+            'C1',
+            undefined,
+            { code: 'BAD_DATA', reason: 'not-composed', message: gate.message, hint: gate.hint },
+            undefined,
+            undefined,
+          ],
+        ],
+        label,
+      );
+      assert.deepEqual(
+        ok<{ drafts: ShownDraft[] }>(await call('slack_draft_list', { workspace: 'acme' })).drafts,
+        listed,
+        label,
+      );
+      await store.remove(draftId);
+    }
+    assert.ok(!asked.includes('chat.postMessage'), `nothing was posted: ${asked.join(', ')}`);
   } finally {
     await close();
   }

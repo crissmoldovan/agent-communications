@@ -162,7 +162,8 @@ export interface DraftView {
 
 /** The part of a view every draft has, whether or not it would post. */
 function heading(draft: SlackDraft): Pick<DraftView, 'draftId' | 'channel' | 'threadTs'> {
-  // Only a string: a file the gate refuses may hold anything here, and this is shown beside the refusal.
+  // Only a string: the gate refuses a draft holding anything else here (see `postedPayload`), and this is shown beside
+  // that refusal.
   const threadTs: unknown = draft.payload.thread_ts;
   return {
     draftId: draft.draftId,
