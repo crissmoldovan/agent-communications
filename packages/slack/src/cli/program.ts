@@ -939,9 +939,37 @@ configuration problem.`,
     .action(
       act(async (context, globalOptions, approvalId: string) => {
         /*
+         * The one command an agent may not run for the user, checked before the id is even looked up, so an agent is
+         * told to hand this to a person whatever it passed.
+         *
+         * A shell agent can defeat this — `script -q /dev/null` makes any command see a terminal — and this is a
+         * speed bump against the ordinary case, not a boundary. The boundary for an agent with a shell is the
+         * `never` policy, and a workspace installed in `read` mode, whose token cannot post at all.
+         */
+        const marker = agentMarker(env);
+        if (marker) {
+          throw new CommsError(
+            'APPROVAL_REQUIRED',
+            'only a person can approve a post, a reaction or a change, not an agent',
+            {
+              hint: `Ask the user to run \`agent-slack approve ${approvalId}\` in their own terminal.`,
+              details: { marker },
+            },
+          );
+        }
+        if (!canPrompt(env, streams, { json: globalOptions.json })) {
+          throw new CommsError(
+            'APPROVAL_REQUIRED',
+            'approving a post, a reaction or a change needs an interactive terminal',
+            {
+              hint: `Run \`agent-slack approve ${approvalId}\` directly in a terminal.`,
+            },
+          );
+        }
+        /*
          * A change approval too. `agentcomms` is not installed beside this package, and a person told to run
          * `agentcomms approve` has nothing to run — so the command they already have approves a change as well, through
-         * core's own terminal approval, which refuses an agent and anything without a terminal in the same words.
+         * core's own terminal approval.
          */
         const pending = await context.core.approvals.get(approvalId);
         if (pending && approvalKind(pending) === 'change') {
@@ -958,25 +986,6 @@ configuration problem.`,
               : 'Cancelled. Nothing was changed.\n',
           );
           return;
-        }
-        /*
-         * The one command an agent may not run for the user.
-         *
-         * A shell agent can defeat this — `script -q /dev/null` makes any command see a terminal — and this is a
-         * speed bump against the ordinary case, not a boundary. The boundary for an agent with a shell is the
-         * `never` policy, and a workspace installed in `read` mode, whose token cannot post at all.
-         */
-        const marker = agentMarker(env);
-        if (marker) {
-          throw new CommsError('APPROVAL_REQUIRED', 'only a person can approve a post, not an agent', {
-            hint: `Ask the user to run \`agent-slack approve ${approvalId}\` in their own terminal.`,
-            details: { marker },
-          });
-        }
-        if (!canPrompt(env, streams, { json: globalOptions.json })) {
-          throw new CommsError('APPROVAL_REQUIRED', 'approving a post needs an interactive terminal', {
-            hint: `Run \`agent-slack approve ${approvalId}\` directly in a terminal.`,
-          });
         }
         void (await workspaceForApproval(context, approvalId));
         const slack = { fetch: deps.read, baseUrl: deps.slackBaseUrl };

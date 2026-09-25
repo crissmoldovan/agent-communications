@@ -1773,6 +1773,16 @@ test('approving is refused to an agent, and needs a terminal', async () => {
   });
   assert.equal(asAgent.code, EXIT_CODES.APPROVAL);
   assert.match(asAgent.stdout + asAgent.stderr, /only a person can approve/);
+
+  // Before the id is looked up: an id that is not even well formed still tells an agent to hand it to a person,
+  // rather than a usage error it would try to repair.
+  const malformed = await cli(harness, ['--json', 'approve', 'ap_whatever'], { env: { CLAUDECODE: '1' } });
+  assert.equal(malformed.code, EXIT_CODES.APPROVAL, malformed.stdout);
+  assert.match(malformed.stdout + malformed.stderr, /their own terminal/);
+
+  const piped = await cli(harness, ['--json', 'approve', 'ap_whatever']);
+  assert.equal(piped.code, EXIT_CODES.APPROVAL, piped.stdout);
+  assert.match(piped.stdout + piped.stderr, /interactive terminal/);
 });
 
 test('one workspace cannot prepare or post another’s draft', async () => {

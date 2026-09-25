@@ -950,10 +950,26 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .description('approve a send or a change at this terminal: read it, then type the code back')
     .action(
       act(async (context, globalOptions, approvalId: string) => {
+        // The one command an agent may not run for the user, checked before the id is even looked up, so an agent is
+        // told to hand this to a person whatever it passed. A shell agent can defeat this — `script -q /dev/null` makes
+        // any command see a terminal — and SECURITY.md says so. It is a speed bump against the ordinary case, not a
+        // boundary; the boundary for an agent with a shell is the `never` policy and sending from Gmail.
+        const marker = agentMarker(env);
+        if (marker) {
+          throw new CommsError('APPROVAL_REQUIRED', 'only a person can approve a send or a change, not an agent', {
+            hint: `Ask the user to run \`agent-gmail approve ${approvalId}\` in their own terminal.`,
+            details: { marker },
+          });
+        }
+        if (!canPrompt(env, streams, { json: globalOptions.json, noInput: globalOptions.noInput })) {
+          throw new CommsError('APPROVAL_REQUIRED', 'approving a send or a change needs an interactive terminal', {
+            hint: `Run \`agent-gmail approve ${approvalId}\` directly in a terminal, or send the draft from Gmail.`,
+          });
+        }
         /*
          * A change approval too. `agentcomms` is not installed beside this package, and a person told to run
          * `agentcomms approve` has nothing to run — so the command they already have approves a change as well, through
-         * core's own terminal approval, which refuses an agent and anything without a terminal in the same words.
+         * core's own terminal approval.
          */
         const pending = await context.core.approvals.get(approvalId);
         if (pending && approvalKind(pending) === 'change') {
@@ -970,21 +986,6 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
               : 'Cancelled. Nothing was changed.\n',
           );
           return;
-        }
-        // The one command an agent may not run for the user. A shell agent can defeat this — `script -q /dev/null`
-        // makes any command see a terminal — and SECURITY.md says so. It is a speed bump against the ordinary case,
-        // not a boundary; the boundary for an agent with a shell is the `never` policy and sending from Gmail.
-        const marker = agentMarker(env);
-        if (marker) {
-          throw new CommsError('APPROVAL_REQUIRED', 'only a person can approve a send, not an agent', {
-            hint: `Ask the user to run \`agent-gmail approve ${approvalId}\` in their own terminal.`,
-            details: { marker },
-          });
-        }
-        if (!canPrompt(env, streams, { json: globalOptions.json, noInput: globalOptions.noInput })) {
-          throw new CommsError('APPROVAL_REQUIRED', 'approving a send needs an interactive terminal', {
-            hint: `Run \`agent-gmail approve ${approvalId}\` directly in a terminal, or send the draft from Gmail.`,
-          });
         }
         const prompt = await beginApproval(context, approvalId);
         streams.stdout.write(`${prompt.preview}\n\n`);
