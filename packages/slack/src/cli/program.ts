@@ -45,7 +45,16 @@ import { createDraft, deleteOwnDraft, listDrafts, showDraft } from '../operation
 import type { ProbeFetch } from '../operations/identity.ts';
 import { checkedPort, manifestFor } from '../operations/manifest.ts';
 import { prepareDraftPost, react, sendPost } from '../operations/post.ts';
-import { listChannels, listFiles, listPeople, readChannel, readThread, searchMessages } from '../operations/read.ts';
+import {
+  filesPaging,
+  listChannels,
+  listFiles,
+  listPeople,
+  readChannel,
+  readThread,
+  searchMessages,
+  searchPaging,
+} from '../operations/read.ts';
 import { openWorkspace } from '../operations/session.ts';
 import { finishSignIn, type ListenerEntry, runSignInListener, type StartedSignIn } from '../operations/signin.ts';
 import { checkAliasFree, listWorkspaces, requireWorkspace, showWorkspace } from '../operations/workspaces.ts';
@@ -711,13 +720,16 @@ configuration problem.`,
     .option('--page <n>', 'which page of results; `nextPage` in an incomplete result says which is next')
     .action(
       act(async (context, options, query: string, flags: Options) => {
+        // As typed, and checked before the workspace is opened: opening it reads the secret store and may renew a
+        // token with Slack, which a refusal of the number alone should not cost — see `searchPaging`. `slack_search`
+        // checks them the same way.
+        const { limit, page } = searchPaging({ limit: flags.limit, page: flags.page, surface: context.surface });
         // `teamId` too, as `read` and `thread` pass it: without it an author from another organisation was not
         // marked `external` here, while the same search over MCP marked them — one message, two answers.
         const { call, name, teamId } = await session(context, String(flags.workspace));
-        // As typed: the operation checks both, for `slack_search` too — see `SEARCH_LIMIT`.
         const result = await searchMessages(call, name, query, {
-          limit: flags.limit,
-          page: flags.page,
+          limit,
+          page,
           ourTeamId: teamId,
           surface: context.surface,
         });
@@ -732,12 +744,14 @@ configuration problem.`,
     .option('--page <n>', 'which page; an incomplete result says which is next')
     .action(
       act(async (context, options, flags: Options) => {
+        // As typed, and checked before the workspace is opened, as `search` checks them — see `filesPaging`.
+        // `slack_files` checks them the same way.
+        const { limit, page } = filesPaging({ limit: flags.limit, page: flags.page, surface: context.surface });
         const { call } = await session(context, String(flags.workspace));
-        // As typed: the operation checks both, for `slack_files` too — see `FILES_LIMIT`.
         const result = await listFiles(call, {
           channel: flags.channel as string | undefined,
-          limit: flags.limit,
-          page: flags.page,
+          limit,
+          page,
           surface: context.surface,
         });
         writeResult(result, output(), () => renderFiles(result, options.color), streams);

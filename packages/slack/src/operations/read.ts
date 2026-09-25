@@ -240,6 +240,12 @@ export const PAGE: NumberOption = { flag: '--page', arg: 'page', min: 1 };
 /** How many matches one search returns: at most one page of `search.messages`, which holds 100. */
 export const SEARCH_LIMIT: NumberOption = { flag: '--limit', arg: 'limit', min: 1, max: 100 };
 
+/** The page size and page number one request asks Slack for, once they have been checked. */
+export interface Paging {
+  readonly limit: number;
+  readonly page: number;
+}
+
 export interface SearchOptions {
   /** How many matches, as given; checked against {@link SEARCH_LIMIT}. Twenty when left out. */
   limit?: unknown;
@@ -259,7 +265,8 @@ export interface SearchOptions {
  *
  * The limit is refused above what one page holds, not cut down to it. It is also the page size, so a limit of 500
  * searched as 100 came back with a `nextPage` counted in pages of 100 — for a caller that believed it had asked for 500
- * at a time. Checked before Slack is asked anything, for the command and the tool alike.
+ * at a time. Checked before anything is read, for the command and the tool alike: each checks the numbers with
+ * {@link searchPaging} before it opens the workspace, and this checks them again for a caller that did not.
  */
 export async function searchMessages(
   call: SlackCall,
@@ -267,8 +274,7 @@ export async function searchMessages(
   query: string,
   options: SearchOptions = {},
 ): Promise<SearchResult> {
-  const limit = numberOption(options.surface, options.limit, SEARCH_LIMIT) ?? 20;
-  const page = numberOption(options.surface, options.page, PAGE) ?? 1;
+  const { limit, page } = searchPaging(options);
   const response = await callSlack(call, 'search.messages', { query, count: limit, page });
   const matches = (response.messages as Raw | undefined) ?? {};
   const raws = list(matches.matches);
@@ -292,6 +298,21 @@ export async function searchMessages(
   const current = typeof paging.page === 'number' ? paging.page : 1;
   const complete = current >= pages;
   return { query, hits, total, complete, ...(complete ? {} : { nextPage: current + 1 }) };
+}
+
+/**
+ * A search's limit and page, checked against {@link SEARCH_LIMIT} and {@link PAGE}: the numbers, or the USAGE refusal.
+ *
+ * Its own function so that each surface can call it before it opens the workspace. The session `searchMessages` is
+ * handed has already read the credential from the secret store — the keychain, in real use — and renewed a token that
+ * was due, with Slack; both surfaces opened it first, so a refusal that needed nothing but the number cost a keychain
+ * read and a token exchange.
+ */
+export function searchPaging(options: Pick<SearchOptions, 'limit' | 'page' | 'surface'>): Paging {
+  return {
+    limit: numberOption(options.surface, options.limit, SEARCH_LIMIT) ?? 20,
+    page: numberOption(options.surface, options.page, PAGE) ?? 1,
+  };
 }
 
 export interface PeopleResult {
@@ -373,10 +394,11 @@ export interface FilesOptions {
  *
  * The limit is the page size, as it is for {@link searchMessages}, and is refused above 200 rather than cut down to it
  * — for the same reason: the `page` an incomplete result names would be counted in pages the caller never asked for.
+ * Checked before anything is read, as a search's are: each surface calls {@link filesPaging} before it opens the
+ * workspace, and this checks again for a caller that did not.
  */
 export async function listFiles(call: SlackCall, options: FilesOptions = {}): Promise<FilesResult> {
-  const limit = numberOption(options.surface, options.limit, FILES_LIMIT) ?? 50;
-  const page = numberOption(options.surface, options.page, PAGE) ?? 1;
+  const { limit, page } = filesPaging(options);
   const response = await callSlack(call, 'files.list', {
     channel: options.channel,
     user: options.user,
@@ -391,6 +413,17 @@ export async function listFiles(call: SlackCall, options: FilesOptions = {}): Pr
     files: list(response.files).map(fileOf),
     complete,
     ...(complete ? {} : { page: current + 1 }),
+  };
+}
+
+/**
+ * A file list's limit and page, checked against {@link FILES_LIMIT} and {@link PAGE}: the numbers, or the USAGE refusal.
+ * Called by each surface before it opens the workspace, for the reason {@link searchPaging} is.
+ */
+export function filesPaging(options: Pick<FilesOptions, 'limit' | 'page' | 'surface'>): Paging {
+  return {
+    limit: numberOption(options.surface, options.limit, FILES_LIMIT) ?? 50,
+    page: numberOption(options.surface, options.page, PAGE) ?? 1,
   };
 }
 

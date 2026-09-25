@@ -857,6 +857,67 @@ test('search and files refuse a limit above the page they read, by the command a
   }
 });
 
+test('search and files refuse a bad limit or page before the workspace is opened: no credential read, no renewal', async () => {
+  /*
+   * The check was the operation's, but both surfaces opened the workspace first — read its credential from the secret
+   * store (the keychain, in real use) and, for a token due for renewal, spent a refresh with Slack — and only then
+   * handed the number over to be refused. A refusal that needs nothing but the number now comes before any of that.
+   */
+  const harness = await newHarness();
+  // Due for renewal: opening it exchanges the refresh token with Slack.
+  await harness.addWorkspace({
+    alias: 'acme',
+    bundle: { accessExpiresAt: new Date(Date.now() - 60_000).toISOString() },
+  });
+  // No credential at all: opening it fails, so any refusal but the number's says the store was read.
+  const bare = await harness.addWorkspace({ alias: 'bare', workspaceId: 'T0002' });
+  await (await harness.core.secrets('file')).delete(bare.secretRef);
+  const asked: string[] = [];
+  const read: FakeFetch = async (input) => {
+    asked.push(String(input instanceof Request ? input.url : input));
+    return new Response(
+      JSON.stringify({ ok: true, messages: { matches: [], paging: { page: 1, pages: 1 } }, files: [], paging: {} }),
+    );
+  };
+  const cases = [
+    { tool: 'slack_search', argv: ['search', 'standup'], args: { query: 'standup' }, arg: 'limit', value: 500 },
+    { tool: 'slack_search', argv: ['search', 'standup'], args: { query: 'standup' }, arg: 'page', value: 0 },
+    { tool: 'slack_files', argv: ['files'], args: {}, arg: 'limit', value: 0 },
+    { tool: 'slack_files', argv: ['files'], args: {}, arg: 'page', value: 0 },
+  ];
+  const { call, close } = await connect(harness, { fetch: read });
+  try {
+    for (const workspace of ['acme', 'bare']) {
+      for (const { tool, argv, args, arg, value } of cases) {
+        const label = `${tool} ${arg} ${value} on ${workspace}`;
+        const byTool = failed(await call(tool, { workspace, ...args, [arg]: value }));
+        assert.equal(byTool.code, 'USAGE', `${label}: ${byTool.message}`);
+        assert.match(byTool.message, new RegExp(`^${arg} "${value}" is not a whole number`), label);
+        const byCommand = await cliError(harness, [...argv, '--workspace', workspace, `--${arg}`, String(value)], read);
+        assert.equal(byCommand.code, 'USAGE', `${label}, by the command: ${byCommand.message}`);
+        assert.match(byCommand.message, new RegExp(`^--${arg} "${value}" is not a whole number`), label);
+      }
+    }
+    assert.deepEqual(
+      harness.calls.map((exchange) => exchange.params.grant_type),
+      [],
+      'no token was renewed',
+    );
+    assert.deepEqual(asked, [], 'Slack was asked nothing');
+
+    // In range, the same calls open the workspace: the renewal, and the missing credential, the refusals never reached.
+    ok(await call('slack_search', { workspace: 'acme', query: 'standup', limit: 20 }));
+    assert.deepEqual(
+      harness.calls.map((exchange) => exchange.params.grant_type),
+      ['refresh_token'],
+    );
+    assert.notEqual(failed(await call('slack_files', { workspace: 'bare', limit: 20 })).code, 'USAGE');
+    assert.notEqual((await cliError(harness, ['files', '--workspace', 'bare', '--limit', '20'], read)).code, 'USAGE');
+  } finally {
+    await close();
+  }
+});
+
 // ── A draft is shown as what it would post ──────────────────────────────────────────────────────────────────────
 
 /** What `draft show`, `draft list`, `slack_draft_get` and `slack_draft_list` give for one draft. */

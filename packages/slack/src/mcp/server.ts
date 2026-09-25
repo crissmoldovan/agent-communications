@@ -31,7 +31,16 @@ import { createDraft, deleteOwnDraft, listDrafts, showDraft } from '../operation
 import type { ProbeFetch } from '../operations/identity.ts';
 import { manifestFor } from '../operations/manifest.ts';
 import { prepareDraftPost, react, sendPost } from '../operations/post.ts';
-import { listChannels, listFiles, listPeople, readChannel, readThread, searchMessages } from '../operations/read.ts';
+import {
+  filesPaging,
+  listChannels,
+  listFiles,
+  listPeople,
+  readChannel,
+  readThread,
+  searchMessages,
+  searchPaging,
+} from '../operations/read.ts';
 import { openWorkspace } from '../operations/session.ts';
 import { finishSignIn, type ListenerEntry, MAX_WAIT_SECONDS, type StartedSignIn } from '../operations/signin.ts';
 import { listWorkspaces, requireWorkspace, showWorkspace } from '../operations/workspaces.ts';
@@ -514,15 +523,11 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     },
     async (args) => {
       try {
+        // The numbers before the workspace: opening it reads the secret store and may renew a token with Slack, and a
+        // refusal that needs nothing but the number should cost neither — see `searchPaging`. `search` does the same.
+        const { limit, page } = searchPaging({ limit: args.limit, page: args.page, surface: 'mcp' });
         const { call, name, teamId } = await session(await resolve(args.workspace));
-        return reply(
-          await searchMessages(call, name, args.query, {
-            limit: args.limit,
-            page: args.page,
-            ourTeamId: teamId,
-            surface: 'mcp',
-          }),
-        );
+        return reply(await searchMessages(call, name, args.query, { limit, page, ourTeamId: teamId, surface: 'mcp' }));
       } catch (error) {
         return fail(error);
       }
@@ -564,10 +569,10 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     },
     async (args) => {
       try {
+        // The numbers before the workspace, as `slack_search` checks them — see `filesPaging`. `files` does the same.
+        const { limit, page } = filesPaging({ limit: args.limit, page: args.page, surface: 'mcp' });
         const { call } = await session(await resolve(args.workspace));
-        return reply(
-          await listFiles(call, { channel: args.channel, limit: args.limit, page: args.page, surface: 'mcp' }),
-        );
+        return reply(await listFiles(call, { channel: args.channel, limit, page, surface: 'mcp' }));
       } catch (error) {
         return fail(error);
       }
