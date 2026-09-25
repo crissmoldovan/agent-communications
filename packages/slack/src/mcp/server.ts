@@ -1,4 +1,11 @@
-import { CommsError, changeToolResult, type GatedChange, gatedChange, toCommsError } from '@agentcomms/core';
+import {
+  CommsError,
+  changeToolResult,
+  type GatedChange,
+  gatedChange,
+  strictToolArguments,
+  toCommsError,
+} from '@agentcomms/core';
 import { McpServer, type Transport } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { FetchLike } from '../api/guard.ts';
@@ -195,6 +202,10 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       content: [{ type: 'text' as const, text: JSON.stringify(structured) }],
     };
   };
+
+  // Every tool registered from here on refuses a key it does not declare, and arguments its schema rejects, as USAGE
+  // in the envelope above — before its handler runs. See `strictToolArguments`.
+  strictToolArguments(server, fail);
 
   /**
    * Which workspace a call acts on, and whether it is allowed to.

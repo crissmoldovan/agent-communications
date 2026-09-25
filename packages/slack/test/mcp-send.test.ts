@@ -136,7 +136,10 @@ async function prepared(
 ): Promise<{ draftId: string; approvalId: string }> {
   const result = await call('slack_post_prepare', { workspace: 'acme', channel: 'C1', text: 'shipping now', ...args });
   assert.notEqual(result.isError, true, JSON.stringify(result.structuredContent));
-  return result.structuredContent as { draftId: string; approvalId: string };
+  // Only the two ids: the rest of the answer — the preview, the policy — is for the person, and `slack_post_send`
+  // takes no key it does not declare, so spreading the whole answer into it is refused.
+  const { draftId, approvalId } = result.structuredContent as { draftId: string; approvalId: string };
+  return { draftId, approvalId };
 }
 
 // ── Posting ────────────────────────────────────────────────────────────────────────────────────────────────────
