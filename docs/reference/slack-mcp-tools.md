@@ -290,7 +290,7 @@ The path back to read-only, as `agent-slack workspace mode <name> read` returns 
 
 ### `slack_workspace_add`
 
-Start connecting a Slack workspace through the person’s own app, in `read` (the default: its token cannot post, and Slack enforces that) or `send`. `read` starts at once. `send` is a change a person approves first: this returns `approvalRequired` with a preview — show it in full and ask; call again with `approvalId` once they say yes (under the `confirm` change policy, once they have run `agentcomms approve <id>` at their terminal; you cannot approve it yourself). Once started it returns a sign-in link and stops: give the person the link to approve in Slack, then call slack_workspace_finish. The same as `agent-slack workspace add`.
+Start connecting a Slack workspace through the person’s own app, in `read` (the default: its token cannot post, and Slack enforces that) or `send`. `read` starts at once. `send` is a change a person approves first: this returns `approvalRequired` with a preview — show it in full and ask; call again with `approvalId` once they say yes (under the `confirm` change policy, once they have run `agent-slack approve <id>` at their terminal; you cannot approve it yourself). Once started it returns a sign-in link and stops: give the person the link to approve in Slack, then call slack_workspace_finish. The same as `agent-slack workspace add`.
 
 *writes*
 
@@ -304,7 +304,7 @@ Start connecting a Slack workspace through the person’s own app, in `read` (th
 
 ### `slack_workspace_remove`
 
-Disconnect a workspace from this machine and delete its token. It cannot be taken back, so it is a change a person approves first: this returns `approvalRequired` with a preview — show it and ask; call again with `approvalId` once they say yes (under `confirm`, once they have run `agentcomms approve <id>`). The Slack app stays installed in the workspace; removing it there is the person’s step in Slack. The same as `agent-slack workspace remove`.
+Disconnect a workspace from this machine and delete its token. It cannot be taken back, so it is a change a person approves first: this returns `approvalRequired` with a preview — show it and ask; call again with `approvalId` once they say yes (under `confirm`, once they have run `agent-slack approve <id>`). The Slack app stays installed in the workspace; removing it there is the person’s step in Slack. The same as `agent-slack workspace remove`.
 
 *writes · destructive*
 
@@ -328,7 +328,7 @@ Complete a sign-in slack_workspace_add, slack_workspace_reauth or slack_mode_set
 
 ### `slack_workspace_reauth`
 
-Start signing a workspace in again, through the app it was connected with: to renew its grant, or with `mode` to change its access. The same person, workspace and app must come back, or nothing is recorded. Renewing, and `read`, start at once. `read` → `send` is a change a person approves first — this returns `approvalRequired` with a preview; show it, ask, and call again with `approvalId` once they say yes (under `confirm`, once they have run `agentcomms approve <id>`). The app’s manifest must already be `send` — slack_mode_set checks that first. Returns a sign-in link: the person approves it in Slack, then call slack_workspace_finish. The same as `agent-slack workspace reauth`.
+Start signing a workspace in again, through the app it was connected with: to renew its grant, or with `mode` to change its access. The same person, workspace and app must come back, or nothing is recorded. Renewing, and `read`, start at once. `read` → `send` is a change a person approves first — this returns `approvalRequired` with a preview; show it, ask, and call again with `approvalId` once they say yes (under `confirm`, once they have run `agent-slack approve <id>`). The app’s manifest must already be `send` — slack_mode_set checks that first. Returns a sign-in link: the person approves it in Slack, then call slack_workspace_finish. The same as `agent-slack workspace reauth`.
 
 *writes*
 
@@ -341,7 +341,7 @@ Start signing a workspace in again, through the app it was connected with: to re
 
 ### `slack_mode_set`
 
-Move a workspace to `send` (its token can post, upload and react, each still only with a person’s approval) or back to `read`. `send`, while the recorded grant cannot show its app offers posting: returns `appUpdateNeeded` with the manifest and the link to that app’s manifest page, and starts nothing — the person pastes it there and saves (or runs the `terminalAlternative` themselves; never ask for an app configuration token in chat); call again with `appUpdated: true` once they say they have. Then it is a change a person approves: `approvalRequired` and a preview — show it, ask, call again with `approvalId` (and `appUpdated`) once they say yes (under `confirm`, once they have run `agentcomms approve <id>`). Then a sign-in link: they approve it in Slack, then call slack_workspace_finish. `read` returns the procedure and changes nothing: Slack never removes a scope from a token. The same as `agent-slack workspace mode <name> send|read`.
+Move a workspace to `send` (its token can post, upload and react, each still only with a person’s approval) or back to `read`. `send`, while the recorded grant cannot show its app offers posting: returns `appUpdateNeeded` with the manifest and the link to that app’s manifest page, and starts nothing — the person pastes it there and saves (or runs the `terminalAlternative` themselves; never ask for an app configuration token in chat); call again with `appUpdated: true` once they say they have. Then it is a change a person approves: `approvalRequired` and a preview — show it, ask, call again with `approvalId` (and `appUpdated`) once they say yes (under `confirm`, once they have run `agent-slack approve <id>`). Then a sign-in link: they approve it in Slack, then call slack_workspace_finish. `read` returns the procedure and changes nothing: Slack never removes a scope from a token. The same as `agent-slack workspace mode <name> send|read`.
 
 *writes*
 
@@ -355,7 +355,7 @@ Move a workspace to `send` (its token can post, upload and react, each still onl
 
 ### `slack_workspace_policy`
 
-Report or set how this workspace’s posts and reactions are approved (`sendPolicy`: `chat`, `confirm` or `never`) and how changes to it are approved (`changePolicy`: `chat` or `confirm`). With neither, it reports. Tightening — towards `never`, towards `confirm` — applies at once. Loosening is a change a person approves first, under the change policy in force before it: this returns `approvalRequired` with a preview; show it, ask, and call again with `approvalId` once they say yes — or, under `confirm`, once they have run `agentcomms approve <id>` at their terminal. Never loosen a policy the person did not ask to loosen. The same as `agent-slack workspace policy`.
+Report or set how this workspace’s posts and reactions are approved (`sendPolicy`: `chat`, `confirm` or `never`) and how changes to it are approved (`changePolicy`: `chat` or `confirm`). With neither, it reports. Tightening — towards `never`, towards `confirm` — applies at once. Loosening is a change a person approves first, under the change policy in force before it: this returns `approvalRequired` with a preview; show it, ask, and call again with `approvalId` once they say yes — or, under `confirm`, once they have run `agent-slack approve <id>` at their terminal. Never loosen a policy the person did not ask to loosen. The same as `agent-slack workspace policy`.
 
 *writes · idempotent*
 

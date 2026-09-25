@@ -124,7 +124,7 @@ agent-slack workspace add [options] [alias]
 | `--url <url>` | with --finish, the address-bar URL, pasted back by hand | — |
 | `--no-browser` | print the link instead of opening it | — |
 | `--client-id <id>` | the app’s Client ID, from its Basic Information page | — |
-| `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved with `agentcomms approve` | — |
+| `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved with `agent-slack approve` | — |
 
 ### `agent-slack workspace list`
 
@@ -156,7 +156,7 @@ agent-slack workspace mode [options] <alias> [mode]
 | `--app-updated` | with send: the app’s manifest already asks for the send scopes | `false` |
 | `--start` | print the sign-in link and return, instead of waiting | `false` |
 | `--no-browser` | print the link instead of opening it | — |
-| `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved with `agentcomms approve` | — |
+| `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved with `agent-slack approve` | — |
 
 ### `agent-slack workspace remove`
 
@@ -168,7 +168,7 @@ agent-slack workspace remove [options] <alias>
 
 | Option | What it does | Default |
 |---|---|---|
-| `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved with `agentcomms approve` | — |
+| `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved with `agent-slack approve` | — |
 
 ### `agent-slack workspace reauth`
 
@@ -187,7 +187,7 @@ agent-slack workspace reauth [options] <alias>
 | `--wait <seconds>` | with --finish, how long to wait for the browser | `"60"` |
 | `--url <url>` | with --finish, the address-bar URL, pasted back by hand | — |
 | `--no-browser` | print the link instead of opening it | — |
-| `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved with `agentcomms approve` | — |
+| `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved with `agent-slack approve` | — |
 
 ### `agent-slack workspace policy`
 
@@ -201,7 +201,7 @@ agent-slack workspace policy [options] <alias>
 |---|---|---|
 | `--send <policy>` | how a post or reaction is approved: chat, confirm or never | — |
 | `--change <policy>` | how a change that loosens or removes it is approved: chat or confirm | — |
-| `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved with `agentcomms approve` | — |
+| `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved with `agent-slack approve` | — |
 
 ### `agent-slack doctor`
 
