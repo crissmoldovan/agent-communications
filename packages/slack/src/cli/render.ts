@@ -1,4 +1,4 @@
-import { paint, stripInvisible } from '@agentcomms/core';
+import { escapeForDisplay, paint, stripInvisible, truncateDisplay } from '@agentcomms/core';
 import { renderManifest } from '../manifest.ts';
 import type { AppCreated, AppUpdated } from '../operations/app.ts';
 import type { AppUpdateNeeded, PolicyResult } from '../operations/changes.ts';
@@ -115,16 +115,29 @@ export function renderRemoved(alias: string): string {
 }
 
 /**
+ * One value of a draft, in a row: escaped as the preview escapes it, never stripped as {@link cell} strips.
+ *
+ * A draft is the person's own outgoing text, so it is shown the way `renderChannelPreview` shows it — every hidden
+ * character made visible as `<U+XXXX>` — and not the way a workspace's words are. Stripping was right for what Slack
+ * sent and wrong here: `1\u200b0\u202e00` printed as `1000` in `draft show`, while `post prepare` printed the same
+ * draft with both marks in it, so the draft was not shown as what it would post.
+ */
+function draftCell(value: string, width: number): string {
+  return truncateDisplay(value, width);
+}
+
+/**
  * One draft as it would be posted: `draft show`.
  *
  * Its text is the payload's, decoded — what the channel would read — and never the words the file keeps as typed,
- * which nothing posts. A draft whose file was changed outside agent-slack says so under it.
+ * which nothing posts. Escaped as the preview's body is (see {@link draftCell}). A draft whose file was changed outside
+ * agent-slack says so under it.
  */
 export function renderDraft(draft: DraftView, color: boolean): string {
   const lines = [
-    `${draft.draftId}  ${cell(draft.channel, 30)}${draft.threadTs ? ` (thread ${cell(draft.threadTs, 30)})` : ''}`,
+    `${draft.draftId}  ${draftCell(draft.channel, 30)}${draft.threadTs ? ` (thread ${draftCell(draft.threadTs, 30)})` : ''}`,
     '',
-    stripInvisible(draft.text ?? '').text,
+    escapeForDisplay(draft.text ?? ''),
   ];
   if (draft.problem) {
     lines.push(
@@ -146,14 +159,14 @@ export function renderDrafts(drafts: readonly DraftView[], color: boolean): stri
   if (drafts.length === 0) return 'No drafts.';
   return drafts
     .map((draft) => {
-      const head = `${draft.draftId}  ${cell(draft.channel, 30)}`;
+      const head = `${draft.draftId}  ${draftCell(draft.channel, 30)}`;
       if (draft.text === undefined) {
         return `${head}  ${paint(color, 'yellow', cell(draft.problem?.message ?? 'cannot be posted', 200))}`;
       }
       const changed = draft.problem
         ? paint(color, 'yellow', '  · changed outside agent-slack; shown as it would post')
         : '';
-      return `${head}  ${cell(draft.text, 60)}${changed}`;
+      return `${head}  ${draftCell(draft.text, 60)}${changed}`;
     })
     .join('\n');
 }

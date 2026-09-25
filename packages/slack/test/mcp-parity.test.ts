@@ -1132,6 +1132,68 @@ test('a draft whose thread_ts is not a string is refused by show, list, prepare 
   }
 });
 
+test('`draft show` and `draft list` show a hidden character escaped, as the preview does — never silently dropped', async () => {
+  /*
+   * Both stripped them. `Approve invoice 1\u200b0\u202e00 now` printed as `Approve invoice 1000 now`, while `post
+   * prepare` printed `1<U+200B>0<U+202E>00` for the same draft: the draft was not shown as what it would post, and the
+   * difference was exactly the kind a person about to approve it needs to see. Both now escape as the preview does.
+   *
+   * Over MCP the preview carries the text as it is — neither escaped nor flagged — and so do the draft tools: what the
+   * preview says about a draft, they say.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'send', sendPolicy: 'chat' });
+  const { call, close } = await connect(harness);
+  try {
+    const text = 'Approve invoice 1\u200b0\u202e00 now';
+    const escaped = 'Approve invoice 1<U+200B>0<U+202E>00 now';
+    const { draftId } = await cliData<{ draftId: string }>(harness, [
+      'draft',
+      'create',
+      '--workspace',
+      'acme',
+      '--channel',
+      'C1\u2060',
+      '--text',
+      text,
+      '--thread',
+      '1700000000.000100\u200d',
+    ]);
+    const hidden = /\u200b|\u200d|\u202e|\u2060/;
+
+    const shown = await printed(harness, ['draft', 'show', draftId, '--workspace', 'acme']);
+    assert.ok(shown.includes(escaped), shown);
+    assert.ok(shown.includes('C1<U+2060>'), shown);
+    assert.ok(shown.includes('1700000000.000100<U+200D>'), shown);
+    const listed = await printed(harness, ['draft', 'list', '--workspace', 'acme']);
+    assert.ok(listed.includes(escaped), listed);
+    assert.ok(listed.includes('C1<U+2060>'), listed);
+    for (const [where, words] of Object.entries({ 'draft show': shown, 'draft list': listed })) {
+      assert.doesNotMatch(words, hidden, `${where} prints no hidden character as it is`);
+      assert.doesNotMatch(words, /invoice 1000/, `${where} does not drop one either`);
+    }
+
+    // The preview at a terminal shows the same text, and the same thread, the same way.
+    const preview = await printed(harness, ['post', 'prepare', '--workspace', 'acme', '--draft', draftId]);
+    assert.ok(preview.includes(escaped), preview);
+    assert.ok(preview.includes('1700000000.000100<U+200D>'), preview);
+
+    // Over MCP: the preview's body is the text as it is, unflagged, and the draft tools give that text.
+    const prepared = ok<{ preview: { body: string; warnings?: string[] } }>(
+      await call('slack_post_prepare', { workspace: 'acme', draftId }),
+    );
+    assert.equal(prepared.preview.body, text);
+    assert.deepEqual(prepared.preview.warnings ?? [], []);
+    const { draft } = ok<{ draft: ShownDraft }>(await call('slack_draft_get', { workspace: 'acme', draftId }));
+    assert.equal(draft.text, prepared.preview.body);
+    assert.equal(draft.problem, undefined);
+    const { drafts } = ok<{ drafts: ShownDraft[] }>(await call('slack_draft_list', { workspace: 'acme' }));
+    assert.deepEqual(drafts, [draft]);
+  } finally {
+    await close();
+  }
+});
+
 test('a draft the composer wrote, in this version or an older one, is not taken for one changed by hand', async () => {
   /*
    * `source` is the author's words before the composer escaped them and put any mentions in front. An older version's
