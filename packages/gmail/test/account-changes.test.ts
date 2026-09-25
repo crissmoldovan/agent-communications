@@ -506,19 +506,18 @@ test('a registration that would be refused is refused before anybody is asked to
     await clientAdd(new GmailContext({ core: harness.core, env: harness.env }), { path, name: 'desktop' });
     const web = join(tempDir(), 'web.json');
     await writeFile(web, JSON.stringify({ web: { client_id: TEST_CLIENT_ID, client_secret: 'x' } }));
+    // One missing path for both surfaces, so their messages can be compared whole — on every platform's separators.
+    const missing = join(tempDir(), 'missing.json');
     for (const [args, argv] of [
       [{ path, name: 'desktop' }, ['client', 'add', path, '--name', 'desktop']],
-      [{ path: join(tempDir(), 'missing.json') }, ['client', 'add', join(tempDir(), 'missing.json')]],
+      [{ path: missing }, ['client', 'add', missing]],
       [{ path: web }, ['client', 'add', web]],
     ] as const) {
       const before = (await harness.core.approvals.list()).length;
       const byTool = toolError(await call('gmail_client_add', { ...args }));
       const byCommand = (await cli(harness, [...argv, '--json'])).envelope().error;
       assert.equal(byTool.code, byCommand?.code, argv.join(' '));
-      assert.equal(
-        byTool.message.replace(/\/[^ ]+missing\.json/, 'X'),
-        byCommand?.message.replace(/\/[^ ]+missing\.json/, 'X'),
-      );
+      assert.equal(byTool.message, byCommand?.message);
       assert.equal((await harness.core.approvals.list()).length, before, `${argv.join(' ')} prepared an approval`);
     }
   } finally {
