@@ -436,6 +436,22 @@
       "status": "pending",
       "phase": "P2",
       "reason": "From chat this is the core server's comms_server_prune (design §5)."
+    },
+    {
+      "id": "slack.app.update",
+      "package": "slack",
+      "cli": "app update",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Needs an app configuration token, which must never pass through chat: the transcript would keep it. From chat, slack_manifest returns the manifest and the app's manifest page to paste it into (design §4, §6.4)."
+    },
+    {
+      "id": "slack.app.create",
+      "package": "slack",
+      "cli": "app create",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Needs an app configuration token, which must never pass through chat. From chat, slack_manifest returns the manifest to create the app from on api.slack.com (design §4, §6.4)."
     }
   ]
 }
