@@ -556,3 +556,24 @@ test('a pinned gmail_doctor answers for its own mailbox only, and refuses anothe
   assert.match(all, /gmail-home/);
   assert.match(all, /ibx_GONE/);
 });
+
+// ── a word that is not one of the choices ───────────────────────────────────────────────────────────────────
+
+test('a tier that is not one is refused as USAGE by gmail_inbox_reauth, as `inbox reauth --tier` refuses it', async () => {
+  const harness = await oneMailbox();
+  const byCommand = await cli(harness, ['inbox', 'reauth', 'work', '--tier', 'everything', '--start', '--json']);
+  assert.equal(byCommand.code, 64, byCommand.stdout);
+  assert.equal(byCommand.envelope().error?.code, 'USAGE');
+
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    const refused = toolError(await call('gmail_inbox_reauth', { inbox: 'work', tier: 'everything' }));
+    assert.equal(refused.code, 'USAGE');
+    assert.match(refused.message, /"everything" is not a permission tier/);
+    assert.match(refused.hint ?? '', /read, draft, organize/);
+    // Refused before anything was prepared: no approval stands for a tier that does not exist.
+    assert.deepEqual(await harness.core.approvals.list(), []);
+  } finally {
+    await close();
+  }
+});

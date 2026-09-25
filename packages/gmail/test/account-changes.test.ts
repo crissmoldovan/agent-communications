@@ -285,6 +285,10 @@ test('inbox policy refuses the same things from both surfaces, in the same words
     const cases: Array<[string[], Record<string, unknown>]> = [
       [['inbox', 'policy', 'nope', '--send', 'never'], { inbox: 'nope', sendPolicy: 'never' }],
       [['inbox', 'policy', 'work'], { inbox: 'work' }],
+      // A word that is not a policy: the operation's USAGE on both, not the tool schema's bare "Input validation
+      // error", which carried no `error.code` for an agent to branch on.
+      [['inbox', 'policy', 'work', '--send', 'loud'], { inbox: 'work', sendPolicy: 'loud' }],
+      [['inbox', 'policy', 'work', '--change', 'never'], { inbox: 'work', changePolicy: 'never' }],
     ];
     for (const [argv, args] of cases) {
       const byCommand = (await cli(harness, [...argv, '--json'])).envelope().error;

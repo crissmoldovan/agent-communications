@@ -332,7 +332,7 @@ Start signing in to a connected mailbox again: to renew a grant Google stopped h
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `inbox` | string | **yes** | the mailbox, by the name gmail_inboxes_list gives |
-| `tier` | `read` \\| `draft` \\| `organize` | no | how much access to ask for; the tier it was connected with when left out |
+| `tier` | string | no | read, draft or organize — how much access to ask for; the tier it was connected with when left out |
 | `contacts` | boolean | no | ask for the address book too; as it is now when left out |
 | `client` | string | no | sign in through this OAuth client; its own when left out |
 | `email` | string | no | the address it must turn out to be; the one it was connected with when left out |
@@ -403,8 +403,8 @@ Set how sending from a mailbox must be approved — `chat` (the user says yes in
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `inbox` | string | **yes** | which mailbox, by the name it was connected under (there is no default) |
-| `sendPolicy` | `chat` \\| `confirm` \\| `never` | no | how a send is approved |
-| `changePolicy` | `chat` \\| `confirm` | no | how a loosening of its settings is approved |
+| `sendPolicy` | string | no | how a send is approved: chat, confirm or never |
+| `changePolicy` | string | no | how a loosening of its settings is approved: chat or confirm |
 | `approvalId` | string | no | the approvalId an earlier call returned for this change, once the user has approved it |
 
 ### `gmail_draft_create`

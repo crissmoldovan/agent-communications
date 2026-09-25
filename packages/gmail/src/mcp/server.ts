@@ -1360,10 +1360,14 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
             'Start signing in to a connected mailbox again: to renew a grant Google stopped honouring, or to change how much access it has. Renewing or narrowing returns a sign-in link at once. Asking for more than the mailbox has — a wider tier, or the address book — returns `approvalRequired` and a preview first: show it verbatim, ask, and call again with `approvalId` after the user says yes. Then give the user the link, and call gmail_inbox_finish with the flowId. The same as `agent-gmail inbox reauth --start`.',
           inputSchema: z.object({
             inbox: z.string().min(1).describe('the mailbox, by the name gmail_inboxes_list gives'),
+            // A word the operation checks, as `gmail_inbox_add`'s is: a tier that is not one is refused as USAGE.
             tier: z
-              .enum(['read', 'draft', 'organize'])
+              .string()
+              .min(1)
               .optional()
-              .describe('how much access to ask for; the tier it was connected with when left out'),
+              .describe(
+                'read, draft or organize — how much access to ask for; the tier it was connected with when left out',
+              ),
             contacts: mcpBoolean().optional().describe('ask for the address book too; as it is now when left out'),
             client: z.string().min(1).optional().describe('sign in through this OAuth client; its own when left out'),
             email: z
@@ -1566,8 +1570,15 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           'Set how sending from a mailbox must be approved — `chat` (the user says yes in this conversation), `confirm` (a code typed at a terminal, or into a trusted form) or `never` (sent from Gmail only) — and how loosening its settings must be approved: `chat` or `confirm`. Stricter applies at once. Looser returns `approvalRequired` and a preview: show the preview verbatim, ask, and call again with `approvalId` only after the user says yes. The same as `agent-gmail inbox policy`.',
         inputSchema: z.object({
           inbox: inboxArgument(Boolean(pinned)),
-          sendPolicy: z.enum(['chat', 'confirm', 'never']).optional().describe('how a send is approved'),
-          changePolicy: z.enum(['chat', 'confirm']).optional().describe('how a loosening of its settings is approved'),
+          // Words, checked by the operation rather than by the schema, so a word that is not a policy is refused as
+          // USAGE with the choices named — as `--send loud` is at the terminal — instead of the SDK's "Input
+          // validation error", which carries no `error.code` for an agent to act on.
+          sendPolicy: z.string().min(1).optional().describe('how a send is approved: chat, confirm or never'),
+          changePolicy: z
+            .string()
+            .min(1)
+            .optional()
+            .describe('how a loosening of its settings is approved: chat or confirm'),
           approvalId: approvalArgument,
         }),
         outputSchema: changeOutput(
