@@ -22,6 +22,7 @@ import {
   serverPruneChange,
 } from '../operations/servers.ts';
 import type { KeyringModule, SecretStore } from '../secrets.ts';
+import { strictToolArguments } from '../tool-arguments.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -121,6 +122,9 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       content: [{ type: 'text' as const, text: JSON.stringify(structured) }],
     };
   };
+  // Every tool registered from here on refuses a key it does not declare, and arguments its schema rejects, as USAGE
+  // in the envelope above — before its handler runs. See `strictToolArguments`.
+  strictToolArguments(server, fail);
   /** One changing call: the change this tool plans, run through the one flow, returned in its one shape. */
   const change = async <T>(build: () => GatedChange<T>, approvalId: string | undefined) => {
     try {

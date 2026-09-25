@@ -43,6 +43,7 @@ export * from './sanitize.ts';
 export * from './secrets.ts';
 export * from './state.ts';
 export * from './taint.ts';
+export * from './tool-arguments.ts';
 export * from './untrusted.ts';
 export { VERSION } from './version.ts';
 
