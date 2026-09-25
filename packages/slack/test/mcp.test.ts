@@ -422,6 +422,7 @@ test('every tool says whether it writes and whether it reaches Slack', async () 
     }
     const writers = tools.filter((tool) => tool.annotations?.readOnlyHint === false).map((tool) => tool.name);
     assert.deepEqual(writers.sort(), [
+      'slack_draft_create',
       'slack_draft_delete',
       'slack_mode_set',
       'slack_post_prepare',
