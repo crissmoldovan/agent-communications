@@ -111,6 +111,13 @@ So, exactly as the Gmail composer generates the HTML part from the author's plai
 When *reading*, a message whose `text` and rendered `blocks` differ beyond whitespace is **reported as a
 mismatch**, the same way the Gmail body pipeline reports a plain/HTML mismatch. That is a signal, not an error.
 
+> **Enforced at the gate, 2026-09-25.** "No tool accepts caller-supplied `blocks`" held for every tool and command,
+> but not for the draft file: anything with a shell could rewrite a draft's `blocks`, and the preview — read from
+> `text` — then showed one message while the post sent another, with a reach the preview never counted. The gate now
+> composes the payload again from the draft's `text` and refuses the draft (`BAD_DATA`) unless the file is exactly
+> that payload, in preparing, at the approval screen and at posting alike; the post sends that composed payload, which
+> is the one the digest is taken over.
+
 ### D5 — Everything the Gmail sanitiser does, minus HTML, plus five Slack-shaped things
 
 The core package's sanitiser is provider-neutral in the parts that matter: invisible-character stripping, the

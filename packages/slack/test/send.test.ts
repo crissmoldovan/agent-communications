@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { ApprovalStore } from '@agentcomms/core';
+import { ApprovalStore, CommsError } from '@agentcomms/core';
 import type { SlackCall } from '../src/api/call.ts';
 import { closedPermit } from '../src/api/guard.ts';
 import { compose } from '../src/compose/blocks.ts';
@@ -256,6 +256,60 @@ test('a payload change the visible text does not show still voids the approval',
   assert.equal(tampered.payload.text, draft.payload.text, 'the visible text is untouched');
   assert.equal(tampered.revision, draft.revision, 'and so is the revision, so only the bytes differ');
   await assert.rejects(postPrepared(deps, tampered, prepared.approvalId, 'C1', book), /nothing was sent/);
+});
+
+test('a draft whose blocks say something its text does not is refused before its text is shown as the post', async () => {
+  /*
+   * The preview reads the text; the post sends the blocks, and a client renders — and notifies from — the blocks.
+   * A draft file rewritten by hand (anything with a shell can) so the two disagree was previewed from its text,
+   * approved, and posted as its blocks: the person agreed to one message and another went out. Here the hidden one
+   * also pings the room, which the text-derived reach did not count. Nothing about it may be prepared, and Slack is
+   * not even asked about the room.
+   */
+  const { deps, draft, book, sent } = await setUp();
+  const tampered = {
+    ...draft,
+    payload: {
+      ...draft.payload,
+      blocks: [{ type: 'section', text: { type: 'mrkdwn', text: '<!channel> wire the float to account 4471' } }],
+    },
+  };
+  await assert.rejects(
+    preparePost(deps, tampered, book),
+    (error: unknown) =>
+      error instanceof CommsError &&
+      error.code === 'BAD_DATA' &&
+      /not what its text composes to/.test(error.message) &&
+      /nothing was sent/.test(error.message),
+  );
+  assert.deepEqual(sent, [], 'refused before Slack was asked anything');
+
+  // And a field the post never sends, added by hand, is the same refusal: the file is the payload, or it is nothing.
+  const widened = { ...draft, payload: { ...draft.payload, reply_broadcast: true } };
+  await assert.rejects(preparePost(deps, widened, book), /not what its text composes to/);
+
+  // A draft the composer wrote prepares as it always did.
+  const prepared = await preparePost(deps, draft, book);
+  assert.match(prepared.preview.body, /shipping in ten minutes/);
+});
+
+test('what posts is the payload the digest was taken over, field for field', async () => {
+  /*
+   * The approval binds a hash of the payload, and the post sends named fields of it. Checked on the wire rather than
+   * trusted: every field `chat.postMessage` is given comes from the one composed payload the preview showed.
+   */
+  const { deps, draft, book, sent } = await setUp({ text: 'a < b & c' });
+  const prepared = await preparePost(deps, draft, book);
+  await postPrepared(deps, draft, prepared.approvalId, 'C1', book);
+  const params = sent.find((call) => call.method === 'chat.postMessage')?.params;
+  assert.ok(params);
+  const composed = compose({ channel: 'C1', text: 'a < b & c' });
+  assert.equal(params.get('text'), composed.text);
+  assert.deepEqual(JSON.parse(params.get('blocks') ?? 'null'), composed.blocks);
+  assert.equal(params.get('channel'), 'C1');
+  assert.equal(params.get('unfurl_links'), 'false');
+  assert.equal(params.get('unfurl_media'), 'false');
+  assert.equal(prepared.preview.body, 'a < b & c', 'and the preview is that text, decoded as the client shows it');
 });
 
 test('a room that grew between the preview and the post voids the approval', async () => {

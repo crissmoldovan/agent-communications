@@ -4,6 +4,7 @@ import {
   type ChannelPreview,
   type ClaimOptions,
   CommsError,
+  canonicalJson,
   type Expectation,
   messageDigest,
   type SendPolicy,
@@ -12,6 +13,7 @@ import {
 } from '@agentcomms/core';
 import { callSlack, type SlackCall } from '../api/call.ts';
 import { spendOn, type WritePermit } from '../api/guard.ts';
+import { type ComposedPayload, payloadOf } from '../compose/blocks.ts';
 import type { SlackDraft } from '../compose/drafts.ts';
 import { mentionedUserIds, previewOf } from '../compose/preview.ts';
 import { decodeSlackText } from '../text/decode.ts';
@@ -155,6 +157,35 @@ export interface PostView {
   readonly digest: string;
   /** Why the room could not be read, when it could not — so its reach is a gap, not a number. */
   readonly roomUnread: string | undefined;
+  /** What posts: the one payload the preview was rendered from and the digest was taken over. */
+  readonly payload: ComposedPayload;
+}
+
+/**
+ * What a draft posts: its text, composed again — and only if that is exactly what the draft file holds.
+ *
+ * The preview is read from `text`. The post sends `blocks` as well, and a client renders the blocks and notifies from
+ * them, so a draft whose blocks say something its text does not would be shown as one message and posted as another —
+ * approved on the strength of words nobody would see, reaching people the preview never counted. The composer cannot
+ * write one; a file edited by hand can, and anything with a shell can edit it. So the payload is made again from
+ * `text` by the composer that made it, and a draft that is not byte for byte that payload — blocks, flags, or a field
+ * nothing here writes — is refused before anyone is shown anything. Checked here because preparing, the approval
+ * screen and posting all come through `viewPost`: no surface can show or send a draft this has not passed.
+ */
+export function postedPayload(draft: SlackDraft): ComposedPayload {
+  const stored = draft.payload;
+  const posted = payloadOf(stored.text, stored.channel, stored.thread_ts);
+  if (canonicalJson(stored) !== canonicalJson(posted)) {
+    throw new CommsError(
+      'BAD_DATA',
+      `nothing was sent: draft "${draft.draftId}" is not what its text composes to, so its preview would not be what posts`,
+      {
+        hint: `It was changed outside agent-slack. Delete it with \`agent-slack draft delete ${draft.draftId} --workspace <name>\` and compose it again.`,
+        details: { draftId: draft.draftId, reason: 'not-composed' },
+      },
+    );
+  }
+  return posted;
 }
 
 /**
@@ -170,12 +201,14 @@ export async function viewPost(
   draft: SlackDraft,
   book: NameBook,
 ): Promise<PostView> {
-  const payload = draft.payload;
+  // Before Slack is asked anything: a draft that is not what its text composes to is shown to nobody.
+  const payload = postedPayload(draft);
   const { channel, members, why } = await roomOf(deps.call, payload.channel);
   if (channel) book.addChannel(channel);
 
   const preview = previewOf({
-    draft,
+    // Rendered from the payload that posts, not from the file it was checked against.
+    draft: { ...draft, payload },
     workspace: deps.workspaceName,
     postingAs: deps.postingAs,
     channel,
@@ -192,7 +225,7 @@ export async function viewPost(
     ...(channel?.name?.text ? { channelName: channel.name.text } : {}),
     ...(payload.thread_ts ? { threadTs: payload.thread_ts } : {}),
     visibleText: preview.body,
-    // The exact bytes, so a change to the blocks that the visible text does not show still counts as a change.
+    // The exact bytes `postPrepared` sends, so a change to any field of them counts as a change.
     payloadSha256: sha256Hex(JSON.stringify(payload)),
     notifies: {
       here: preview.notifies.here,
@@ -205,7 +238,7 @@ export async function viewPost(
     },
     attachments: [],
   };
-  return { preview, digest: messageDigest(canonical), roomUnread: why };
+  return { preview, digest: messageDigest(canonical), roomUnread: why, payload };
 }
 
 /**
@@ -220,8 +253,7 @@ export async function preparePost(deps: PrepareDeps, draft: SlackDraft, book: Na
       hint: 'The preview below is pasteable — send it yourself in Slack, or change the policy at a terminal.',
     });
   }
-  const payload = draft.payload;
-  const { preview, digest } = await viewPost(deps, draft, book);
+  const { preview, digest, payload } = await viewPost(deps, draft, book);
 
   const riskFlags = risksOf(payload, preview.notifies);
   /*
@@ -380,7 +412,6 @@ export async function postPrepared(
   expectChannel: string,
   book: NameBook,
 ): Promise<PostedMessage> {
-  const payload = draft.payload;
   /*
    * The caller restates the destination; this builds the rest.
    *
@@ -390,16 +421,17 @@ export async function postPrepared(
    * with the value `preparePost` had returned. A caller can honestly say which channel it believes it is posting
    * to; it cannot honestly restate a reach it did not measure, so it no longer pretends to.
    */
-  if (expectChannel !== payload.channel) {
+  if (expectChannel !== draft.payload.channel) {
     throw new CommsError(
       'APPROVAL_VOID',
-      `nothing was sent: this draft posts to ${payload.channel}, not ${expectChannel}`,
+      `nothing was sent: this draft posts to ${draft.payload.channel}, not ${expectChannel}`,
       {
         hint: 'Check the channel in the preview, then pass that one.',
       },
     );
   }
-  const { preview, digest } = await viewPost(deps, draft, book);
+  // The payload sent below is this one: checked against the file, previewed, and the one the digest is taken over.
+  const { preview, digest, payload } = await viewPost(deps, draft, book);
 
   await claimOrHandOver(
     deps,
@@ -423,8 +455,8 @@ export async function postPrepared(
         text: payload.text,
         blocks: JSON.stringify(payload.blocks),
         thread_ts: payload.thread_ts,
-        unfurl_links: false,
-        unfurl_media: false,
+        unfurl_links: payload.unfurl_links,
+        unfurl_media: payload.unfurl_media,
       }),
     );
     const ts = typeof response.ts === 'string' ? response.ts : '';

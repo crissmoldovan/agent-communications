@@ -137,12 +137,23 @@ export interface ComposeInput {
 export function compose(input: ComposeInput): ComposedPayload {
   const mentions = (input.mentions ?? []).map(renderMention).join(' ');
   const body = escapeForSlack(input.text);
-  const text = mentions === '' ? body : `${mentions} ${body}`;
+  return payloadOf(mentions === '' ? body : `${mentions} ${body}`, input.channel, input.threadTs);
+}
+
+/**
+ * The payload one message text posts as — Slack's `text` already escaped, mentions already written.
+ *
+ * The only place blocks are made. `compose` makes them from what the author typed, and the gate makes them again from
+ * a stored draft's `text` and refuses the draft if they are not what it holds (see `postedPayload`): the preview is
+ * read from `text`, and a client renders — and notifies from — `blocks`, so a draft whose two disagree would show one
+ * message and post another.
+ */
+export function payloadOf(text: string, channel: string, threadTs: string | undefined): ComposedPayload {
   return {
     text,
     blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }],
-    channel: input.channel,
-    ...(input.threadTs === undefined ? {} : { thread_ts: input.threadTs }),
+    channel,
+    ...(threadTs === undefined ? {} : { thread_ts: threadTs }),
     unfurl_links: false,
     unfurl_media: false,
   };

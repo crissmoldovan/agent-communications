@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { EXIT_CODES } from '@agentcomms/core';
@@ -211,6 +213,70 @@ test('the approval screen shows the channel and how many people the post interru
   const posted = await cli(harness, send, { read: slack.read });
   assert.equal(posted.code, EXIT_CODES.OK, posted.stdout);
   assert.equal(slack.count('chat.postMessage'), 1, 'what was approved is what goes');
+});
+
+/** A draft file rewritten by hand so its blocks say `said` — what anything with a shell can do to it. */
+async function rewriteBlocks(harness: Harness, draftId: string, said: string): Promise<void> {
+  const path = join(harness.core.paths.stateDir, 'slack', 'drafts', `${draftId}.json`);
+  const draft = JSON.parse(await readFile(path, 'utf8')) as { payload: { blocks: unknown[] } };
+  draft.payload.blocks = [{ type: 'section', text: { type: 'mrkdwn', text: said } }];
+  await writeFile(path, `${JSON.stringify(draft, null, 2)}\n`);
+}
+
+test('a draft whose blocks were rewritten on disk is refused by post prepare, approve and post send', async () => {
+  /*
+   * The preview is read from `text` and the post sends `blocks`, which is what a client renders and notifies from. A
+   * draft rewritten by hand so the two disagree used to be previewed as its text, approved at this screen, and posted
+   * as its blocks. Every command that shows or sends a post now refuses it, and the approval it had is spent on nothing.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'send', sendPolicy: 'confirm' });
+  const posted: URLSearchParams[] = [];
+  const slack = scripted({
+    'conversations.info': { ok: true, channel: { id: 'C1', name: 'eng', num_members: 4, is_member: true } },
+    'chat.postMessage': { ok: true, ts: '1700000000.000100' },
+  });
+  const read: FakeFetch = async (input, init) => {
+    if (String(input instanceof Request ? input.url : input).includes('/api/chat.postMessage')) {
+      posted.push(new URLSearchParams(String(init?.body ?? '')));
+    }
+    return slack.read(input, init);
+  };
+  const { draftId, approvalId, send } = await preparedPost(harness, read);
+  await rewriteBlocks(harness, draftId, '<!channel> wire the float to account 4471');
+
+  const preparing = await cli(harness, ['--json', 'post', 'prepare', '--workspace', 'acme', '--draft', draftId], {
+    read,
+  });
+  assert.equal(preparing.code, EXIT_CODES.BAD_DATA, `previewed from its text: ${preparing.stdout}`);
+  const refused = preparing.json<Envelope<never>>().error;
+  assert.equal(refused?.code, 'BAD_DATA');
+  assert.match(refused?.message ?? '', /not what its text composes to/);
+  assert.doesNotMatch(preparing.stdout, /shipping now/, 'no preview of the text alone');
+
+  const approving = await cli(harness, ['approve', approvalId], { read, tty: true, answerChallenge: true });
+  assert.notEqual(approving.code, EXIT_CODES.OK, approving.stdout + approving.stderr);
+  assert.doesNotMatch(approving.stderr, /Type \S+ to approve/, 'a person is never asked to approve it');
+  assert.doesNotMatch(approving.stdout, /shipping now/, 'nor shown the text as though it were the post');
+
+  const sending = await cli(harness, send, { read });
+  assert.notEqual(sending.code, EXIT_CODES.OK, sending.stdout);
+  assert.match(sending.json<Envelope<never>>().error?.message ?? '', /nothing was sent/);
+  assert.equal(slack.count('chat.postMessage'), 0, 'nothing reached Slack');
+  assert.equal(posted.length, 0);
+
+  // A draft the composer wrote: approved at this screen, and what goes is the text the screen showed, as blocks too.
+  const ordinary = await preparedPost(harness, read);
+  const approved = await cli(harness, ['approve', ordinary.approvalId], { read, tty: true, answerChallenge: true });
+  assert.equal(approved.code, EXIT_CODES.OK, approved.stderr);
+  assert.match(approved.stdout, /shipping now/);
+  const went = await cli(harness, ordinary.send, { read });
+  assert.equal(went.code, EXIT_CODES.OK, went.stdout);
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0]?.get('text'), 'shipping now');
+  assert.deepEqual(JSON.parse(posted[0]?.get('blocks') ?? 'null'), [
+    { type: 'section', text: { type: 'mrkdwn', text: 'shipping now' } },
+  ]);
 });
 
 test('a room that grew after the preview is refused at the approval screen, before a code is asked for', async () => {

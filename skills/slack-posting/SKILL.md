@@ -90,6 +90,7 @@ do next on the surface you are using. Tell the person, and stop. Once they have 
 | Refusal | What happened |
 |---|---|
 | the draft was edited after the preview | The approved bytes are the posted bytes, or nothing is |
+| the draft is not what its text composes to (`BAD_DATA`) | Its file was changed outside agent-slack, so a preview of its text would not be what posts. Delete it and compose it again |
 | the room grew after the preview | The words did not change; who reads them did |
 | the channel given is not the draft's | You were about to post somewhere other than where you think |
 | already claimed | An approval is single-use, across processes |

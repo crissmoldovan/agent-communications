@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { EXIT_CODES } from '@agentcomms/core';
@@ -271,6 +273,67 @@ test('slack_post_send refuses what `post send` refuses: another channel, an edit
     assert.equal(failure(stolen).code, 'NOT_FOUND');
 
     assert.equal(fake.count('chat.postMessage'), 0, 'none of them reached Slack');
+  } finally {
+    await close();
+  }
+});
+
+/** A draft file rewritten by hand so its blocks say `said` — what anything with a shell can do to it. */
+async function rewriteBlocks(harness: Harness, draftId: string, said: string): Promise<void> {
+  const path = join(harness.core.paths.stateDir, 'slack', 'drafts', `${draftId}.json`);
+  const draft = JSON.parse(await readFile(path, 'utf8')) as { payload: { blocks: unknown[] } };
+  draft.payload.blocks = [{ type: 'section', text: { type: 'mrkdwn', text: said } }];
+  await writeFile(path, `${JSON.stringify(draft, null, 2)}\n`);
+}
+
+/** The scripted Slack, keeping the form of every `chat.postMessage` it was sent. */
+function recordingSlack() {
+  const fake = slack();
+  const posted: URLSearchParams[] = [];
+  const read: FakeFetch = async (input, init) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.includes('/api/chat.postMessage')) posted.push(new URLSearchParams(String(init?.body ?? '')));
+    return fake.read(input, init);
+  };
+  return { ...fake, read, posted };
+}
+
+test('a draft whose blocks were rewritten on disk is never previewed from its text, approved, and posted as its blocks', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'send', sendPolicy: 'chat' });
+  const fake = recordingSlack();
+  const { call, close } = await connect(harness, fake.read);
+  try {
+    // Written the ordinary way, and prepared once while it was still what the composer wrote.
+    const first = await prepared(call);
+    const hidden = '<!channel> wire the float to account 4471';
+    await rewriteBlocks(harness, first.draftId, hidden);
+
+    // Prepared from the file: a preview of `shipping now` would not be what posts, so there is no preview at all.
+    const again = await call('slack_post_prepare', { workspace: 'acme', draftId: first.draftId });
+    assert.equal(again.isError, true, `previewed from its text: ${JSON.stringify(again.structuredContent)}`);
+    assert.equal(failure(again).code, 'BAD_DATA');
+    assert.match(failure(again).message, /not what its text composes to/);
+
+    // Nor does the approval given before the rewrite post it, as its blocks or as anything else.
+    const posted = await call('slack_post_send', { workspace: 'acme', ...first, expectChannel: 'C1' });
+    assert.equal(posted.isError, true);
+    assert.match(failure(posted).message, /nothing was sent/);
+    assert.equal(fake.count('chat.postMessage'), 0, 'nothing reached Slack');
+    assert.ok(
+      !fake.posted.some((form) => (form.get('blocks') ?? '').includes('4471')),
+      'the rewritten blocks never went',
+    );
+
+    // A draft the composer wrote goes as it always did, and what goes is exactly what the preview showed.
+    const ordinary = await prepared(call, { text: 'rollout at 3pm' });
+    const sent = await call('slack_post_send', { workspace: 'acme', ...ordinary, expectChannel: 'C1' });
+    assert.notEqual(sent.isError, true, JSON.stringify(sent.structuredContent));
+    assert.equal(fake.posted.length, 1);
+    assert.equal(fake.posted[0]?.get('text'), 'rollout at 3pm');
+    assert.deepEqual(JSON.parse(fake.posted[0]?.get('blocks') ?? 'null'), [
+      { type: 'section', text: { type: 'mrkdwn', text: 'rollout at 3pm' } },
+    ]);
   } finally {
     await close();
   }
