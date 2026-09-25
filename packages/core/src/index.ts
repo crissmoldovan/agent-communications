@@ -21,6 +21,7 @@ export * from './mcp-clients.ts';
 export * from './mcp-install.ts';
 export * from './name-grammar.ts';
 export * from './names.ts';
+export * from './numbers.ts';
 /*
  * The registration and pruning changes, for the channels' own `mcp install` and `mcp prune`: the one change the core
  * server's `comms_server_install` and `comms_server_prune` make, so an approval for either is the other's too.

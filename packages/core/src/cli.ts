@@ -13,6 +13,7 @@ import { openCore } from './core.ts';
 import { CommsError, EXIT_CODES } from './errors.ts';
 import { installExitStatus, type Launcher, type SupportedClient } from './mcp-install.ts';
 import type { NamesMigrationRow, NotApplicableRename } from './names.ts';
+import { wholeNumber } from './numbers.ts';
 import {
   type ChangePolicyReport,
   changePolicyChange,
@@ -188,10 +189,8 @@ export async function main(
       }
       case 'audit': {
         if (sub !== 'tail') throw usage('usage: agentcomms audit tail');
-        const limit = values.limit ? Number.parseInt(values.limit, 10) : undefined;
-        if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
-          throw usage('--limit must be a positive whole number');
-        }
+        // Checked as typed: `Number.parseInt` read `1e2` as 1 and `12abc` as 12.
+        const limit = wholeNumber(values.limit, { name: '--limit', min: 1 });
         const records = await auditTail(core, { inbox: values.inbox, since: values.since, limit });
         writeResult(records, output, (rs) =>
           rs.length

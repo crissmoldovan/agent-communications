@@ -70,6 +70,22 @@ test('audit tail and approvals list work on an empty config', () => {
   assert.equal(missing.status, 66);
 });
 
+test('audit tail --limit takes a whole number of 1 or more and refuses anything else as USAGE, naming it', () => {
+  // `Number.parseInt` read `1e2` as 1 and `12abc` as 12, and printed that many records as if they had been asked for.
+  for (const limit of ['1e2', '12abc', 'abc', '0', '-1', '2.5', '0x10']) {
+    // `--inbox nope` names nothing: refused as USAGE rather than NOT_FOUND, the limit was checked before it was read.
+    const refused = run(['audit', 'tail', `--limit=${limit}`, '--inbox', 'nope', '--json']);
+    assert.equal(refused.status, 64, `--limit ${limit}: ${refused.stdout}`);
+    const error = JSON.parse(refused.stdout).error;
+    assert.equal(error.code, 'USAGE');
+    assert.equal(error.message, `--limit "${limit}" is not a whole number of 1 or more`);
+  }
+  for (const limit of ['1', '007', '500']) {
+    const taken = run(['audit', 'tail', '--limit', limit, '--json']);
+    assert.equal(taken.status, 0, `--limit ${limit}: ${taken.stdout}`);
+  }
+});
+
 test('audit tail --inbox and approvals list --inbox refuse a former name with the current one', () => {
   const config = tempDir();
   writeFileSync(
