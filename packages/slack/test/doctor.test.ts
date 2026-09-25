@@ -94,6 +94,58 @@ test('an interrupted refresh is a failure that says reauth, not a retry', () => 
   assert.equal(result.healthy, false);
 });
 
+test('a refresh Slack refused by name says so, with the code, rather than "interrupted"', () => {
+  /*
+   * The first real refresh failure has to be diagnosable from `doctor`. Every terminal refresh used to print the
+   * same sentence, so `invalid_refresh_token`, a lost reply and a killed process were indistinguishable.
+   */
+  const dead = doctor({
+    config: config({ acme: account() }),
+    now: NOW,
+    bundles: new Map([
+      [
+        'acme',
+        bundle({
+          state: 'refresh-uncertain',
+          reason: { kind: 'dead', stage: 'refused', slackError: 'invalid_refresh_token', at: NOW.toISOString() },
+        }),
+      ],
+    ]),
+  });
+  const check = find(dead, 'credential-state');
+  assert.equal(check?.status, 'fail');
+  assert.match(check?.detail ?? '', /no longer valid \(invalid_refresh_token\)/);
+  assert.match(check?.fix ?? '', /workspace reauth acme/);
+
+  const lost = doctor({
+    config: config({ acme: account() }),
+    now: NOW,
+    bundles: new Map([
+      [
+        'acme',
+        bundle({
+          state: 'refresh-uncertain',
+          reason: { kind: 'uncertain', stage: 'http', httpStatus: 503, at: NOW.toISOString() },
+        }),
+      ],
+    ]),
+  });
+  assert.match(find(lost, 'credential-state')?.detail ?? '', /did not complete \(http, 503\)/);
+});
+
+test('a secret store that will not answer is its own finding, and its fix is not reauth', () => {
+  const result = doctor({
+    config: config({ acme: account() }),
+    now: NOW,
+    bundles: new Map([['acme', { storeUnavailable: 'the system keychain did not answer within 12s' }]]),
+  });
+  const check = find(result, 'credential');
+  assert.equal(check?.status, 'fail');
+  assert.match(check?.detail ?? '', /secret store could not be read.*did not answer/);
+  assert.doesNotMatch(check?.fix ?? '', /reauth/, 're-authorising would discard a refresh token nothing says is bad');
+  assert.doesNotMatch(check?.detail ?? '', /corrupt/);
+});
+
 test('an expiring refresh token warns while reauthorising is still a choice', () => {
   // Slack expires them 30 days after issue. A workspace nobody has touched for a month just stops working, and
   // the failure gives no hint that the clock was the cause.

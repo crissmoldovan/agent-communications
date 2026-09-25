@@ -903,33 +903,6 @@ test('a throttled Slack is not reported as a revoked token', async () => {
   assert.match(identity?.detail ?? '', /could not answer right now/);
 });
 
-test('an already-expired token is not asked about, because the answer would mean nothing', async () => {
-  /*
-   * Slack would refuse it, and the refusal would read as a credential problem. It is not one: an expired access
-   * token is the ordinary state of a workspace nobody has used today, and `credential-state` already says so.
-   */
-  const harness = await newHarness();
-  await harness.addWorkspace({ alias: 'acme', bundle: { accessExpiresAt: '2020-01-01T00:00:00.000Z' } });
-  /*
-   * Counted, not `assert.fail`ed inside the probe.
-   *
-   * `probeIdentity` turns every thrown thing into `{ kind: 'unreachable' }` on purpose, so an assertion raised
-   * in there is swallowed and the test passes whatever the code does. Found by deleting the guard and watching
-   * nothing fail.
-   */
-  let asked = 0;
-  harness.probe = () => {
-    asked += 1;
-    return Promise.resolve(harness.authTest());
-  };
-
-  const result = await cli(harness, ['--json', 'doctor']);
-  assert.equal(asked, 0, 'doctor asked Slack about a token it already knew was stale');
-  const checks = result.json<Envelope<{ checks: { id: string; status: string; detail: string }[] }>>().data?.checks;
-  assert.equal(checks?.find((check) => check.id === 'identity')?.status, 'unknown');
-  assert.match(checks?.find((check) => check.id === 'credential-state')?.detail ?? '', /expired/);
-});
-
 test('a widening a person approved actually goes through', async () => {
   /*
    * The half the refusal tests never covered: that the key works, not only that the door is locked.

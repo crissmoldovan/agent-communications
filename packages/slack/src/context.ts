@@ -46,11 +46,26 @@ async function postExchange(params: Record<string, string>): Promise<unknown> {
     body: new URLSearchParams(params).toString(),
     signal: AbortSignal.timeout(30_000),
   });
-  // Slack answers 200 with `ok:false` for a refusal, so the status is not the thing to read — but a 5xx has no
-  // JSON body at all, and letting `json()` throw would report a parse error for an outage.
+  /*
+   * Slack answers 200 with `ok:false` for a refusal, so the status is not the thing to read — but a 5xx has no
+   * JSON body at all, and letting `json()` throw would report a parse error for an outage.
+   *
+   * Every failure here says which step it was and what status came back, in `details`. A refresh decides from
+   * that whether the token it sent may have been used: a 429 is the rate limiter turning the request away
+   * (Slack's `ratelimited`, often with no body), while a 5xx or an unreadable reply may have followed a request
+   * Slack acted on. Fetch's own rejection is left to propagate untouched, because its `cause` code is the evidence
+   * of whether anything was sent at all.
+   */
+  if (response.status === 429) {
+    throw new CommsError('TRANSIENT', 'Slack is rate-limiting the token exchange', {
+      hint: 'Try again shortly.',
+      details: { stage: 'http', httpStatus: 429, slackError: 'ratelimited' },
+    });
+  }
   if (!response.ok && response.status >= 500) {
     throw new CommsError('TRANSIENT', `Slack returned ${response.status} for the token exchange`, {
       hint: 'Try again in a moment.',
+      details: { stage: 'http', httpStatus: response.status },
     });
   }
   try {
@@ -58,6 +73,7 @@ async function postExchange(params: Record<string, string>): Promise<unknown> {
   } catch {
     throw new CommsError('PROVIDER_UNAVAILABLE', 'Slack’s reply to the token exchange was not readable', {
       hint: 'Try again; if it persists, check https://status.slack.com.',
+      details: { stage: 'unreadable', httpStatus: response.status },
     });
   }
 }

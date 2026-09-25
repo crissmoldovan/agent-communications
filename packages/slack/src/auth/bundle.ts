@@ -35,15 +35,47 @@ export type BundleState =
    */
   | 'refreshing'
   /**
-   * A refresh was sent and its outcome is unknown: a timeout, a malformed reply, or a process that died with a
-   * `refreshing` marker still on disk.
+   * The refresh token must not be presented again, and recovering means re-authorising.
    *
-   * There is no transaction spanning Slack and this machine and no idempotency key, so this is genuinely
-   * unknowable rather than merely unknown — the refresh token may or may not have been consumed. The old access
-   * token is kept because it may still work for up to twelve hours, and the refresh token is **never**
-   * automatically reused: recovering means re-authorising.
+   * Originally only "a refresh was sent and its outcome is unknown" — a timeout, a malformed reply, a process that
+   * died with a `refreshing` marker on disk. It now also covers a refresh token Slack has said outright is dead,
+   * and `reason` says which. That is one state with a reason rather than a second terminal state on purpose: a
+   * 0.4.0 process reading the same credential knows only these three strings, refuses to refresh exactly
+   * `refreshing` and `refresh-uncertain`, and would treat any new name as refreshable — presenting a token Slack
+   * has already refused. Unknown *fields* it carries through untouched, so the reason survives it.
+   *
+   * The old access token is kept because it may still work for up to twelve hours, and the refresh token is
+   * **never** automatically reused.
    */
   | 'refresh-uncertain';
+
+/**
+ * Where in a refresh a failure happened. Recorded so the first real failure can be diagnosed from what was kept.
+ *
+ * `guard` is this package's own refusal before anything left; `network` is `fetch` rejecting; `http` is a status
+ * with no usable body; `unreadable` a body that did not parse; `refused` Slack's `ok:false`; `parse` an `ok:true`
+ * reply without a usable credential; `store` the write afterwards.
+ */
+export type RefreshStage = 'guard' | 'network' | 'http' | 'unreadable' | 'refused' | 'parse' | 'store';
+
+/**
+ * Why a credential is `refresh-uncertain`. Holds nothing secret — Slack's error code, never its token.
+ *
+ * - `dead`: Slack said the refresh token is no longer valid, or accepted it and sent back nothing usable. Spent
+ *   for certain; nothing to retry.
+ * - `uncertain`: the request may have reached Slack and its reply been lost. Unknowable from here.
+ * - `interrupted`: a `refreshing` marker nobody finished — a process killed mid-refresh.
+ */
+export interface RefreshFailureReason {
+  readonly kind: 'dead' | 'uncertain' | 'interrupted';
+  readonly stage?: RefreshStage | undefined;
+  readonly slackError?: string | undefined;
+  readonly httpStatus?: number | undefined;
+  readonly networkCode?: string | undefined;
+  /** The attempt this came from, so this process's own unsaved result can still be written over it. */
+  readonly attemptId?: string | undefined;
+  readonly at: string;
+}
 
 export interface TokenBundle {
   readonly v: typeof BUNDLE_VERSION;
@@ -64,6 +96,8 @@ export interface TokenBundle {
   readonly issuedAt: string;
   /** Set while `refreshing`, so a marker left by a dead process can be told from one a live process just wrote. */
   readonly attempt?: { readonly id: string; readonly startedAt: string } | undefined;
+  /** Set only on `refresh-uncertain`: what put it there. Absent on a credential an older version marked. */
+  readonly reason?: RefreshFailureReason | undefined;
 }
 
 /** Refresh this long before the access token actually expires, so a slow call does not race the deadline. */

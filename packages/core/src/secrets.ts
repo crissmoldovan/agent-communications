@@ -22,6 +22,15 @@ export interface SecretStore {
   delete(ref: string): Promise<boolean>;
   /** Forgets any cached value, so the next read goes to the backend (e.g. after another process re-authorised). */
   invalidate(ref: string): void;
+  /**
+   * Resolves once no earlier call is still occupying the backend. Absent on a store with nothing to wait for.
+   *
+   * For a caller that must not give up on a write: the keychain fails every call fast while a timed-out native call
+   * is still held by an OS dialog, so retrying on a timer spends every attempt against the same stuck call. A
+   * refresh that has already spent Slack's single-use token is that caller — it has one value it cannot get again,
+   * and waiting for the dialog to be answered is the only retry that can succeed.
+   */
+  settled?(): Promise<void>;
 }
 
 export const KEYCHAIN_SERVICE = 'agent-communications';
@@ -205,6 +214,16 @@ export class KeychainSecretStore implements SecretStore {
 
   invalidate(ref: string): void {
     this.#cache.delete(ref);
+  }
+
+  /**
+   * Waits for a native call that outlived its timeout to finish, however it finishes.
+   *
+   * Never rejects: the stuck call's outcome belongs to whoever made it, and has already been reported to them as a
+   * timeout. What a waiter needs is only the moment the keychain is free to be asked again.
+   */
+  async settled(): Promise<void> {
+    while (this.#stuck) await this.#stuck;
   }
 
   async get(ref: string): Promise<string | null> {

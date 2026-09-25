@@ -33,6 +33,11 @@ export interface DoctorResult {
   readonly checks: readonly Check[];
 }
 
+/** The secret store would not answer, and why, in its own words. Says nothing about the credential inside it. */
+export interface StoreUnavailable {
+  readonly storeUnavailable: string;
+}
+
 /** What one `auth.test` came back with, or why it could not be made. */
 export type IdentityProbe =
   | { readonly kind: 'ok'; readonly workspaceId: string; readonly userId: string; readonly scopes?: readonly string[] }
@@ -49,8 +54,13 @@ export interface DoctorInput {
    * means it holds something this cannot parse. Collapsing the second into the first sent somebody to
    * `workspace add` — connect it, it is not connected — when the truthful answer is that it *is* connected and
    * the credential is corrupt, which `reauth` repairs and `add` refuses outright as a duplicate.
+   *
+   * And a fourth: `{ storeUnavailable }`, the secret store itself would not answer — a locked keychain, a prompt
+   * nobody has approved, a missing keyring module. That was reported as `'unreadable'`, whose fix is `reauth`: the
+   * one piece of advice that throws away a refresh token which is almost certainly fine, to cure a keychain that
+   * only needed unlocking.
    */
-  readonly bundles: ReadonlyMap<string, TokenBundle | null | 'unreadable'>;
+  readonly bundles: ReadonlyMap<string, TokenBundle | null | 'unreadable' | StoreUnavailable>;
   /**
    * What ordinary traffic has already observed about rate limiting. Empty until S3 does any reading.
    *
@@ -112,6 +122,19 @@ export function doctor(input: DoctorInput): DoctorResult {
   for (const workspace of workspaces) {
     const bundle = input.bundles.get(workspace.alias) ?? null;
 
+    if (bundle !== null && typeof bundle === 'object' && 'storeUnavailable' in bundle) {
+      checks.push({
+        id: 'credential',
+        title: `Credential for ${workspace.alias}`,
+        status: 'fail',
+        detail: `the secret store could not be read, so the credential was not checked: ${bundle.storeUnavailable}`,
+        // Not `reauth`: nothing says the credential is wrong, and re-authorising would discard a working one.
+        fix: 'Unlock the keychain or approve its prompt, then run `agent-slack doctor` again; `agentcomms doctor` checks the store itself.',
+        workspace: workspace.alias,
+      });
+      continue;
+    }
+
     if (bundle === null || bundle === 'unreadable') {
       checks.push({
         id: 'credential',
@@ -135,11 +158,31 @@ export function doctor(input: DoctorInput): DoctorResult {
      * puzzling failure in a week and an instruction now.
      */
     if (bundle.state === 'refresh-uncertain') {
+      /*
+       * Why, when the credential says. The first real refresh failure has to be diagnosable from here, and
+       * "interrupted" was printed for a token Slack had refused by name just as for a process killed mid-call.
+       */
+      const reason = bundle.reason;
+      const why =
+        reason?.kind === 'dead'
+          ? reason.slackError
+            ? `Slack said the refresh token is no longer valid (${reason.slackError})`
+            : 'Slack renewed the token, but its reply held no credential this could use'
+          : reason?.kind === 'uncertain'
+            ? `a token refresh did not complete (${[
+                reason.stage,
+                reason.slackError,
+                reason.httpStatus,
+                reason.networkCode,
+              ]
+                .filter((part) => part !== undefined)
+                .join(', ')}), and Slack refresh tokens cannot be retried safely`
+            : 'a token refresh was interrupted, and Slack refresh tokens cannot be retried safely';
       checks.push({
         id: 'credential-state',
         title: `Sign-in for ${workspace.alias}`,
         status: 'fail',
-        detail: 'a token refresh was interrupted, and Slack refresh tokens cannot be retried safely',
+        detail: reason?.at ? `${why}; at ${reason.at}` : why,
         fix: `agent-slack workspace reauth ${workspace.alias}`,
         workspace: workspace.alias,
       });

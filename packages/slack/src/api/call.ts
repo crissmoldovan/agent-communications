@@ -28,6 +28,14 @@ export interface SlackCall {
   signal?: AbortSignal | undefined;
   /** Bound per call, not per operation: a paginated read makes many, and one budget for all of them is a hang. */
   timeoutMs?: number | undefined;
+  /**
+   * A replacement for a token Slack has just rejected, or null when there is none. Set by `openWorkspace`.
+   *
+   * The stored expiry is the only thing that normally starts a refresh, and it can be wrong: a clock more than ten
+   * minutes out, or another sign-in of the same user and app whose refreshes revoke this token early. Without this
+   * every call would fail `invalid_auth` until the recorded expiry passed — up to twelve hours.
+   */
+  renew?: ((rejected: string) => Promise<string | null>) | undefined;
 }
 
 export interface SlackResponse {
@@ -107,16 +115,42 @@ function body(params: Record<string, string | number | boolean | undefined>): st
   return form.toString();
 }
 
+/** What Slack says about a token that no longer works — the rejections a renewed token can fix. */
+const RENEWABLE: ReadonlySet<string> = new Set(['invalid_auth', 'token_expired', 'token_revoked']);
+
 /**
  * One call.
  *
  * Every read goes through here, which is what makes "reads never carry a permit" and "every failure is mapped"
  * true by construction rather than by each operation remembering.
+ *
+ * A token Slack rejects is renewed once and the call made again — never for a write. The permit is spent by the
+ * first attempt whether or not Slack accepted it, so a second would be refused by the guard, and a post is a
+ * person's act at a terminal who can simply run it again.
  */
 export async function callSlack(
   call: SlackCall,
   method: string,
   params: Record<string, string | number | boolean | undefined> = {},
+): Promise<SlackResponse> {
+  const writing = (call.permit?.approvalId ?? null) !== null;
+  try {
+    return await callOnce(call, method, params);
+  } catch (error) {
+    const slackError = error instanceof CommsError ? error.details?.slackError : undefined;
+    if (writing || !call.renew || typeof slackError !== 'string' || !RENEWABLE.has(slackError)) throw error;
+    const fresh = await call.renew(call.token);
+    if (fresh === null || fresh === call.token) throw error;
+    // Kept on the call, so the rest of a paginated read uses it rather than being rejected page by page.
+    call.token = fresh;
+    return callOnce({ ...call, renew: undefined }, method, params);
+  }
+}
+
+async function callOnce(
+  call: SlackCall,
+  method: string,
+  params: Record<string, string | number | boolean | undefined>,
 ): Promise<SlackResponse> {
   const send = guardSlackRequests(call.fetch ?? (fetch as FetchLike), call.permit ?? closedPermit());
   const url = new URL(`/api/${method}`, call.baseUrl ?? SLACK_ORIGIN);

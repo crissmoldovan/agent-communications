@@ -272,6 +272,50 @@ test('a locked or hanging keychain fails fast with a CONFIG error, never a silen
   );
 });
 
+test('settled() waits out a keychain call that outlived its timeout, so the next write can succeed', async () => {
+  /*
+   * The refresh path's one unrepeatable write depends on this. After a timeout the store fails every call fast
+   * until the stuck native call finishes, so a caller retrying on a timer spends every attempt against the same
+   * dialog. `settled()` is the moment asking again can work.
+   */
+  const { module, data } = fakeKeyring();
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let stall = true;
+  const original = module.AsyncEntry;
+  const Stalling = class extends (original as unknown as new (
+    ...args: unknown[]
+  ) => {
+    setPassword(value: string): Promise<void>;
+  }) {
+    override async setPassword(value: string): Promise<void> {
+      if (stall) {
+        stall = false;
+        await held;
+      }
+      return super.setPassword(value);
+    }
+  };
+  const store = new KeychainSecretStore({ AsyncEntry: Stalling } as unknown as KeyringModule, 'ns', 30);
+  await assert.rejects(store.set('a', 'first'), /did not answer/);
+  await assert.rejects(store.set('a', 'second'), /did not answer/, 'a stuck call makes the next one fail fast');
+
+  let done = false;
+  const waiting = store.settled().then(() => {
+    done = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(done, false, 'settled() resolved while the native call was still held');
+  release();
+  await waiting;
+  await store.set('a', 'third');
+  assert.equal(data.get('ns:a'), 'third', 'the write after settling reached the keychain');
+  // Nothing stuck: resolves at once.
+  await new KeychainSecretStore(fakeKeyring().module, 'ns').settled();
+});
+
 test('probeKeychain reports ok only after a full round trip through the keychain itself', async () => {
   const { module, data } = fakeKeyring();
   assert.deepEqual(await probeKeychain(module), { ok: true });

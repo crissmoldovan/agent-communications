@@ -10,20 +10,22 @@ import {
   renderChannelPreview,
   requirePerson,
   runCommand,
+  type SecretStore,
   type Streams,
+  toCommsError,
   withCredentialsLock,
   writeResult,
 } from '@agentcomms/core';
 import { Command, CommanderError, Option } from 'commander';
 import type { FetchLike } from '../api/guard.ts';
 import { closedPermit } from '../api/guard.ts';
-import { isExpired, parseBundle, type TokenBundle } from '../auth/bundle.ts';
+import { isDue, isExpired, parseBundle, type TokenBundle } from '../auth/bundle.ts';
 import { compose, type Mention } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
-import { doctor, type IdentityProbe } from '../operations/doctor.ts';
+import { doctor, type IdentityProbe, type StoreUnavailable } from '../operations/doctor.ts';
 import { type ProbeFetch, probeIdentity } from '../operations/identity.ts';
 import { modeReport, narrowingSteps, wideningSteps } from '../operations/mode.ts';
 import { NameBook } from '../operations/people.ts';
@@ -477,13 +479,40 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
     .action(
       act(async (context, options, flags: Options) => {
         const config = await context.config();
-        const secrets = await context.secrets();
-        const bundles = new Map<string, TokenBundle | null | 'unreadable'>();
+        const bundles = new Map<string, TokenBundle | null | 'unreadable' | StoreUnavailable>();
+        /*
+         * A store that will not open is one finding per workspace, not a crash: a keychain module missing, or a
+         * keychain that is locked, says nothing about any credential inside it.
+         */
+        let secrets: SecretStore | null = null;
+        let storeProblem: string | null = null;
+        try {
+          secrets = await context.secrets();
+        } catch (error) {
+          storeProblem = toCommsError(error).message;
+        }
         for (const view of listWorkspaces(config)) {
           const account = lookupName(config, 'account', view.alias);
           if (!account) continue;
+          if (secrets === null) {
+            bundles.set(view.alias, { storeUnavailable: storeProblem ?? 'the secret store could not be opened' });
+            continue;
+          }
+          let raw: string | null;
           try {
-            bundles.set(view.alias, parseBundle(await secrets.get(account.secretRef)));
+            raw = await secrets.get(account.secretRef);
+          } catch (error) {
+            /*
+             * The store refusing is not the credential being corrupt.
+             *
+             * Both were reported as unreadable, whose fix is `reauth` — which, for a keychain that only wanted
+             * unlocking or a prompt approving, throws away a refresh token that was fine all along.
+             */
+            bundles.set(view.alias, { storeUnavailable: toCommsError(error).message });
+            continue;
+          }
+          try {
+            bundles.set(view.alias, parseBundle(raw));
           } catch {
             /*
              * An unreadable credential is a finding, not a crash — `doctor` is what somebody runs *because*
@@ -504,19 +533,49 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
          * to reach Slack is reported as not having asked, never as a problem with the install.
          */
         const identities = new Map<string, IdentityProbe>();
-        if (flags.offline !== true) {
+        if (flags.offline !== true && secrets !== null) {
           for (const [alias, bundle] of bundles) {
-            if (bundle === null || bundle === 'unreadable') continue;
+            if (bundle === null || typeof bundle !== 'object' || 'storeUnavailable' in bundle) continue;
             /*
-             * A token already past its expiry is not asked about.
+             * Renewed first when it is due, then asked about.
              *
-             * Slack would refuse it, and the refusal would be reported as a credential problem — which it is
-             * not: an expired access token is the ordinary state of a workspace nobody has used today, and the
-             * `credential-state` check above already says so. Asking anyway would turn "this is fine" into
-             * "re-authorise", which is the one piece of advice that throws away a working refresh token.
+             * This used to skip any token past its expiry, on the reasoning that Slack would refuse it and the
+             * refusal would read as a credential problem. True, and it meant the ordinary state of a workspace
+             * nobody had used today — expired, and perfectly refreshable — was never checked at all. A refresh is
+             * what the next read would do anyway, through exactly the same locks, so `doctor` does it and then
+             * checks the token that results.
+             *
+             * Only a `ready` credential is renewed. One that is `refresh-uncertain` must not be, and the
+             * credential-state check already says what is wrong with it.
              */
-            if (isExpired(bundle, context.now())) continue;
-            identities.set(alias, await probeIdentity(bundle, deps.probe ? { fetch: deps.probe } : {}));
+            let token = bundle.accessToken;
+            if (isExpired(bundle, context.now()) || (bundle.state === 'ready' && isDue(bundle, context.now()))) {
+              if (bundle.state !== 'ready') continue;
+              try {
+                token = (await openWorkspace(context, alias)).call.token;
+              } catch (error) {
+                const failure = toCommsError(error);
+                identities.set(alias, {
+                  kind: 'unreachable',
+                  why: `the token could not be renewed: ${failure.message}`,
+                });
+              }
+              // Whatever the refresh left behind is what the state check should describe.
+              try {
+                const account = lookupName(config, 'account', alias);
+                if (account) {
+                  secrets.invalidate(account.secretRef);
+                  bundles.set(alias, parseBundle(await secrets.get(account.secretRef)));
+                }
+              } catch {
+                // The earlier read stands; the identity check below says whether the token works.
+              }
+              if (identities.has(alias)) continue;
+            }
+            identities.set(
+              alias,
+              await probeIdentity({ ...bundle, accessToken: token }, deps.probe ? { fetch: deps.probe } : {}),
+            );
           }
         }
         const result = doctor({ config, now: context.now(), bundles, identities });

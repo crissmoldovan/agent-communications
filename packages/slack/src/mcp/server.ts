@@ -1,6 +1,7 @@
 import { CommsError, lookupName, toCommsError } from '@agentcomms/core';
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { settleRefreshes } from '../auth/refresh.ts';
 import { compose } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
@@ -106,9 +107,22 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     return { structuredContent: structured, content: [{ type: 'text' as const, text: JSON.stringify(structured) }] };
   };
 
+  /*
+   * `details` goes through, because it is where the diagnosis is. A refresh Slack refused says so only there —
+   * `slackError`, the stage, the HTTP status — and with only the code and message, `ratelimited`, a dead refresh
+   * token and a reply this could not parse all read identically to the model and to the person it tells.
+   * Nothing secret is ever put in `details`; the CLI's `--json` envelope has always carried it.
+   */
   const fail = (error: unknown) => {
     const comms: CommsError = toCommsError(error);
-    const structured = { error: { code: comms.code, message: comms.message, hint: comms.hint ?? null } };
+    const structured = {
+      error: {
+        code: comms.code,
+        message: comms.message,
+        hint: comms.hint ?? null,
+        ...(comms.details !== undefined ? { details: comms.details } : {}),
+      },
+    };
     return {
       isError: true as const,
       structuredContent: structured,
@@ -457,8 +471,52 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         process.stdin.once('end', resolve);
         process.stdin.once('close', resolve);
       });
+      /*
+       * Installed for the life of the process, not of the connection. The case it exists for is a client that closes
+       * stdin and then, when the server has not left, sends SIGTERM — by which time the connection is already over.
+       * Signal listeners do not keep the event loop alive, so a server with nothing in flight still exits as before.
+       */
+      exitAfterRefreshes();
       await server.connect(transport);
       await closed;
     },
+  };
+}
+
+/** What `exitAfterRefreshes` needs from the process, so a test can send the signal without being killed by it. */
+export interface SignalHost {
+  once(signal: 'SIGTERM' | 'SIGINT', listener: () => void): unknown;
+  removeListener(signal: 'SIGTERM' | 'SIGINT', listener: () => void): unknown;
+}
+
+/**
+ * On SIGTERM or SIGINT, let any token refresh in flight finish before exiting — for up to `waitMs`.
+ *
+ * A client that wants its server gone closes stdin and, if the server has not left promptly, sends SIGTERM.
+ * Node's default for that is to die on the spot, and if the spot is between Slack's reply to a refresh and the
+ * write that records it, the workspace's only renewed token dies with the process: Slack has already retired the
+ * old one, and the marker left behind becomes `refresh-uncertain`, which means a re-authorisation. The window is one
+ * round trip and one keychain write, and a busy server hits it eventually.
+ *
+ * Bounded, because a client is entitled to its server going away: 45 seconds covers the thirty-second exchange
+ * and most of a store retry. Each signal is taken once, so a second one — a person pressing Ctrl-C again — gets
+ * Node's default and ends the process immediately. Returns a function that removes the handlers.
+ */
+export function exitAfterRefreshes(
+  options: { host?: SignalHost; waitMs?: number; exit?: (code: number) => void } = {},
+): () => void {
+  const host: SignalHost = options.host ?? process;
+  const waitMs = options.waitMs ?? 45_000;
+  const exit = options.exit ?? ((code: number) => process.exit(code));
+  const on = (signal: 'SIGTERM' | 'SIGINT') => () => {
+    void settleRefreshes(waitMs).finally(() => exit(signal === 'SIGINT' ? 130 : 143));
+  };
+  const onTerm = on('SIGTERM');
+  const onInt = on('SIGINT');
+  host.once('SIGTERM', onTerm);
+  host.once('SIGINT', onInt);
+  return () => {
+    host.removeListener('SIGTERM', onTerm);
+    host.removeListener('SIGINT', onInt);
   };
 }
