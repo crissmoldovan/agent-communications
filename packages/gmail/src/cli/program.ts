@@ -167,9 +167,16 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
    *
    * Standard input matters more than it looks: a body is prose with newlines and quotes in it, and an agent that has
    * to fit one into a shell argument will mangle it. Piping it in is the way that always works.
+   *
+   * `--file -` asks for standard input by name. A new draft or a reply also reads it when nothing else is given,
+   * because it cannot exist without a body. An update never does: there, no body means "keep the one it has" — what
+   * `gmail_draft_update` does when `text` is left out — and guessing from standard input is what broke it. An agent's
+   * shell hands a command standard input that has already ended, which read as an empty body and was refused; or a
+   * pipe nobody closes, which was read until the end that never came. Only an explicit `--file -` reads it now.
    */
   const bodyText = async (options: Options, behaviour: { bodyOptional?: boolean } = {}): Promise<string> => {
     if (typeof options.text === 'string') return options.text;
+    if (options.file === '-') return pipedBody();
     if (typeof options.file === 'string') {
       // Bounded at the size a message can be anyway: anything larger was going to be refused by `compose` a
       // moment later, so the ceiling costs nothing — and a FIFO or a device at `--file` no longer reads until
@@ -187,14 +194,19 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       }
       return content.text;
     }
-    const stdin = streams.stdin as NodeJS.ReadableStream & { isTTY?: boolean };
-    // On an update, no body means "keep the one that is there" rather than an error.
-    if (behaviour.bodyOptional && stdin.isTTY) return undefined as unknown as string;
-    if (stdin.isTTY) {
+    // On an update, no body means "keep the one that is there" — whatever standard input is.
+    if (behaviour.bodyOptional) return undefined as unknown as string;
+    if ((streams.stdin as { isTTY?: boolean }).isTTY) {
       throw new CommsError('USAGE', 'no message body', {
         hint: 'Pass --text "…", or --file <path>, or pipe the body in on standard input.',
       });
     }
+    return pipedBody();
+  };
+
+  /** Standard input, read to its end as a message body. */
+  const pipedBody = async (): Promise<string> => {
+    const stdin = streams.stdin as NodeJS.ReadableStream;
     // Bounded the same way `--file` is, and at the same ceiling: a pipe is the easier of the two to point at
     // something endless, and the size check in `compose` only runs once the whole thing is already in memory.
     const { readBoundedStream } = await import('../operations/small-file.ts');
@@ -239,7 +251,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
   const withDraftOptions = (command: Command): Command =>
     command
       .option('--text <text>', 'the body, as plain text (the HTML part is generated from it)')
-      .option('--file <path>', 'read the body from a file')
+      .option('--file <path>', 'read the body from a file; `-` reads standard input')
       .option('--cc <address...>', 'copy these people')
       .option('--bcc <address...>', 'blind-copy these people')
       .option('--attach <path...>', 'attach these local files')
@@ -852,7 +864,9 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
   withDraftOptions(
     draft
       .command('update <draftId>')
-      .description('change a draft — the body, files and headers you do not restate are kept'),
+      .description(
+        'change a draft — the body, files and headers you do not restate are kept; a new body comes only from --text or --file (`--file -` for standard input)',
+      ),
   )
     .requiredOption('--inbox <alias>', 'which mailbox')
     .option('--to <address...>', 'replace the recipients')

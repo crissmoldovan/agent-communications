@@ -396,7 +396,7 @@ agent-gmail draft new [options]
 | Option | What it does | Default |
 |---|---|---|
 | `--text <text>` | the body, as plain text (the HTML part is generated from it) | — |
-| `--file <path>` | read the body from a file | — |
+| `--file <path>` | read the body from a file; `-` reads standard input | — |
 | `--cc <address...>` | copy these people | — |
 | `--bcc <address...>` | blind-copy these people | — |
 | `--attach <path...>` | attach these local files | — |
@@ -418,7 +418,7 @@ agent-gmail draft reply [options] <messageId>
 | Option | What it does | Default |
 |---|---|---|
 | `--text <text>` | the body, as plain text (the HTML part is generated from it) | — |
-| `--file <path>` | read the body from a file | — |
+| `--file <path>` | read the body from a file; `-` reads standard input | — |
 | `--cc <address...>` | copy these people | — |
 | `--bcc <address...>` | blind-copy these people | — |
 | `--attach <path...>` | attach these local files | — |
@@ -456,7 +456,7 @@ agent-gmail draft show [options] <draftId>
 
 ### `agent-gmail draft update`
 
-change a draft — the body, files and headers you do not restate are kept
+change a draft — the body, files and headers you do not restate are kept; a new body comes only from --text or --file (`--file -` for standard input)
 
 ```
 agent-gmail draft update [options] <draftId>
@@ -465,7 +465,7 @@ agent-gmail draft update [options] <draftId>
 | Option | What it does | Default |
 |---|---|---|
 | `--text <text>` | the body, as plain text (the HTML part is generated from it) | — |
-| `--file <path>` | read the body from a file | — |
+| `--file <path>` | read the body from a file; `-` reads standard input | — |
 | `--cc <address...>` | copy these people | — |
 | `--bcc <address...>` | blind-copy these people | — |
 | `--attach <path...>` | attach these local files | — |

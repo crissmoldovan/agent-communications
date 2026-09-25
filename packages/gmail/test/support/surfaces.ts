@@ -62,6 +62,10 @@ export interface CliRun {
  *
  * With `replies`, each reply is typed once its prompt has appeared, in order. A plain prompt reads whatever is waiting
  * on standard input, so answers written up front are all swallowed by the first question.
+ *
+ * Standard input stays open unless `endStdin` is set, because a person typing answers keeps it open. An agent's shell
+ * is the other case: its standard input has usually ended before the command starts (or was never a terminal at
+ * all), and a command that reads it then must not mistake "nothing" for an answer — nor wait for more.
  */
 export async function cli(
   harness: Harness,
@@ -70,6 +74,7 @@ export async function cli(
     tty?: boolean;
     answer?: boolean;
     stdin?: string;
+    endStdin?: boolean;
     env?: NodeJS.ProcessEnv;
     replies?: ReadonlyArray<readonly [RegExp, string]>;
   } = {},
@@ -79,7 +84,8 @@ export async function cli(
   const out = new PassThrough();
   const err = new PassThrough();
   const input = new PassThrough();
-  if (options.stdin !== undefined) input.write(options.stdin);
+  if (options.endStdin) input.end(options.stdin ?? '');
+  else if (options.stdin !== undefined) input.write(options.stdin);
   out.on('data', (chunk) => {
     stdout += String(chunk);
   });
