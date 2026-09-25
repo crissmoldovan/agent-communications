@@ -144,7 +144,8 @@ try {
   assert.deepEqual(names, [
     'slack_channels',
     'slack_doctor',
-    // Local drafts only: none of the three reaches Slack.
+    // Local drafts only: none of the four reaches Slack.
+    'slack_draft_create',
     'slack_draft_delete',
     'slack_draft_get',
     'slack_draft_list',
