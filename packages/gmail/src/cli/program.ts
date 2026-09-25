@@ -53,7 +53,7 @@ import {
   prepareSend,
   revokeApproval,
 } from '../operations/send.ts';
-import { finishSignIn, inboxReauthChange, startSignIn } from '../operations/signin.ts';
+import { checkedWait, finishSignIn, inboxReauthChange, MAX_WAIT_SECONDS, startSignIn } from '../operations/signin.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
 import { askFor } from './prompt.ts';
@@ -395,7 +395,13 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       .option('--start', 'start the sign-in and return the link, to be finished later', false)
       .option('--finish <flowId>', 'finish a sign-in started earlier')
       .option('--url <url>', 'the address the browser ended up at, pasted back')
-      .option('--wait <seconds>', 'how long to wait for the browser', (value) => Number.parseInt(value, 10), 60);
+      // Taken as typed and checked by the operation (`checkedWait`), not parsed here: `Number.parseInt` made `abc` NaN,
+      // a deadline never reached, and `12abc` twelve.
+      .option(
+        '--wait <seconds>',
+        `with --finish, how long to wait for the browser: 0 to ${MAX_WAIT_SECONDS} seconds`,
+        '60',
+      );
 
   const signIn = async (
     context: GmailContext,
@@ -404,13 +410,15 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     alias: string | undefined,
     options: Options,
   ): Promise<void> => {
+    // Whatever else is asked: a wait that is not one is refused as USAGE, not taken as some other number.
+    const waitSeconds = checkedWait(options.wait, context.surface);
     if (options.finish) {
       const result = await finishSignIn(context, {
         flowId: String(options.finish),
         onlyMode: mode,
         onlyAlias: alias,
         url: options.url ? String(options.url) : undefined,
-        waitSeconds: Number(options.wait ?? 60),
+        waitSeconds,
       });
       writeResult(result, output(), (data) => renderSignedIn(data, globalOptions.color), streams);
       return;

@@ -10,7 +10,6 @@ import {
 } from '@agentcomms/core';
 import { acceptedContent, inputRequired, inputResponse, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { FLOW_TTL_MS } from '../auth/flows.ts';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
 import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts';
 import { downloadAttachments, findAttachments } from '../operations/attachments.ts';
@@ -47,7 +46,13 @@ import {
   revokeApproval,
 } from '../operations/send.ts';
 import { CONSOLE_STEPS, setupState } from '../operations/setup.ts';
-import { finishSignIn, inboxReauthChange, type StartedSignIn, startSignIn } from '../operations/signin.ts';
+import {
+  finishSignIn,
+  inboxReauthChange,
+  MAX_WAIT_SECONDS,
+  type StartedSignIn,
+  startSignIn,
+} from '../operations/signin.ts';
 import { VERSION } from '../version.ts';
 import { inboxArgument, mcpBoolean, mcpInboxes, mcpInteger, mcpStringArray } from './schemas.ts';
 
@@ -1265,11 +1270,12 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
               .describe(
                 'the whole address the browser ended up at after the consent screen, pasted back by the user; finishes without waiting',
               ),
+            // The range is stated here and checked by the operation (`checkedWait`), which `--wait` goes through too,
+            // so a wait out of it is refused as USAGE on both surfaces rather than by the SDK's uncoded message.
             waitSeconds: z
               .number()
               .int()
-              .min(0)
-              .max(FLOW_TTL_MS / 1000)
+              .meta({ minimum: 0, maximum: MAX_WAIT_SECONDS })
               .optional()
               .describe(
                 'how long to wait for the grant, default 60 and at most 600 — the sign-in itself lasts ten minutes. Many clients give up on a call after about a minute; if yours does, keep this under that and call again. A call the client gives up on stops waiting and leaves the sign-in as it was',
@@ -1302,7 +1308,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
             const result = await finishSignIn(context, {
               flowId,
               url,
-              waitSeconds: waitSeconds ?? 60,
+              waitSeconds,
               signal: ctx.mcpReq.signal,
             });
             // What `--finish --json` prints, less one field: `secretRef`, where the refresh token is kept, which no

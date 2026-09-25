@@ -380,6 +380,89 @@ test('gmail_inbox_finish waits as long as the sign-in can, and stops waiting whe
   }
 });
 
+/**
+ * A sign-in on record and waiting for a browser nobody will open: no listener behind it, and nothing asked of Google.
+ * `expiresIn` moves its end nearer, for the tests about a wait that outlives it.
+ */
+async function waitingFlow(
+  harness: Harness,
+  options: { mode?: 'add' | 'reauth'; expiresIn?: number } = {},
+): Promise<string> {
+  const flows = new GmailContext({ core: harness.core, env: harness.env }).flows;
+  const flow = await flows.create({
+    mode: options.mode ?? 'add',
+    alias: 'later',
+    clientName: 'default',
+    tier: 'organize',
+    contacts: true,
+    scopes: [],
+    state: 'state-nobody-will-return',
+    codeVerifier: 'verifier-nobody-will-use',
+    redirectUri: 'http://127.0.0.1:9/',
+    port: 9,
+    expect: {},
+  });
+  if (options.expiresIn !== undefined) {
+    await flows.patch(flow.flowId, { expiresAt: new Date(Date.now() + options.expiresIn).toISOString() });
+  }
+  return flow.flowId;
+}
+
+test('a `--wait` that is not a number of seconds from 0 to 600 is refused as USAGE, as gmail_inbox_finish refuses it', {
+  timeout: 20_000,
+}, async () => {
+  /*
+   * `--wait` was `Number.parseInt`: `--wait abc` was NaN, a deadline no clock reaches, so `inbox add --finish …
+   * --wait abc` waited for ever on a sign-in that lasts ten minutes; `--wait 12abc` was twelve seconds, and `--wait
+   * 601` waited past the sign-in's own end. The tool's schema kept its wait between 0 and 600; the command kept
+   * nothing. Both `inbox add` and `inbox reauth` take `--wait`, and both are held to the one range.
+   */
+  const harness = await oneMailbox();
+  const added = await waitingFlow(harness);
+  const reauthorising = await waitingFlow(harness, { mode: 'reauth' });
+  const cases: Array<[string, string, string]> = [
+    ['add', added, 'abc'],
+    ['add', added, '12abc'],
+    ['add', added, '1.5'],
+    ['add', added, '-1'],
+    ['add', added, '601'],
+    ['reauth', reauthorising, 'abc'],
+    ['reauth', reauthorising, '601'],
+  ];
+  const refusals = new Map<string, { message: string }>();
+  for (const [command, flowId, wait] of cases) {
+    const run = await cli(harness, ['inbox', command, '--finish', flowId, `--wait=${wait}`, '--json']);
+    assert.equal(run.code, 64, `inbox ${command} --wait ${wait}: ${run.stdout}`);
+    const error = run.envelope().error;
+    assert.equal(error?.code, 'USAGE', run.stdout);
+    assert.equal(error?.message, `"${wait}" is not a wait`);
+    assert.match(error?.hint ?? '', /from 0 to 600/);
+    refusals.set(wait, { message: error?.message ?? '' });
+  }
+
+  // Refused before the sign-in was read, so it is still there to finish — and a wait in range still waits.
+  for (const flowId of [added, reauthorising]) {
+    const command = flowId === added ? 'add' : 'reauth';
+    const once = await cli(harness, ['inbox', command, '--finish', flowId, '--wait', '0', '--json']);
+    assert.equal(once.code, 10, once.stdout);
+    assert.equal(once.envelope().error?.code, 'APPROVAL_PENDING');
+  }
+
+  // The tool refuses what the command refuses, in the same words, from the same check.
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    for (const waitSeconds of [601, -1]) {
+      const refused = toolError(await call('gmail_inbox_finish', { flowId: added, waitSeconds }));
+      assert.equal(refused.code, 'USAGE');
+      assert.equal(refused.message, refusals.get(String(waitSeconds))?.message);
+      assert.match(refused.hint ?? '', /from 0 to 600/);
+      assert.match(refused.hint ?? '', /gmail_inbox_finish/);
+    }
+  } finally {
+    await close();
+  }
+});
+
 // ── a pinned server, and approvals for other mailboxes ──────────────────────────────────────────────────────
 
 /** `work`, which a server is pinned to, and `home`, which it was not given. Both send under `chat`. */

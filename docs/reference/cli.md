@@ -133,7 +133,7 @@ agent-gmail inbox add [options] [alias]
 | `--start` | start the sign-in and return the link, to be finished later | `false` |
 | `--finish <flowId>` | finish a sign-in started earlier | — |
 | `--url <url>` | the address the browser ended up at, pasted back | — |
-| `--wait <seconds>` | how long to wait for the browser | `60` |
+| `--wait <seconds>` | with --finish, how long to wait for the browser: 0 to 600 seconds | `"60"` |
 
 ### `agent-gmail inbox reauth`
 
@@ -156,7 +156,7 @@ agent-gmail inbox reauth [options] [alias]
 | `--start` | start the sign-in and return the link, to be finished later | `false` |
 | `--finish <flowId>` | finish a sign-in started earlier | — |
 | `--url <url>` | the address the browser ended up at, pasted back | — |
-| `--wait <seconds>` | how long to wait for the browser | `60` |
+| `--wait <seconds>` | with --finish, how long to wait for the browser: 0 to 600 seconds | `"60"` |
 | `--approval <id>` | start the sign-in this approval was given for | — |
 
 ### `agent-gmail inbox list`

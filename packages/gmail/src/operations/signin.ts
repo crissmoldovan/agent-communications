@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CommsError, findById, type GatedChange, lookupName, requireInbox } from '@agentcomms/core';
 import type { OAuthFlow } from '../auth/flows.ts';
-import { aboutFlow } from '../auth/flows.ts';
+import { aboutFlow, FLOW_TTL_MS } from '../auth/flows.ts';
 import { startLoopback } from '../auth/loopback.ts';
 import { buildAuthUrl, newPkce, newState, oauthError } from '../auth/oauth.ts';
 import { capabilitiesOf, scopesFor, TIERS, type Tier, tierOf } from '../auth/scopes.ts';
@@ -418,8 +418,11 @@ export interface FinishOptions {
   onlyAlias?: string | undefined;
   /** The address bar URL, pasted back on a machine with no browser of its own. */
   url?: string | undefined;
-  /** How long to wait for the detached listener, in seconds. */
-  waitSeconds?: number;
+  /**
+   * How long to wait for the detached listener, in seconds, as given — `--wait`'s text or the tool's number — and
+   * checked here, by {@link checkedWait}, for both surfaces. Sixty when left out.
+   */
+  waitSeconds?: unknown;
   pollMs?: number;
   /**
    * Stops the wait when whoever asked has gone — an MCP client that gave up on the call.
@@ -431,11 +434,43 @@ export interface FinishOptions {
   signal?: AbortSignal | undefined;
 }
 
+/** The longest a finish waits for the browser: the sign-in's own life, since nothing can arrive after it ends. */
+export const MAX_WAIT_SECONDS: number = FLOW_TTL_MS / 1000;
+
+/**
+ * How long `--finish` or `gmail_inbox_finish` waits for the browser, checked rather than coerced.
+ *
+ * `--wait` was `Number.parseInt`, so `--wait abc` was NaN — a deadline no clock reaches, and a finish that waited for
+ * ever on a sign-in that lasts ten minutes — and `--wait 12abc` was twelve. The tool's schema held its wait to 0–600
+ * and the command held nothing. One check for both surfaces now: whole seconds, from 0 (look once and report) to the
+ * sign-in's own life, and anything else refused as USAGE with the range named, before anything is read.
+ */
+export function checkedWait(raw: unknown, surface: 'cli' | 'mcp'): number {
+  const given = raw ?? 60;
+  const seconds =
+    typeof given === 'number'
+      ? given
+      : typeof given === 'string' && /^\d+$/.test(given.trim())
+        ? Number(given.trim())
+        : Number.NaN;
+  if (!Number.isInteger(seconds) || seconds < 0 || seconds > MAX_WAIT_SECONDS) {
+    throw new CommsError('USAGE', `"${String(given)}" is not a wait`, {
+      hint:
+        surface === 'mcp'
+          ? `A whole number of seconds from 0 to ${MAX_WAIT_SECONDS}: a sign-in lasts ten minutes, so there is nothing to wait for after that. A client that gives up on a call sooner can call gmail_inbox_finish again.`
+          : `A whole number of seconds from 0 to ${MAX_WAIT_SECONDS}. A sign-in lasts ten minutes, so there is nothing to wait for after that.`,
+    });
+  }
+  return seconds;
+}
+
 /**
  * Completes a sign-in exactly once. A wait that times out leaves the flow alone, so the user can run `--finish`
  * again; only an answer from the browser claims it.
  */
 export async function finishSignIn(context: GmailContext, options: FinishOptions): Promise<ConsentResult> {
+  // Checked before anything is read: a wait that is not one is refused whatever the flow, and leaves it as it was.
+  const waitSeconds = checkedWait(options.waitSeconds, context.surface);
   const flow = await context.flows.get(options.flowId);
   if (options.onlyMode && flow.mode !== options.onlyMode) {
     const wanted = options.onlyMode === 'add' ? 'a new mailbox' : 're-authorising an existing mailbox';
@@ -474,7 +509,7 @@ export async function finishSignIn(context: GmailContext, options: FinishOptions
   if (options.url) {
     code = codeFromUrl(options.url, flow);
   } else {
-    const outcome = await waitForOutcome(context, options, flow);
+    const outcome = await waitForOutcome(context, { ...options, waitSeconds }, flow);
     if ('error' in outcome) {
       await context.flows.discard(flow.flowId);
       throw oauthError(outcome.error, outcome.description);
@@ -493,10 +528,10 @@ export async function finishSignIn(context: GmailContext, options: FinishOptions
 
 async function waitForOutcome(
   context: GmailContext,
-  options: FinishOptions,
+  options: FinishOptions & { waitSeconds: number },
   flow: OAuthFlow,
 ): Promise<{ code: string } | { error: string; description?: string | undefined }> {
-  const deadline = context.now().getTime() + (options.waitSeconds ?? 60) * 1000;
+  const deadline = context.now().getTime() + options.waitSeconds * 1000;
   const pollMs = options.pollMs ?? 500;
   for (;;) {
     // Before the outcome is read: a caller that has gone never takes the grant, even one already waiting.
