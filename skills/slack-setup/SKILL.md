@@ -2,7 +2,7 @@
 name: slack-setup
 description: "Connect a Slack workspace to agent-slack: the app manifest, the PKCE sign-in, read and send modes, and what doctor reports. Symptoms: 'connect my Slack', 'set up agent-slack', 'why can't it post', 'move this workspace to send mode', 'agent-slack doctor says something is wrong'. Not for reading or posting once it works — slack-reading and slack-posting do those."
 license: MIT
-compatibility: "@agentcomms/slack@0.4.0"
+compatibility: "@agentcomms/slack@0.4.1"
 metadata:
   group: communications
   lifecycle: release

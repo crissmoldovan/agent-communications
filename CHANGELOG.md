@@ -3,6 +3,72 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.4.1
+
+**`agent-slack mcp install` connects Slack to your agent**, the way `agent-gmail mcp install` connects Gmail — it is
+the same installer now, shared through `@agentcomms/core`. `--workspace` pins the server to one workspace. Pins were
+being dropped on the way: `agent-gmail mcp install --inbox` and `--read-only` registered an unpinned, full server,
+because the option was read from the wrong command. Both now reach the entry. If you installed a pinned Gmail server
+with 0.4.0, re-register it with the same flags and `--force`.
+
+**`mcp install` never overwrites a server it did not write, and `--force` never widens one.** The default Slack name
+is `slack`, which is also where other Slack MCP servers keep their bot token, and installing replaced that entry,
+token and all. For codex it happened even without `--force`, when codex kept its config somewhere this did not look.
+An entry this package did not write is now refused whatever `--force` says, with a `--name` to use instead. Codex is
+asked what it has registered before anything is written there. And `--force` on our own entry keeps a pin to one
+mailbox or workspace, or `--read-only`, that you leave out of the command: a server is widened only by removing it
+yourself and installing again.
+
+**A failed Slack token refresh no longer forces a new sign-in for a network blip.** Slack access tokens last twelve
+hours, and each refresh token can be used once. Any failed refresh used to lock the workspace until somebody signed
+in again, including a laptop that was offline for the first read of the day. Failures are now sorted before anything
+is written. A request that never reached Slack — including a connection that timed out on one address and was
+refused on another — leaves the workspace as it was. Only a token Slack says is dead, or an exchange whose outcome
+cannot be known, asks for a new sign-in, and it says which. A renewed token the keychain refused to store is kept,
+written again before the command or the MCP server exits, and named on stderr if it still cannot be. Ctrl-C during a
+refresh waits for Slack's reply to be written, and then stops the command by the signal, so a script running it stops
+too.
+
+**Reactions can be approved.** In a workspace that asks before posting, a reaction's approval could never be given,
+and every retry made a new one. `agent-slack react` now prepares it and prints the approval id; after `agent-slack
+approve`, `react --approval <id>` adds it once, bound to that channel, message and emoji.
+
+**The approval screen shows what is being approved.** It names the channel and how many people the post interrupts,
+and an `@channel` or `@here` whose room Slack cannot count is never approved — the approval waits, to be tried
+again. A post held for approval names `agent-slack`'s commands, not Gmail's.
+
+**Agents can list, read and delete Slack drafts** (`slack_draft_list`, `slack_draft_get`, `slack_draft_delete`).
+None of them reaches Slack. A damaged draft file no longer hides the rest, and can be deleted. Every
+`slack_post_prepare` an agent makes is in the audit trail too; only the terminal's were before.
+
+**A Slack workspace remembers the port its app redirects to.** Slack matches the redirect URL exactly. `workspace
+reauth` and `workspace mode` asked for the port on every run, and the MCP mode tools guessed 51234, which sent anybody
+on another port to a sign-in that failed on the way back. The port is recorded at sign-in and used by default; a
+workspace connected before 0.4.1 records it at its next sign-in.
+
+**`mcp prune` removes old runtimes, and only those it can show are unused.** Each release installs its own runtime and
+the old ones stayed on disk. `agent-gmail mcp prune` and `agent-slack mcp prune` keep any runtime a client config
+names — including a config with comments, a project's `.mcp.json`, and the configs an install recorded writing to
+under another `CLAUDE_CONFIG_DIR` or `CODEX_HOME` — and any a running process uses. If a config or the process list
+cannot be read, nothing is removed. A runtime whose entry was only printed is kept until `--include-printed` says
+that entry is gone. `--dry-run` lists them first.
+
+**Another server's address is shown by its host only.** Install warnings and `doctor` printed other MCP servers' URLs
+whole, and some remote servers carry the user's key in the query or the path.
+
+**One rename mapping works on every computer, and a backup is made first.** `agentcomms names migrate` refused the
+whole plan if a `--rename` named an account that computer does not have, so a single mapping for several machines
+failed everywhere but one. Such a rename is now listed as not applicable here and changes nothing, and the config is
+copied to `config.json.before-names-migrate-<time>` before anything is renamed. [Upgrading](docs/upgrading.md)
+walks a computer through the whole upgrade.
+
+**A release publishes all four packages, from the tagged commit.** 0.4.0's workflow left `@agentcomms/slack` out.
+Before anything is sent, the release now proves that npm will accept a publish of every package from this workflow.
+A package already out at the version from another commit, or a tag moved or deleted while its run is going, stops
+the run before anything more is published. Re-running a failed job finishes a partial release at the same version.
+The GitHub release is made from this changelog, and a prerelease goes out under `next`, from the local fallback
+script as well as from CI.
+
 ## 0.4.0
 
 **Slack arrives.** `@agentcomms/slack` reads channels, threads, search, people and files across one or more

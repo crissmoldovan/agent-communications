@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/core",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Provider-neutral core for agent-communications: config, secret store, approvals, audit log and untrusted-content handling.",
   "type": "module",
   "license": "MIT",
