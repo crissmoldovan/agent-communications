@@ -383,6 +383,45 @@ test('an unreadable draft can be deleted through the tool, and only from the wor
   }
 });
 
+test('a draft that names its workspace and nothing else is skipped by the list tool and deleted by the delete tool', async () => {
+  // The CLI has the same test in `cli-parity.test.ts`; both read drafts through one store.
+  const harness = await newHarness();
+  const acme = await harness.addWorkspace({ alias: 'acme', workspaceId: 'T0001' });
+  const fetch = slackReplies({
+    'conversations.info': { ok: true, channel: { id: 'C1', name: 'general', num_members: 4, is_member: true } },
+  });
+  const directory = join(harness.core.paths.stateDir, 'slack', 'drafts');
+  const { client, close } = await connect(harness, { fetch });
+  const call = async (name: string, args: Record<string, unknown>) =>
+    (await client.callTool({ name, arguments: args })) as ToolResult;
+  try {
+    const prepared = await call('slack_post_prepare', { workspace: 'acme', channel: 'C1', text: 'first' });
+    const real = (prepared.structuredContent as { draftId: string }).draftId;
+    const damaged = 'dft_AAAAAAAAAAAAAAAAAAAAAA';
+    await writeFile(join(directory, `${damaged}.json`), JSON.stringify({ accountId: acme.id }));
+
+    const listed = await call('slack_draft_list', { workspace: 'acme' });
+    assert.notEqual(listed.isError, true, JSON.stringify(listed.structuredContent));
+    assert.deepEqual(
+      (listed.structuredContent as { drafts: { draftId: string }[] }).drafts.map((d) => d.draftId),
+      [real],
+    );
+    const got = await call('slack_draft_get', { workspace: 'acme', draftId: damaged });
+    assert.equal(got.isError, true, 'not returned as though it were a draft');
+
+    const deleted = await call('slack_draft_delete', { workspace: 'acme', draftId: damaged });
+    assert.deepEqual(deleted.structuredContent, {
+      draftId: damaged,
+      deleted: true,
+      unreadable: true,
+      workspaceConfirmed: true,
+    });
+    await assert.rejects(access(join(directory, `${damaged}.json`)));
+  } finally {
+    await close();
+  }
+});
+
 test('a pinned server refuses another workspace on every tool that takes one', async () => {
   /*
    * The pin is checked in `resolve`, which every tool calls — and a tool that forgot to call it would act on

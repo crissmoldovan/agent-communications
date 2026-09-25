@@ -263,6 +263,27 @@ test('a channel digest covers who gets notified, which is the part with no mail 
   assert.notEqual(messageDigest(post), messageDigest(base));
 });
 
+test('a channel digest tells a reach nobody measured from a room measured at nobody', () => {
+  const broadcast: CanonicalChannelMessage = {
+    kind: 'channel',
+    workspace: 'T123',
+    postingAs: 'U_BOT',
+    channel: 'C456',
+    visibleText: 'Deploy is out.',
+    payloadSha256: 'p1',
+    notifies: { here: false, channel: true, users: [], estimated: 0 },
+    attachments: [],
+  };
+  const unmeasured = { ...broadcast, notifies: { ...broadcast.notifies, unmeasured: true } };
+  // Both say `0`. Only one of them was counted, and a person who agreed to that one has not agreed to the other.
+  assert.notEqual(messageDigest(unmeasured), messageDigest(broadcast));
+  // Hashed only when set, so a digest taken before the mark existed is the same digest now.
+  assert.equal(
+    messageDigest({ ...broadcast, notifies: { ...broadcast.notifies, unmeasured: false } }),
+    messageDigest(broadcast),
+  );
+});
+
 test('taint: a handle is scoped to its workspace, so the same id elsewhere is a different person', async () => {
   const dir = tempDir();
   const store = new TaintStore(dir, clock().now);

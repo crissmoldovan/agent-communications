@@ -939,7 +939,8 @@ configuration problem.`,
           });
         }
         void (await workspaceForApproval(context, approvalId));
-        const prompt = await beginApproval(context, approvalId, { fetch: deps.read, baseUrl: deps.slackBaseUrl });
+        const slack = { fetch: deps.read, baseUrl: deps.slackBaseUrl };
+        const prompt = await beginApproval(context, approvalId, slack);
         const verb = prompt.kind === 'reaction' ? 'react' : 'post';
         streams.stdout.write(`${prompt.preview}\n\n`);
         const answer = await askFor(streams, {
@@ -950,7 +951,7 @@ configuration problem.`,
           streams.stdout.write(`Cancelled. Nothing was ${verb === 'react' ? 'added' : 'posted'}.\n`);
           return;
         }
-        await finishApproval(context, approvalId, answer);
+        await finishApproval(context, approvalId, answer, slack);
         streams.stdout.write(`Approved. This command approves; it does not ${verb}.\n`);
       }),
     );

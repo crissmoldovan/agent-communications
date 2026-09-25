@@ -126,14 +126,23 @@ async function roomOf(
   }
 }
 
+/**
+ * The flag on a post's approval whose reach could not be counted when it was prepared.
+ *
+ * Read back as well as shown. The digest binds a reach nobody measured as exactly that, and the approval screen reads
+ * this to say so when it voids one — rather than quoting the `0` that stood in for the count as though it were one.
+ */
+export const REACH_UNKNOWN = 'reach-unknown';
+
 /** Anything about this post a person should look at twice. Flags, never refusals. */
 function risksOf(
   payload: { text: string },
-  notifies: { channel: boolean; here: boolean; estimated: number },
+  notifies: { channel: boolean; here: boolean; estimated: number; unknown?: string | undefined },
 ): string[] {
   const flags: string[] = [];
   if (notifies.channel) flags.push('notifies-channel');
   if (notifies.here) flags.push('notifies-here');
+  if (notifies.unknown !== undefined) flags.push(REACH_UNKNOWN);
   if (notifies.estimated >= 50) flags.push('large-audience');
   const { references } = decodeSlackText(payload.text);
   if (references.some((reference) => reference.kind === 'link')) flags.push('contains-link');
@@ -191,6 +200,8 @@ export async function viewPost(
       // Ids, not the names the preview shows — see `mentionedUserIds`.
       users: mentionedUserIds(payload.text),
       estimated: preview.notifies.estimated,
+      // A reach nobody could count is bound as that, not as the `0` that stands in for it — see `roomOf`.
+      unmeasured: preview.notifies.unknown !== undefined,
     },
     attachments: [],
   };

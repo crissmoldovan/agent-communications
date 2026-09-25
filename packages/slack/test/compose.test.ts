@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { renderChannelPreview } from '@agentcomms/core';
 import { compose, escapeForSlack, renderMention } from '../src/compose/blocks.ts';
-import { openDraftStore } from '../src/compose/drafts.ts';
+import { isUnreadableDraft, openDraftStore } from '../src/compose/drafts.ts';
 import { notifiesOf, previewOf } from '../src/compose/preview.ts';
 import { channelOf, NameBook, personOf } from '../src/operations/people.ts';
 
@@ -89,6 +90,43 @@ test('a draft id that is not one cannot name a file', async () => {
 test('a missing draft says so, and a corrupt one says something different', async () => {
   const store = openDraftStore(tempState(), NOW);
   await assert.rejects(store.get('dft_AAAAAAAAAAAAAAAAAAAAAA'), /no draft/);
+});
+
+test('a draft file that parses is unreadable when any part a reader uses is missing, even if it names its owner', async () => {
+  /*
+   * Only the owner was checked, so `{"accountId": …}` — a hand edit that kept one line — read as a draft. The list
+   * then sorted on its missing `updatedAt` and failed for the whole workspace, and preparing it failed on its missing
+   * channel: one damaged file hid every draft beside it, with an error that named none of them.
+   */
+  const state = tempState();
+  const store = openDraftStore(state, NOW);
+  const real = await store.create('acc_1', compose({ channel: 'C1', text: 'still here' }), 'still here');
+  const whole = JSON.parse(JSON.stringify(real)) as Record<string, unknown>;
+  const payload = whole.payload as Record<string, unknown>;
+  const damaged: [string, Record<string, unknown>][] = [
+    ['only its owner', { accountId: 'acc_1' }],
+    ['no owner', { ...whole, accountId: undefined }],
+    ['no draft id', { ...whole, draftId: undefined }],
+    ['a revision that is not text', { ...whole, revision: 7 }],
+    ['no source', { ...whole, source: undefined }],
+    ['no creation time', { ...whole, createdAt: undefined }],
+    ['an update time that is not text', { ...whole, updatedAt: 1 }],
+    ['no payload', { ...whole, payload: null }],
+    ['a payload that is a list', { ...whole, payload: [] }],
+    ['a payload with no channel', { ...whole, payload: { ...payload, channel: undefined } }],
+    ['a payload whose text is not text', { ...whole, payload: { ...payload, text: ['still here'] } }],
+  ];
+  const id = 'dft_AAAAAAAAAAAAAAAAAAAAAA';
+  for (const [what, contents] of damaged) {
+    await writeFile(join(state, 'slack', 'drafts', `${id}.json`), JSON.stringify(contents));
+    await assert.rejects(store.get(id), (error: unknown) => isUnreadableDraft(error), what);
+    const listed = await store.list('acc_1');
+    assert.deepEqual(
+      listed.map((draft) => draft.draftId),
+      [real.draftId],
+      `${what}: skipped, and the draft beside it still listed`,
+    );
+  }
 });
 
 // ── The preview ────────────────────────────────────────────────────────────────────────────────────────────────

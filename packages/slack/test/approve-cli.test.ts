@@ -28,7 +28,7 @@ interface Envelope<T> {
 async function cli(
   harness: Harness,
   argv: string[],
-  options: { read?: FakeFetch; tty?: boolean; answerChallenge?: boolean } = {},
+  options: { read?: FakeFetch; tty?: boolean; answerChallenge?: boolean; beforeAnswer?: () => void } = {},
 ) {
   let stdout = '';
   let stderr = '';
@@ -46,6 +46,8 @@ async function cli(
       const asked = /Type (\S+) to approve/.exec(stderr);
       if (asked) {
         answered = true;
+        // Whatever changes while a person reads the screen and types, which is where the room can move.
+        options.beforeAnswer?.();
         input.write(`${asked[1]}\n`);
       }
     }
@@ -237,4 +239,101 @@ test('a room that grew after the preview is refused at the approval screen, befo
   const posted = await cli(harness, send, { read: slack.read });
   assert.equal(posted.code, EXIT_CODES.APPROVAL, 'nothing was approved');
   assert.equal(slack.count('chat.postMessage'), 0);
+});
+
+// ── A room that cannot be read ─────────────────────────────────────────────────────────────────────────────────
+
+const UNREADABLE = { ok: false, error: 'ratelimited' };
+
+test('an @channel prepared while the room could not be read is not approved while it still cannot be', async () => {
+  /*
+   * The preview said the reach was not known, and the approval bound that. The screen then read the room, failed
+   * again, rendered the same digest — and so never reached the refusal for an unreadable room, which only ran when
+   * the digests differed. It asked for the code and approved an @channel nobody had counted.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'send', sendPolicy: 'confirm' });
+  const slack = scripted({
+    'conversations.info': UNREADABLE,
+    'chat.postMessage': { ok: true, ts: '1700000000.000100' },
+  });
+  const { approvalId, send } = await preparedPost(harness, slack.read, ['--broadcast', 'channel']);
+  const record = await harness.core.approvals.get(approvalId);
+  assert.ok(record?.riskFlags.includes('reach-unknown'), 'the approval records that nobody counted the room');
+
+  for (const attempt of ['first', 'second']) {
+    const approving = await cli(harness, ['approve', approvalId], {
+      read: slack.read,
+      tty: true,
+      answerChallenge: true,
+    });
+    assert.equal(approving.code, EXIT_CODES.UNAVAILABLE, `${attempt}: ${approving.stdout}${approving.stderr}`);
+    assert.match(approving.stderr, /could not be read/);
+    assert.doesNotMatch(approving.stderr, /Type \S+ to approve/, `${attempt}: never asks for the code`);
+  }
+
+  const held = await cli(harness, send, { read: slack.read });
+  assert.equal(held.code, EXIT_CODES.APPROVAL, held.stdout);
+  assert.equal(
+    held.json<Envelope<never>>().error?.code,
+    'APPROVAL_PENDING',
+    'nothing was approved, and the approval is still there to try again',
+  );
+  assert.equal(slack.count('chat.postMessage'), 0);
+});
+
+test('a room that stops being readable while the code is typed is not approved either', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'send', sendPolicy: 'confirm' });
+  const readable = { ok: true, channel: { id: 'C1', name: 'eng', num_members: 412, is_member: true } };
+  const slack = scripted({ 'conversations.info': readable, 'chat.postMessage': { ok: true, ts: '1700000000.000100' } });
+  const { approvalId, send } = await preparedPost(harness, slack.read, ['--broadcast', 'channel']);
+
+  const approving = await cli(harness, ['approve', approvalId], {
+    read: slack.read,
+    tty: true,
+    answerChallenge: true,
+    beforeAnswer: () => {
+      slack.script['conversations.info'] = UNREADABLE;
+    },
+  });
+  assert.equal(approving.code, EXIT_CODES.UNAVAILABLE, approving.stdout + approving.stderr);
+  assert.doesNotMatch(approving.stdout, /Approved\./);
+
+  slack.script['conversations.info'] = readable;
+  const held = await cli(harness, send, { read: slack.read });
+  assert.equal(held.json<Envelope<never>>().error?.code, 'APPROVAL_PENDING', 'kept, and not approved');
+  assert.equal(slack.count('chat.postMessage'), 0);
+});
+
+test('a post prepared without a count is voided for that reason, never for a count nobody measured', async () => {
+  // A room measured at nobody is in the list too: it says `0` as the unread room did, and was never agreed to.
+  for (const members of [412, 0]) {
+    const harness = await newHarness();
+    await harness.addWorkspace({ alias: 'acme', mode: 'send', sendPolicy: 'confirm' });
+    const slack = scripted({
+      'conversations.info': UNREADABLE,
+      'chat.postMessage': { ok: true, ts: '1700000000.000100' },
+    });
+    const { approvalId, send } = await preparedPost(harness, slack.read, ['--broadcast', 'channel']);
+
+    slack.script['conversations.info'] = {
+      ok: true,
+      channel: { id: 'C1', name: 'eng', num_members: members, is_member: true },
+    };
+    const approving = await cli(harness, ['approve', approvalId], {
+      read: slack.read,
+      tty: true,
+      answerChallenge: true,
+    });
+    assert.equal(approving.code, EXIT_CODES.APPROVAL, `${members}: ${approving.stdout}${approving.stderr}`);
+    const why = /the room could not be read when this was prepared; prepare it again to see who it reaches/;
+    assert.match(approving.stderr, why, `${members}`);
+    assert.doesNotMatch(approving.stderr, /not the 0/, 'the preview never said 0');
+
+    const posted = await cli(harness, send, { read: slack.read });
+    assert.equal(posted.code, EXIT_CODES.APPROVAL);
+    assert.match(posted.json<Envelope<never>>().error?.message ?? '', why, 'and the send says the same');
+    assert.equal(slack.count('chat.postMessage'), 0);
+  }
 });

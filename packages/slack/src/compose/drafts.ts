@@ -93,6 +93,21 @@ export interface DraftStore {
   ownerOf(draftId: string): Promise<string | undefined>;
 }
 
+/** Whether what a draft file parsed to has every field something reading a draft goes on to use. */
+function isDraftShaped(parsed: unknown): parsed is SlackDraft {
+  if (typeof parsed !== 'object' || parsed === null) return false;
+  const draft = parsed as Record<string, unknown>;
+  const text = ['draftId', 'accountId', 'revision', 'source', 'createdAt', 'updatedAt'];
+  if (!text.every((field) => typeof draft[field] === 'string')) return false;
+  const payload = draft.payload as Record<string, unknown> | null | undefined;
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    typeof payload.channel === 'string' &&
+    typeof payload.text === 'string'
+  );
+}
+
 /** Whether an error is `get` saying a draft file exists but is not a draft. */
 export function isUnreadableDraft(error: unknown): boolean {
   return error instanceof CommsError && error.code === 'BAD_DATA' && error.details?.reason === 'unreadable';
@@ -126,15 +141,19 @@ export function openDraftStore(stateDir: string, now: () => Date): DraftStore {
      * Parsed is not the same as readable. `null` and `[]` parse, and a caller reading `accountId` off either threw a
      * TypeError instead of saying which draft was damaged — so a draft with no owner is as unreadable as one that
      * would not parse at all.
+     *
+     * Nor is having an owner. `{"accountId": …}` alone was accepted, and then `draft list` failed for the whole
+     * workspace sorting on the `updatedAt` it lacked, and preparing it failed on its missing channel — one damaged
+     * file hid every draft beside it. So every field a reader relies on is checked here, once, where the refusal can
+     * still name the draft.
      */
-    const owner = (parsed as { accountId?: unknown } | null | undefined)?.accountId;
-    if (typeof parsed !== 'object' || parsed === null || typeof owner !== 'string') {
+    if (!isDraftShaped(parsed)) {
       throw new CommsError('BAD_DATA', `draft "${draftId}" could not be read`, {
         hint: `Delete it with \`agent-slack draft delete ${draftId} --workspace <name>\` and compose it again.`,
         details: { reason: 'unreadable' },
       });
     }
-    return parsed as SlackDraft;
+    return parsed;
   };
 
   const write = async (draft: SlackDraft): Promise<SlackDraft> => {

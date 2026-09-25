@@ -84,6 +84,14 @@ export interface CanonicalChannelMessage {
      * than a silent send.
      */
     estimated: number;
+    /**
+     * Set when `estimated` is not a count: the room's size could not be read, so nobody measured who this reaches.
+     *
+     * Inside the digest because an unmeasured reach and a room measured at nobody are both `0`, and a person who
+     * agreed to one has not agreed to the other. Hashed only when set, so every digest taken before this existed is
+     * the digest it was, and an approval outstanding across an upgrade is not voided for it.
+     */
+    unmeasured?: boolean | undefined;
   };
   attachments: readonly { filename: string; mimeType: string; size: number; sha256: string }[];
 }
@@ -188,6 +196,7 @@ function channelDigest(message: CanonicalChannelMessage): string {
         channel: message.notifies.channel,
         users: [...new Set(message.notifies.users.map((u) => u.trim()).filter(Boolean))].sort(),
         estimated: exactCount(message.notifies.estimated, 'the number of people notified'),
+        unmeasured: message.notifies.unmeasured === true ? true : undefined,
       },
       attachments: [...message.attachments]
         .map((a) => ({

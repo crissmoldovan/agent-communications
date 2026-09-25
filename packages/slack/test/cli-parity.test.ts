@@ -217,6 +217,59 @@ test('an unreadable draft can be deleted as its refusal says, and the result say
   assert.equal(empty.json<Envelope<{ unreadable: boolean }>>().data?.unreadable, true);
 });
 
+test('a draft that names its workspace and nothing else is skipped by the list, refused by prepare, and deletable', async () => {
+  /*
+   * It parsed and it had an owner, which was all that was checked, so it read as a draft: the list then failed for
+   * the whole workspace on the fields it lacked, and preparing it failed with an error that named nothing.
+   */
+  const harness = await newHarness();
+  const acme = await harness.addWorkspace({ alias: 'acme' });
+  const written = await cli(harness, [
+    '--json',
+    'draft',
+    'create',
+    '--workspace',
+    'acme',
+    '--channel',
+    'C1',
+    '--text',
+    'hi',
+  ]);
+  assert.equal(written.code, EXIT_CODES.OK, written.stdout);
+  const real = String(written.json<Envelope<{ draftId: string }>>().data?.draftId);
+  const path = await damage(harness, JSON.stringify({ accountId: acme.id }));
+
+  const listed = await cli(harness, ['--json', 'draft', 'list', '--workspace', 'acme']);
+  assert.equal(listed.code, EXIT_CODES.OK, listed.stdout);
+  assert.deepEqual(
+    listed.json<Envelope<{ draftId: string }[]>>().data?.map((draft) => draft.draftId),
+    [real],
+    'the damaged one is skipped and the real one is still there',
+  );
+  const human = await cli(harness, ['draft', 'list', '--workspace', 'acme']);
+  assert.equal(human.code, EXIT_CODES.OK, human.stderr);
+  assert.match(human.stdout, new RegExp(real));
+
+  for (const argv of [
+    ['post', 'prepare', '--workspace', 'acme', '--draft', DAMAGED],
+    ['draft', 'show', DAMAGED, '--workspace', 'acme'],
+  ]) {
+    const refused = await cli(harness, ['--json', ...argv]);
+    assert.equal(refused.code, EXIT_CODES.BAD_DATA, `${argv.join(' ')}: ${refused.stdout}`);
+    assert.match(refused.json<Envelope<never>>().error?.hint ?? '', new RegExp(`agent-slack draft delete ${DAMAGED}`));
+  }
+
+  const deleted = await cli(harness, ['--json', 'draft', 'delete', DAMAGED, '--workspace', 'acme']);
+  assert.equal(deleted.code, EXIT_CODES.OK, deleted.stdout);
+  assert.deepEqual(deleted.json<Envelope<unknown>>().data, {
+    draftId: DAMAGED,
+    deleted: true,
+    unreadable: true,
+    workspaceConfirmed: true,
+  });
+  await assert.rejects(access(path), 'and the file is gone');
+});
+
 test('an unreadable draft that still names another workspace is left for that workspace to delete', async () => {
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'acme', workspaceId: 'T0001' });
