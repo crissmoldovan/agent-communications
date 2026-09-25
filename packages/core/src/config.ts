@@ -928,9 +928,10 @@ function migrationApplied(config: ConfigV2, rows: readonly RenamedAccount[]): bo
  *
  * The schema checks that no live name is a former one, but only in the config it is given — so a single write that
  * deleted a record and reused its name would pass it. This compares the two sides. A record's key is permanent. Its
- * id may change only to follow a re-authorisation, which mints a new id for the same account: from an id that has just
- * gone to one that has just arrived. Its `name` is only the fallback shown when the account has been removed, so it
- * may change freely.
+ * id may change only to follow a re-authorisation that minted a new id for the same account — Slack's did before it
+ * kept the id, and a release of that age sharing this configuration still does: from an id that has just gone to one
+ * that has just arrived. Its `name` is only the fallback shown when the account has been removed, so it may change
+ * freely.
  */
 function formerNamesDropped(before: ConfigV2, after: ConfigV2): string | null {
   for (const map of ['inboxes', 'accounts'] as const) {
@@ -955,8 +956,8 @@ function formerNamesDropped(before: ConfigV2, after: ConfigV2): string | null {
 /**
  * Whether `toId` replaced `fromId` in this write as a re-authorisation of the same account.
  *
- * Only accounts re-authorise under a new id — Slack's reauth stages the new credential beside the old one — so only
- * they can move a former name. The old account must have been connected before the write and gone after it; the new
+ * Only accounts ever re-authorised under a new id — Slack's reauth once did, to stage the new credential beside the
+ * old one, and an older release still does — so only they can move a former name. The old account must have been connected before the write and gone after it; the new
  * one must be new in this write; and they must be the same person in the same workspace. Without the first
  * condition, a former name of an account removed long ago could be pointed at whatever was connected next.
  */
@@ -1143,10 +1144,11 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
     /*
      * By id, and failing that by alias.
      *
-     * Re-authorising a Slack workspace mints a new account id on purpose, so the new credential can be staged
-     * beside the old one. An id lookup alone then finds nothing and measures the renewed account against the
-     * *default* — so a workspace set to `never`, re-authorised into `chat`, read as a new account arriving at the
-     * default and needed nobody's consent. The alias is what the person set the policy on.
+     * Re-authorising a Slack workspace minted a new account id, to stage the new credential beside the old one —
+     * this release keeps the id, and an older one sharing the configuration still mints one. An id lookup alone then
+     * finds nothing and measures the renewed account against the *default* — so a workspace set to `never`,
+     * re-authorised into `chat`, read as a new account arriving at the default and needed nobody's consent. The
+     * alias is what the person set the policy on.
      */
     const previous =
       Object.values(before.accounts).find((existing) => existing.id === account.id) ?? sameAccountUnder(alias);
@@ -1169,8 +1171,8 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
      * can, and nothing downstream can undo that: the send gate governs whether this package posts, while the mode
      * governs whether posting is possible at all.
      *
-     * **Matched by alias, not by id.** Re-authorising mints a new account id precisely so the new credential can
-     * be staged beside the old one, so an id lookup finds nothing and would read every renewal as a brand-new
+     * **Matched by alias, not by id.** A reauth by an older release mints a new account id to stage the new
+     * credential beside the old one, so an id lookup finds nothing and would read that renewal as a brand-new
      * account — which is exactly the case this must not miss.
      *
      * **A new account arriving as `send` is a widening too.** This once read "choosing `send` when connecting is the

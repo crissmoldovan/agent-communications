@@ -118,8 +118,9 @@ Built with the MCP surface (S3 onwards), not before.
 - `slack_workspace_narrow` — returns §5's path for that workspace. There is nothing for an agent to *do* beyond
   that; the owner's permission to narrow is honoured by saying exactly how.
 - `slack_workspace_request_send` — records a pending request. **Grants nothing.** A request:
-  - is bound to `workspaceId` + `userId` — the pair that survives a reauth, which mints a new `accountId` every
-    time — and records the `accountId` it was made against for display. The name is display only, so a rename does
+  - is bound to `workspaceId` + `userId` — the pair that survives a reauth, which minted a new `accountId` every
+    time until 2026-09-25 (it keeps the id now; see the Slack design's S2 note) — and records the `accountId` it was
+    made against for display. The name is display only, so a rename does
     not detach it and a reused name cannot inherit it. A reauth of either kind leaves pending requests in place;
     they still describe the same person in the same workspace.
   - has a random id (`rq_` + 26 characters from core's id alphabet), validated before it names a file, and lives in

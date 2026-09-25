@@ -286,6 +286,16 @@ distinct `acc_` / `ibx_` prefixes mean an id alone still says which it is.
 > the credential behind it can post. The Gmail package overwrites, and has the same window; that is not fixed
 > here.
 >
+> *Amended 2026-09-25:* the new *reference* is what the staging needs, not a new account. A reauth now keeps the
+> account id — it is the same person, workspace and app, checked before anything is written, as Gmail's reauth keeps
+> its inbox id — and stages the credential under a fresh reference beside the old one (`slack/token/<id>/<random>`).
+> The new id had moved everything filed under the old one: an MCP server pinned to the workspace refused every call
+> until it was restarted, and the workspace's drafts and pending approvals belonged to nobody. What the id used to say
+> — that another renewal landed first, or that one landed while a removal ran — is now said by the credential the
+> account holds: a sign-in records the reference it replaces and is refused if the account holds another, and a
+> removal drops the entry only if it still holds the credential it deleted. Connecting a workspace, even one removed
+> a moment ago, is still a new account with a new id, and a pinned server refuses it.
+>
 > **Verified against a real workspace, 2026-09-22.** The manifest's `pkce_enabled` and `token_rotation_enabled`
 > both take effect, and `oauth.v2.access` is the right exchange endpoint. The run found one bug, since fixed:
 > Slack adds `identify` to every user token, and `doctor` reported it as drift. Only `127.0.0.1` stays untried,

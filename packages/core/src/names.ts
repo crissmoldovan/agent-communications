@@ -242,8 +242,8 @@ export function renameEntry<C extends Config>(config: C, kind: NameKind, from: s
 /**
  * `config` with every former name that pointed at `fromId` pointed at `toId` instead.
  *
- * For a re-authorisation that mints a new id for the same account — Slack's does, so the new credential can be staged
- * beside the old one. Without this, the account's old names would point at an id that no longer exists and be
+ * For a re-authorisation that mints a new id for the same account — Slack's did before it kept the id, and a release
+ * of that age still does. Without this, the account's old names would point at an id that no longer exists and be
  * reported as belonging to a removed account while it is still connected. Called in the same config write that
  * replaces the id; `ConfigStore.update` allows exactly this change and no other to a former name's id.
  */

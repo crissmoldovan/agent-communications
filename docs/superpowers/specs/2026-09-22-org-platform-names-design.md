@@ -95,7 +95,9 @@ formerNames: {
 - **Chains collapse.** `cue` → `cue/gmail` → `cue/gmail-main` leaves `cue` pointing at `cue/gmail-main`, never at
   another tombstone.
 - **They follow a re-authorisation.** A Slack reauth mints a new account id on purpose, so the new credential can be
-  staged beside the old one. A tombstone still holding the old id would then report the workspace as removed while
+  staged beside the old one. *(Amended 2026-09-25: a reauth now keeps the id and stages the credential under a fresh
+  reference instead, so its former names need no moving; the rule below stays for a configuration shared with an
+  older release, whose reauth still mints one.)* A tombstone still holding the old id would then report the workspace as removed while
   it is connected. So the reauth's config write re-points every account tombstone holding the old id to the new
   one (`retargetFormerNames`), in the same write that replaces the id.
 - **Enforced on every write, not only where names are proposed.** The schema refuses a live name that is a former
