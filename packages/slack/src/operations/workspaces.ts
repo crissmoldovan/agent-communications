@@ -136,6 +136,26 @@ export function validateExchange(options: {
    */
   const { missing, extra } = scopeMismatch(mode, token.scopes);
   if (missing.length > 0) {
+    /*
+     * Asking for `send` and getting only reading back is not a person unticking boxes. A token can only be granted what
+     * its app declares, so an app still carrying the `read` manifest answers a `send` sign-in with `read` — which is
+     * what happens when the app step of a widening was skipped, or saved on a different app. Said as that, with the
+     * way to do the step, because the generic advice here sent people to create a new app, which changes no
+     * installation.
+     */
+    const alias = existing?.alias ?? flow.alias;
+    if (mode === 'send' && missing.every((scope) => OUTWARD_SCOPES.includes(scope))) {
+      throw new CommsError(
+        'SCOPE_MISSING',
+        `Slack granted no posting scope, so the app's manifest was not updated to send: it did not grant ${missing.join(', ')}`,
+        {
+          hint: existing
+            ? `Nothing was saved, and "${alias}" is as it was. Update the app it signed in through: \`agent-slack manifest --workspace ${alias} --mode send\` (slack_manifest from a chat) prints the manifest and the link to its page, or \`agent-slack app update ${alias} --mode send --port ${flow.port}\` does it at a terminal with an app configuration token. Then sign in again.`
+            : `Nothing was saved. Update the app first: paste \`agent-slack manifest --mode send --port ${flow.port}\` on its App Manifest page at https://api.slack.com/apps, and save. Then connect it again.`,
+          details: { missing },
+        },
+      );
+    }
     throw new CommsError('SCOPE_MISSING', `Slack did not grant: ${missing.join(', ')}`, {
       hint: 'Leave every permission ticked on the consent screen, or re-create the app from the manifest.',
     });
@@ -330,8 +350,24 @@ export interface RemovalDeps {
  * Slack token in the secret store that no command lists, refreshes or removes, and that nothing will ever
  * mention again.
  */
-export async function removeWorkspace(deps: RemovalDeps, alias: string): Promise<RemovedWorkspace> {
+export async function removeWorkspace(
+  deps: RemovalDeps,
+  alias: string,
+  options: { expectId?: string | undefined } = {},
+): Promise<RemovedWorkspace> {
   const found = requireWorkspace(deps.config, alias);
+  /*
+   * The workspace a person approved removing, and no other.
+   *
+   * A removal is approved for the account that was shown, and the configuration is read again here, after the approval
+   * was claimed. A renewal landing in between gives the name a new account id; a remove and an add, an unrelated
+   * account. Either way this is not what the person agreed to delete, so nothing is deleted and they are asked again.
+   */
+  if (options.expectId !== undefined && found.account.id !== options.expectId) {
+    throw new CommsError('CONFIG', `"${alias}" changed after its removal was approved, so nothing was removed`, {
+      hint: `Look at it with \`agent-slack workspace show ${alias}\`, and remove it again if you still want it gone.`,
+    });
+  }
   await deps.secrets.delete(found.account.secretRef);
   await deps.update((config) => {
     /*

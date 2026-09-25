@@ -207,7 +207,11 @@ test('app update validates first, then updates the recorded app, with the config
   assert.equal(data?.workspaceMode, 'read');
   assert.equal(data?.permissionsUpdated, true);
   assert.equal(data?.manifestPage, 'https://api.slack.com/apps/A0001/app-manifest');
-  assert.match(String((data?.next as string[] | undefined)?.[0]), /agent-slack workspace mode acme send --port 51234/);
+  // The app is updated now, so the next step says so: without `--app-updated` the move would hand back the app step.
+  assert.match(
+    String((data?.next as string[] | undefined)?.[0]),
+    /agent-slack workspace mode acme send --app-updated --port 51234/,
+  );
 
   // Nothing local changed: the workspace's mode and port describe its token and its last sign-in, and neither moved.
   assert.equal(await configText(harness), before);
@@ -225,7 +229,7 @@ test('updating an app to send says it changes no token, and names the sign-in th
   });
   assert.equal(result.code, EXIT_CODES.OK, result.stderr);
   assert.match(result.stdout, /not what any token already issued can do: "acme" is still in read mode/);
-  assert.match(result.stdout, /agent-slack workspace mode acme send --port 51234/);
+  assert.match(result.stdout, /agent-slack workspace mode acme send --app-updated --port 51234/);
   // Said before the token is taken, because Slack's update replaces the app's name and description too.
   assert.match(result.stderr, /replaces the whole configuration of Slack app A0001/);
   await assertNoToken(harness, result);

@@ -1,6 +1,6 @@
 import { CommsError } from '@agentcomms/core';
 import type { SlackContext } from '../context.ts';
-import { buildManifest, type InstallMode, type SlackManifest } from '../manifest.ts';
+import { appManifestUrl, buildManifest, type InstallMode, type SlackManifest } from '../manifest.ts';
 import { requireWorkspace } from './workspaces.ts';
 
 /**
@@ -71,6 +71,6 @@ export async function manifestFor(
     manifest: buildManifest(mode, redirectUrl),
     workspace: found?.alias ?? null,
     appId,
-    manifestUrl: appId === null ? null : `https://api.slack.com/apps/${encodeURIComponent(appId)}/app-manifest`,
+    manifestUrl: appId === null ? null : appManifestUrl(appId),
   };
 }

@@ -520,6 +520,51 @@ test('removing does not delete a workspace that was renewed in the meantime', as
   assert.equal(written, undefined, 'the renewed workspace was removed');
 });
 
+test('removing refuses a workspace that is not the account whose removal was approved', async () => {
+  /*
+   * A removal is approved for the account that was shown, and the configuration is read again after the approval was
+   * claimed. A renewal or a remove-and-add landing in between puts another account under the name — not what the person
+   * agreed to delete. Nothing is deleted, not even the credential, which is the first thing a removal touches.
+   */
+  const held = account();
+  const deleted: string[] = [];
+  let written = false;
+  await assert.rejects(
+    removeWorkspace(
+      {
+        config: { ...emptyConfig(), accounts: { acme: held } },
+        secrets: {
+          async delete(ref) {
+            deleted.push(ref);
+            return true;
+          },
+        },
+        async update(mutator) {
+          written = true;
+          return mutator({ ...emptyConfig(), accounts: { acme: held } });
+        },
+      },
+      'acme',
+      { expectId: newAccountId() },
+    ),
+    /"acme" changed after its removal was approved, so nothing was removed/,
+  );
+  assert.deepEqual(deleted, [], 'a credential was deleted for an account nobody approved removing');
+  assert.equal(written, false);
+
+  // The account that was approved is removed as before.
+  const removed = await removeWorkspace(
+    {
+      config: { ...emptyConfig(), accounts: { acme: held } },
+      secrets: { delete: async () => true },
+      update: async (mutator) => mutator({ ...emptyConfig(), accounts: { acme: held } }),
+    },
+    'acme',
+    { expectId: held.id },
+  );
+  assert.equal(removed.accountId, held.id);
+});
+
 test('removing refuses when a migration switched backends underneath it', async () => {
   /*
    * The migration copied the credential to the new backend before this deleted it from the old one. Dropping

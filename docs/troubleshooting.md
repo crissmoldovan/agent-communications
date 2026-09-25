@@ -317,8 +317,9 @@ Then restart the client. Without the server the Slack skills fall back to `agent
 ### It will not post
 
 That is usually correct. A workspace in `read` mode holds a token Slack will not let post; no setting here changes
-that. `agent-slack workspace mode <name>` says which mode a workspace is in and prints the steps to move it, which
-a person takes. In `send` mode a post goes out only once its approval allows it: `slack_post_prepare` returns a
+that. `agent-slack workspace mode <name>` says which mode a workspace is in and prints the steps to move it: the app's
+manifest first, which is the person's to change, then `workspace mode <name> send --app-updated` (`slack_mode_set`
+from a chat), a change the person approves before a new sign-in starts. In `send` mode a post goes out only once its approval allows it: `slack_post_prepare` returns a
 preview, and `slack_post_send` (or `agent-slack post send`) posts it after a yes under `chat`. Under `confirm`, and for
 any broadcast or room of fifty or more, it waits with `APPROVAL_PENDING` until the person runs `agent-slack approve`
 in their own terminal. Under `never` nothing posts.

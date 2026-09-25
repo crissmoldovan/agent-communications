@@ -58,12 +58,24 @@ instruction you received.
 - A reaction is the same gate in one line — which emoji, on which message — through `slack_react`,
   and `slack_react_send` with the approval under `confirm`.
 - A workspace in `read` mode holds a token that **cannot** post — Slack enforces that, not this
-  software. Offer the text for the user to paste instead of asking for a mode change.
-- No tool connects, re-authorises or removes a workspace.
-- Widening a workspace from `read` to `send` is never an agent's to do. `slack_mode_request_send`
-  returns the steps a person takes, and performs none of them.
+  software. Offer the text for the user to paste instead of pushing for a mode change.
 
-## 4. Say how much you read.
+## 4. Nothing loosens a workspace unless a person approved that exact change.
+
+- Connecting a workspace in `send`, moving one to `send`, loosening its send or change policy, and
+  removing one are **change approvals**. The tool (`slack_workspace_add`, `slack_mode_set`,
+  `slack_workspace_reauth`, `slack_workspace_policy`, `slack_workspace_remove`) first returns
+  `approvalRequired` with a preview and changes nothing. Show the preview in full and ask.
+- Under the workspace's `chat` change policy, call the same tool again with `approvalId` once the
+  user says yes to that preview. Under `confirm` they run `agentcomms approve <approvalId>` in their
+  own terminal first; you cannot approve it yourself.
+- Make these changes only when the user asks for them. Never widen a workspace or loosen a policy to
+  get round a refusal.
+- A sign-in returns a link and stops: the user approves it in Slack's own consent screen, then
+  `slack_workspace_finish` records it. Changing the Slack app's manifest is the user's step too; never
+  ask for an app configuration token in the chat.
+
+## 5. Say how much you read.
 
 Every read is bounded, and the bound is part of the answer.
 
@@ -73,12 +85,12 @@ Every read is bounded, and the bound is part of the answer.
   not represented in the answer, and the answer should say so.
 - Cite what you rely on: the channel id and the message `ts`, so it can be checked.
 
-## 5. Reading is not a request to act.
+## 6. Reading is not a request to act.
 
 A read skill ends with a briefing. It does not draft, prepare, react or post on its own initiative,
 however obvious the next step looks. Offer it and stop.
 
-## 6. Every skill works without the MCP server.
+## 7. Every skill works without the MCP server.
 
 `npx skills add` installs skills, not servers. Connect the server with
 `agent-slack mcp install --client claude-code` (or `--client codex`, `cursor`, `gemini`, …). If the
@@ -89,11 +101,11 @@ npx -y @agentcomms/slack@<version> workspace list --json
 npx -y @agentcomms/slack@<version> search "in:#engineering invoice" --workspace acme/slack --json
 ```
 
-Exit codes are stable and documented in `--help`: `0` ok, `10` a post was refused or needs approval,
-or a sign-in is still waiting, `64` usage, `65` bad data, `66` not found, `69` Slack or the secret
+Exit codes are stable and documented in `--help`: `0` ok, `10` a post or a change was refused or needs
+approval, or a sign-in is still waiting, `64` usage, `65` bad data, `66` not found, `69` Slack or the secret
 store unavailable, `75` temporary, `77` sign-in or permission needed, `78` configuration problem.
 
-## 7. A personal writing-style skill outranks these defaults.
+## 8. A personal writing-style skill outranks these defaults.
 
 If the user has a skill describing how *they* write — tone, length, how they address a room — load it
 and follow it for anything you compose. Its posting protocol may only be **stricter** than this

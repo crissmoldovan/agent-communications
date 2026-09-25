@@ -39,6 +39,31 @@ agent-slack mcp install --client claude-code         # connect it to your agent
 The port must be the same number in both commands — Slack stores redirect URLs on the app and matches them
 exactly.
 
+## Changing a workspace, and who approves it
+
+Connecting a workspace, signing it in again, moving it between `read` and `send`, setting its policies and removing
+it work from a terminal and from a chat alike, and ask the same way. Anything that loosens what a workspace may do —
+connecting it in `send`, moving it to `send`, loosening a policy — or that cannot be taken back — removing it — is a
+**change approval**: you are shown a preview of exactly what changes, and nothing happens until you agree to it.
+Tightening applies at once.
+
+```sh
+agent-slack workspace mode acme/slack send                 # the app's send manifest, and the link to its page, first
+agent-slack workspace mode acme/slack send --app-updated   # then the change: a preview, your yes, and the sign-in
+agent-slack workspace policy acme/slack --send confirm     # tightening: applied at once
+agent-slack workspace remove acme/slack                    # a preview, then your yes
+```
+
+How you agree is the workspace's **change policy**. Under `chat`, the default, a yes — in the conversation, or typed
+at the terminal running the command. Under `confirm`, a code typed at your own terminal: the command asks for it, and
+an agent asks you to run `agentcomms approve <id>` (`npx -y @agentcomms/core approve <id>` if only `@agentcomms/slack`
+is installed). `agent-slack workspace policy <name> --change confirm` switches to that; moving back to `chat` is itself
+approved under `confirm`. An agent that runs the command without your approval gets the preview and an approval id,
+exits 10, and runs it again with `--approval <id>` once you have agreed.
+
+Every sign-in stops at Slack's own consent screen, which is yours to approve, and the app's manifest is yours to
+change.
+
 ## Changing the app from the CLI
 
 Pasting the manifest on the app's page is the default. With an **app configuration token** — generated at
@@ -53,7 +78,7 @@ agent-slack app update acme/slack --mode send                # the app acme/slac
 Both ask Slack to validate the manifest first, and a refusal changes nothing. `app update` replaces the app's whole
 configuration with the manifest `agent-slack manifest` prints — a hand-set name or description included — and
 changes no token: a workspace updated to `send` still cannot post until you run `agent-slack workspace mode <name>
-send`, which it prints. `app create` keeps only the app id and Client ID from Slack's reply; the client secret and
+send --app-updated` and approve the change and the sign-in, which it prints. `app create` keeps only the app id and Client ID from Slack's reply; the client secret and
 signing secret it also returns are dropped unseen, because the PKCE sign-in needs neither.
 
 The token is read from a hidden prompt, or from `SLACK_APP_CONFIG_TOKEN` for that one command, and is used for that
@@ -115,6 +140,11 @@ The entry pins the exact version, so a newer release reaches the agent only when
 | Tools | What they do |
 |---|---|
 | `slack_workspaces_list`, `slack_workspace_show`, `slack_mode` | which workspaces are connected, and what each may do |
+| `slack_workspace_add`, `slack_workspace_finish` | connect a workspace: start the sign-in and return its link, then finish it — `send` is approved first |
+| `slack_workspace_reauth` | sign one in again — widening to `send` is approved first |
+| `slack_mode_set` | move one to `send` (the app's manifest first, then an approved change) or back to `read` (the steps) |
+| `slack_workspace_policy` | report or set how its posts and its changes are approved — loosening is approved first |
+| `slack_workspace_remove` | disconnect one and delete its token — approved first |
 | `slack_doctor` | what `agent-slack doctor` checks, as the same JSON |
 | `slack_manifest` | the app manifest, and for a connected workspace the link to its own app's manifest page — changes nothing |
 | `slack_channels`, `slack_read`, `slack_thread`, `slack_search`, `slack_people`, `slack_files` | read, bounded |
@@ -122,7 +152,7 @@ The entry pins the exact version, so a newer release reaches the agent only when
 | `slack_post_send` | post a prepared draft once its approval allows it — the operation `agent-slack post send` runs |
 | `slack_react`, `slack_react_send` | add or remove a reaction through the same gate — `agent-slack react` |
 | `slack_draft_list`, `slack_draft_get`, `slack_draft_delete` | the drafts prepares leave behind |
-| `slack_mode_request_send`, `slack_mode_narrow` | the steps a person takes to change a workspace's mode — changes nothing |
+| `slack_mode_request_send`, `slack_mode_narrow` | the steps to change a workspace's mode, as text — changes nothing |
 
 Every one that acts on a workspace takes `workspace`. The full list, with arguments, is `docs/reference/slack-mcp-tools.md` in
 [the repository](https://github.com/crissmoldovan/agent-communications).
@@ -136,11 +166,13 @@ const server = await createSlackMcpServer({ workspace: 'acme/slack' });
 await server.connectStdio();
 ```
 
-No tool approves, and none connects a workspace. `slack_post_send` and the reaction tools claim an approval through
-the gate the CLI uses: under `chat` your yes in the conversation is the approval; under `confirm` they return
-`APPROVAL_PENDING` with the `agent-slack approve <approvalId>` command for you to run, and post only after you have;
-under `never` they refuse. An agent may report a workspace's mode and may ask to widen it — and gets back the steps
-you would have to take, with nothing changed.
+No tool approves. `slack_post_send` and the reaction tools claim an approval through the gate the CLI uses: under
+`chat` your yes in the conversation is the approval; under `confirm` they return `APPROVAL_PENDING` with the
+`agent-slack approve <approvalId>` command for you to run, and post only after you have; under `never` they refuse.
+The tools that change a workspace return a preview and an approval id first, whenever the change loosens it or
+removes it, and apply it only when called again with that id — after your yes under the `chat` change policy, after
+`agentcomms approve` at your terminal under `confirm`. A server pinned to one workspace connects and removes none. No
+tool changes the Slack app itself: that needs an app configuration token, and a chat's transcript would keep it.
 
 ## Modes
 
@@ -150,8 +182,10 @@ you would have to take, with nothing changed.
 | `send` | the above plus `chat:write`, `files:write`, `reactions:write` | this package's approval gate |
 
 Moving to `send` means editing your app's manifest — on its page, or with `agent-slack app update <name> --mode
-send` — and re-authorising: a new grant you approve in Slack's own UI. Going back means removing the app's installation in Slack first: Slack adds scopes to a token and never
-removes one. `agent-slack workspace mode <name>` prints either path.
+send` — and then approving the change and re-authorising: a new grant you approve in Slack's own UI.
+`agent-slack workspace mode <name> send` walks both, from a terminal or, as `slack_mode_set`, from a chat. Going
+back means removing the app's installation in Slack first: Slack adds scopes to a token and never removes one.
+`agent-slack workspace mode <name>` prints either path.
 
 ## Licence
 

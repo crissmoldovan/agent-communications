@@ -11,10 +11,10 @@ import { type Harness, newHarness } from './support/harness.ts';
  * The agent-facing surface.
  *
  * Two things are being checked, and the second is the one that matters. That the tools work — and that the ones
- * which put a message in front of people do so only through the gate the CLI uses, and that none of them approves
- * or widens what this software may do. An agent may report a mode, may narrow it, and may *request* a widening that
- * parks for a person; it never widens, and it never approves its own post. These tests, with `mcp-send.test.ts`, are
- * where those rules are enforced rather than described.
+ * which put a message in front of people do so only through the gate the CLI uses, and that none of them approves.
+ * An agent may report a mode and read the steps to change it; it widens a workspace only through a change a person
+ * approved (`mcp-changes.test.ts`), and it never approves its own post. These tests, with `mcp-send.test.ts` and
+ * `mcp-changes.test.ts`, are where those rules are enforced rather than described.
  */
 
 interface ToolResult {
@@ -178,11 +178,10 @@ test('an agent may report a mode', async () => {
   }
 });
 
-test('an agent asking to widen gets steps for a person, and nothing changes', async () => {
+test('an agent asking for the steps to widen gets them, and nothing changes', async () => {
   /*
-   * The owner's rule, enforced rather than described: an agent never widens. The widening is a new OAuth grant
-   * approved in Slack's own UI, which is a better gate than anything written here — so the tool returns the
-   * steps and performs none of them.
+   * The steps as text, for a person who wants to read them first. Making the move is `slack_mode_set`, through a
+   * change a person approves — this tool performs none of it, and says which one does.
    */
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'acme', mode: 'read' });
@@ -195,8 +194,10 @@ test('an agent asking to widen gets steps for a person, and nothing changes', as
     assert.notEqual(result.isError, true);
     const data = result.structuredContent as { alreadySend: boolean; steps: string[]; note: string };
     assert.equal(data.alreadySend, false);
-    assert.ok(data.steps.length > 0, 'it says what a person must do');
-    assert.match(data.note, /cannot/i, 'and says plainly that it did not do it');
+    assert.ok(data.steps.length > 0, 'it says what has to happen');
+    assert.match(data.steps[0] ?? '', /apps\/A0001\/app-manifest/, 'the app step links the workspace’s own app');
+    assert.match(data.note, /Nothing has changed/, 'and says plainly that it did not do it');
+    assert.match(data.note, /slack_mode_set/, 'and which tool does');
 
     const account = (await harness.core.config.load()).accounts.acme;
     assert.equal(account?.mode, 'read', 'the workspace is exactly as read-only as it was');
@@ -288,24 +289,32 @@ test('preparing a post writes a draft, returns a preview, audits it, and posts n
 
 // ── Parity with the CLI, and the tools that are absent on purpose ──────────────────────────────────────────────
 
-test('no tool approves, and none changes a workspace’s connection', async () => {
+test('no tool approves, and the only tools that change a workspace are the named few behind a change approval', async () => {
   /*
    * Approving is the one act that stays at a terminal whatever else moves to chat: under `confirm` it is what the
    * policy means, and a tool that approved would make it mean nothing. The posting tools are the named few that
    * claim a prepared post or reaction through the gate; any other name for putting words in a room is a way round it.
-   * Changing a workspace's connection waits on the change approvals that gate it, and is not in this server yet.
+   * The same for changing a workspace: the named tools run core's change flow (`mcp-changes.test.ts`), and a tool
+   * that widened by another name would be a way round that. Changing the Slack app itself stays off entirely: it
+   * needs an app configuration token, and a chat's transcript would keep one.
    */
   const harness = await newHarness();
   const { client, close } = await connect(harness);
   try {
     const names = (await client.listTools()).tools.map((tool) => tool.name);
     const forbidden = names.filter((name) =>
-      /approv|^slack_(post_(?!prepare$|send$)|send|react_(?!send$)|reaction|workspace_(add|reauth|remove|finish)|mode_(send|widen|set))/.test(
+      /approv|^slack_(post_(?!prepare$|send$)|send|react_(?!send$)|reaction|app_|workspace_(?!add$|finish$|reauth$|remove$|policy$|show$)|mode_(?!narrow$|request_send$|set$))/.test(
         name,
       ),
     );
-    assert.deepEqual(forbidden, [], 'approving and connecting stay off the MCP surface');
+    assert.deepEqual(forbidden, [], 'approving, changing the app, and any other way to change a workspace stay off');
     for (const expected of [
+      'slack_workspace_add',
+      'slack_workspace_finish',
+      'slack_workspace_reauth',
+      'slack_workspace_remove',
+      'slack_workspace_policy',
+      'slack_mode_set',
       'slack_draft_list',
       'slack_draft_get',
       'slack_draft_delete',
@@ -336,13 +345,26 @@ test('every tool says whether it writes and whether it reaches Slack', async () 
     const writers = tools.filter((tool) => tool.annotations?.readOnlyHint === false).map((tool) => tool.name);
     assert.deepEqual(writers.sort(), [
       'slack_draft_delete',
+      'slack_mode_set',
       'slack_post_prepare',
       'slack_post_send',
       'slack_react',
       'slack_react_send',
+      'slack_workspace_add',
+      'slack_workspace_finish',
+      'slack_workspace_policy',
+      'slack_workspace_reauth',
+      'slack_workspace_remove',
     ]);
-    // A post cannot be taken back once people have read it, and a client that asks before such a call must know.
-    for (const irreversible of ['slack_draft_delete', 'slack_post_send', 'slack_react', 'slack_react_send']) {
+    // A post cannot be taken back once people have read it, nor a deleted token, and a client that asks before such a
+    // call must know.
+    for (const irreversible of [
+      'slack_draft_delete',
+      'slack_post_send',
+      'slack_react',
+      'slack_react_send',
+      'slack_workspace_remove',
+    ]) {
       const tool = tools.find((candidate) => candidate.name === irreversible);
       assert.equal(tool?.annotations?.destructiveHint, true, `${irreversible} is marked destructive`);
       assert.equal(tool?.annotations?.idempotentHint ?? false, false, `${irreversible} is not safe to repeat`);
@@ -493,6 +515,8 @@ test('a pinned server refuses another workspace on every tool that takes one', a
     approvalId: 'ap_AAAAAAAAAAAAAAAAAAAAAA',
     expectChannel: 'C1',
     emoji: 'eyes',
+    mode: 'send',
+    flowId: 'sfl_AAAAAAAAAAAAAAAAAAAAAA',
   };
   try {
     const tools = (await client.listTools()).tools;

@@ -54,7 +54,10 @@ export interface StartOptions {
   readonly detached?: boolean | undefined;
   /** The account this must turn out to be, on a reauth. */
   readonly expect?: SlackFlow['expect'];
-  /** Proof a person typed a challenge, when this sign-in widens what the workspace can do. */
+  /**
+   * The consent a claimed change approval gave, when this sign-in widens what the workspace can do. It travels on the
+   * flow to the write at the end, which `ConfigStore.update` refuses without it.
+   */
   readonly consent?: LooseningConsent | undefined;
   /** Command that can run the hidden listener; tests point it at the source entry. */
   readonly listenerCommand?: ListenerEntry | undefined;
@@ -91,7 +94,7 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
         'LOOSENING_REFUSED',
         `connecting "${options.alias}" able to post needs a person to confirm it`,
         {
-          hint: `Run \`agent-slack workspace add ${options.alias} --mode send\` in a terminal, or connect it in read mode.`,
+          hint: `Connect it with \`agent-slack workspace add ${options.alias} --mode send\`, or slack_workspace_add from a chat: both ask the person to approve it first. Or connect it in read mode.`,
         },
       );
     }
@@ -515,7 +518,7 @@ async function namesThisFlow(context: SlackContext, flow: SlackFlow, name: strin
 /**
  * The config write, carrying the person's consent — under the name the workspace has now.
  *
- * A reauth may narrow what a workspace can do freely; widening it is gated before this point, and the proof is carried
+ * A reauth may narrow what a workspace can do freely; widening it is approved before this point, and the proof is carried
  * in so the config layer can tell the two apart. The proof names a path, and the path contains the workspace's name,
  * which a migration can change between the snapshot this was prepared from and the write itself. Consent is passed
  * before the write runs, so the name the write actually used is only known afterwards: if the write is refused as a
@@ -555,14 +558,55 @@ async function writeWithConsent(
  * Consent is given for a path — `accounts.live.mode` — and a migration between starting and finishing renames the
  * account under it, so the widening it approved would be refused as `accounts.cue/slack.mode`. It is the same
  * account (the reauth is bound to it by id), so the paths are offered under both names; any other path is not.
+ *
+ * A consent from a change approval also says what each path was approved to move between, and on which account by
+ * id, and `ConfigStore.update` holds the write to exactly those. They move with their paths and nothing else moves:
+ * the values and the id stay what the person approved, so the renamed account is still the only one they can widen.
+ * Moving the paths alone left an approved widening refused as "not the change that was approved" by a rename.
  */
 function consentUnder(consent: LooseningConsent, flow: SlackFlow, current: string | undefined): LooseningConsent {
   if (!current || current === flow.alias) return consent;
   const before = `accounts.${flow.alias}.`;
-  const moved = consent.paths
-    .filter((path) => path.startsWith(before))
-    .map((path) => `accounts.${current}.${path.slice(before.length)}`);
-  return { ...consent, paths: [...consent.paths, ...moved] };
+  const renamed = (path: string): string => `accounts.${current}.${path.slice(before.length)}`;
+  const moved = consent.paths.filter((path) => path.startsWith(before)).map(renamed);
+  const changes = consent.changes?.filter((change) => change.path.startsWith(before));
+  return {
+    ...consent,
+    paths: [...consent.paths, ...moved],
+    ...(consent.changes === undefined
+      ? {}
+      : {
+          changes: [
+            ...consent.changes,
+            ...(changes ?? []).map((change) => ({ ...change, path: renamed(change.path) })),
+          ],
+        }),
+  };
+}
+
+/**
+ * A write refused because the workspace is not what the person approved, said in the terms of this sign-in.
+ *
+ * An approval is claimed when the sign-in starts, and the write it permits comes minutes later, after Slack has
+ * already issued the token. If the configuration moved in between — the account renewed, replaced, or its mode
+ * changed underneath — `ConfigStore.update` refuses the write as "not the change that was approved", which is right
+ * but says nothing about the sign-in the person has just finished in Slack. So this says that nothing was saved, and
+ * what to do: ask for the change again. Whether the token could be taken back is the caller's to add, since only it
+ * knows.
+ */
+function explainRefusedConsent(error: unknown, flow: SlackFlow): unknown {
+  if (!(error instanceof CommsError) || error.code !== 'LOOSENING_REFUSED' || flow.consent?.changes === undefined) {
+    return error;
+  }
+  return new CommsError(
+    'LOOSENING_REFUSED',
+    `"${flow.alias}" changed after this was approved, so the sign-in was not saved`,
+    {
+      hint: `Nothing was saved for it. Ask for the change again — \`agent-slack workspace ${flow.expect ? `reauth ${flow.alias}` : `add ${flow.alias}`} --mode ${flow.mode}\`, or the same tool from a chat — and approve what it shows now.`,
+      details: { ...(error.details ?? {}), refused: error.message },
+      cause: error,
+    },
+  );
 }
 
 function codeFromUrl(raw: string, flow: SlackFlow): string {
@@ -715,7 +759,7 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
         'LOOSENING_REFUSED',
         `connecting "${flow.alias}" able to post needs a person to confirm it`,
         {
-          hint: `Start again at a terminal: \`agent-slack workspace add ${flow.alias} --mode send\`.`,
+          hint: `Start again with \`agent-slack workspace add ${flow.alias} --mode send\`, or slack_workspace_add from a chat: both ask the person to approve it first.`,
         },
       );
     }
@@ -874,7 +918,9 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
        */
       const landed = await committed(context, accountId, secretRefFor(accountId));
       if (landed === 'unknown') throw keepAndReport(error, secretRefFor(accountId));
-      if (landed === 'absent') throw await withdrawStaged(secrets, secretRefFor(accountId), error);
+      if (landed === 'absent') {
+        throw await withdrawStaged(secrets, secretRefFor(accountId), explainRefusedConsent(error, flow));
+      }
       // 'present': the write is in and only the lock's cleanup failed. The sign-in worked; carry on as it did.
     }
 

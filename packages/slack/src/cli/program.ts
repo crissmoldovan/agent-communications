@@ -4,16 +4,15 @@ import {
   canPrompt,
   colorEnabled,
   EXIT_CODES,
+  type GatedChange,
+  gatedChangeAtTerminal,
   installExitStatus,
-  type LooseningConsent,
   type OutputOptions,
   paint,
   renderChannelPreview,
   renderPrune,
-  requirePerson,
   runCommand,
   type Streams,
-  withCredentialsLock,
   writeResult,
 } from '@agentcomms/core';
 import { Command, CommanderError, Option } from 'commander';
@@ -26,31 +25,28 @@ import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
 import { mcpInstall, mcpPrune } from '../mcp/install.ts';
 import { createApp, updateApp } from '../operations/app.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
+import {
+  connectWorkspace,
+  planModeSet,
+  policyChange,
+  policyReport,
+  policyWanted,
+  reauthWorkspace,
+  removeWorkspaceChange,
+  signInStarted,
+} from '../operations/changes.ts';
 import { runDoctor } from '../operations/doctor.ts';
 import { deleteOwnDraft, ownDraft } from '../operations/drafts.ts';
 import { gateDepsFor } from '../operations/gate.ts';
 import type { ProbeFetch } from '../operations/identity.ts';
 import { checkedPort, manifestFor } from '../operations/manifest.ts';
-import { modeReport, narrowingSteps, wideningSteps } from '../operations/mode.ts';
 import { NameBook } from '../operations/people.ts';
 import { react, sendPost } from '../operations/post.ts';
 import { listChannels, listFiles, listPeople, readChannel, readThread, searchMessages } from '../operations/read.ts';
 import { preparePost } from '../operations/send.ts';
 import { openWorkspace } from '../operations/session.ts';
-import {
-  finishSignIn,
-  type ListenerEntry,
-  runSignInListener,
-  type StartedSignIn,
-  startSignIn,
-} from '../operations/signin.ts';
-import {
-  checkAliasFree,
-  listWorkspaces,
-  removeWorkspace,
-  requireWorkspace,
-  showWorkspace,
-} from '../operations/workspaces.ts';
+import { finishSignIn, type ListenerEntry, runSignInListener, type StartedSignIn } from '../operations/signin.ts';
+import { checkAliasFree, listWorkspaces, requireWorkspace, showWorkspace } from '../operations/workspaces.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
 import { readConfigurationToken } from './config-token.ts';
@@ -58,6 +54,7 @@ import { askFor } from './prompt.ts';
 import {
   renderAppCreated,
   renderAppUpdated,
+  renderAppUpdateNeeded,
   renderChannels,
   renderConnected,
   renderDeletedDraft,
@@ -68,6 +65,7 @@ import {
   renderManifestHelp,
   renderMode,
   renderPeople,
+  renderPolicies,
   renderRemoved,
   renderSearch,
   renderSignInStarted,
@@ -171,8 +169,8 @@ Getting started:
   agent-slack channels --workspace acme/slack
   agent-slack read <channel> --workspace acme/slack
 
-Exit codes: 0 ok · 1 unexpected · 10 a post was refused or needs approval, or a sign-in
-is still waiting · 64 usage · 65 bad data · 66 not found · 69 provider or secret store
+Exit codes: 0 ok · 1 unexpected · 10 a post or a change was refused or needs approval, or a
+sign-in is still waiting · 64 usage · 65 bad data · 66 not found · 69 provider or secret store
 unavailable · 75 temporary (retry later) · 77 sign-in or permission needed · 78
 configuration problem.`,
     )
@@ -390,53 +388,80 @@ configuration problem.`,
       .option('--url <url>', 'with --finish, the address-bar URL, pasted back by hand')
       .option('--no-browser', 'print the link instead of opening it');
 
-  signInOptions(workspace.command('add [alias]'))
-    .description('connect a workspace (opens Slack in a browser)')
-    .option('--client-id <id>', 'the app’s Client ID, from its Basic Information page')
-    .action(
-      act(async (context, options, alias: string | undefined, flags: Options) => {
-        if (flags.finish) {
-          const view = await finishSignIn(context, {
-            flowId: String(flags.finish),
-            only: 'add',
-            // Optional here, so bound only when it was given rather than invented from the flow.
-            ...(alias ? { expectAlias: alias } : {}),
-            ...(flags.url ? { url: String(flags.url) } : {}),
-            waitSeconds: waitOf(flags),
-          });
-          writeResult(view, output(), () => renderConnected(view, false, options.color), streams);
-          return;
-        }
-        if (!alias) {
-          throw new CommsError('USAGE', 'a name for the workspace is needed', {
-            hint: 'e.g. `agent-slack workspace add acme/slack --client-id <id> --port 51234`.',
-          });
-        }
-        if (!flags.clientId) {
-          throw new CommsError('USAGE', 'the Slack app’s Client ID is needed', {
-            hint: 'Create the app first: `agent-slack manifest --port 51234`. The Client ID is not a secret.',
-          });
-        }
-        const mode = String(flags.mode) as InstallMode;
-        // A new workspace that can post is a widening from nothing, and asked about as one. See `startSignIn`.
-        const consent =
-          mode === 'send'
-            ? await confirmPosting(options, alias, {
-                command: `agent-slack workspace add ${alias} --mode send --client-id ${String(flags.clientId)} --port ${portOf(flags)}`,
-                prompt: `This connects "${alias}" with a token that can post to Slack.`,
-              })
-            : undefined;
-        await signIn(context, options, {
+  /** Every command that changes a workspace takes the approval a person gave for it, so an agent can finish the job. */
+  const approvalOption = (command: Command): Command =>
+    command.option(
+      '--approval <approvalId>',
+      'apply a change a person approved: said yes to in chat, or approved with `agentcomms approve`',
+    );
+
+  /**
+   * Runs a change the way every changing command and tool does — core's `gatedChangeAtTerminal`.
+   *
+   * With `--approval` it claims that approval. Without one, a person at a terminal approves there and then (a yes, or
+   * the typed code under `confirm`), and an agent or a script gets the preview and the approval id and exits 10, as a
+   * post waiting for approval does. This replaced a typed challenge that refused agents outright: since 2026-09-25 an
+   * agent may make these changes, once a person has approved each one.
+   */
+  const changeAt = <T>(context: SlackContext, change: GatedChange<T>, flags: Options, command: string): Promise<T> =>
+    gatedChangeAtTerminal(context.core, change, {
+      approvalId: flags.approval === undefined ? undefined : String(flags.approval),
+      env,
+      output: output(),
+      command,
+      streams,
+    });
+
+  /** The parts of a command line that were given, for the command an agent is told to run again. */
+  const given = (flags: Options, names: readonly ('port' | 'start')[]): string =>
+    names
+      .map((name) => {
+        if (name === 'start') return flags.start === true ? ' --start' : '';
+        return flags.port === undefined ? '' : ` --port ${String(flags.port)}`;
+      })
+      .join('');
+
+  approvalOption(
+    signInOptions(workspace.command('add [alias]'))
+      .description('connect a workspace (opens Slack in a browser); in send mode, once a person approves it')
+      .option('--client-id <id>', 'the app’s Client ID, from its Basic Information page'),
+  ).action(
+    act(async (context, options, alias: string | undefined, flags: Options) => {
+      if (flags.finish) {
+        const view = await finishSignIn(context, {
+          flowId: String(flags.finish),
+          only: 'add',
+          // Optional here, so bound only when it was given rather than invented from the flow.
+          ...(alias ? { expectAlias: alias } : {}),
+          ...(flags.url ? { url: String(flags.url) } : {}),
+          waitSeconds: waitOf(flags),
+        });
+        writeResult(view, output(), () => renderConnected(view, false, options.color), streams);
+        return;
+      }
+      if (!alias) {
+        throw new CommsError('USAGE', 'a name for the workspace is needed', {
+          hint: 'e.g. `agent-slack workspace add acme/slack --client-id <id> --port 51234`.',
+        });
+      }
+      const mode = String(flags.mode) as InstallMode;
+      // The same operation as `slack_workspace_add`: in send mode, a change approved before the sign-in starts.
+      const started = await changeAt(
+        context,
+        connectWorkspace(context, {
           alias,
           mode,
-          ...(consent ? { consent } : {}),
-          clientId: String(flags.clientId),
-          port: portOf(flags),
-          start: flags.start === true,
-          browser: flags.browser !== false,
-        });
-      }),
-    );
+          clientId: flags.clientId === undefined ? undefined : String(flags.clientId),
+          port: flags.port,
+          detached: flags.start === true,
+          listenerCommand: deps.listenerCommand,
+        }),
+        flags,
+        `agent-slack workspace add ${alias} --mode ${mode} --client-id ${String(flags.clientId)}${given(flags, ['port', 'start'])}`,
+      );
+      await presentSignIn(started, false, options, { start: flags.start === true, browser: flags.browser !== false });
+    }),
+  );
 
   workspace
     .command('list')
@@ -461,165 +486,154 @@ configuration problem.`,
   /*
    * The mode, and moving it — one command for what `show`, `reauth` and the Slack admin pages each hold part of.
    *
-   * Reporting is anybody's. `send` is the gated widening under a name people look for, and only a person runs it.
-   * `read` changes nothing: Slack cannot take a scope back from a token, only removing the app's installation resets
-   * it, and that is in Slack's settings — so this says exactly how, in the order that keeps the workspace's name.
+   * Reporting is anybody's. `send` is the widening under a name people look for: the app step first, while nothing
+   * shows the app has been widened, then a change approved before its sign-in starts. `read` changes nothing: Slack
+   * cannot take a scope back from a token, only removing the app's installation resets it, and that is in Slack's
+   * settings — so this says exactly how, in the order that keeps the workspace's name.
    */
-  workspace
-    .command('mode <alias> [mode]')
-    .description('what a workspace can do, and how to change it: `mode <name> send`, or `mode <name> read`')
-    .option('--port <port>', 'the loopback port in the app’s manifest')
-    .option('--start', 'print the sign-in link and return, instead of waiting', false)
-    .option('--no-browser', 'print the link instead of opening it')
-    .action(
-      act(async (context, options, alias: string, target: string | undefined, flags: Options) => {
-        const found = requireWorkspace(await context.config(), alias);
-        const port = flags.port === undefined ? undefined : portOf(flags);
-        const report = modeReport(found.alias, found.account, port);
-        const recorded = found.account.redirectPort;
-        if (target === undefined || target === report.mode) {
-          writeResult(report, output(), () => renderMode(report, options.color), streams);
+  approvalOption(
+    workspace
+      .command('mode <alias> [mode]')
+      .description('what a workspace can do, and how to change it: `mode <name> send`, or `mode <name> read`')
+      .option('--port <port>', 'the loopback port in the app’s manifest')
+      .option('--app-updated', 'with send: the app’s manifest already asks for the send scopes', false)
+      .option('--start', 'print the sign-in link and return, instead of waiting', false)
+      .option('--no-browser', 'print the link instead of opening it'),
+  ).action(
+    act(async (context, options, alias: string, target: string | undefined, flags: Options) => {
+      // The same operation as `slack_mode_set`: see `planModeSet` for what each direction does.
+      const planned = await planModeSet(context, alias, target, {
+        port: flags.port,
+        appUpdated: flags.appUpdated === true,
+        detached: flags.start === true,
+        listenerCommand: deps.listenerCommand,
+      });
+      switch (planned.kind) {
+        case 'report':
+          writeResult(planned.report, output(), () => renderMode(planned.report, options.color), streams);
           return;
-        }
-        if (target === 'read') {
-          // The port is in two of the steps: the one asked for, else the one this workspace last signed in with.
-          const steps = narrowingSteps(found.alias, portOf(flags, recorded), {
-            knowsItsApp: found.account.oauthClientId !== undefined,
-          });
+        case 'steps':
           writeResult(
-            { alias: found.alias, mode: report.mode, changed: false, steps },
+            planned.result,
             output(),
             () =>
               renderSteps(
-                `Slack cannot take posting away from "${found.alias}"'s token. Removing the app's installation does:`,
-                steps,
+                `Slack cannot take posting away from "${planned.result.alias}"'s token. Removing the app's installation does:`,
+                planned.result.steps,
                 options.color,
               ),
             streams,
           );
           return;
-        }
-        if (target !== 'send') {
-          throw new CommsError('USAGE', `"${target}" is not a mode`, { hint: 'The modes are `read` and `send`.' });
-        }
-        if (!found.account.oauthClientId) {
-          throw new CommsError('CONFIG', `"${found.alias}" does not record which Slack app it was connected through`, {
-            hint: `Remove and add it again: \`agent-slack workspace remove ${found.alias}\`.`,
-          });
-        }
-        // Both steps name the port: the one asked for, else the one this workspace last signed in with — never a guess.
-        const chosen = portOf(flags, recorded);
-        streams.stderr.write(
-          `${renderSteps('Moving to send takes two steps:', wideningSteps(found.alias, chosen), options.color)}\n`,
-        );
-        const consent = await confirmWidening(options, found.alias, chosen);
-        // A reauth, bound to this account as `workspace reauth` binds it: without `expect` the sign-in is an add,
-        // and an add refuses a name that is already connected.
-        const { account } = found;
-        await signIn(context, options, {
-          alias: found.alias,
-          mode: 'send',
-          consent,
-          clientId: found.account.oauthClientId,
-          port: chosen,
-          start: flags.start === true,
-          browser: flags.browser !== false,
-          expect: {
-            accountId: account.id,
-            workspaceId: account.workspace,
-            userId: account.userId,
-            oauthClientId: account.oauthClientId,
-            ...(account.appId ? { appId: account.appId } : {}),
-          },
-        });
-      }),
-    );
-
-  workspace
-    .command('remove <alias>')
-    .description('disconnect a workspace from this machine')
-    .action(
-      act(async (context, _options, alias: string) => {
-        /*
-         * Under the credentials lock, from reading the configuration to the last write.
-         *
-         * Removal deletes a credential and then drops the entry naming it, and a migration running in between
-         * saw an account still configured whose credential was already gone — skipped it as having nothing to
-         * copy, switched backends, and left the removal refusing because the backend had moved. The account stayed
-         * configured with its credential in neither backend. Holding the lock makes the two strictly one after
-         * the other, and reading the configuration inside it means the store chosen is the one actually in force.
-         *
-         * A sign-in does not take it, deliberately: it only ever *adds* a reference, which the migration's own
-         * check of the reference set does see, and the sign-in checks the backend from its side. Making it wait
-         * here would spend a one-shot authorisation code on a five-second lock timeout.
-         */
-        const removed = await withCredentialsLock(context.core.paths.configDir, async () =>
-          removeWorkspace(
-            {
-              config: await context.config(),
-              secrets: await context.secrets(),
-              update: (mutator) => context.core.config.update(mutator),
-            },
-            alias,
-          ),
-        );
-        writeResult(removed, output(), () => renderRemoved(alias), streams);
-      }),
-    );
-
-  signInOptions(workspace.command('reauth <alias>'))
-    .description('sign in again: renew the grant, or change how much access it has')
-    .action(
-      act(async (context, options, alias: string, flags: Options, command: Command) => {
-        if (flags.finish) {
-          const view = await finishSignIn(context, {
-            flowId: String(flags.finish),
-            only: 'reauth',
-            // The caller named a workspace; a flow id names one too, and they have to be the same one.
-            expectAlias: alias,
-            ...(flags.url ? { url: String(flags.url) } : {}),
-            waitSeconds: waitOf(flags),
-          });
-          writeResult(view, output(), () => renderConnected(view, true, options.color), streams);
+        case 'app-update-needed':
+          writeResult(planned.result, output(), () => renderAppUpdateNeeded(planned.result, options.color), streams);
           return;
-        }
-        const { account } = requireWorkspace(await context.config(), alias);
-        if (!account.oauthClientId) {
-          throw new CommsError('CONFIG', `"${alias}" does not record which Slack app it was connected through`, {
-            hint: `Remove and add it again: \`agent-slack workspace remove ${alias}\`.`,
+        case 'change': {
+          const started = await changeAt(
+            context,
+            planned.change,
+            flags,
+            `agent-slack workspace mode ${alias} send --app-updated${given(flags, ['port', 'start'])}`,
+          );
+          await presentSignIn(started, true, options, {
+            start: flags.start === true,
+            browser: flags.browser !== false,
           });
         }
-        /*
-         * The workspace's own mode by default, not `read`.
-         *
-         * `--mode` carries a default, so at this layer "not passed" and "passed read" look identical — and taking
-         * the default would quietly downgrade a `send` workspace every time somebody renewed its grant, which is
-         * the opposite of what "the same, again" means. Commander knows where the value came from; ask it.
-         */
-        const was = parseMode(account.mode ?? account.tier, `"${alias}"`);
-        const mode = command.getOptionValueSource('mode') === 'default' ? was : (String(flags.mode) as InstallMode);
-        const consent =
-          mode === 'send' && was === 'read'
-            ? await confirmWidening(options, alias, portOf(flags, account.redirectPort))
-            : undefined;
-        await signIn(context, options, {
+      }
+    }),
+  );
+
+  approvalOption(
+    workspace
+      .command('remove <alias>')
+      .description('disconnect a workspace from this machine, once a person approves it'),
+  ).action(
+    act(async (context, _options, alias: string, flags: Options) => {
+      // The same operation as `slack_workspace_remove`: approved, because a deleted token cannot be taken back.
+      const removed = await changeAt(
+        context,
+        removeWorkspaceChange(context, alias),
+        flags,
+        `agent-slack workspace remove ${alias}`,
+      );
+      writeResult(removed, output(), () => renderRemoved(alias), streams);
+    }),
+  );
+
+  approvalOption(
+    signInOptions(workspace.command('reauth <alias>')).description(
+      'sign in again: renew the grant, or change how much access it has',
+    ),
+  ).action(
+    act(async (context, options, alias: string, flags: Options, command: Command) => {
+      if (flags.finish) {
+        const view = await finishSignIn(context, {
+          flowId: String(flags.finish),
+          only: 'reauth',
+          // The caller named a workspace; a flow id names one too, and they have to be the same one.
+          expectAlias: alias,
+          ...(flags.url ? { url: String(flags.url) } : {}),
+          waitSeconds: waitOf(flags),
+        });
+        writeResult(view, output(), () => renderConnected(view, true, options.color), streams);
+        return;
+      }
+      /*
+       * The workspace's own mode by default, not `read`.
+       *
+       * `--mode` carries a default, so at this layer "not passed" and "passed read" look identical — and taking
+       * the default would quietly downgrade a `send` workspace every time somebody renewed its grant, which is
+       * the opposite of what "the same, again" means. Commander knows where the value came from; ask it.
+       */
+      const mode = command.getOptionValueSource('mode') === 'default' ? undefined : (String(flags.mode) as InstallMode);
+      // The same operation as `slack_workspace_reauth`: a widening is approved before its sign-in starts.
+      const started = await changeAt(
+        context,
+        reauthWorkspace(context, {
           alias,
           mode,
-          ...(consent ? { consent } : {}),
-          clientId: account.oauthClientId,
-          port: portOf(flags, account.redirectPort),
-          start: flags.start === true,
-          browser: flags.browser !== false,
-          expect: {
-            accountId: account.id,
-            workspaceId: account.workspace,
-            userId: account.userId,
-            oauthClientId: account.oauthClientId,
-            ...(account.appId ? { appId: account.appId } : {}),
-          },
-        });
-      }),
-    );
+          port: flags.port,
+          detached: flags.start === true,
+          listenerCommand: deps.listenerCommand,
+        }),
+        flags,
+        `agent-slack workspace reauth ${alias}${mode === undefined ? '' : ` --mode ${mode}`}${given(flags, ['port', 'start'])}`,
+      );
+      await presentSignIn(started, true, options, { start: flags.start === true, browser: flags.browser !== false });
+    }),
+  );
+
+  /*
+   * How posting and changes to a workspace are approved.
+   *
+   * With neither option it reports. Tightening applies at once; loosening — a send policy towards `chat`, a change
+   * policy from `confirm` to `chat` — is a change approval, decided by the change policy in force before it.
+   */
+  approvalOption(
+    workspace
+      .command('policy <alias>')
+      .description('how its posts and its changes are approved: report them, or set --send and --change')
+      .option('--send <policy>', 'how a post or reaction is approved: chat, confirm or never')
+      .option('--change <policy>', 'how a change that loosens or removes it is approved: chat or confirm'),
+  ).action(
+    act(async (context, options, alias: string, flags: Options) => {
+      // The same operation as `slack_workspace_policy`, checks and all.
+      const wanted = policyWanted({ send: flags.send, change: flags.change });
+      const result =
+        wanted.send === undefined && wanted.change === undefined
+          ? policyReport(await context.config(), alias)
+          : await changeAt(
+              context,
+              policyChange(context, alias, wanted),
+              flags,
+              `agent-slack workspace policy ${alias}${wanted.send ? ` --send ${wanted.send}` : ''}${
+                wanted.change ? ` --change ${wanted.change}` : ''
+              }`,
+            );
+      writeResult(result, output(), () => renderPolicies(result, options.color), streams);
+    }),
+  );
 
   // ── doctor ──────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -1053,113 +1067,34 @@ configuration problem.`,
       }),
     );
 
-  // ── shared by add and reauth ────────────────────────────────────────────────────────────────────────────────
+  // ── shared by add, reauth and mode ──────────────────────────────────────────────────────────────────────────
 
   /**
-   * `read` → `send` is the one change here that a person has to make deliberately.
+   * A sign-in that has started, shown the way it was asked for.
    *
-   * A workspace connected as `read` holds a token that physically cannot post. That is the guarantee D1 makes,
-   * and re-authorising as `send` replaces the token with one that can — so it is not a setting an agent may flip
-   * on somebody's behalf, however reasonable the reason sounds in a transcript.
-   *
-   * Two things stand in the way, and they answer different threats. The agent marker refuses outright when the
-   * caller is an agent, because an agent that can run commands can also type a challenge. The typed challenge
-   * then makes it deliberate for the person who is left, which is what it is for: a speed bump against a hasty
-   * change, never a security boundary.
-   *
-   * The consent travels on the flow, because the sign-in this gates may be finished by a different process.
+   * With `--start` the listener is detached and the flow is on disk, so the link is the result and whatever runs
+   * `--finish` need not be this process — or even this session: an agent's shell call returns in seconds while consent
+   * takes minutes. Without it, the link goes to stderr, so `--json` still puts exactly one document on stdout, and
+   * this waits for the browser.
    */
-  /** The same gate for a workspace connected able to post from the start: no earlier mode, but the same risk. */
-  async function confirmPosting(
+  async function presentSignIn(
+    started: StartedSignIn,
+    reauth: boolean,
     options: GlobalOptions,
-    alias: string,
-    ask: { command: string; prompt: string },
-  ): Promise<LooseningConsent> {
-    await requirePerson(env, streams, {
-      refusedToAgent: `connecting "${alias}" able to post to Slack is not an agent's to do`,
-      refusedWithoutTerminal: 'connecting a workspace that can post needs a terminal',
-      command: ask.command,
-      prompt: ask.prompt,
-      color: options.color,
-      json: globals().json,
-      noInput: false,
-    });
-    return { kind: 'loosening-consent', paths: [`accounts.${alias}.mode`] };
-  }
-
-  async function confirmWidening(options: GlobalOptions, alias: string, port: number): Promise<LooseningConsent> {
-    await requirePerson(env, streams, {
-      refusedToAgent: `widening "${alias}" from read to send is not an agent's to do`,
-      refusedWithoutTerminal: 'widening a workspace from read to send needs a terminal',
-      // With the port: the command is copied as printed, and without one it is a usage error.
-      command: `agent-slack workspace reauth ${alias} --mode send --port ${port}`,
-      prompt: `This replaces "${alias}"'s token with one that can post to Slack (read → send).`,
-      color: options.color,
-      json: globals().json,
-      noInput: false,
-    });
-    return { kind: 'loosening-consent', paths: [`accounts.${alias}.mode`] };
-  }
-
-  async function signIn(
-    context: SlackContext,
-    options: GlobalOptions,
-    input: {
-      alias: string;
-      mode: InstallMode;
-      clientId: string;
-      port: number;
-      start: boolean;
-      browser: boolean;
-      expect?: Parameters<typeof startSignIn>[1]['expect'];
-      /**
-       * Proof a person typed a challenge to widen this workspace.
-       *
-       * Declared here because leaving it out did not fail to compile: the caller passed it, this signature
-       * ignored it, and the consent was dropped between the two. `ConfigStore.update` then refused every
-       * approved widening, so the gate stopped meaning "a person must approve this" and started meaning "this
-       * can never happen" — while every refusal test went on passing.
-       */
-      consent?: LooseningConsent | undefined;
-    },
+    how: { start: boolean; browser: boolean },
   ): Promise<void> {
-    const started: StartedSignIn = await startSignIn(context, {
-      alias: input.alias,
-      mode: input.mode,
-      clientId: input.clientId,
-      port: input.port,
-      detached: input.start,
-      ...(input.expect ? { expect: input.expect } : {}),
-      ...(input.consent ? { consent: input.consent } : {}),
-      ...(deps.listenerCommand ? { listenerCommand: deps.listenerCommand } : {}),
-    });
-    const reauth = Boolean(input.expect);
-
-    if (input.start) {
-      /*
-       * The two-step form, and why it exists: an agent's shell call returns in seconds while consent takes
-       * minutes. The listener is detached and the flow is on disk, so whatever runs `--finish` need not be this
-       * process — or even this session.
-       */
-      if (input.browser) tryOpen(started.authUrl);
+    if (how.start) {
+      if (how.browser) tryOpen(started.authUrl);
       writeResult(
-        {
-          flowId: started.flowId,
-          alias: started.alias,
-          mode: started.mode,
-          authUrl: started.authUrl,
-          expiresAt: started.expiresAt,
-        },
+        signInStarted(started, reauth),
         output(),
         () => renderSignInStarted(started, reauth, options.color),
         streams,
       );
       return;
     }
-
-    // Interactive. The link goes to stderr, so `--json` still puts exactly one document on stdout.
     streams.stderr.write(`${renderSignInStarted(started, reauth, options.color)}\n\n`);
-    if (input.browser) tryOpen(started.authUrl);
+    if (how.browser) tryOpen(started.authUrl);
     const listener = started.listener;
     if (!listener) throw new CommsError('UNEXPECTED', 'the sign-in listener did not start');
     try {

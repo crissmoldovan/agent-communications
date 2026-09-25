@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { CommsError, classifyChange, parseConfig, type SecretStore } from '@agentcomms/core';
 import { newFlowId, type SlackFlow } from '../src/auth/flow.ts';
 import { SlackContext } from '../src/context.ts';
+import { scopesForMode } from '../src/manifest.ts';
 import {
   finishSignIn,
   releaseChannel,
@@ -15,7 +16,7 @@ import {
   type StartedSignIn,
   startSignIn,
 } from '../src/operations/signin.ts';
-import { newHarness, TEST_CLIENT_ID, tempDir } from './support/harness.ts';
+import { newHarness, slackOk, TEST_CLIENT_ID, tempDir } from './support/harness.ts';
 import { running, stopListeners } from './support/listener.ts';
 
 /*
@@ -743,4 +744,67 @@ test('the package does not hand out the sign-in operations, so the gated paths a
   for (const name of ['startSignIn', 'completeSignIn', 'finishSignIn']) {
     assert.equal(name in root, false, `${name} is exported from the package root`);
   }
+});
+
+test('a widening whose approval names another account is not saved, says why, and keeps no token', async () => {
+  /*
+   * A consent from a claimed change approval binds each loosening to the account it was approved on, by id, and
+   * `ConfigStore.update` refuses a write that loosens anything else — a name that moved on to another account between
+   * the claim and the write, minutes later. Core's refusal is right and says nothing about the sign-in the person has
+   * just finished in Slack, so this one says that nothing was saved and how to ask again; and the token Slack issued
+   * for it does not stay on this machine under a reference nothing names.
+   */
+  const harness = await newHarness();
+  const context = new SlackContext({ core: harness.core, env: harness.env, exchange: (p) => harness.exchange(p) });
+  const account = await harness.addWorkspace({ alias: 'acme', mode: 'read' });
+  const real = await harness.core.secrets('file');
+  const written: string[] = [];
+  context.secrets = async () => ({
+    kind: real.kind,
+    get: (ref) => real.get(ref),
+    delete: (ref) => real.delete(ref),
+    invalidate: (ref) => real.invalidate(ref),
+    async set(ref: string, value: string) {
+      written.push(ref);
+      await real.set(ref, value);
+    },
+  });
+  harness.reply = () => slackOk({ scopes: scopesForMode('send') });
+  const started = await startSignIn(context, {
+    mode: 'send',
+    alias: 'acme',
+    clientId: TEST_CLIENT_ID,
+    port: await freePort(),
+    detached: false,
+    expect: {
+      accountId: account.id,
+      workspaceId: account.workspace,
+      userId: account.userId,
+      oauthClientId: TEST_CLIENT_ID,
+      appId: 'A0001',
+    },
+    consent: {
+      kind: 'loosening-consent',
+      paths: ['accounts.acme.mode'],
+      changes: [{ path: 'accounts.acme.mode', before: 'read', after: 'send', id: 'acc_ZZZZZZZZZZZZZZZZ' }],
+    },
+  });
+  const listener = started.listener as NonNullable<StartedSignIn['listener']>;
+  await redirectTo(started.authUrl);
+  await assert.rejects(listener.result, (error: CommsError) => {
+    assert.equal(error.code, 'LOOSENING_REFUSED');
+    assert.match(error.message, /"acme" changed after this was approved, so the sign-in was not saved/);
+    assert.match(error.hint ?? '', /Nothing was saved for it/);
+    assert.match(error.hint ?? '', /agent-slack workspace reauth acme --mode send/);
+    assert.match(String(error.details?.refused), /this is not the change that was approved/);
+    return true;
+  });
+  await listener.close();
+
+  const after = (await harness.core.config.load()).accounts.acme;
+  assert.equal(after?.id, account.id);
+  assert.equal(after?.mode, 'read');
+  assert.equal(written.length, 1, 'the sign-in stored its credential before the write, as it does');
+  assert.equal(await real.get(written[0] as string), null, 'the token Slack issued was left on this machine');
+  assert.ok(await real.get(account.secretRef), 'the credential the workspace still uses is untouched');
 });

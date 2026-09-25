@@ -329,9 +329,17 @@
       "id": "slack.workspace.add",
       "package": "slack",
       "cli": "workspace add",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P3"
+      "mcp": "slack_workspace_add",
+      "status": "both",
+      "reason": "Connecting in `send` is a change approval, given before the sign-in starts; in `read` it starts at once."
+    },
+    {
+      "id": "slack.workspace.finish",
+      "package": "slack",
+      "cli": "workspace add",
+      "mcp": "slack_workspace_finish",
+      "status": "both",
+      "reason": "The CLI completes a sign-in begun with --start as `workspace add --finish <flowId>`. Over MCP that is a call of its own, because a tool call cannot sit waiting on a browser."
     },
     {
       "id": "slack.workspace.list",
@@ -354,7 +362,7 @@
       "cli": "workspace mode",
       "mcp": "slack_mode_request_send",
       "status": "both",
-      "reason": "`workspace mode <name> send` prints the same steps before it asks for anything."
+      "reason": "The steps as text: `workspace mode <name> send` returns the same steps, with the manifest, while the app has not been updated."
     },
     {
       "id": "slack.mode.narrow",
@@ -368,26 +376,41 @@
       "id": "slack.mode.set",
       "package": "slack",
       "cli": "workspace mode",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P3",
-      "reason": "The widening itself: `workspace mode <name> send` signs in again with posting scopes. From chat that is slack_mode_set, by change approval (design §6.2)."
+      "mcp": "slack_mode_set",
+      "status": "both",
+      "reason": "The move itself, `workspace mode <name> send|read`: the app step first while nothing shows the app was widened, then a change approval before the sign-in starts; `read` returns the procedure (design §6.2)."
     },
     {
       "id": "slack.workspace.remove",
       "package": "slack",
       "cli": "workspace remove",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P3"
+      "mcp": "slack_workspace_remove",
+      "status": "both",
+      "reason": "A change approval, because a deleted token cannot be taken back."
     },
     {
       "id": "slack.workspace.reauth",
       "package": "slack",
       "cli": "workspace reauth",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P3"
+      "mcp": "slack_workspace_reauth",
+      "status": "both",
+      "reason": "Renewing starts at once; read → send is a change approval, given before the sign-in starts."
+    },
+    {
+      "id": "slack.workspace.reauth.finish",
+      "package": "slack",
+      "cli": "workspace reauth",
+      "mcp": "slack_workspace_finish",
+      "status": "both",
+      "reason": "The CLI completes a sign-in again as `workspace reauth <name> --finish <flowId>`; over MCP the one finishing tool completes every sign-in, bound to the name when it is given."
+    },
+    {
+      "id": "slack.workspace.policy",
+      "package": "slack",
+      "cli": "workspace policy",
+      "mcp": "slack_workspace_policy",
+      "status": "both",
+      "reason": "Reports, and tightens at once; loosening a send or change policy is a change approval, under the change policy in force before it."
     },
     { "id": "slack.doctor", "package": "slack", "cli": "doctor", "mcp": "slack_doctor", "status": "both" },
     { "id": "slack.channels", "package": "slack", "cli": "channels", "mcp": "slack_channels", "status": "both" },

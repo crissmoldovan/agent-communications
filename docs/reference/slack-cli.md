@@ -21,7 +21,7 @@ Scripts should read these rather than parse output.
 |---|---|
 | `0` | it worked |
 | `1` | unexpected failure |
-| `10` | a post was refused or needs approval, or a sign-in is still waiting |
+| `10` | a post or a change was refused or needs approval, or a sign-in is still waiting |
 | `64` | the command was used wrongly |
 | `65` | the data given was not usable |
 | `66` | what was asked for does not exist |
@@ -108,7 +108,7 @@ agent-slack workspace [options] [command]
 
 ### `agent-slack workspace add`
 
-connect a workspace (opens Slack in a browser)
+connect a workspace (opens Slack in a browser); in send mode, once a person approves it
 
 ```
 agent-slack workspace add [options] [alias]
@@ -124,6 +124,7 @@ agent-slack workspace add [options] [alias]
 | `--url <url>` | with --finish, the address-bar URL, pasted back by hand | — |
 | `--no-browser` | print the link instead of opening it | — |
 | `--client-id <id>` | the app’s Client ID, from its Basic Information page | — |
+| `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved with `agentcomms approve` | — |
 
 ### `agent-slack workspace list`
 
@@ -152,16 +153,22 @@ agent-slack workspace mode [options] <alias> [mode]
 | Option | What it does | Default |
 |---|---|---|
 | `--port <port>` | the loopback port in the app’s manifest | — |
+| `--app-updated` | with send: the app’s manifest already asks for the send scopes | `false` |
 | `--start` | print the sign-in link and return, instead of waiting | `false` |
 | `--no-browser` | print the link instead of opening it | — |
+| `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved with `agentcomms approve` | — |
 
 ### `agent-slack workspace remove`
 
-disconnect a workspace from this machine
+disconnect a workspace from this machine, once a person approves it
 
 ```
 agent-slack workspace remove [options] <alias>
 ```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved with `agentcomms approve` | — |
 
 ### `agent-slack workspace reauth`
 
@@ -180,6 +187,21 @@ agent-slack workspace reauth [options] <alias>
 | `--wait <seconds>` | with --finish, how long to wait for the browser | `"60"` |
 | `--url <url>` | with --finish, the address-bar URL, pasted back by hand | — |
 | `--no-browser` | print the link instead of opening it | — |
+| `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved with `agentcomms approve` | — |
+
+### `agent-slack workspace policy`
+
+how its posts and its changes are approved: report them, or set --send and --change
+
+```
+agent-slack workspace policy [options] <alias>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--send <policy>` | how a post or reaction is approved: chat, confirm or never | — |
+| `--change <policy>` | how a change that loosens or removes it is approved: chat or confirm | — |
+| `--approval <approvalId>` | apply a change a person approved: said yes to in chat, or approved with `agentcomms approve` | — |
 
 ### `agent-slack doctor`
 

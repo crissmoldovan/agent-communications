@@ -112,10 +112,11 @@ policy says, because the people who would be interrupted are not in the conversa
 
 There is no "send it from the app instead" escape hatch: Slack has no server-side draft, so the person cannot
 open it in Slack and finish it. The equivalent is **"here is the text; paste it yourself"**, and the preview is
-written to be pasteable. Offer it that way rather than asking for a mode change.
+written to be pasteable. Offer it that way rather than pushing for a mode change.
 
-Widening a workspace to `send` is a person's job and needs their own Slack app's manifest changed — see
-`slack-setup`. You may *ask*; you may never do it.
+If the person wants the workspace able to post, that is a change they approve, and it needs their own Slack app's
+manifest updated first — see `slack-setup` (`slack_mode_set`). Never start it on your own to get a post out, and
+never loosen a send policy of `never` (`slack_workspace_policy`) to get round it: both are the person's to ask for.
 
 ## Reactions
 

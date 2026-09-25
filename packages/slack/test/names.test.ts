@@ -6,6 +6,7 @@ import {
   type AccountConfig,
   CommsError,
   type ConfigV2,
+  gatedChange,
   migrateNames,
   planNamesMigration,
   renameEntry,
@@ -16,6 +17,7 @@ import {
 import { parseBundle } from '../src/auth/bundle.ts';
 import { SlackContext } from '../src/context.ts';
 import { scopesForMode } from '../src/manifest.ts';
+import { reauthWorkspace } from '../src/operations/changes.ts';
 import { doctor } from '../src/operations/doctor.ts';
 import { finishSignIn, type StartedSignIn, startSignIn } from '../src/operations/signin.ts';
 import { listWorkspaces, removeWorkspace, requireWorkspace } from '../src/operations/workspaces.ts';
@@ -314,6 +316,32 @@ test('a read → send reauth approved before the migration is still approved aft
   await migrate(harness, ['live=cue/slack']);
   harness.reply = () => slackOk({ scopes: scopesForMode('send') });
   const view = await finish(started);
+  assert.equal(view.alias, 'cue/slack');
+  assert.equal((await harness.core.config.load()).accounts['cue/slack']?.mode, 'send');
+});
+
+test('a widening approved through a change approval is still approved after a migration renames it', async () => {
+  /*
+   * A consent from a claimed change approval carries, beside each path, the values it was approved to move between
+   * and the account it moves them on — and `ConfigStore.update` holds the write to exactly those. A migration between
+   * the claim and the write renames the path under it. Carrying the paths alone to the new name left the widening
+   * refused as "not the change that was approved", a sign-in the person had approved twice wasted.
+   */
+  const harness = await newHarness();
+  const context = contextFor(harness);
+  await harness.addWorkspace({ alias: 'live', mode: 'read', redirectPort: await freePort() });
+  // Prepared and claimed as both surfaces do: the operation they run, through core's flow.
+  const change = reauthWorkspace(context, { alias: 'live', mode: 'send', detached: false });
+  const asked = await gatedChange(harness.core, change, { surface: 'mcp' });
+  assert.equal(asked.status, 'approval-required');
+  if (asked.status !== 'approval-required') return;
+  const claimed = await gatedChange(harness.core, change, { surface: 'mcp', approvalId: asked.prepared.approvalId });
+  assert.equal(claimed.status, 'applied');
+  if (claimed.status !== 'applied') return;
+
+  await migrate(harness, ['live=cue/slack']);
+  harness.reply = () => slackOk({ scopes: scopesForMode('send') });
+  const view = await finish(claimed.result);
   assert.equal(view.alias, 'cue/slack');
   assert.equal((await harness.core.config.load()).accounts['cue/slack']?.mode, 'send');
 });

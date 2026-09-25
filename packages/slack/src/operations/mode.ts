@@ -1,5 +1,5 @@
 import type { AccountConfig } from '@agentcomms/core';
-import { type InstallMode, parseMode, scopesForMode } from '../manifest.ts';
+import { appManifestUrl, type InstallMode, parseMode, scopesForMode } from '../manifest.ts';
 
 /**
  * What a workspace can do, and what changing that takes.
@@ -43,7 +43,7 @@ export function modeReport(alias: string, account: AccountConfig, requested?: nu
     mode,
     outwardScopes,
     canActOutward: outwardScopes.length > 0,
-    toSend: mode === 'send' ? [] : wideningSteps(alias, port),
+    toSend: mode === 'send' ? [] : wideningSteps(alias, port, account.appId),
     toRead:
       mode === 'read' && outwardScopes.length === 0
         ? []
@@ -56,12 +56,22 @@ const portText = (port: number | undefined): string => (port === undefined ? '<p
 /**
  * `read` → `send`: the app first, because a token can only be granted what its app declares, and changing the app
  * changes no token already issued.
+ *
+ * With the app's id recorded, the first step links straight to that app's manifest page and names `app update`, which
+ * edits exactly that app from a terminal. Without it there is no telling which of the person's apps this workspace
+ * uses, so the step says how to find it rather than guessing — and does not offer `app update`, which would refuse.
+ *
+ * The second step is the change itself, from either surface. `--app-updated` is part of it because the recorded grant
+ * of a `read` workspace cannot show that the app was widened, and without the person's word that it was, the command
+ * hands back this first step instead of starting a sign-in that Slack would answer with `read` again.
  */
-export function wideningSteps(alias: string, port?: number): string[] {
+export function wideningSteps(alias: string, port?: number, appId?: string | undefined): string[] {
   const p = portText(port);
   return [
-    `Open the workspace's existing app at https://api.slack.com/apps → App Manifest, and replace it with \`agent-slack manifest --mode send --port ${p}\` — the same app, not a new one.`,
-    `Then, at a terminal: \`agent-slack workspace mode ${alias} send --port ${p}\`, and approve it in Slack.`,
+    appId
+      ? `Open ${appManifestUrl(appId)} — the manifest of the app "${alias}" signed in through — replace it with \`agent-slack manifest --mode send --port ${p}\`, and save: the same app, not a new one. With an app configuration token, \`agent-slack app update ${alias} --mode send --port ${p}\` does this at a terminal instead.`
+      : `Open the workspace's existing app at https://api.slack.com/apps → App Manifest, and replace it with \`agent-slack manifest --mode send --port ${p}\` — the same app, not a new one.`,
+    `Then move it: \`agent-slack workspace mode ${alias} send --app-updated --port ${p}\` at a terminal, or slack_mode_set with appUpdated from a chat. Either asks for the change to be approved first, then for the sign-in to be approved in Slack.`,
   ];
 }
 

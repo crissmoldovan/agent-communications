@@ -153,6 +153,8 @@ try {
     'slack_mode',
     'slack_mode_narrow',
     'slack_mode_request_send',
+    // Moving a workspace between read and send: the app step, then a change a person approves.
+    'slack_mode_set',
     'slack_people',
     'slack_post_prepare',
     // The three that reach people, each through the approval gate the CLI uses. None of them approves.
@@ -162,6 +164,12 @@ try {
     'slack_read',
     'slack_search',
     'slack_thread',
+    // Connecting and changing a workspace: whatever loosens it or removes it waits for a change approval.
+    'slack_workspace_add',
+    'slack_workspace_finish',
+    'slack_workspace_policy',
+    'slack_workspace_reauth',
+    'slack_workspace_remove',
     'slack_workspace_show',
     'slack_workspaces_list',
   ]);

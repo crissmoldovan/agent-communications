@@ -1,5 +1,7 @@
 import { paint, stripInvisible } from '@agentcomms/core';
+import { renderManifest } from '../manifest.ts';
 import type { AppCreated, AppUpdated } from '../operations/app.ts';
+import type { AppUpdateNeeded, PolicyResult } from '../operations/changes.ts';
 import type { DoctorResult } from '../operations/doctor.ts';
 import type { DeletedDraft } from '../operations/drafts.ts';
 import type { ModeReport } from '../operations/mode.ts';
@@ -192,13 +194,60 @@ export function renderMode(report: ModeReport, color: boolean): string {
   ];
   const steps = (title: string, list: readonly string[]) =>
     list.length === 0 ? [] : ['', title, ...list.map((step, i) => `  ${i + 1}. ${step}`)];
-  lines.push(...steps('To let it post (a person does this; an agent cannot):', report.toSend));
+  lines.push(...steps('To let it post (the change is approved before its sign-in starts):', report.toSend));
   lines.push(...steps('To take posting away again:', report.toRead));
   return lines.join('\n');
 }
 
 export function renderSteps(title: string, steps: readonly string[], color: boolean): string {
   return [paint(color, 'bold', title), ...steps.map((step, i) => `  ${i + 1}. ${step}`)].join('\n');
+}
+
+/**
+ * `workspace mode <name> send` before the app has been updated: why nothing started, the app step with its manifest,
+ * and the command that follows it.
+ *
+ * The manifest is printed whole, because pasting it is the step; and the reason comes first, because "nothing
+ * happened" is otherwise read as a fault rather than as the order Slack requires.
+ */
+export function renderAppUpdateNeeded(result: AppUpdateNeeded, color: boolean): string {
+  const { manifest } = result;
+  return [
+    paint(color, 'bold', `"${result.alias}" cannot post yet, and its app comes first.`),
+    `Its recorded grant has no posting scope, so nothing shows its app now offers one — and a sign-in would be granted read again. Nothing was changed.`,
+    '',
+    renderManifestHelp('send', manifest.port, color, { workspace: result.alias, manifestUrl: manifest.manifestUrl }),
+    '',
+    renderManifest('send', manifest.redirectUrl).trimEnd(),
+    '',
+    ...(result.terminalAlternative === null
+      ? []
+      : [
+          paint(
+            color,
+            'dim',
+            `Or, with an app configuration token, at a terminal: ${result.terminalAlternative} — never paste that token into a chat.`,
+          ),
+          '',
+        ]),
+    'Once it is saved:',
+    `  agent-slack workspace mode ${result.alias} send --app-updated --port ${manifest.port}`,
+  ].join('\n');
+}
+
+/** A workspace's two policies, where each comes from, and what changed. */
+export function renderPolicies(result: PolicyResult, color: boolean): string {
+  const from = (setOn: 'workspace' | 'default') =>
+    paint(color, 'dim', setOn === 'default' ? '(the default)' : '(set on it)');
+  const lines = [
+    `${paint(color, 'bold', result.alias)}`,
+    `  posts and reactions  ${result.sendPolicy} ${from(result.sendPolicySetOn)}`,
+    `  changes to it        ${result.changePolicy} ${from(result.changePolicySetOn)}`,
+  ];
+  if (result.changed) {
+    lines.push('', `Changed from: posts ${result.previous.sendPolicy}, changes ${result.previous.changePolicy}.`);
+  }
+  return lines.join('\n');
 }
 
 export function renderManifestHelp(
@@ -249,7 +298,7 @@ export function renderManifestHelp(
       : paint(
           color,
           'dim',
-          `This app can post, upload and react, each only after your approval. \`agent-slack manifest --mode read --port ${port}\` prints one that cannot post at all. To move an existing workspace from read, update its app with this manifest first, then run \`agent-slack workspace mode ${target.workspace ?? '<name>'} send --port ${port}\`.`,
+          `This app can post, upload and react, each only after your approval. \`agent-slack manifest --mode read --port ${port}\` prints one that cannot post at all. To move an existing workspace from read, update its app with this manifest first, then run \`agent-slack workspace mode ${target.workspace ?? '<name>'} send --app-updated --port ${port}\`.`,
         ),
   ].join('\n');
 }
@@ -305,7 +354,9 @@ export function renderAppCreated(result: AppCreated, color: boolean): string {
   }
   lines.push('', 'Connect a workspace through it:', `  ${result.next}`);
   if (result.mode === 'send') {
-    lines.push(paint(color, 'dim', 'That asks you to type a code: a workspace that can post is a person’s decision.'));
+    lines.push(
+      paint(color, 'dim', 'That asks for your approval first: a workspace that can post is a person’s decision.'),
+    );
   }
   lines.push(
     '',

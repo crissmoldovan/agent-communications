@@ -44,8 +44,9 @@ const CLIS = [
     package: 'slack',
     out: 'docs/reference/slack-cli.md',
     provider: 'Slack',
-    // Exit 10 means two things here, and the reference said only one: a sign-in still waiting exits 10 as well.
-    approval: 'a post was refused or needs approval, or a sign-in is still waiting',
+    // Exit 10 means three things here, and the reference once said only one: a change waiting for its approval, and
+    // a sign-in still waiting, exit 10 as well.
+    approval: 'a post or a change was refused or needs approval, or a sign-in is still waiting',
   },
 ];
 
@@ -169,7 +170,11 @@ const SERVERS = [
       '**Every call that acts on a workspace takes `workspace`.** There is no default workspace. **Nothing posts without',
       "a person's approval of that exact content**: `slack_post_prepare` returns a preview, and `slack_post_send` and the",
       'reaction tools claim it through the gate `agent-slack post send` uses — a yes in the conversation under `chat`,',
-      '`agent-slack approve` at the person’s own terminal under `confirm`. No tool approves or connects a workspace.',
+      '`agent-slack approve` at the person’s own terminal under `confirm`. **Nothing loosens a workspace without a',
+      "person's approval of that exact change**: a tool that would connect or move one to `send`, loosen a policy, or",
+      'remove one returns a preview and an approval id first, and applies the change when called again with that id —',
+      'after a yes under the `chat` change policy, after `agentcomms approve` at the person’s terminal under `confirm`.',
+      'Tightening applies at once. No tool approves.',
     ],
   },
   {

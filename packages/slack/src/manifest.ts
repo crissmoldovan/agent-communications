@@ -154,3 +154,15 @@ export function buildManifest(mode: InstallMode, redirectUrl: string): SlackMani
 export function renderManifest(mode: InstallMode, redirectUrl: string): string {
   return `${JSON.stringify(buildManifest(mode, redirectUrl), null, 2)}\n`;
 }
+
+/**
+ * The page where one app's manifest is edited: the one link a person needs to widen or narrow a workspace's app.
+ *
+ * Here rather than beside the commands that print it, because the manifest step, the mode steps and `app update`
+ * all name it, and `operations/app.ts` may be imported by nothing but the CLI. A link to the list of apps instead
+ * leaves the person to find the right one by name, with "Create New App" one click away — and a new app changes no
+ * installation.
+ */
+export function appManifestUrl(appId: string): string {
+  return `https://api.slack.com/apps/${encodeURIComponent(appId)}/app-manifest`;
+}

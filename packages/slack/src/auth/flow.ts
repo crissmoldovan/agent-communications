@@ -40,11 +40,12 @@ export interface SlackFlow {
     | undefined;
   readonly clientId: string;
   /**
-   * Proof that a person at a terminal typed a challenge to widen this workspace's access.
+   * The consent a person gave to widen this workspace's access: a change approval claimed as the sign-in started,
+   * bound to the values it moves between and the account it moves them on.
    *
    * On the flow rather than gathered at `--finish`, because `--finish` may be headless and may be a different
-   * process entirely — which is the whole reason the two-step form exists. The person consented when the sign-in
-   * was started, which is also the moment they were told what they were about to change.
+   * process entirely — which is the whole reason the two-step form exists. The person consented before the sign-in
+   * was started, which is also the moment they were shown what they were about to change.
    *
    * It sits beside the PKCE verifier under the same 0600 file and the same ten-minute life. Anything that can
    * read this file can already finish the sign-in.

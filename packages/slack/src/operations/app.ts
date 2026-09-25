@@ -1,7 +1,7 @@
 import { type AccountConfig, CommsError, toCommsError } from '@agentcomms/core';
 import { callSlack, type SlackCall, type SlackProblem, type SlackResponse } from '../api/call.ts';
 import { closedPermit, configureWith, type FetchLike } from '../api/guard.ts';
-import { buildManifest, type InstallMode, parseMode, type SlackManifest } from '../manifest.ts';
+import { appManifestUrl, buildManifest, type InstallMode, parseMode, type SlackManifest } from '../manifest.ts';
 import { narrowingSteps } from './mode.ts';
 import type { AuditSink } from './send.ts';
 
@@ -109,7 +109,7 @@ export function redirectUrlFor(port: number): string {
 
 /** The app's own manifest page — the one link a person needs to check what an update wrote. */
 export function manifestPageFor(appId: string): string {
-  return `https://api.slack.com/apps/${encodeURIComponent(appId)}/app-manifest`;
+  return appManifestUrl(appId);
 }
 
 /**
@@ -265,7 +265,7 @@ function stepsAfterUpdate(alias: string, account: AccountConfig, mode: InstallMo
   const workspaceMode = parseMode(account.mode ?? account.tier, `"${alias}"`);
   if (mode === 'send' && workspaceMode === 'read') {
     return [
-      `At a terminal: \`agent-slack workspace mode ${alias} send --port ${port}\`, and approve it in Slack. That sign-in is what gives "${alias}" a token that can post, and a person types a code to start it.`,
+      `\`agent-slack workspace mode ${alias} send --app-updated --port ${port}\` (slack_mode_set from a chat): a person approves the change, then approves the sign-in in Slack. That sign-in is what gives "${alias}" a token that can post.`,
     ];
   }
   if (mode === 'read' && workspaceMode === 'send') {
