@@ -189,11 +189,14 @@ test('a tool that needs a mailbox refuses to guess one, and says how to find the
   const { client, close } = await connect({ core: harness.core, env: harness.env });
   try {
     const result = (await client.callTool({ name: 'gmail_whoami', arguments: {} })) as ToolResult;
-    // The SDK validates arguments against the declared schema before the handler runs, so this is its message,
-    // not ours; what matters is that it names the missing argument rather than defaulting to some mailbox.
+    // Refused before the handler runs, by the check every tool's arguments go through: USAGE in the envelope every
+    // other refusal uses, naming the missing argument rather than defaulting to some mailbox. It used to be the
+    // SDK's own "Input validation error", with no code at all.
     assert.equal(result.isError, true);
-    assert.match(result.content?.[0]?.text ?? '', /inbox/);
-    assert.equal(result.structuredContent, undefined);
+    const error = result.structuredContent?.error as { code: string; message: string; hint: string };
+    assert.equal(error.code, 'USAGE');
+    assert.match(error.message, /`inbox` is required/);
+    assert.match(error.hint, /there is no default/);
   } finally {
     await close();
   }

@@ -6,6 +6,7 @@ import {
   gatedChange,
   lookupName,
   stricterPolicy,
+  strictToolArguments,
   toCommsError,
 } from '@agentcomms/core';
 import { acceptedContent, inputRequired, inputResponse, McpServer } from '@modelcontextprotocol/server';
@@ -174,6 +175,14 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       content: [{ type: 'text', text: JSON.stringify(structured) }],
     };
   };
+
+  /*
+   * Every tool registered from here on refuses a key it does not declare, and arguments its schema rejects, as USAGE
+   * in the envelope above — before its handler runs, and before the pin below is checked. See `strictToolArguments`:
+   * the SDK stripped a key a tool did not declare, which is how `client` and `contacts` were once dropped from
+   * `gmail_inbox_add` without a word.
+   */
+  strictToolArguments(server, fail);
 
   /**
    * What every tool that changes an account returns: the result once the change is made, or the approval it waits for.
