@@ -7,7 +7,8 @@ The server is the same code as the CLI, over stdio. Start it with `agent-gmail m
 with `agent-gmail mcp install --client claude-code`. `@agentcomms/gmail-mcp` is a thin wrapper that starts the
 same server.
 
-**Every call takes `inbox`.** There is no default mailbox.
+**Every call that acts on a mailbox takes `inbox`** — or `inboxes`, for a search across several; a rename
+names it `from`. There is no default mailbox.
 
 ## Tools
 
