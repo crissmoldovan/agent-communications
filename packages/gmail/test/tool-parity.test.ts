@@ -666,6 +666,59 @@ test('a pinned gmail_send_list refuses another mailbox, as every pinned tool doe
   }
 });
 
+test('a pinned tool that takes `inboxes` refuses another mailbox in the list, as every pinned tool does, rather than searching its own', async () => {
+  /*
+   * `gmail_search {inboxes: ['home']}` on a server pinned to `work` searched work and answered as if it had searched
+   * home — the pin replaced the list instead of refusing it, as `gmail_send_list` once replaced `inbox`. So did every
+   * tool taking a list of mailboxes, and `['work', 'home']` quietly dropped home.
+   */
+  const harness = await workAndHome();
+  const pinned = await connect({ core: harness.core, env: harness.env, inbox: 'work' });
+  try {
+    const cases: Record<string, Record<string, unknown>> = {
+      gmail_search: { query: 'Tuesday' },
+      gmail_attachments_find: {},
+      // Past mail only: work was connected without the address book, which would make the answer incomplete.
+      gmail_contacts_search: { query: 'sam', sources: ['history'] },
+      gmail_followups: {},
+    };
+    // Every tool that takes a list of mailboxes is here, so one added later is held to this too.
+    const listed = (await pinned.client.listTools()).tools;
+    assert.deepEqual(
+      listed
+        .filter((tool) => Object.hasOwn((tool.inputSchema.properties ?? {}) as object, 'inboxes'))
+        .map((tool) => tool.name)
+        .sort(),
+      Object.keys(cases).sort(),
+    );
+
+    // The same refusal, word for word, as a pinned tool taking one mailbox gives for the same one.
+    const byAnother = toolError(await pinned.call('gmail_whoami', { inbox: 'home' }));
+    for (const [tool, args] of Object.entries(cases)) {
+      for (const inboxes of [['home'], ['work', 'home'], 'home']) {
+        const asked = harness.google.requests.length;
+        const refused = toolError(await pinned.call(tool, { ...args, inboxes }));
+        const label = `${tool} ${JSON.stringify(inboxes)}`;
+        assert.equal(refused.code, 'USAGE', label);
+        assert.equal(refused.message, byAnother.message, label);
+        assert.equal(refused.hint, byAnother.hint, label);
+        assert.equal(harness.google.requests.length, asked, `${label} asked Google before refusing`);
+      }
+
+      // Its own mailbox — left out, named, or as "all" of the one it serves — is searched as before, and only it.
+      for (const inboxes of [undefined, ['work'], 'work', 'all']) {
+        const answered = wire(await pinned.call(tool, inboxes === undefined ? args : { ...args, inboxes }));
+        const label = `${tool} ${JSON.stringify(inboxes)}`;
+        assert.equal(answered.complete, true, label);
+        assert.deepEqual(answered.errors, [], label);
+        if (tool === 'gmail_search') assert.deepEqual(answered.inboxes, ['work'], label);
+      }
+    }
+  } finally {
+    await pinned.close();
+  }
+});
+
 // ── a pinned doctor ─────────────────────────────────────────────────────────────────────────────────────────
 
 test('a pinned gmail_doctor answers for its own mailbox only, and refuses another, as `doctor --inbox` scopes', async () => {

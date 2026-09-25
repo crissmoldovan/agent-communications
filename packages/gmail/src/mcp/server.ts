@@ -350,6 +350,18 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     return requested;
   };
 
+  /**
+   * Resolves the `inboxes` argument under the pin, as {@link targetInbox} resolves `inbox`: a pinned server searches
+   * its own mailbox whether the list is left out, is "all" (all it serves), or names it — and refuses a list naming
+   * any other, with the refusal every pinned tool gives. The pin used to replace the list instead, so `['home']` was
+   * answered with work's results under home's name, and `['work', 'home']` quietly dropped home.
+   */
+  const targetInboxes = (requested: string[] | 'all' | undefined): string[] | 'all' | undefined => {
+    if (!pinned) return requested;
+    if (Array.isArray(requested)) for (const alias of requested) targetInbox(alias);
+    return [pinned];
+  };
+
   /** One mailbox as `inbox list --json` prints it: the operation's own view, which names no secret. */
   const inboxView = z.object({
     alias: z.string(),
@@ -576,7 +588,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       try {
         const result = await search(context, {
           query,
-          inboxes: pinned ? [pinned] : (inboxes as string[] | 'all' | undefined),
+          inboxes: targetInboxes(inboxes as string[] | 'all' | undefined),
           kind,
           limit,
           cursor,
@@ -714,7 +726,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       try {
         const result = await findAttachments(context, {
           ...args,
-          inboxes: pinned ? [pinned] : (args.inboxes as string[] | 'all' | undefined),
+          inboxes: targetInboxes(args.inboxes as string[] | 'all' | undefined),
         });
         return reply({
           rows: result.rows,
@@ -789,7 +801,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     async ({ query, inboxes, sources, limit }) => {
       try {
         const result = await searchContacts(context, query, {
-          inboxes: pinned ? [pinned] : (inboxes as string[] | 'all' | undefined),
+          inboxes: targetInboxes(inboxes as string[] | 'all' | undefined),
           sources: sources as Array<'contacts' | 'other-contacts' | 'history'> | undefined,
           limit,
         });
@@ -829,7 +841,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     async ({ inboxes, direction, olderThanDays, lookbackDays, limit }) => {
       try {
         const result = await followUps(context, {
-          inboxes: pinned ? [pinned] : (inboxes as string[] | 'all' | undefined),
+          inboxes: targetInboxes(inboxes as string[] | 'all' | undefined),
           direction,
           olderThanDays,
           lookbackDays,
