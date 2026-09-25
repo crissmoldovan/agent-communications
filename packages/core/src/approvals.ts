@@ -1,6 +1,13 @@
 import { open, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { type ChangePolicy, canonicalLoosening, type Loosening, type SendPolicy, sameLoosening } from './config.ts';
+import {
+  type ChangePolicy,
+  canonicalLoosening,
+  type Loosening,
+  type SendPolicy,
+  type SettingChange,
+  sameLoosening,
+} from './config.ts';
 import { canonicalJson, normaliseAddress, sha256Hex } from './digest.ts';
 import { CommsError, type ErrorCode } from './errors.ts';
 import { ensurePrivateDir, writeFileAtomic } from './fs.ts';
@@ -52,6 +59,13 @@ export interface ChangeBinding {
   target: ChangeTarget | null;
   /** Every safety setting it loosens, with the values `classifyChange` compared. Empty for a destructive change. */
   loosened: Loosening[];
+  /**
+   * Every setting it writes, loosened or tightened, with the values in the file before and after (`changedSettings`).
+   *
+   * Bound as well as the loosenings, because a preview shows the whole change: a claim that loosened the same thing
+   * while dropping a tightening the person read would otherwise digest the same. Absent reads as none.
+   */
+  settings?: SettingChange[] | undefined;
   /** What it does outside the configuration, in words: a sign-in, a registration, files removed. */
   effects: string[];
 }
@@ -62,19 +76,21 @@ export function approvalKind(record: Pick<ApprovalRecord, 'kind'>): ApprovalKind
 }
 
 /**
- * The digest a change approval is bound to: its target, every loosened path with its before and after values, and its
- * effects.
+ * The digest a change approval is bound to: its target, every loosened path with its before and after values, every
+ * setting it writes with its before and after values, and its effects.
  *
- * The loosenings are sorted, because the classifier's order is an implementation detail and the same change must
+ * The loosenings and the settings are sorted, because their order is an implementation detail and the same change must
  * digest the same however it is listed. The effects are not: they are what the person read, in the order they read it.
  */
-export function changeDigest(change: Pick<ChangeBinding, 'target' | 'loosened' | 'effects'>): string {
+export function changeDigest(change: Pick<ChangeBinding, 'target' | 'loosened' | 'settings' | 'effects'>): string {
   const target = change.target;
   return sha256Hex(
     canonicalJson({
       kind: 'change',
       target: target === null ? null : { kind: target.kind, name: target.name, id: target.id ?? null },
       loosened: change.loosened.map(canonicalLoosening).sort(),
+      // The same four fields a loosening has, in the same canonical form.
+      settings: (change.settings ?? []).map(canonicalLoosening).sort(),
       effects: [...change.effects],
     }),
   );
@@ -102,6 +118,11 @@ export function changeDrift(approved: ChangeBinding, now: ChangeBinding): string
   if (paths(approved) !== paths(now)) return 'it loosens different settings from the ones approved';
   const moved = now.loosened.find((loosening) => !approved.loosened.some((ok) => sameLoosening(ok, loosening)));
   if (moved) return `${moved.path} would not move between the values that were approved`;
+  // Either way round: a setting the person was shown and the claim leaves out, or one the claim adds.
+  const unlike = (one: SettingChange[] | undefined, other: SettingChange[] | undefined) =>
+    (one ?? []).find((setting) => !(other ?? []).some((ok) => sameLoosening(ok, setting)));
+  const unset = unlike(approved.settings, now.settings) ?? unlike(now.settings, approved.settings);
+  if (unset) return `it would not set ${unset.path} the way that was approved`;
   if (canonicalJson(approved.effects) !== canonicalJson(now.effects)) {
     return 'what it does outside the configuration is not what was approved';
   }
@@ -535,6 +556,7 @@ export class ApprovalStore {
       summary: input.change.summary,
       target: input.change.target === null ? null : { ...input.change.target },
       loosened: input.change.loosened.map((loosening) => ({ ...loosening })),
+      settings: (input.change.settings ?? []).map((setting) => ({ ...setting })),
       effects: [...input.change.effects],
     };
     const digest = changeDigest(change);

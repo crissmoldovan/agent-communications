@@ -222,6 +222,41 @@ test('moving a mailbox off the confirm change policy is approved at a terminal, 
   }
 });
 
+test('an approval binds every setting its preview showed: a claim that drops a tightening is refused', async () => {
+  /*
+   * The approval used to bind the loosenings and the effects, not the tightenings. The person read "sends approved by
+   * never; changes to its settings approved by chat" and typed the code; the agent then claimed with the change
+   * policy alone, which loosens exactly the same thing, and the mailbox kept sending under chat.
+   */
+  const harness = await mailbox();
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  const both = { inbox: 'work', sendPolicy: 'never', changePolicy: 'chat' };
+  try {
+    applied(await call('gmail_inbox_policy', { inbox: 'work', changePolicy: 'confirm' }));
+    const asked = approvalAsked(await call('gmail_inbox_policy', both));
+    assert.equal(asked.policy, 'confirm');
+    assert.match(asked.preview, /sends approved by never/);
+    await approveAtTerminal(harness.core, asked.approvalId);
+
+    const dropped = toolError(
+      await call('gmail_inbox_policy', { inbox: 'work', changePolicy: 'chat', approvalId: asked.approvalId }),
+    );
+    assert.equal(dropped.code, 'APPROVAL_VOID');
+    assert.match(dropped.message, /inboxes\.work\.sendPolicy/);
+    const work = (await harness.core.config.load()).inboxes.work;
+    assert.deepEqual([work?.sendPolicy, work?.changePolicy], [undefined, 'confirm'], 'the claim wrote something');
+
+    // The change that was shown, shown and approved again, is made whole.
+    const again = approvalAsked(await call('gmail_inbox_policy', both));
+    await approveAtTerminal(harness.core, again.approvalId);
+    applied(await call('gmail_inbox_policy', { ...both, approvalId: again.approvalId }));
+    const made = (await harness.core.config.load()).inboxes.work;
+    assert.deepEqual([made?.sendPolicy, made?.changePolicy], ['never', 'chat']);
+  } finally {
+    await close();
+  }
+});
+
 test('agent-gmail approve approves a change under confirm, so the person needs no other command', async () => {
   const harness = await mailbox();
   // Tightening asks nobody; from here every change to this mailbox needs a person at a terminal.

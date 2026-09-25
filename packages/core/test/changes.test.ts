@@ -343,6 +343,69 @@ test('drift between preview and apply voids the approval, and says what moved', 
   }
 });
 
+test('an approval binds every setting the change writes: a claim that drops, adds or moves a tightening is refused', async () => {
+  /*
+   * The digest bound the loosenings and the effects, not the tightenings. A person shown "send policy to never, change
+   * policy to chat" approved at a terminal, and a claim for the change policy alone — the same loosening — was
+   * applied: the send policy the person saw tightened stayed as it was.
+   */
+  const cases: [string, Partial<InboxConfig>, RegExp][] = [
+    ['a tightening dropped', { changePolicy: 'chat' }, /it would not set inboxes\.acme\/gmail\.sendPolicy the way/],
+    [
+      'a tightening added',
+      { sendPolicy: 'never', changePolicy: 'chat', internalDomains: [] },
+      /it would not set inboxes\.acme\/gmail\.internalDomains the way/,
+    ],
+    [
+      'a tightening moved',
+      { sendPolicy: 'confirm', changePolicy: 'chat' },
+      /it would not set inboxes\.acme\/gmail\.sendPolicy the way/,
+    ],
+  ];
+  for (const [name, claimed, reason] of cases) {
+    const { core } = coreWith({ inboxes: { 'acme/gmail': inbox(MAIL, { changePolicy: 'confirm' }) } });
+    const before = await core.config.load();
+    const setting = (over: Partial<InboxConfig>): ChangeSpec => {
+      const after = structuredClone(before);
+      after.inboxes['acme/gmail'] = { ...(after.inboxes['acme/gmail'] as InboxConfig), ...over };
+      return { inbox: 'acme/gmail', before, after };
+    };
+    const shown = setting({ sendPolicy: 'never', changePolicy: 'chat' });
+    const prepared = await prepareChange(
+      core,
+      { ...shown, summary: 'acme/gmail: sends approved by never; changes approved by chat' },
+      { surface: 'mcp' },
+    );
+    assert.equal(prepared.policy, 'confirm', name);
+    const prompt = await beginChangeApproval(core, prepared.approvalId, { surface: 'cli' });
+    await finishChangeApproval(core, prepared.approvalId, prompt.challenge, { surface: 'cli' });
+
+    await assert.rejects(
+      claimChange(core, prepared.approvalId, setting(claimed), { surface: 'mcp' }),
+      refusedWith('APPROVAL_VOID', reason),
+      name,
+    );
+    await assert.rejects(
+      claimChange(core, prepared.approvalId, shown, { surface: 'mcp' }),
+      refusedWith('APPROVAL_VOID', /was voided/),
+      `${name}: the approval survived a claim for another change`,
+    );
+  }
+
+  // The change as it was shown is claimed, and carries only the loosening as consent.
+  const { core } = coreWith({ inboxes: { 'acme/gmail': inbox(MAIL, { changePolicy: 'confirm' }) } });
+  const before = await core.config.load();
+  const after = structuredClone(before);
+  after.inboxes['acme/gmail'] = { ...(after.inboxes['acme/gmail'] as InboxConfig), sendPolicy: 'never' };
+  (after.inboxes['acme/gmail'] as InboxConfig).changePolicy = 'chat';
+  const spec: ChangeSpec = { inbox: 'acme/gmail', before, after };
+  const prepared = await prepareChange(core, { ...spec, summary: 'acme/gmail: both' }, { surface: 'mcp' });
+  const prompt = await beginChangeApproval(core, prepared.approvalId, { surface: 'cli' });
+  await finishChangeApproval(core, prepared.approvalId, prompt.challenge, { surface: 'cli' });
+  const consent = await claimChange(core, prepared.approvalId, spec, { surface: 'mcp' });
+  assert.deepEqual(consent.paths, ['inboxes.acme/gmail.changePolicy']);
+});
+
 test('an account replaced under the same name between preview and apply is not the one approved', async () => {
   const { core, write } = coreWith({ accounts: { 'acme/slack': account(ACME) } });
   const spec = await widening(core);

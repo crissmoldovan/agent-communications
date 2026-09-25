@@ -10,6 +10,7 @@ import type { AuditRecord } from './audit.ts';
 import {
   type ChangePolicy,
   type Config,
+  changedSettings,
   classifyChange,
   defaultChangePolicy,
   type Loosening,
@@ -163,7 +164,14 @@ function bindChange(spec: ChangeSpec, summary: string): ChangeBinding {
       hint: 'Pass each effect as one plain sentence, or leave it out.',
     });
   }
-  return { summary, target, loosened: classifyChange(spec.before, spec.after).changes, effects };
+  return {
+    summary,
+    target,
+    loosened: classifyChange(spec.before, spec.after).changes,
+    // Every setting it writes, tightenings too: what the preview shows is what the claim has to be.
+    settings: changedSettings(spec.before, spec.after),
+    effects,
+  };
 }
 
 /**
@@ -242,7 +250,7 @@ export async function claimChange(
   let binding: ChangeBinding | undefined;
   let policy: ChangePolicy | undefined;
   try {
-    // The summary is not bound — the settings and the effects are — so none is needed to claim.
+    // The summary is not bound — every setting written and every effect are — so none is needed to claim.
     binding = bindChange(expect, '');
     policy = governingChangePolicy(await core.config.load(), binding);
     const record = await core.approvals.claimForChange(

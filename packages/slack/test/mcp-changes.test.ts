@@ -413,6 +413,38 @@ test('a policy is reported; tightening applies at once; loosening is approved, u
   }
 });
 
+test('an approval binds every setting its preview showed: a claim that drops a tightening is refused', async () => {
+  // Shown "posts approved under never, changes approved under chat"; claimed with the change policy alone, which
+  // loosens the same thing — so the loosenings matched, and posts stayed approved in chat.
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  const { call, close } = await connect(harness);
+  const both = { workspace: 'acme', sendPolicy: 'never', changePolicy: 'chat' };
+  try {
+    applied(await call('slack_workspace_policy', { workspace: 'acme', changePolicy: 'confirm' }));
+    const asked = prepared(await call('slack_workspace_policy', both));
+    assert.equal(asked.policy, 'confirm');
+    assert.match(asked.preview, /posts approved under never/);
+    await approveAtTerminal(harness, asked.approvalId);
+
+    const dropped = failed(
+      await call('slack_workspace_policy', { workspace: 'acme', changePolicy: 'chat', approvalId: asked.approvalId }),
+    );
+    assert.equal(dropped.code, 'APPROVAL_VOID');
+    assert.match(dropped.message, /accounts\.acme\.sendPolicy/);
+    const acme = (await harness.core.config.load()).accounts.acme;
+    assert.deepEqual([acme?.sendPolicy, acme?.changePolicy], [undefined, 'confirm'], 'the claim wrote something');
+
+    const again = prepared(await call('slack_workspace_policy', both));
+    await approveAtTerminal(harness, again.approvalId);
+    applied(await call('slack_workspace_policy', { ...both, approvalId: again.approvalId }));
+    const made = (await harness.core.config.load()).accounts.acme;
+    assert.deepEqual([made?.sendPolicy, made?.changePolicy], ['never', 'chat']);
+  } finally {
+    await close();
+  }
+});
+
 // ── A pinned server ──────────────────────────────────────────────────────────────────────────────────────────
 
 test('a pinned server neither connects another workspace nor removes its own, and finishes only its own sign-in', async () => {

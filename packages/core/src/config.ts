@@ -1200,6 +1200,69 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
 }
 
 /**
+ * One setting a change writes, from the value in the file before to the value after — whichever way it moves.
+ *
+ * Unlike a `Loosening`, these are the raw values, not the effective ones: `null` for a setting the file does not
+ * hold, so a mailbox set to `chat` itself is told apart from one inheriting `chat`, which only the first survives a
+ * later change to the default. `id` is the inbox or account measured on the before side, as for a loosening.
+ */
+export interface SettingChange {
+  readonly path: string;
+  readonly before: SettingValue;
+  readonly after: SettingValue;
+  readonly id?: string | undefined;
+}
+
+/** The settings of a mailbox, and of an account, that a change can write — the ones the classifier judges. */
+const INBOX_SETTINGS = ['sendPolicy', 'changePolicy', 'internalDomains'] as const;
+const ACCOUNT_SETTINGS = ['sendPolicy', 'changePolicy', 'mode'] as const;
+
+/**
+ * Every setting that differs between `before` and `after`, loosened or tightened: the defaults, the secret store,
+ * and each mailbox's and account's own settings — including those of one added or removed.
+ *
+ * What a change approval binds, beside its loosenings. A preview shows the whole change — "sends approved by never;
+ * changes approved by chat" — and binding only the loosenings let a claim drop the tightening a person read, since
+ * what it loosened was the same. Records that are not settings (timestamps, grants, ids, clients) are left out: they
+ * are not what a person approves, and some of them are made fresh each time a change is planned.
+ *
+ * Mailboxes and accounts are matched by id, so a rename in the same change moves no setting.
+ */
+export function changedSettings(before: Config, after: Config): SettingChange[] {
+  const changes: SettingChange[] = [];
+  const record = (path: string, was: unknown, now: unknown, id?: string): void => {
+    const from = (was ?? null) as SettingValue;
+    const to = (now ?? null) as SettingValue;
+    if (canonicalJson(from) === canonicalJson(to)) return;
+    changes.push({ path, before: from, after: to, ...(id === undefined ? {} : { id }) });
+  };
+  const entries = <T extends { id: string }>(
+    map: 'inboxes' | 'accounts',
+    was: Record<string, T>,
+    now: Record<string, T>,
+    fields: readonly (keyof T & string)[],
+  ): void => {
+    for (const [alias, entry] of Object.entries(now)) {
+      const previous = Object.values(was).find((held) => held.id === entry.id);
+      for (const field of fields) record(`${map}.${alias}.${field}`, previous?.[field], entry[field], previous?.id);
+    }
+    for (const [alias, entry] of Object.entries(was)) {
+      if (Object.values(now).some((held) => held.id === entry.id)) continue;
+      for (const field of fields) record(`${map}.${alias}.${field}`, entry[field], undefined, entry.id);
+    }
+  };
+  entries('inboxes', before.inboxes, after.inboxes, INBOX_SETTINGS);
+  entries('accounts', before.accounts, after.accounts, ACCOUNT_SETTINGS);
+  const defaultsBefore = before.defaults as unknown as Record<string, unknown>;
+  const defaultsAfter = after.defaults as unknown as Record<string, unknown>;
+  for (const key of [...new Set([...Object.keys(defaultsBefore), ...Object.keys(defaultsAfter)])].sort()) {
+    record(`defaults.${key}`, defaultsBefore[key], defaultsAfter[key]);
+  }
+  record('secrets.store', before.secrets?.store, after.secrets?.store);
+  return changes;
+}
+
+/**
  * Proof that exactly these paths may loosen: produced by a CLI after a person at a terminal typed a challenge, or by
  * `claimChange` from a change approval a person gave.
  */
