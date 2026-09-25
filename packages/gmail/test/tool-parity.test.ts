@@ -426,6 +426,9 @@ test('a `--wait` that is not a number of seconds from 0 to 600 is refused as USA
     ['add', added, '1.5'],
     ['add', added, '-1'],
     ['add', added, '601'],
+    // Numbers to `Number()`, and not a count of seconds anyone typed on purpose.
+    ['add', added, '1e2'],
+    ['add', added, '0x10'],
     ['reauth', reauthorising, 'abc'],
     ['reauth', reauthorising, '601'],
   ];
@@ -439,6 +442,11 @@ test('a `--wait` that is not a number of seconds from 0 to 600 is refused as USA
     assert.match(error?.hint ?? '', /from 0 to 600/);
     refusals.set(wait, { message: error?.message ?? '' });
   }
+
+  // Given without `--finish`, where nothing waits, a wait that is not one is still refused rather than ignored.
+  const unfinished = await cli(harness, ['inbox', 'add', '--wait=abc', '--json']);
+  assert.equal(unfinished.code, 64, unfinished.stdout);
+  assert.equal(unfinished.envelope().error?.message, '"abc" is not a wait');
 
   // Refused before the sign-in was read, so it is still there to finish — and a wait in range still waits.
   for (const flowId of [added, reauthorising]) {
