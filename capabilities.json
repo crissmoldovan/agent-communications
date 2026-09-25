@@ -1,44 +1,80 @@
 {
-  "about": "Every capability, and the CLI command and MCP tool that provide it. Checked against both registries, read from the running product, by test/parity.test.mjs in `pnpm verify`; `pnpm verify:parity --strict`, also part of `pnpm verify`, refuses any pending row. `cli` is the command path without the binary; `mcp` is a tool name. How to add one: CONTRIBUTING.md, \"Adding a capability\". Design: docs/superpowers/specs/2026-09-25-cli-mcp-parity-design.md.",
+  "about": "Every capability: the CLI command and the MCP tool that provide it, and the operation both of them run. `cli` is the command path without the binary; `mcp` is a tool name; `operation` is the function exported from packages/<package>/src/operations (or the core's) that both reach — a list when the command is several. `argv` and `args` are what the check adds to the command and the tool to get there, `via` another row's operation a side passes through first, and `unchecked` says why a row is not checked, instead of `operation`. Checked by test/parity.test.mjs in `pnpm verify` against both registries, read from the running product, and by running each row's command and tool with every operation replaced by a stand-in that records the call; `pnpm verify:parity --strict`, also part of `pnpm verify`, refuses any pending row. How to add one: CONTRIBUTING.md, \"Adding a capability\". Design: docs/superpowers/specs/2026-09-25-cli-mcp-parity-design.md.",
   "capabilities": [
-    { "id": "core.paths", "package": "core", "cli": "paths", "mcp": "comms_paths", "status": "both" },
-    { "id": "core.doctor", "package": "core", "cli": "doctor", "mcp": "comms_doctor", "status": "both" },
-    { "id": "core.audit.tail", "package": "core", "cli": "audit tail", "mcp": "comms_audit_tail", "status": "both" },
+    {
+      "id": "core.paths",
+      "package": "core",
+      "cli": "paths",
+      "mcp": "comms_paths",
+      "status": "both",
+      "operation": "corePaths"
+    },
+    {
+      "id": "core.doctor",
+      "package": "core",
+      "cli": "doctor",
+      "mcp": "comms_doctor",
+      "status": "both",
+      "operation": "doctor"
+    },
+    {
+      "id": "core.audit.tail",
+      "package": "core",
+      "cli": "audit tail",
+      "mcp": "comms_audit_tail",
+      "status": "both",
+      "operation": "auditTail"
+    },
     {
       "id": "core.approvals.list",
       "package": "core",
       "cli": "approvals list",
       "mcp": "comms_approvals_list",
-      "status": "both"
+      "status": "both",
+      "operation": "listApprovals"
     },
     {
       "id": "core.approvals.revoke",
       "package": "core",
       "cli": "approvals revoke",
       "mcp": "comms_approval_revoke",
-      "status": "both"
+      "status": "both",
+      "operation": "revokeApproval",
+      "argv": ["ap_00000000000000000000000000"]
     },
     {
       "id": "core.secrets.migrate",
       "package": "core",
       "cli": "secrets migrate",
       "mcp": "comms_secrets_migrate",
-      "status": "both"
+      "status": "both",
+      "operation": "secretsMigration",
+      "argv": ["--to", "file"],
+      "args": { "to": "file" }
     },
     {
       "id": "core.names.migrate",
       "package": "core",
       "cli": "names migrate",
       "mcp": "comms_names_migrate",
-      "status": "both"
+      "status": "both",
+      "operation": "namesMigration"
     },
-    { "id": "core.policy", "package": "core", "cli": "policy", "mcp": "comms_change_policy", "status": "both" },
+    {
+      "id": "core.policy",
+      "package": "core",
+      "cli": "policy",
+      "mcp": "comms_change_policy",
+      "status": "both",
+      "operation": "changePolicyReport"
+    },
     {
       "id": "core.channels",
       "package": "core",
       "cli": "channels",
       "mcp": "comms_channels_available",
-      "status": "both"
+      "status": "both",
+      "operation": "channelsAvailable"
     },
     {
       "id": "core.approve",
@@ -62,6 +98,9 @@
       "cli": "mcp install",
       "mcp": "comms_server_install",
       "status": "both",
+      "operation": "serverInstallChange",
+      "argv": ["--client", "claude-code"],
+      "args": { "channel": "core", "client": "claude-code" },
       "reason": "`agentcomms mcp install` registers the core server; comms_server_install registers any channel's, and with `channel: \"core\"` is this command."
     },
     {
@@ -70,6 +109,8 @@
       "cli": "mcp prune",
       "mcp": "comms_server_prune",
       "status": "both",
+      "operation": "serverPruneChange",
+      "args": { "channel": "core" },
       "reason": "`agentcomms mcp prune` prunes the core's own runtimes; comms_server_prune takes the channel, and with `channel: \"core\"` is this command."
     },
 
@@ -79,6 +120,7 @@
       "cli": "client add",
       "mcp": "gmail_client_add",
       "status": "both",
+      "operation": "clientAddChange",
       "reason": "A change approval on both surfaces. The tool reads the client JSON from a path on this machine, so the file never passes through the conversation, and neither side returns the secret."
     },
     {
@@ -86,22 +128,34 @@
       "package": "gmail",
       "cli": "client list",
       "mcp": "gmail_clients_list",
-      "status": "both"
+      "status": "both",
+      "operation": "clientList"
     },
     {
       "id": "gmail.client.remove",
       "package": "gmail",
       "cli": "client remove",
       "mcp": "gmail_client_remove",
-      "status": "both"
+      "status": "both",
+      "operation": "clientRemoveChange"
     },
-    { "id": "gmail.inbox.add", "package": "gmail", "cli": "inbox add", "mcp": "gmail_inbox_add", "status": "both" },
+    {
+      "id": "gmail.inbox.add",
+      "package": "gmail",
+      "cli": "inbox add",
+      "mcp": "gmail_inbox_add",
+      "status": "both",
+      "operation": "startSignIn",
+      "argv": ["parity/gmail"]
+    },
     {
       "id": "gmail.inbox.finish",
       "package": "gmail",
       "cli": "inbox add",
       "mcp": "gmail_inbox_finish",
       "status": "both",
+      "operation": "finishSignIn",
+      "argv": ["--finish", "parity"],
       "reason": "The CLI completes a sign-in begun with --start as `inbox add --finish <flowId>`. Over MCP that is a call of its own, because a tool call cannot sit waiting on a browser."
     },
     {
@@ -110,6 +164,8 @@
       "cli": "inbox reauth",
       "mcp": "gmail_inbox_reauth",
       "status": "both",
+      "operation": "inboxReauthChange",
+      "argv": ["parity/gmail"],
       "reason": "Asking for more than the mailbox holds is a change approval, given before the sign-in link exists; renewing or narrowing starts at once."
     },
     {
@@ -118,6 +174,8 @@
       "cli": "inbox reauth",
       "mcp": "gmail_inbox_finish",
       "status": "both",
+      "operation": "finishSignIn",
+      "argv": ["--finish", "parity"],
       "reason": "The CLI completes a re-authorisation as `inbox reauth --finish <flowId>`. Over MCP gmail_inbox_finish finishes either kind of sign-in, because a tool call cannot sit waiting on a browser."
     },
     {
@@ -125,15 +183,24 @@
       "package": "gmail",
       "cli": "inbox list",
       "mcp": "gmail_inboxes_list",
-      "status": "both"
+      "status": "both",
+      "operation": "inboxList"
     },
-    { "id": "gmail.inbox.show", "package": "gmail", "cli": "inbox show", "mcp": "gmail_inbox_show", "status": "both" },
+    {
+      "id": "gmail.inbox.show",
+      "package": "gmail",
+      "cli": "inbox show",
+      "mcp": "gmail_inbox_show",
+      "status": "both",
+      "operation": "inboxShow"
+    },
     {
       "id": "gmail.inbox.rename",
       "package": "gmail",
       "cli": "inbox rename",
       "mcp": "gmail_inbox_rename",
-      "status": "both"
+      "status": "both",
+      "operation": "inboxRename"
     },
     {
       "id": "gmail.inbox.policy",
@@ -141,6 +208,7 @@
       "cli": "inbox policy",
       "mcp": "gmail_inbox_policy",
       "status": "both",
+      "operation": "inboxPolicyChange",
       "reason": "Both directions, for the send policy and the change policy. Tightening applies at once; loosening is a change approval on either surface (design §3). One row, since what was the loosening row now names the same command and tool."
     },
     {
@@ -148,54 +216,96 @@
       "package": "gmail",
       "cli": "inbox import",
       "mcp": "gmail_inbox_import",
-      "status": "both"
+      "status": "both",
+      "operation": "inboxImportChange"
     },
     {
       "id": "gmail.inbox.remove",
       "package": "gmail",
       "cli": "inbox remove",
       "mcp": "gmail_inbox_remove",
-      "status": "both"
+      "status": "both",
+      "operation": "inboxRemoveChange"
     },
-    { "id": "gmail.search", "package": "gmail", "cli": "search", "mcp": "gmail_search", "status": "both" },
-    { "id": "gmail.message.read", "package": "gmail", "cli": "read", "mcp": "gmail_message_get", "status": "both" },
-    { "id": "gmail.thread.read", "package": "gmail", "cli": "thread", "mcp": "gmail_thread_get", "status": "both" },
+    {
+      "id": "gmail.search",
+      "package": "gmail",
+      "cli": "search",
+      "mcp": "gmail_search",
+      "status": "both",
+      "operation": "search"
+    },
+    {
+      "id": "gmail.message.read",
+      "package": "gmail",
+      "cli": "read",
+      "mcp": "gmail_message_get",
+      "status": "both",
+      "operation": "readMessage"
+    },
+    {
+      "id": "gmail.thread.read",
+      "package": "gmail",
+      "cli": "thread",
+      "mcp": "gmail_thread_get",
+      "status": "both",
+      "operation": "readThread"
+    },
     {
       "id": "gmail.thread.timeline",
       "package": "gmail",
       "cli": "timeline",
       "mcp": "gmail_thread_timeline",
-      "status": "both"
+      "status": "both",
+      "operation": "threadTimeline"
     },
     {
       "id": "gmail.attachments.find",
       "package": "gmail",
       "cli": "attachments find",
       "mcp": "gmail_attachments_find",
-      "status": "both"
+      "status": "both",
+      "operation": "findAttachments"
     },
     {
       "id": "gmail.attachments.download",
       "package": "gmail",
       "cli": "attachments download",
       "mcp": "gmail_attachment_download",
-      "status": "both"
+      "status": "both",
+      "operation": "downloadAttachments"
     },
     {
       "id": "gmail.contacts.search",
       "package": "gmail",
       "cli": "contacts",
       "mcp": "gmail_contacts_search",
-      "status": "both"
+      "status": "both",
+      "operation": "searchContacts"
     },
-    { "id": "gmail.followups", "package": "gmail", "cli": "followups", "mcp": "gmail_followups", "status": "both" },
-    { "id": "gmail.export", "package": "gmail", "cli": "export", "mcp": "gmail_export", "status": "both" },
+    {
+      "id": "gmail.followups",
+      "package": "gmail",
+      "cli": "followups",
+      "mcp": "gmail_followups",
+      "status": "both",
+      "operation": "followUps"
+    },
+    {
+      "id": "gmail.export",
+      "package": "gmail",
+      "cli": "export",
+      "mcp": "gmail_export",
+      "status": "both",
+      "operation": "exportMail"
+    },
     {
       "id": "gmail.draft.create",
       "package": "gmail",
       "cli": "draft new",
       "mcp": "gmail_draft_create",
       "status": "both",
+      "operation": "createDraft",
       "reason": "The command reads the body from `--text`, `--file <path>` or standard input (`--file -`); the tool takes it as `text`, the chat's way to pass prose that no shell has to quote."
     },
     {
@@ -204,16 +314,32 @@
       "cli": "draft reply",
       "mcp": "gmail_draft_reply",
       "status": "both",
+      "operation": "replyDraft",
       "reason": "The command reads the body from `--text`, `--file <path>` or standard input (`--file -`); the tool takes it as `text`, the chat's way to pass prose that no shell has to quote."
     },
-    { "id": "gmail.draft.list", "package": "gmail", "cli": "draft list", "mcp": "gmail_draft_list", "status": "both" },
-    { "id": "gmail.draft.get", "package": "gmail", "cli": "draft show", "mcp": "gmail_draft_get", "status": "both" },
+    {
+      "id": "gmail.draft.list",
+      "package": "gmail",
+      "cli": "draft list",
+      "mcp": "gmail_draft_list",
+      "status": "both",
+      "operation": "listDrafts"
+    },
+    {
+      "id": "gmail.draft.get",
+      "package": "gmail",
+      "cli": "draft show",
+      "mcp": "gmail_draft_get",
+      "status": "both",
+      "operation": "getDraft"
+    },
     {
       "id": "gmail.draft.update",
       "package": "gmail",
       "cli": "draft update",
       "mcp": "gmail_draft_update",
       "status": "both",
+      "operation": "updateDraft",
       "reason": "A new body comes from `--text` or `--file` (`--file -` for standard input) at a terminal, and from `text` in chat; given none, both keep the body the draft has."
     },
     {
@@ -221,29 +347,40 @@
       "package": "gmail",
       "cli": "draft delete",
       "mcp": "gmail_draft_delete",
-      "status": "both"
+      "status": "both",
+      "operation": "deleteDraft"
     },
     {
       "id": "gmail.send.prepare",
       "package": "gmail",
       "cli": "send prepare",
       "mcp": "gmail_send_prepare",
-      "status": "both"
+      "status": "both",
+      "operation": "prepareSend"
     },
     {
       "id": "gmail.send.execute",
       "package": "gmail",
       "cli": "send execute",
       "mcp": "gmail_draft_send",
-      "status": "both"
+      "status": "both",
+      "operation": "executeSend"
     },
-    { "id": "gmail.send.list", "package": "gmail", "cli": "send list", "mcp": "gmail_send_list", "status": "both" },
+    {
+      "id": "gmail.send.list",
+      "package": "gmail",
+      "cli": "send list",
+      "mcp": "gmail_send_list",
+      "status": "both",
+      "operation": "listApprovals"
+    },
     {
       "id": "gmail.send.cancel",
       "package": "gmail",
       "cli": "send cancel",
       "mcp": "gmail_send_cancel",
-      "status": "both"
+      "status": "both",
+      "operation": "revokeApproval"
     },
     {
       "id": "gmail.approve",
@@ -258,7 +395,8 @@
       "package": "gmail",
       "cli": "confirm-clients list",
       "mcp": "gmail_confirm_clients",
-      "status": "both"
+      "status": "both",
+      "operation": "listConfirmClients"
     },
     {
       "id": "gmail.confirm-clients.add",
@@ -266,6 +404,7 @@
       "cli": "confirm-clients add",
       "mcp": "gmail_confirm_client_add",
       "status": "both",
+      "operation": "confirmClientAddChange",
       "reason": "Both refuse a client without a recent probe, then ask for a change approval: the probe is the evidence, the approval the decision."
     },
     {
@@ -273,7 +412,8 @@
       "package": "gmail",
       "cli": "confirm-clients remove",
       "mcp": "gmail_confirm_client_remove",
-      "status": "both"
+      "status": "both",
+      "operation": "removeConfirmClient"
     },
     {
       "id": "gmail.confirm-clients.probe",
@@ -283,19 +423,62 @@
       "status": "exception",
       "reason": "It tests the MCP client's own approval form by raising one, so a person can see it reaches them. A terminal has no form to test; what the probe shows is then recorded with gmail_confirm_client_add or `confirm-clients add`."
     },
-    { "id": "gmail.organise", "package": "gmail", "cli": "organise", "mcp": "gmail_organise", "status": "both" },
+    {
+      "id": "gmail.organise",
+      "package": "gmail",
+      "cli": "organise",
+      "mcp": "gmail_organise",
+      "status": "both",
+      "operation": "modify"
+    },
     {
       "id": "gmail.organise.undo",
       "package": "gmail",
       "cli": "organise-undo",
       "mcp": "gmail_organise_undo",
-      "status": "both"
+      "status": "both",
+      "operation": "applyUndo"
     },
-    { "id": "gmail.trash", "package": "gmail", "cli": "trash", "mcp": "gmail_trash", "status": "both" },
-    { "id": "gmail.label.create", "package": "gmail", "cli": "label", "mcp": "gmail_label_create", "status": "both" },
-    { "id": "gmail.labels.list", "package": "gmail", "cli": "labels", "mcp": "gmail_labels_list", "status": "both" },
-    { "id": "gmail.sendas.list", "package": "gmail", "cli": "sendas", "mcp": "gmail_sendas_list", "status": "both" },
-    { "id": "gmail.whoami", "package": "gmail", "cli": "whoami", "mcp": "gmail_whoami", "status": "both" },
+    {
+      "id": "gmail.trash",
+      "package": "gmail",
+      "cli": "trash",
+      "mcp": "gmail_trash",
+      "status": "both",
+      "operation": "trash"
+    },
+    {
+      "id": "gmail.label.create",
+      "package": "gmail",
+      "cli": "label",
+      "mcp": "gmail_label_create",
+      "status": "both",
+      "operation": "createLabel"
+    },
+    {
+      "id": "gmail.labels.list",
+      "package": "gmail",
+      "cli": "labels",
+      "mcp": "gmail_labels_list",
+      "status": "both",
+      "operation": "listLabels"
+    },
+    {
+      "id": "gmail.sendas.list",
+      "package": "gmail",
+      "cli": "sendas",
+      "mcp": "gmail_sendas_list",
+      "status": "both",
+      "operation": "listSendAs"
+    },
+    {
+      "id": "gmail.whoami",
+      "package": "gmail",
+      "cli": "whoami",
+      "mcp": "gmail_whoami",
+      "status": "both",
+      "operation": "whoami"
+    },
     {
       "id": "gmail.mcp.serve",
       "package": "gmail",
@@ -310,6 +493,9 @@
       "cli": "mcp install",
       "mcp": "comms_server_install",
       "status": "both",
+      "operation": "serverInstallChange",
+      "argv": ["--client", "claude-code"],
+      "args": { "channel": "gmail", "client": "claude-code" },
       "reason": "From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"gmail\"` is this command — the same change, `serverInstallChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     {
@@ -318,6 +504,8 @@
       "cli": "mcp prune",
       "mcp": "comms_server_prune",
       "status": "both",
+      "operation": "serverPruneChange",
+      "args": { "channel": "gmail" },
       "reason": "From chat this is the core server's comms_server_prune, which prunes any channel's runtimes: `channel: \"gmail\"` is this command — the same change, `serverPruneChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     {
@@ -326,6 +514,7 @@
       "cli": "setup",
       "mcp": "gmail_setup",
       "status": "both",
+      "operation": "setupState",
       "reason": "The report `setup` starts from: the clients and mailboxes there are, the MCP clients the server is registered with, the downloaded client files, and the one step to take next. `setup --json` with no flags and no terminal prints it and changes nothing; gmail_setup never changes anything. The steps `setup` then takes are the three rows that follow."
     },
     {
@@ -334,6 +523,7 @@
       "cli": "setup",
       "mcp": "gmail_client_add",
       "status": "both",
+      "unchecked": "`setup` registers the client only when `setupState` finds none, and in the drive `setupState` is a stand-in that finds nothing to compare, so `setup --client-json` never reaches the step there. It runs clientAddChange, as `client add` and gmail_client_add do: packages/gmail/test/account-changes.test.ts, \"setup --client-json registers the client the same way client add does\".",
       "reason": "`setup --client-json <path>` registers the OAuth client through the change `client add` runs, under the name \"desktop\"; from chat that step is gmail_client_add."
     },
     {
@@ -342,6 +532,9 @@
       "cli": "setup",
       "mcp": "gmail_inbox_add",
       "status": "both",
+      "operation": "startSignIn",
+      "via": "setupState",
+      "argv": ["--inbox", "parity/gmail"],
       "reason": "`setup --inbox <name> [--email]` starts the sign-in `inbox add --start` starts; from chat that step is gmail_inbox_add, finished by gmail_inbox_finish. At a terminal, setup waits for the browser itself."
     },
     {
@@ -350,17 +543,37 @@
       "cli": "setup",
       "mcp": "comms_server_install",
       "status": "both",
+      "operation": "serverInstallChange",
+      "via": "setupState",
+      "argv": ["--mcp-client", "claude-code"],
+      "args": { "channel": "gmail", "client": "claude-code" },
       "reason": "`setup --mcp-client <client>` registers the server as `mcp install` does; from chat that step is the core server's comms_server_install with `channel: \"gmail\"` (design §5)."
     },
-    { "id": "gmail.doctor", "package": "gmail", "cli": "doctor", "mcp": "gmail_doctor", "status": "both" },
+    {
+      "id": "gmail.doctor",
+      "package": "gmail",
+      "cli": "doctor",
+      "mcp": "gmail_doctor",
+      "status": "both",
+      "operation": "doctor"
+    },
 
-    { "id": "slack.manifest", "package": "slack", "cli": "manifest", "mcp": "slack_manifest", "status": "both" },
+    {
+      "id": "slack.manifest",
+      "package": "slack",
+      "cli": "manifest",
+      "mcp": "slack_manifest",
+      "status": "both",
+      "operation": "manifestFor"
+    },
     {
       "id": "slack.workspace.add",
       "package": "slack",
       "cli": "workspace add",
       "mcp": "slack_workspace_add",
       "status": "both",
+      "operation": "connectWorkspace",
+      "argv": ["parity/slack"],
       "reason": "Connecting in `send` is a change approval, given before the sign-in starts; in `read` it starts at once."
     },
     {
@@ -369,6 +582,8 @@
       "cli": "workspace add",
       "mcp": "slack_workspace_finish",
       "status": "both",
+      "operation": "finishSignIn",
+      "argv": ["--finish", "parity"],
       "reason": "The CLI completes a sign-in begun with --start as `workspace add --finish <flowId>`. Over MCP that is a call of its own, because a tool call cannot sit waiting on a browser."
     },
     {
@@ -376,22 +591,33 @@
       "package": "slack",
       "cli": "workspace list",
       "mcp": "slack_workspaces_list",
-      "status": "both"
+      "status": "both",
+      "operation": "listWorkspaces"
     },
     {
       "id": "slack.workspace.show",
       "package": "slack",
       "cli": "workspace show",
       "mcp": "slack_workspace_show",
-      "status": "both"
+      "status": "both",
+      "operation": "showWorkspace"
     },
-    { "id": "slack.mode.report", "package": "slack", "cli": "workspace mode", "mcp": "slack_mode", "status": "both" },
+    {
+      "id": "slack.mode.report",
+      "package": "slack",
+      "cli": "workspace mode",
+      "mcp": "slack_mode",
+      "status": "both",
+      "operation": "planModeSet"
+    },
     {
       "id": "slack.mode.request-send",
       "package": "slack",
       "cli": "workspace mode",
       "mcp": "slack_mode_request_send",
       "status": "both",
+      "operation": "planModeSet",
+      "argv": ["send"],
       "reason": "The steps as text: `workspace mode <name> send` returns the same steps, with the manifest, while the app has not been updated."
     },
     {
@@ -400,6 +626,8 @@
       "cli": "workspace mode",
       "mcp": "slack_mode_narrow",
       "status": "both",
+      "operation": "planModeSet",
+      "argv": ["read"],
       "reason": "`workspace mode <name> read` returns the same steps back to read-only."
     },
     {
@@ -408,6 +636,9 @@
       "cli": "workspace mode",
       "mcp": "slack_mode_set",
       "status": "both",
+      "operation": "planModeSet",
+      "argv": ["send"],
+      "args": { "mode": "send" },
       "reason": "The move itself, `workspace mode <name> send|read`: the app step first while nothing shows the app was widened, then a change approval before the sign-in starts; `read` returns the procedure (design §6.2)."
     },
     {
@@ -416,6 +647,7 @@
       "cli": "workspace remove",
       "mcp": "slack_workspace_remove",
       "status": "both",
+      "operation": "removeWorkspaceChange",
       "reason": "A change approval, because a deleted token cannot be taken back."
     },
     {
@@ -424,6 +656,7 @@
       "cli": "workspace reauth",
       "mcp": "slack_workspace_reauth",
       "status": "both",
+      "operation": "reauthWorkspace",
       "reason": "Renewing starts at once; read → send is a change approval, given before the sign-in starts."
     },
     {
@@ -432,6 +665,8 @@
       "cli": "workspace reauth",
       "mcp": "slack_workspace_finish",
       "status": "both",
+      "operation": "finishSignIn",
+      "argv": ["--finish", "parity"],
       "reason": "The CLI completes a sign-in again as `workspace reauth <name> --finish <flowId>`; over MCP the one finishing tool completes every sign-in, bound to the name when it is given."
     },
     {
@@ -440,47 +675,132 @@
       "cli": "workspace policy",
       "mcp": "slack_workspace_policy",
       "status": "both",
+      "operation": "policyChange",
+      "argv": ["--send", "confirm"],
+      "args": { "sendPolicy": "confirm" },
       "reason": "Reports, and tightens at once; loosening a send or change policy is a change approval, under the change policy in force before it."
     },
-    { "id": "slack.doctor", "package": "slack", "cli": "doctor", "mcp": "slack_doctor", "status": "both" },
-    { "id": "slack.channels", "package": "slack", "cli": "channels", "mcp": "slack_channels", "status": "both" },
-    { "id": "slack.read", "package": "slack", "cli": "read", "mcp": "slack_read", "status": "both" },
-    { "id": "slack.thread", "package": "slack", "cli": "thread", "mcp": "slack_thread", "status": "both" },
-    { "id": "slack.search", "package": "slack", "cli": "search", "mcp": "slack_search", "status": "both" },
-    { "id": "slack.files", "package": "slack", "cli": "files", "mcp": "slack_files", "status": "both" },
-    { "id": "slack.people", "package": "slack", "cli": "people", "mcp": "slack_people", "status": "both" },
+    {
+      "id": "slack.doctor",
+      "package": "slack",
+      "cli": "doctor",
+      "mcp": "slack_doctor",
+      "status": "both",
+      "operation": "runDoctor"
+    },
+    {
+      "id": "slack.channels",
+      "package": "slack",
+      "cli": "channels",
+      "mcp": "slack_channels",
+      "status": "both",
+      "operation": "listChannels"
+    },
+    {
+      "id": "slack.read",
+      "package": "slack",
+      "cli": "read",
+      "mcp": "slack_read",
+      "status": "both",
+      "operation": "readChannel"
+    },
+    {
+      "id": "slack.thread",
+      "package": "slack",
+      "cli": "thread",
+      "mcp": "slack_thread",
+      "status": "both",
+      "operation": "readThread"
+    },
+    {
+      "id": "slack.search",
+      "package": "slack",
+      "cli": "search",
+      "mcp": "slack_search",
+      "status": "both",
+      "operation": "searchMessages"
+    },
+    {
+      "id": "slack.files",
+      "package": "slack",
+      "cli": "files",
+      "mcp": "slack_files",
+      "status": "both",
+      "operation": "listFiles"
+    },
+    {
+      "id": "slack.people",
+      "package": "slack",
+      "cli": "people",
+      "mcp": "slack_people",
+      "status": "both",
+      "operation": "listPeople"
+    },
     {
       "id": "slack.draft.create",
       "package": "slack",
       "cli": "draft create",
       "mcp": "slack_post_prepare",
       "status": "both",
+      "unchecked": "Not one operation, found by the operation check and left as it is for a change of its own: `draft create` runs createDraft, while slack_post_prepare runs prepareDraftPost, which writes the draft itself (the draft store's `create`) and prepares it in the same call.",
       "reason": "slack_post_prepare writes the draft and prepares it in one call; the CLI takes those as two steps, `draft create` then `post prepare`."
     },
-    { "id": "slack.draft.list", "package": "slack", "cli": "draft list", "mcp": "slack_draft_list", "status": "both" },
-    { "id": "slack.draft.get", "package": "slack", "cli": "draft show", "mcp": "slack_draft_get", "status": "both" },
+    {
+      "id": "slack.draft.list",
+      "package": "slack",
+      "cli": "draft list",
+      "mcp": "slack_draft_list",
+      "status": "both",
+      "unchecked": "No operation on either side, found by the operation check and left as it is for a change of its own: `draft list` and slack_draft_list each resolve the workspace (requireWorkspace) and read the draft store's `list` themselves."
+    },
+    {
+      "id": "slack.draft.get",
+      "package": "slack",
+      "cli": "draft show",
+      "mcp": "slack_draft_get",
+      "status": "both",
+      "operation": "ownDraft"
+    },
     {
       "id": "slack.draft.delete",
       "package": "slack",
       "cli": "draft delete",
       "mcp": "slack_draft_delete",
-      "status": "both"
+      "status": "both",
+      "operation": "deleteOwnDraft"
     },
     {
       "id": "slack.post.prepare",
       "package": "slack",
       "cli": "post prepare",
       "mcp": "slack_post_prepare",
-      "status": "both"
+      "status": "both",
+      "operation": "prepareDraftPost"
     },
-    { "id": "slack.post.send", "package": "slack", "cli": "post send", "mcp": "slack_post_send", "status": "both" },
-    { "id": "slack.react", "package": "slack", "cli": "react", "mcp": "slack_react", "status": "both" },
+    {
+      "id": "slack.post.send",
+      "package": "slack",
+      "cli": "post send",
+      "mcp": "slack_post_send",
+      "status": "both",
+      "operation": "sendPost"
+    },
+    {
+      "id": "slack.react",
+      "package": "slack",
+      "cli": "react",
+      "mcp": "slack_react",
+      "status": "both",
+      "operation": "react"
+    },
     {
       "id": "slack.react.send",
       "package": "slack",
       "cli": "react",
       "mcp": "slack_react_send",
       "status": "both",
+      "operation": "react",
+      "argv": ["--approval", "ap_00000000000000000000000000"],
       "reason": "The CLI claims a reaction's approval as `react --approval <id>`. Over MCP that is a call of its own, as posting is."
     },
     {
@@ -505,6 +825,9 @@
       "cli": "mcp install",
       "mcp": "comms_server_install",
       "status": "both",
+      "operation": "serverInstallChange",
+      "argv": ["--client", "claude-code"],
+      "args": { "channel": "slack", "client": "claude-code" },
       "reason": "From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"slack\"` is this command — the same change, `serverInstallChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     {
@@ -513,6 +836,8 @@
       "cli": "mcp prune",
       "mcp": "comms_server_prune",
       "status": "both",
+      "operation": "serverPruneChange",
+      "args": { "channel": "slack" },
       "reason": "From chat this is the core server's comms_server_prune, which prunes any channel's runtimes: `channel: \"slack\"` is this command — the same change, `serverPruneChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     {
