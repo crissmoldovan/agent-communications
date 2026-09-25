@@ -21,8 +21,9 @@ readable before you run anything, and because the one step nothing can automate 
 own browser — is easier to meet if you have read about it first. Everything below is also what `setup` does, in
 the same order.
 
-An agent can drive the same steps over MCP with `gmail_setup`, `gmail_inbox_add` and `gmail_inbox_finish`; the
-grant is still yours to approve.
+An agent can drive the same steps over MCP with `gmail_setup`, `gmail_client_add`, `gmail_inbox_add` and
+`gmail_inbox_finish`. The Google Cloud screens are still yours to click through, registering the client is a change
+you approve, and the grant is yours to give in your own browser.
 
 ## 1. A Google OAuth client
 
@@ -121,7 +122,8 @@ npx -y @agentcomms/gmail inbox import             # do it
 ```
 
 Every mailbox comes across with its existing OAuth client and refresh token. No browser, no re-consent — but the
-import lists every mailbox it will connect and waits for your `yes` before it copies anything.
+import lists every mailbox it will connect and waits for your `yes` before it copies anything. An agent that runs it
+gets the same list and an approval id, and runs it again with `--approval <id>` once you have said yes.
 
 One thing an import cannot bring is a permission the other server never asked for. Most legacy servers do not
 request `openid` or `userinfo.email`, so `doctor` will report those as missing on every imported mailbox. Nothing

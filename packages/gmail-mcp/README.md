@@ -61,8 +61,10 @@ the code it shows first. An approval is for the change it previewed, once, for t
 different by the time it is claimed, it is refused and the change is prepared again. Tightening needs nobody. The
 same approval can be claimed from the command line with `--approval <id>`, and the other way round.
 
-The writers are withheld from a server started `--read-only`. One pinned to a single mailbox with `--inbox` sets
-its own mailbox's policies and offers none of the rest.
+The writers are withheld from a server started `--read-only`. One pinned to a single mailbox with `--inbox` offers,
+of the tools above, the ones that read, `gmail_inbox_policy` for its own mailbox, and `gmail_confirm_client_remove`,
+since trusting fewer clients needs nobody; it does not rename, re-authorise, import, remove, add or remove an OAuth
+client, or add a trusted client.
 
 ## Options
 

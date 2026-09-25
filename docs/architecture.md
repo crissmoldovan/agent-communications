@@ -13,7 +13,7 @@ and ignore the rest.
                        ├──────────────────────────────────┴───────────────────────────────────┤
                        │  @agentcomms/core   (shared)                                         │
                        └──────────────────────────────────────────────────────────────────────┘
-  agents ────────────►    skills/  — gmail-* and slack-*, instructions, not code
+  agents ────────────►    skills/  — gmail-*, slack-* and comms-*, instructions, not code
 ```
 
 | | What it is | Install | Needs |
@@ -52,17 +52,20 @@ They are separate things that are easy to confuse because both are "for agents".
 them, and when they are not they fall back to the CLI. You can install skills with no server, a server with no
 skills, or both.
 
-There are fifteen, one per job. Twelve for Gmail — searching, triage, composing, sending, organising, attachments,
-contacts, thread analysis, follow-ups, export, security, setup — and three for Slack: setup, reading and posting.
-Each is a `SKILL.md` plus reference pages, including the contract its platform's skills share.
+There are sixteen, one per job. Twelve for Gmail — searching, triage, composing, sending, organising, attachments,
+contacts, thread analysis, follow-ups, export, security, setup — three for Slack: setup, reading and posting — and
+one, `comms-onboarding`, that sets both up through the core server. Each is a `SKILL.md` plus reference pages,
+including the contract its platform's skills share; `comms-onboarding` has its own, for the core's tools.
 See [the skills index](skills.md).
 
-They are named `gmail-*` and `slack-*` because a skill states one platform's truth and has no other branch to fall
-into. Slack ships its own pack, and its own contract, rather than the Gmail skills becoming platform-neutral, and
-the reason is that the guarantees genuinely differ: on some accounts the credential itself cannot send, on others only this
-software stops it. A skill that had to say "depending on the platform" is one an agent under pressure resolves in
-the reassuring direction. [The skills architecture across platforms](superpowers/specs/2026-09-20-skills-architecture.md)
-is the full design, including what adding an IMAP pack later would take.
+The platform skills are named `gmail-*` and `slack-*` because a skill states one platform's truth and has no other
+branch to fall into. `comms-onboarding` is the one that spans both, and only to install and connect them: once an
+account works, it hands over to `gmail-setup` and `slack-setup`. Slack ships its own pack, and its own contract,
+rather than the Gmail skills becoming platform-neutral, and the reason is that the guarantees genuinely differ: on
+some accounts the credential itself cannot send, on others only this software stops it. A skill that had to say
+"depending on the platform" is one an agent under pressure resolves in the reassuring direction.
+[The skills architecture across platforms](superpowers/specs/2026-09-20-skills-architecture.md) is the full design,
+including what adding an IMAP pack later would take.
 
 ## `@agentcomms/core` is shared, not Gmail
 
@@ -74,7 +77,9 @@ registration a person runs at a terminal before everything else can be done from
 It is separate because the approval gate and the sanitiser are not mail-specific. The Slack package uses the same
 core, the same approval records and the same audit log.
 
-You rarely install it directly — `@agentcomms/gmail` and `@agentcomms/slack` depend on it.
+`@agentcomms/gmail` and `@agentcomms/slack` depend on it, so it arrives with either. You run it directly for its
+command and its MCP server — `npx -y @agentcomms/core mcp install --client <client>` is the first step of the
+install from a chat.
 
 ## How a send is gated
 

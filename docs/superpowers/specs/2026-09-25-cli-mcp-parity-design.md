@@ -1,6 +1,6 @@
 # Every capability from both surfaces — CLI and MCP — design
 
-Status: draft, 2026-09-25. Supersedes the terminal-only widening rule in
+Status: decided and implemented, 2026-09-25, for 0.5.0. Supersedes the terminal-only widening rule in
 [`2026-09-23-slack-mode-switching-design.md`](2026-09-23-slack-mode-switching-design.md) §1 and §6; everything else
 there stands.
 

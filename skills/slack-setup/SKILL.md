@@ -138,8 +138,9 @@ does not read a workspace's own `.vscode/mcp.json` or `.cursor/mcp.json`, so run
 user what it lists. Without the server the skills still work, through `agent-slack … --json`.
 
 From a chat with the core server connected, `comms_server_install` and `comms_server_prune` with
-`channel: "slack"` do the same. Each returns a preview and an approval id first: show the preview, and call again
-with the id once the user agrees. The server appears after the client is restarted.
+`channel: "slack"` do the same. A registration, and a prune that would remove something, returns a preview and an
+approval id first: show the preview, and call again with the id once the user agrees. A prune dry run, or a prune
+with nothing to remove, asks nobody. The server appears after the client is restarted.
 
 What the agent gets is everything the CLI does except approving, and changing the Slack app itself. Posting and
 reacting go through the same approval gate as the CLI: under `chat` the person's yes in the conversation is the
@@ -181,7 +182,8 @@ never on your own initiative. It takes two steps, in this order, and `agent-slac
    `terminalAlternative` the result names. Never ask for that token in the chat.
 2. **The change.** Once they say the app is saved, run it again with `--app-updated` (`appUpdated: true`). It is a
    change approval — show the preview and ask — and once approved it starts a sign-in: the person approves that in
-   Slack, and `slack_workspace_finish` (or `--finish`) records the new token.
+   Slack, and `slack_workspace_finish` (at a terminal, `agent-slack workspace reauth <name> --finish <flowId>`)
+   records the new token.
 
 If Slack grants no posting scope at the end, the app's manifest was not updated after all — saved on another app, or
 not saved — and nothing is recorded; the refusal says so and how to do step 1.

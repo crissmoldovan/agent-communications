@@ -1,9 +1,9 @@
 # @agentcomms/core
 
 The provider-neutral core of [agent-communications](https://github.com/crissmoldovan/agent-communications): the
-config and inbox registry, the secret store (OS keychain or owner-only files), the send-approval engine, the audit
-log, path jails, and the untrusted-content envelope and HTML sanitiser that keep what a sender wrote — an email or
-a Slack message — from steering an agent.
+config and inbox registry, the secret store (OS keychain or owner-only files), the approval engine for sends, posts
+and configuration changes, the audit log, path jails, and the untrusted-content envelope and HTML sanitiser that
+keep what a sender wrote — an email or a Slack message — from steering an agent.
 
 Most people want a platform package instead: `npx @agentcomms/gmail --help` or `npx @agentcomms/slack --help` — or
 this package's MCP server, which installs those for an agent.
@@ -13,7 +13,7 @@ this package's MCP server, which installs those for an agent.
 ```sh
 npx @agentcomms/core paths      # where config, state and downloads live
 npx @agentcomms/core doctor     # Node version, directory permissions, secret store
-npx @agentcomms/core audit tail # every mailbox write and Slack prepare or post, newest last (no bodies, no secrets)
+npx @agentcomms/core audit tail # mailbox writes, Slack prepares and posts, and every step of a change, newest last (no bodies, no secrets)
 npx @agentcomms/core approvals list
 npx @agentcomms/core approve <id>  # approve a settings change an agent prepared: read it, type the code it shows
 npx @agentcomms/core policy        # the change policy: how a loosening is approved — chat or confirm
@@ -24,8 +24,9 @@ npx @agentcomms/core mcp install --client claude-code   # register the core MCP 
 Every command takes `--json` and prints `{ "ok": true, "schemaVersion": 1, "data": … }` or
 `{ "ok": false, "schemaVersion": 1, "error": { "code", "message", "hint" } }`.
 
-A command that changes something — `policy chat|confirm`, `mcp install`, `mcp prune`, `secrets migrate`,
-`names migrate` — shows the change first. At a terminal you approve it there; anything else gets the preview and an
+A command that loosens something or cannot be undone — `policy chat`, `mcp install`, `mcp prune`, `secrets migrate`,
+`names migrate` — shows the change first (`policy confirm` tightens, so it applies at once). At a terminal you
+approve it there; anything else gets the preview and an
 approval id and exits `10`, and runs the same command again with `--approval <id>` once the person has agreed.
 
 ## The core MCP server

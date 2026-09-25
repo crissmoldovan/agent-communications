@@ -177,7 +177,8 @@ half of the release exists.
 
 ## What the verify actually proves
 
-`pnpm verify` is lint → build → typecheck → test → skills → versions → licences → **packed-tarball consumer checks**.
+`pnpm verify` is lint → build → typecheck → test → skills → versions → licences → reference pages → CLI and MCP
+parity → **packed-tarball consumer checks**.
 
 That last stage is the one worth protecting. It packs each package exactly as it will be published, installs the
 tarball into a fresh project with its own npm cache, and runs it there. It is the only thing that catches a missing
@@ -187,7 +188,8 @@ they import from `src/`.
 ## After publishing
 
 - `npm view @agentcomms/gmail version` — confirm what actually went out.
-- `npx -y @agentcomms/gmail@X.Y.Z --version`, then `doctor`, somewhere that is not this repository.
+- `npx -y @agentcomms/gmail@X.Y.Z --version`, `npx -y @agentcomms/slack@X.Y.Z --version` and
+  `npx -y @agentcomms/core@X.Y.Z --version`, then each one's `doctor`, somewhere that is not this repository.
 - `npx skills add crissmoldovan/agent-communications --skill '*'` in a scratch directory; check a skill brought its
   `references/` with it.
 - The GitHub release is made by the workflow's `github-release` job, from the changelog section, once the registry

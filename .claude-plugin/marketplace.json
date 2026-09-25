@@ -1,6 +1,6 @@
 {
   "name": "agent-communications",
-  "description": "Communication tools for coding agents: Gmail and Slack. Search, read, analyse, draft and organise mail across several mailboxes, and read Slack workspaces and prepare posts \u2014 nothing is sent or posted without your approval.",
+  "description": "Communication tools for coding agents: Gmail and Slack. Search, read, analyse, draft and organise mail across several mailboxes, and read and post to Slack workspaces \u2014 nothing is sent or posted without your approval.",
   "owner": {
     "name": "crissmoldovan",
     "url": "https://github.com/crissmoldovan/agent-communications"
@@ -9,7 +9,7 @@
     {
       "name": "gmail",
       "source": "./",
-      "description": "Gmail and Slack for coding agents. The Gmail server is included: search, read, analyse, draft and organise mail, with sending behind your approval. The Slack skills read a workspace and prepare posts that only a person can approve; connect their server with `npx -y @agentcomms/slack mcp install --client claude-code` (or `--client` codex, cursor, gemini, claude-desktop or vscode).",
+      "description": "Gmail and Slack for coding agents. The Gmail server is included: search, read, analyse, draft and organise mail, with sending behind your approval. The Slack skills read a workspace and post only what a person approves; connect their server with `npx -y @agentcomms/slack mcp install --client claude-code` (or `--client` codex, cursor, gemini, claude-desktop or vscode), a registration you approve. The onboarding skill works through the core server, which the plugin does not start either: `npx -y @agentcomms/core mcp install --client claude-code`.",
       "version": "0.4.2",
       "author": {
         "name": "crissmoldovan"
