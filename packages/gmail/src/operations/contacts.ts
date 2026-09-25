@@ -3,7 +3,7 @@ import type { GmailContext } from '../context.ts';
 import { headerValue } from '../domain/mime.ts';
 import { type NumberOption, numberOption } from './numbers.ts';
 import { resolveInboxes } from './search.ts';
-import { oneOf } from './words.ts';
+import { allOf, oneOf } from './words.ts';
 
 /**
  * Finding someone's address.
@@ -15,6 +15,9 @@ import { oneOf } from './words.ts';
  */
 
 export type ContactSource = 'contacts' | 'other-contacts' | 'history';
+
+/** Where an address can come from: the saved address book, Google's "other contacts", and past mail's headers. */
+export const CONTACT_SOURCES: readonly ContactSource[] = ['contacts', 'other-contacts', 'history'];
 
 export interface Contact {
   name: string;
@@ -35,8 +38,11 @@ export interface ContactsResult {
 
 export interface ContactsOptions {
   inboxes?: string[] | 'all' | undefined;
-  /** Which sources to use; all three by default. */
-  sources?: ContactSource[] | undefined;
+  /**
+   * Which sources to use, as given: each is checked by `searchContacts` against {@link CONTACT_SOURCES}. All three
+   * when left out.
+   */
+  sources?: readonly string[] | undefined;
   /** How many rows, as given; checked by `searchContacts` against {@link CONTACTS_LIMIT}. Twenty when left out. */
   limit?: unknown;
 }
@@ -55,9 +61,15 @@ export async function searchContacts(
       hint: 'Pass a name, part of an address, or a domain.',
     });
   }
+  /*
+   * Checked before anything is read, so a word that is not a source is refused the same way from either surface. It
+   * was used as a filter instead: a misspelt source was never looked in and never mentioned, so `['history',
+   * 'adress-book']` searched past mail alone, and `['address-book']` searched nothing and answered "complete" with no
+   * contacts — which a person reads as nobody by that name.
+   */
+  const sources = new Set<ContactSource>(allOf(options.sources, CONTACT_SOURCES, 'a source') ?? CONTACT_SOURCES);
   const limit = numberOption(context, options.limit, CONTACTS_LIMIT) ?? 20;
   const aliases = await resolveInboxes(context, options.inboxes);
-  const sources = new Set<ContactSource>(options.sources ?? ['contacts', 'other-contacts', 'history']);
   const errors: ContactsResult['errors'] = [];
   const found = new Map<string, Contact>();
 

@@ -787,7 +787,10 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       inputSchema: z.object({
         query: z.string().min(1).describe('a name, part of an address, or a domain'),
         inboxes: mcpInboxes().optional(),
-        sources: mcpStringArray().optional().describe('contacts, other-contacts, history'),
+        // Words the operation checks, as `direction` and `kind` are: one that is not a source is refused as USAGE.
+        sources: mcpStringArray()
+          .optional()
+          .describe('where to look: any of contacts, other-contacts or history; all three when left out'),
         limit: mcpInteger().optional().describe('rows to return, 1–50 (default 20)'),
       }),
       outputSchema: z.object({
@@ -802,7 +805,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       try {
         const result = await searchContacts(context, query, {
           inboxes: targetInboxes(inboxes as string[] | 'all' | undefined),
-          sources: sources as Array<'contacts' | 'other-contacts' | 'history'> | undefined,
+          sources,
           limit,
         });
         return reply({

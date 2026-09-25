@@ -27,7 +27,7 @@ import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts
 import { downloadAttachments, findAttachments } from '../operations/attachments.ts';
 import { clientAddChange, clientList, clientRemoveChange, STORE_KINDS } from '../operations/clients.ts';
 import { confirmClientAddChange, listConfirmClients, removeConfirmClient } from '../operations/confirm-clients.ts';
-import { FOLLOW_UP_DIRECTIONS, followUps, searchContacts } from '../operations/contacts.ts';
+import { CONTACT_SOURCES, FOLLOW_UP_DIRECTIONS, followUps, searchContacts } from '../operations/contacts.ts';
 import { doctor } from '../operations/doctor.ts';
 import {
   createDraft,
@@ -767,13 +767,15 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .command('contacts <query>')
     .description('find someone’s address: from the address book, from people written to, and from past mail')
     .option('--inbox <alias...>', 'search these mailboxes (default: all)')
-    .option('--sources <source...>', 'contacts, other-contacts, history')
+    .addOption(
+      new Option('--sources <source...>', 'where to look; all three when left out').choices([...CONTACT_SOURCES]),
+    )
     .option('--limit <number>', 'how many rows: 1 to 50 (default 20)')
     .action(
       act(async (context, globalOptions, query: string, options: Options) => {
         const result = await searchContacts(context, query, {
           inboxes: options.inbox as string[] | undefined,
-          sources: options.sources as Array<'contacts' | 'other-contacts' | 'history'> | undefined,
+          sources: options.sources as string[] | undefined,
           limit: options.limit,
         });
         writeResult(result, output(), (data) => renderContacts(data, globalOptions.color), streams);

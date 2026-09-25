@@ -20,6 +20,19 @@ export function oneOf<const T extends string>(
   throw new CommsError('USAGE', `"${value}" is not ${what}`, { hint: `Use ${spoken(words)}.` });
 }
 
+/**
+ * A list of words, each checked as {@link oneOf} checks one: the list, `undefined` when none was given, or the USAGE
+ * refusal of the first that is not one of the words there are — not a list with it quietly left out.
+ */
+export function allOf<const T extends string>(
+  values: readonly string[] | undefined,
+  words: readonly T[],
+  what: string,
+): T[] | undefined {
+  if (values === undefined) return undefined;
+  return values.map((value) => oneOf(value, words, what) as T);
+}
+
 /** `a`, `a or b`, `a, b or c`: the choices as a person would say them. */
 export function spoken(words: readonly string[]): string {
   if (words.length <= 1) return words.join('');

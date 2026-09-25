@@ -342,7 +342,7 @@ agent-gmail contacts [options] <query>
 | Option | What it does | Default |
 |---|---|---|
 | `--inbox <alias...>` | search these mailboxes | `all` |
-| `--sources <source...>` | contacts, other-contacts, history | — |
+| `--sources <source...>` | where to look; all three when left out (choices: "contacts", "other-contacts", "history") | — |
 | `--limit <number>` | how many rows: 1 to 50 (default 20) | — |
 
 ### `agent-gmail followups`

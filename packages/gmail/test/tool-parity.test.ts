@@ -994,6 +994,14 @@ test('every word argument a tool takes refuses a word that is not one as USAGE, 
       choices: ['keychain', 'file'],
       argv: ['inbox', 'import', '--dir', missing, '--store', 'vault', '--dry-run'],
     },
+    {
+      // A list of words: one that is not a source is refused even beside one that is.
+      tool: 'gmail_contacts_search',
+      args: { query: 'sam', sources: ['history', 'address-book'] },
+      word: 'address-book',
+      choices: ['contacts', 'other-contacts', 'history'],
+      argv: ['contacts', 'sam', '--sources', 'history', 'address-book'],
+    },
   ];
 
   const { call, close } = await connect({ core: harness.core, env: harness.env });
@@ -1287,6 +1295,48 @@ test('the tools still take every word that is one', async () => {
     for (const direction of ['them', 'me']) {
       assert.equal(wire(await call('gmail_followups', { direction })).complete, true);
     }
+    for (const sources of [['contacts'], ['other-contacts'], ['history'], ['contacts', 'other-contacts', 'history']]) {
+      assert.equal(wire(await call('gmail_contacts_search', { query: 'sam', sources })).query, 'sam');
+    }
+  } finally {
+    await close();
+  }
+});
+
+test('a source gmail_contacts_search does not know is refused before anything is searched, as `contacts --sources` refuses it', async () => {
+  /*
+   * `sources` was taken as whatever list arrived and used as a filter, so a word that is not a source was never looked
+   * for and never mentioned: `sources: ['history', 'adress-book']` searched past mail alone, and `['address-book']`
+   * searched nothing and answered with no contacts and `complete: true` — the answer a person reads as "nobody by
+   * that name". `contacts --sources` did the same. Refused now by the operation, before any mailbox is read, naming
+   * the words it takes; and the command lists them as its choices.
+   */
+  const harness = await oneMailbox();
+  const asked = harness.google.requests.length;
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    for (const sources of [['address-book'], ['history', 'adress-book'], '["history","adress-book"]']) {
+      const refused = toolError(await call('gmail_contacts_search', { query: 'sam', sources }));
+      assert.equal(refused.code, 'USAGE', JSON.stringify(sources));
+      assert.match(refused.message, /^"(address-book|adress-book)" is not a source/);
+      assert.equal(refused.hint, 'Use contacts, other-contacts or history.');
+    }
+    for (const argv of [
+      ['contacts', 'sam', '--sources', 'address-book'],
+      ['contacts', 'sam', '--sources', 'history', 'adress-book'],
+    ]) {
+      const run = await cli(harness, [...argv, '--json']);
+      assert.equal(run.code, 64, `${argv.join(' ')}: ${run.stdout}`);
+      const error = run.envelope().error;
+      assert.equal(error?.code, 'USAGE');
+      assert.match(error?.message ?? '', /adress-book|address-book/);
+      assert.match(error?.message ?? '', /contacts, other-contacts, history/);
+    }
+    assert.equal(harness.google.requests.length, asked, 'a mailbox was searched for a source that is not one');
+
+    // Every source that is one is still searched, from the command as from the tool.
+    const run = await cli(harness, ['contacts', 'sam', '--sources', 'contacts', 'other-contacts', 'history', '--json']);
+    assert.equal(run.code, 0, run.stdout);
   } finally {
     await close();
   }
