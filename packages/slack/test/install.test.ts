@@ -208,7 +208,7 @@ test('codex: --force replaces our own entry by removing it first', NOT_ON_WINDOW
   await mkdir(dirname(fileOf('codex')), { recursive: true });
   await writeFile(
     fileOf('codex'),
-    ['[mcp_servers.slack]', 'command = "node"', `args = ["${OURS.args[0]}", "mcp"]`].join('\n'),
+    ['[mcp_servers.slack]', 'command = "node"', `args = [${JSON.stringify(OURS.args[0])}, "mcp"]`].join('\n'),
   );
 
   await assert.rejects(mcpInstall(context, { client: 'codex', launcher: 'local', noVerify: true }), /already has this/);

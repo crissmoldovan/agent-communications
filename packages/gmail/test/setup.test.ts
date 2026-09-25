@@ -371,7 +371,9 @@ test('a registered server is what marks the agent step done, and it is matched o
   );
   await writeFile(
     join(home, '.codex', 'config.toml'),
-    ['[mcp_servers.gmail]', 'command = "node"', `args = ["${managed}", "mcp", "serve"]`].join('\n'),
+    // Quoted as codex writes it: a Windows path's backslashes are escapes inside a TOML string, and written raw
+    // they made a file that is not TOML at all — read as unreadable, only on Windows.
+    ['[mcp_servers.gmail]', 'command = "node"', `args = [${JSON.stringify(managed)}, "mcp", "serve"]`].join('\n'),
   );
   /*
    * A Windows managed path, backslash-separated — the case nobody exercises locally.
