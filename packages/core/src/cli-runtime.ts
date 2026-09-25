@@ -169,6 +169,18 @@ export interface PersonGate {
  * wording and the challenge are here.
  */
 export async function requirePerson(env: NodeJS.ProcessEnv, streams: Streams, gate: PersonGate): Promise<void> {
+  refuseUnlessPerson(env, streams, gate);
+  await askChallenge(streams, { prompt: gate.prompt, color: gate.color });
+}
+
+/**
+ * The first two steps of `requirePerson` — an agent is refused, then anything without a terminal — for a command
+ * whose code is not its own to make up.
+ *
+ * `agentcomms approve` asks for a code the approval store issued and will check, so it cannot use `askChallenge`;
+ * but it refuses in exactly the same order and words, because it is the same gate.
+ */
+export function refuseUnlessPerson(env: NodeJS.ProcessEnv, streams: Streams, gate: Omit<PersonGate, 'prompt'>): void {
   const marker = agentMarker(env);
   if (marker) {
     throw new CommsError('LOOSENING_REFUSED', gate.refusedToAgent, {
@@ -184,5 +196,4 @@ export async function requirePerson(env: NodeJS.ProcessEnv, streams: Streams, ga
       hint: `Run \`${gate.command}\` directly in a terminal.`,
     });
   }
-  await askChallenge(streams, { prompt: gate.prompt, color: gate.color });
 }

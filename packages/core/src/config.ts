@@ -31,6 +31,14 @@ export const ALIAS_PATTERN: RegExp = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const ALIAS_MESSAGE = 'names must be 1–32 lowercase letters, digits or hyphens, starting with a letter or digit';
 
 export type SendPolicy = 'chat' | 'confirm' | 'never';
+/**
+ * How a loosening of the configuration is approved: `chat` — the person says yes in the conversation and the agent
+ * claims the approval — or `confirm` — the person types a code at a terminal, as for a send under `confirm`.
+ *
+ * There is no `never`. A setting the software refused ever to loosen would leave editing the file by hand as the only
+ * way to change it, and that passes no gate at all.
+ */
+export type ChangePolicy = 'chat' | 'confirm';
 export type StoreKind = 'keychain' | 'file';
 
 export interface ClientConfig {
@@ -55,12 +63,22 @@ export interface InboxConfig {
   grantedScopes: string[];
   secretRef: string;
   sendPolicy?: SendPolicy | undefined;
+  /** Overrides `defaults.changePolicy` for changes to this inbox. */
+  changePolicy?: ChangePolicy | undefined;
   internalDomains: string[];
   createdAt: string;
 }
 
 export interface Defaults {
   sendPolicy: SendPolicy;
+  /**
+   * How a loosening is approved wherever an inbox or account does not say otherwise. Absent reads as `chat`.
+   *
+   * Absent rather than filled in by the schema, unlike `sendPolicy`. A config written before this setting existed
+   * reads as `chat` from then on, and the release note says so; a default the schema supplied would be written into
+   * the file by the next unrelated change, where it would look like a choice somebody made.
+   */
+  changePolicy?: ChangePolicy | undefined;
   riskEscalation: boolean;
   sendCaps: { perHour: number; perDay: number };
   attachRoots: string[];
@@ -101,6 +119,8 @@ export interface AccountConfig {
   grantedScopes: string[];
   secretRef: string;
   sendPolicy?: SendPolicy | undefined;
+  /** Overrides `defaults.changePolicy` for changes to this account. */
+  changePolicy?: ChangePolicy | undefined;
   createdAt: string;
   /**
    * The OAuth client this account's token was issued by, and the app it belongs to.
@@ -198,6 +218,7 @@ export function newAccountId(): string {
   return newId('acc_');
 }
 const sendPolicySchema = z.enum(['chat', 'confirm', 'never']);
+const changePolicySchema = z.enum(['chat', 'confirm']);
 const storeKindSchema = z.enum(['keychain', 'file']);
 
 const clientSchema = z.looseObject({
@@ -220,6 +241,7 @@ const inboxSchema = z.looseObject({
   grantedScopes: z.array(z.string()).default([]),
   secretRef: z.string().min(1),
   sendPolicy: sendPolicySchema.optional(),
+  changePolicy: changePolicySchema.optional(),
   // Lower-cased on the way in: domains are case-insensitive, and a mixed-case entry would otherwise fail to match
   // the inbox's own domain and demand consent for a change that is not one.
   internalDomains: z.array(z.string().transform((domain) => domain.trim().toLowerCase())).default([]),
@@ -236,6 +258,7 @@ const accountSchema = z.looseObject({
   grantedScopes: z.array(z.string()).default([]),
   secretRef: z.string().min(1),
   sendPolicy: sendPolicySchema.optional(),
+  changePolicy: changePolicySchema.optional(),
   createdAt: z.string(),
   oauthClientId: z.string().min(1).optional(),
   appId: z.string().min(1).optional(),
@@ -249,6 +272,7 @@ const accountSchema = z.looseObject({
 // reader: it strips them, as it always has.
 const defaultsSchema = z.looseObject({
   sendPolicy: sendPolicySchema.default('chat'),
+  changePolicy: changePolicySchema.optional(),
   riskEscalation: z.boolean().default(true),
   sendCaps: z
     .looseObject({ perHour: z.number().int().min(0).default(20), perDay: z.number().int().min(0).default(100) })
@@ -512,6 +536,26 @@ export function effectiveSendPolicy(config: Config, inbox: string): SendPolicy {
   return config.inboxes[inbox]?.sendPolicy ?? config.defaults.sendPolicy;
 }
 
+/** The change policy that applies where nothing overrides it: the default, and `chat` when none is set. */
+export function defaultChangePolicy(config: Config): ChangePolicy {
+  return config.defaults.changePolicy ?? 'chat';
+}
+
+/**
+ * The change policy that applies to an inbox or an account, by name: its own, else the default. With neither named,
+ * or a name that is not connected, the default — a change to something that does not exist yet is governed by what
+ * governs everything else.
+ */
+export function effectiveChangePolicy(config: Config, scope: { inbox?: string; account?: string } = {}): ChangePolicy {
+  const entry =
+    scope.inbox !== undefined
+      ? own(config.inboxes, scope.inbox)
+      : scope.account !== undefined
+        ? own(config.accounts, scope.account)
+        : undefined;
+  return entry?.changePolicy ?? defaultChangePolicy(config);
+}
+
 function describeIssues(error: z.ZodError, version: ConfigVersion): string {
   return error.issues
     .slice(0, 5)
@@ -614,7 +658,7 @@ export class ConfigStore {
           });
         }
       }
-      const { loosened } = classifyChange(current, parsed.data);
+      const { loosened, changes } = classifyChange(current, parsed.data);
       const allowed = new Set(options.consent?.paths ?? []);
       const unconsented = loosened.filter((path) => !allowed.has(path));
       if (unconsented.length > 0) {
@@ -622,6 +666,24 @@ export class ConfigStore {
           hint: 'Only a person at a terminal can loosen these, by running the matching command and typing the challenge it shows.',
           details: { paths: unconsented },
         });
+      }
+      /*
+       * A consent from a change approval says what each path was approved to move between, and the write has to be
+       * that. Checked here, against the configuration read inside the lock, because this is the one place nothing
+       * can change between the check and the write: a claim checks the change the caller described, and the
+       * configuration may have moved since — a path now loosened from a different value, or an account that is not
+       * the one the person was shown.
+       */
+      const approved = options.consent?.changes;
+      if (approved !== undefined) {
+        const drifted = changes.filter((change) => !approved.some((ok) => sameLoosening(ok, change)));
+        if (drifted.length > 0) {
+          const paths = drifted.map((change) => change.path);
+          throw new CommsError('LOOSENING_REFUSED', `this is not the change that was approved: ${paths.join(', ')}`, {
+            hint: 'The configuration changed after the approval was given. Prepare the change again and ask again.',
+            details: { paths },
+          });
+        }
       }
       await writeFileAtomic(this.path, `${JSON.stringify(parsed.data, null, 2)}\n`);
       this.#cache = null;
@@ -945,25 +1007,61 @@ function isInsideDirectory(candidate: string | undefined, parent: string | undef
   return candidate === parent || candidate.startsWith(`${parent}/`) || candidate.startsWith(`${parent}\\`);
 }
 
+/** A value a loosened setting had or will have: a policy, a mode, a list, a pair of caps, a path, or nothing. */
+export type SettingValue = string | number | boolean | readonly string[] | { readonly [key: string]: unknown } | null;
+
 /**
- * Which paths of a config change loosen a safety setting. A safety setting may only be loosened by a person at a
- * terminal who typed a challenge (see LooseningConsent); tightening never needs consent.
+ * One loosened setting, with the values the classifier compared.
+ *
+ * The values are the ones it judged, not the raw fields: an inbox that inherits a looser default reports the policy
+ * it inherits, and a new inbox reports the default it was measured against. A preview built from anything else could
+ * show a person one change while the classifier judged another.
  */
-export function classifyChange(before: Config, after: Config): { loosened: string[] } {
-  const loosened: string[] = [];
+export interface Loosening {
+  /** As `ConfigStore.update` names it in a refusal: `accounts.rgc/slack.mode`, `defaults.sendPolicy`. */
+  readonly path: string;
+  readonly before: SettingValue;
+  readonly after: SettingValue;
+  /**
+   * The inbox or account measured on the before side, by id. Absent for one new in this change and for a setting
+   * that belongs to the whole configuration. Carried so that an approval of this loosening cannot be spent on a
+   * different account that took the same name in the meantime.
+   */
+  readonly id?: string | undefined;
+}
+
+/**
+ * Which paths of a config change loosen a safety setting, and what each moved between. A safety setting may only be
+ * loosened with a person's consent (see LooseningConsent); tightening never needs it.
+ */
+export function classifyChange(before: Config, after: Config): { loosened: string[]; changes: Loosening[] } {
+  const changes: Loosening[] = [];
+  const loosen = (path: string, was: SettingValue | undefined, now: SettingValue | undefined, id?: string): void => {
+    // `null` rather than `undefined` for a value that is not set, so the value survives being written to disk and
+    // read back as the same thing — an approval is bound to it.
+    changes.push({ path, before: was ?? null, after: now ?? null, ...(id === undefined ? {} : { id }) });
+  };
   for (const [alias, inbox] of Object.entries(after.inboxes)) {
     const previous = Object.values(before.inboxes).find((i) => i.id === inbox.id);
     // A newly added inbox is measured against the policy in force before it existed: adding one that may send more
     // freely than the default is the same loosening as relaxing an existing one, and needs the same consent.
     const was = previous ? (previous.sendPolicy ?? before.defaults.sendPolicy) : before.defaults.sendPolicy;
     const now = inbox.sendPolicy ?? after.defaults.sendPolicy;
-    if (POLICY_RANK[now] < POLICY_RANK[was]) loosened.push(`inboxes.${alias}.sendPolicy`);
+    if (POLICY_RANK[now] < POLICY_RANK[was]) loosen(`inboxes.${alias}.sendPolicy`, was, now, previous?.id);
+    // The change policy is a safety setting like the send policy, measured the same way: a new inbox against the
+    // default in force before it existed, so adding one that approves its own changes in chat under a `confirm`
+    // default is the loosening it would be for an existing one.
+    const wasChange = previous?.changePolicy ?? defaultChangePolicy(before);
+    const nowChange = inbox.changePolicy ?? defaultChangePolicy(after);
+    if (POLICY_RANK[nowChange] < POLICY_RANK[wasChange]) {
+      loosen(`inboxes.${alias}.changePolicy`, wasChange, nowChange, previous?.id);
+    }
     // For a new inbox, its own domain is part of what it is; any *other* domain declared internal is a claim about
     // who to trust, and needs the same consent as widening an existing inbox's list.
     const ownDomain = inbox.email.slice(inbox.email.lastIndexOf('@') + 1).toLowerCase();
     const domainsBefore = previous ? previous.internalDomains : [ownDomain];
     if (inbox.internalDomains.some((domain) => !domainsBefore.includes(domain))) {
-      loosened.push(`inboxes.${alias}.internalDomains`);
+      loosen(`inboxes.${alias}.internalDomains`, domainsBefore, inbox.internalDomains, previous?.id);
     }
   }
   // The same rule for non-mail accounts. Without this loop, moving `accounts.acme.sendPolicy` from `never` to
@@ -1006,7 +1104,13 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
       Object.values(before.accounts).find((existing) => existing.id === account.id) ?? sameAccountUnder(alias);
     const was = previous ? (previous.sendPolicy ?? before.defaults.sendPolicy) : before.defaults.sendPolicy;
     const now = account.sendPolicy ?? after.defaults.sendPolicy;
-    if (POLICY_RANK[now] < POLICY_RANK[was]) loosened.push(`accounts.${alias}.sendPolicy`);
+    if (POLICY_RANK[now] < POLICY_RANK[was]) loosen(`accounts.${alias}.sendPolicy`, was, now, previous?.id);
+    // Found the same way as the send policy, across a reauth's new id, for the same reason.
+    const wasChange = previous?.changePolicy ?? defaultChangePolicy(before);
+    const nowChange = account.changePolicy ?? defaultChangePolicy(after);
+    if (POLICY_RANK[nowChange] < POLICY_RANK[wasChange]) {
+      loosen(`accounts.${alias}.changePolicy`, wasChange, nowChange, previous?.id);
+    }
 
     /*
      * `mode` is a claim about what the stored credential can do at all, and widening it is a different kind of
@@ -1027,8 +1131,9 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
      * consent. Measured against nothing, a new account's floor is `read`.
      */
     const wasMode = previous ? (previous.mode ?? previous.tier) : 'read';
-    if (wasMode === 'read' && (account.mode ?? account.tier) === 'send') {
-      loosened.push(`accounts.${alias}.mode`);
+    const nowMode = account.mode ?? account.tier;
+    if (wasMode === 'read' && nowMode === 'send') {
+      loosen(`accounts.${alias}.mode`, wasMode, nowMode, previous?.id);
     }
   }
 
@@ -1036,18 +1141,27 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   const a = after.defaults;
   // Checked directly as well: with no inboxes (yet), the loop above sees nothing, and the next inbox added would
   // inherit the looser default without anyone having been asked.
-  if (POLICY_RANK[a.sendPolicy] < POLICY_RANK[b.sendPolicy]) loosened.push('defaults.sendPolicy');
-  if (b.riskEscalation && !a.riskEscalation) loosened.push('defaults.riskEscalation');
+  if (POLICY_RANK[a.sendPolicy] < POLICY_RANK[b.sendPolicy]) loosen('defaults.sendPolicy', b.sendPolicy, a.sendPolicy);
+  // The same for the change policy — and this one governs itself: moving it off `confirm` is approved under
+  // `confirm`, because the policy in force before a change is the one that decides how it is approved.
+  if (POLICY_RANK[defaultChangePolicy(after)] < POLICY_RANK[defaultChangePolicy(before)]) {
+    loosen('defaults.changePolicy', defaultChangePolicy(before), defaultChangePolicy(after));
+  }
+  if (b.riskEscalation && !a.riskEscalation) loosen('defaults.riskEscalation', b.riskEscalation, a.riskEscalation);
   if (a.sendCaps.perHour > b.sendCaps.perHour || a.sendCaps.perDay > b.sendCaps.perDay)
-    loosened.push('defaults.sendCaps');
+    loosen('defaults.sendCaps', b.sendCaps, a.sendCaps);
   // Paths are compared by what they resolve to: a path written with `~` and the same path written in full are the
   // same place, and comparing them as strings would either ask for consent that is not needed or miss a change
   // that is.
   const roots = (list: readonly string[]) => new Set(list.map(normalisePath));
   const before_roots = roots(b.attachRoots);
   const after_deny = roots(a.attachDeny);
-  if ([...roots(a.attachRoots)].some((root) => !before_roots.has(root))) loosened.push('defaults.attachRoots');
-  if ([...roots(b.attachDeny)].some((deny) => !after_deny.has(deny))) loosened.push('defaults.attachDeny');
+  if ([...roots(a.attachRoots)].some((root) => !before_roots.has(root))) {
+    loosen('defaults.attachRoots', b.attachRoots, a.attachRoots);
+  }
+  if ([...roots(b.attachDeny)].some((deny) => !after_deny.has(deny))) {
+    loosen('defaults.attachDeny', b.attachDeny, a.attachDeny);
+  }
   // Moving where files from strangers land is a safety change — unless the new place is inside the old one, which
   // narrows rather than widens it.
   // Unset is not "anywhere": it means the built-in downloads directory under our own state, which is the narrowest
@@ -1060,29 +1174,63 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
     downloadsAfter !== downloadsBefore &&
     !isInsideDirectory(downloadsAfter, downloadsBefore)
   ) {
-    loosened.push('defaults.downloadsDir');
+    loosen('defaults.downloadsDir', b.downloadsDir, a.downloadsDir);
   }
   if (a.confirm.elicitationClients.some((c) => !b.confirm.elicitationClients.includes(c))) {
-    loosened.push('defaults.confirm.elicitationClients');
+    loosen('defaults.confirm.elicitationClients', b.confirm.elicitationClients, a.confirm.elicitationClients);
   }
   // Moving away from a recorded keychain is a downgrade, whether it names another store or erases the record so the
   // next write can name one. Choosing a store on a configuration that has never held a secret is not a downgrade —
   // it is setup, and on a machine with no keychain (a server, a container) files are the only thing that works.
-  if (before.secrets?.store === 'keychain' && after.secrets?.store !== 'keychain') loosened.push('secrets.store');
+  if (before.secrets?.store === 'keychain' && after.secrets?.store !== 'keychain') {
+    loosen('secrets.store', before.secrets.store, after.secrets?.store);
+  }
   // And the unrecorded case, which is the same downgrade wearing a different shape: with no `secrets` block the
   // effective store is the keychain (`secretsStoreOf`), so if this configuration already holds secret references,
   // naming `file` for the first time moves real secrets out of the keychain. Only a configuration with nothing
   // stored yet is setup.
   if (before.secrets === undefined && after.secrets !== undefined && after.secrets.store !== 'keychain') {
-    if (holdsSecrets(before)) loosened.push('secrets.store');
+    if (holdsSecrets(before)) loosen('secrets.store', secretsStoreOf(before), after.secrets.store);
   }
-  return { loosened };
+  return { loosened: changes.map((change) => change.path), changes };
 }
 
-/** Proof, produced by the CLI after a person at a terminal typed a challenge, that exactly these paths may loosen. */
+/**
+ * Proof that exactly these paths may loosen: produced by a CLI after a person at a terminal typed a challenge, or by
+ * `claimChange` from a change approval a person gave.
+ */
 export interface LooseningConsent {
   kind: 'loosening-consent';
   paths: readonly string[];
+  /**
+   * What each path was approved to move between, when the consent came from a change approval.
+   *
+   * A terminal challenge is answered moments before the write it permits, so the paths are enough. An approval is
+   * prepared first and applied later — after a sign-in, possibly minutes later — and in between the configuration
+   * can move underneath it: the same path, loosened from a different value, or on a different account that took
+   * the name. With these, `ConfigStore.update` refuses any loosening that is not exactly one of them.
+   */
+  changes?: readonly Loosening[] | undefined;
+}
+
+/**
+ * A loosening in canonical form: the four fields and nothing else, an unset value as `null`.
+ *
+ * Only these fields, because a loosening read back from an approval on disk is whatever the file says, and a stray
+ * key in it must neither make two identical changes differ nor let two different ones agree.
+ */
+export function canonicalLoosening(loosening: Loosening): string {
+  return canonicalJson({
+    path: loosening.path,
+    before: loosening.before ?? null,
+    after: loosening.after ?? null,
+    id: loosening.id ?? null,
+  });
+}
+
+/** Whether two loosenings are the same one: the same path, between the same values, on the same account. */
+export function sameLoosening(a: Loosening, b: Loosening): boolean {
+  return canonicalLoosening(a) === canonicalLoosening(b);
 }
 
 /** Finds an inbox by its immutable id. */

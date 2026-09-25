@@ -1,7 +1,7 @@
 import { open, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { SendPolicy } from './config.ts';
-import { normaliseAddress } from './digest.ts';
+import { type ChangePolicy, canonicalLoosening, type Loosening, type SendPolicy, sameLoosening } from './config.ts';
+import { canonicalJson, normaliseAddress, sha256Hex } from './digest.ts';
 import { CommsError, type ErrorCode } from './errors.ts';
 import { ensurePrivateDir, writeFileAtomic } from './fs.ts';
 import { APPROVAL_ID_PATTERN, challengeMatches, hashChallenge, newApprovalId, newChallenge } from './ids.ts';
@@ -17,10 +17,96 @@ import { withFileLock } from './lock.ts';
  *
  * Every transition is a compare-and-swap under a per-record lock. Single use does not rest on the lock alone: a claim
  * also creates `<id>.claim` with O_EXCL, which the file system guarantees only one process can do.
+ *
+ * A change approval (`kind: 'change'`) lives in the same store and goes through the same states, except that its
+ * claim goes straight to `used`: what it permits is a write to the configuration, which the claimant makes itself.
  */
 
 export type ApprovalState = 'pending' | 'approved' | 'sending' | 'used' | 'failed' | 'unknown' | 'expired' | 'revoked';
 export type ApprovalChannel = 'elicitation' | 'terminal';
+
+/**
+ * What an approval permits: a send (a mail, a post, a reaction) or a change to the configuration.
+ *
+ * One store for both, so a change gets the machinery a send already has — expiry, single use, the typed code — and
+ * a kind on every record, so that neither can be spent as the other. Without it, a person who approved a post at a
+ * terminal would also have approved whatever change an agent claimed under the same id.
+ */
+export type ApprovalKind = 'send' | 'change';
+
+/** The inbox or account a change is about. `id` is absent when the change connects it, and it does not exist yet. */
+export interface ChangeTarget {
+  kind: 'inbox' | 'account';
+  name: string;
+  id?: string | undefined;
+}
+
+/**
+ * Exactly what a change approval permits, stored on the record so a terminal can show it again and prove it is what
+ * was prepared.
+ */
+export interface ChangeBinding {
+  /** The caller's one line about the change, shown to the person. Not part of the digest: the lines below are. */
+  summary: string;
+  /** What it is about, or `null` for a change to the whole configuration. */
+  target: ChangeTarget | null;
+  /** Every safety setting it loosens, with the values `classifyChange` compared. Empty for a destructive change. */
+  loosened: Loosening[];
+  /** What it does outside the configuration, in words: a sign-in, a registration, files removed. */
+  effects: string[];
+}
+
+/** The kind of a record. Absent is a send: every record written before changes had approvals. */
+export function approvalKind(record: Pick<ApprovalRecord, 'kind'>): ApprovalKind {
+  return record.kind ?? 'send';
+}
+
+/**
+ * The digest a change approval is bound to: its target, every loosened path with its before and after values, and its
+ * effects.
+ *
+ * The loosenings are sorted, because the classifier's order is an implementation detail and the same change must
+ * digest the same however it is listed. The effects are not: they are what the person read, in the order they read it.
+ */
+export function changeDigest(change: Pick<ChangeBinding, 'target' | 'loosened' | 'effects'>): string {
+  const target = change.target;
+  return sha256Hex(
+    canonicalJson({
+      kind: 'change',
+      target: target === null ? null : { kind: target.kind, name: target.name, id: target.id ?? null },
+      loosened: change.loosened.map(canonicalLoosening).sort(),
+      effects: [...change.effects],
+    }),
+  );
+}
+
+/**
+ * Why `now` is not the change that was approved, in a sentence — the first difference found.
+ *
+ * Only the words of a refusal. What refuses is the digest; this says to the person, or the agent, which part moved,
+ * because "prepare it again" with no reason reads as a fault rather than as the safety check it is.
+ */
+export function changeDrift(approved: ChangeBinding, now: ChangeBinding): string {
+  const target = ({ target: of }: ChangeBinding) =>
+    of === null ? null : canonicalJson({ kind: of.kind, name: of.name, id: of.id ?? null });
+  if (target(approved) !== target(now)) {
+    return approved.target !== null && now.target !== null && approved.target.name === now.target.name
+      ? `"${now.target.name}" is not the ${now.target.kind} it was when this was approved`
+      : 'it is about something other than what was approved';
+  }
+  const paths = (binding: ChangeBinding) =>
+    binding.loosened
+      .map((loosening) => loosening.path)
+      .sort()
+      .join('\n');
+  if (paths(approved) !== paths(now)) return 'it loosens different settings from the ones approved';
+  const moved = now.loosened.find((loosening) => !approved.loosened.some((ok) => sameLoosening(ok, loosening)));
+  if (moved) return `${moved.path} would not move between the values that were approved`;
+  if (canonicalJson(approved.effects) !== canonicalJson(now.effects)) {
+    return 'what it does outside the configuration is not what was approved';
+  }
+  return 'the change is not the one that was approved';
+}
 
 /** Bumped whenever the canonical form of a digest changes; a record prepared under another version is refused. */
 export const DIGEST_VERSION = 1;
@@ -34,7 +120,10 @@ export interface Expectation {
 
 export interface ApprovalRecord {
   approvalId: string;
+  /** Absent on a send, so a send's record is byte for byte what it was before change approvals existed. */
+  kind?: ApprovalKind | undefined;
   digestVersion: number;
+  /** For a change: the id of the inbox or account it is about, or empty for one to the whole configuration. */
   inboxId: string;
   inboxSub?: string | undefined;
   draftId: string;
@@ -59,6 +148,8 @@ export interface ApprovalRecord {
   updatedAt: string;
   sentMessageId?: string | undefined;
   reason?: string | undefined;
+  /** For a change: exactly what it permits. `digest` is `changeDigest` of this. */
+  change?: ChangeBinding | undefined;
 }
 
 export interface CreateApprovalInput {
@@ -71,6 +162,18 @@ export interface CreateApprovalInput {
   requiredPolicy: SendPolicy;
   riskFlags: string[];
   expect: Expectation;
+}
+
+export interface CreateChangeApprovalInput {
+  change: ChangeBinding;
+  /** The change policy in force before the change: it decides how the change is approved. */
+  policy: ChangePolicy;
+}
+
+/** What a claimant of a change is about to write, and the change policy in force as it does. */
+export interface LiveChange {
+  change: ChangeBinding;
+  policy: ChangePolicy;
 }
 
 /** What the caller observed in the live draft at the moment of a transition. */
@@ -108,6 +211,19 @@ function refuse(code: ErrorCode, reason: string, record?: ApprovalRecord, hint?:
     hint: hint ?? 'Prepare the send again and show the new preview to the user.',
     details: record ? { approvalId: record.approvalId, state: record.state } : {},
   });
+}
+
+/** The same refusal for a change, which sends nothing and so must not say that it did not. */
+function refuseChange(code: ErrorCode, reason: string, record?: ApprovalRecord, hint?: string): CommsError {
+  return new CommsError(code, `nothing was changed: ${reason}`, {
+    hint: hint ?? 'Prepare the change again and show the new preview to the user.',
+    details: record ? { approvalId: record.approvalId, state: record.state } : {},
+  });
+}
+
+/** The refusal in the words of the record's own kind. */
+function refusalFor(record: ApprovalRecord): typeof refuse {
+  return approvalKind(record) === 'change' ? refuseChange : refuse;
 }
 
 /** The record as it may be shown to anyone, agents included: never the challenge hash. */
@@ -214,7 +330,7 @@ export class ApprovalStore {
       const current = this.#derive(stored);
       if (current.state !== stored.state) await this.#write({ ...current, updatedAt: this.#now().toISOString() });
       if (current.digestVersion !== DIGEST_VERSION) {
-        throw refuse(
+        throw refusalFor(current)(
           'APPROVAL_VOID',
           'the approval was prepared by a different version of agent-communications',
           current,
@@ -227,18 +343,44 @@ export class ApprovalStore {
   }
 
   #stateError(record: ApprovalRecord): CommsError {
+    const refusal = refusalFor(record);
     if (record.state === 'expired')
-      return refuse('APPROVAL_EXPIRED', 'the approval expired before it was used', record);
+      return refusal('APPROVAL_EXPIRED', 'the approval expired before it was used', record);
     if (record.state === 'revoked') {
-      return refuse('APPROVAL_VOID', `the approval was voided (${record.reason ?? 'revoked'})`, record);
+      return refusal('APPROVAL_VOID', `the approval was voided (${record.reason ?? 'revoked'})`, record);
     }
-    return refuse('APPROVAL_REQUIRED', `the approval is ${record.state}`, record);
+    return refusal('APPROVAL_REQUIRED', `the approval is ${record.state}`, record);
+  }
+
+  /**
+   * Refuses a record of the other kind, writing nothing to it.
+   *
+   * Nothing written, because the caller made a mistake about an approval that may be perfectly good: voiding a post
+   * somebody is about to approve, because an agent passed its id to a change, would punish the wrong party.
+   */
+  #requireKind(record: ApprovalRecord, kind: ApprovalKind): void {
+    if (approvalKind(record) === kind) return;
+    const id = record.approvalId;
+    throw kind === 'send'
+      ? refuse(
+          'USAGE',
+          `approval ${id} is for a configuration change, not a send`,
+          record,
+          `A person approves it with \`agentcomms approve ${id}\`, and it permits only the change it was prepared for.`,
+        )
+      : refuseChange(
+          'USAGE',
+          `approval ${id} is for a send, not a configuration change`,
+          record,
+          'It is approved with the command that prepared it — `agent-gmail approve` or `agent-slack approve` — and permits only that send.',
+        );
   }
 
   /** Issues a new challenge to show a human; only its hash is kept. */
-  async issueChallenge(approvalId: string): Promise<string> {
+  async issueChallenge(approvalId: string, kind: ApprovalKind = 'send'): Promise<string> {
     const challenge = newChallenge();
     await this.#transition(approvalId, (current) => {
+      this.#requireKind(current, kind);
       if (current.state !== 'pending') throw this.#stateError(current);
       return { ...current, challengeHash: hashChallenge(challenge) };
     });
@@ -249,15 +391,29 @@ export class ApprovalStore {
    * A human approved through a confirm channel by typing the issued challenge. The draft must still be exactly what the
    * record was prepared for; otherwise the record is voided, because the human would be approving content the record
    * does not describe. Three wrong answers void it too.
+   *
+   * A change is approved the same way, with `kind: 'change'` and its digest standing in for the draft (see
+   * `createChange`), so a person's typed code means one thing whichever kind of approval it is typed for.
    */
-  async approve(approvalId: string, via: ApprovalChannel, live: LiveDraft, answer: string): Promise<ApprovalRecord> {
+  async approve(
+    approvalId: string,
+    via: ApprovalChannel,
+    live: LiveDraft,
+    answer: string,
+    kind: ApprovalKind = 'send',
+  ): Promise<ApprovalRecord> {
     let failure: Failure | null = null;
     const result = await this.#transition(approvalId, (current) => {
+      this.#requireKind(current, kind);
       if (current.state !== 'pending') throw this.#stateError(current);
       if (!current.challengeHash)
-        throw refuse('APPROVAL_REQUIRED', 'no challenge was issued for this approval', current);
+        throw refusalFor(current)('APPROVAL_REQUIRED', 'no challenge was issued for this approval', current);
       if (live.draftMessageId !== current.draftMessageId || live.digest !== current.digest) {
-        failure = { code: 'APPROVAL_VOID', reason: 'the draft changed after the preview was prepared' };
+        const reason =
+          kind === 'change'
+            ? 'the change shown is not the one the approval was prepared for'
+            : 'the draft changed after the preview was prepared';
+        failure = { code: 'APPROVAL_VOID', reason };
         return { ...current, state: 'revoked', reason: failure.reason };
       }
       if (!challengeMatches(answer, current.challengeHash)) {
@@ -272,7 +428,7 @@ export class ApprovalStore {
       return { ...current, state: 'approved', approvedDigest: live.digest, approvedVia: via, challengeHash: undefined };
     });
     const failed = failure as Failure | null;
-    if (failed) throw refuse(failed.code, failed.reason, result);
+    if (failed) throw refusalFor(result)(failed.code, failed.reason, result);
     return result;
   }
 
@@ -288,6 +444,9 @@ export class ApprovalStore {
   ): Promise<ApprovalRecord> {
     let failure: Failure | null = null;
     const result = await this.#transition(approvalId, (current) => {
+      // Before anything else: a change approval names an account in the same field, and a send claimed against it
+      // would otherwise be judged — and voided — as a send that went wrong.
+      this.#requireKind(current, 'send');
       if (current.state !== 'pending' && current.state !== 'approved') throw this.#stateError(current);
       const voidWith = (code: ErrorCode, reason: string): ApprovalRecord => {
         failure = { code, reason };
@@ -344,18 +503,113 @@ export class ApprovalStore {
     });
     const failed = failure as Failure | null;
     if (failed) throw refuse(failed.code, failed.reason, result);
-    // The file system's O_EXCL is the single-use guarantee, independent of the lock.
+    await this.#markClaimed(result);
+    return result;
+  }
+
+  /** The file system's O_EXCL is the single-use guarantee, independent of the lock. */
+  async #markClaimed(record: ApprovalRecord): Promise<void> {
     await ensurePrivateDir(this.directory);
     try {
-      const marker = await open(this.#path(approvalId, '.claim'), 'wx', 0o600);
+      const marker = await open(this.#path(record.approvalId, '.claim'), 'wx', 0o600);
       await marker.writeFile(JSON.stringify({ pid: process.pid, at: this.#now().toISOString() }));
       await marker.close();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-        throw refuse('APPROVAL_VOID', 'this approval was already claimed by another process', result);
+        throw refusalFor(record)('APPROVAL_VOID', 'this approval was already claimed by another process', record);
       }
       throw error;
     }
+  }
+
+  /**
+   * A change approval, pending, bound to `changeDigest(input.change)`.
+   *
+   * The digest is computed here, never taken from the caller, so a record cannot claim to be bound to one change while
+   * describing another. It stands in for the draft revision too, as a reaction's does: a change has no draft, and the
+   * same value means the same change.
+   */
+  async createChange(input: CreateChangeApprovalInput): Promise<ApprovalRecord> {
+    const now = this.#now();
+    const change: ChangeBinding = {
+      summary: input.change.summary,
+      target: input.change.target === null ? null : { ...input.change.target },
+      loosened: input.change.loosened.map((loosening) => ({ ...loosening })),
+      effects: [...input.change.effects],
+    };
+    const digest = changeDigest(change);
+    const record: ApprovalRecord = {
+      approvalId: newApprovalId(),
+      kind: 'change',
+      digestVersion: DIGEST_VERSION,
+      inboxId: change.target?.id ?? '',
+      draftId: 'change',
+      draftMessageId: digest,
+      digest,
+      policy: input.policy,
+      requiredPolicy: input.policy,
+      riskFlags: [],
+      // Not an expectation of recipients — a change has none — but it is the field every listing already shows.
+      expect: { to: [], cc: [], bcc: [], subject: change.summary },
+      challengeAttempts: 0,
+      state: 'pending',
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + this.#ttlMs).toISOString(),
+      updatedAt: now.toISOString(),
+      change,
+    };
+    await this.#write(record);
+    return record;
+  }
+
+  /**
+   * Claims a change approval, once, for the change the caller is about to write.
+   *
+   * `live.change` is the change as the caller computes it now, and it has to digest to what was prepared: a different
+   * path, a different value, a different account or a different effect voids the approval, because the person agreed
+   * to something else. `live.policy` is the change policy in force now, and the stricter of it and the one at prepare
+   * decides — so tightening the policy after an agent prepared a change takes effect on that change, and loosening it
+   * does not release one prepared under `confirm`.
+   *
+   * Under `chat` a pending approval is claimable: the yes was given in the conversation. Anything stricter needs a
+   * person to have typed the code at a terminal first; until then the refusal leaves the record as it is.
+   */
+  async claimForChange(approvalId: string, live: LiveChange, options: ClaimOptions = {}): Promise<ApprovalRecord> {
+    const digest = changeDigest(live.change);
+    let failure: Failure | null = null;
+    const result = await this.#transition(approvalId, (current) => {
+      this.#requireKind(current, 'change');
+      if (current.state !== 'pending' && current.state !== 'approved') throw this.#stateError(current);
+      const voidWith = (reason: string): ApprovalRecord => {
+        failure = { code: 'APPROVAL_VOID', reason };
+        return { ...current, state: 'revoked', reason };
+      };
+      if (digest !== current.digest) {
+        return voidWith(
+          current.change ? changeDrift(current.change, live.change) : 'the change is not the one that was approved',
+        );
+      }
+      if (stricterPolicy(live.policy, current.requiredPolicy) !== 'chat') {
+        if (current.state !== 'approved') {
+          throw refuseChange(
+            'APPROVAL_PENDING',
+            'this change needs a person to approve it at a terminal first',
+            current,
+            options.pendingHint ??
+              `Ask the user to run \`agentcomms approve ${approvalId}\` in their own terminal, then try again with the same approval.`,
+          );
+        }
+        // `confirm` means a person at a terminal. An approval given any other way — a form in a client window, which
+        // is how a send may be approved — is not what the policy asked for.
+        if (current.approvedVia !== 'terminal') {
+          return voidWith('the change policy is confirm, and this was not approved at a terminal');
+        }
+      }
+      return { ...current, state: 'used' };
+    });
+    const failed = failure as Failure | null;
+    if (failed) throw refuseChange(failed.code, failed.reason, result);
+    await this.#markClaimed(result);
     return result;
   }
 

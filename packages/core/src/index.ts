@@ -1,6 +1,7 @@
 export * from './addresses.ts';
 export * from './approvals.ts';
 export * from './audit.ts';
+export * from './changes.ts';
 export * from './chars.ts';
 export * from './cli-runtime.ts';
 export * from './compose-profile.ts';

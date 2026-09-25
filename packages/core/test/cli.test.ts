@@ -798,3 +798,47 @@ test('requirePerson refuses an agent before it asks about a terminal, and names 
     return true;
   });
 });
+
+test('approve is refused to an agent and to anything without a terminal, touches nothing, and says so in the audit', async () => {
+  const { openCore } = await import('../src/core.ts');
+  const { prepareChange } = await import('../src/changes.ts');
+  const config = tempDir();
+  const core = openCore({ env: { AGENT_COMMS_CONFIG_DIR: config, HOME: config } });
+  const before = await core.config.load();
+  const after = structuredClone(before);
+  after.defaults.riskEscalation = false;
+  const { approvalId } = await prepareChange(
+    core,
+    { before, after, summary: 'Stop raising risky sends' },
+    { surface: 'mcp' },
+  );
+
+  const agent = run(['approve', approvalId, '--json'], { AGENT_COMMS_CONFIG_DIR: config, CLAUDECODE: '1' });
+  assert.equal(agent.status, 10, agent.stderr);
+  const refusal = JSON.parse(agent.stdout).error;
+  assert.equal(refusal.code, 'LOOSENING_REFUSED');
+  assert.equal(refusal.message, 'only a person can approve a change, not an agent');
+  assert.equal(refusal.hint, `Ask the user to run \`agentcomms approve ${approvalId}\` in their own terminal.`);
+
+  const piped = run(['approve', approvalId], { AGENT_COMMS_CONFIG_DIR: config });
+  assert.equal(piped.status, 10, piped.stderr);
+  assert.match(piped.stderr, /approving a change needs an interactive terminal/);
+  assert.match(piped.stderr, new RegExp(`Run \`agentcomms approve ${approvalId}\` directly in a terminal`));
+
+  const record = await core.approvals.get(approvalId);
+  assert.equal(record?.state, 'pending');
+  assert.equal(record?.challengeHash, undefined, 'no code was issued to either');
+  const refused = (await core.audit.tail()).filter((line) => line.operation === 'change.approve');
+  assert.deepEqual(
+    refused.map((line) => [line.outcome, line.surface, line.policy, line.approvalId]),
+    [
+      ['refused', 'cli', 'chat', approvalId],
+      ['refused', 'cli', 'chat', approvalId],
+    ],
+  );
+  assert.match(refused[0]?.reason ?? '', /not an agent/);
+
+  const noId = run(['approve', '--json'], { AGENT_COMMS_CONFIG_DIR: config });
+  assert.equal(noId.status, 64);
+  assert.match(run(['--help']).stdout, /agentcomms approve <approvalId>/);
+});

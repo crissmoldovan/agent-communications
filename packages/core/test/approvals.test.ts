@@ -2,7 +2,14 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { type ApprovalRecord, ApprovalStore, type Expectation, publicView } from '../src/approvals.ts';
+import {
+  type ApprovalRecord,
+  ApprovalStore,
+  type ChangeBinding,
+  changeDigest,
+  type Expectation,
+  publicView,
+} from '../src/approvals.ts';
 import { CommsError } from '../src/errors.ts';
 import { APPROVAL_ID_PATTERN } from '../src/ids.ts';
 import { tempDir } from './helpers/temp.ts';
@@ -283,4 +290,83 @@ test('list filters by inbox and state; malformed ids are refused before touching
   );
   assert.equal((await store.list({ states: ['revoked'] })).length, 1);
   await assert.rejects(store.get('../../config'), (e: unknown) => e instanceof CommsError && e.code === 'USAGE');
+});
+
+/** A change approval in the same store: `acme/slack` widened from read to send. */
+const CHANGE: ChangeBinding = {
+  summary: 'Let acme/slack post',
+  target: { kind: 'account', name: 'acme/slack', id: 'acc_AAAAAAAAAAAAAAAA' },
+  loosened: [{ path: 'accounts.acme/slack.mode', before: 'read', after: 'send', id: 'acc_AAAAAAAAAAAAAAAA' }],
+  effects: ['signs in to Slack again'],
+};
+
+test('a change approval is never spent as a send, nor a send approval as a change — and trying harms neither', async () => {
+  const { store, record: send } = await setup();
+  const change = await store.createChange({ change: CHANGE, policy: 'chat' });
+  assert.equal(change.kind, 'change');
+  assert.equal(send.kind, undefined, 'a send record is written exactly as it was before changes had approvals');
+
+  const wrongKind = (pattern: RegExp) => (e: unknown) =>
+    e instanceof CommsError && e.code === 'USAGE' && pattern.test(e.message);
+  const asSend = /nothing was sent: approval ap_\w+ is for a configuration change, not a send/;
+  const asChange = /nothing was changed: approval ap_\w+ is for a send, not a configuration change/;
+
+  // Every door a send uses refuses a change's approval: the challenge, the typed approval and the claim.
+  await assert.rejects(store.issueChallenge(change.approvalId), wrongKind(asSend), 'issueChallenge');
+  await assert.rejects(store.approve(change.approvalId, 'terminal', LIVE_DRAFT, 'ABCD'), wrongKind(asSend), 'approve');
+  await assert.rejects(store.claimForSend(change.approvalId, live()), wrongKind(asSend), 'claimForSend');
+  // And the doors a change uses refuse a send's.
+  await assert.rejects(store.issueChallenge(send.approvalId, 'change'), wrongKind(asChange), 'issueChallenge change');
+  await assert.rejects(
+    store.approve(send.approvalId, 'terminal', LIVE_DRAFT, 'ABCD', 'change'),
+    wrongKind(asChange),
+    'approve change',
+  );
+  await assert.rejects(
+    store.claimForChange(send.approvalId, { change: CHANGE, policy: 'chat' }),
+    wrongKind(asChange),
+    'claimForChange',
+  );
+
+  // Neither was voided or consumed by the attempts: each still works for what it is.
+  assert.equal((await store.get(send.approvalId))?.state, 'pending');
+  assert.equal((await store.get(change.approvalId))?.state, 'pending');
+  assert.equal((await store.claimForSend(send.approvalId, live())).state, 'sending');
+  assert.equal((await store.claimForChange(change.approvalId, { change: CHANGE, policy: 'chat' })).state, 'used');
+});
+
+test('a change approval is claimed once, even if its record file were reset', async () => {
+  const { store } = await setup();
+  const change = await store.createChange({ change: CHANGE, policy: 'chat' });
+  const claim = () => store.claimForChange(change.approvalId, { change: CHANGE, policy: 'chat' });
+  assert.equal((await claim()).state, 'used');
+  await assert.rejects(
+    claim(),
+    (e: unknown) => e instanceof CommsError && /nothing was changed: the approval is used/.test(e.message),
+  );
+  const path = join(store.directory, `${change.approvalId}.json`);
+  writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, 'utf8')), state: 'pending' }));
+  await assert.rejects(claim(), isRefusal(/nothing was changed: this approval was already claimed/, 'APPROVAL_VOID'));
+});
+
+test('a change approval is bound to a digest the store computes, of the change it stores', async () => {
+  const { store } = await setup();
+  const change = await store.createChange({ change: CHANGE, policy: 'confirm' });
+  assert.equal(change.digest, changeDigest(CHANGE));
+  assert.equal(change.draftMessageId, change.digest, 'the digest stands in for a draft revision, as a reaction’s does');
+  assert.equal(change.inboxId, 'acc_AAAAAAAAAAAAAAAA');
+  assert.equal(change.requiredPolicy, 'confirm');
+  // The order the classifier lists loosenings in does not matter; the values, the account and the effects do.
+  const two = {
+    ...CHANGE,
+    loosened: [...CHANGE.loosened, { path: 'defaults.sendPolicy', before: 'confirm', after: 'chat' }],
+  };
+  assert.equal(changeDigest(two), changeDigest({ ...two, loosened: [...two.loosened].reverse() }));
+  assert.notEqual(changeDigest(CHANGE), changeDigest({ ...CHANGE, effects: [] }));
+  assert.notEqual(
+    changeDigest(CHANGE),
+    changeDigest({ ...CHANGE, target: { kind: 'account', name: 'acme/slack', id: 'acc_BBBBBBBBBBBBBBBB' } }),
+  );
+  const reworded: ChangeBinding = { ...CHANGE, summary: 'worded differently' };
+  assert.equal(changeDigest(CHANGE), changeDigest(reworded), 'the summary is not bound');
 });

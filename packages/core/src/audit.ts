@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { SendPolicy } from './config.ts';
 import { appendPrivateLine } from './fs.ts';
 
 /**
@@ -26,6 +27,12 @@ export interface AuditRecord {
   approvalId?: string;
   reason?: string;
   surface?: 'cli' | 'mcp';
+  /**
+   * The policy that decided how this was approved. Written by change approvals, where it is the whole question
+   * afterwards: a loosening a person typed a code for and one an agent claimed after a yes in chat look the same in
+   * the configuration, and only this line tells them apart.
+   */
+  policy?: SendPolicy;
 }
 
 /** Large id lists are condensed so every audit line stays small enough to be appended atomically. */

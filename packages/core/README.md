@@ -14,6 +14,7 @@ npx @agentcomms/core paths      # where config, state and downloads live
 npx @agentcomms/core doctor     # Node version, directory permissions, secret store
 npx @agentcomms/core audit tail # every mailbox write and Slack prepare or post, newest last (no bodies, no secrets)
 npx @agentcomms/core approvals list
+npx @agentcomms/core approve <id>  # approve a settings change an agent prepared: read it, type the code it shows
 ```
 
 Every command takes `--json` and prints `{ "ok": true, "schemaVersion": 1, "data": … }` or
