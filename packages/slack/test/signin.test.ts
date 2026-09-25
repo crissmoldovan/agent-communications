@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
-import { after, test } from 'node:test';
+import { afterEach, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { CommsError, classifyChange, parseConfig, type SecretStore } from '@agentcomms/core';
 import { newFlowId, type SlackFlow } from '../src/auth/flow.ts';
@@ -16,6 +16,7 @@ import {
   startSignIn,
 } from '../src/operations/signin.ts';
 import { newHarness, TEST_CLIENT_ID, tempDir } from './support/harness.ts';
+import { running, stopListeners } from './support/listener.ts';
 
 /*
  * The listener entry, in the layout that breaks it.
@@ -26,15 +27,15 @@ import { newHarness, TEST_CLIENT_ID, tempDir } from './support/harness.ts';
  * resolution, then the thing the resolution is for, then the wiring that uses it.
  */
 
-const strays: number[] = [];
-after(() => {
-  for (const pid of strays) {
-    try {
-      process.kill(pid);
-    } catch {
-      // already gone
-    }
-  }
+/*
+ * Listeners a test started, stopped when that test ends rather than when the file does: a file the runner ends for
+ * overrunning its timeout never reaches a file-wide hook, and whatever was waiting for one stays up.
+ */
+let strays: number[] = [];
+afterEach(async () => {
+  const started = strays;
+  strays = [];
+  await stopListeners(started);
 });
 
 async function freePort(): Promise<number> {
@@ -130,6 +131,69 @@ test('a detached sign-in with no listener injected still starts: the wiring, not
   const flow = await context.flows.peek(started.flowId);
   assert.ok(flow?.listenerPid, 'the detached listener never reported itself');
   strays.push(flow.listenerPid as number);
+});
+
+test('a listener a test started goes when the test process does, however that process ended', async () => {
+  /*
+   * The runner ends a test file that overruns its timeout with SIGTERM, and no hook of the file's runs after that.
+   * Every listener the file had started then outlived it: detached, re-parented, holding its port for the ten
+   * minutes a sign-in lasts. Two were found that way after `cli.test.ts` timed out under load.
+   *
+   * So the process that starts the listener here is killed outright, with no chance to clean anything up, and the
+   * listener has to notice by itself. SIGKILL rather than the runner's SIGTERM, because it leaves the test process
+   * nothing at all to do — which is the case the guard has to cover.
+   */
+  const specifier = (path: string) => JSON.stringify(new URL(path, import.meta.url).href);
+  const starter = `
+    import { newHarness, TEST_CLIENT_ID } from ${specifier('./support/harness.ts')};
+    import { LISTENER_COMMAND } from ${specifier('./support/listener.ts')};
+    import { SlackContext } from ${specifier('../src/context.ts')};
+    import { startSignIn } from ${specifier('../src/operations/signin.ts')};
+    const harness = await newHarness();
+    const context = new SlackContext({ core: harness.core, env: harness.env, exchange: (p) => harness.exchange(p) });
+    const started = await startSignIn(context, {
+      mode: 'read', alias: 'acme', clientId: TEST_CLIENT_ID, port: ${await freePort()}, listenerCommand: LISTENER_COMMAND,
+    });
+    process.stdout.write(String((await context.flows.peek(started.flowId))?.listenerPid) + '\\n');
+    setInterval(() => undefined, 60_000);
+  `;
+  /*
+   * Stands in for a test file's process: it starts the listener, then waits to be killed. Its stderr is piped, not
+   * inherited, so nothing it leaves running can hold this file's output open.
+   */
+  const testProcess = spawn(
+    process.execPath,
+    ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', '--input-type=module', '--eval', starter],
+    { stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let errors = '';
+  testProcess.stderr.on('data', (chunk) => {
+    errors += String(chunk);
+  });
+  let listener = 0;
+  try {
+    listener = await new Promise<number>((settle, reject) => {
+      let output = '';
+      testProcess.stdout.on('data', (chunk) => {
+        output += String(chunk);
+        if (output.includes('\n')) settle(Number(output.trim()));
+      });
+      testProcess.once('exit', (code) =>
+        reject(new Error(`the test process ended (exit ${code}) before its listener was up:\n${errors}`)),
+      );
+    });
+    assert.ok(Number.isInteger(listener) && listener > 0, `no listener pid came back: ${listener}`);
+    assert.ok(running(listener), 'the listener was not running while its test process was');
+
+    testProcess.kill('SIGKILL');
+    const deadline = Date.now() + 10_000;
+    while (running(listener) && Date.now() < deadline) await new Promise((settle) => setTimeout(settle, 100));
+    assert.equal(running(listener), false, 'the listener outlived the test process that started it');
+  } finally {
+    // A failure here must not become the leak it is reporting.
+    testProcess.kill('SIGKILL');
+    if (listener > 0) await stopListeners([listener]);
+  }
 });
 
 test('dropping the IPC channel survives the child having closed it first', () => {

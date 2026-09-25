@@ -3,14 +3,14 @@ import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import { after, test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { afterEach, test } from 'node:test';
 import { EXIT_CODES, withCredentialsLock } from '@agentcomms/core';
 import { parseBundle } from '../src/auth/bundle.ts';
 import { openFlowStore } from '../src/auth/flow.ts';
 import { run } from '../src/cli/program.ts';
 import { scopesForMode } from '../src/manifest.ts';
 import { type Harness, newHarness, slackOk, TEST_CLIENT_ID, tempDir } from './support/harness.ts';
+import { LISTENER_COMMAND, stopListeners } from './support/listener.ts';
 
 /**
  * The command, end to end.
@@ -19,8 +19,6 @@ import { type Harness, newHarness, slackOk, TEST_CLIENT_ID, tempDir } from './su
  * exactly the part a unit test of `readExchange` cannot see: that nothing is written when the grant is wrong, and
  * that what is written is what the grant said.
  */
-
-const CLI_ENTRY = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 
 interface Captured {
   code: number;
@@ -82,10 +80,7 @@ async function cli(
     openBrowser: () => undefined,
     probe: (input, init) => harness.probe(input, init),
     ...(options.read ? { read: options.read } : {}),
-    listenerCommand: {
-      command: process.execPath,
-      args: ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', CLI_ENTRY],
-    },
+    listenerCommand: LISTENER_COMMAND,
   });
   return { code, stdout, stderr, json: <T>() => JSON.parse(stdout) as T };
 }
@@ -107,21 +102,22 @@ async function freePort(): Promise<number> {
 }
 
 /**
- * A detached sign-in, with its listener registered for cleanup.
+ * A detached sign-in, with its listener stopped when the test that started it ends.
  *
  * `--start` leaves a real child process holding a real port for ten minutes, which is the whole point of it — and
  * means a test that starts one and never finishes it leaks a process and a port. One run left twelve behind
- * before this existed.
+ * before any cleanup existed.
+ *
+ * Stopped after each test, not once after the file. A file-wide `after` hook ran only if the file got that far:
+ * when the runner ended the file for overrunning its timeout, it never ran, and every listener the unfinished
+ * tests had left for it stayed up. Per test, a killed file strands at most the listener of the test it was in —
+ * and `LISTENER_COMMAND` ends that one once this process has gone.
  */
-const strays: number[] = [];
-after(() => {
-  for (const pid of strays) {
-    try {
-      process.kill(pid);
-    } catch {
-      // already gone, which is the normal case for a flow that was finished
-    }
-  }
+let strays: number[] = [];
+afterEach(async () => {
+  const started = strays;
+  strays = [];
+  await stopListeners(started);
 });
 
 async function startDetached(harness: Harness, argv: string[]): Promise<{ flowId: string; authUrl: string }> {
