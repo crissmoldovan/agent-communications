@@ -69,7 +69,7 @@ agent-gmail client [options] [command]
 
 ### `agent-gmail client add`
 
-register a Desktop OAuth client JSON downloaded from Google Cloud
+register a Desktop OAuth client JSON downloaded from Google Cloud (needs a change approval)
 
 ```
 agent-gmail client add [options] <path>
@@ -82,6 +82,7 @@ agent-gmail client add [options] <path>
 | `--move` | delete the downloaded file once the secret is stored | `false` |
 | `--replace` | rotate the secret of the client already registered under this name | `false` |
 | `--no-probe` | do not check the credentials with Google first | — |
+| `--approval <id>` | apply the change this approval was given for | — |
 
 ### `agent-gmail client list`
 
@@ -93,11 +94,15 @@ agent-gmail client list [options]
 
 ### `agent-gmail client remove`
 
-forget an OAuth client and its secret
+forget an OAuth client and delete its secret (needs a change approval)
 
 ```
 agent-gmail client remove [options] <name>
 ```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--approval <id>` | apply the change this approval was given for | — |
 
 ### `agent-gmail inbox`
 
@@ -132,7 +137,7 @@ agent-gmail inbox add [options] [alias]
 
 ### `agent-gmail inbox reauth`
 
-sign in again: renew the grant, or change how much access it has
+sign in again: renew the grant, or change how much access it has (more needs a change approval)
 
 ```
 agent-gmail inbox reauth [options] [alias]
@@ -152,6 +157,7 @@ agent-gmail inbox reauth [options] [alias]
 | `--finish <flowId>` | finish a sign-in started earlier | — |
 | `--url <url>` | the address the browser ended up at, pasted back | — |
 | `--wait <seconds>` | how long to wait for the browser | `60` |
+| `--approval <id>` | start the sign-in this approval was given for | — |
 
 ### `agent-gmail inbox list`
 
@@ -179,7 +185,7 @@ agent-gmail inbox rename [options] <from> <to>
 
 ### `agent-gmail inbox policy`
 
-how sending from this inbox must be approved
+how sending from this inbox, and loosening its settings, must be approved (looser needs approval)
 
 ```
 agent-gmail inbox policy [options] <alias>
@@ -187,11 +193,13 @@ agent-gmail inbox policy [options] <alias>
 
 | Option | What it does | Default |
 |---|---|---|
-| `--send <policy>` | chat \| confirm \| never | — |
+| `--send <policy>` | how a send is approved: chat \| confirm \| never | — |
+| `--change <policy>` | how a loosening of its settings is approved: chat \| confirm | — |
+| `--approval <id>` | apply the change this approval was given for | — |
 
 ### `agent-gmail inbox import`
 
-copy the mailboxes set up in another Gmail MCP server (default: @artymclabin/gmail-mcp)
+copy the mailboxes set up in another Gmail MCP server (default: @artymclabin/gmail-mcp; needs a change approval)
 
 ```
 agent-gmail inbox import [options] [source]
@@ -204,10 +212,11 @@ agent-gmail inbox import [options] [source]
 | `--store <store>` | where secrets are kept (first time only) (choices: "keychain", "file") | — |
 | `--dry-run` | say what would be imported, and change nothing | `false` |
 | `--rename <old=new>` | import one under another name (repeatable) | — |
+| `--approval <id>` | apply the import this approval was given for | — |
 
 ### `agent-gmail inbox remove`
 
-disconnect a mailbox
+disconnect a mailbox and delete its token (needs a change approval)
 
 ```
 agent-gmail inbox remove [options] <alias>
@@ -216,6 +225,7 @@ agent-gmail inbox remove [options] <alias>
 | Option | What it does | Default |
 |---|---|---|
 | `--revoke` | also ask Google to revoke the token (may affect other tools sharing the grant) | `false` |
+| `--approval <id>` | apply the removal this approval was given for | — |
 
 ### `agent-gmail search`
 
@@ -561,11 +571,15 @@ agent-gmail confirm-clients list [options]
 
 ### `agent-gmail confirm-clients add`
 
-trust a client that has just passed the probe
+trust a client that has just passed the probe (needs a change approval)
 
 ```
 agent-gmail confirm-clients add [options] <name>
 ```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--approval <id>` | apply the change this approval was given for | — |
 
 ### `agent-gmail confirm-clients remove`
 
@@ -738,6 +752,7 @@ agent-gmail setup [options]
 | `--move` | delete the downloaded client JSON once its secret is stored | `false` |
 | `--launcher <launcher>` | how the server is started (choices: "managed", "npx", "local") | — |
 | `--restart` | walk the Google Cloud steps again even if a client is registered | `false` |
+| `--approval <id>` | register the client this approval was given for | — |
 | `--no-tui` | plain one-line prompts instead of lists and fields | — |
 | `--no-browser` | print the links instead of opening them | — |
 

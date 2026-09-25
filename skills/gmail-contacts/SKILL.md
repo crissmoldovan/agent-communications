@@ -48,7 +48,7 @@ could have looked were switched off" are different answers, and only one of them
 | Ruling whether an address is a phish | `gmail-security`, and the send preview | Shows the candidates and says what is odd about them. Offers no verdict it cannot support. |
 | Who owes whom a reply | `gmail-follow-ups` | Reports `lastSeen` from the rows and stops; it is a date, not an obligation. |
 | What the person actually said | `gmail-search`, `gmail-thread-analysis` | Cites ids so the user can go and read. Does not paste bodies in to make a case. |
-| Granting address-book access | the user, at a terminal | Reports that a source was unavailable. Never claims a search was complete when it was not. |
+| Granting address-book access | the user, with `gmail-setup`: a change approval, then Google's consent screen | Reports that a source was unavailable. Never claims a search was complete when it was not. |
 
 ## Contract
 

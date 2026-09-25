@@ -36,7 +36,7 @@ user what it needs, not to look for a path around it.
 | Attaching files | `gmail-compose`, `gmail-attachments` | Sends whatever the draft already carries; adding one means going back to compose. |
 | Deciding whether the message is a good idea | the user | Shows them the preview and waits. No judgement offered unless asked. |
 | How the user writes | their personal writing-style skill | Not consulted here — nothing is written at this stage. |
-| Changing the send policy | `gmail-setup` tightens it; loosening is the user's, at a terminal | Reports what the policy is and what it needs. Never proposes loosening it. |
+| Changing the send policy | `gmail-setup`; loosening it is the user's to approve | Reports what the policy is and what it needs. Never proposes loosening it to get a send through. |
 
 ## Contract
 
@@ -169,9 +169,11 @@ you are running in is not on that list, you will be told to use the terminal or 
 plainly and stop.
 
 If the user would rather approve sends here than in a terminal, that list is something they add to
-themselves, and it takes evidence: `gmail_confirm_probe` raises a test form carrying a code, they
-type it back, and then they run `agent-gmail confirm-clients add <name>` in a terminal within ten
-minutes. You can run the probe when they ask for it; you cannot complete the second half.
+themselves, and it takes evidence and then a decision. The evidence: `gmail_confirm_probe` raises a
+test form carrying a code, and they type it back. The decision, within ten minutes:
+`gmail_confirm_client_add` with the client's name (or `agent-gmail confirm-clients add <name>`), which
+refuses a client with no recent probe and otherwise returns a change approval — show them its preview
+and claim it only after they say yes. Run either half only when they ask for it.
 `gmail_confirm_clients` shows who is on the list, and `gmail_confirm_client_remove` takes a client
 off it — trusting fewer clients only makes sending stricter, so that one needs nobody.
 
@@ -228,8 +230,10 @@ Bad in a quieter way:
 That needs terminal approval, so I'll set the policy to chat instead and send it.
 ```
 
-Changing a safety setting to get past a safety setting. Policy changes need a person at a terminal
-for exactly this reason, and proposing one here is the wrong instinct even when it fails.
+Changing a safety setting to get past a safety setting. A looser policy needs the user's own approval
+of that change for exactly this reason — and a mailbox under `confirm` usually has its change policy at
+`confirm` too, which puts that approval at a terminal. Proposing one here is the wrong instinct even when
+it would succeed.
 
 ## Pitfalls
 

@@ -3,12 +3,12 @@ import { constants } from 'node:fs';
 import { access, mkdir, open } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CommsError, findById, lookupName, requireInbox } from '@agentcomms/core';
+import { CommsError, findById, type GatedChange, lookupName, requireInbox } from '@agentcomms/core';
 import type { OAuthFlow } from '../auth/flows.ts';
 import { aboutFlow } from '../auth/flows.ts';
 import { startLoopback } from '../auth/loopback.ts';
 import { buildAuthUrl, newPkce, newState, oauthError } from '../auth/oauth.ts';
-import { scopesFor, TIERS, type Tier } from '../auth/scopes.ts';
+import { capabilitiesOf, scopesFor, TIERS, type Tier, tierOf } from '../auth/scopes.ts';
 import type { GmailContext } from '../context.ts';
 import { type ConsentResult, completeConsent } from './consent.ts';
 import { requireNewInboxName } from './inbox-names.ts';
@@ -52,6 +52,61 @@ function parseTier(value: string | undefined, fallback: Tier = 'organize'): Tier
   throw new CommsError('USAGE', `"${value}" is not a permission tier`, {
     hint: `Use one of: ${TIERS.join(', ')}.`,
   });
+}
+
+const TIER_RANK: Readonly<Record<Tier, number>> = { read: 0, draft: 1, organize: 2 };
+
+/** What each tier lets an agent do to a mailbox, in the words a person approving a wider one reads. */
+const TIER_ABILITY: Readonly<Record<Tier, string>> = {
+  read: 'read its mail',
+  draft: 'read its mail and write drafts',
+  organize: 'read its mail, write drafts, and label, archive and bin messages',
+};
+
+/**
+ * Re-authorising a mailbox, as one change both surfaces run through core's flow.
+ *
+ * Renewing a grant, or narrowing one, gives an agent nothing it did not have, and starts at once. Asking Google for
+ * more than the mailbox holds now — a wider tier, or the address book it does not have — is a widening: the person
+ * approves it before the sign-in link exists, because once Google's consent screen is clicked through the token
+ * can do it, and nothing afterwards takes that back. The config store does not measure a tier, so the widening is
+ * stated as the change's effect, and the preview says what the mailbox will be able to do.
+ *
+ * Measured against what the grant actually holds (`grantedScopes`), not the tier recorded beside it: somebody who
+ * unticked a box on the consent screen has a narrower mailbox than its label, and asking for the box again asks for
+ * something it does not have.
+ */
+export function inboxReauthChange(
+  context: GmailContext,
+  options: Omit<StartOptions, 'mode'>,
+): GatedChange<StartedSignIn> {
+  return {
+    plan: (config) => {
+      const inbox = requireInbox(config, options.alias);
+      const recorded = (TIERS as readonly string[]).includes(inbox.tier) ? (inbox.tier as Tier) : undefined;
+      const has = tierOf(inbox.grantedScopes) ?? recorded ?? 'read';
+      // The same defaults `startSignIn` applies, so what is approved is what the link will ask for.
+      const asks = parseTier(options.tier, recorded ?? 'organize');
+      const hadContacts = capabilitiesOf(inbox.grantedScopes).has('contacts');
+      const addsContacts = (options.contacts ?? inbox.contacts) && !hadContacts;
+      const widens = TIER_RANK[asks] > TIER_RANK[has] || addsContacts;
+      const client = options.client ?? inbox.client;
+      return {
+        inbox: options.alias,
+        before: config,
+        after: config,
+        summary: widens
+          ? `Let ${options.alias} do more: ${has}${hadContacts ? ' and contacts' : ''} → ${asks}${addsContacts || hadContacts ? ' and contacts' : ''}`
+          : `Sign in to ${options.alias} again`,
+        effects: widens
+          ? [
+              `signs in to Google again as ${inbox.email}, through the OAuth client "${client}", and asks for ${asks} access${addsContacts ? ' and the address book' : ''}: an agent will be able to ${TIER_ABILITY[asks]}${addsContacts || hadContacts ? ', and search the address book' : ''}`,
+            ]
+          : [],
+      };
+    },
+    apply: () => startSignIn(context, { ...options, mode: 'reauth' }),
+  };
 }
 
 /**

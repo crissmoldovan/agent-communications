@@ -86,7 +86,9 @@ npx -y @agentcomms/gmail client add ~/Downloads/client_secret_*.json
 ```
 
 The client id goes into your config; the secret goes into your OS keychain, never into a file the client can read.
-Add `--move` to delete the download afterwards.
+Add `--move` to delete the download afterwards. It shows you which client it is about to register and asks you to
+type `yes` first: every mailbox signs in through this client, so adding one is a change you approve. An agent that
+runs it gets the same preview and an approval id, and runs it again with `--approval <id>` once you have said yes.
 
 ## 3. Connect a mailbox
 
@@ -118,7 +120,8 @@ npx -y @agentcomms/gmail inbox import --dry-run   # what it would bring over
 npx -y @agentcomms/gmail inbox import             # do it
 ```
 
-Every mailbox comes across with its existing OAuth client and refresh token. No browser, no re-consent.
+Every mailbox comes across with its existing OAuth client and refresh token. No browser, no re-consent — but the
+import lists every mailbox it will connect and waits for your `yes` before it copies anything.
 
 One thing an import cannot bring is a permission the other server never asked for. Most legacy servers do not
 request `openid` or `userinfo.email`, so `doctor` will report those as missing on every imported mailbox. Nothing

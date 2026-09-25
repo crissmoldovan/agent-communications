@@ -3,16 +3,19 @@ import { resolve } from 'node:path';
 import {
   type ClientConfig,
   CommsError,
+  type Config,
   expandHome,
+  type GatedChange,
   homeDirectory,
   keepAndReport,
+  type LooseningConsent,
   probeKeychain,
   type StoreKind,
   secretsStoreOf,
   withCredentialsLock,
   writeOutcome,
 } from '@agentcomms/core';
-import { parseClientJson, probeClientCredentials } from '../auth/oauth.ts';
+import { type InstalledClient, parseClientJson, probeClientCredentials } from '../auth/oauth.ts';
 import { clientSecretRef } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';
 import { MAX_CLIENT_BYTES, readSmallFile } from './small-file.ts';
@@ -46,20 +49,29 @@ export interface ClientAddResult extends ClientView {
   probeSkippedReason?: string | undefined;
 }
 
+/** A client JSON, read and checked: where it was, and what it holds. The secret stays in here and goes nowhere else. */
+export interface ClientFile {
+  path: string;
+  client: InstalledClient;
+}
+
 /**
- * Registers a Desktop OAuth client: the client id goes into config, the secret into the secret store, and the
- * downloaded file can be deleted. The secret is never printed, and never written to config.
+ * Reads a downloaded client JSON from a path somebody named, and checks it is a Desktop client.
+ *
+ * Shared by `client add` and by the change that prepares it, so what a person approves is the file as it was read,
+ * and the same file is what gets registered: the change keeps this result and registers it, rather than reading
+ * the path a second time after the approval, when it could hold something else.
  */
-export async function clientAdd(context: GmailContext, options: ClientAddOptions): Promise<ClientAddResult> {
-  const name = options.name ?? 'default';
-  const path = resolve(expandHome(options.path, homeDirectory(context.env)));
+export async function readClientFile(context: GmailContext, given: string): Promise<ClientFile> {
+  const path = resolve(expandHome(given, homeDirectory(context.env)));
   /*
    * A bounded read of a path somebody typed.
    *
-   * `readFile` on a name will read whatever is at the end of it, and this name arrives from a person or from
-   * `setup --client-json`: `/dev/zero` reads until the process dies, and a FIFO blocks until a writer appears
-   * that may never come. Neither is a client JSON, and neither should be the way this command ends. The symlink
-   * is followed here — unlike the download scan, this path is one the caller chose, so a link at it is theirs.
+   * `readFile` on a name will read whatever is at the end of it, and this name arrives from a person, from
+   * `setup --client-json` or from a tool call: `/dev/zero` reads until the process dies, and a FIFO blocks until a
+   * writer appears that may never come. Neither is a client JSON, and neither should be the way this command ends.
+   * The symlink is followed here — unlike the download scan, this path is one the caller chose, so a link at it is
+   * theirs.
    */
   const file = await readSmallFile(path, { follow: true });
   if (!file.ok) {
@@ -76,10 +88,17 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
       { hint: 'Pass the JSON Google offered when the Desktop client was created; it is well under a kilobyte.' },
     );
   }
-  const parsed = parseClientJson(file.text);
-  const config = await context.config();
+  return { path, client: parseClientJson(file.text) };
+}
+
+/**
+ * Refuses a registration that would replace what is there: a name already taken, or a different client under it
+ * while mailboxes still sign in through it. Checked when the change is planned — so an approval is never asked for a
+ * registration that would only be refused — and again under the lock, where it counts.
+ */
+function refuseClientConflict(config: Config, name: string, parsed: InstalledClient, replace: boolean): void {
   const existing = config.clients[name];
-  if (existing && !options.replace) {
+  if (existing && !replace) {
     throw new CommsError('CONFIG', `an OAuth client called "${name}" is already registered`, {
       hint:
         existing.clientId === parsed.clientId
@@ -87,7 +106,7 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
           : `Choose another name with --name, or remove it first with \`agent-gmail client remove ${name}\`.`,
     });
   }
-  if (existing && options.replace && existing.clientId !== parsed.clientId) {
+  if (existing && replace && existing.clientId !== parsed.clientId) {
     const users = inboxesOf(config.inboxes, name);
     if (users.length > 0) {
       throw new CommsError('CONFIG', `"${name}" is a different OAuth client, and ${users.length} inbox(es) use it`, {
@@ -95,6 +114,75 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
       });
     }
   }
+}
+
+/**
+ * Registering an OAuth client, as one change both surfaces run through core's flow.
+ *
+ * A client loosens nothing the config store measures — it grants no mailbox anything by itself — but every mailbox
+ * connected through it signs in with it, and a client from somebody else's Cloud project is a way to have that
+ * somebody's app hold the grant. So it is approved like a loosening, by its effects, and the preview names the
+ * client by its id and project: public values that appear in every sign-in link. Never the secret.
+ *
+ * The file is read when the change is planned, and what that read found is what `apply` registers.
+ */
+export function clientAddChange(context: GmailContext, options: ClientAddOptions): GatedChange<ClientAddResult> {
+  let read: ClientFile | undefined;
+  return {
+    plan: async (config) => {
+      read = await readClientFile(context, options.path);
+      const name = options.name ?? 'default';
+      refuseClientConflict(config, name, read.client, options.replace === true);
+      const store = await chooseStore(context, options.store);
+      const existing = config.clients[name];
+      const after = structuredClone(config);
+      after.secrets = { store };
+      after.clients[name] = {
+        provider: 'gmail',
+        clientId: read.client.clientId,
+        projectId: read.client.projectId,
+        secretRef: clientSecretRef(name),
+        addedAt: existing?.addedAt ?? context.now().toISOString(),
+      };
+      const project = read.client.projectId ? ` from the Google Cloud project ${read.client.projectId}` : '';
+      return {
+        before: config,
+        after,
+        summary: existing
+          ? `Replace the secret of the OAuth client "${name}"`
+          : `Register the OAuth client "${name}", which mailboxes sign in through`,
+        effects: [
+          `registers the OAuth client ${read.client.clientId}${project} as "${name}", and keeps its secret in the ${store} store on this machine`,
+          ...(existing ? [`replaces the secret "${name}" holds now`] : []),
+          ...(options.move ? [`deletes ${read.path} once the secret is stored`] : []),
+        ],
+      };
+    },
+    apply: (consent) => {
+      if (!read) throw new CommsError('UNEXPECTED', 'the client file was not read before it was registered');
+      return registerClient(context, read, { ...options, consent });
+    },
+  };
+}
+
+/**
+ * Registers a Desktop OAuth client: the client id goes into config, the secret into the secret store, and the
+ * downloaded file can be deleted. The secret is never printed, and never written to config.
+ */
+export async function clientAdd(context: GmailContext, options: ClientAddOptions): Promise<ClientAddResult> {
+  return registerClient(context, await readClientFile(context, options.path), options);
+}
+
+async function registerClient(
+  context: GmailContext,
+  file: ClientFile,
+  options: ClientAddOptions & { consent?: LooseningConsent | undefined },
+): Promise<ClientAddResult> {
+  const name = options.name ?? 'default';
+  const { path, client: parsed } = file;
+  const config = await context.config();
+  const existing = config.clients[name];
+  refuseClientConflict(config, name, parsed, options.replace === true);
 
   // One backend per config directory: the first command that stores a secret picks it, and it cannot be mixed later.
   const chosen = await chooseStore(context, options.store);
@@ -168,25 +256,28 @@ export async function clientAdd(context: GmailContext, options: ClientAddOptions
           hint: 'Try again with `--store file` to keep secrets in owner-only files instead of the system keychain.',
         });
       }
-      await context.core.config.update((current) => {
-        refused = true;
-        // Never switch the store back: only `secrets migrate` changes it, and it moves the secrets with it.
-        if (current.secrets?.store && current.secrets.store !== chosen) {
-          throw new CommsError('TRANSIENT', 'the secret store was changed while this ran', {
-            hint: 'Run the command again.',
-          });
-        }
-        // The users are re-checked here as well as above: a sign-in completing between the two would otherwise
-        // attach a mailbox to the client being replaced, and its token would not survive the replacement.
-        const held = current.clients[name];
-        if (held && held.clientId !== parsed.clientId && inboxesOf(current.inboxes, name).length > 0) {
-          throw new CommsError('CONFIG', `"${name}" is a different OAuth client, and mailboxes use it`, {
-            hint: 'Add the new client under another name, then `inbox reauth` each mailbox onto it.',
-          });
-        }
-        refused = false;
-        return { ...current, secrets: { store: chosen }, clients: { ...current.clients, [name]: row } };
-      });
+      await context.core.config.update(
+        (current) => {
+          refused = true;
+          // Never switch the store back: only `secrets migrate` changes it, and it moves the secrets with it.
+          if (current.secrets?.store && current.secrets.store !== chosen) {
+            throw new CommsError('TRANSIENT', 'the secret store was changed while this ran', {
+              hint: 'Run the command again.',
+            });
+          }
+          // The users are re-checked here as well as above: a sign-in completing between the two would otherwise
+          // attach a mailbox to the client being replaced, and its token would not survive the replacement.
+          const held = current.clients[name];
+          if (held && held.clientId !== parsed.clientId && inboxesOf(current.inboxes, name).length > 0) {
+            throw new CommsError('CONFIG', `"${name}" is a different OAuth client, and mailboxes use it`, {
+              hint: 'Add the new client under another name, then `inbox reauth` each mailbox onto it.',
+            });
+          }
+          refused = false;
+          return { ...current, secrets: { store: chosen }, clients: { ...current.clients, [name]: row } };
+        },
+        options.consent ? { consent: options.consent } : {},
+      );
     } catch (error) {
       /*
        * A rejected write may have committed (see `writeOutcome` in core) — but "committed" has to mean *this* write.
@@ -268,15 +359,54 @@ export async function clientList(context: GmailContext): Promise<ClientView[]> {
   return Object.entries(config.clients).map(([name, client]) => view(name, client, inboxesOf(config.inboxes, name)));
 }
 
-export async function clientRemove(context: GmailContext, name: string): Promise<{ name: string }> {
-  // Under the credentials lock, from the read to the secret deletion: `client add --replace` holds it too, and a
-  // replacement landing in between would otherwise be re-added and then have its secret deleted from under it.
-  return withCredentialsLock(context.core.paths.configDir, () => removeClientLocked(context, name));
+/**
+ * Removing an OAuth client, as one change both surfaces run through core's flow.
+ *
+ * It loosens nothing, and it is refused while any mailbox signs in through the client; what needs approval is that it
+ * cannot be taken back. The secret is deleted from this machine, and Google shows a client secret once — so adding
+ * the client again takes the JSON downloaded when it was made, or a new secret. The approval binds the client by its
+ * id, and so does the removal.
+ */
+export function clientRemoveChange(context: GmailContext, name: string): GatedChange<{ name: string }> {
+  let planned: string | undefined;
+  return {
+    plan: (config) => {
+      const client = requireRemovableClient(config, name);
+      planned = client.clientId;
+      const after = structuredClone(config);
+      delete after.clients[name];
+      return {
+        before: config,
+        after,
+        summary: `Remove the OAuth client "${name}"`,
+        effects: [
+          `forgets the OAuth client ${client.clientId} registered as "${name}", and deletes its secret from this machine; Google shows a client secret once, so adding it back takes its downloaded JSON or a new secret`,
+        ],
+      };
+    },
+    apply: () => clientRemove(context, name, { expectedClientId: planned }),
+  };
 }
 
-async function removeClientLocked(context: GmailContext, name: string): Promise<{ name: string }> {
-  const config = await context.config();
-  const client = config.clients[name];
+/**
+ * Forgets an OAuth client and deletes its secret.
+ *
+ * `expectedClientId` is the client an approval was given for: the name can be given to another client between that
+ * approval and this call, and that one is not what the person agreed to remove.
+ */
+export async function clientRemove(
+  context: GmailContext,
+  name: string,
+  options: { expectedClientId?: string | undefined } = {},
+): Promise<{ name: string }> {
+  // Under the credentials lock, from the read to the secret deletion: `client add --replace` holds it too, and a
+  // replacement landing in between would otherwise be re-added and then have its secret deleted from under it.
+  return withCredentialsLock(context.core.paths.configDir, () => removeClientLocked(context, name, options));
+}
+
+/** The client registered under `name`, or the refusal: none there, or mailboxes still signing in through it. */
+function requireRemovableClient(config: Config, name: string): ClientConfig {
+  const client = Object.hasOwn(config.clients, name) ? config.clients[name] : undefined;
   if (!client) {
     throw new CommsError('NOT_FOUND', `no OAuth client called "${name}"`, {
       hint: Object.keys(config.clients).length
@@ -288,6 +418,20 @@ async function removeClientLocked(context: GmailContext, name: string): Promise<
   if (users.length > 0) {
     throw new CommsError('CONFIG', `${users.length} inbox(es) still sign in through "${name}"`, {
       hint: `Remove them first (${users.join(', ')}), or move them to another client with \`agent-gmail inbox reauth\`.`,
+    });
+  }
+  return client;
+}
+
+async function removeClientLocked(
+  context: GmailContext,
+  name: string,
+  options: { expectedClientId?: string | undefined },
+): Promise<{ name: string }> {
+  const client = requireRemovableClient(await context.config(), name);
+  if (options.expectedClientId !== undefined && client.clientId !== options.expectedClientId) {
+    throw new CommsError('CONFIG', `"${name}" is no longer the OAuth client this removal was approved for`, {
+      hint: 'Nothing was removed. Prepare the removal again, and read the preview before approving it.',
     });
   }
   try {

@@ -75,6 +75,18 @@ Every command takes `--json` and prints `{"ok":true,"schemaVersion":1,"data":…
 `{"ok":false,"schemaVersion":1,"error":{"code","message","hint"}}` — with a documented exit code (`--help` lists
 them). Data goes to stdout, messages to stderr.
 
+### Changes that need your approval
+
+`client add` and `client remove`, `inbox import` and `inbox remove`, `confirm-clients add`, a looser
+`inbox policy`, and an `inbox reauth` that asks for more access than the mailbox has each loosen a safety setting
+or cannot be taken back, so each is approved before it happens. At a terminal the command shows exactly what will
+change and asks you to type `yes` — or, under the `confirm` change policy, the code `agentcomms approve` shows.
+Run by an agent, or with no terminal, it prints the same preview with an approval id and exits `10`; once you have
+said yes, the same command with `--approval <id>` makes the change. Tightening a policy never asks.
+
+The MCP server offers each of these as a tool that asks the same way, and an approval prepared on one surface can be
+claimed on the other: it is one change.
+
 ## Coming from another Gmail MCP server
 
 ```sh
@@ -107,6 +119,12 @@ await server.connectStdio();
 Tools are registered by process flags only, so the tool list never varies between connections; what each mailbox may
 do is checked on every call against the configuration as it is at that moment. An inbox added or a policy tightened
 while the server runs applies to the next call.
+
+Every account command has its tool — `gmail_client_add`, `gmail_inbox_reauth`, `gmail_inbox_import`,
+`gmail_inbox_remove`, `gmail_inbox_policy`, `gmail_confirm_client_add` and the rest — and a change that needs
+approval returns `approvalRequired` with the preview and an `approvalId` instead of acting. The agent shows you the
+preview and calls again with the id after your yes. `gmail_client_add` reads the client JSON from a path on your
+machine; the file never passes through the conversation, and no tool returns its secret.
 
 ## Where things are kept
 

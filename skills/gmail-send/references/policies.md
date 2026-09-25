@@ -232,6 +232,6 @@ silent success. And a record written by a different digest version of this packa
   run `agent-gmail approve <approvalId>` in a terminal, or send the draft from Gmail. Then stop.
 - Under `never`, the sentence is: this mailbox does not send through agents; the draft is in Gmail
   Drafts and can be sent from there.
-- Under either, changing the policy to get past it is the wrong instinct. Loosening is refused with
-  `LOOSENING_REFUSED` and needs a person at their own terminal — that refusal is the design working,
-  and proposing the change is worth avoiding even when you know it will fail.
+- Under either, changing the policy to get past it is the wrong instinct. Loosening is a change the
+  person approves after reading its preview — at their own terminal when the mailbox's change policy is
+  `confirm` — and proposing it to get one message out is worth avoiding even when they would say yes.

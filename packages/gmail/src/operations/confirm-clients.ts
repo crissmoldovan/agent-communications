@@ -1,7 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { CommsError, ensurePrivateDir, type LooseningConsent, writeFileAtomic } from '@agentcomms/core';
+import {
+  CommsError,
+  ensurePrivateDir,
+  type GatedChange,
+  type LooseningConsent,
+  writeFileAtomic,
+} from '@agentcomms/core';
 import type { GmailContext } from '../context.ts';
 
 /**
@@ -11,8 +17,8 @@ import type { GmailContext } from '../context.ts';
  * is such a channel **only if the client actually shows it to a human** — `clientInfo.name` is self-reported, and a
  * client that auto-accepts forms, or answers them from the model, would turn the strongest gate in this package into
  * a formality. So the list is empty by default and fail-closed, and a name reaches it only by evidence: the client
- * raises a probe form carrying a code, a person types that code back, and only then may the name be added — at a
- * terminal, by a person, with the same consent every other loosening needs.
+ * raises a probe form carrying a code, a person types that code back, and only then may the name be added — with a
+ * change approval, from a chat or a terminal, the consent every other loosening needs.
  */
 
 const PROBE_TTL_MS = 10 * 60 * 1000;
@@ -93,22 +99,54 @@ export async function listConfirmClients(context: GmailContext): Promise<string[
   return (await context.config()).defaults.confirm.elicitationClients;
 }
 
-/**
- * Adds a client to the allowlist. Refused unless that client completed a probe in the last ten minutes, and refused
- * again by the config store unless the caller carries consent — which only a person at a terminal can obtain.
- */
-export async function addConfirmClient(
-  context: GmailContext,
-  client: string,
-  consent: LooseningConsent,
-): Promise<string[]> {
-  const name = client.trim();
-  if (!name) throw new CommsError('USAGE', 'name the client to trust');
+/** The refusal for a client that has not proved, in the last ten minutes, that its forms reach a person. */
+async function requireRecentProbe(context: GmailContext, name: string): Promise<void> {
   if (!(await hasRecentProbe(context, name))) {
     throw new CommsError('APPROVAL_REQUIRED', `"${name}" has not shown that its approval forms reach a person`, {
       hint: `In that client, ask it to run the gmail_confirm_probe tool and type the code it shows. Then run this again within ten minutes.`,
     });
   }
+}
+
+/**
+ * Trusting a client's approval forms, as one change both surfaces run through core's flow.
+ *
+ * Two things have to be true, and they are different in kind. The probe is evidence that the client shows its forms
+ * to a person — checked when the change is planned, so nobody is asked to approve trusting a client that has not
+ * shown it, and again when it is written. The change approval is the decision, and core's classifier already counts
+ * a name added to `defaults.confirm.elicitationClients` as a loosening, so the store refuses the write without it.
+ * A name already on the list loosens nothing, and is applied at once.
+ */
+export function confirmClientAddChange(context: GmailContext, client: string): GatedChange<string[]> {
+  const name = client.trim();
+  return {
+    plan: async (config) => {
+      if (!name) throw new CommsError('USAGE', 'name the client to trust');
+      await requireRecentProbe(context, name);
+      const after = structuredClone(config);
+      after.defaults.confirm.elicitationClients = [...new Set([...config.defaults.confirm.elicitationClients, name])];
+      return {
+        before: config,
+        after,
+        summary: `Trust "${name}" to show you approval forms for sends`,
+      };
+    },
+    apply: (consent) => addConfirmClient(context, name, consent),
+  };
+}
+
+/**
+ * Adds a client to the allowlist. Refused unless that client completed a probe in the last ten minutes, and refused
+ * again by the config store unless the caller carries consent — which only a change approval a person gave yields.
+ */
+export async function addConfirmClient(
+  context: GmailContext,
+  client: string,
+  consent: LooseningConsent | undefined,
+): Promise<string[]> {
+  const name = client.trim();
+  if (!name) throw new CommsError('USAGE', 'name the client to trust');
+  await requireRecentProbe(context, name);
   const config = await context.core.config.update(
     (current) => ({
       ...current,
@@ -120,7 +158,7 @@ export async function addConfirmClient(
         },
       },
     }),
-    { consent },
+    consent ? { consent } : {},
   );
   await context.core.audit.append({
     inboxId: '',

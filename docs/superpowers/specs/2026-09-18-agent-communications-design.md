@@ -206,10 +206,14 @@ permissions and ownership. On Windows the ACL defaults of `%APPDATA%` apply.
   `gmail_inbox_finish`, under the same lock and subject to the bounds in §9 — a server that is `--read-only` or
   pinned does not offer it, it can finish only a flow it started as an `add`, and no MCP tool writes anything
   else. Every other lifecycle write is CLI-only. *(Amended 2026-09-25 by the
-  [parity design](2026-09-25-cli-mcp-parity-design.md): an unpinned, writable server may also rename a mailbox,
-  and any writable server may tighten a send policy or take a client off the trusted-forms list — writes that
-  loosen nothing. Every loosening, removal and client registration is still CLI-only until change approvals
-  exist.)* Readers check the
+  [parity design](2026-09-25-cli-mcp-parity-design.md): every lifecycle write is now reachable from a writable
+  MCP server as from the CLI. An unpinned one may rename, re-authorise, import and remove mailboxes, register and
+  remove OAuth clients, and trust a client's approval forms; any writable one may set a mailbox's send and change
+  policies and take a client off the trusted-forms list. What loosens a safety setting or cannot be taken back is
+  a change approval (that design's §3), prepared by one call and claimed by the next on either surface, and the
+  config store still refuses a loosening that carries no consent. `gmail_inbox_finish` finishes a
+  re-authorisation too: one that asks for more than the mailbox holds was approved before its link existed.)*
+  Readers check the
   file's (inode, mtime, size) on every call rather than relying on `fs.watch` (which stops firing after the first
   rename on Linux), so a tightened policy applies to the next tool call of an already-running server.
 
@@ -628,7 +632,9 @@ TTL); execution requires that token. Trash always requires a plan token. Every w
      tool `gmail_confirm_probe` raises a form elicitation carrying a server-generated code and records
      `{clientInfo.name, capabilities, probeId}` in state; the human types that code back in the form; then
      `agent-gmail confirm-clients add <name>` — on a TTY, with a typed challenge, audited — adds the name only if a
-     probe from that client completed in the last 10 minutes. `confirm-clients list|remove` complete the set. The form (MRTR
+     probe from that client completed in the last 10 minutes. *(Amended 2026-09-25: or `gmail_confirm_client_add`;
+     on either surface the decision is a change approval rather than a challenge of its own, and the probe is still
+     required first.)* `confirm-clients list|remove` complete the set. The form (MRTR
      `inputRequired.elicit`, HMAC-sealed and context-bound `requestState` via `createRequestStateCodec`, key in the
      secret store **[V: SDK typings]**) shows the §8.5 rendering with the **full** body up to 4,000 characters (a
      longer body skips (a) and uses (b) or (c); total length and line count are always stated) and requires a **typed 4-character challenge**
@@ -711,9 +717,13 @@ TTL); execution requires that token. Trash always requires a plan token. Every w
   processes (e.g. Claude Desktop's chat and Cowork instances **[V: gap-5]**) cannot multiply them; over the cap
   → exit 10 with the reset time.
 - **Policy changes are CLI-only, and loosening needs a person.** No MCP tool changes policy, removes inboxes or
-  clients, or edits the elicitation allowlist. *(Amended 2026-09-25: `gmail_inbox_policy` may tighten a policy
-  and `gmail_confirm_client_remove` may shorten the allowlist; both refuse or cannot express a loosening. See
-  the [parity design](2026-09-25-cli-mcp-parity-design.md) §6.1.)* **Adding an inbox is the one exception, added deliberately in
+  clients, or edits the elicitation allowlist. *(Amended 2026-09-25: every one of these is now a tool as well —
+  `gmail_inbox_policy`, `gmail_inbox_remove`, `gmail_client_add`, `gmail_client_remove`,
+  `gmail_confirm_client_add`, `gmail_confirm_client_remove` — and loosening still needs a person. The consent the
+  store demands comes from a claimed change approval rather than a challenge typed into this CLI: the person
+  approves in the conversation under the `chat` change policy, or with `agentcomms approve <id>` at a terminal
+  under `confirm`, and both surfaces ask the same way. See the [parity design](2026-09-25-cli-mcp-parity-design.md)
+  §3 and §6.1.)* **Adding an inbox is the one exception, added deliberately in
   0.1.4 — see below.** The core config store classifies every change and **refuses any
   that loosens a safety setting** unless the caller passes consent for exactly those settings — obtained by the CLI
   on an interactive TTY, with a typed challenge, no agent marker, and an audit entry. Loosening covers: an effective
@@ -761,6 +771,13 @@ TTL); execution requires that token. Trash always requires a plan token. Every w
     and tier through the one tool whose permission to exist is that it only ever adds.
   - There is still no MCP tool that registers an OAuth **client**: that reads a file of the user's choosing and
     writes a secret, with no third party attesting to anything.
+
+  *(Amended 2026-09-25 by the [parity design](2026-09-25-cli-mcp-parity-design.md): the last two bounds are
+  replaced by change approvals. `gmail_inbox_reauth` starts a re-authorisation, and one asking for more than the
+  mailbox holds is approved before its link exists, so `gmail_inbox_finish` now finishes either kind of flow.
+  `gmail_client_add` registers a client from a path on the user's machine, never from content pasted into the
+  conversation, after the person approves the preview naming it; no result carries its secret. Moving a new
+  inbox's policy to something looser is a change approval from either surface.)*
 
   `gmail_setup` is read-only and outside the guard: saying what is missing changes nothing, and a server with no
   mailboxes should be able to explain why. New inboxes inherit the default policy (`sendPolicy` unset) and default their
@@ -926,7 +943,7 @@ agent-gmail mcp install --client claude-code|claude-desktop|codex|cursor|gemini|
 | `gmail_draft_send` | **send** | destructive, openWorld, not idempotent, requiresUserInteraction under `confirm` |
 | `gmail_setup` | read | readOnly — and on a pinned server it reports only that mailbox, its client, and no downloaded-file paths |
 | `gmail_inbox_add` | **config write** (the §5.2 exception) | openWorld; returns a sign-in URL and writes nothing; absent when `--read-only` or pinned |
-| `gmail_inbox_finish` | **config write** (the §5.2 exception) | openWorld; refuses any flow that is not an `add`; absent when `--read-only` or pinned |
+| `gmail_inbox_finish` | **config write** (the §5.2 exception) | openWorld; refuses any flow that is not an `add` *(amended 2026-09-25: finishes a re-authorisation too)*; absent when `--read-only` or pinned |
 
 - **Results:** `structuredContent` conforming to a declared `outputSchema`, and the same JSON minified in one text
   block. Claude Code and Codex pass **only** `structuredContent` to the model and drop text blocks; Cursor passes

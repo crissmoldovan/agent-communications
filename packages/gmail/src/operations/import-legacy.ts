@@ -7,6 +7,7 @@ import {
   duplicateInbox,
   expandHome,
   findById,
+  type GatedChange,
   homeDirectory,
   type InboxConfig,
   isValidAlias,
@@ -72,6 +73,22 @@ export interface ImportOptions {
    * `creds-work.json` is `work` — so a person can see it in `--dry-run` and override exactly that one.
    */
   renames?: readonly string[] | undefined;
+  /**
+   * What a change approval covered, when one did: the import does that and nothing more.
+   *
+   * The preview a person approves lists the mailboxes a dry run found, and the import runs afterwards. In between a
+   * credentials file can appear, a token can come to belong to another account, or a name can be taken so that a
+   * mailbox would land under a different one. Each of those is skipped and says why, rather than imported on the
+   * strength of an approval that did not mention it.
+   */
+  approved?: ApprovedImport | undefined;
+}
+
+export interface ApprovedImport {
+  /** Whether registering the other server's OAuth client was part of what was approved. */
+  registersClient: boolean;
+  /** Each mailbox approved, by its credentials file, the name it was to have, and the address Google gave for it. */
+  mailboxes: ReadonlyArray<{ file: string; alias: string; email: string }>;
 }
 
 interface LegacyCredentials {
@@ -106,8 +123,71 @@ export function aliasFromCredentialsFile(file: string): string {
   return isValidAlias(alias) ? alias : 'imported';
 }
 
+/** Where the other server keeps its files: `--dir`, or its own default. */
+export function importDirectory(context: GmailContext, dir: string | undefined): string {
+  return expandHome(dir ?? '~/.gmail-mcp', homeDirectory(context.env));
+}
+
+/**
+ * Importing another server's mailboxes, as one change both surfaces run through core's flow.
+ *
+ * It loosens no setting — an imported mailbox arrives at the defaults, as a connected one does — but it connects
+ * accounts, stores their tokens and possibly an OAuth client's secret on this machine, and the design counts adding
+ * an account as a change a person approves. So the plan is a dry run, and its findings are the effects: every
+ * mailbox by name, address and file, and the client if it is new. What the dry run found is what `apply` imports.
+ *
+ * Asked for as a dry run, it is one: no effects, so nobody is asked, and nothing is written.
+ */
+export function inboxImportChange(context: GmailContext, options: ImportOptions): GatedChange<ImportResult> {
+  if (options.dryRun) {
+    return {
+      plan: (config) => ({ before: config, after: config, summary: 'Say what an import would do' }),
+      apply: () => importLegacy(context, { ...options, dryRun: true, approved: undefined }),
+    };
+  }
+  let approved: ApprovedImport | undefined;
+  return {
+    plan: async (config) => {
+      const found = await importLegacy(context, { ...options, dryRun: true, approved: undefined });
+      const client = found.client;
+      approved = {
+        registersClient: client !== null && !client.alreadyPresent,
+        mailboxes: found.imported.map((candidate) => ({
+          file: candidate.file,
+          alias: candidate.alias,
+          email: candidate.email ?? '',
+        })),
+      };
+      const directory = importDirectory(context, options.dir);
+      const effects = [
+        ...(approved.registersClient && client
+          ? [
+              `registers the OAuth client ${client.clientId} from ${join(directory, 'gcp-oauth.keys.json')} as "${client.name}", and keeps its secret on this machine`,
+            ]
+          : []),
+        ...found.imported.map(
+          (candidate) =>
+            `connects ${candidate.alias} (${candidate.email}) with ${candidate.tier} access, copying the token in ${candidate.file}; the file itself is left as it is`,
+        ),
+      ];
+      const count = found.imported.length;
+      return {
+        before: config,
+        after: config,
+        summary: `Import ${count} mailbox${count === 1 ? '' : 'es'} from ${directory}`,
+        effects,
+      };
+    },
+    apply: () => {
+      // Never without the list: an import with no `approved` is an import of whatever is there now.
+      if (!approved) throw new CommsError('UNEXPECTED', 'the import was not planned before it was applied');
+      return importLegacy(context, { ...options, dryRun: false, approved });
+    },
+  };
+}
+
 export async function importLegacy(context: GmailContext, options: ImportOptions = {}): Promise<ImportResult> {
-  const directory = expandHome(options.dir ?? '~/.gmail-mcp', homeDirectory(context.env));
+  const directory = importDirectory(context, options.dir);
   const clientName = options.clientName ?? 'imported';
   const dryRun = options.dryRun ?? false;
 
@@ -160,6 +240,14 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
         hint: 'Import it under another name with `--name <name>`.',
       },
     );
+  }
+
+  // An approval that did not include registering the client does not cover it: the client it expected has gone.
+  const approved = dryRun ? undefined : options.approved;
+  if (approved && !approved.registersClient && !existingClient) {
+    throw new CommsError('CONFIG', `the OAuth client this import was approved to use is no longer registered`, {
+      hint: 'Nothing was imported. Prepare the import again, and read the preview before approving it.',
+    });
   }
 
   const credentialFiles = entries.filter((entry) => /^creds-.+\.json$/i.test(entry) || entry === 'credentials.json');
@@ -271,6 +359,12 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
       skipped.push({ ...candidate, duplicateOf: duplicate, problem: `already connected as "${duplicate}"` });
       continue;
     }
+    // Checked last, so a file the dry run skipped for its own reason is still reported with that reason.
+    const outside = approved ? outsideApproval(approved, candidate) : null;
+    if (outside) {
+      skipped.push({ ...candidate, problem: outside });
+      continue;
+    }
 
     if (dryRun) {
       imported.push(candidate);
@@ -347,6 +441,19 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
     ungatedServers,
     nextSteps: nextSteps(imported, ungatedServers, dryRun),
   };
+}
+
+/** Why a mailbox about to be imported is not the one an approval covered, or null when it is. */
+function outsideApproval(approved: ApprovedImport, candidate: ImportCandidate): string | null {
+  const allowed = approved.mailboxes.find((mailbox) => mailbox.file === candidate.file);
+  if (!allowed) return 'it was not in the import that was approved';
+  if (allowed.alias !== candidate.alias) {
+    return `it would be called "${candidate.alias}" now, not the "${allowed.alias}" that was approved`;
+  }
+  if (allowed.email.toLowerCase() !== (candidate.email ?? '').toLowerCase()) {
+    return `it is ${candidate.email ?? 'an unknown address'} now, not the ${allowed.email} that was approved`;
+  }
+  return null;
 }
 
 function nextSteps(imported: ImportCandidate[], ungated: LegacyServerFinding[], dryRun: boolean): string[] {

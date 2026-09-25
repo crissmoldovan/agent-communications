@@ -1,9 +1,12 @@
 import { join } from 'node:path';
 import {
   appendPrivateLine,
+  type ChangePolicy,
   CommsError,
+  defaultChangePolicy,
   effectiveSendPolicy,
   findById,
+  type GatedChange,
   type InboxRuntimeState,
   keepAndReport,
   type LooseningConsent,
@@ -29,6 +32,10 @@ export interface InboxView {
   sendPolicy: SendPolicy;
   /** True when the policy comes from `defaults`, not from the inbox itself. */
   sendPolicyInherited: boolean;
+  /** How a loosening of this mailbox's settings is approved: a yes in the chat, or a code typed at a terminal. */
+  changePolicy: ChangePolicy;
+  /** True when that comes from `defaults`, not from the inbox itself. */
+  changePolicyInherited: boolean;
   client: string;
   identity: 'oidc' | 'legacy';
   createdAt: string;
@@ -57,6 +64,8 @@ export async function inboxList(context: GmailContext): Promise<InboxView[]> {
       contacts: inbox.contacts,
       sendPolicy: effectiveSendPolicy(config, alias),
       sendPolicyInherited: inbox.sendPolicy === undefined,
+      changePolicy: inbox.changePolicy ?? defaultChangePolicy(config),
+      changePolicyInherited: inbox.changePolicy === undefined,
       client: inbox.client,
       identity: inbox.identity,
       createdAt: inbox.createdAt,
@@ -112,7 +121,7 @@ export async function inboxRename(
 }
 
 const SEND_POLICIES: readonly SendPolicy[] = ['chat', 'confirm', 'never'];
-const POLICY_RANK: Record<SendPolicy, number> = { chat: 0, confirm: 1, never: 2 };
+const CHANGE_POLICIES: readonly ChangePolicy[] = ['chat', 'confirm'];
 
 /** A send policy as somebody typed it, or the refusal naming the three there are. */
 export function parseSendPolicy(value: string): SendPolicy {
@@ -120,98 +129,128 @@ export function parseSendPolicy(value: string): SendPolicy {
   throw new CommsError('USAGE', `"${value}" is not a send policy`, { hint: 'Use chat, confirm or never.' });
 }
 
-export interface SendPolicyChange {
+/** A change policy as somebody typed it, or the refusal naming the two there are. */
+export function parseChangePolicy(value: string): ChangePolicy {
+  if ((CHANGE_POLICIES as readonly string[]).includes(value)) return value as ChangePolicy;
+  throw new CommsError('USAGE', `"${value}" is not a change policy`, { hint: 'Use chat or confirm.' });
+}
+
+/** The policies a caller asked to set on a mailbox, as typed. Either, or both. */
+export interface PolicyRequest {
+  sendPolicy?: string | undefined;
+  changePolicy?: string | undefined;
+}
+
+/** The same, checked. */
+export interface InboxPolicies {
+  sendPolicy?: SendPolicy | undefined;
+  changePolicy?: ChangePolicy | undefined;
+}
+
+export interface InboxPolicyResult {
   alias: string;
-  previous: SendPolicy;
+  /** How sending from it is approved now, whether set on the mailbox or inherited. */
   sendPolicy: SendPolicy;
-  /** True when the change makes sending easier, which needs somebody's consent; tightening never does. */
-  loosens: boolean;
-  /** The config path a consent for this change has to name. */
-  path: string;
+  /** …and before this call. */
+  previous: SendPolicy;
+  /** How a loosening of its settings is approved now, whether set on the mailbox or inherited. */
+  changePolicy: ChangePolicy;
+  /** …and before this call. */
+  previousChangePolicy: ChangePolicy;
 }
 
 /**
- * What setting a mailbox's send policy would do, without doing it.
+ * The policies asked for, or the refusal: each has to be one of its values, and at least one has to be named.
  *
- * Here rather than in the CLI, because both surfaces have to agree on which direction is a loosening. The CLI asks
- * a person at its terminal when this says so; the MCP server has nobody to ask yet and refuses. Measured against the
- * policy in force — the mailbox's own, or the default it inherits — as the config store measures it, so the two
- * cannot disagree about whether a mailbox on the default is being loosened.
+ * Checked before anything is read, so a word that is not a policy is refused the same way on both surfaces whatever
+ * the mailbox — and before a change approval could be prepared for it.
  */
-export async function sendPolicyChange(
+export function parsePolicies(request: PolicyRequest): InboxPolicies {
+  const sendPolicy = request.sendPolicy === undefined ? undefined : parseSendPolicy(request.sendPolicy);
+  const changePolicy = request.changePolicy === undefined ? undefined : parseChangePolicy(request.changePolicy);
+  if (sendPolicy === undefined && changePolicy === undefined) {
+    throw new CommsError('USAGE', 'name a policy to set: how sending is approved, how changes are approved, or both', {
+      hint: 'At a terminal: --send chat|confirm|never, --change chat|confirm. Over MCP: sendPolicy, changePolicy.',
+    });
+  }
+  return { ...(sendPolicy ? { sendPolicy } : {}), ...(changePolicy ? { changePolicy } : {}) };
+}
+
+/**
+ * Setting how a mailbox's sends and changes are approved, as one change both surfaces run through core's flow.
+ *
+ * The plan is the mailbox as it would be with the policies set, so core's classifier — the one `ConfigStore.update`
+ * enforces with — decides which direction is a loosening. Nothing here decides it a second time: tightening loosens
+ * nothing and is applied at once, and a loosening is prepared for a person to approve and claimed on the next call.
+ * The change policy governs itself, so moving a mailbox off `confirm` is approved under `confirm`, at a terminal.
+ */
+export function inboxPolicyChange(
   context: GmailContext,
   alias: string,
-  wanted: string,
-): Promise<SendPolicyChange> {
-  const sendPolicy = parseSendPolicy(wanted);
-  const config = await context.config();
-  // Resolved, so a former name is refused with its replacement here rather than silently measured against the
-  // default — which would skip the consent a loosening of the renamed mailbox needs. From the same read as the
-  // default it is compared with.
-  const previous = requireInbox(config, alias).sendPolicy ?? config.defaults.sendPolicy;
+  request: PolicyRequest,
+): GatedChange<InboxPolicyResult> {
+  const wanted = parsePolicies(request);
   return {
-    alias,
-    previous,
-    sendPolicy,
-    loosens: POLICY_RANK[sendPolicy] < POLICY_RANK[previous],
-    path: `inboxes.${alias}.sendPolicy`,
+    plan: (config) => {
+      // By its name now: a former name is refused with the one it has, rather than measured against the default.
+      const inbox = requireInbox(config, alias);
+      const after = { ...config, inboxes: { ...config.inboxes, [alias]: { ...inbox, ...wanted } } };
+      const parts = [
+        ...(wanted.sendPolicy ? [`sends approved by ${wanted.sendPolicy}`] : []),
+        ...(wanted.changePolicy ? [`changes to its settings approved by ${wanted.changePolicy}`] : []),
+      ];
+      return { inbox: alias, before: config, after, summary: `${alias}: ${parts.join('; ')}` };
+    },
+    apply: (consent) => inboxPolicy(context, alias, wanted, consent),
   };
 }
 
 /**
- * The refusal a loosening gets when nobody has consented to it, from whichever surface asked.
+ * Sets how sending from one inbox, and loosening its settings, must be approved.
  *
- * The config store would refuse it anyway — that is the enforcement, and it stays the only one — but its words are
- * about config paths. This says what was asked, why it was not done, and the one way it can be done today.
- */
-function needsChangeApproval(alias: string, from: SendPolicy, to: SendPolicy): CommsError {
-  return new CommsError(
-    'LOOSENING_REFUSED',
-    `making sending from "${alias}" easier (${from} → ${to}) needs a change approval`,
-    {
-      hint:
-        'Tightening needs nothing; this loosens. Approving a change from chat arrives in a later release — until ' +
-        `then a person runs \`agent-gmail inbox policy ${alias} --send ${to}\` in their own terminal and types the ` +
-        'code it shows. Do not retry this call.',
-      details: { alias, from, to, path: `inboxes.${alias}.sendPolicy` },
-    },
-  );
-}
-
-/**
- * Sets the send policy of one inbox. Tightening (chat → confirm → never) is always allowed; loosening needs the
- * consent the CLI obtains from a person at a terminal, and is refused without it.
+ * Tightening is always allowed. A loosening is refused by the config store unless `consent` covers it — the consent a
+ * claimed change approval yields (`inboxPolicyChange`). There is no second check here: the store is the one place a
+ * loosening is let through or refused, whichever surface asked, and a caller that forgot to ask is refused there.
  */
 export async function inboxPolicy(
   context: GmailContext,
   alias: string,
-  sendPolicy: SendPolicy,
+  wanted: InboxPolicies,
   consent?: LooseningConsent,
-): Promise<{ alias: string; sendPolicy: SendPolicy; previous: SendPolicy }> {
-  const config = await context.config();
+): Promise<InboxPolicyResult> {
   const { inbox } = await context.inbox(alias);
-  const previous = effectiveSendPolicy(config, alias);
+  let result: InboxPolicyResult | undefined;
   await context.core.config.update(
     (current) => {
       const now = findById(current, 'inbox', inbox.id);
       if (!now) throw new CommsError('NOT_FOUND', `no inbox called "${alias}"`);
-      // Measured under the lock, against the policy as it is now: one tightened since the snapshot above is what a
-      // change from it would loosen.
-      const was = now.inbox.sendPolicy ?? current.defaults.sendPolicy;
-      if (!consent && POLICY_RANK[sendPolicy] < POLICY_RANK[was]) throw needsChangeApproval(now.alias, was, sendPolicy);
-      return { ...current, inboxes: { ...current.inboxes, [now.alias]: { ...now.inbox, sendPolicy } } };
+      // Measured under the lock, against the policies as they are now, so what is reported as `previous` is what
+      // this write replaced rather than what a read a moment earlier saw.
+      const next = { ...now.inbox, ...wanted };
+      result = {
+        alias: now.alias,
+        sendPolicy: next.sendPolicy ?? current.defaults.sendPolicy,
+        previous: now.inbox.sendPolicy ?? current.defaults.sendPolicy,
+        changePolicy: next.changePolicy ?? defaultChangePolicy(current),
+        previousChangePolicy: now.inbox.changePolicy ?? defaultChangePolicy(current),
+      };
+      return { ...current, inboxes: { ...current.inboxes, [now.alias]: next } };
     },
     consent ? { consent } : {},
   );
+  if (!result) throw new CommsError('UNEXPECTED', 'the policy was written without being measured');
   await context.core.audit.append({
     inboxId: inbox.id,
-    alias,
+    alias: result.alias,
     operation: 'inbox.policy',
     outcome: 'ok',
     surface: context.surface,
-    reason: `${previous} → ${sendPolicy}`,
+    reason: [
+      ...(wanted.sendPolicy ? [`send ${result.previous} → ${result.sendPolicy}`] : []),
+      ...(wanted.changePolicy ? [`change ${result.previousChangePolicy} → ${result.changePolicy}`] : []),
+    ].join('; '),
   });
-  return { alias, sendPolicy, previous };
+  return result;
 }
 
 export interface InboxRemoveResult {
@@ -226,16 +265,67 @@ export interface InboxRemoveResult {
 }
 
 /**
+ * Removing a mailbox, as one change both surfaces run through core's flow.
+ *
+ * It loosens no setting, so what makes it need approval is its effects: a mailbox removed takes its token with it,
+ * and connecting it again means Google's consent screen again. The effects name the mailbox by address, so the
+ * person reads which account goes rather than a name that may mean something else to them.
+ *
+ * The approval binds the mailbox by id (core's target), and so does the removal: `apply` passes the id the plan saw,
+ * and `inboxRemove` refuses if the name has come to mean another mailbox in between.
+ */
+export function inboxRemoveChange(
+  context: GmailContext,
+  alias: string,
+  options: { revoke?: boolean | undefined } = {},
+): GatedChange<InboxRemoveResult> {
+  let planned: string | undefined;
+  return {
+    plan: (config) => {
+      const inbox = requireInbox(config, alias);
+      planned = inbox.id;
+      const { [alias]: _removed, ...inboxes } = config.inboxes;
+      const after = { ...config, inboxes };
+      return {
+        inbox: alias,
+        before: config,
+        after,
+        summary: `Remove the mailbox ${alias}`,
+        effects: [
+          `disconnects ${alias} (${inbox.email}) and deletes its token from this machine; connecting it again means signing in to Google again`,
+          ...(options.revoke
+            ? [
+                'asks Google to revoke that token, which can end the grant for every other tool signed in through the same client',
+              ]
+            : []),
+        ],
+      };
+    },
+    apply: () => inboxRemove(context, alias, { revoke: options.revoke === true, expectedId: planned }),
+  };
+}
+
+/**
  * Disconnects an inbox. The registry row goes first, so a server that is mid-call stops serving it immediately; the
  * token is deleted afterwards. Revocation is opt-in, because revoking one token can invalidate the whole
  * account-and-client grant, including other tools that share it.
+ *
+ * `expectedId` is the mailbox an approval was given for. A name is only a label, so between that approval and this
+ * call it can come to mean another mailbox — removed and connected again under the same name — and that one is not
+ * the one the person agreed to remove.
  */
 export async function inboxRemove(
   context: GmailContext,
   alias: string,
-  options: { revoke?: boolean } = {},
+  options: { revoke?: boolean; expectedId?: string | undefined } = {},
 ): Promise<InboxRemoveResult> {
   const { inbox: named } = await context.inbox(alias);
+  if (options.expectedId !== undefined && named.id !== options.expectedId) {
+    throw new CommsError('CONFIG', `"${alias}" is no longer the mailbox this removal was approved for`, {
+      hint: 'Nothing was removed. Prepare the removal again, and read the preview before approving it.',
+      details: { alias, expectedId: options.expectedId, id: named.id },
+    });
+  }
 
   /*
    * Under the credentials lock, from the read to the secret deletion.

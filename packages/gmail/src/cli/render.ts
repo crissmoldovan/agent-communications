@@ -140,6 +140,7 @@ export function renderInboxShow(
     `  id:          ${inbox.id}`,
     `  access:      ${inbox.tier} (${inbox.capabilities.join(', ')})`,
     `  sending:     ${inbox.sendPolicy}${inbox.sendPolicyInherited ? ' (from defaults)' : ''}`,
+    `  changes:     ${inbox.changePolicy}${inbox.changePolicyInherited ? ' (from defaults)' : ''}`,
     `  client:      ${inbox.client}`,
     `  account id:  ${inbox.identity === 'oidc' ? 'known' : 'not known (imported)'}`,
     `  connected:   ${inbox.createdAt}`,

@@ -136,7 +136,8 @@ after the preview. Prepare again and read the new preview — do not reuse the o
 ### `this mailbox is set to never send`
 
 The policy for that mailbox is `never`. The draft is in Gmail; send it from the Gmail app. Changing the policy is a
-loosening and needs a typed confirmation at a terminal.
+loosening: it is prepared, shown to you, and made only once you approve it — in the conversation, or at a terminal
+when the mailbox's change policy is `confirm`.
 
 ### An agent sent mail without asking me
 

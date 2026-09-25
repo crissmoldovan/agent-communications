@@ -31,7 +31,7 @@ Each platform has one contract its skills share, copied into every skill as `ref
 | [`gmail-search`](#gmail-search) | Find mail across one or more mailboxes and read what you find, honestly about how much you read. |
 | [`gmail-security`](#gmail-security) | Judge whether a message is what it claims to be — Google's authentication verdict, the sender warnings, the link flags and what the sanitiser removed. |
 | [`gmail-send`](#gmail-send) | Send a Gmail draft the user has approved, under the approval policy their mailbox is set to. |
-| [`gmail-setup`](#gmail-setup) | Install agent-gmail and connect mailboxes: the Google Cloud OAuth client, inbox add and reauth, showing, renaming and tightening a mailbox from chat or a terminal, importing a legacy Gmail MCP setup, doctor, and wiring MCP clients. |
+| [`gmail-setup`](#gmail-setup) | Install agent-gmail and connect mailboxes: the Google Cloud OAuth client, inbox add and reauth, policies, import and removal, from chat or a terminal — every loosening and removal shown to the user as a change approval first — plus doctor and wiring MCP clients. |
 | [`gmail-thread-analysis`](#gmail-thread-analysis) | Brief the user on one Gmail conversation: a computed timeline of who wrote what and when, then your own labelled reading of decisions, asks, commitments, whose turn it is and how urgent it looks. |
 | [`gmail-triage`](#gmail-triage) | Sort a window of mail across every connected mailbox into Reply needed, Review, FYI and Noise, and propose archive and label changes for the user to approve as one batch. |
 | [`slack-posting`](#slack-posting) | Draft a Slack message and take it through the approval gate, including how many people a post would interrupt. |
@@ -130,7 +130,7 @@ Send a Gmail draft the user has approved, under the approval policy their mailbo
 
 ### `gmail-setup`
 
-Install agent-gmail and connect mailboxes: the Google Cloud OAuth client, inbox add and reauth, showing, renaming and tightening a mailbox from chat or a terminal, importing a legacy Gmail MCP setup, doctor, and wiring MCP clients.
+Install agent-gmail and connect mailboxes: the Google Cloud OAuth client, inbox add and reauth, policies, import and removal, from chat or a terminal — every loosening and removal shown to the user as a change approval first — plus doctor and wiring MCP clients.
 
 **Reach for it when:** 'set up Gmail', 'connect my work inbox', 'no mailbox is connected', 'it stopped working after a week'
 

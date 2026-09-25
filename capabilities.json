@@ -77,9 +77,9 @@
       "id": "gmail.client.add",
       "package": "gmail",
       "cli": "client add",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P4"
+      "mcp": "gmail_client_add",
+      "status": "both",
+      "reason": "A change approval on both surfaces. The tool reads the client JSON from a path on this machine, so the file never passes through the conversation, and neither side returns the secret."
     },
     {
       "id": "gmail.client.list",
@@ -92,9 +92,8 @@
       "id": "gmail.client.remove",
       "package": "gmail",
       "cli": "client remove",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P4"
+      "mcp": "gmail_client_remove",
+      "status": "both"
     },
     { "id": "gmail.inbox.add", "package": "gmail", "cli": "inbox add", "mcp": "gmail_inbox_add", "status": "both" },
     {
@@ -109,9 +108,17 @@
       "id": "gmail.inbox.reauth",
       "package": "gmail",
       "cli": "inbox reauth",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P4"
+      "mcp": "gmail_inbox_reauth",
+      "status": "both",
+      "reason": "Asking for more than the mailbox holds is a change approval, given before the sign-in link exists; renewing or narrowing starts at once."
+    },
+    {
+      "id": "gmail.inbox.reauth.finish",
+      "package": "gmail",
+      "cli": "inbox reauth",
+      "mcp": "gmail_inbox_finish",
+      "status": "both",
+      "reason": "The CLI completes a re-authorisation as `inbox reauth --finish <flowId>`. Over MCP gmail_inbox_finish finishes either kind of sign-in, because a tool call cannot sit waiting on a browser."
     },
     {
       "id": "gmail.inbox.list",
@@ -134,32 +141,21 @@
       "cli": "inbox policy",
       "mcp": "gmail_inbox_policy",
       "status": "both",
-      "reason": "Tightening, and reporting the policy in force. Loosening is its own row until change approvals reach it."
-    },
-    {
-      "id": "gmail.inbox.policy.loosen",
-      "package": "gmail",
-      "cli": "inbox policy",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P4",
-      "reason": "Loosening from chat needs a change approval (design §3)."
+      "reason": "Both directions, for the send policy and the change policy. Tightening applies at once; loosening is a change approval on either surface (design §3). One row, since what was the loosening row now names the same command and tool."
     },
     {
       "id": "gmail.inbox.import",
       "package": "gmail",
       "cli": "inbox import",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P4"
+      "mcp": "gmail_inbox_import",
+      "status": "both"
     },
     {
       "id": "gmail.inbox.remove",
       "package": "gmail",
       "cli": "inbox remove",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P4"
+      "mcp": "gmail_inbox_remove",
+      "status": "both"
     },
     { "id": "gmail.search", "package": "gmail", "cli": "search", "mcp": "gmail_search", "status": "both" },
     { "id": "gmail.message.read", "package": "gmail", "cli": "read", "mcp": "gmail_message_get", "status": "both" },
@@ -265,9 +261,9 @@
       "id": "gmail.confirm-clients.add",
       "package": "gmail",
       "cli": "confirm-clients add",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P4"
+      "mcp": "gmail_confirm_client_add",
+      "status": "both",
+      "reason": "Both refuse a client without a recent probe, then ask for a change approval: the probe is the evidence, the approval the decision."
     },
     {
       "id": "gmail.confirm-clients.remove",
@@ -282,7 +278,7 @@
       "cli": null,
       "mcp": "gmail_confirm_probe",
       "status": "exception",
-      "reason": "It tests the MCP client's own approval form by raising one, so a person can see it reaches them. A terminal has no form to test; what the probe shows is then recorded with `confirm-clients add`."
+      "reason": "It tests the MCP client's own approval form by raising one, so a person can see it reaches them. A terminal has no form to test; what the probe shows is then recorded with gmail_confirm_client_add or `confirm-clients add`."
     },
     { "id": "gmail.organise", "package": "gmail", "cli": "organise", "mcp": "gmail_organise", "status": "both" },
     {

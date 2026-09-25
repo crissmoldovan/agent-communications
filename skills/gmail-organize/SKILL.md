@@ -42,7 +42,7 @@ honest answer is what actually happens: they go to the bin, and they can be take
 | Reading what a message says | `gmail-search`, `gmail-thread-analysis` | Never opens a body to decide where it belongs. Labels come from the user, not from the mail. |
 | Writing or sending anything | `gmail-compose`, `gmail-send` | Nothing here transmits a message. Not a reply, not a forward, not an auto-acknowledgement. |
 | Permanent deletion | nobody — it is not implemented | Offers the bin and says so. Never presents binning as deletion, or looks for another route. |
-| Granting the permission to do this | the user, at a terminal | Reports `SCOPE_MISSING` and the command that grants it. Never retries around it. |
+| Granting the permission to do this | the user, with `gmail-setup`: a change approval, then Google's consent screen | Reports `SCOPE_MISSING` and the re-authorisation that grants it. Never retries around it. |
 
 ## Contract
 

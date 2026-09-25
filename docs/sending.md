@@ -51,9 +51,13 @@ Each mailbox has one. `agent-gmail inbox list` shows it.
 | `confirm` | a code typed at a terminal, or into a form from a client that has proved its forms reach a person | an agent you are not watching |
 | `never` | nothing sends; the draft waits in Gmail | mailboxes an agent should never speak for |
 
-Changing a policy to something weaker is a loosening: it needs a typed confirmation at a terminal, not a flag an
-agent can pass. Making it stricter needs nobody — `agent-gmail inbox policy <alias> --send confirm`, or the same
-change from chat with `gmail_inbox_policy`, which refuses the other direction and names the command instead.
+Changing a policy to something weaker is a loosening, and a loosening is a change you approve: the command, or
+`gmail_inbox_policy` from chat, shows you exactly what would change and does nothing until you say yes — no flag an
+agent passes on its own makes it happen. How that yes is given is the mailbox's **change policy**: `chat` (the
+default), your yes in the conversation, or `confirm`, a code typed at a terminal with `agentcomms approve <id>`.
+`agent-gmail inbox policy <alias> --change confirm` sets it, and moving it back to `chat` is itself approved at a
+terminal. Making a policy stricter needs nobody — `agent-gmail inbox policy <alias> --send confirm`, or the same
+change from chat.
 
 ### Risk escalation
 

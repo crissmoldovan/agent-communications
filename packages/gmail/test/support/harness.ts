@@ -15,7 +15,7 @@ import {
 import type { GoogleEndpoints } from '../../src/auth/endpoints.ts';
 import { resolveEndpoints } from '../../src/auth/endpoints.ts';
 import { buildAuthUrl, exchangeCode, newPkce } from '../../src/auth/oauth.ts';
-import { SCOPES } from '../../src/auth/scopes.ts';
+import { capabilitiesOf, SCOPES } from '../../src/auth/scopes.ts';
 import { clientSecretRef, refreshTokenRef } from '../../src/auth/session.ts';
 import { type FakeGoogle, type FakeGoogleOptions, startFakeGoogle } from './fake-google.ts';
 
@@ -43,6 +43,8 @@ export interface Harness {
     client?: string;
     tier?: string;
     grantedScopes?: string[];
+    /** Whether it was connected with the address book. Defaults to true, whatever `grantedScopes` says. */
+    contacts?: boolean;
     sendPolicy?: 'chat' | 'confirm' | 'never';
   }): Promise<InboxConfig>;
   /**
@@ -113,7 +115,7 @@ export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harne
       identity: inboxOptions.sub ? 'oidc' : 'legacy',
       client: clientName,
       tier: inboxOptions.tier ?? 'organize',
-      contacts: true,
+      contacts: inboxOptions.contacts ?? true,
       grantedScopes: inboxOptions.grantedScopes ?? ['https://www.googleapis.com/auth/gmail.modify'],
       secretRef: refreshTokenRef(id),
       sendPolicy: inboxOptions.sendPolicy,
@@ -147,7 +149,17 @@ export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harne
     const code = new URL(google.consent(authUrl)).searchParams.get('code') ?? '';
     const tokens = await exchangeCode({ client, endpoints, code, codeVerifier: pkce.verifier, redirectUri });
     const { scopes: _ignored, ...rest } = { ...inboxOptions, scopes: undefined };
-    return addInbox({ ...rest, refreshToken: tokens.refreshToken, grantedScopes: scopes });
+    /*
+     * Its contacts setting from what it was granted, as a real sign-in records it. `addInbox` says true whatever the
+     * scopes, and a mailbox that says it has the address book while its grant does not is one a re-authorisation
+     * would widen — which is a change approval, and not what a test re-authorising at the same tier is about.
+     */
+    return addInbox({
+      ...rest,
+      refreshToken: tokens.refreshToken,
+      grantedScopes: scopes,
+      contacts: capabilitiesOf(scopes).has('contacts'),
+    });
   };
 
   return { configDir, core, google, endpoints, env, addInbox, connectInbox };

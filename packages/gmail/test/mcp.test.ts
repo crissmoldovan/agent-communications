@@ -57,7 +57,10 @@ test('the tool list is the same whatever is configured, and every tool says what
   assert.deepEqual(withoutInboxes, [
     'gmail_attachment_download',
     'gmail_attachments_find',
+    'gmail_client_add',
+    'gmail_client_remove',
     'gmail_clients_list',
+    'gmail_confirm_client_add',
     'gmail_confirm_client_remove',
     'gmail_confirm_clients',
     'gmail_confirm_probe',
@@ -76,9 +79,12 @@ test('the tool list is the same whatever is configured, and every tool says what
     // but tell the person to go and run a CLI, which is where most of them stop.
     'gmail_inbox_add',
     'gmail_inbox_finish',
-    // Account management is reachable from a chat as from a terminal (2026-09-25), within what a chat may approve:
-    // reading, renaming and tightening. Loosening and removal wait for change approvals.
+    // Account management is reachable from a chat as from a terminal (2026-09-25). What loosens a safety setting, or
+    // cannot be taken back, asks for a change approval on either surface before it is done.
+    'gmail_inbox_import',
     'gmail_inbox_policy',
+    'gmail_inbox_reauth',
+    'gmail_inbox_remove',
     'gmail_inbox_rename',
     'gmail_inbox_show',
     'gmail_inboxes_list',
@@ -137,10 +143,16 @@ test('a read-only server does not offer the tools that would write', async () =>
       'gmail_inbox_finish',
       'gmail_send_cancel',
       'gmail_confirm_probe',
-      // Renaming, tightening and forgetting a trusted client all write the config.
+      // Renaming, setting a policy, trusting or forgetting a client, and the rest of account management all write.
       'gmail_inbox_rename',
       'gmail_inbox_policy',
+      'gmail_confirm_client_add',
       'gmail_confirm_client_remove',
+      'gmail_inbox_reauth',
+      'gmail_inbox_import',
+      'gmail_inbox_remove',
+      'gmail_client_add',
+      'gmail_client_remove',
     ]) {
       assert.ok(!names.includes(withheld), `${withheld} must not be offered by a read-only server`);
     }
@@ -413,45 +425,36 @@ test('a pinned gmail_setup answers about its own mailbox and nothing else', asyn
   }
 });
 
-test('an MCP server cannot finish a re-authorisation somebody started at the CLI', async () => {
+test('gmail_inbox_finish finishes a re-authorisation, which passed its approval before its link existed', async () => {
   /*
-   * The bound that makes the whole MCP exception defensible.
-   *
-   * `gmail_inbox_finish` takes a flow id and nothing else, and `finishSignIn` will complete either kind of flow.
-   * A `reauth` re-points an *existing* mailbox at a possibly different client and tier — so without this, the one
-   * tool whose permission to exist is that it only ever adds could quietly finish somebody else's re-consent and
-   * change a mailbox that was already there.
+   * This used to be refused. `gmail_inbox_finish` finished only new mailboxes, because re-authorising re-points an
+   * existing mailbox at the client and tier its flow asked for, and nothing over MCP could approve that. Now every
+   * re-authorisation that asks for more is approved before its link exists — gmail_inbox_reauth, or `inbox reauth`
+   * at a terminal — so a flow that exists has passed the one gate it needed. Finishing one here re-authorises the
+   * mailbox it was for, and says so.
    */
   const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
-  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
-  const context = new GmailContext({ core: harness.core, env: harness.env });
-
-  // Started the way the CLI starts one, in this process so nothing is left waiting.
-  const { startSignIn } = await import('../src/operations/signin.ts');
-  const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', detached: false });
-
-  // Nobody is going to sign in, so the listener's promise would reject in ten minutes, long after this test is
-  // over. Claimed now so it lands here rather than as an unhandled rejection in whatever is running then.
-  reauth.listener?.result.catch(() => undefined);
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1' });
 
   const { client, close } = await connect({ core: harness.core, env: harness.env });
   try {
-    const result = (await client.callTool({
+    // A renewal at the tier it has: nothing to approve, so the link comes back at once.
+    const started = (await client.callTool({ name: 'gmail_inbox_reauth', arguments: { inbox: 'work' } })) as ToolResult;
+    assert.equal(started.isError, undefined, JSON.stringify(started.content));
+    assert.equal(started.structuredContent?.applied, true);
+    const link = started.structuredContent?.result as { flowId: string; authUrl: string; nextTool: string };
+    assert.equal(link.nextTool, 'gmail_inbox_finish');
+    await fetch(harness.google.consent(link.authUrl, { sub: 'sub-1' }));
+
+    const finished = (await client.callTool({
       name: 'gmail_inbox_finish',
-      arguments: { flowId: reauth.flowId, waitSeconds: 0 },
+      arguments: { flowId: link.flowId, waitSeconds: 10 },
     })) as ToolResult;
-    assert.equal(result.isError, true, 'a reauth flow was finished through MCP');
-    const said = (result.content ?? []).map((part) => part.text ?? '').join(' ');
-    /*
-     * The code, not the wording. Without the guard this call still fails — it waits zero seconds for a consent
-     * nobody gave and reports APPROVAL_PENDING — and that error's hint names `inbox reauth`, so a test matching
-     * on "reauth" passes whether the guard is there or not. It has to be the refusal, not any failure.
-     */
-    assert.match(said, /"code":"USAGE"/, `refused for the wrong reason: ${said}`);
-    assert.match(said, /can only finish a new mailbox/);
+    assert.equal(finished.isError, undefined, JSON.stringify(finished.content));
+    assert.equal(finished.structuredContent?.reauthorised, true);
+    assert.equal(finished.structuredContent?.alias, 'work');
   } finally {
     await close();
-    await reauth.listener?.close();
   }
 });
 

@@ -143,22 +143,27 @@ there if you would rather drive them yourself.
 npx -y @agentcomms/gmail mcp install --client claude-code
 ```
 
-38 tools over stdio — the same operations the CLI runs. Works with Claude Code, Codex, Cursor, Claude Desktop,
+44 tools over stdio — the same operations the CLI runs. Works with Claude Code, Codex, Cursor, Claude Desktop,
 Gemini CLI and anything else that speaks MCP. [MCP tool reference](docs/reference/mcp-tools.md).
 
 **Onboarding works over MCP too**, so an agent asked to "set up Gmail" is not reduced to telling you to go and
-run a CLI. `gmail_setup` says what is missing and changes nothing; `gmail_inbox_add` returns a sign-in link and
-stops; `gmail_inbox_finish` completes it once Google returns the grant. The bounds are deliberate and enforced:
-a server started `--read-only` does not offer the two writers at all, nor does one pinned to a single mailbox,
-`gmail_inbox_finish` refuses any flow that is not an add, and no MCP tool registers an OAuth client or loosens a
-policy. [Why adding a mailbox from chat is safe](docs/superpowers/specs/2026-09-18-agent-communications-design.md).
+run a CLI. `gmail_setup` says what is missing and changes nothing; `gmail_client_add` registers the OAuth client
+from the path of the JSON you downloaded — the file never passes through the conversation, and no result carries
+its secret; `gmail_inbox_add` returns a sign-in link and stops; `gmail_inbox_finish` completes it once Google
+returns the grant. A server started `--read-only` does not offer any of the writers, nor does one pinned to a
+single mailbox. [Why adding a mailbox from chat is safe](docs/superpowers/specs/2026-09-18-agent-communications-design.md).
 
-**So does managing a mailbox.** `gmail_inbox_show`, `gmail_clients_list` and `gmail_confirm_clients` answer what
-`inbox show`, `client list` and `confirm-clients list` do; `gmail_inbox_rename` renames a mailbox;
-`gmail_inbox_policy` makes sending from it stricter and refuses to make it easier; `gmail_confirm_client_remove`
-stops trusting a client's approval forms. Each calls the same operation as its command. Loosening a policy, adding
-or removing an OAuth client, re-authorising, importing and removing a mailbox stay terminal commands until a change
-can be approved from chat ([the design](docs/superpowers/specs/2026-09-25-cli-mcp-parity-design.md)).
+**So does managing one — everything the CLI does to an account.** Showing, renaming, re-authorising
+(`gmail_inbox_reauth`), importing from another Gmail server (`gmail_inbox_import`), removing (`gmail_inbox_remove`),
+setting how sends and changes are approved (`gmail_inbox_policy`), removing an OAuth client
+(`gmail_client_remove`), and trusting or no longer trusting a client's approval forms (`gmail_confirm_client_add`,
+`gmail_confirm_client_remove`). Each calls the same operation as its command. Anything that loosens a safety
+setting or cannot be taken back is a **change approval**, on both surfaces: the tool returns a preview and an
+approval id instead of acting, the agent shows you the preview, and the change is made only when it calls again
+with that id after your yes. At a terminal you type `yes` to the same preview; an agent running the command gets
+it with exit 10 and runs it again with `--approval <id>`. Under the `confirm` change policy
+(`inbox policy <alias> --change confirm`) you approve with `agentcomms approve <id>` and a code instead, and
+moving a mailbox off `confirm` is itself approved that way ([the design](docs/superpowers/specs/2026-09-25-cli-mcp-parity-design.md)).
 
 ### Slack
 
@@ -261,7 +266,7 @@ cannot drift from what the software does.
 | [`gmail-search`](skills/gmail-search/SKILL.md) | Find mail across one or more mailboxes and read what you find, honestly about how much you read. Symptoms: 'find that email from Sam', 'what did the invoice actually say', 'search my inboxes for anything about Phase 2', 'read me that thread'. Not for judging what a conversation means — gmail-thread-analysis does that. |
 | [`gmail-security`](skills/gmail-security/SKILL.md) | Judge whether a message is what it claims to be — Google's authentication verdict, the sender warnings, the link flags and what the sanitiser removed. Symptoms: 'is this real?', 'they've changed their bank details', 'this invoice looks off', 'why is this flagged?'. Not for sending anything about it — gmail-send does that. |
 | [`gmail-send`](skills/gmail-send/SKILL.md) | Send a Gmail draft the user has approved, under the approval policy their mailbox is set to. Symptoms: 'send it', 'ok send that', 'go ahead and send the reply', 'why won't it send', 'it says approval required'. Not for writing the message — gmail-compose writes drafts and hands them here. |
-| [`gmail-setup`](skills/gmail-setup/SKILL.md) | Install agent-gmail and connect mailboxes: the Google Cloud OAuth client, inbox add and reauth, showing, renaming and tightening a mailbox from chat or a terminal, importing a legacy Gmail MCP setup, doctor, and wiring MCP clients. Symptoms: 'set up Gmail', 'connect my work inbox', 'no mailbox is connected', 'it stopped working after a week'. Not for reading or writing mail — gmail-search and gmail-compose do that. |
+| [`gmail-setup`](skills/gmail-setup/SKILL.md) | Install agent-gmail and connect mailboxes: the Google Cloud OAuth client, inbox add and reauth, policies, import and removal, from chat or a terminal — every loosening and removal shown to the user as a change approval first — plus doctor and wiring MCP clients. Symptoms: 'set up Gmail', 'connect my work inbox', 'no mailbox is connected', 'it stopped working after a week'. Not for reading or writing mail — gmail-search and gmail-compose do that. |
 | [`gmail-thread-analysis`](skills/gmail-thread-analysis/SKILL.md) | Brief the user on one Gmail conversation: a computed timeline of who wrote what and when, then your own labelled reading of decisions, asks, commitments, whose turn it is and how urgent it looks. Symptoms: 'what's going on in this thread?', 'did we agree a date?', 'who owes what here?', 'catch me up on this'. Not for finding the thread — gmail-search does that. |
 | [`gmail-triage`](skills/gmail-triage/SKILL.md) | Sort a window of mail across every connected mailbox into Reply needed, Review, FYI and Noise, and propose archive and label changes for the user to approve as one batch. Symptoms: 'triage my inboxes', 'what needs my attention today', 'catch me up on email'. Not for applying the changes — gmail-organize does that. |
 | [`slack-posting`](skills/slack-posting/SKILL.md) | Draft a Slack message and take it through the approval gate, including how many people a post would interrupt. Symptoms: 'post this to #engineering', 'reply in that thread', 'let the team know', 'react to that message'. Not for reading — slack-reading does that; not for connecting a workspace — slack-setup does. |

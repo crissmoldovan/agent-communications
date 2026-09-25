@@ -4,11 +4,11 @@ import {
   canPrompt,
   colorEnabled,
   EXIT_CODES,
+  type GatedChange,
+  gatedChangeAtTerminal,
   installExitStatus,
-  type LooseningConsent,
   type OutputOptions,
   paint,
-  requirePerson,
   runCommand,
   type StoreKind,
   type Streams,
@@ -20,21 +20,19 @@ import { GmailContext, type GmailContextOptions } from '../context.ts';
 import type { Launcher, SupportedClient } from '../mcp/install.ts';
 import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts';
 import { downloadAttachments, findAttachments } from '../operations/attachments.ts';
-import { clientAdd, clientList, clientRemove } from '../operations/clients.ts';
-import { addConfirmClient, listConfirmClients, removeConfirmClient } from '../operations/confirm-clients.ts';
+import { clientAddChange, clientList, clientRemoveChange } from '../operations/clients.ts';
+import { confirmClientAddChange, listConfirmClients, removeConfirmClient } from '../operations/confirm-clients.ts';
 import { followUps, searchContacts } from '../operations/contacts.ts';
 import { doctor } from '../operations/doctor.ts';
 import { createDraft, deleteDraft, getDraft, listDrafts, replyDraft, updateDraft } from '../operations/drafts.ts';
 import { exportMail } from '../operations/export.ts';
-import { importLegacy } from '../operations/import-legacy.ts';
+import { inboxImportChange } from '../operations/import-legacy.ts';
 import {
   inboxList,
-  inboxPolicy,
-  inboxRemove,
+  inboxPolicyChange,
+  inboxRemoveChange,
   inboxRename,
   inboxShow,
-  type SendPolicyChange,
-  sendPolicyChange,
   whoami,
 } from '../operations/inboxes.ts';
 import { runOauthListener } from '../operations/oauth-listen.ts';
@@ -49,7 +47,7 @@ import {
   prepareSend,
   revokeApproval,
 } from '../operations/send.ts';
-import { finishSignIn, startSignIn } from '../operations/signin.ts';
+import { finishSignIn, inboxReauthChange, startSignIn } from '../operations/signin.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
 import { askFor } from './prompt.ts';
@@ -257,19 +255,70 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     includeProfile: Boolean(options.profile),
   });
 
+  /**
+   * This command as it was typed, without an `--approval` it already carried: what to run again once a change it
+   * prepared has been approved.
+   *
+   * From the arguments themselves rather than rebuilt per command, so every flag the person or agent gave is in it
+   * — `--rename`, `--dir`, `--revoke` — and running it again prepares nothing new: it claims the approval for the
+   * same change.
+   */
+  const again = (): string => {
+    const kept: string[] = [];
+    for (let index = 0; index < argv.length; index++) {
+      const arg = argv[index] ?? '';
+      if (arg === '--approval') {
+        index++;
+        continue;
+      }
+      if (arg.startsWith('--approval=')) continue;
+      kept.push(arg);
+    }
+    // Quoted for a POSIX shell wherever it holds anything a shell would read differently, `~` included: a path the
+    // person quoted to keep it literal must stay literal when it is pasted back.
+    const quoted = kept.map((arg) => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`));
+    return ['agent-gmail', ...quoted].join(' ');
+  };
+
+  /**
+   * A command that changes an account, asked the way every surface asks: through core's one flow.
+   *
+   * With `--approval <id>` it claims that approval and applies the change. Without one, a change that loosens nothing
+   * is applied at once; one that does is prepared, and a person at this terminal approves it there — a yes under the
+   * `chat` change policy, the code under `confirm` — while an agent, or anything without a terminal, gets the preview
+   * and the approval id and exits 10. `gmail_*` tools call the same flow with the same change, so the two surfaces
+   * cannot ask differently.
+   */
+  const changed = <T>(
+    context: GmailContext,
+    globalOptions: GlobalOptions,
+    change: GatedChange<T>,
+    approvalId: unknown,
+  ): Promise<T> =>
+    gatedChangeAtTerminal(context.core, change, {
+      approvalId: typeof approvalId === 'string' ? approvalId : undefined,
+      env,
+      // `--no-input` means nobody is asked anything. The flow's one way to hear that is `json`, which it reads only
+      // to decide whether a person could answer a question — so both say the same thing to it.
+      output: { json: globalOptions.json || globalOptions.noInput, color: globalOptions.color },
+      command: again(),
+      streams,
+    });
+
   // ---- clients ----------------------------------------------------------------
   const client = program.command('client').description('the Google Cloud OAuth client every inbox signs in through');
   client
     .command('add <path>')
-    .description('register a Desktop OAuth client JSON downloaded from Google Cloud')
+    .description('register a Desktop OAuth client JSON downloaded from Google Cloud (needs a change approval)')
     .option('--name <name>', 'register it under this name', 'default')
     .addOption(new Option('--store <store>', 'where secrets are kept (first time only)').choices(['keychain', 'file']))
     .option('--move', 'delete the downloaded file once the secret is stored', false)
     .option('--replace', 'rotate the secret of the client already registered under this name', false)
     .option('--no-probe', 'do not check the credentials with Google first')
+    .option('--approval <id>', 'apply the change this approval was given for')
     .action(
       act(async (context, globalOptions, path: string, options: Options) => {
-        const result = await clientAdd(context, {
+        const change = clientAddChange(context, {
           path,
           name: String(options.name ?? 'default'),
           store: options.store as StoreKind | undefined,
@@ -277,6 +326,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           replace: Boolean(options.replace),
           noProbe: options.probe === false,
         });
+        const result = await changed(context, globalOptions, change, options.approval);
         writeResult(result, output(), (data) => renderClientAdd(data, globalOptions.color), streams);
       }),
     );
@@ -290,11 +340,12 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     );
   client
     .command('remove <name>')
-    .description('forget an OAuth client and its secret')
+    .description('forget an OAuth client and delete its secret (needs a change approval)')
+    .option('--approval <id>', 'apply the change this approval was given for')
     .action(
-      act(async (context, _globalOptions, name: string) => {
+      act(async (context, globalOptions, name: string, options: Options) => {
         writeResult(
-          await clientRemove(context, name),
+          await changed(context, globalOptions, clientRemoveChange(context, name), options.approval),
           output(),
           (data) => `Removed the OAuth client "${data.name}".`,
           streams,
@@ -355,8 +406,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     // A person at a terminal can wait for the browser; an agent cannot, so its sign-in is two commands.
     const interactive =
       !options.start && canPrompt(env, streams, { json: globalOptions.json, noInput: globalOptions.noInput });
-    const started = await startSignIn(context, {
-      mode,
+    const signInOptions = {
       alias,
       tier: options.tier ? String(options.tier) : undefined,
       contacts: options.contacts === undefined ? undefined : options.contacts !== false,
@@ -366,7 +416,13 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       port: options.port === undefined ? undefined : Number(options.port),
       detached: !interactive,
       listenerCommand: deps.listenerCommand,
-    });
+    };
+    // A re-authorisation that asks for more than the mailbox holds is approved before the link exists, exactly as
+    // `gmail_inbox_reauth` approves it; renewing or narrowing a grant starts at once.
+    const started =
+      mode === 'reauth'
+        ? await changed(context, globalOptions, inboxReauthChange(context, signInOptions), options.approval)
+        : await startSignIn(context, { ...signInOptions, mode });
 
     if (!interactive || !started.listener) {
       writeResult(started, output(), (data) => renderSignInStarted(data, mode, globalOptions.color), streams);
@@ -385,12 +441,16 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
   );
 
   withSignInOptions(
-    inbox.command('reauth [alias]').description('sign in again: renew the grant, or change how much access it has'),
-  ).action(
-    act(async (context, globalOptions, alias: string | undefined, options: Options) => {
-      await signIn(context, globalOptions, 'reauth', alias, options);
-    }),
-  );
+    inbox
+      .command('reauth [alias]')
+      .description('sign in again: renew the grant, or change how much access it has (more needs a change approval)'),
+  )
+    .option('--approval <id>', 'start the sign-in this approval was given for')
+    .action(
+      act(async (context, globalOptions, alias: string | undefined, options: Options) => {
+        await signIn(context, globalOptions, 'reauth', alias, options);
+      }),
+    );
 
   inbox
     .command('list')
@@ -431,17 +491,30 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
 
   inbox
     .command('policy <alias>')
-    .description('how sending from this inbox must be approved')
-    .requiredOption('--send <policy>', 'chat | confirm | never')
+    .description('how sending from this inbox, and loosening its settings, must be approved (looser needs approval)')
+    .option('--send <policy>', 'how a send is approved: chat | confirm | never')
+    .option('--change <policy>', 'how a loosening of its settings is approved: chat | confirm')
+    .option('--approval <id>', 'apply the change this approval was given for')
     .action(
       act(async (context, globalOptions, alias: string, options: Options) => {
-        // Which direction this goes is the operation's call, so `gmail_inbox_policy` cannot disagree with it.
-        const change = await sendPolicyChange(context, alias, String(options.send));
-        const consent = change.loosens ? await consentForLoosening(change, globalOptions) : undefined;
+        // Which direction this goes is core's classifier's call, through the same change `gmail_inbox_policy` runs,
+        // so the two surfaces cannot disagree about what needs approval.
+        const change = inboxPolicyChange(context, alias, {
+          sendPolicy: options.send === undefined ? undefined : String(options.send),
+          changePolicy: options.change === undefined ? undefined : String(options.change),
+        });
         writeResult(
-          await inboxPolicy(context, alias, change.sendPolicy, consent),
+          await changed(context, globalOptions, change, options.approval),
           output(),
-          (data) => `Sending from "${data.alias}" now needs: ${data.sendPolicy} (was ${data.previous}).`,
+          (data) =>
+            [
+              ...(options.send === undefined
+                ? []
+                : [`Sending from "${data.alias}" now needs: ${data.sendPolicy} (was ${data.previous}).`]),
+              ...(options.change === undefined
+                ? []
+                : [`Loosening "${data.alias}" now needs: ${data.changePolicy} (was ${data.previousChangePolicy}).`]),
+            ].join('\n'),
           streams,
         );
       }),
@@ -449,7 +522,9 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
 
   inbox
     .command('import [source]')
-    .description('copy the mailboxes set up in another Gmail MCP server (default: @artymclabin/gmail-mcp)')
+    .description(
+      'copy the mailboxes set up in another Gmail MCP server (default: @artymclabin/gmail-mcp; needs a change approval)',
+    )
     .option('--dir <path>', 'where that server keeps its files', '~/.gmail-mcp')
     .option('--name <name>', 'register its OAuth client under this name', 'imported')
     .addOption(new Option('--store <store>', 'where secrets are kept (first time only)').choices(['keychain', 'file']))
@@ -459,6 +534,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       'import one under another name (repeatable)',
       (value: string, previous: string[] = []) => [...previous, value],
     )
+    .option('--approval <id>', 'apply the import this approval was given for')
     .action(
       act(async (context, globalOptions, source: string | undefined, options: Options) => {
         if (source && source !== 'artymclabin') {
@@ -466,25 +542,33 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             hint: 'Only `artymclabin` (and the servers sharing its file layout) is supported: `agent-gmail inbox import`.',
           });
         }
-        const result = await importLegacy(context, {
+        // A dry run changes nothing and asks nobody; the import itself connects accounts, and is approved first.
+        const change = inboxImportChange(context, {
           dir: options.dir ? String(options.dir) : undefined,
           clientName: options.name ? String(options.name) : undefined,
           store: options.store as StoreKind | undefined,
           dryRun: Boolean(options.dryRun),
           renames: Array.isArray(options.rename) ? options.rename.map(String) : [],
         });
+        const result = await changed(context, globalOptions, change, options.approval);
         writeResult(result, output(), (data) => renderImport(data, globalOptions.color), streams);
       }),
     );
 
   inbox
     .command('remove <alias>')
-    .description('disconnect a mailbox')
+    .description('disconnect a mailbox and delete its token (needs a change approval)')
     .option('--revoke', 'also ask Google to revoke the token (may affect other tools sharing the grant)', false)
+    .option('--approval <id>', 'apply the removal this approval was given for')
     .action(
-      act(async (context, _globalOptions, alias: string, options: Options) => {
+      act(async (context, globalOptions, alias: string, options: Options) => {
         writeResult(
-          await inboxRemove(context, alias, { revoke: Boolean(options.revoke) }),
+          await changed(
+            context,
+            globalOptions,
+            inboxRemoveChange(context, alias, { revoke: Boolean(options.revoke) }),
+            options.approval,
+          ),
           output(),
           (data) =>
             `Disconnected "${data.alias}" (${data.email}).\n` +
@@ -915,24 +999,13 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
 
   confirmClients
     .command('add <name>')
-    .description('trust a client that has just passed the probe')
+    .description('trust a client that has just passed the probe (needs a change approval)')
+    .option('--approval <id>', 'apply the change this approval was given for')
     .action(
-      act(async (context, globalOptions, name: string) => {
-        await requirePerson(env, streams, {
-          refusedToAgent: 'only a person can decide which clients they trust',
-          refusedWithoutTerminal: 'this needs an interactive terminal',
-          command: `agent-gmail confirm-clients add ${name}`,
-          prompt:
-            `This lets "${name}" ask you to approve a send in its own window, instead of in a terminal.\n` +
-            'Only say yes if you just answered its probe form yourself.',
-          color: globalOptions.color,
-          json: globalOptions.json,
-          noInput: globalOptions.noInput,
-        });
-        const clients = await addConfirmClient(context, name, {
-          kind: 'loosening-consent',
-          paths: ['defaults.confirm.elicitationClients'],
-        });
+      act(async (context, globalOptions, name: string, options: Options) => {
+        // The probe is the evidence and the approval is the decision: the change refuses a client that has not
+        // passed the probe before anybody is asked, and a person approves the rest as every loosening is approved.
+        const clients = await changed(context, globalOptions, confirmClientAddChange(context, name), options.approval);
         writeResult(clients, output(), (data) => `Trusted to show approval forms: ${data.join(', ')}.`, streams);
       }),
     );
@@ -1275,6 +1348,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
      */
     .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
     .option('--restart', 'walk the Google Cloud steps again even if a client is registered', false)
+    .option('--approval <id>', 'register the client this approval was given for')
     .option('--no-tui', 'plain one-line prompts instead of lists and fields')
     .option('--no-browser', 'print the links instead of opening them')
     .action(
@@ -1316,13 +1390,19 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           if (state.next === 'client') {
             const path = options.clientJson ? String(options.clientJson) : '';
             if (path) {
-              const { clientAdd } = await import('../operations/clients.ts');
-              const added = await clientAdd(context, {
-                path,
-                name: 'desktop',
-                ...(options.store ? { store: String(options.store) as 'keychain' | 'file' } : {}),
-                ...(options.move === true ? { move: true } : {}),
-              });
+              // The same change as `client add`, approved the same way: an agent gets the preview and the approval
+              // id, and runs this again with `--approval <id>` once the person has agreed.
+              const added = await changed(
+                context,
+                globalOptions,
+                clientAddChange(context, {
+                  path,
+                  name: 'desktop',
+                  ...(options.store ? { store: String(options.store) as 'keychain' | 'file' } : {}),
+                  ...(options.move === true ? { move: true } : {}),
+                }),
+                options.approval,
+              );
               did.push(
                 `registered the OAuth client as "${added.name}" (secret in the ${added.store} store)` +
                   (added.sourceRemoved ? ', and removed the downloaded file' : ''),
@@ -1515,13 +1595,18 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             });
           }
 
-          const { clientAdd } = await import('../operations/clients.ts');
-          const added = await clientAdd(context, {
-            path,
-            name: 'desktop',
-            ...(options.store ? { store: String(options.store) as 'keychain' | 'file' } : {}),
-            ...(options.move === true ? { move: true } : {}),
-          });
+          // Asked here as `client add` asks: the person reads what is registered, and says yes to it.
+          const added = await changed(
+            context,
+            globalOptions,
+            clientAddChange(context, {
+              path,
+              name: 'desktop',
+              ...(options.store ? { store: String(options.store) as 'keychain' | 'file' } : {}),
+              ...(options.move === true ? { move: true } : {}),
+            }),
+            options.approval,
+          );
           out.write(`\n${bold('Client registered')} as "${added.name}".\n`);
           // What happened, not what usually happens: this said "your keychain, never to a file" whatever the
           // store turned out to be, including on the machines where the keychain is exactly what is missing.
@@ -1674,26 +1759,6 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         await runOauthListener(context, flowId);
       }),
     );
-
-  /**
-   * A loosening's consent: a person at this terminal typing a challenge. Only asked for once the operation has said
-   * the change loosens — tightening never asks anybody anything.
-   */
-  const consentForLoosening = async (
-    change: SendPolicyChange,
-    globalOptions: GlobalOptions,
-  ): Promise<LooseningConsent> => {
-    await requirePerson(env, streams, {
-      refusedToAgent: 'only a person can make sending easier, not an agent',
-      refusedWithoutTerminal: 'making sending easier needs an interactive terminal',
-      command: `agent-gmail inbox policy ${change.alias} --send ${change.sendPolicy}`,
-      prompt: `This makes sending from "${change.alias}" easier (${change.previous} → ${change.sendPolicy}).`,
-      color: globalOptions.color,
-      json: globalOptions.json,
-      noInput: globalOptions.noInput,
-    });
-    return { kind: 'loosening-consent', paths: [change.path] };
-  };
 
   try {
     await program.parseAsync([...argv], { from: 'user' });

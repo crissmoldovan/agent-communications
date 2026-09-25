@@ -1,14 +1,10 @@
 import assert from 'node:assert/strict';
-import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { Client } from '@modelcontextprotocol/client';
-import { InMemoryTransport } from '@modelcontextprotocol/server';
-import { run } from '../src/cli/program.ts';
 import { GmailContext } from '../src/context.ts';
-import { createGmailMcpServer } from '../src/mcp/server.ts';
 import { addConfirmClient, completeProbe, startProbe } from '../src/operations/confirm-clients.ts';
 import { inboxPolicy } from '../src/operations/inboxes.ts';
 import { type Harness, migrateNamesForTest, newHarness, TEST_CLIENT_SECRET } from './support/harness.ts';
+import { cli, connect, toolError, wire } from './support/surfaces.ts';
 
 /*
  * Account management from both surfaces.
@@ -18,94 +14,6 @@ import { type Harness, migrateNamesForTest, newHarness, TEST_CLIENT_SECRET } fro
  * result, and the same refusal — checked by running both against one configuration and comparing what came back,
  * rather than by asserting each side separately and trusting they agree.
  */
-
-interface ToolResult {
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-  content?: Array<{ type: string; text?: string }>;
-}
-
-interface Envelope<T> {
-  ok: boolean;
-  data?: T;
-  error?: { code: string; message: string; hint?: string };
-}
-
-async function connect(options: Parameters<typeof createGmailMcpServer>[0]): Promise<{
-  client: Client;
-  call: (name: string, args?: Record<string, unknown>) => Promise<ToolResult>;
-  names: () => Promise<string[]>;
-  close: () => Promise<void>;
-}> {
-  const built = await createGmailMcpServer(options);
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'test-client', version: '1.0.0' });
-  await Promise.all([built.server.connect(serverTransport), client.connect(clientTransport)]);
-  return {
-    client,
-    call: async (name, args = {}) => (await client.callTool({ name, arguments: args })) as ToolResult,
-    names: async () => (await client.listTools()).tools.map((tool) => tool.name).sort(),
-    close: async () => {
-      await client.close();
-      await built.close();
-    },
-  };
-}
-
-/** Runs the CLI in-process, answering the typed challenge as a person at a terminal would when asked to. */
-async function cli(
-  harness: Harness,
-  argv: string[],
-  options: { tty?: boolean; answerChallenge?: boolean; stdin?: string; env?: NodeJS.ProcessEnv } = {},
-): Promise<{ code: number; stdout: string; stderr: string; envelope: <T>() => Envelope<T> }> {
-  let stdout = '';
-  let stderr = '';
-  const out = new PassThrough();
-  const err = new PassThrough();
-  const input = new PassThrough();
-  if (options.stdin !== undefined) input.write(options.stdin);
-  out.on('data', (chunk) => {
-    stdout += String(chunk);
-  });
-  let answered = false;
-  err.on('data', (chunk) => {
-    stderr += String(chunk);
-    if (options.answerChallenge && !answered) {
-      // The code is invented per run, so it is read back off the prompt.
-      const asked = /Type (\S+) to confirm/.exec(stderr);
-      if (asked) {
-        answered = true;
-        input.write(`${asked[1]}\n`);
-      }
-    }
-  });
-  const tty = options.tty ?? false;
-  const code = await run(argv, {
-    core: harness.core,
-    env: { ...harness.env, ...options.env },
-    streams: {
-      stdout: Object.assign(out, { isTTY: tty }),
-      stderr: Object.assign(err, { isTTY: tty }),
-      stdin: Object.assign(input, { isTTY: tty }),
-    },
-  });
-  return { code, stdout, stderr, envelope: <T>() => JSON.parse(stdout) as Envelope<T> };
-}
-
-/**
- * A tool's result as a client receives it: JSON, so a key whose value is `undefined` is not there at all, exactly as
- * it is not in the CLI's envelope. The in-memory transport these tests use hands the object over as it was built.
- */
-function wire(result: ToolResult): unknown {
-  assert.equal(result.isError, undefined, JSON.stringify(result.content));
-  return JSON.parse(JSON.stringify(result.structuredContent));
-}
-
-/** The error a tool returned, as the envelope's `error` is shaped. */
-function toolError(result: ToolResult): { code: string; message: string; hint: string | null } {
-  assert.equal(result.isError, true, `expected a refusal, got ${JSON.stringify(result.structuredContent)}`);
-  return result.structuredContent?.error as { code: string; message: string; hint: string | null };
-}
 
 async function twoMailboxes(): Promise<Harness> {
   const harness = await newHarness({
@@ -133,14 +41,13 @@ test('the confirm-clients tools map one to one onto the CLI, and the probe stays
   const { names, close } = await connect({ core: harness.core, env: harness.env });
   try {
     /*
-     * Three tools, three different operations: the probe is the evidence (an MCP form has no terminal
-     * equivalent), the list is `confirm-clients list`, and removing is `confirm-clients remove`. Adding a name is
-     * a loosening, so it stays a terminal command until change approvals exist — a fourth tool here would be one
-     * that trusts a client on the model's say-so.
+     * Four tools, four different operations: the probe is the evidence (an MCP form has no terminal equivalent), the
+     * list is `confirm-clients list`, adding is `confirm-clients add` and removing is `confirm-clients remove`. Adding
+     * a name is a loosening, so the tool, like the command, asks for a change approval before it writes it.
      */
     assert.deepEqual(
       (await names()).filter((name) => name.startsWith('gmail_confirm')),
-      ['gmail_confirm_client_remove', 'gmail_confirm_clients', 'gmail_confirm_probe'],
+      ['gmail_confirm_client_add', 'gmail_confirm_client_remove', 'gmail_confirm_clients', 'gmail_confirm_probe'],
     );
   } finally {
     await close();
@@ -159,6 +66,20 @@ test('a pinned server does not rename, and a read-only one changes nothing about
      * possible use strands the server that offers it is not a tool worth offering there.
      */
     assert.equal(offered.includes('gmail_inbox_rename'), false, 'a pinned server offered to rename');
+    /*
+     * Nor the rest of account management. Re-authorising ends in gmail_inbox_finish, which a pinned server does not
+     * offer; removing its own mailbox strands it; the others reach past the one mailbox it was narrowed to.
+     */
+    for (const withheld of [
+      'gmail_inbox_reauth',
+      'gmail_inbox_import',
+      'gmail_inbox_remove',
+      'gmail_client_add',
+      'gmail_client_remove',
+      'gmail_confirm_client_add',
+    ]) {
+      assert.equal(offered.includes(withheld), false, `a pinned server offered ${withheld}`);
+    }
     // Reading its own mailbox, and making sending from it stricter, stay.
     for (const kept of ['gmail_inbox_show', 'gmail_inbox_policy', 'gmail_clients_list', 'gmail_confirm_clients']) {
       assert.ok(offered.includes(kept), `a pinned server should offer ${kept}`);
@@ -173,7 +94,17 @@ test('a pinned server does not rename, and a read-only one changes nothing about
     for (const read of ['gmail_inbox_show', 'gmail_clients_list', 'gmail_confirm_clients']) {
       assert.ok(offered.includes(read), `a read-only server should offer ${read}`);
     }
-    for (const write of ['gmail_inbox_rename', 'gmail_inbox_policy', 'gmail_confirm_client_remove']) {
+    for (const write of [
+      'gmail_inbox_rename',
+      'gmail_inbox_policy',
+      'gmail_confirm_client_remove',
+      'gmail_inbox_reauth',
+      'gmail_inbox_import',
+      'gmail_inbox_remove',
+      'gmail_client_add',
+      'gmail_client_remove',
+      'gmail_confirm_client_add',
+    ]) {
       assert.equal(offered.includes(write), false, `a read-only server offered ${write}`);
     }
   } finally {
@@ -185,7 +116,7 @@ test('a pinned server does not rename, and a read-only one changes nothing about
 
 test('gmail_inbox_show answers exactly what `inbox show --json` does', async () => {
   const harness = await twoMailboxes();
-  await inboxPolicy(new GmailContext({ core: harness.core, env: harness.env }), 'work', 'confirm');
+  await inboxPolicy(new GmailContext({ core: harness.core, env: harness.env }), 'work', { sendPolicy: 'confirm' });
 
   const shown = await cli(harness, ['inbox', 'show', 'work', '--json']);
   assert.equal(shown.code, 0, shown.stderr);
@@ -195,6 +126,8 @@ test('gmail_inbox_show answers exactly what `inbox show --json` does', async () 
     assert.deepEqual(wire(result), shown.envelope().data);
     assert.equal(result.structuredContent?.sendPolicy, 'confirm');
     assert.equal(result.structuredContent?.sendPolicyInherited, false);
+    assert.equal(result.structuredContent?.changePolicy, 'chat');
+    assert.equal(result.structuredContent?.changePolicyInherited, true);
 
     // The same refusal for a name that is not there, from the same operation.
     const missing = await cli(harness, ['inbox', 'show', 'nope', '--json']);
@@ -214,7 +147,7 @@ test('a pinned server shows and tightens its own mailbox, and refuses any other'
     assert.equal(own.structuredContent?.alias, 'work');
     assert.match(toolError(await call('gmail_inbox_show', { inbox: 'home' })).message, /only serves the "work"/);
 
-    assert.equal((await call('gmail_inbox_policy', { sendPolicy: 'never' })).isError, undefined);
+    assert.equal((await call('gmail_inbox_policy', { sendPolicy: 'never' })).structuredContent?.applied, true);
     const other = toolError(await call('gmail_inbox_policy', { inbox: 'home', sendPolicy: 'never' }));
     assert.match(other.message, /only serves the "work"/);
     const config = await harness.core.config.load();
@@ -295,13 +228,21 @@ test('gmail_inbox_policy tightens as `inbox policy` does, with the same result',
   try {
     const byTool = await call('gmail_inbox_policy', { inbox: 'work', sendPolicy: 'confirm' });
     assert.equal(byTool.isError, undefined, JSON.stringify(byTool.content));
-    assert.deepEqual(byTool.structuredContent, byCommand.envelope().data);
-    assert.deepEqual(byTool.structuredContent, { alias: 'work', sendPolicy: 'confirm', previous: 'chat' });
+    // Tightening asks nobody, so it comes back applied, and what it did is exactly what the command printed.
+    assert.deepEqual(byTool.structuredContent, { applied: true, result: byCommand.envelope().data });
+    assert.deepEqual(byTool.structuredContent?.result, {
+      alias: 'work',
+      sendPolicy: 'confirm',
+      previous: 'chat',
+      changePolicy: 'chat',
+      previousChangePolicy: 'chat',
+    });
 
     // Further, to never, and the same value again: neither loosens anything.
     assert.equal((await call('gmail_inbox_policy', { inbox: 'work', sendPolicy: 'never' })).isError, undefined);
     assert.equal((await call('gmail_inbox_policy', { inbox: 'work', sendPolicy: 'never' })).isError, undefined);
     assert.equal((await viaTool.core.config.load()).inboxes.work?.sendPolicy, 'never');
+    assert.deepEqual(await viaTool.core.approvals.list(), [], 'tightening asked somebody');
 
     const audit = await viaTool.core.audit.tail({ inbox: 'work' });
     assert.ok(audit.some((entry) => entry.operation === 'inbox.policy' && entry.surface === 'mcp'));
@@ -310,45 +251,53 @@ test('gmail_inbox_policy tightens as `inbox policy` does, with the same result',
   }
 });
 
-test('gmail_inbox_policy refuses a loosening, says it needs a change approval, and changes nothing', async () => {
+test('gmail_inbox_policy asks for a change approval to loosen, and changes nothing until it is claimed', async () => {
   const harness = await twoMailboxes();
   const { call, close } = await connect({ core: harness.core, env: harness.env });
   try {
     await call('gmail_inbox_policy', { inbox: 'work', sendPolicy: 'never' });
     for (const looser of ['confirm', 'chat']) {
-      const refused = toolError(await call('gmail_inbox_policy', { inbox: 'work', sendPolicy: looser }));
-      assert.equal(refused.code, 'LOOSENING_REFUSED', looser);
-      assert.match(refused.message, /needs a change approval/, looser);
-      // The one thing that works today, named exactly, so the agent can hand it over rather than hunt for another way.
-      assert.match(refused.hint ?? '', new RegExp(`agent-gmail inbox policy work --send ${looser}`), looser);
+      const asked = await call('gmail_inbox_policy', { inbox: 'work', sendPolicy: looser });
+      // Not a refusal any more: the preview a person reads, and the id that makes it once they have said yes.
+      assert.equal(asked.isError, undefined, JSON.stringify(asked.content));
+      assert.equal(asked.structuredContent?.applied, false, looser);
+      assert.equal(asked.structuredContent?.approvalRequired, true, looser);
+      assert.match(String(asked.structuredContent?.approvalId), /\S/);
+      assert.match(String(asked.structuredContent?.preview), new RegExp(`send policy: never → ${looser}`), looser);
       assert.equal((await harness.core.config.load()).inboxes.work?.sendPolicy, 'never', `${looser} was written`);
     }
     // A mailbox that inherits the default is measured against the default: `chat` is not looser than `chat`.
     const inherited = await call('gmail_inbox_policy', { inbox: 'home', sendPolicy: 'chat' });
-    assert.equal(inherited.isError, undefined, JSON.stringify(inherited.content));
+    assert.equal(inherited.structuredContent?.applied, true, JSON.stringify(inherited.content));
   } finally {
     await close();
   }
 });
 
-test('the refusal lives in the operation, so no surface that forgets to ask for consent can loosen', async () => {
+test('the refusal lives in the config store, so no surface that forgets to ask for approval can loosen', async () => {
   const harness = await twoMailboxes();
   const context = new GmailContext({ core: harness.core, env: harness.env });
-  await inboxPolicy(context, 'work', 'never');
-  await assert.rejects(inboxPolicy(context, 'work', 'chat'), (error: Error & { code?: string }) => {
+  await inboxPolicy(context, 'work', { sendPolicy: 'never' });
+  // The operation with no consent: what a surface that skipped core's change flow would be calling.
+  await assert.rejects(inboxPolicy(context, 'work', { sendPolicy: 'chat' }), (error: Error & { code?: string }) => {
     assert.equal(error.code, 'LOOSENING_REFUSED');
-    assert.match(error.message, /making sending from "work" easier \(never → chat\) needs a change approval/);
+    assert.match(error.message, /loosens a safety setting: inboxes\.work\.sendPolicy/);
     return true;
   });
-  assert.equal((await harness.core.config.load()).inboxes.work?.sendPolicy, 'never');
+  // The change policy the same way: moving it back off `confirm` is a loosening like any other.
+  await inboxPolicy(context, 'work', { changePolicy: 'confirm' });
+  await assert.rejects(inboxPolicy(context, 'work', { changePolicy: 'chat' }), /inboxes\.work\.changePolicy/);
+  const work = (await harness.core.config.load()).inboxes.work;
+  assert.equal(work?.sendPolicy, 'never');
+  assert.equal(work?.changePolicy, 'confirm');
 });
 
-test('a person at a terminal who types the code still loosens it from the CLI', async () => {
+test('a person at a terminal who approves still loosens it from the CLI, and tightening asks nothing', async () => {
   const harness = await twoMailboxes();
-  await inboxPolicy(new GmailContext({ core: harness.core, env: harness.env }), 'work', 'never');
+  await inboxPolicy(new GmailContext({ core: harness.core, env: harness.env }), 'work', { sendPolicy: 'never' });
   const loosened = await cli(harness, ['inbox', 'policy', 'work', '--send', 'chat'], {
     tty: true,
-    answerChallenge: true,
+    answer: true,
   });
   assert.equal(loosened.code, 0, loosened.stderr);
   assert.match(loosened.stdout, /now needs: chat \(was never\)/);
@@ -358,7 +307,7 @@ test('a person at a terminal who types the code still loosens it from the CLI', 
   // answered with "cancel" and fails here, rather than waiting for ever on a terminal nobody is at.
   const tightened = await cli(harness, ['inbox', 'policy', 'work', '--send', 'confirm'], { tty: true, stdin: '\n' });
   assert.equal(tightened.code, 0, tightened.stderr);
-  assert.doesNotMatch(tightened.stderr, /to confirm/);
+  assert.doesNotMatch(tightened.stderr, /Type \S+ to/);
 });
 
 test('a policy that is not one of the three is refused the same way before anything is resolved', async () => {

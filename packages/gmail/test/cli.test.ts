@@ -66,7 +66,20 @@ interface Envelope<T> {
   ok: boolean;
   schemaVersion: number;
   data?: T;
-  error?: { code: string; message: string; hint?: string };
+  error?: { code: string; message: string; hint?: string; details?: Record<string, unknown> };
+}
+
+/**
+ * Runs a command that changes an account the way an agent does: the first run prepares the change and exits 10 with
+ * its approval id; the person says yes; the second run, with `--approval <id>`, claims it and applies. Under the
+ * default `chat` change policy that is the whole of it. A command that needed no approval, or was refused outright,
+ * is returned from the first run.
+ */
+async function approving(harness: Harness, argv: string[]): Promise<Captured> {
+  const first = await cli(harness, [...argv, '--json']);
+  const error = first.code === EXIT_CODES.APPROVAL ? first.json<Envelope<never>>().error : undefined;
+  if (error?.code !== 'APPROVAL_PENDING') return first;
+  return cli(harness, [...argv, '--json', '--approval', String(error.details?.approvalId)]);
 }
 
 test('--json prints the versioned envelope, and human output goes to stdout without it', async () => {
@@ -131,8 +144,8 @@ test('client add stores the secret out of sight and reports what it did', async 
       installed: { client_id: TEST_CLIENT_ID, client_secret: TEST_CLIENT_SECRET, project_id: 'proj-1' },
     }),
   );
-  const added = await cli(harness, ['client', 'add', path, '--store', 'file', '--json']);
-  assert.equal(added.code, 0);
+  const added = await approving(harness, ['client', 'add', path, '--store', 'file']);
+  assert.equal(added.code, 0, added.stdout);
   const data = dataOf(added.json<Envelope<{ clientId: string; store: string; probed: boolean }>>());
   assert.equal(data.clientId, TEST_CLIENT_ID);
   assert.equal(data.store, 'file');
@@ -144,7 +157,7 @@ test('client add stores the secret out of sight and reports what it did', async 
   };
   assert.doesNotMatch(JSON.stringify(config), new RegExp(TEST_CLIENT_SECRET), 'the secret never reaches config.json');
 
-  // A second client under the same name is refused, with the way to rotate it.
+  // A second client under the same name is refused, with the way to rotate it — before anybody is asked to approve it.
   const again = await cli(harness, ['client', 'add', path, '--json']);
   assert.equal(again.code, 78);
   assert.match(again.json<Envelope<never>>().error?.hint ?? '', /--replace/);
@@ -160,7 +173,7 @@ test('--finish finishes only the sign-in the command names', async () => {
     path,
     JSON.stringify({ installed: { client_id: TEST_CLIENT_ID, client_secret: TEST_CLIENT_SECRET } }),
   );
-  await cli(harness, ['client', 'add', path, '--store', 'file', '--json']);
+  assert.equal((await approving(harness, ['client', 'add', path, '--store', 'file'])).code, 0);
   const started = await cli(harness, ['inbox', 'add', 'work', '--start', '--email', 'jo@example.test', '--json']);
   const flow = dataOf(started.json<Envelope<{ flowId: string; authUrl: string }>>());
   await fetch(harness.google.consent(flow.authUrl));
@@ -193,7 +206,7 @@ test('--finish on a reauth follows the mailbox, not the spelling of its name', a
     path,
     JSON.stringify({ installed: { client_id: TEST_CLIENT_ID, client_secret: TEST_CLIENT_SECRET } }),
   );
-  await cli(harness, ['client', 'add', path, '--store', 'file', '--json']);
+  assert.equal((await approving(harness, ['client', 'add', path, '--store', 'file'])).code, 0);
   await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1' });
 
   const started = await cli(harness, ['inbox', 'reauth', 'work', '--start', '--json']);
@@ -223,7 +236,7 @@ test('the two-step sign-in works end to end through the CLI', async () => {
     path,
     JSON.stringify({ installed: { client_id: TEST_CLIENT_ID, client_secret: TEST_CLIENT_SECRET } }),
   );
-  await cli(harness, ['client', 'add', path, '--store', 'file', '--json']);
+  assert.equal((await approving(harness, ['client', 'add', path, '--store', 'file'])).code, 0);
 
   const started = await cli(harness, ['inbox', 'add', 'work', '--start', '--email', 'jo@example.test', '--json']);
   assert.equal(started.code, 0);
@@ -243,12 +256,13 @@ test('the two-step sign-in works end to end through the CLI', async () => {
 
   const renamed = await cli(harness, ['inbox', 'rename', 'work', 'main', '--json']);
   assert.equal(renamed.code, 0);
-  const removed = await cli(harness, ['inbox', 'remove', 'main', '--json']);
-  assert.equal(removed.code, 0);
+  // Removing it deletes its token, which cannot be taken back, so it is approved first.
+  const removed = await approving(harness, ['inbox', 'remove', 'main']);
+  assert.equal(removed.code, 0, removed.stdout);
   assert.deepEqual(await cli(harness, ['inbox', 'list', '--json']).then((r) => r.json<Envelope<unknown[]>>().data), []);
 });
 
-test('tightening how sending is approved is free; loosening it is refused for an agent', async () => {
+test('tightening how sending is approved is free; loosening it waits for a change approval', async () => {
   const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
   await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
 
@@ -256,17 +270,16 @@ test('tightening how sending is approved is free; loosening it is refused for an
   assert.equal(tightened.code, 0);
   assert.equal(tightened.json<Envelope<{ sendPolicy: string }>>().data?.sendPolicy, 'never');
 
-  // An agent may not loosen it, whatever it passes.
-  const agent = await cli(harness, ['inbox', 'policy', 'work', '--send', 'chat', '--json'], {
-    env: { CLAUDECODE: '1' },
-  });
-  assert.equal(agent.code, 10);
-  assert.equal(agent.json<Envelope<never>>().error?.code, 'LOOSENING_REFUSED');
-
-  // And not without a terminal either.
-  const headless = await cli(harness, ['inbox', 'policy', 'work', '--send', 'chat', '--json']);
-  assert.equal(headless.code, 10);
-  assert.match(headless.json<Envelope<never>>().error?.hint ?? '', /in a terminal/);
+  // An agent is not refused and not obeyed: it gets the preview and the approval id, and exits 10 as a send waiting
+  // for approval does. The same from a script with no terminal.
+  for (const env of [{ CLAUDECODE: '1' }, {}]) {
+    const asked = await cli(harness, ['inbox', 'policy', 'work', '--send', 'chat', '--json'], { env });
+    assert.equal(asked.code, 10);
+    const error = asked.json<Envelope<never>>().error;
+    assert.equal(error?.code, 'APPROVAL_PENDING');
+    assert.match(String(error?.details?.preview), /send policy: never → chat/);
+    assert.match(error?.hint ?? '', /agent-gmail inbox policy work --send chat --json --approval \S+/);
+  }
 
   const unchanged = await cli(harness, ['inbox', 'show', 'work', '--json']);
   assert.equal(unchanged.json<Envelope<{ sendPolicy: string }>>().data?.sendPolicy, 'never');
@@ -643,8 +656,9 @@ test('setup can choose the file store, and says which store it used', async () =
     JSON.stringify({ installed: { client_id: TEST_CLIENT_ID, client_secret: TEST_CLIENT_SECRET, project_id: 'p' } }),
   );
 
-  const result = await cli(harness, ['setup', '--client-json', path, '--store', 'file', '--move', '--json']);
-  assert.equal(result.code, 0, result.stderr);
+  // Registering the client is `client add`, approved the same way: a first run that asks, and a second that claims.
+  const result = await approving(harness, ['setup', '--client-json', path, '--store', 'file', '--move']);
+  assert.equal(result.code, 0, result.stdout);
   const { data: report } = result.json<{ data: { did: string[]; clients: string[] } }>();
   assert.deepEqual(report.clients, ['desktop']);
   // `--move` is the other half of the pass-through, and "deleted it" is a claim worth checking against the disk

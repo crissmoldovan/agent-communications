@@ -192,7 +192,7 @@ test('a former name is refused with the new one on every path that takes a mailb
     await assert.rejects(context.inbox(name), renamed, `context.inbox(${name})`);
     await assert.rejects(search(context, { query: 'x', inboxes: [name] }), renamed, `search ${name}`);
     await assert.rejects(listApprovals(context, { inbox: name }), renamed, `send list ${name}`);
-    await assert.rejects(inboxPolicy(context, name, 'never'), renamed, `policy ${name}`);
+    await assert.rejects(inboxPolicy(context, name, { sendPolicy: 'never' }), renamed, `policy ${name}`);
     await assert.rejects(inboxRename(context, name, 'other/gmail'), renamed, `rename ${name}`);
     await assert.rejects(inboxRemove(context, name), renamed, `remove ${name}`);
     await assert.rejects(
@@ -421,7 +421,7 @@ test('reauth keeps a policy set while it was writing', async () => {
   const store = secrets.set.bind(secrets);
   secrets.set = async (ref, value) => {
     await store(ref, value);
-    if (ref === `gmail:refresh:${id}`) await inboxPolicy(context, 'work', 'never');
+    if (ref === `gmail:refresh:${id}`) await inboxPolicy(context, 'work', { sendPolicy: 'never' });
   };
   const reauth = await startSignIn(context, { mode: 'reauth', alias: 'work', detached: false });
   await fetch(harness.google.consent(reauth.authUrl, { sub: 'sub-1' }));
