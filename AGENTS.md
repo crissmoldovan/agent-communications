@@ -9,4 +9,5 @@
 - Only `send.execute` may call Gmail's send endpoints. Do not add another path.
 - Anything a sender controls must pass through the HTML sanitiser and the untrusted-content envelope before it
   reaches a result.
-- Keep CLI and MCP in parity: both call the same function in `packages/gmail/src/operations`.
+- Keep CLI and MCP in parity: both call the same function in `packages/gmail/src/operations`, and every command and
+  tool has a row in `capabilities.json` — see "Adding a capability" in `CONTRIBUTING.md`.

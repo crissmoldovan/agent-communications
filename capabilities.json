@@ -1,0 +1,443 @@
+{
+  "about": "Every capability, and the CLI command and MCP tool that provide it. Checked against both registries, read from the running product, by test/parity.test.mjs in `pnpm verify`; `pnpm verify:parity --strict` also refuses any pending row, which is what a release has to pass. `cli` is the command path without the binary; `mcp` is a tool name. How to add one: CONTRIBUTING.md, \"Adding a capability\". Design: docs/superpowers/specs/2026-09-25-cli-mcp-parity-design.md.",
+  "capabilities": [
+    { "id": "core.paths", "package": "core", "cli": "paths", "mcp": null, "status": "pending", "phase": "P2" },
+    { "id": "core.doctor", "package": "core", "cli": "doctor", "mcp": null, "status": "pending", "phase": "P2" },
+    {
+      "id": "core.audit.tail",
+      "package": "core",
+      "cli": "audit tail",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P2"
+    },
+    {
+      "id": "core.approvals.list",
+      "package": "core",
+      "cli": "approvals list",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P2"
+    },
+    {
+      "id": "core.approvals.revoke",
+      "package": "core",
+      "cli": "approvals revoke",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P2"
+    },
+    {
+      "id": "core.secrets.migrate",
+      "package": "core",
+      "cli": "secrets migrate",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P2"
+    },
+    {
+      "id": "core.names.migrate",
+      "package": "core",
+      "cli": "names migrate",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P2"
+    },
+
+    {
+      "id": "gmail.client.add",
+      "package": "gmail",
+      "cli": "client add",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P4"
+    },
+    {
+      "id": "gmail.client.list",
+      "package": "gmail",
+      "cli": "client list",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P4"
+    },
+    {
+      "id": "gmail.client.remove",
+      "package": "gmail",
+      "cli": "client remove",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P4"
+    },
+    { "id": "gmail.inbox.add", "package": "gmail", "cli": "inbox add", "mcp": "gmail_inbox_add", "status": "both" },
+    {
+      "id": "gmail.inbox.finish",
+      "package": "gmail",
+      "cli": "inbox add",
+      "mcp": "gmail_inbox_finish",
+      "status": "both",
+      "reason": "The CLI completes a sign-in begun with --start as `inbox add --finish <flowId>`. Over MCP that is a call of its own, because a tool call cannot sit waiting on a browser."
+    },
+    {
+      "id": "gmail.inbox.reauth",
+      "package": "gmail",
+      "cli": "inbox reauth",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P4"
+    },
+    {
+      "id": "gmail.inbox.list",
+      "package": "gmail",
+      "cli": "inbox list",
+      "mcp": "gmail_inboxes_list",
+      "status": "both"
+    },
+    {
+      "id": "gmail.inbox.show",
+      "package": "gmail",
+      "cli": "inbox show",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P4"
+    },
+    {
+      "id": "gmail.inbox.rename",
+      "package": "gmail",
+      "cli": "inbox rename",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P4"
+    },
+    {
+      "id": "gmail.inbox.policy",
+      "package": "gmail",
+      "cli": "inbox policy",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P4"
+    },
+    {
+      "id": "gmail.inbox.import",
+      "package": "gmail",
+      "cli": "inbox import",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P4"
+    },
+    {
+      "id": "gmail.inbox.remove",
+      "package": "gmail",
+      "cli": "inbox remove",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P4"
+    },
+    { "id": "gmail.search", "package": "gmail", "cli": "search", "mcp": "gmail_search", "status": "both" },
+    { "id": "gmail.message.read", "package": "gmail", "cli": "read", "mcp": "gmail_message_get", "status": "both" },
+    { "id": "gmail.thread.read", "package": "gmail", "cli": "thread", "mcp": "gmail_thread_get", "status": "both" },
+    {
+      "id": "gmail.thread.timeline",
+      "package": "gmail",
+      "cli": "timeline",
+      "mcp": "gmail_thread_timeline",
+      "status": "both"
+    },
+    {
+      "id": "gmail.attachments.find",
+      "package": "gmail",
+      "cli": "attachments find",
+      "mcp": "gmail_attachments_find",
+      "status": "both"
+    },
+    {
+      "id": "gmail.attachments.download",
+      "package": "gmail",
+      "cli": "attachments download",
+      "mcp": "gmail_attachment_download",
+      "status": "both"
+    },
+    {
+      "id": "gmail.contacts.search",
+      "package": "gmail",
+      "cli": "contacts",
+      "mcp": "gmail_contacts_search",
+      "status": "both"
+    },
+    { "id": "gmail.followups", "package": "gmail", "cli": "followups", "mcp": "gmail_followups", "status": "both" },
+    { "id": "gmail.export", "package": "gmail", "cli": "export", "mcp": "gmail_export", "status": "both" },
+    {
+      "id": "gmail.draft.create",
+      "package": "gmail",
+      "cli": "draft new",
+      "mcp": "gmail_draft_create",
+      "status": "both"
+    },
+    {
+      "id": "gmail.draft.reply",
+      "package": "gmail",
+      "cli": "draft reply",
+      "mcp": "gmail_draft_reply",
+      "status": "both"
+    },
+    { "id": "gmail.draft.list", "package": "gmail", "cli": "draft list", "mcp": "gmail_draft_list", "status": "both" },
+    { "id": "gmail.draft.get", "package": "gmail", "cli": "draft show", "mcp": "gmail_draft_get", "status": "both" },
+    {
+      "id": "gmail.draft.update",
+      "package": "gmail",
+      "cli": "draft update",
+      "mcp": "gmail_draft_update",
+      "status": "both"
+    },
+    {
+      "id": "gmail.draft.delete",
+      "package": "gmail",
+      "cli": "draft delete",
+      "mcp": "gmail_draft_delete",
+      "status": "both"
+    },
+    {
+      "id": "gmail.send.prepare",
+      "package": "gmail",
+      "cli": "send prepare",
+      "mcp": "gmail_send_prepare",
+      "status": "both"
+    },
+    {
+      "id": "gmail.send.execute",
+      "package": "gmail",
+      "cli": "send execute",
+      "mcp": "gmail_draft_send",
+      "status": "both"
+    },
+    { "id": "gmail.send.list", "package": "gmail", "cli": "send list", "mcp": "gmail_send_list", "status": "both" },
+    {
+      "id": "gmail.send.cancel",
+      "package": "gmail",
+      "cli": "send cancel",
+      "mcp": "gmail_send_cancel",
+      "status": "both"
+    },
+    {
+      "id": "gmail.approve",
+      "package": "gmail",
+      "cli": "approve",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Approving under the `confirm` policy means a person at a terminal typing the code shown (design §6.3). A tool that approved would make `confirm` mean nothing; over MCP the answer is the command to run."
+    },
+    {
+      "id": "gmail.confirm-clients.list",
+      "package": "gmail",
+      "cli": "confirm-clients list",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P4"
+    },
+    {
+      "id": "gmail.confirm-clients.add",
+      "package": "gmail",
+      "cli": "confirm-clients add",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P4"
+    },
+    {
+      "id": "gmail.confirm-clients.remove",
+      "package": "gmail",
+      "cli": "confirm-clients remove",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P4"
+    },
+    {
+      "id": "gmail.confirm-clients.probe",
+      "package": "gmail",
+      "cli": null,
+      "mcp": "gmail_confirm_probe",
+      "status": "exception",
+      "reason": "It tests the MCP client's own approval form by raising one, so a person can see it reaches them. A terminal has no form to test; what the probe shows is then recorded with `confirm-clients add`."
+    },
+    { "id": "gmail.organise", "package": "gmail", "cli": "organise", "mcp": "gmail_organise", "status": "both" },
+    {
+      "id": "gmail.organise.undo",
+      "package": "gmail",
+      "cli": "organise-undo",
+      "mcp": "gmail_organise_undo",
+      "status": "both"
+    },
+    { "id": "gmail.trash", "package": "gmail", "cli": "trash", "mcp": "gmail_trash", "status": "both" },
+    { "id": "gmail.label.create", "package": "gmail", "cli": "label", "mcp": "gmail_label_create", "status": "both" },
+    { "id": "gmail.labels.list", "package": "gmail", "cli": "labels", "mcp": "gmail_labels_list", "status": "both" },
+    { "id": "gmail.sendas.list", "package": "gmail", "cli": "sendas", "mcp": "gmail_sendas_list", "status": "both" },
+    { "id": "gmail.whoami", "package": "gmail", "cli": "whoami", "mcp": "gmail_whoami", "status": "both" },
+    {
+      "id": "gmail.mcp.serve",
+      "package": "gmail",
+      "cli": "mcp",
+      "mcp": null,
+      "status": "exception",
+      "reason": "It runs the MCP server. A tool is a call into a server that is already running, so no tool can be the one that starts it."
+    },
+    {
+      "id": "gmail.mcp.install",
+      "package": "gmail",
+      "cli": "mcp install",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P2",
+      "reason": "From chat this is the core server's comms_server_install, which registers any channel's server (design §5)."
+    },
+    {
+      "id": "gmail.mcp.prune",
+      "package": "gmail",
+      "cli": "mcp prune",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P2",
+      "reason": "From chat this is the core server's comms_server_prune (design §5)."
+    },
+    { "id": "gmail.setup", "package": "gmail", "cli": "setup", "mcp": "gmail_setup", "status": "both" },
+    { "id": "gmail.doctor", "package": "gmail", "cli": "doctor", "mcp": "gmail_doctor", "status": "both" },
+
+    { "id": "slack.manifest", "package": "slack", "cli": "manifest", "mcp": null, "status": "pending", "phase": "P3" },
+    {
+      "id": "slack.workspace.add",
+      "package": "slack",
+      "cli": "workspace add",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P3"
+    },
+    {
+      "id": "slack.workspace.list",
+      "package": "slack",
+      "cli": "workspace list",
+      "mcp": "slack_workspaces_list",
+      "status": "both"
+    },
+    {
+      "id": "slack.workspace.show",
+      "package": "slack",
+      "cli": "workspace show",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P3"
+    },
+    { "id": "slack.mode.report", "package": "slack", "cli": "workspace mode", "mcp": "slack_mode", "status": "both" },
+    {
+      "id": "slack.mode.request-send",
+      "package": "slack",
+      "cli": "workspace mode",
+      "mcp": "slack_mode_request_send",
+      "status": "both",
+      "reason": "`workspace mode <name> send` prints the same steps before it asks for anything."
+    },
+    {
+      "id": "slack.mode.narrow",
+      "package": "slack",
+      "cli": "workspace mode",
+      "mcp": "slack_mode_narrow",
+      "status": "both",
+      "reason": "`workspace mode <name> read` returns the same steps back to read-only."
+    },
+    {
+      "id": "slack.mode.set",
+      "package": "slack",
+      "cli": "workspace mode",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P3",
+      "reason": "The widening itself: `workspace mode <name> send` signs in again with posting scopes. From chat that is slack_mode_set, by change approval (design §6.2)."
+    },
+    {
+      "id": "slack.workspace.remove",
+      "package": "slack",
+      "cli": "workspace remove",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P3"
+    },
+    {
+      "id": "slack.workspace.reauth",
+      "package": "slack",
+      "cli": "workspace reauth",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P3"
+    },
+    { "id": "slack.doctor", "package": "slack", "cli": "doctor", "mcp": null, "status": "pending", "phase": "P3" },
+    { "id": "slack.channels", "package": "slack", "cli": "channels", "mcp": "slack_channels", "status": "both" },
+    { "id": "slack.read", "package": "slack", "cli": "read", "mcp": "slack_read", "status": "both" },
+    { "id": "slack.thread", "package": "slack", "cli": "thread", "mcp": "slack_thread", "status": "both" },
+    { "id": "slack.search", "package": "slack", "cli": "search", "mcp": "slack_search", "status": "both" },
+    { "id": "slack.files", "package": "slack", "cli": "files", "mcp": "slack_files", "status": "both" },
+    { "id": "slack.people", "package": "slack", "cli": "people", "mcp": "slack_people", "status": "both" },
+    {
+      "id": "slack.draft.create",
+      "package": "slack",
+      "cli": "draft create",
+      "mcp": "slack_post_prepare",
+      "status": "both",
+      "reason": "slack_post_prepare writes the draft and prepares it in one call; the CLI takes those as two steps, `draft create` then `post prepare`."
+    },
+    { "id": "slack.draft.list", "package": "slack", "cli": "draft list", "mcp": "slack_draft_list", "status": "both" },
+    { "id": "slack.draft.get", "package": "slack", "cli": "draft show", "mcp": "slack_draft_get", "status": "both" },
+    {
+      "id": "slack.draft.delete",
+      "package": "slack",
+      "cli": "draft delete",
+      "mcp": "slack_draft_delete",
+      "status": "both"
+    },
+    {
+      "id": "slack.post.prepare",
+      "package": "slack",
+      "cli": "post prepare",
+      "mcp": "slack_post_prepare",
+      "status": "both"
+    },
+    {
+      "id": "slack.post.send",
+      "package": "slack",
+      "cli": "post send",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P3"
+    },
+    { "id": "slack.react", "package": "slack", "cli": "react", "mcp": null, "status": "pending", "phase": "P3" },
+    {
+      "id": "slack.approve",
+      "package": "slack",
+      "cli": "approve",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Approving under the `confirm` policy means a person at a terminal typing the code shown (design §6.3). A tool that approved would make `confirm` mean nothing; over MCP the answer is the command to run."
+    },
+    {
+      "id": "slack.mcp.serve",
+      "package": "slack",
+      "cli": "mcp",
+      "mcp": null,
+      "status": "exception",
+      "reason": "It runs the MCP server. A tool is a call into a server that is already running, so no tool can be the one that starts it."
+    },
+    {
+      "id": "slack.mcp.install",
+      "package": "slack",
+      "cli": "mcp install",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P2",
+      "reason": "From chat this is the core server's comms_server_install, which registers any channel's server (design §5)."
+    },
+    {
+      "id": "slack.mcp.prune",
+      "package": "slack",
+      "cli": "mcp prune",
+      "mcp": null,
+      "status": "pending",
+      "phase": "P2",
+      "reason": "From chat this is the core server's comms_server_prune (design §5)."
+    }
+  ]
+}

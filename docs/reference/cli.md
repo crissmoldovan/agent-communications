@@ -551,6 +551,30 @@ MCP clients whose approval forms are trusted to reach you
 agent-gmail confirm-clients [options] [command]
 ```
 
+### `agent-gmail confirm-clients list`
+
+the clients on the list
+
+```
+agent-gmail confirm-clients list [options]
+```
+
+### `agent-gmail confirm-clients add`
+
+trust a client that has just passed the probe
+
+```
+agent-gmail confirm-clients add [options] <name>
+```
+
+### `agent-gmail confirm-clients remove`
+
+stop trusting a client — never needs permission
+
+```
+agent-gmail confirm-clients remove [options] <name>
+```
+
 ### `agent-gmail organise`
 
 label, archive, star and mark read — every change reversible, and previewable with --dry-run

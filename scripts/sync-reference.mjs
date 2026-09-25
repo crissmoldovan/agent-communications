@@ -11,126 +11,43 @@
  *   node scripts/sync-reference.mjs --check   # fail if they are out of date
  *
  * The CLI half captures `--help` through the same code path a person runs, by handing `run()` its streams. The MCP
- * half asks a live server for `tools/list`. Both read the product rather than a description of it.
+ * half asks a live server for `tools/list`. Both read the product rather than a description of it, and both are
+ * `scripts/registries.mjs` — the same derivation `test/parity.test.mjs` checks `capabilities.json` against, so the
+ * reference and the parity check cannot disagree about what exists.
  */
-import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { PassThrough } from 'node:stream';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { commandTree, entry, ROOT as root, sections, serverTools, surfaceOf } from './registries.mjs';
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const check = process.argv.includes('--check');
-/*
- * Every path the products under documentation could write to, pointed at one scratch directory in the checkout.
- * Setting only the config directory left the state and data directories to their defaults, which are the real
- * ones on the machine running this — a reference generator has no business near somebody's mailboxes.
- */
-const SCRATCH = join(root, '.tmp-reference-config');
-const scratchEnv = () => ({
-  ...process.env,
-  NO_COLOR: '1',
-  AGENT_COMMS_CONFIG_DIR: SCRATCH,
-  AGENT_COMMS_STATE_DIR: join(SCRATCH, 'state'),
-  AGENT_COMMS_DATA_DIR: join(SCRATCH, 'data'),
-});
 
 /**
  * The CLIs this page is generated from.
  *
  * A second entry rather than a second script: the page is generated *from the CLI itself*, and two generators
- * would be two chances for one of them to drift from the program it documents. `groups` are the commands that
- * only group others — their own help lists subcommands rather than doing anything.
+ * would be two chances for one of them to drift from the program it documents. Which commands only group others is
+ * not listed here: it is read from the CLI with the rest of the tree (`commandTree` in `registries.mjs`). A list kept
+ * here once left `agent-gmail confirm-clients` documented without its three subcommands.
  */
 const CLIS = [
   {
     binary: 'agent-gmail',
     pkg: '@agentcomms/gmail',
-    program: 'packages/gmail/src/cli/program.ts',
+    package: 'gmail',
     out: 'docs/reference/cli.md',
     provider: 'Gmail',
-    groups: new Set(['client', 'inbox', 'attachments', 'draft', 'send', 'mcp']),
     approval: 'a send was refused, or an approval is required',
   },
   {
     binary: 'agent-slack',
     pkg: '@agentcomms/slack',
-    program: 'packages/slack/src/cli/program.ts',
+    package: 'slack',
     out: 'docs/reference/slack-cli.md',
     provider: 'Slack',
-    groups: new Set(['workspace', 'draft', 'post', 'mcp']),
     // Exit 10 means two things here, and the reference said only one: a sign-in still waiting exits 10 as well.
     approval: 'a post was refused or needs approval, or a sign-in is still waiting',
   },
 ];
-
-// The source, not the bundle: `dist/cli.mjs` is a bin that runs on import, and neither bundle re-exports `run`.
-// This file is therefore executed with `--experimental-strip-types`, the same way the test suite runs TypeScript.
-// `pathToFileURL`, not the bare path: on Windows an absolute path is `D:\\…`, and ESM rejects it as an unknown
-// URL scheme. This only shows up on Windows, so a dynamic import of a path must always go through a file:// URL.
-
-/** Runs `--help` for a command through the real CLI, capturing what a person would see. */
-async function help(run, argv) {
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  let text = '';
-  stdout.on('data', (c) => {
-    text += c;
-  });
-  stderr.on('data', (c) => {
-    text += c;
-  });
-  await run([...argv, '--help'], {
-    streams: { stdout, stderr, stdin: new PassThrough() },
-    env: scratchEnv(),
-  });
-  return text;
-}
-
-/** Splits Commander's help into its sections, which are stable and are what the user actually reads. */
-function sections(text) {
-  const out = { usage: '', description: '', Arguments: [], Options: [], Commands: [] };
-  const lines = text.split('\n');
-  let current = null;
-  for (const line of lines) {
-    const usage = /^Usage:\s*(.+)$/.exec(line);
-    if (usage) {
-      out.usage = usage[1].trim();
-      current = 'description';
-      continue;
-    }
-    const heading = /^(Arguments|Options|Commands):\s*$/.exec(line);
-    if (heading) {
-      current = heading[1];
-      continue;
-    }
-    if (/^\S/.test(line) && current && current !== 'description') current = null;
-    if (!line.trim()) continue;
-    if (current === 'description') out.description += `${line.trim()} `;
-    else if (current && /^\s{3,}/.test(line) && out[current].length > 0) {
-      // A wrapped continuation: Commander starts every entry two spaces in, and indents the rest of a long description
-      // to line up under it. Read as its own entry, it became a row of its own — the flag column holding the tail of
-      // the previous description, and the previous row's default cut off mid-sentence.
-      out[current][out[current].length - 1] += ` ${line.trim()}`;
-    } else if (current) out[current].push(line);
-  }
-  out.description = out.description.trim();
-  return out;
-}
-
-/** One `  --flag <value>   what it does (default: x)` line into its parts. */
-function entry(line) {
-  const m = /^\s{2,}(\S.*?)\s{2,}(.*)$/.exec(line);
-  if (!m) return { name: line.trim(), text: '' };
-  let text = m[2].trim();
-  let fallback = '';
-  const d = /\(default:\s*(.+?)\)\s*$/.exec(text);
-  if (d) {
-    fallback = d[1];
-    text = text.slice(0, d.index).trim();
-  }
-  return { name: m[1].trim(), text, fallback };
-}
 
 const table = (rows, headers) =>
   [`| ${headers.join(' | ')} |`, `|${headers.map(() => '---').join('|')}|`, ...rows].join('\n');
@@ -140,9 +57,10 @@ const cell = (s) =>
     .replaceAll('|', '\\|')
     .replaceAll('\n', ' ');
 
-async function commandPage(cli, run, path) {
-  const s = sections(await help(run, path));
-  const lines = [`### \`${cli.binary} ${path.join(' ')}\``, ''];
+/** One command's section, from the help text the tree already captured for it. */
+function commandPage(cli, node) {
+  const s = sections(node.help);
+  const lines = [`### \`${cli.binary} ${node.path.join(' ')}\``, ''];
   if (s.description) lines.push(s.description, '');
   lines.push('```', s.usage.replace(new RegExp(`^${cli.binary}\\s*`), `${cli.binary} `), '```', '');
 
@@ -161,8 +79,8 @@ async function commandPage(cli, run, path) {
 
 // ── The CLI page, once per CLI ────────────────────────────────────────────────────────────────────────────────
 async function cliPage(cli) {
-  const { run } = await import(pathToFileURL(join(root, cli.program)).href);
-  const top = sections(await help(run, []));
+  const [rootNode, ...nodes] = await commandTree(surfaceOf(cli.package));
+  const top = sections(rootNode.help);
   const commands = top.Commands.map(entry).filter((c) => !/^help\b/.test(c.name));
 
   const cliParts = [
@@ -213,16 +131,8 @@ async function cliPage(cli) {
     '',
   ];
 
-  for (const c of commands) {
-    const name = c.name.split(' ')[0].split('|')[0];
-    cliParts.push(await commandPage(cli, run, [name]), '');
-    if (cli.groups.has(name)) {
-      const sub = sections(await help(run, [name]))
-        .Commands.map(entry)
-        .filter((x) => !/^help\b/.test(x.name));
-      for (const s of sub) cliParts.push(await commandPage(cli, run, [name, s.name.split(' ')[0].split('|')[0]]), '');
-    }
-  }
+  // Every node below the root, in the order help lists them: a command, then its own subcommands, at any depth.
+  for (const node of nodes) cliParts.push(commandPage(cli, node), '');
 
   return `${cliParts
     .join('\n')
@@ -239,7 +149,7 @@ async function cliPage(cli) {
  */
 const SERVERS = [
   {
-    entry: 'packages/gmail/dist/cli.mjs',
+    package: 'gmail',
     out: 'docs/reference/mcp-tools.md',
     intro: [
       'The server is the same code as the CLI, over stdio. Start it with `agent-gmail mcp`, or install it into a client',
@@ -250,7 +160,7 @@ const SERVERS = [
     ],
   },
   {
-    entry: 'packages/slack/dist/cli.mjs',
+    package: 'slack',
     out: 'docs/reference/slack-mcp-tools.md',
     intro: [
       'The server is the same code as the CLI, over stdio. Start it with `agent-slack mcp`, or install it into a client',
@@ -261,44 +171,6 @@ const SERVERS = [
     ],
   },
 ];
-
-/** Asks a live server what it offers, so the page cannot describe a tool the server does not have. */
-async function tools(entry) {
-  const child = spawn(process.execPath, [join(root, entry), 'mcp'], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: scratchEnv(),
-  });
-  let buf = '';
-  child.stdout.on('data', (c) => {
-    buf += c;
-  });
-  const send = (m) => child.stdin.write(`${JSON.stringify(m)}\n`);
-  send({
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'initialize',
-    params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'reference', version: '0' } },
-  });
-  send({ jsonrpc: '2.0', method: 'notifications/initialized' });
-  send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
-  const deadline = Date.now() + 30_000;
-  let list = null;
-  while (Date.now() < deadline && !list) {
-    await new Promise((r) => setTimeout(r, 200));
-    for (const line of buf.split('\n')) {
-      if (!line.trim().startsWith('{')) continue;
-      try {
-        const m = JSON.parse(line);
-        if (m.id === 2) list = m.result;
-      } catch {
-        /* a partial line: the next chunk completes it */
-      }
-    }
-  }
-  child.kill();
-  if (!list) throw new Error(`the MCP server in ${entry} did not answer tools/list`);
-  return list.tools;
-}
 
 /** A one-line shape for an argument, so the table says what to pass without reproducing JSON Schema. */
 function shape(schema) {
@@ -349,7 +221,8 @@ function mcpPage(server, all) {
     .trimEnd()}\n`;
 }
 
-const listed = await Promise.all(SERVERS.map(async (server) => [server, await tools(server.entry)]));
+// Asked of a running server (`serverTools` in `registries.mjs`), so a page cannot describe a tool the server lacks.
+const listed = await Promise.all(SERVERS.map(async (server) => [server, await serverTools(surfaceOf(server.package))]));
 
 // ── The skills index ──────────────────────────────────────────────────────────────────────────────────────────
 // Read from each skill's own frontmatter, so this page cannot describe a skill differently from the skill itself.

@@ -48,6 +48,39 @@ A skill lives at exactly `skills/<name>/SKILL.md` (no root `SKILL.md`). The dire
 Every skill carries `references/fit.json` and follows the section structure described in the design. Keep links
 relative and inside the skill directory; the README must list each skill's exact description.
 
+## Adding a capability
+
+Everything the packages do can be done from a terminal and from a chat
+([design](docs/superpowers/specs/2026-09-25-cli-mcp-parity-design.md)). A new capability is four things, in one pull
+request:
+
+1. **One operation** in `packages/<package>/src/operations/` that does the work. Both surfaces call it; neither
+   re-implements it.
+2. **The command**, in the package's CLI (`src/cli/program.ts`; for the core, the usage table in `src/cli.ts`).
+3. **The tool**, in the package's MCP server (`src/mcp/server.ts`).
+4. **The row**, in `capabilities.json` at the root. `cli` is the command path without the binary, `mcp` the tool:
+
+   ```json
+   { "id": "gmail.label.create", "package": "gmail", "cli": "label", "mcp": "gmail_label_create", "status": "both" }
+   ```
+
+Then `pnpm sync:reference` and `pnpm test`. `test/parity.test.mjs` reads every command from the CLI's own help and
+every tool from a running server, and fails — naming what is missing — when either is in no row, when a row names
+something that does not exist, or when a row's status and its sides disagree.
+
+When one side is missing, the row says why:
+
+- `"status": "pending", "phase": "P4"` — the other side lands in that phase of the design. Allowed on every push;
+  refused at release, where `pnpm verify:parity --strict` fails on any pending row.
+- `"status": "exception", "reason": "…"` — one side on purpose: `approve`, because under `confirm` approving is a
+  person at a terminal; `mcp`, because it starts the server a tool would need already running. The reason is what a
+  reviewer reads, so it says why rather than what.
+
+A command that only groups others (`agent-gmail inbox`) has no row; one that groups and also acts (`agent-gmail mcp`)
+does, and the test tells them apart from the CLI itself. One command can be several rows when its arguments choose
+between operations (`agent-slack workspace mode`), and one tool can back several commands (`slack_post_prepare` is
+`draft create` and `post prepare` at once); `reason` on such a row says how the two meet.
+
 ## Pull requests
 
 - Keep each pull request focused, and say what changes for the person using it.
