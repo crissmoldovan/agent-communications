@@ -3,7 +3,7 @@
  * Keeps the generated parts of the skills in step with their sources.
  *
  * Three things drift if nobody watches them, and each has bitten a skill pack before: the shared contract diverging
- * between twelve copies, a skill that does not say where it fits, and a README whose descriptions no longer match
+ * between its copies, a skill that does not say where it fits, and a README whose descriptions no longer match
  * the frontmatter a client actually reads. All three are generated here and checked in CI, so a change to the one
  * source reaches every skill or the build fails.
  *
@@ -15,7 +15,15 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SKILLS = join(ROOT, 'skills');
-const CONTRACT = join(SKILLS, '_shared', 'contract.md');
+/**
+ * One contract per platform, chosen by the skill's name: `gmail-search` gets `_shared/contract-gmail.md`.
+ *
+ * There used to be one contract, written for mail, and it was copied into the Slack skills word for word — so an
+ * agent following `slack-reading` was told to call `gmail_inboxes_list`, that only `gmail-send` sends, and to fall
+ * back to `npx @agentcomms/gmail` when the Slack tools were missing. Choosing by prefix, and refusing a skill whose
+ * prefix has no contract, means a new platform cannot inherit another's rules by default.
+ */
+const contractFor = (name) => join(SKILLS, '_shared', `contract-${name.split('-')[0]}.md`);
 const README = join(ROOT, 'README.md');
 const check = process.argv.includes('--check');
 
@@ -55,7 +63,6 @@ function useWhenFor(meta) {
   return first.replace(/\s+/g, ' ');
 }
 
-const contract = await readFile(CONTRACT, 'utf8');
 /*
  * Every skill directory, not every `gmail-` one.
  *
@@ -81,8 +88,13 @@ for (const name of names) {
   rows.push(meta);
 
   // The contract, copied rather than linked: a skill is installed as a directory and a link out of it would break.
-  await put(join(SKILLS, name, 'references', 'contract.md'), contract);
-  // Where the skill fits. `requestOnly`: a mailbox is not a repository, so nothing in a codebase should ever
+  const contract = await readFile(contractFor(name), 'utf8').catch(() => null);
+  if (contract === null) {
+    problems.push(`skills/${name}: no contract for its platform — add ${contractFor(name).replace(ROOT, '')}`);
+  } else {
+    await put(join(SKILLS, name, 'references', 'contract.md'), contract);
+  }
+  // Where the skill fits. `requestOnly`: a mailbox or a workspace is not a repository, so nothing in a codebase should ever
   // recommend these — they load when somebody asks for the job, and `useWhen` is the one line that says which job.
   await put(
     join(SKILLS, name, 'references', 'fit.json'),

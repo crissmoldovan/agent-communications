@@ -1,6 +1,6 @@
 {
   "name": "agent-communications",
-  "description": "Communication tools for coding agents. Gmail today: search, read, analyse, draft and organise mail across several mailboxes \u2014 and nothing is sent without your approval.",
+  "description": "Communication tools for coding agents: Gmail and Slack. Search, read, analyse, draft and organise mail across several mailboxes, and read Slack workspaces and prepare posts \u2014 nothing is sent or posted without your approval.",
   "owner": {
     "name": "crissmoldovan",
     "url": "https://github.com/crissmoldovan/agent-communications"
@@ -9,14 +9,14 @@
     {
       "name": "gmail",
       "source": "./",
-      "description": "Gmail for coding agents: search, read, analyse, draft and organise mail across several mailboxes. Sending needs your approval.",
+      "description": "Gmail and Slack for coding agents. The Gmail server is included: search, read, analyse, draft and organise mail, with sending behind your approval. The Slack skills read a workspace and prepare posts that only a person can approve; connect their server with `npx -y @agentcomms/slack mcp install`.",
       "version": "0.4.0",
       "author": {
         "name": "crissmoldovan"
       },
       "homepage": "https://github.com/crissmoldovan/agent-communications",
       "license": "MIT",
-      "keywords": ["gmail", "email", "mcp", "communications"],
+      "keywords": ["gmail", "email", "slack", "mcp", "communications"],
       "strict": false,
       "skills": [
         "./skills/gmail-setup",

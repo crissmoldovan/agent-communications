@@ -21,7 +21,7 @@ Scripts should read these rather than parse output.
 |---|---|
 | `0` | it worked |
 | `1` | unexpected failure |
-| `10` | a send was refused, or an approval is required |
+| `10` | a post was refused or needs approval, or a sign-in is still waiting |
 | `64` | the command was used wrongly |
 | `65` | the data given was not usable |
 | `66` | what was asked for does not exist |
@@ -167,9 +167,9 @@ agent-slack channels [options]
 
 | Option | What it does | Default |
 |---|---|---|
-| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
 | `--all` | include channels this account is not a member of | `false` |
-| `--limit <n>` | how many to return | `100` |
+| `--limit <n>` | how many to return | `"100"` |
 
 ### `agent-slack read`
 
@@ -181,8 +181,8 @@ agent-slack read [options] <channel>
 
 | Option | What it does | Default |
 |---|---|---|
-| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
-| `--limit <n>` | how many messages | `50` |
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
+| `--limit <n>` | how many messages | `"50"` |
 | `--oldest <ts>` | only messages at or after this Slack timestamp | — |
 | `--latest <ts>` | only messages at or before this Slack timestamp | — |
 | `--cursor <cursor>` | resume where an earlier, incomplete read stopped | — |
@@ -197,8 +197,8 @@ agent-slack thread [options] <channel> <ts>
 
 | Option | What it does | Default |
 |---|---|---|
-| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
-| `--limit <n>` | how many replies | `100` |
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
+| `--limit <n>` | how many replies | `"100"` |
 | `--cursor <cursor>` | resume where an earlier, incomplete read stopped | — |
 
 ### `agent-slack search`
@@ -211,8 +211,8 @@ agent-slack search [options] <query>
 
 | Option | What it does | Default |
 |---|---|---|
-| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
-| `--limit <n>` | how many matches | `20` |
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
+| `--limit <n>` | how many matches | `"20"` |
 | `--page <n>` | which page of results; `nextPage` in an incomplete result says which is next | — |
 
 ### `agent-slack files`
@@ -225,9 +225,9 @@ agent-slack files [options]
 
 | Option | What it does | Default |
 |---|---|---|
-| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
 | `--channel <id>` | only files in one channel | — |
-| `--limit <n>` | how many | `50` |
+| `--limit <n>` | how many | `"50"` |
 | `--page <n>` | which page; an incomplete result says which is next | — |
 
 ### `agent-slack people`
@@ -240,8 +240,8 @@ agent-slack people [options]
 
 | Option | What it does | Default |
 |---|---|---|
-| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
-| `--limit <n>` | how many | `200` |
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
+| `--limit <n>` | how many | `"200"` |
 
 ### `agent-slack draft`
 
@@ -261,7 +261,7 @@ agent-slack draft create [options]
 
 | Option | What it does | Default |
 |---|---|---|
-| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
 | `--channel <id>` | the channel or conversation id | — |
 | `--text <text>` | what to say. Markup in it is shown, not interpreted | — |
 | `--thread <ts>` | reply inside this thread | — |
@@ -278,7 +278,19 @@ agent-slack draft list [options]
 
 | Option | What it does | Default |
 |---|---|---|
-| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
+
+### `agent-slack draft show`
+
+one draft, exactly as it would be posted
+
+```
+agent-slack draft show [options] <draftId>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
 
 ### `agent-slack draft delete`
 
@@ -290,7 +302,7 @@ agent-slack draft delete [options] <draftId>
 
 | Option | What it does | Default |
 |---|---|---|
-| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
 
 ### `agent-slack post`
 
@@ -310,7 +322,7 @@ agent-slack post prepare [options]
 
 | Option | What it does | Default |
 |---|---|---|
-| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
 | `--draft <draftId>` | the draft to prepare | — |
 
 ### `agent-slack post send`
@@ -323,7 +335,7 @@ agent-slack post send [options]
 
 | Option | What it does | Default |
 |---|---|---|
-| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
 | `--draft <draftId>` | the draft | — |
 | `--approval <approvalId>` | the approval `post prepare` returned | — |
 | `--expect-channel <id>` | the channel you believe this goes to | — |
@@ -338,7 +350,7 @@ agent-slack react [options]
 
 | Option | What it does | Default |
 |---|---|---|
-| `--workspace <name>` | which workspace to read, as `organisation/slack` | — |
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
 | `--channel <id>` | the channel | — |
 | `--ts <ts>` | the message timestamp | — |
 | `--emoji <name>` | the emoji name, without colons | — |
@@ -363,3 +375,21 @@ agent-slack mcp [options] [command]
 | Option | What it does | Default |
 |---|---|---|
 | `--workspace <name>` | pin the server to one workspace; every tool then acts on it and no other | — |
+
+### `agent-slack mcp install`
+
+register this server with an MCP client, and prove it starts
+
+```
+agent-slack mcp install [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--client <client>` | which client to register with (choices: "claude-code", "claude-desktop", "codex", "cursor", "gemini", "vscode", "json") | — |
+| `--name <name>` | the name the client will show | `"slack"` |
+| `--workspace <name>` | pin the server to one workspace | — |
+| `--launcher <launcher>` | how the server is started (choices: "managed", "npx", "local") | — |
+| `--no-verify` | do not start the server to check the entry works | — |
+| `--force` | replace an entry of the same name — this is how you upgrade | `false` |
+| `--print` | only print what would be written | `false` |

@@ -663,6 +663,25 @@ agent-gmail mcp [options] [command]
 | `--inbox <alias>` | serve only this mailbox | — |
 | `--read-only` | leave out every tool that changes the mailbox | `false` |
 
+### `agent-gmail mcp install`
+
+register this server with an MCP client, and prove it starts
+
+```
+agent-gmail mcp install [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--client <client>` | which client to register with (choices: "claude-code", "claude-desktop", "codex", "cursor", "gemini", "vscode", "json") | — |
+| `--name <name>` | the name the client will show | `"gmail"` |
+| `--inbox <alias>` | serve only this mailbox | — |
+| `--read-only` | leave out every tool that changes the mailbox | `false` |
+| `--launcher <launcher>` | how the server is started (choices: "managed", "npx", "local") | — |
+| `--no-verify` | do not start the server to check the entry works | — |
+| `--force` | replace an entry of the same name — this is how you upgrade | `false` |
+| `--print` | only print what would be written | `false` |
+
 ### `agent-gmail setup`
 
 set this up from nothing: the Google client, a mailbox, and the agent connection

@@ -1,11 +1,14 @@
-import { CommsError, lookupName, toCommsError } from '@agentcomms/core';
+import { CommsError, toCommsError } from '@agentcomms/core';
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import type { FetchLike } from '../api/guard.ts';
 import { settleRefreshes } from '../auth/refresh.ts';
 import { compose } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { parseMode } from '../manifest.ts';
+import { ownDraft } from '../operations/drafts.ts';
+import { gateDepsFor } from '../operations/gate.ts';
 import { modeReport, narrowingSteps, wideningSteps } from '../operations/mode.ts';
 import { NameBook } from '../operations/people.ts';
 import { listChannels, listFiles, listPeople, readChannel, readThread, searchMessages } from '../operations/read.ts';
@@ -25,11 +28,23 @@ import { VERSION } from '../version.ts';
  * id; posting it is a separate act a person takes at a terminal. That is a stronger position than Gmail's, and it
  * is available because Slack's read and write scopes are disjoint — under `read` mode the token physically cannot
  * post, so the promise is enforced by Slack rather than by this code.
+ *
+ * What is left off, deliberately, and asserted absent by the tests: posting a draft, reacting, approving, and
+ * adding, re-authorising or removing a workspace. Each is either a message in front of people or a change to what
+ * this software may do, and both are a person's to make. Everything else the CLI does has a tool here, so an agent
+ * is not sent to a shell for the ordinary parts of the job.
  */
 
 export interface SlackMcpOptions extends SlackContextOptions {
   /** Pin the server to one workspace, so every tool acts on it and no other. */
   workspace?: string | undefined;
+  /**
+   * The fetch every Slack call goes through, always inside the guard. Injected so a test never reaches Slack —
+   * the CLI has had this from the start, and without it the prepare test here was quietly asking slack.com.
+   */
+  fetch?: FetchLike | undefined;
+  /** Where Slack is, for a test that stands one up locally rather than relaxing the origin check. */
+  slackBaseUrl?: string | undefined;
 }
 
 export interface SlackMcpServer {
@@ -164,7 +179,17 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     return named;
   };
 
-  const session = (name: string) => openWorkspace(context, name);
+  const slackDeps = { fetch: options.fetch, baseUrl: options.slackBaseUrl };
+  const session = (name: string) => openWorkspace(context, name, slackDeps);
+  const drafts = () => openDraftStore(context.core.paths.stateDir, context.now);
+
+  /*
+   * Annotations, as the Gmail server declares them: a client that asks before a write needs to know which these
+   * are. `openWorldHint` is whether the tool reaches Slack at all — the draft and mode tools read only files on
+   * this machine.
+   */
+  const readsSlack = { readOnlyHint: true, openWorldHint: true } as const;
+  const readsLocal = { readOnlyHint: true, openWorldHint: false } as const;
   const workspaceArg = { workspace: z.string().optional().describe('which workspace, as `organisation/slack`') };
 
   server.registerTool(
@@ -174,6 +199,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       description:
         'The connected Slack workspaces, what each may do (`read` cannot post at all — Slack enforces that), and whether its credential looks healthy.',
       inputSchema: {},
+      annotations: readsLocal,
     },
     async () => {
       try {
@@ -192,6 +218,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       title: 'List channels',
       description: 'Channels and conversations this account can see. Bounded; `complete: false` means more remain.',
       inputSchema: { ...workspaceArg, all: z.boolean().optional(), limit: z.number().int().positive().optional() },
+      annotations: readsSlack,
     },
     async (args) => {
       try {
@@ -217,6 +244,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         latest: z.string().optional(),
         cursor: z.string().optional(),
       },
+      annotations: readsSlack,
     },
     async (args) => {
       try {
@@ -248,6 +276,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         limit: z.number().int().positive().optional(),
         cursor: z.string().optional(),
       },
+      annotations: readsSlack,
     },
     async (args) => {
       try {
@@ -276,6 +305,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         limit: z.number().int().positive().optional(),
         page: z.number().int().positive().optional(),
       },
+      annotations: readsSlack,
     },
     async (args) => {
       try {
@@ -296,6 +326,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       description:
         'Members of the workspace. Display names and statuses are editable by anyone and are treated as untrusted.',
       inputSchema: { ...workspaceArg, limit: z.number().int().positive().optional() },
+      annotations: readsSlack,
     },
     async (args) => {
       try {
@@ -318,6 +349,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         limit: z.number().int().positive().optional(),
         page: z.number().int().positive().optional(),
       },
+      annotations: readsSlack,
     },
     async (args) => {
       try {
@@ -343,14 +375,12 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         mentionUsers: z.array(z.string()).optional().describe('user ids to mention, by id — never by name'),
         broadcast: z.enum(['here', 'channel', 'everyone']).optional().describe('interrupts the room; needs a person'),
       },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     async (args) => {
       try {
-        const name = await resolve(args.workspace);
-        const config = await context.config();
-        const { account } = requireWorkspace(config, name);
-        const { call, teamId } = await session(name);
-        const drafts = openDraftStore(context.core.paths.stateDir, context.now);
+        // The same dependencies `post prepare` uses, audit sink and all: see `gateDepsFor` for what a copy cost.
+        const gate = await gateDepsFor(context, await resolve(args.workspace), slackDeps);
         const payload = compose({
           channel: args.channel,
           text: args.text,
@@ -360,21 +390,74 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
             ...(args.broadcast ? [{ kind: 'broadcast' as const, who: args.broadcast }] : []),
           ],
         });
-        const draft = await drafts.create(account.id, payload, args.text);
-        const prepared = await preparePost(
-          {
-            call,
-            accountId: account.id,
-            workspaceId: teamId,
-            workspaceName: name,
-            postingAs: account.userId,
-            policy: account.sendPolicy ?? config.defaults.sendPolicy,
-            approvals: context.core.approvals,
-          },
-          draft,
-          new NameBook(),
-        );
-        return reply(prepared);
+        const draft = await drafts().create(gate.accountId, payload, args.text);
+        return reply(await preparePost(gate, draft, new NameBook()));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  /*
+   * The drafts, which `slack_post_prepare` leaves behind.
+   *
+   * Every prepare writes a draft, and without these an agent could neither see what it had left nor clear it up,
+   * so they piled up with nothing but a shell to reach them. Scoped to the workspace like everything else: drafts
+   * share one directory, and a draft id from another workspace is reported as absent.
+   */
+  server.registerTool(
+    'slack_draft_list',
+    {
+      title: 'List drafts',
+      description:
+        'The drafts held on this machine for this workspace, newest first. Nothing in them has reached Slack.',
+      inputSchema: { ...workspaceArg },
+      annotations: readsLocal,
+    },
+    async (args) => {
+      try {
+        const { account } = requireWorkspace(await context.config(), await resolve(args.workspace));
+        return reply({ drafts: await drafts().list(account.id) });
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'slack_draft_get',
+    {
+      title: 'Read a draft',
+      description: 'One draft, exactly as it would be posted, and the text it was written from.',
+      inputSchema: { ...workspaceArg, draftId: z.string() },
+      annotations: readsLocal,
+    },
+    async (args) => {
+      try {
+        const { account } = requireWorkspace(await context.config(), await resolve(args.workspace));
+        return reply({ draft: await ownDraft(drafts(), account.id, args.draftId) });
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'slack_draft_delete',
+    {
+      title: 'Delete a draft',
+      description:
+        'Throw a draft away. An approval prepared from it can no longer be used, because there is nothing left to post.',
+      inputSchema: { ...workspaceArg, draftId: z.string() },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async (args) => {
+      try {
+        const { account } = requireWorkspace(await context.config(), await resolve(args.workspace));
+        const store = drafts();
+        await ownDraft(store, account.id, args.draftId);
+        await store.remove(args.draftId);
+        return reply({ draftId: args.draftId, deleted: true });
       } catch (error) {
         return fail(error);
       }
@@ -396,6 +479,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       title: 'What a workspace may do',
       description: 'Reports whether this workspace can post, upload or react, and what its recorded grant allows.',
       inputSchema: { ...workspaceArg },
+      annotations: readsLocal,
     },
     async (args) => {
       try {
@@ -415,6 +499,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       description:
         'Returns the steps a **person** must take to let this workspace post. Performs nothing: widening is a new OAuth grant approved in Slack’s own UI, and an agent never widens. Show these steps and stop.',
       inputSchema: { ...workspaceArg, port: z.number().int().positive().optional() },
+      annotations: readsLocal,
     },
     async (args) => {
       try {
@@ -441,6 +526,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       description:
         'The path back to read-only. Tightening needs nobody’s consent, but Slack never removes a scope from a token — only removing the app’s installation resets it — so this returns the steps rather than pretending to do it.',
       inputSchema: { ...workspaceArg, port: z.number().int().positive().optional() },
+      annotations: readsLocal,
     },
     async (args) => {
       try {

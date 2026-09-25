@@ -24,7 +24,6 @@ import {
 } from '@agentcomms/core';
 import { Command, CommanderError, Option } from 'commander';
 import type { FetchLike } from '../api/guard.ts';
-import { closedPermit } from '../api/guard.ts';
 import { isDue, isExpired, parseBundle, type TokenBundle } from '../auth/bundle.ts';
 import { compose, type Mention } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
@@ -33,6 +32,8 @@ import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
 import { mcpInstall, mcpPrune, SLACK_MCP } from '../mcp/install.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
 import { doctor, type IdentityProbe, type StoreUnavailable } from '../operations/doctor.ts';
+import { ownDraft } from '../operations/drafts.ts';
+import { gateDepsFor } from '../operations/gate.ts';
 import { type ProbeFetch, probeIdentity } from '../operations/identity.ts';
 import { modeReport, narrowingSteps, wideningSteps } from '../operations/mode.ts';
 import { NameBook } from '../operations/people.ts';
@@ -72,9 +73,8 @@ import {
 /**
  * The `agent-slack` command.
  *
- * Setup and reading: make an app, connect a workspace, see what is connected, be told what is broken — and read
- * channels, threads, search, people and files. Drafting and posting arrive in later phases, and a command that
- * pretended to do them now would be worse than one that is not there.
+ * Make an app, connect a workspace, see what is connected, be told what is broken; read channels, threads,
+ * search, people and files; and draft, prepare and — with a person's approval at a terminal — post and react.
  *
  * Both a person and an agent run this, so every command prints a readable summary by default and the whole result
  * under `--json`, with the same exit codes either way.
@@ -119,7 +119,9 @@ export async function run(argv: readonly string[], deps: CliDeps = {}): Promise<
 
   program
     .name('agent-slack')
-    .description('Slack for coding agents: connect a workspace, check it works, and read it. Posting comes later.')
+    .description(
+      'Slack for coding agents: connect a workspace, read it, and draft posts that go out only when a person approves them.',
+    )
     .version(VERSION, '-v, --version')
     .option('--json', 'print the result as {"ok":true,"schemaVersion":1,"data":…}', false)
     .option('--no-color', 'never colour the output')
@@ -134,12 +136,14 @@ Getting started:
   agent-slack manifest --port 51234        the app to create in Slack, and how
   agent-slack workspace add acme/slack --client-id <id> --port 51234
   agent-slack doctor                       what works and what does not
+  agent-slack mcp install --client claude-code
   agent-slack channels --workspace acme/slack
   agent-slack read <channel> --workspace acme/slack
 
-Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in · 64 usage ·
-65 bad data · 66 not found · 69 provider or secret store unavailable · 75 temporary
-(retry later) · 77 sign-in or permission needed · 78 configuration problem.`,
+Exit codes: 0 ok · 1 unexpected · 10 a post was refused or needs approval, or a sign-in
+is still waiting · 64 usage · 65 bad data · 66 not found · 69 provider or secret store
+unavailable · 75 temporary (retry later) · 77 sign-in or permission needed · 78
+configuration problem.`,
     )
     .exitOverride();
 
@@ -203,6 +207,26 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
     }
     return seconds;
   };
+
+  /**
+   * `--limit` and `--page`, checked as the MCP tools check them.
+   *
+   * They were `Number(value)` in Commander's parser, so `--limit abc` became `NaN`, was sent to Slack as
+   * `limit=NaN`, and came back `ok` — a result bounded by whatever Slack made of that, reported as if it were the
+   * bound asked for. The same input over MCP was refused by the schema. Checked here rather than in Commander's
+   * parser because a parser that throws escapes the envelope, and `--json` promises exactly one document.
+   */
+  const countOf = (flags: Options, flag: 'limit' | 'page'): number | undefined => {
+    const raw = flags[flag];
+    if (raw === undefined) return undefined;
+    const count = Number(raw);
+    if (!Number.isInteger(count) || count < 1) {
+      throw new CommsError('USAGE', `--${flag} "${String(raw)}" is not a count`, { hint: 'A whole number from 1.' });
+    }
+    return count;
+  };
+  /** `--limit`, which always has a default, so it is never absent by the time a command reads it. */
+  const limitOf = (flags: Options): number => countOf(flags, 'limit') as number;
 
   // ── manifest ────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -608,7 +632,7 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
    * A machine with two of them would otherwise pick one, and a person reading the output could not tell which.
    */
   const workspaceOption = (command: Command): Command =>
-    command.requiredOption('--workspace <name>', 'which workspace to read, as `organisation/slack`');
+    command.requiredOption('--workspace <name>', 'which workspace, as `organisation/slack`');
 
   const session = (context: SlackContext, alias: string) =>
     openWorkspace(context, alias, { fetch: deps.read, baseUrl: deps.slackBaseUrl });
@@ -616,18 +640,18 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
   workspaceOption(program.command('channels'))
     .description('the channels and conversations this account can see')
     .option('--all', 'include channels this account is not a member of', false)
-    .option('--limit <n>', 'how many to return', (value: string) => Number(value), 100)
+    .option('--limit <n>', 'how many to return', '100')
     .action(
       act(async (context, options, flags: Options) => {
         const { call } = await session(context, String(flags.workspace));
-        const result = await listChannels(call, { all: flags.all === true, limit: Number(flags.limit) });
+        const result = await listChannels(call, { all: flags.all === true, limit: limitOf(flags) });
         writeResult(result, output(), () => renderChannels(result, options.color), streams);
       }),
     );
 
   workspaceOption(program.command('read <channel>'))
     .description('a channel’s recent messages, newest first')
-    .option('--limit <n>', 'how many messages', (value: string) => Number(value), 50)
+    .option('--limit <n>', 'how many messages', '50')
     .option('--oldest <ts>', 'only messages at or after this Slack timestamp')
     .option('--latest <ts>', 'only messages at or before this Slack timestamp')
     .option('--cursor <cursor>', 'resume where an earlier, incomplete read stopped')
@@ -635,7 +659,7 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
       act(async (context, options, channel: string, flags: Options) => {
         const { call, name, teamId } = await session(context, String(flags.workspace));
         const result = await readChannel(call, name, channel, {
-          limit: Number(flags.limit),
+          limit: limitOf(flags),
           oldest: flags.oldest as string | undefined,
           latest: flags.latest as string | undefined,
           cursor: flags.cursor as string | undefined,
@@ -647,13 +671,13 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
 
   workspaceOption(program.command('thread <channel> <ts>'))
     .description('one thread, parent first')
-    .option('--limit <n>', 'how many replies', (value: string) => Number(value), 100)
+    .option('--limit <n>', 'how many replies', '100')
     .option('--cursor <cursor>', 'resume where an earlier, incomplete read stopped')
     .action(
       act(async (context, options, channel: string, ts: string, flags: Options) => {
         const { call, name, teamId } = await session(context, String(flags.workspace));
         const result = await readThread(call, name, channel, ts, {
-          limit: Number(flags.limit),
+          limit: limitOf(flags),
           cursor: flags.cursor as string | undefined,
           ourTeamId: teamId,
         });
@@ -663,14 +687,17 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
 
   workspaceOption(program.command('search <query>'))
     .description('Slack’s own search, in Slack’s syntax, over this workspace')
-    .option('--limit <n>', 'how many matches', (value: string) => Number(value), 20)
+    .option('--limit <n>', 'how many matches', '20')
     .option('--page <n>', 'which page of results; `nextPage` in an incomplete result says which is next')
     .action(
       act(async (context, options, query: string, flags: Options) => {
-        const { call, name } = await session(context, String(flags.workspace));
+        // `teamId` too, as `read` and `thread` pass it: without it an author from another organisation was not
+        // marked `external` here, while the same search over MCP marked them — one message, two answers.
+        const { call, name, teamId } = await session(context, String(flags.workspace));
         const result = await searchMessages(call, name, query, {
-          limit: Number(flags.limit),
-          page: flags.page === undefined ? undefined : Number(flags.page),
+          limit: limitOf(flags),
+          page: countOf(flags, 'page'),
+          ourTeamId: teamId,
         });
         writeResult(result, output(), () => renderSearch(result, options.color), streams);
       }),
@@ -679,15 +706,15 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
   workspaceOption(program.command('files'))
     .description('files shared in this workspace')
     .option('--channel <id>', 'only files in one channel')
-    .option('--limit <n>', 'how many', (value: string) => Number(value), 50)
+    .option('--limit <n>', 'how many', '50')
     .option('--page <n>', 'which page; an incomplete result says which is next')
     .action(
       act(async (context, options, flags: Options) => {
         const { call } = await session(context, String(flags.workspace));
         const result = await listFiles(call, {
           channel: flags.channel as string | undefined,
-          limit: Number(flags.limit),
-          page: flags.page === undefined ? undefined : Number(flags.page),
+          limit: limitOf(flags),
+          page: countOf(flags, 'page'),
         });
         writeResult(result, output(), () => renderFiles(result, options.color), streams);
       }),
@@ -695,58 +722,20 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
 
   workspaceOption(program.command('people'))
     .description('the members of this workspace')
-    .option('--limit <n>', 'how many', (value: string) => Number(value), 200)
+    .option('--limit <n>', 'how many', '200')
     .action(
       act(async (context, options, flags: Options) => {
         const { call } = await session(context, String(flags.workspace));
-        const result = await listPeople(call, { limit: Number(flags.limit) });
+        const result = await listPeople(call, { limit: limitOf(flags) });
         writeResult(result, output(), () => renderPeople(result, options.color), streams);
       }),
     );
 
   // ── Drafting and posting ────────────────────────────────────────────────────────────────────────────────────
 
-  /*
-   * Everything the gate needs, assembled once.
-   *
-   * The audit sink and the surface go in here rather than at each call site: an operation that records what it
-   * did in three places out of four is an operation whose log cannot be trusted, and the missing one is always
-   * the interesting one.
-   */
-  const gateDeps = async (context: SlackContext, alias: string) => {
-    const config = await context.config();
-    const { alias: name, account } = requireWorkspace(config, alias);
-    const { call, teamId } = await openWorkspace(context, name, { fetch: deps.read, baseUrl: deps.slackBaseUrl });
-    return {
-      call,
-      accountId: account.id,
-      workspaceId: teamId,
-      workspaceName: name,
-      postingAs: account.userId,
-      policy: account.sendPolicy ?? config.defaults.sendPolicy,
-      approvals: context.core.approvals,
-      audit: context.core.audit,
-      surface: 'cli' as const,
-      permit: closedPermit(),
-    };
-  };
-
-  /**
-   * A draft, if it belongs to the workspace being asked about.
-   *
-   * Drafts are stored by id in one directory shared by every workspace, so without this a caller naming workspace
-   * A could prepare and post workspace B's draft. Slack would probably refuse the channel id, which is luck
-   * rather than a check — and on the two workspaces of one organisation that share channel ids, it would not.
-   */
-  const ownDraft = async (store: ReturnType<typeof openDraftStore>, accountId: string, draftId: string) => {
-    const found = await store.get(draftId);
-    if (found.accountId !== accountId) {
-      throw new CommsError('NOT_FOUND', `no draft "${draftId}" in this workspace`, {
-        hint: 'List this workspace’s drafts with `agent-slack draft list --workspace <name>`.',
-      });
-    }
-    return found;
-  };
+  /** The gate's dependencies, from the one function the MCP server uses too — see `gateDepsFor`. */
+  const gateDeps = (context: SlackContext, alias: string) =>
+    gateDepsFor(context, alias, { fetch: deps.read, baseUrl: deps.slackBaseUrl });
 
   const draft = program.command('draft').description('compose and keep messages locally; nothing reaches Slack');
 
@@ -801,6 +790,23 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
             rows.length === 0
               ? 'No drafts.'
               : rows.map((row) => `${row.draftId}  ${row.payload.channel}  ${row.source.slice(0, 60)}`).join('\n'),
+          streams,
+        );
+      }),
+    );
+
+  workspaceOption(draft.command('show <draftId>'))
+    .description('one draft, exactly as it would be posted')
+    .action(
+      act(async (context, options, draftId: string, flags: Options) => {
+        const { account } = requireWorkspace(await context.config(), String(flags.workspace));
+        const store = openDraftStore(context.core.paths.stateDir, context.now);
+        const found = await ownDraft(store, account.id, draftId);
+        writeResult(
+          found,
+          output(),
+          (row) =>
+            `${row.draftId}  ${row.payload.channel}${row.payload.thread_ts ? ` (thread ${row.payload.thread_ts})` : ''}\n\n${row.source}`,
           streams,
         );
       }),

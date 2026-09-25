@@ -17,7 +17,8 @@ so. That is why there are two install modes and why the default is the narrow on
 Be precise about what the narrow mode promises. It is **"this package cannot post"**, not "nothing on this
 machine can post". A second Slack MCP server holding a write token for the same workspace lets an agent post
 without going near this one, and the Gmail release found exactly that shape on the author's own machine.
-`doctor` reports other Slack servers it can see; the promise is never stated more broadly than the sentence above.
+Check the client's MCP server list for other Slack servers, and never state the promise more broadly than the
+sentence above.
 
 ## The two modes
 
@@ -61,6 +62,31 @@ The name is `organisation/platform` — `acme/slack`, `rgc/slack`. A flat name i
 No client secret is stored anywhere, ever. PKCE is what proves the exchange, and the verifier never leaves the
 machine that generated it.
 
+## Connecting it to your agent
+
+The workspace is connected; the agent is not, until the MCP server is registered with its client:
+
+```sh
+agent-slack mcp install --client claude-code
+agent-slack mcp install --client cursor --workspace acme/slack   # pinned to one workspace
+```
+
+`--client` also takes `codex`, `claude-desktop`, `gemini`, `vscode` and `json` (print the entry to paste by hand).
+The entry pins the exact version it was installed from, so a newer release reaches the agent only when it is
+registered again with `--force`; restart the client afterwards. Without the server the skills still work, through
+`agent-slack … --json`.
+
+What the agent gets is reading, drafting and preparing — never posting:
+
+| MCP tool | CLI |
+|---|---|
+| `slack_workspaces_list` | `agent-slack workspace list` |
+| `slack_mode`, `slack_mode_request_send`, `slack_mode_narrow` | `agent-slack workspace mode <name> [send\|read]` |
+| `slack_channels`, `slack_read`, `slack_thread`, `slack_search`, `slack_people`, `slack_files` | the commands of the same name — see `slack-reading` |
+| `slack_post_prepare`, `slack_draft_list`, `slack_draft_get`, `slack_draft_delete` | `agent-slack draft …` and `agent-slack post prepare` — see `slack-posting` |
+
+`slack_mode_request_send` and `slack_mode_narrow` return steps for a person and change nothing.
+
 ## Moving a workspace to `send`
 
 This is a **widening**, and an agent never does it. It takes two steps, in this order:
@@ -93,7 +119,8 @@ back is a person's procedure, not a command:
   sign-in;
 - who the token actually is, via `auth.test` — the only check that can tell a revoked token from a working one,
   because everything else reads files this package wrote;
-- other Slack MCP servers registered on this machine.
+- other Slack MCP servers registered on this machine. Where it says *not checked*, it could not look, and that is
+  not the same as "none": open the client's MCP server list and look for another Slack entry yourself.
 
 `--offline` skips the one network call, so a person diagnosing a machine with no network still gets everything
 the files can say.

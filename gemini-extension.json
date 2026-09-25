@@ -1,12 +1,15 @@
 {
   "name": "agent-communications",
   "version": "0.4.0",
-  "description": "Gmail for coding agents: search, read, analyse, draft and organise mail across several mailboxes. Sending needs your approval.",
+  "description": "Gmail and Slack for coding agents: search, read, analyse, draft and organise mail across several mailboxes, and read Slack workspaces and prepare posts. Nothing is sent or posted without your approval.",
   "mcpServers": {
     "gmail": {
       "command": "npx",
       "args": ["-y", "@agentcomms/gmail-mcp@0.4.0"]
+    },
+    "slack": {
+      "command": "npx",
+      "args": ["-y", "@agentcomms/slack@0.4.0", "mcp"]
     }
-  },
-  "contextFileName": "GEMINI.md"
+  }
 }

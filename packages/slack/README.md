@@ -14,8 +14,8 @@ token holding only `*:history` and `*:read` cannot call `chat.postMessage` at al
 so. Install a workspace in the default `read` mode and no bug in this software can post from it.
 
 Be exact about what that buys. It is **"this package cannot post"**, not "nothing on this machine can post" — a
-second Slack server holding a write token for the same workspace posts without going near this one. `doctor`
-reports the ones it can see.
+second Slack server holding a write token for the same workspace posts without going near this one. Look in your
+agent's MCP server list for another Slack entry, and remove it if you want the guarantee to mean anything.
 
 **Nothing is posted without a person.** Even in `send` mode, an agent prepares; a person approves at a terminal.
 The preview shows what the recipient will read and **how many people it interrupts** — `@channel` is eight
@@ -31,6 +31,7 @@ client secret is stored anywhere: the sign-in is PKCE, and the verifier never le
 agent-slack manifest --mode read --port 51234      # the app to create, and how
 agent-slack workspace add acme/slack --client-id <id> --port 51234
 agent-slack doctor
+agent-slack mcp install --client claude-code         # connect it to your agent
 ```
 
 The port must be the same number in both commands — Slack stores redirect URLs on the app and matches them
@@ -75,9 +76,26 @@ the post, because the words did not change but who reads them did.
 
 ## As an MCP server
 
+Register it with your agent's client, which also starts it once to prove the entry works:
+
 ```sh
-agent-slack mcp --workspace acme/slack
+agent-slack mcp install --client claude-code                       # or codex, cursor, gemini, claude-desktop, vscode
+agent-slack mcp install --client claude-code --workspace acme/slack # pinned to one workspace
 ```
+
+The entry pins the exact version, so a newer release reaches the agent only when you register it again with
+`--force`, then restart the client. `agent-slack mcp --workspace acme/slack` runs the server on stdio directly.
+
+| Tools | What they do |
+|---|---|
+| `slack_workspaces_list`, `slack_mode` | which workspaces are connected, and what each may do |
+| `slack_channels`, `slack_read`, `slack_thread`, `slack_search`, `slack_people`, `slack_files` | read, bounded |
+| `slack_post_prepare` | compose a draft and return the preview a person must approve — posts nothing |
+| `slack_draft_list`, `slack_draft_get`, `slack_draft_delete` | the drafts prepares leave behind |
+| `slack_mode_request_send`, `slack_mode_narrow` | the steps a person takes to change a workspace's mode — changes nothing |
+
+Every one takes `workspace`. The full list, with arguments, is `docs/reference/slack-mcp-tools.md` in
+[the repository](https://github.com/crissmoldovan/agent-communications).
 
 Or embed it:
 
@@ -88,7 +106,8 @@ const server = await createSlackMcpServer({ workspace: 'acme/slack' });
 await server.connectStdio();
 ```
 
-No tool posts. `slack_post_prepare` writes a draft and returns the preview; posting is yours. An agent may report
+No tool posts, reacts, approves, or connects a workspace. `slack_post_prepare` writes a draft and returns the
+preview; posting is yours. An agent may report
 a workspace's mode and may ask to widen it — and gets back the steps you would have to take, with nothing
 changed.
 

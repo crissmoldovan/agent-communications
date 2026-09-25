@@ -1,6 +1,7 @@
 # Getting started
 
-From nothing to reading mail, in about ten minutes. Most of that is Google's console.
+From nothing to reading mail, in about ten minutes. Most of that is Google's console. Slack is
+[at the end](#slack).
 
 You need Node 22.12 or newer and a Google account.
 
@@ -181,7 +182,24 @@ moved. The approval is single-use.
 Each mailbox has a policy: `chat` (the default) needs your yes in the conversation, `confirm` needs a code typed at
 a terminal, `never` means the draft waits in Gmail for you to send yourself.
 
+## Slack
+
+The Slack package is separate and needs no Google account. You make a Slack app in your own workspace from a
+manifest it prints, so the scopes are visible before anything is granted, and no client secret is stored.
+
+```bash
+npm i -g @agentcomms/slack
+agent-slack manifest --port 51234        # the app to create, with every field explained
+agent-slack workspace add acme/slack --client-id <id> --port 51234
+agent-slack doctor
+agent-slack mcp install --client claude-code
+agent-slack channels --workspace acme/slack
+```
+
+The port must be the same number in the manifest and in `workspace add`. The default `read` mode gets a token
+Slack itself will not let post. The `slack-setup` skill walks all of this, including moving a workspace to `send`.
+
 - [Sending and approvals](sending.md) — the gate in detail, and what it does not cover
-- [CLI reference](reference/cli.md) — every command
-- [MCP tool reference](reference/mcp-tools.md) — every tool
+- [CLI reference](reference/cli.md) — every command · [Slack](reference/slack-cli.md)
+- [MCP tool reference](reference/mcp-tools.md) — every tool · [Slack](reference/slack-mcp-tools.md)
 - [Troubleshooting](troubleshooting.md)

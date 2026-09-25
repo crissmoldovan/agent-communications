@@ -1,18 +1,19 @@
 # What is where
 
-Four things ship, and they are independent. You can take one and ignore the rest.
+Two platforms, Gmail and Slack, each shipping the same four things, independent of each other. You can take one
+and ignore the rest.
 
 ```
-                       ┌──────────────────────────────────────┐
-  people, scripts ───► │  agent-gmail          (the CLI)      │
-                       ├──────────────────────────────────────┤
-  agents ────────────► │  MCP server           (32 tools)     │
-                       ├──────────────────────────────────────┤
-                       │  @agentcomms/gmail    (the library)  │
-                       ├──────────────────────────────────────┤
-                       │  @agentcomms/core     (shared)       │
-                       └──────────────────────────────────────┘
-  agents ────────────►    skills/  — instructions, not code
+                       ┌──────────────────────────────────┬───────────────────────────────────┐
+  people, scripts ───► │  agent-gmail        (the CLI)    │  agent-slack        (the CLI)     │
+                       ├──────────────────────────────────┼───────────────────────────────────┤
+  agents ────────────► │  MCP server         (32 tools)   │  MCP server         (14 tools)    │
+                       ├──────────────────────────────────┼───────────────────────────────────┤
+                       │  @agentcomms/gmail  (library)    │  @agentcomms/slack  (library)     │
+                       ├──────────────────────────────────┴───────────────────────────────────┤
+                       │  @agentcomms/core   (shared)                                         │
+                       └──────────────────────────────────────────────────────────────────────┘
+  agents ────────────►    skills/  — gmail-* and slack-*, instructions, not code
 ```
 
 | | What it is | Install | Needs |
@@ -20,6 +21,8 @@ Four things ship, and they are independent. You can take one and ignore the rest
 | **`agent-gmail`** | A CLI. 24 commands, `--json` on all of them, documented exit codes. | `@agentcomms/gmail` | nothing else |
 | **MCP server** | The same operations over stdio, for agents. | `@agentcomms/gmail` (`agent-gmail mcp`) or `@agentcomms/gmail-mcp` | nothing else |
 | **Library** | The TypeScript API both surfaces are built on. | `@agentcomms/gmail` | nothing else |
+| **`agent-slack`** | The Slack CLI: connect a workspace, read it, draft, and post with a person's approval. | `@agentcomms/slack` | nothing else |
+| **Slack MCP server** | Reading, drafting and preparing over stdio. No tool posts. | `@agentcomms/slack` (`agent-slack mcp`) | nothing else |
 | **Skills** | Markdown instructions telling an agent how to use the above, and where to stop. | `npx skills add` | neither package |
 
 ## The CLI does not need the MCP server
@@ -48,13 +51,14 @@ They are separate things that are easy to confuse because both are "for agents".
 them, and when they are not they fall back to the CLI. You can install skills with no server, a server with no
 skills, or both.
 
-There are twelve, one per job — searching, triage, composing, sending, organising, attachments, contacts,
-thread analysis, follow-ups, export, security, setup. Each is a `SKILL.md` plus reference pages.
+There are fifteen, one per job. Twelve for Gmail — searching, triage, composing, sending, organising, attachments,
+contacts, thread analysis, follow-ups, export, security, setup — and three for Slack: setup, reading and posting.
+Each is a `SKILL.md` plus reference pages, including the contract its platform's skills share.
 See [the skills index](skills.md).
 
-They are named `gmail-*` because a skill states one platform's truth and has no other branch to fall into. When
-Slack arrives it ships its own `slack-*` pack rather than the twelve becoming platform-neutral, and the reason is
-that the guarantees genuinely differ: on some accounts the credential itself cannot send, on others only this
+They are named `gmail-*` and `slack-*` because a skill states one platform's truth and has no other branch to fall
+into. Slack ships its own pack, and its own contract, rather than the Gmail skills becoming platform-neutral, and
+the reason is that the guarantees genuinely differ: on some accounts the credential itself cannot send, on others only this
 software stops it. A skill that had to say "depending on the platform" is one an agent under pressure resolves in
 the reassuring direction. [The skills architecture across platforms](superpowers/specs/2026-09-20-skills-architecture.md)
 is the full design, including what adding an IMAP pack later would take.
@@ -64,10 +68,10 @@ is the full design, including what adding an IMAP pack later would take.
 Config, the secret store, the approval engine, the sanitiser, the untrusted-content envelope, path jails, the audit
 log, and the `agentcomms` command for the parts that are not about any one provider.
 
-It is separate because the approval gate and the sanitiser are not mail-specific. The Slack package will use the
-same core, the same approval records and the same digest.
+It is separate because the approval gate and the sanitiser are not mail-specific. The Slack package uses the same
+core, the same approval records and the same audit log.
 
-You rarely install it directly — `@agentcomms/gmail` depends on it.
+You rarely install it directly — `@agentcomms/gmail` and `@agentcomms/slack` depend on it.
 
 ## How a send is gated
 
@@ -86,3 +90,12 @@ code instead:
 What that buys, stated narrowly: an agent using this package cannot send without an approval. It does not stop an
 agent with a shell, and it does not stop a different Gmail server installed beside it. See
 [Sending and approvals](sending.md).
+
+## How a Slack post is gated
+
+Slack's read and write scopes are disjoint, so the default `read` mode is a token Slack itself will not let post —
+no bug here can change that. In `send` mode the gate is the same shape as Gmail's, with two differences that come
+from Slack: every way of putting something in front of people (`chat.postMessage`, a file share's comment, a
+reaction) is behind the one permit, and the approval covers how many people the post reaches, so a room that grew
+after the preview voids it. No MCP tool posts: `slack_post_prepare` returns the preview, and a person posts from a
+terminal.

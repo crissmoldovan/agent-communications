@@ -19,6 +19,19 @@ agent-slack draft create --workspace acme/slack --channel C024BE7LR --text 'read
 agent-slack post prepare --workspace acme/slack --draft <draftId>   # prints the preview, posts nothing
 ```
 
+With the MCP server connected, `slack_post_prepare` does both steps in one call and returns the same preview. Every
+prepare leaves a draft behind, so clear up the ones that will not be posted:
+
+| MCP tool | CLI |
+|---|---|
+| `slack_post_prepare` | `agent-slack draft create`, then `agent-slack post prepare` |
+| `slack_draft_list` | `agent-slack draft list` |
+| `slack_draft_get` | `agent-slack draft show <draftId>` |
+| `slack_draft_delete` | `agent-slack draft delete <draftId>` |
+
+There is no tool that posts, reacts or approves, and there will not be one: those are `agent-slack post send`,
+`agent-slack react` and `agent-slack approve`, at a terminal, under the rules below.
+
 ## Show the whole preview, and stop
 
 The preview is what the person is agreeing to. Show it in full, then wait. Do not summarise it, do not prepare a

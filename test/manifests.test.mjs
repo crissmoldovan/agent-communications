@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { access, constants, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { access, constants, cp, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -120,4 +120,57 @@ test('the Gemini extension launches the version it declares', async () => {
     extension.mcpServers.gmail.args.includes(`@agentcomms/gmail-mcp@${root.version}`),
     'the extension should start the version it says it is',
   );
+});
+
+test('the Gemini extension starts the Slack server the way it starts Gmail’s, at the same version', async () => {
+  /*
+   * The extension installed the Slack skills' instructions and no Slack server, so an agent following one found no
+   * `slack_*` tools. It is declared exactly as Gmail's is — `npx -y` with an exact version, no prompt and no drift —
+   * and `mcp` last, because `@agentcomms/slack` is the whole CLI and without it the process prints help and exits.
+   */
+  const extension = JSON.parse(await readFile(join(ROOT, 'gemini-extension.json'), 'utf8'));
+  const root = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
+  const slack = extension.mcpServers.slack;
+  assert.ok(slack, 'the extension declares a Slack server');
+  assert.equal(slack.command, extension.mcpServers.gmail.command, 'started the same way as Gmail’s');
+  assert.deepEqual(slack.args, ['-y', `@agentcomms/slack@${root.version}`, 'mcp']);
+  // Gemini reads `contextFileName` at install time, and this one named a file that never existed.
+  if (extension.contextFileName) await access(join(ROOT, extension.contextFileName), constants.R_OK);
+});
+
+test('a version bump reaches the Slack pin in the Gemini extension', async () => {
+  // A pin nothing rewrites is one release from pointing at the previous version — and `--check` passing over it.
+  const scratch = await mkdtemp(join(tmpdir(), 'agentcomms-versions-'));
+  try {
+    for (const path of [
+      'package.json',
+      'scripts/sync-versions.mjs',
+      '.claude-plugin/marketplace.json',
+      'gemini-extension.json',
+      'bin/agent-gmail-launch',
+      'skills',
+      ...['core', 'gmail', 'gmail-mcp', 'slack'].map((name) => `packages/${name}/package.json`),
+    ]) {
+      await cp(join(ROOT, path), join(scratch, path), { recursive: true });
+    }
+    const root = JSON.parse(await readFile(join(scratch, 'package.json'), 'utf8'));
+    await writeFile(join(scratch, 'package.json'), `${JSON.stringify({ ...root, version: '9.9.9' }, null, 2)}\n`);
+    await run(process.execPath, [join(scratch, 'scripts', 'sync-versions.mjs')]);
+    const extension = JSON.parse(await readFile(join(scratch, 'gemini-extension.json'), 'utf8'));
+    assert.deepEqual(extension.mcpServers.slack.args, ['-y', '@agentcomms/slack@9.9.9', 'mcp']);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test('the plugin says how to connect the Slack server it does not start', async () => {
+  /*
+   * The plugin's Gmail server is started through `bin/agent-gmail-launch`, which finds Node for a host with an empty
+   * PATH. There is no Slack launcher, so the plugin declares no Slack server rather than one started differently
+   * from Gmail's — and says, where a person reads before installing, how to connect it.
+   */
+  const manifest = JSON.parse(await readFile(join(ROOT, '.claude-plugin', 'marketplace.json'), 'utf8'));
+  const plugin = manifest.plugins[0];
+  if (!plugin.mcpServers.slack) assert.match(plugin.description, /@agentcomms\/slack mcp install/);
+  assert.ok(plugin.keywords.includes('slack'));
 });

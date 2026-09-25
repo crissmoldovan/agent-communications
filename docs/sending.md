@@ -1,7 +1,8 @@
 # Sending and approvals
 
 An agent using this package cannot send mail without your approval. This page says how that is enforced, and what
-it does not cover.
+it does not cover. It is about Gmail; Slack's gate is described in the
+[`slack-posting` skill](../skills/slack-posting/SKILL.md) and in [What is where](architecture.md#how-a-slack-post-is-gated).
 
 ## Why it is in code
 
@@ -23,7 +24,7 @@ draft ──► send prepare ──► you read the preview ──► send execu
 ```
 
 ```bash
-agent-gmail draft create --inbox acme/gmail --to sam@example.com --subject 'Tuesday' --text 'Works for me.'
+agent-gmail draft new --inbox acme/gmail --to sam@example.com --subject 'Tuesday' --text 'Works for me.'
 agent-gmail send prepare --inbox acme/gmail --draft <draftId>     # prints the preview, sends nothing
 agent-gmail send execute --inbox acme/gmail --draft <draftId> --approval <approvalId> --expect-to sam@example.com
 ```

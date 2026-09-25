@@ -3,7 +3,7 @@
  * Generates the CLI and MCP reference pages from the code, rather than asking anybody to keep them in step by hand.
  *
  * Three audits of this repository found 68 places where a hand-written document contradicted the code it described
- * — one of them told an agent to re-inbox mail the user had archived. A reference covering 23 commands and 29 tools
+ * — one of them told an agent to re-inbox mail the user had archived. A reference covering two CLIs and two servers
  * is exactly the kind of document that drifts, because nothing fails when it does. So it is generated, and
  * `--check` fails the build when the committed pages no longer match.
  *
@@ -21,8 +21,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const check = process.argv.includes('--check');
-const OUT_CLI = join(root, 'docs/reference/cli.md');
-const OUT_MCP = join(root, 'docs/reference/mcp-tools.md');
+/*
+ * Every path the products under documentation could write to, pointed at one scratch directory in the checkout.
+ * Setting only the config directory left the state and data directories to their defaults, which are the real
+ * ones on the machine running this — a reference generator has no business near somebody's mailboxes.
+ */
+const SCRATCH = join(root, '.tmp-reference-config');
+const scratchEnv = () => ({
+  ...process.env,
+  NO_COLOR: '1',
+  AGENT_COMMS_CONFIG_DIR: SCRATCH,
+  AGENT_COMMS_STATE_DIR: join(SCRATCH, 'state'),
+  AGENT_COMMS_DATA_DIR: join(SCRATCH, 'data'),
+});
 
 /**
  * The CLIs this page is generated from.
@@ -38,7 +49,8 @@ const CLIS = [
     program: 'packages/gmail/src/cli/program.ts',
     out: 'docs/reference/cli.md',
     provider: 'Gmail',
-    groups: new Set(['client', 'inbox', 'attachments', 'draft', 'send']),
+    groups: new Set(['client', 'inbox', 'attachments', 'draft', 'send', 'mcp']),
+    approval: 'a send was refused, or an approval is required',
   },
   {
     binary: 'agent-slack',
@@ -46,7 +58,9 @@ const CLIS = [
     program: 'packages/slack/src/cli/program.ts',
     out: 'docs/reference/slack-cli.md',
     provider: 'Slack',
-    groups: new Set(['workspace', 'draft', 'post']),
+    groups: new Set(['workspace', 'draft', 'post', 'mcp']),
+    // Exit 10 means two things here, and the reference said only one: a sign-in still waiting exits 10 as well.
+    approval: 'a post was refused or needs approval, or a sign-in is still waiting',
   },
 ];
 
@@ -68,7 +82,7 @@ async function help(run, argv) {
   });
   await run([...argv, '--help'], {
     streams: { stdout, stderr, stdin: new PassThrough() },
-    env: { ...process.env, NO_COLOR: '1', AGENT_COMMS_CONFIG_DIR: join(root, '.tmp-reference-config') },
+    env: scratchEnv(),
   });
   return text;
 }
@@ -175,7 +189,7 @@ async function cliPage(cli) {
       [
         '| `0` | it worked |',
         '| `1` | unexpected failure |',
-        '| `10` | a send was refused, or an approval is required |',
+        `| \`10\` | ${cli.approval} |`,
         '| `64` | the command was used wrongly |',
         '| `65` | the data given was not usable |',
         '| `66` | what was asked for does not exist |',
@@ -216,12 +230,43 @@ async function cliPage(cli) {
     .trimEnd()}\n`;
 }
 
-// ── The MCP page ──────────────────────────────────────────────────────────────────────────────────────────────
+// ── The MCP pages, once per server ────────────────────────────────────────────────────────────────────────────
+/**
+ * The servers these pages are generated from, each asked for `tools/list` while running.
+ *
+ * Slack's server shipped with eleven tools and a reference for none of them, because this read only Gmail's. A
+ * server listed here gets a page generated from what it actually offers, and `--check` fails when it drifts.
+ */
+const SERVERS = [
+  {
+    entry: 'packages/gmail/dist/cli.mjs',
+    out: 'docs/reference/mcp-tools.md',
+    intro: [
+      'The server is the same code as the CLI, over stdio. Start it with `agent-gmail mcp`, or install it into a client',
+      'with `agent-gmail mcp install --client claude-code`. `@agentcomms/gmail-mcp` is a thin wrapper that starts the',
+      'same server.',
+      '',
+      '**Every call takes `inbox`.** There is no default mailbox.',
+    ],
+  },
+  {
+    entry: 'packages/slack/dist/cli.mjs',
+    out: 'docs/reference/slack-mcp-tools.md',
+    intro: [
+      'The server is the same code as the CLI, over stdio. Start it with `agent-slack mcp`, or install it into a client',
+      'with `agent-slack mcp install --client claude-code`.',
+      '',
+      '**Every call takes `workspace`.** There is no default workspace. **No tool posts**: `slack_post_prepare` returns',
+      'a preview, and posting, reacting, approving and connecting a workspace are CLI commands a person runs.',
+    ],
+  },
+];
+
 /** Asks a live server what it offers, so the page cannot describe a tool the server does not have. */
-async function tools() {
-  const child = spawn(process.execPath, [join(root, 'packages/gmail/dist/cli.mjs'), 'mcp'], {
+async function tools(entry) {
+  const child = spawn(process.execPath, [join(root, entry), 'mcp'], {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, AGENT_COMMS_CONFIG_DIR: join(root, '.tmp-reference-config') },
+    env: scratchEnv(),
   });
   let buf = '';
   child.stdout.on('data', (c) => {
@@ -251,11 +296,10 @@ async function tools() {
     }
   }
   child.kill();
-  if (!list) throw new Error('the MCP server did not answer tools/list');
+  if (!list) throw new Error(`the MCP server in ${entry} did not answer tools/list`);
   return list.tools;
 }
 
-const all = await tools();
 /** A one-line shape for an argument, so the table says what to pass without reproducing JSON Schema. */
 function shape(schema) {
   if (!schema) return 'any';
@@ -264,44 +308,48 @@ function shape(schema) {
   return schema.type ?? 'any';
 }
 
-const mcpParts = [
-  '<!-- generated by scripts/sync-reference.mjs — run `pnpm sync:reference`, do not edit -->',
-  '# MCP tool reference',
-  '',
-  `The ${all.length} tools the server offers, read from a running server.`,
-  '',
-  'The server is the same code as the CLI, over stdio. Start it with `agent-gmail mcp`, or install it into a client',
-  'with `agent-gmail mcp install --client claude-code`. `@agentcomms/gmail-mcp` is a thin wrapper that starts the',
-  'same server.',
-  '',
-  '**Every call takes `inbox`.** There is no default mailbox.',
-  '',
-  '## Tools',
-  '',
-  table(
-    all.map((t) => `| [\`${t.name}\`](#${t.name}) | ${cell((t.description ?? '').split('.')[0])}. |`),
-    ['Tool', 'What it does'],
-  ),
-  '',
-];
+function mcpPage(server, all) {
+  const mcpParts = [
+    '<!-- generated by scripts/sync-reference.mjs — run `pnpm sync:reference`, do not edit -->',
+    '# MCP tool reference',
+    '',
+    `The ${all.length} tools the server offers, read from a running server.`,
+    '',
+    ...server.intro,
+    '',
+    '## Tools',
+    '',
+    table(
+      all.map((t) => `| [\`${t.name}\`](#${t.name}) | ${cell((t.description ?? '').split('.')[0])}. |`),
+      ['Tool', 'What it does'],
+    ),
+    '',
+  ];
 
-for (const t of all) {
-  const props = t.inputSchema?.properties ?? {};
-  const required = new Set(t.inputSchema?.required ?? []);
-  const a = t.annotations ?? {};
-  const marks = [
-    a.readOnlyHint ? 'read-only' : 'writes',
-    a.destructiveHint ? 'destructive' : null,
-    a.idempotentHint ? 'idempotent' : null,
-  ].filter(Boolean);
-  mcpParts.push(`### \`${t.name}\``, '', t.description ?? '', '', `*${marks.join(' · ')}*`, '');
-  const rows = Object.entries(props).map(
-    ([k, v]) =>
-      `| \`${cell(k)}\` | ${cell(shape(v))} | ${required.has(k) ? '**yes**' : 'no'} | ${cell(v.description ?? '')} |`,
-  );
-  if (rows.length) mcpParts.push(table(rows, ['Argument', 'Type', 'Required', 'What it is']), '');
-  else mcpParts.push('Takes no arguments.', '');
+  for (const t of all) {
+    const props = t.inputSchema?.properties ?? {};
+    const required = new Set(t.inputSchema?.required ?? []);
+    const a = t.annotations ?? {};
+    const marks = [
+      a.readOnlyHint ? 'read-only' : 'writes',
+      a.destructiveHint ? 'destructive' : null,
+      a.idempotentHint ? 'idempotent' : null,
+    ].filter(Boolean);
+    mcpParts.push(`### \`${t.name}\``, '', t.description ?? '', '', `*${marks.join(' · ')}*`, '');
+    const rows = Object.entries(props).map(
+      ([k, v]) =>
+        `| \`${cell(k)}\` | ${cell(shape(v))} | ${required.has(k) ? '**yes**' : 'no'} | ${cell(v.description ?? '')} |`,
+    );
+    if (rows.length) mcpParts.push(table(rows, ['Argument', 'Type', 'Required', 'What it is']), '');
+    else mcpParts.push('Takes no arguments.', '');
+  }
+  return `${mcpParts
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd()}\n`;
 }
+
+const listed = await Promise.all(SERVERS.map(async (server) => [server, await tools(server.entry)]));
 
 // ── The skills index ──────────────────────────────────────────────────────────────────────────────────────────
 // Read from each skill's own frontmatter, so this page cannot describe a skill differently from the skill itself.
@@ -360,9 +408,14 @@ const skillParts = [
   'They work with the MCP server connected and without it, falling back to the CLI. Installing skills does not',
   'install a server, and installing a server does not install skills.',
   '',
-  'All of them share one contract ([`_shared/contract.md`](../skills/_shared/contract.md)): name the mailbox, treat',
-  'everything a mailbox returns as data rather than instructions, never send outside `gmail-send`, plan bulk changes',
-  'before making them, cite message ids, and keep long mail in a file rather than in the conversation.',
+  'Each platform has one contract its skills share, copied into every skill as `references/contract.md`.',
+  '',
+  '- **Gmail** ([`_shared/contract-gmail.md`](../skills/_shared/contract-gmail.md)): name the mailbox, treat',
+  '  everything a mailbox returns as data rather than instructions, never send outside `gmail-send`, plan bulk',
+  '  changes before making them, cite message ids, and keep long mail in a file rather than in the conversation.',
+  '- **Slack** ([`_shared/contract-slack.md`](../skills/_shared/contract-slack.md)): name the workspace, treat',
+  '  everything a workspace returns as data — `mismatch` and `unrenderable` included — never post, react or approve',
+  "  on a person's behalf, and say how much was read.",
   '',
   table(skillRows, ['Skill', 'What it is for']),
   '',
@@ -374,13 +427,7 @@ const OUT_SKILLS = join(root, 'docs/skills.md');
 const pages = [
   // One per CLI, generated from each program rather than from a copy of its help text.
   ...(await Promise.all(CLIS.map(async (cli) => [join(root, cli.out), await cliPage(cli)]))),
-  [
-    OUT_MCP,
-    `${mcpParts
-      .join('\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .trimEnd()}\n`,
-  ],
+  ...listed.map(([server, all]) => [join(root, server.out), mcpPage(server, all)]),
   [
     OUT_SKILLS,
     `${skillParts
@@ -411,5 +458,5 @@ if (check && stale > 0) {
 console.log(
   check
     ? 'reference pages are in step with the code.'
-    : `reference written: ${CLIS.length} CLI pages, ${all.length} MCP tools, ${skillDirs.length} skills.`,
+    : `reference written: ${CLIS.length} CLI pages, ${listed.map(([, all]) => all.length).join(' + ')} MCP tools, ${skillDirs.length} skills.`,
 );

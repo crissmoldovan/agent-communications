@@ -25,6 +25,19 @@ agent-slack files --workspace acme/slack
 Every one of them takes `--workspace`; there is no default. `--json` gives the whole result with the same exit
 codes.
 
+With the MCP server connected, the same reads are tools, each taking `workspace`:
+
+| MCP tool | CLI |
+|---|---|
+| `slack_channels` | `agent-slack channels` |
+| `slack_read` | `agent-slack read <channel>` |
+| `slack_thread` | `agent-slack thread <channel> <ts>` |
+| `slack_search` | `agent-slack search <query>` |
+| `slack_people` | `agent-slack people` |
+| `slack_files` | `agent-slack files` |
+
+`slack_workspaces_list` (`agent-slack workspace list`) names the workspaces when you do not know them.
+
 ## Three fields decide how to report what you read
 
 **`complete`.** False means a page remained. Say so — "the newest 50 of more" — and use the `cursor` or `page` in
@@ -63,7 +76,7 @@ different things.** Never use `chosenName` to decide who somebody is.
 
 ## Saying what you actually read
 
-Name the window, the mailboxes and what failed. A true sentence is longer than the tempting one:
+Name the window, the workspaces and what failed. A true sentence is longer than the tempting one:
 
 ```text
 Nothing came back from the part I looked at: `acme/slack` only, #engineering, the newest 50 messages,

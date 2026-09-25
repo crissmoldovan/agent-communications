@@ -96,7 +96,9 @@ for (const [path, what] of [
     path,
     source
       .replace(/"version":\s*"[\w.-]+"/g, `"version": "${version}"`)
-      .replace(/@agentcomms\/gmail-mcp@[\w.-]+/g, `@agentcomms/gmail-mcp@${version}`),
+      .replace(/@agentcomms\/gmail-mcp@[\w.-]+/g, `@agentcomms/gmail-mcp@${version}`)
+      // The Gemini extension starts the Slack server too, pinned the same way.
+      .replace(/@agentcomms\/slack@[\w.-]+/g, `@agentcomms/slack@${version}`),
     what,
   );
 }

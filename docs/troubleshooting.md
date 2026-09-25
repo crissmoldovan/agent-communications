@@ -1,7 +1,7 @@
 # Troubleshooting
 
 Run this first. It checks everything that has to work and prints the one command that fixes each thing that does
-not.
+not. Slack has its own — see [Slack](#slack) at the end.
 
 ```bash
 agent-gmail doctor
@@ -182,19 +182,19 @@ nothing for an already-registered client until you re-register it.
 Check what is registered against what you have:
 
 ```bash
-agent-gmail doctor --json | jq '.data.checks[] | select(.name | test("Registered server"))'
+agent-gmail doctor --json | jq '.data.checks[] | select(.id == "registered-server-version")'
 ```
 
-Re-registering is remove-then-install. `mcp install` refuses to overwrite an existing entry, so the remove is not
-optional:
+Re-register with `--force`, which replaces the entry of the same name — without it, `mcp install` refuses to
+overwrite one:
 
 ```bash
-claude mcp remove gmail                                    # or the equivalent for your client
-npx -y @agentcomms/gmail@latest mcp install --client claude-code
+npx -y @agentcomms/gmail@latest mcp install --client claude-code --force
+npx -y @agentcomms/slack@latest mcp install --client claude-code --force   # the Slack server, the same way
 ```
 
-Restart the client afterwards. The old runtime stays on disk under `<data dir>/runtime/<version>/`; nothing
-depends on it once the entry points elsewhere, and it can be deleted.
+Restart the client afterwards. The old runtime stays on disk under `<data dir>/runtime/`, in a directory named for
+its version; nothing depends on it once the entry points elsewhere, and it can be deleted.
 
 ### The server starts but every call fails
 
@@ -238,6 +238,45 @@ withheld.
 Either the budget ran out across messages, or one message's body was cut. The flag does not distinguish the two:
 compare `messageCount` against the messages returned, and check each message's own `body.truncated`. Use
 `agent-gmail export` to write the whole thing to a file instead of pulling it through a conversation.
+
+## Slack
+
+`agent-slack doctor` is the Slack equivalent, and exits `78` the same way. `--offline` skips the one call it makes
+to Slack.
+
+### The sign-in completes at Slack and never comes back
+
+The port in the app's manifest and the port given to `workspace add` differ. Slack matches redirect URLs exactly,
+so they must be the same number: `agent-slack manifest --port 51234` and
+`agent-slack workspace add acme/slack --client-id <id> --port 51234`.
+
+### The agent has no `slack_*` tools
+
+The workspace is connected but the server is not registered with the client:
+
+```bash
+agent-slack mcp install --client claude-code
+```
+
+Then restart the client. Without the server the Slack skills fall back to `agent-slack … --json`.
+
+### It will not post
+
+That is usually correct. A workspace in `read` mode holds a token Slack will not let post; no setting here changes
+that. `agent-slack workspace mode <name>` says which mode a workspace is in and prints the steps to move it, which
+a person takes. No MCP tool posts in any mode: `slack_post_prepare` returns a preview, and a person runs
+`agent-slack approve` where the policy asks for it, then `agent-slack post send`.
+
+### A prepared post was refused because the room grew
+
+The words did not change, but who reads them did, so the approval is void and nothing was posted. Prepare it again
+and read the new count.
+
+### Drafts are piling up
+
+Every prepare leaves a local draft. `agent-slack draft list --workspace <name>` shows them and
+`agent-slack draft delete <draftId> --workspace <name>` removes one; over MCP, `slack_draft_list` and
+`slack_draft_delete`.
 
 ## Still stuck
 
