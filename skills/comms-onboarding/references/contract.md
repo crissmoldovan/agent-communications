@@ -6,9 +6,11 @@ one wins.
 
 ## 1. A change is shown, then approved, then applied.
 
-Connecting an account, letting it post or send more freely, trusting a client, registering a server,
-removing an account, migrating names or secrets: each is a **change**, and a change reaches the
-configuration only through an approval bound to exactly what was shown.
+Connecting a Slack workspace in `send`, letting an account post or send more freely, adding an OAuth
+client, trusting a client, registering a server, removing an account, migrating names or secrets:
+each is a **change**, and a change reaches the configuration only through an approval bound to exactly
+what was shown. Connecting a mailbox, or a workspace in `read`, is not one: its sign-in starts at once,
+and the consent screen is the person's (§2).
 
 - The first call of a changing tool (without `approvalId`) returns `approvalRequired`, a `preview`
   and `next`. **Nothing has changed at that point.** Show the preview in full — every line that
