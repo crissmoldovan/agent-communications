@@ -19,6 +19,7 @@
       "keywords": ["gmail", "email", "slack", "mcp", "communications"],
       "strict": false,
       "skills": [
+        "./skills/comms-onboarding",
         "./skills/gmail-setup",
         "./skills/gmail-search",
         "./skills/gmail-thread-analysis",
