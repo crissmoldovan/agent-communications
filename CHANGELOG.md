@@ -50,6 +50,11 @@ a user group. `--broadcast` accepts only `here`, `channel` and `everyone`, and a
 could be made to carry a user-group mention that the preview counted as nobody, so a post that interrupted a whole
 group was approved as one that interrupted no one.
 
+**What is approved is what is posted.** A Slack draft was previewed from its text and posted as its blocks, so a draft
+file rewritten on disk — by anything that can write to it — could be approved as one message and post another. A draft
+whose blocks are not exactly what its text composes to is now refused, at every step that reads it, and what is posted
+is the payload the approval was taken over.
+
 **A core MCP server sets up the others.** `npx -y @agentcomms/core mcp install --client <client>` registers it once;
 from then on an agent can list which channels are available, register or prune the Gmail and Slack servers, set the
 change policy, migrate names and secrets, read the audit log and list or revoke approvals — 11 tools. It registers
@@ -60,7 +65,9 @@ person through the whole setup from a conversation; there are now sixteen skills
 **A server pinned to one mailbox or workspace keeps to it.** Given another account's approval id, a pinned server
 voided it — so an agent talking to the `work` server could cancel an approval waiting for `home`. It is now refused
 before it is touched. A pinned `gmail_doctor` answers for its own mailbox only, and a pinned `gmail_send_list`
-refuses another mailbox instead of answering for its own.
+refuses another mailbox instead of answering for its own. A Slack workspace keeps its id when it signs in again, so a
+server pinned to it no longer stops working after `workspace reauth`; drafts and approvals waiting on it survive the
+reauth too.
 
 **A mismatched credential store is refused.** On a computer with Slack credentials in the keychain but no store
 recorded, `agent-gmail client add --store file` was approved as "credentials will move", moved nothing, and left every
