@@ -180,7 +180,7 @@ agent-slack workspace reauth [options] <alias>
 
 | Option | What it does | Default |
 |---|---|---|
-| `--mode <mode>` | how much access to ask Slack for (choices: "read", "send", default: "read") | — |
+| `--mode <mode>` | how much access to ask Slack for; its own mode when left out (choices: "read", "send") | — |
 | `--port <port>` | the loopback port, matching the one in the manifest | — |
 | `--start` | print the link and return, instead of waiting | `false` |
 | `--finish <flowId>` | complete a sign-in started with --start | — |

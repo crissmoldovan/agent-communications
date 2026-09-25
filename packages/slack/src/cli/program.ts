@@ -380,9 +380,9 @@ configuration problem.`,
 
   const workspace = program.command('workspace').description('connect, inspect and disconnect Slack workspaces');
 
-  const signInOptions = (command: Command): Command =>
+  const signInOptions = (command: Command, mode: Option = modeOption()): Command =>
     command
-      .addOption(modeOption())
+      .addOption(mode)
       .option('--port <port>', 'the loopback port, matching the one in the manifest')
       .option('--start', 'print the link and return, instead of waiting', false)
       .option('--finish <flowId>', 'complete a sign-in started with --start')
@@ -564,11 +564,21 @@ configuration problem.`,
   );
 
   approvalOption(
-    signInOptions(workspace.command('reauth <alias>')).description(
-      'sign in again: renew the grant, or change how much access it has',
-    ),
+    signInOptions(
+      workspace.command('reauth <alias>'),
+      /*
+       * No default, and the help says what an absent `--mode` means: the workspace's own mode, not `read`.
+       *
+       * It used to share `add`'s option, default `read` and all, so `--help` (and the reference page generated from
+       * it) promised a downgrade the command has never made — it asked Commander where the value came from instead.
+       */
+      new Option('--mode <mode>', 'how much access to ask Slack for; its own mode when left out').choices([
+        'read',
+        'send',
+      ]),
+    ).description('sign in again: renew the grant, or change how much access it has'),
   ).action(
-    act(async (context, options, alias: string, flags: Options, command: Command) => {
+    act(async (context, options, alias: string, flags: Options) => {
       if (flags.finish) {
         const view = await finishSignIn(context, {
           flowId: String(flags.finish),
@@ -582,13 +592,10 @@ configuration problem.`,
         return;
       }
       /*
-       * The workspace's own mode by default, not `read`.
-       *
-       * `--mode` carries a default, so at this layer "not passed" and "passed read" look identical — and taking
-       * the default would quietly downgrade a `send` workspace every time somebody renewed its grant, which is
-       * the opposite of what "the same, again" means. Commander knows where the value came from; ask it.
+       * The workspace's own mode when `--mode` is not given, not `read`: renewing a `send` workspace's grant must not
+       * quietly downgrade it, which is the opposite of what "the same, again" means.
        */
-      const mode = command.getOptionValueSource('mode') === 'default' ? undefined : (String(flags.mode) as InstallMode);
+      const mode = flags.mode === undefined ? undefined : (String(flags.mode) as InstallMode);
       // The same operation as `slack_workspace_reauth`: a widening is approved before its sign-in starts.
       const started = await changeAt(
         context,

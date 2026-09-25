@@ -599,11 +599,10 @@ test('connecting the same account twice is refused with the command that renews 
 
 // ── re-authorising ────────────────────────────────────────────────────────────────────────────────────────────
 
-test('reauth keeps the access the workspace already had, rather than the flag default', async () => {
+test('reauth keeps the access the workspace already had, rather than a flag default', async () => {
   /*
-   * `--mode` carries a default, so at the option layer "not passed" and "passed read" look the same. Taking the
-   * default would quietly downgrade a `send` workspace every time somebody renewed its grant — which is the
-   * opposite of what "the same, again" means.
+   * `add`'s `--mode` defaults to `read`. Taking that default here would quietly downgrade a `send` workspace every
+   * time somebody renewed its grant — which is the opposite of what "the same, again" means.
    */
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'acme', mode: 'send' });
@@ -616,6 +615,23 @@ test('reauth keeps the access the workspace already had, rather than the flag de
   );
   assert.equal(result.code, EXIT_CODES.OK, result.stderr);
   assert.equal((await harness.core.config.load()).accounts.acme?.mode, 'send');
+});
+
+test('reauth --help says an absent --mode keeps the workspace’s own, and promises no `read` default', async () => {
+  // The help (and the reference page generated from it) said `default: "read"` while the command kept the
+  // workspace's mode — a person reading it would pass `--mode send` to avoid a downgrade that never happens, or
+  // trust a renewal to narrow a workspace it leaves able to post.
+  const harness = await newHarness();
+  // Help wraps at the terminal's width, so an option's text is read with its line breaks folded away.
+  const modeOf = async (argv: string[]) => {
+    const help = (await cli(harness, [...argv, '--help'])).stdout.replace(/\s+/g, ' ');
+    return /--mode <mode> (.*?) --port/.exec(help)?.[1] ?? '';
+  };
+  const reauth = await modeOf(['workspace', 'reauth']);
+  assert.match(reauth, /its own mode when left out/);
+  assert.doesNotMatch(reauth, /default/);
+  // `add` still starts at `read`, and says so.
+  assert.match(await modeOf(['workspace', 'add']), /default: "read"/);
 });
 
 test('reauth as a different person is refused, and the old credential is still there', async () => {
