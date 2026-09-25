@@ -32,9 +32,14 @@ to publish at all.
 ### Why this was not always so
 
 The first release of each package happened from a maintainer's laptop, because npm will not configure a trusted
-publisher for a package that does not exist — so no CI workflow could have performed a first publish. That
-chicken-and-egg is spent: the registry now knows all three, each names this workflow as its trusted publisher, and
-from 0.1.1 onward this is the publisher.
+publisher for a package that does not exist — so no CI workflow could have performed a first publish. For core,
+gmail and gmail-mcp that was 0.1.0, and from 0.1.1 CI is the publisher. `@agentcomms/slack` was first published by
+hand at 0.4.0, so it needs its own trusted publisher added once, by the package owner, before CI can publish it.
+
+**Whether a package trusts this workflow cannot be read from outside.** npm's trust settings need an authenticated
+owner (`npm trust list @agentcomms/<name>`, npm 11.15 or later, or npmjs.com → the package → Settings → Trusted
+publishing), and the public packument only says how past versions were published. So the publish job proves it
+instead — see [the preflight](#the-oidc-preflight) below.
 
 The local path still exists in `scripts/release.mjs` and still works. It is the fallback, for the day GitHub is
 down or a release cannot wait. What it gives up is provenance: npm attests only what a supported CI runner
@@ -46,17 +51,26 @@ published, so anything released from a laptop carries no attestation, and 0.1.0 
 |---|---|
 | The repository is public | npm refuses a provenance attestation for a private source repository, with a 422 that arrives only after the tarball is uploaded |
 | A GitHub-hosted runner | a self-hosted one cannot issue an OIDC token npm accepts |
-| Each package names this workflow | npmjs.com → the package → Settings → Trusted publishing: repository, workflow file, environment. npm does not validate those strings when you save them, so read them back |
+| Each package names this workflow | npmjs.com → the package → Settings → Trusted publishing: repository, workflow file (`release.yml`), environment (`release`). npm does not validate those strings when you save them — the preflight is what reads them back |
 | `id-token: write` on the publish job | without it there is no OIDC token to exchange |
+
+## The packages
+
+**One list, in `scripts/packages.mjs`:** `core`, `gmail`, `gmail-mcp`, `slack`, in that order. The workflow's publish
+and confirm loops, `scripts/release.mjs`, `scripts/sync-versions.mjs` and `pnpm verify:packages` all read it, and
+`test/release-packages.test.mjs` fails if a publishable package is missing from it, if the order puts a package
+before one it depends on, or if any of those stops reading it. There used to be a copy in each; 0.4.0 shipped
+without Slack because one of them said three.
 
 ## The order, and why it is that order
 
 ```bash
 # 1. The version, everywhere it is written down.
-pnpm sync:versions          # three manifests, two plugin files, the launcher, twelve skills
+pnpm sync:versions          # every package manifest, two plugin files, the launcher, every skill's compatibility line
 pnpm run licenses               # third-party notices that ship inside the bundles
 
-# 2. The changelog entry, written by a person. `## Unreleased` becomes `## X.Y.Z`.
+# 2. The changelog entry, written by a person. `## Unreleased` becomes `## X.Y.Z`. The tag gate refuses a version
+#    with no section, and the GitHub release is made from it.
 
 # 3. Commit and push. What is published must be what anyone else can read.
 
@@ -66,7 +80,7 @@ pnpm release                # every check, then stops before sending anything
 # 5. Tag. This starts the workflow; it does not publish.
 git tag vX.Y.Z && git push origin vX.Y.Z
 
-# 6. Watch it. Six verify legs, then it publishes.
+# 6. Watch it. Six verify legs, the OIDC preflight, the publish, the registry check, then the GitHub release.
 ```
 
 **The tag now comes before the publish, because it is what starts it** — the reverse of the local flow, where the
@@ -80,24 +94,46 @@ installs — for everybody, immediately. The workflow reads the tag and passes `
 hyphen in it. `scripts/release.mjs` has always accepted a prerelease string, so the two used to disagree about
 what a `-rc.1` meant.
 
-**The packages publish in dependency order** — `core`, then `gmail`, then `gmail-mcp` — because a consumer
-installing `@agentcomms/gmail` must find the exact `core` it pins already on the registry.
+**The packages publish in dependency order** — the order of `scripts/packages.mjs` — because a consumer installing
+`@agentcomms/gmail` must find the exact `core` it pins already on the registry.
+
+### The OIDC preflight
+
+Before anything is published, the publish job does for every package what the publish itself will do, minus the
+publish: it asks GitHub for an ID token with the audience `npm:registry.npmjs.org` and POSTs it to
+`/-/npm/v1/oidc/token/exchange/package/@agentcomms%2f<name>`. npm answers with a short-lived publish token only if
+that package names this repository, `release.yml` and the `release` environment as its trusted publisher. The token
+is checked for and dropped — never printed, never kept — and nothing is sent. If any package is refused, the run
+fails there, naming it, with nothing published. (`scripts/release-ci.mjs preflight`.)
+
+Without it, a package with no trusted publisher fails late and quietly: pnpm prints only "Skipped OIDC", falls back
+to a registry token this workflow does not have, and that one publish is refused — after the packages before it in
+the list have gone out. Slack is last in the list, so that is exactly how a first CI release of it would have gone.
 
 **`pnpm verify` runs build before typecheck, deliberately.** The `gmail` package typechecks against `core`'s
 emitted declarations. For a long time this ran the other way round, which passed on every machine that already had a
 `dist` lying about and failed on a clean checkout with 235 `Cannot find module` errors. If you reorder it, you will
 reintroduce that.
 
-**The release asks the registry what arrived** rather than trusting the publish command's exit code. `pnpm --filter`
+**The release asks the registry what arrived** — for up to ten minutes, because the read path lagged four minutes
+behind the publish at 0.4.0 and the old five-minute budget was nearly spent on releases that succeeded — rather than
+trusting the publish command's exit code. `pnpm --filter`
 exits 0 when it matches nothing — "No projects matched the filters" is not an error — so a renamed package or a
 changed scope would publish fewer packages than the hardcoded list claims and still finish green. The first person
 to find out would be a consumer whose install of `gmail-mcp` cannot resolve the `gmail` it pins.
 
 ## If a publish fails part way through
 
-The packages that already went out are on the registry permanently. **Do not retry the same version.** Bump it and
-release again. The script prints which packages it managed to send at the point of failure, because that list is the
-only record of which half of the release exists.
+The packages that already went out are on the registry permanently, and a version can never be replaced.
+
+**In CI, fix the cause and re-run the failed job, at the same version.** The publish loop skips any package already
+on the registry at that exact version, so the re-run sends only what is missing, then confirms all of them and
+makes the GitHub release. This used to be impossible — the re-run stopped at `core` with "cannot publish over
+previously published version" — and the only way forward was to burn a version number.
+
+**With the local script, bump the version.** `scripts/release.mjs` still refuses a version any package already has,
+and prints which packages it managed to send at the point of failure, because that list is the only record of which
+half of the release exists.
 
 ## What the verify actually proves
 
@@ -114,7 +150,9 @@ they import from `src/`.
 - `npx -y @agentcomms/gmail@X.Y.Z --version`, then `doctor`, somewhere that is not this repository.
 - `npx skills add crissmoldovan/agent-communications --skill '*'` in a scratch directory; check a skill brought its
   `references/` with it.
-- Cut the GitHub release from the tag, with the changelog section as its body.
+- The GitHub release is made by the workflow's `github-release` job, from the changelog section, once the registry
+  has confirmed every package. A re-run leaves an existing release alone. After a local `pnpm release:publish`,
+  pushing the tag still makes it: the run finds every package already published, skips the publish and confirms.
 
 ## Do not run agents in this checkout during a release
 

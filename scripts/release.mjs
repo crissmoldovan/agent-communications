@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Publishes the three packages to npm, from here.
+ * Publishes every package in `scripts/packages.mjs` to npm, from here.
  *
  * Publishing is the one thing in this repository that cannot be undone: npm keeps a version for ever, and the
  * 72-hour unpublish window is not a fix once somebody has installed it. So this refuses far more than it does, and
@@ -18,10 +18,9 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-
-/** Packages in dependency order: a consumer installing gmail must find the core it pins already on the registry. */
-const PACKAGES = ['core', 'gmail', 'gmail-mcp'];
-const SCOPE = '@agentcomms';
+// The shared, ordered list. This file had its own copy, which still said three packages after the workflow learned
+// about Slack — a local release would have published three, confirmed three and reported success.
+import { PACKAGES, SCOPE } from './packages.mjs';
 
 const args = new Set(process.argv.slice(2));
 const publish = args.has('--publish');
@@ -210,7 +209,10 @@ if (pending.size > 0) {
 }
 
 console.log(`\nPublished ${version}.`);
-console.log('\nNext, and none of it automatic:');
+console.log('\nNext:');
 console.log(`  git tag v${version} && git push origin v${version}`);
+console.log('  # The tag run finds every package already at this version and skips its publish, then confirms them');
+console.log(
+  '  # and creates the GitHub release from the changelog section — so the release page is not a manual step.',
+);
 console.log(`  npx -y ${SCOPE}/gmail@${version} --version     # prove it installs from a clean machine`);
-console.log('  gh release create ...                          # with the changelog section as its body');

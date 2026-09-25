@@ -2,17 +2,18 @@
 /**
  * One version, everywhere it is written down.
  *
- * A released version appears in more places than anybody remembers: three package manifests, a plugin manifest, a
- * Gemini extension, a launcher script with a pinned `npx` target, and a `compatibility` line in each of twelve
- * skills. Every one of those is a place a user copies a command from, and a stale one sends them to a version that
- * does not exist or, worse, an older one that still does. So the root `package.json` version is the source and this
- * writes it into the rest.
+ * A released version appears in more places than anybody remembers: every package manifest, a plugin manifest, a
+ * Gemini extension, a launcher script with a pinned `npx` target, and a `compatibility` line in every skill. Every
+ * one of those is a place a user copies a command from, and a stale one sends them to a version that does not exist
+ * or, worse, an older one that still does. So the root `package.json` version is the source and this writes it into
+ * the rest. The package manifests are the ones in `scripts/packages.mjs`.
  *
  * `--check` verifies without writing, which is what CI runs.
  */
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PACKAGES } from './packages.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const check = process.argv.includes('--check');
@@ -36,8 +37,7 @@ if (!/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version)) {
 }
 
 // The published packages, in lockstep. They depend on each other by exact version, so a mismatch is a broken install.
-const packages = ['core', 'gmail', 'gmail-mcp', 'slack'];
-for (const name of packages) {
+for (const name of PACKAGES) {
   const path = join(ROOT, 'packages', name, 'package.json');
   const manifest = JSON.parse(await readFile(path, 'utf8'));
   manifest.version = version;
@@ -52,20 +52,30 @@ for (const name of packages) {
   await put(path, `${JSON.stringify(manifest, null, 2)}\n`, 'version');
 }
 
-// Each skill states which package version it was written against, so a user installing both can see a mismatch.
+/*
+ * Each skill states which package version it was written against, so a user installing both can see a mismatch.
+ *
+ * Every skill, whichever package it names. This used to walk only `gmail-` directories and match only
+ * `@agentcomms/gmail@`, so the three Slack skills kept saying 0.4.0 through a bump to 0.4.1 while `--check` — the
+ * same check the release job's tag gate runs — printed "versions in step". A skill is a directory not starting with
+ * `_`; `_shared` is the contract they are given.
+ */
 const skills = join(ROOT, 'skills');
 for (const entry of await readdir(skills, { withFileTypes: true })) {
-  if (!entry.isDirectory() || !entry.name.startsWith('gmail-')) continue;
+  if (!entry.isDirectory() || entry.name.startsWith('_')) continue;
   const path = join(skills, entry.name, 'SKILL.md');
   const source = await readFile(path, 'utf8');
-  const updated = source.replace(
-    /^compatibility: "@agentcomms\/gmail@[^"]+"$/m,
-    `compatibility: "@agentcomms/gmail@${version}"`,
-  );
-  if (!/^compatibility: /m.test(source)) {
-    problems.push(`skills/${entry.name}/SKILL.md: no compatibility line to keep in step`);
+  const line = /^compatibility: "@agentcomms\/[\w-]+@[^"]+"$/m;
+  if (!line.test(source)) {
+    problems.push(
+      `skills/${entry.name}/SKILL.md: no \`compatibility: "@agentcomms/<package>@<version>"\` line to keep in step`,
+    );
     continue;
   }
+  const updated = source.replace(
+    /^compatibility: "(@agentcomms\/[\w-]+)@[^"]+"$/m,
+    (_, name) => `compatibility: "${name}@${version}"`,
+  );
   await put(path, updated, 'the compatibility line');
 }
 

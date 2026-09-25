@@ -6,12 +6,28 @@
  * broken bins — none of which the source tests can see.
  *
  *   node scripts/verify-package.mjs packages/core
+ *   node scripts/verify-package.mjs --all     # every package in scripts/packages.mjs, in order
  */
 import { execFileSync } from 'node:child_process';
 import { copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
+import { PACKAGES } from './packages.mjs';
+
+// `--all` walks the shared list rather than a chain of commands in package.json, which was one more hand-written
+// copy of it. Each package runs in its own process, as it did before, so one package's temp tree and environment
+// cannot leak into the next.
+if (process.argv[2] === '--all') {
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  for (const name of PACKAGES) {
+    execFileSync(process.execPath, [fileURLToPath(import.meta.url), join(root, 'packages', name)], {
+      stdio: 'inherit',
+    });
+  }
+  process.exit(0);
+}
 
 const packageDir = resolve(process.argv[2] ?? '');
 const manifest = JSON.parse(await readFile(join(packageDir, 'package.json'), 'utf8'));

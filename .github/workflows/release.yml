@@ -9,11 +9,11 @@ name: Release
 #
 # It could not always work this way. npm will not configure a trusted publisher for a package that does not exist,
 # so the **first** release of each package has to happen from a maintainer's machine, after which the registry
-# knows it and this workflow is the publisher it trusts. That was done for core, gmail and gmail-mcp at 0.1.1, and
-# has to be done once more for any package added later — `@agentcomms/slack` is the first such, and 0.4.0 published
-# the other three while it was still missing from the list below. `test/release-packages.test.mjs` now fails if a
-# publishable package is not named here, so the omission cannot repeat; the first publish itself still cannot be
-# done by CI, and that is npm's rule rather than a choice made here.
+# knows it and a trusted publisher can be added for this workflow. That was done for core, gmail and gmail-mcp at
+# 0.1.1, and `@agentcomms/slack` was first published by hand at 0.4.0. Whether each package's trusted publisher is
+# actually configured cannot be read from outside, so the publish job proves it before sending anything: see the
+# preflight step. The package list itself lives in `scripts/packages.mjs`; every loop below reads it from there,
+# and `test/release-packages.test.mjs` fails if one stops doing so.
 #
 # **A pushed `v*` tag publishes.** There was a required reviewer on the `release` environment for one release; it
 # was removed, because in practice it was opened on instruction rather than as an independent check, and a gate
@@ -63,7 +63,8 @@ jobs:
     name: publish to npm
     needs: verify
     if: ${{ inputs.dry-run != true }}
-    # The human gate. Configured with a required reviewer, so this job waits rather than runs.
+    # Accepts `v*` tags only. It is also one of the claims each package's trusted publisher names, so renaming it
+    # fails the OIDC preflight below for every package.
     environment: release
     # Trusted publishing needs a GitHub-hosted runner: a self-hosted one cannot issue an OIDC token npm accepts.
     runs-on: ubuntu-latest
@@ -94,6 +95,9 @@ jobs:
             exit 1
           fi
           node scripts/sync-versions.mjs --check
+          # The GitHub release is made from this section after the publish. Missing, it would fail there — with the
+          # packages already out. Here it fails with nothing sent.
+          node scripts/release-ci.mjs notes "$tag" > /dev/null
 
       # Provenance is attested against a public source repository; npm refuses it for a private one with a 422 that
       # arrives only after the tarball has been uploaded. Cheaper to find out here.
@@ -106,24 +110,46 @@ jobs:
       - run: pnpm build
       - run: pnpm verify:packages
 
+      # **Prove every package trusts this workflow before publishing any.** Trust is configured per package on npm
+      # and cannot be read from outside. When it is missing, pnpm only warns "Skipped OIDC" and that one publish is
+      # refused — after the packages before it have gone out, leaving a half-published version. This does the same
+      # OIDC token exchange the publish does, for each package, and publishes nothing; the tokens it mints are never
+      # printed and expire on their own. See `scripts/release-ci.mjs`.
+      - name: every package trusts this workflow (npm OIDC preflight)
+        run: node scripts/release-ci.mjs preflight
+
       # In dependency order: a consumer installing gmail must find the exact core it pins already on the registry.
       #
       # `--tag` is not optional. npm moves `latest` on every publish that does not name another tag, so a
       # `v1.2.3-rc.1` tag would have made a release candidate the version `npm i @agentcomms/gmail` installs — for
       # everybody, immediately. The version validator in `scripts/release.mjs` already accepts a prerelease string,
       # so the script invited exactly the shape the workflow then mishandled.
+      #
+      # **A package already at this version is skipped, not re-sent.** npm refuses to publish over a version, so
+      # without this a re-run after a partial failure stopped at `core` and the only way forward was a new version
+      # number. Now a re-run publishes what is missing and finishes the release at the version the tag names. It is
+      # also what lets a tag pushed after a local `pnpm release:publish` complete: nothing to send, then confirm and
+      # make the GitHub release.
       - name: publish
         run: |
           set -euo pipefail
+          packages=$(node scripts/packages.mjs)
+          # An empty list would loop zero times and finish green having published nothing.
+          [ -n "$packages" ] || { echo "::error::scripts/packages.mjs printed no packages" >&2; exit 1; }
           version="${GITHUB_REF_NAME#v}"
           case "$version" in
             *-*) tag=next ;;
             *)   tag=latest ;;
           esac
           echo "publishing $version under the \"$tag\" dist-tag"
-          for package in core gmail gmail-mcp slack; do
+          for package in $packages; do
             echo "::group::@agentcomms/$package"
-            pnpm --filter "@agentcomms/$package" publish --access public --no-git-checks --provenance --tag "$tag"
+            existing=$(npm view "@agentcomms/$package@$version" version 2>/dev/null || true)
+            if [ "$existing" = "$version" ]; then
+              echo "@agentcomms/$package@$version is already on the registry; skipping it"
+            else
+              pnpm --filter "@agentcomms/$package" publish --access public --no-git-checks --provenance --tag "$tag"
+            fi
             echo "::endgroup::"
           done
 
@@ -131,12 +157,17 @@ jobs:
       # claims and still finish green. Ask the registry. It is read through a CDN that lags a successful publish by
       # minutes, so this retries rather than concluding from one empty answer — a check that gave up immediately
       # once reported a release that had in fact landed as a total failure.
+      #
+      # 40 attempts, 15 s apart: ten minutes. Twenty was nearly spent on releases that succeeded — the last package
+      # became visible on attempt 11 at 0.3.2, 14 at 0.3.1 and 15 at 0.4.0 — and a timeout here now also skips the
+      # GitHub release.
       - name: confirm what reached the registry
         run: |
           set -euo pipefail
           version=$(node -p "require('./package.json').version")
-          missing="core gmail gmail-mcp slack"
-          for attempt in $(seq 1 20); do
+          missing=$(node scripts/packages.mjs)
+          [ -n "$missing" ] || { echo "::error::scripts/packages.mjs printed no packages" >&2; exit 1; }
+          for attempt in $(seq 1 40); do
             still=""
             for package in $missing; do
               found=$(npm view "@agentcomms/$package@$version" version 2>/dev/null || true)
@@ -155,4 +186,39 @@ jobs:
             echo "::error::not visible after retrying:$missing — check \`npm dist-tag ls\` before assuming it failed" >&2
             exit 1
           fi
-          echo "All three confirmed at $version."
+          echo "All confirmed at $version."
+
+  # The GitHub release page, made from the changelog section once the registry has confirmed every package. Every
+  # release from 0.1.0 to 0.4.0 was made by hand, and 0.3.2's was forgotten for a day. Only for a tag: a manual run
+  # has no tag to hang a release on. Idempotent, so re-running the workflow after a partial failure does not trip
+  # over a release that already exists.
+  github-release:
+    name: GitHub release
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      # To create the release, and nothing else. The publish job keeps `contents: read`.
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.18.0
+      - name: create the release from the changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "$GITHUB_REF_NAME already has a release; leaving it as it is."
+            exit 0
+          fi
+          node scripts/release-ci.mjs notes "$version" > "$RUNNER_TEMP/notes.md"
+          prerelease=""
+          case "$version" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$version" --notes-file "$RUNNER_TEMP/notes.md" $prerelease
