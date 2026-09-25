@@ -56,9 +56,8 @@
       "id": "gmail.client.list",
       "package": "gmail",
       "cli": "client list",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P4"
+      "mcp": "gmail_clients_list",
+      "status": "both"
     },
     {
       "id": "gmail.client.remove",
@@ -92,29 +91,30 @@
       "mcp": "gmail_inboxes_list",
       "status": "both"
     },
-    {
-      "id": "gmail.inbox.show",
-      "package": "gmail",
-      "cli": "inbox show",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P4"
-    },
+    { "id": "gmail.inbox.show", "package": "gmail", "cli": "inbox show", "mcp": "gmail_inbox_show", "status": "both" },
     {
       "id": "gmail.inbox.rename",
       "package": "gmail",
       "cli": "inbox rename",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P4"
+      "mcp": "gmail_inbox_rename",
+      "status": "both"
     },
     {
       "id": "gmail.inbox.policy",
       "package": "gmail",
       "cli": "inbox policy",
+      "mcp": "gmail_inbox_policy",
+      "status": "both",
+      "reason": "Tightening, and reporting the policy in force. Loosening is its own row until change approvals reach it."
+    },
+    {
+      "id": "gmail.inbox.policy.loosen",
+      "package": "gmail",
+      "cli": "inbox policy",
       "mcp": null,
       "status": "pending",
-      "phase": "P4"
+      "phase": "P4",
+      "reason": "Loosening from chat needs a change approval (design §3)."
     },
     {
       "id": "gmail.inbox.import",
@@ -229,9 +229,8 @@
       "id": "gmail.confirm-clients.list",
       "package": "gmail",
       "cli": "confirm-clients list",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P4"
+      "mcp": "gmail_confirm_clients",
+      "status": "both"
     },
     {
       "id": "gmail.confirm-clients.add",
@@ -245,9 +244,8 @@
       "id": "gmail.confirm-clients.remove",
       "package": "gmail",
       "cli": "confirm-clients remove",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P4"
+      "mcp": "gmail_confirm_client_remove",
+      "status": "both"
     },
     {
       "id": "gmail.confirm-clients.probe",
