@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import {
@@ -27,6 +27,12 @@ import { newHarness, tempDir } from './support/harness.ts';
 
 const NOT_ON_WINDOWS =
   process.platform === 'win32' ? { skip: 'mcp install cannot spawn a .cmd; see install-force.test.ts in gmail' } : {};
+
+interface Entry {
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+}
 
 /** Somebody else's Slack server, as its README sets it up: a token in the env. */
 const THEIRS = {
@@ -61,8 +67,19 @@ async function writeJson(path: string, value: unknown) {
   await writeFile(path, JSON.stringify(value));
 }
 
-/** A stand-in for `claude` or `codex` that records every call and succeeds. */
-async function fakeCli(dir: string, name: 'claude' | 'codex') {
+/**
+ * A stand-in for `claude` or `codex` that records every call and succeeds.
+ *
+ * Codex is asked what it has under a name before anything is written there, so the stand-in answers `mcp get
+ * <name> --json` in codex's shape: the entry, or "No MCP server named …" and a failure. `registered` is what it
+ * answers from — codex's own view, which need not be anything the config files show. `get` makes that one answer
+ * unreadable (`garbage`) or a failure that is not "none" (`broken`).
+ */
+async function fakeCli(
+  dir: string,
+  name: 'claude' | 'codex',
+  options: { registered?: Record<string, Entry>; get?: 'garbage' | 'broken' } = {},
+) {
   const log = join(dir, `${name}.log`);
   const path = join(dir, name);
   await writeFile(
@@ -70,12 +87,26 @@ async function fakeCli(dir: string, name: 'claude' | 'codex') {
     [
       '#!/usr/bin/env node',
       'const fs = require("node:fs");',
-      `fs.appendFileSync(${JSON.stringify(log)}, process.argv.slice(2).join(" ") + "\\n");`,
+      'const argv = process.argv.slice(2);',
+      `fs.appendFileSync(${JSON.stringify(log)}, argv.join(" ") + "\\n");`,
+      `const registered = ${JSON.stringify(options.registered ?? {})};`,
+      `const mode = ${JSON.stringify(options.get ?? 'answer')};`,
+      'if (argv[0] === "mcp" && argv[1] === "get") {',
+      '  if (mode === "garbage") { process.stdout.write("slack\\n  enabled: true\\n"); process.exit(0); }',
+      '  if (mode === "broken") { process.stderr.write("Error: failed to load configuration\\n"); process.exit(1); }',
+      '  const entry = registered[argv[2]];',
+      '  if (!entry) { process.stderr.write("Error: No MCP server named \'" + argv[2] + "\' found.\\n"); process.exit(1); }',
+      '  const transport = { type: "stdio", command: entry.command, args: entry.args, env: entry.env ?? null, env_vars: [], cwd: null };',
+      '  process.stdout.write(JSON.stringify({ name: argv[2], enabled: true, transport }, null, 2));',
+      '}',
     ].join('\n'),
   );
   await chmod(path, 0o755);
   return async () => (await readFile(log, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean);
 }
+
+/** What was asked of a client's CLI that changes something: asking what is registered changes nothing. */
+const writesOf = (calls: string[]) => calls.filter((call) => !call.startsWith('mcp get '));
 
 const refusedAsNotOurs = (error: unknown) =>
   error instanceof CommsError && /is not this one/.test(error.message) && /--name/.test(error.hint ?? '');
@@ -173,7 +204,7 @@ test('our own entry is replaced only with --force, and is saved owner-only first
 
 test('codex: --force replaces our own entry by removing it first', NOT_ON_WINDOWS, async () => {
   const { context, bin, fileOf } = await setUp();
-  const calls = await fakeCli(bin, 'codex');
+  const calls = await fakeCli(bin, 'codex', { registered: { slack: OURS } });
   await mkdir(dirname(fileOf('codex')), { recursive: true });
   await writeFile(
     fileOf('codex'),
@@ -185,7 +216,7 @@ test('codex: --force replaces our own entry by removing it first', NOT_ON_WINDOW
 
   const result = await mcpInstall(context, { client: 'codex', launcher: 'local', noVerify: true, force: true });
   assert.equal(result.applied, true);
-  const made = await calls();
+  const made = writesOf(await calls());
   assert.equal(made[0], 'mcp remove slack');
   assert.match(made[1] ?? '', /^mcp add slack /);
 });
@@ -250,3 +281,192 @@ test('warnings are about the client being installed, and see a URL-only Slack se
   assert.equal(here.warnings.length, 1);
   assert.match(here.warnings[0] ?? '', /"official" in cursor \(https:\/\/mcp\.slack\.com\/mcp\)/);
 });
+
+test(
+  'codex: a server codex itself reports under the name is refused, though no file shows it',
+  NOT_ON_WINDOWS,
+  async () => {
+    // Codex's answer is the one that counts: it is what `codex mcp add` would overwrite, token and all.
+    const { context, bin } = await setUp();
+    const calls = await fakeCli(bin, 'codex', { registered: { slack: THEIRS } });
+    for (const force of [false, true]) {
+      await assert.rejects(
+        mcpInstall(context, { client: 'codex', launcher: 'local', noVerify: true, force }),
+        refusedAsNotOurs,
+        `force: ${force}`,
+      );
+    }
+    assert.deepEqual(writesOf(await calls()), [], 'codex was never asked to remove or add anything');
+  },
+);
+
+test(
+  'codex: our own entry that only codex reports is still ours, and is saved before --force replaces it',
+  NOT_ON_WINDOWS,
+  async () => {
+    const { context, bin } = await setUp();
+    const calls = await fakeCli(bin, 'codex', { registered: { slack: OURS } });
+    await assert.rejects(
+      mcpInstall(context, { client: 'codex', launcher: 'local', noVerify: true }),
+      /already has this/,
+    );
+    assert.deepEqual(writesOf(await calls()), []);
+
+    const result = await mcpInstall(context, { client: 'codex', launcher: 'local', noVerify: true, force: true });
+    assert.deepEqual(
+      writesOf(await calls()).map((call) => call.split(' ').slice(0, 3).join(' ')),
+      ['mcp remove slack', 'mcp add slack'],
+    );
+    assert.ok(result.backupPath, 'the entry codex reported was saved first');
+    assert.match(await readFile(result.backupPath, 'utf8'), /\/cfg\/previous/);
+  },
+);
+
+test(
+  'codex: an answer that cannot be read, or a codex that cannot answer, writes nothing',
+  NOT_ON_WINDOWS,
+  async () => {
+    for (const get of ['garbage', 'broken'] as const) {
+      const { context, bin } = await setUp();
+      const calls = await fakeCli(bin, 'codex', { get });
+      await assert.rejects(
+        mcpInstall(context, { client: 'codex', launcher: 'local', noVerify: true, force: true }),
+        (error: unknown) => error instanceof CommsError && /nothing was written/.test(error.message),
+        get,
+      );
+      assert.deepEqual(writesOf(await calls()), [], get);
+    }
+  },
+);
+
+test(
+  "codex: somebody else's entry in CODEX_HOME, or in an inline [mcp_servers] table, is refused",
+  NOT_ON_WINDOWS,
+  async () => {
+    const inline = [
+      '[mcp_servers]',
+      'slack = { command = "npx", args = ["-y", "@modelcontextprotocol/server-slack"], env = { SLACK_BOT_TOKEN = "fake-bot-token-1" } }',
+    ].join('\n');
+    const sectioned = [
+      '[mcp_servers.slack]',
+      'command = "npx"',
+      'args = ["-y", "@modelcontextprotocol/server-slack"]',
+    ].join('\n');
+    for (const [label, where, text] of [
+      ['CODEX_HOME', 'codex-home', sectioned],
+      ['inline table', 'default', inline],
+    ] as const) {
+      const { bin, env, fileOf, harness } = await setUp();
+      const codexHome = tempDir();
+      const moved = where === 'codex-home' ? { ...env, CODEX_HOME: codexHome } : env;
+      const context = new SlackContext({
+        core: harness.core,
+        env: moved,
+        exchange: (params) => harness.exchange(params),
+      });
+      const file = where === 'codex-home' ? join(codexHome, 'config.toml') : fileOf('codex');
+      await mkdir(dirname(file), { recursive: true });
+      await writeFile(file, text);
+      // A stand-in that knows nothing, so what is refused is what the file shows.
+      const calls = await fakeCli(bin, 'codex');
+      for (const force of [false, true]) {
+        await assert.rejects(
+          mcpInstall(context, { client: 'codex', launcher: 'local', noVerify: true, force }),
+          refusedAsNotOurs,
+          `${label}, force: ${force}`,
+        );
+      }
+      assert.deepEqual(writesOf(await calls()), [], label);
+    }
+  },
+);
+
+test('codex: a config.toml this cannot read is a reason to write nothing', NOT_ON_WINDOWS, async () => {
+  const { context, bin, fileOf } = await setUp();
+  const calls = await fakeCli(bin, 'codex');
+  await mkdir(dirname(fileOf('codex')), { recursive: true });
+  await writeFile(fileOf('codex'), '[mcp_servers.slack\ncommand = "npx"\n');
+  await assert.rejects(
+    mcpInstall(context, { client: 'codex', launcher: 'local', noVerify: true, force: true }),
+    (error: unknown) => error instanceof CommsError && error.message.includes(fileOf('codex')),
+  );
+  assert.deepEqual(writesOf(await calls()), []);
+});
+
+test(
+  'Claude Code: --force reaches the user-scope copy of an entry that is also at project scope',
+  NOT_ON_WINDOWS,
+  async () => {
+    const { context, bin, fileOf } = await setUp();
+    const calls = await fakeCli(bin, 'claude');
+    await writeJson(fileOf('claude-code'), {
+      mcpServers: { slack: OURS },
+      projects: { [tempDir()]: { mcpServers: { slack: OURS } } },
+    });
+    await mcpInstall(context, { client: 'claude-code', launcher: 'local', noVerify: true, force: true });
+    assert.deepEqual(
+      (await calls()).map((call) => call.split(' ').slice(0, 3).join(' ')),
+      ['mcp remove slack', 'mcp add-json slack'],
+    );
+  },
+);
+
+test('a refusal names another server by where it is, never by what its URL carries', async () => {
+  const { context, fileOf } = await setUp();
+  const secretUrl = 'https://someone:fake-password-1@mcp.example.net/fake-path-id/sse?key=fake-secret-1#fake-fragment';
+  await writeJson(fileOf('cursor'), {
+    mcpServers: { slack: { url: secretUrl }, relay: { url: secretUrl.replace('/sse', '/slack') } },
+  });
+  const refusal = await mcpInstall(context, { client: 'cursor', launcher: 'local', noVerify: true }).then(
+    () => assert.fail('not refused'),
+    (error: CommsError) => `${error.message} ${error.hint ?? ''}`,
+  );
+  assert.match(refusal, /mcp\.example\.net\/fake-path-id\/sse/);
+  const warned = await mcpInstall(context, {
+    client: 'cursor',
+    name: 'agent-slack',
+    launcher: 'local',
+    noVerify: true,
+  });
+  assert.match(warned.warnings.join('\n'), /"relay" in cursor \(https:\/\/mcp\.example\.net\/fake-path-id\/slack\)/);
+  for (const text of [refusal, ...warned.warnings]) {
+    assert.doesNotMatch(text, /fake-password-1|fake-secret-1|fake-fragment/, text);
+  }
+});
+
+test("a refusal's hint keeps the name and the workspace pin it was given", async () => {
+  const { harness, context, fileOf } = await setUp();
+  await harness.addWorkspace({ alias: 'acme' });
+  await writeJson(fileOf('cursor'), { mcpServers: { 'slack-acme': OURS } });
+  await assert.rejects(
+    mcpInstall(context, { client: 'cursor', name: 'slack-acme', workspace: 'acme', launcher: 'local', noVerify: true }),
+    (error: unknown) =>
+      error instanceof CommsError &&
+      (error.hint ?? '').includes('--name slack-acme') &&
+      (error.hint ?? '').includes('--workspace acme') &&
+      (error.hint ?? '').includes('--force'),
+  );
+});
+
+test(
+  'a config kept elsewhere and linked into place stays linked, and its directory keeps its mode',
+  NOT_ON_WINDOWS,
+  async () => {
+    const { context, fileOf } = await setUp();
+    const link = fileOf('cursor');
+    const dotfiles = join(tempDir(), 'cursor-mcp.json');
+    await writeFile(dotfiles, JSON.stringify({ mcpServers: { other: { command: 'x', args: [] } } }));
+    await chmod(dotfiles, 0o644);
+    await mkdir(dirname(link), { recursive: true });
+    await chmod(dirname(link), 0o755);
+    await symlink(dotfiles, link);
+
+    const result = await mcpInstall(context, { client: 'cursor', launcher: 'local', noVerify: true });
+    assert.equal(result.applied, true);
+    assert.ok((await lstat(link)).isSymbolicLink(), 'the link was replaced by a file');
+    const written = JSON.parse(await readFile(dotfiles, 'utf8')) as { mcpServers: Record<string, unknown> };
+    assert.deepEqual(Object.keys(written.mcpServers).sort(), ['other', 'slack'], 'the linked file has the entry');
+    assert.equal((await stat(dotfiles)).mode & 0o777, 0o644, 'the file kept its mode');
+    assert.equal((await stat(dirname(link))).mode & 0o777, 0o755, "the client's directory kept its mode");
+  },
+);

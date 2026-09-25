@@ -9,7 +9,7 @@
     {
       "name": "gmail",
       "source": "./",
-      "description": "Gmail and Slack for coding agents. The Gmail server is included: search, read, analyse, draft and organise mail, with sending behind your approval. The Slack skills read a workspace and prepare posts that only a person can approve; connect their server with `npx -y @agentcomms/slack mcp install`.",
+      "description": "Gmail and Slack for coding agents. The Gmail server is included: search, read, analyse, draft and organise mail, with sending behind your approval. The Slack skills read a workspace and prepare posts that only a person can approve; connect their server with `npx -y @agentcomms/slack mcp install --client claude-code` (or `--client` codex, cursor, gemini, claude-desktop or vscode).",
       "version": "0.4.0",
       "author": {
         "name": "crissmoldovan"

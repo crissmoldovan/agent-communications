@@ -355,11 +355,12 @@ export function renderInstall(result: InstallResult, color: boolean): string {
     );
   }
   if (result.backupPath) lines.push(`The entry it replaced was saved to ${result.backupPath}.`);
-  lines.push(
-    result.verified
-      ? paint(color, 'green', `Checked: ${result.verifyDetail}`)
-      : paint(color, 'yellow', `Not checked: ${result.verifyDetail ?? 'skipped'}`),
-  );
+  // A check that ran and failed is not one that was skipped: "Not checked" for both read as "probably fine".
+  if (result.verification === 'passed') lines.push(paint(color, 'green', `Checked: ${result.verifyDetail}`));
+  else if (result.verification === 'failed') {
+    lines.push(paint(color, 'red', `Failed to start: ${result.verifyDetail ?? 'no reason given'}`));
+    if (result.backupPath) lines.push(`The entry it replaced is still in ${result.backupPath}, to put back by hand.`);
+  } else lines.push(paint(color, 'yellow', `Not checked: ${result.verifyDetail ?? 'skipped'}`));
   for (const warning of result.warnings) lines.push('', paint(color, 'red', warning));
   return lines.join('\n');
 }

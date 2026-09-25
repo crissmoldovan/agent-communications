@@ -2,9 +2,15 @@ import { execFile, spawn } from 'node:child_process';
 import { access, constants, lstat, mkdir, readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CommsError } from './errors.ts';
-import { writeFileAtomic } from './fs.ts';
-import { knownClientConfigs, listRegisteredServers, type RegisteredServer } from './mcp-clients.ts';
+import { CommsError, EXIT_CODES } from './errors.ts';
+import { appendPrivateLine, replaceFileInPlace, writeFileAtomic } from './fs.ts';
+import {
+  codexServerFromGet,
+  displayUrl,
+  knownClientConfigs,
+  type RegisteredServer,
+  scanRegisteredServers,
+} from './mcp-clients.ts';
 
 /*
  * Registering the server with an MCP client. Two failures seen in the wild shape this:
@@ -27,8 +33,16 @@ import { knownClientConfigs, listRegisteredServers, type RegisteredServer } from
 export interface McpProduct {
   /** `@agentcomms/gmail`. Installed into the managed runtime, and pinned in the entry. */
   readonly packageName: string;
-  /** The binary a person types, for hints: `agent-gmail`. */
+  /** The binary a person types, for hints: `agent-gmail`. An entry that starts it is this product's. */
   readonly binary: string;
+  /**
+   * Other published commands that start this server, beside `binary`: Gmail's `agent-gmail-mcp`.
+   *
+   * A hand-written entry may start the server by any of them — the Slack README says `agent-slack mcp` runs it —
+   * and such an entry is ours. Read only from an entry's command, never its arguments: `npx -y agent-slack` would
+   * fetch whatever the registry holds under that name.
+   */
+  readonly bins?: readonly string[] | undefined;
   /** The default name the client shows: `gmail`. */
   readonly defaultServerName: string;
   /** The package `npx` runs, when that launcher is chosen. Often a thin `-mcp` wrapper. */
@@ -57,7 +71,12 @@ export interface McpProduct {
    * Only used by the `local` launcher, and it has to come from the caller: resolving it here would find core.
    */
   readonly moduleUrl: string;
-  /** Extra arguments after `mcp`, from the caller's options — `--inbox work`, `--workspace acme/slack`. */
+  /**
+   * Extra arguments after `mcp`, from the caller's options — `--inbox work`, `--workspace acme/slack`.
+   *
+   * These are also the `mcp install` command's own flags for the same thing, which is what lets a refusal's hint
+   * repeat them: see `installCommand`.
+   */
   serverArgs(options: InstallOptions): string[];
   /**
    * Anything already registered with the client being installed that is worth warning about.
@@ -117,6 +136,15 @@ export interface InstallResult {
   /** Where the entry that was replaced was saved first, owner-only. */
   backupPath?: string | undefined;
   verified: boolean;
+  /**
+   * Whether the entry was started, and how that went: `failed` is a check that ran and did not complete a
+   * handshake, `skipped` one that did not run (`--no-verify`, or a `--print` with no runtime to start).
+   *
+   * `verified: false` meant both, and both were printed as "Not checked" and ended the command with 0. So
+   * `--force` could replace a working entry with one that exits at once, say it had not checked, and report
+   * success to every script that looks at the exit status.
+   */
+  verification: 'passed' | 'failed' | 'skipped';
   verifyDetail?: string | undefined;
   /** What the product thought worth saying about other servers this client already has registered. */
   warnings: string[];
@@ -241,8 +269,15 @@ export function pinnedVersion(
  */
 export function isProductServer(
   server: Pick<RegisteredServer, 'command' | 'args' | 'packageName'>,
-  product: Pick<McpProduct, 'packageName' | 'npxPackage' | 'entryFiles'>,
+  product: Pick<McpProduct, 'packageName' | 'npxPackage' | 'entryFiles' | 'binary' | 'bins'>,
 ): boolean {
+  /*
+   * The product's own command, by name or at the end of a path — `agent-slack`, `/usr/local/bin/agent-slack`,
+   * `node_modules/.bin/agent-slack`, `agent-slack.cmd` on Windows. Missing it made a hand-written entry that
+   * starts our own server "another Slack server with no approval step", with a fix that removed it.
+   */
+  const launched = (server.command.split(/[\\/]+/).at(-1) ?? '').replace(/\.(?:cmd|exe|bat|ps1)$/i, '');
+  if (launched && [product.binary, ...(product.bins ?? [])].includes(launched)) return true;
   if (server.packageName)
     return server.packageName === product.packageName || server.packageName === product.npxPackage;
   const short = unscoped(product.packageName);
@@ -523,22 +558,111 @@ function claimName(
   );
   const foreign = taken.find((server) => !isProductServer(server, product));
   if (foreign) {
-    // Never the arguments or the env: either may hold somebody's token.
-    const what = foreign.packageName ?? foreign.url ?? (foreign.command || 'something else');
+    // Never the arguments or the env, and of a URL only where it points: any of them may hold somebody's token.
+    const what =
+      foreign.packageName ??
+      (foreign.url ? displayUrl(foreign.url) : undefined) ??
+      (foreign.command || 'something else');
+    const other = name === product.binary ? `${product.binary}-${product.defaultServerName}` : product.binary;
     throw new CommsError(
       'CONFIG',
       `${options.client} already has an MCP server called "${name}", and it is not this one (it runs ${what})`,
       {
-        hint: `Register this one under another name: \`${product.binary} mcp install --client ${options.client} --name ${product.binary}\`. --force does not replace a server this did not install.`,
+        hint: `Register this one under another name: \`${installCommand(product, options, other)}\`. --force does not replace a server this did not install.`,
       },
     );
   }
   if (taken.length > 0 && !options.force) {
     throw new CommsError('CONFIG', `${options.client} already has this server registered as "${name}"`, {
-      hint: `Pass --force to replace it — that is how an upgrade reaches a client: \`${product.binary} mcp install --client ${options.client} --force\`.`,
+      hint: `Pass --force to replace it — that is how an upgrade reaches a client: \`${installCommand(product, options, name, ['--force'])}\`.`,
     });
   }
   return taken;
+}
+
+/**
+ * The `mcp install` that repeats this one under `name`, with every flag that decides what the server may reach.
+ *
+ * The hints used to be `mcp install --client <c> --force` whatever had been asked. Refused for `--name slack-acme
+ * --workspace acme/slack`, the hint registered a second server under the default name, pinned to nothing — every
+ * workspace on the machine; for Gmail it dropped `--inbox` and `--read-only` the same way. Doctor's repair already
+ * rebuilds these flags for exactly that reason. The product's `serverArgs` are the install command's own flags for
+ * the pin and the narrowing, so they are repeated as they are.
+ */
+function installCommand(product: McpProduct, options: InstallOptions, name: string, extra: string[] = []): string {
+  const words = [product.binary, 'mcp', 'install', '--client', options.client];
+  if (name !== product.defaultServerName) words.push('--name', name);
+  words.push(...product.serverArgs(options));
+  if (options.launcher && options.launcher !== 'managed') words.push('--launcher', options.launcher);
+  words.push(...extra);
+  return words.map((word) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`)).join(' ');
+}
+
+/** A command's exit status and what it printed, kept here and never shown: codex prints an entry's env. */
+function capture(command: string, args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.once('error', reject);
+    child.once('close', (code) => resolvePromise({ code, stdout, stderr }));
+  });
+}
+
+/**
+ * What codex itself has registered under this name: the entry, or null when it has none.
+ *
+ * Asked of codex rather than read from a file, because codex is what `codex mcp add` overwrites — silently, env
+ * and all — and its config can be somewhere or in a shape no scan of `~/.codex/config.toml` finds. Both happened:
+ * a `CODEX_HOME` set elsewhere and an inline `[mcp_servers]` table each hid somebody's Slack server, and the
+ * install replaced it, bot token included, without `--force` and without a copy. An answer that cannot be read,
+ * or a failure that is not "no such server", stops the install: not knowing is not the same as nothing there.
+ * Nothing codex prints is repeated, because its answer carries the entry's env.
+ */
+async function codexRegistration(binary: string, name: string, path: string): Promise<RegisteredServer | null> {
+  const unknown = () =>
+    new CommsError('CONFIG', `codex would not say what it has registered as "${name}", so nothing was written`, {
+      hint: `Look with \`codex mcp get ${name}\`. If it is not an older copy of this server, choose another --name; \`--print\` shows the entry to add by hand.`,
+    });
+  let answer: Awaited<ReturnType<typeof capture>>;
+  try {
+    answer = await capture(binary, ['mcp', 'get', name, '--json']);
+  } catch {
+    throw unknown();
+  }
+  if (answer.code !== 0) {
+    if (/no mcp server named/i.test(`${answer.stderr}\n${answer.stdout}`)) return null;
+    throw unknown();
+  }
+  try {
+    return codexServerFromGet(name, answer.stdout, path);
+  } catch {
+    throw unknown();
+  }
+}
+
+/**
+ * Where the installer records each managed runtime it handed out as an entry to paste, rather than wrote.
+ *
+ * `--client json`, `--print`, and a client whose own CLI was not on PATH all end with an entry a person puts
+ * wherever they keep one, and nothing reads that place back. `mcp prune` keeps every runtime recorded here, so a
+ * pasted entry is not left pointing at a directory that has been deleted.
+ */
+export function handedOutRuntimesPath(dataDir: string): string {
+  return join(dataDir, 'mcp-handed-out.jsonl');
+}
+
+interface HandedOut {
+  at: string;
+  client: string;
+  name: string;
+  runtime: string;
 }
 
 /** Saves the entries about to be replaced, owner-only, and returns where. */
@@ -575,7 +699,8 @@ export async function mcpInstall(
   const name = options.name ?? product.defaultServerName;
   const apply = options.apply ?? true;
 
-  const existing = await listRegisteredServers(context.env);
+  const scan = await scanRegisteredServers(context.env);
+  const existing = scan.servers;
   // The client being installed, only. Every other client's findings were being reported here too, with removal
   // advice that said "the file above" and meant a different file.
   const warnings = (product.warnAbout?.(existing.filter((server) => server.client === options.client)) ?? []).filter(
@@ -591,7 +716,24 @@ export async function mcpInstall(
   const writes = apply && (cliName ? binary !== null : configPath !== undefined);
 
   // Before anything is installed or written: a refusal should cost nothing.
-  const previous = writes ? claimName(product, options, name, existing) : [];
+  if (writes) {
+    // The client's own file, when it is there and unreadable: nothing in it can be checked, so nothing in it may
+    // be replaced. A project's `.mcp.json` elsewhere is not what a user-scope write would touch.
+    const own = knownClientConfigs(context.env).find((file) => file.client === options.client)?.path;
+    const blind = scan.unreadable.find((file) => file.path === own);
+    if (blind) {
+      throw new CommsError(
+        'CONFIG',
+        `${blind.path} could not be read (${blind.reason}), so what is already registered there cannot be checked; nothing was written`,
+        { hint: 'Fix the file, or add the entry by hand: `--print` shows it without writing anything.' },
+      );
+    }
+  }
+  let previous = writes ? claimName(product, options, name, existing) : [];
+  if (writes && binary && options.client === 'codex') {
+    const reported = await codexRegistration(binary, name, configPath ?? 'codex');
+    if (reported) previous = claimName(product, options, name, [reported]);
+  }
   if (!writes) {
     // Nothing is written, so nothing is refused — but a snippet pasted by hand would replace somebody's server.
     const foreign = existing.find(
@@ -683,7 +825,7 @@ export async function mcpInstall(
           {
             hint: restored
               ? 'Check the client is not running, then try again.'
-              : `Re-register it with \`${product.binary} mcp install --client ${options.client}\`. The old entry is in ${backupPath}.`,
+              : `Re-register it with \`${installCommand(product, options, name)}\`. The old entry is in ${backupPath}.`,
             cause: error,
           },
         );
@@ -717,7 +859,19 @@ export async function mcpInstall(
     applied = true;
   }
 
+  if (!applied && launcher === 'managed') {
+    // Printed rather than written, so where it ends up is out of sight: remember the runtime it names for `prune`.
+    const record: HandedOut = {
+      at: new Date().toISOString(),
+      client: options.client,
+      name,
+      runtime: managedRuntimeDir(context.core.paths.dataDir, product.packageName, product.version),
+    };
+    await appendPrivateLine(handedOutRuntimesPath(context.core.paths.dataDir), JSON.stringify(record));
+  }
+
   let verified = false;
+  let verification: InstallResult['verification'] = 'skipped';
   let verifyDetail: string | undefined;
   if (!options.noVerify) {
     if (runtimeMissing) {
@@ -725,6 +879,7 @@ export async function mcpInstall(
     } else {
       const check = await verifyEntry(entry, product);
       verified = check.ok;
+      verification = check.ok ? 'passed' : 'failed';
       verifyDetail = check.detail;
     }
   }
@@ -741,9 +896,21 @@ export async function mcpInstall(
     notApplied,
     backupPath,
     verified,
+    verification,
     verifyDetail,
     warnings,
   };
+}
+
+/**
+ * The exit status an install ends with, the same in both CLIs: non-zero when nothing was registered although that
+ * was asked for, and when the entry was started and did not work.
+ *
+ * A registration that does not start is the failure people actually hit, and it used to end with 0 — after
+ * `--force` had already removed the working entry it replaced.
+ */
+export function installExitStatus(result: Pick<InstallResult, 'notApplied' | 'verification'>): number {
+  return result.notApplied || result.verification === 'failed' ? EXIT_CODES.UNAVAILABLE : EXIT_CODES.OK;
 }
 
 /** Merges the entry into a client's JSON config, keeping everything else in the file exactly as it was. */
@@ -758,8 +925,9 @@ async function mergeIntoJsonConfig(
     current = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw new CommsError('CONFIG', `${path} is not valid JSON, so it was left alone`, {
-        hint: 'Fix the file, or add the snippet by hand.',
+      // Comments are fine to VS Code and Gemini, and are what a rewrite through `JSON.stringify` would drop.
+      throw new CommsError('CONFIG', `${path} is not plain JSON, so it was left alone rather than rewritten`, {
+        hint: 'Add the entry by hand (`--print` shows it), or remove any comments and trailing commas and run this again.',
         cause: error,
       });
     }
@@ -780,8 +948,8 @@ async function mergeIntoJsonConfig(
     const servers = (current[key] as Record<string, unknown> | undefined) ?? {};
     current[key] = { ...servers, [name]: entry };
   }
-  await mkdir(dirname(path), { recursive: true });
-  await writeFileAtomic(path, `${JSON.stringify(current, null, 2)}\n`);
+  // Through a link, with the mode it had, in a directory left as it was: the file is the client's, not ours.
+  await replaceFileInPlace(path, `${JSON.stringify(current, null, 2)}\n`);
 }
 
 /** Starts the server exactly as a client would, and completes the handshake. */
@@ -829,7 +997,8 @@ export async function runningCommandLines(): Promise<string[] | null> {
 const RUNTIME_NAME = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$/;
 
 /**
- * Removes this product's managed runtimes that no client registers and no process is running.
+ * Removes this product's managed runtimes that no client config it can read names, that it never printed an
+ * entry for, and that no process is running.
  *
  * Every upgrade installs a new `runtime/<version>-<name>` and leaves the old one where it was — a machine that had
  * been through six releases held five orphans at 4–5 MB each. Deleting a runtime a client still starts turns a
@@ -839,8 +1008,15 @@ const RUNTIME_NAME = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$/;
  *  - only directories directly inside `<data>/runtime`, named like a version, that hold this product's package —
  *    never a symbolic link, never another product's runtime, never anything else in that directory;
  *  - never this release's own;
- *  - never one any registered entry names, in any client and any scope;
+ *  - never one an entry names in a client config `scanRegisteredServers` reads, in any scope. When one of those
+ *    files is there and cannot be read, nothing is removed at all: a file skipped in silence looked exactly like
+ *    one that registered nothing, and one comment in a VS Code `mcp.json` was enough to lose a runtime;
+ *  - never one it handed out as an entry to paste (`--client json`, `--print`), which no scan can follow. When
+ *    that record cannot be read, nothing is removed;
  *  - never one a running process names. When the processes cannot be listed, nothing is removed at all.
+ *
+ * What it cannot see is an entry in a file it does not read — a workspace `.vscode/mcp.json`, a config a client
+ * was pointed at on its command line — put there by hand. The documents say so rather than promise more.
  */
 export async function pruneManagedRuntimes(
   context: InstallContext,
@@ -874,27 +1050,44 @@ export async function pruneManagedRuntimes(
   }
   if (candidates.length === 0) return result;
 
-  const processes = await (options.processes ?? runningCommandLines)();
-  if (processes === null) {
-    result.refused = 'the running processes on this machine could not be listed, so none of these can be shown unused';
+  // Each of these stops the whole run the same way: what it could not see is what might have been in use.
+  const refuse = (why: string) => {
+    result.refused = why;
     result.kept = candidates.map(({ path, version }) => ({ path, version, reason: 'not checked' }));
     return result;
+  };
+  const processes = await (options.processes ?? runningCommandLines)();
+  if (processes === null) {
+    return refuse('the running processes on this machine could not be listed, so none of these can be shown unused');
   }
-  const registered = await listRegisteredServers(context.env);
+  const scan = await scanRegisteredServers(context.env);
+  if (scan.unreadable.length > 0) {
+    const files = scan.unreadable.map((file) => `${file.path} (${file.reason})`).join('; ');
+    return refuse(`${files} could not be read, so none of these can be shown unregistered`);
+  }
+  const registered = scan.servers;
+  const ledger = handedOutRuntimesPath(context.core.paths.dataDir);
+  const handedOut = await readHandedOut(ledger);
+  if (handedOut === null) {
+    return refuse(`${ledger} could not be read, so none of these can be shown never to have been handed out`);
+  }
   const mentions = (aliases: string[], text: string) =>
     aliases.some((alias) => text === alias || text.includes(`${alias}${sep}`) || text.includes(`${alias}/`));
 
   const current = managedRuntimeDir(context.core.paths.dataDir, product.packageName, product.version);
   for (const { path, version, aliases } of candidates) {
     const owner = registered.find((server) => [server.command, ...server.args].some((part) => mentions(aliases, part)));
+    const printed = handedOut.find((record) => mentions(aliases, record.runtime));
     const reason =
       path === current
         ? 'this release'
         : owner
           ? `registered with ${owner.client} as "${owner.name}"`
-          : processes.some((line) => mentions(aliases, line))
-            ? 'a running process uses it'
-            : null;
+          : printed
+            ? `printed for ${printed.client} as "${printed.name}" on ${printed.at.slice(0, 10)}, and where that entry went cannot be read`
+            : processes.some((line) => mentions(aliases, line))
+              ? 'a running process uses it'
+              : null;
     if (reason) {
       result.kept.push({ path, version, reason });
       continue;
@@ -904,4 +1097,31 @@ export async function pruneManagedRuntimes(
     result.removed.push({ path, version });
   }
   return result;
+}
+
+/** Every runtime the installer handed out, or null when the record is there and cannot be read. */
+async function readHandedOut(path: string): Promise<HandedOut[] | null> {
+  let text: string;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null;
+  }
+  const records: HandedOut[] = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const record = JSON.parse(line) as Partial<HandedOut>;
+      if (typeof record.runtime !== 'string') return null;
+      records.push({
+        at: String(record.at ?? ''),
+        client: String(record.client ?? ''),
+        name: String(record.name ?? ''),
+        runtime: record.runtime,
+      });
+    } catch {
+      return null;
+    }
+  }
+  return records;
 }

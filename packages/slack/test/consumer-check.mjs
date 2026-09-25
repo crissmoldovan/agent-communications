@@ -30,6 +30,9 @@ const env = {
   AGENT_COMMS_DATA_DIR: join(home, 'data'),
   AGENT_COMMS_STATE_DIR: join(home, 'state'),
 };
+// These move where codex and Claude Code keep their configs, which the scan would then follow out of this consumer.
+delete env.CODEX_HOME;
+delete env.CLAUDE_CONFIG_DIR;
 
 assert.equal(PACKAGE_NAME, '@agentcomms/slack');
 assert.match(VERSION, /^\d+\.\d+\.\d+/);

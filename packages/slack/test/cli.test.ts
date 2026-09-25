@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { chmod, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -1651,6 +1653,27 @@ test("mcp install names its client, and exits non-zero when that client's CLI is
   );
   assert.equal(missing.code, EXIT_CODES.UNAVAILABLE, missing.stdout);
 });
+
+test(
+  'mcp install says an entry that does not start failed, and exits non-zero',
+  process.platform === 'win32' ? { skip: 'the stand-in npx is a shell script' } : {},
+  async () => {
+    // An `npx` that exits at once, as 0.4.0's entry did without `mcp`: the check runs, and fails.
+    const harness = await newHarness();
+    const bin = tempDir();
+    await writeFile(join(bin, 'npx'), '#!/bin/sh\nexit 3\n');
+    await chmod(join(bin, 'npx'), 0o755);
+    const env = { HOME: tempDir(), PATH: bin };
+    const argv = ['mcp', 'install', '--client', 'json', '--launcher', 'npx'];
+
+    const json = await cli(harness, ['--json', ...argv], { env });
+    assert.equal(json.code, EXIT_CODES.UNAVAILABLE, json.stdout);
+    assert.equal(json.json<Envelope<{ verification: string }>>().data?.verification, 'failed');
+    const text = await cli(harness, argv, { env });
+    assert.equal(text.code, EXIT_CODES.UNAVAILABLE);
+    assert.match(text.stdout, /Failed to start: /);
+  },
+);
 
 test('`mcp install --workspace` actually pins the registered server', async () => {
   /*

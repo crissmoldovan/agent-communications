@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createGmailMcpServer, PACKAGE_NAME, VERSION } from '@agentcomms/gmail';
 
 assert.equal(PACKAGE_NAME, '@agentcomms/gmail');
@@ -16,10 +16,34 @@ await server.close();
 
 const bin = join('node_modules', '.bin', process.platform === 'win32' ? 'agent-gmail.cmd' : 'agent-gmail');
 
+/*
+ * Everything the bin can reach is inside this consumer, as in Slack's check.
+ *
+ * `doctor` reads every MCP client's config to see what else is registered, so with the caller's HOME it read the
+ * maintainer's real `~/.claude.json` — and it now reads the `.mcp.json` of each project listed there too.
+ * `CODEX_HOME` and `CLAUDE_CONFIG_DIR` point that reading somewhere else again, so neither is passed on.
+ */
+const home = resolve('home');
+mkdirSync(home, { recursive: true });
+const env = {
+  ...process.env,
+  HOME: home,
+  USERPROFILE: home,
+  APPDATA: join(home, 'AppData', 'Roaming'),
+  LOCALAPPDATA: join(home, 'AppData', 'Local'),
+  XDG_CONFIG_HOME: join(home, '.config'),
+  XDG_DATA_HOME: join(home, '.local', 'share'),
+};
+delete env.CODEX_HOME;
+delete env.CLAUDE_CONFIG_DIR;
+
 /** Runs the bin and returns what it printed with the status it exited with: a refusal is an answer, not a crash. */
 function run(...args) {
   try {
-    return { status: 0, stdout: execFileSync(bin, args, { encoding: 'utf8', shell: process.platform === 'win32' }) };
+    return {
+      status: 0,
+      stdout: execFileSync(bin, args, { encoding: 'utf8', env, shell: process.platform === 'win32' }),
+    };
   } catch (error) {
     if (typeof error.status !== 'number') throw error;
     return { status: error.status, stdout: String(error.stdout ?? '') };

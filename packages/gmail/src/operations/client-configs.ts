@@ -19,26 +19,28 @@ export interface LegacyServerFinding extends RegisteredServer {
 const UNGATED_GMAIL_SERVERS: Array<{
   pattern: RegExp;
   name: string;
-  removal: (client: string, server: string, path: string) => string;
+  removal: (server: RegisteredServer) => string;
 }> = [
   {
     pattern: /@artymclabin\/gmail-mcp/,
     name: '@artymclabin/gmail-mcp',
-    removal: (client, server, path) => removalCommand(client, server, path),
+    removal: (server) => removalCommand(server),
   },
   {
     pattern: /@gongrzhe\/server-gmail-autoauth-mcp|(?<![\w@/-])server-gmail-autoauth-mcp/,
     name: '@gongrzhe/server-gmail-autoauth-mcp',
-    removal: (client, server, path) => removalCommand(client, server, path),
+    removal: (server) => removalCommand(server),
   },
   {
     pattern: /@shinzolabs\/gmail-mcp/,
     name: '@shinzolabs/gmail-mcp',
-    removal: (client, server, path) => removalCommand(client, server, path),
+    removal: (server) => removalCommand(server),
   },
 ];
 
-function removalCommand(client: string, server: string, path: string): string {
+function removalCommand({ client, name: server, path, scope }: RegisteredServer): string {
+  // A project's entry is out of reach of the user-scope commands below, run from wherever `doctor` was.
+  if (scope === 'project') return `remove "${server}" from the project entry in ${path} by hand`;
   switch (client) {
     case 'claude-code':
       return `claude mcp remove ${server}`;
@@ -62,7 +64,7 @@ export function findUngatedGmailServers(servers: readonly RegisteredServer[]): L
         ...server,
         packageName: known.name,
         reason: `${known.name} exposes send tools that no approval step gates`,
-        removal: known.removal(server.client, server.name, server.path),
+        removal: known.removal(server),
       });
       break;
     }

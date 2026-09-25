@@ -31,8 +31,10 @@ export const GMAIL_MCP: McpProduct = {
   binary: 'agent-gmail',
   defaultServerName: 'gmail',
   npxPackage: '@agentcomms/gmail-mcp',
-  // The published `agent-gmail-mcp` bin: not what the installer writes, but a real way to run this server.
+  // The published `agent-gmail-mcp` bin: not what the installer writes, but a real way to run this server —
+  // by its path inside a package, or by its name when installed globally.
   entryFiles: [['node_modules', '@agentcomms', 'gmail-mcp', 'dist', 'server.mjs']],
+  bins: ['agent-gmail-mcp'],
   version: VERSION,
   moduleUrl: import.meta.url,
   serverArgs: (options) => {

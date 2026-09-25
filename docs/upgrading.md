@@ -119,8 +119,10 @@ npx -y @agentcomms/slack@$V doctor --offline
 ## 7. Reopen the clients
 
 Reopen them, and check that the Gmail and Slack tools are there. Then remove the old servers' runtimes, which stay
-on disk otherwise. `prune` keeps anything a client registers or a running process uses, so run it after the
-clients are back:
+on disk otherwise. `prune` keeps a runtime named in any client config it reads, one it printed an entry for, and
+one a running process uses, and it removes nothing if one of those configs cannot be read. It does not read a
+workspace's own `.vscode/mcp.json` or `.cursor/mcp.json`, so if you registered a runtime there by hand, look at
+`mcp prune --dry-run` first. Run it after the clients are back:
 
 ```bash
 npx -y @agentcomms/gmail@$V mcp prune

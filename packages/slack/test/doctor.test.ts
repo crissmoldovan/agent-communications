@@ -405,3 +405,39 @@ test('every check names its workspace, or says it is not about one', () => {
     assert.ok(check.title.length > 0);
   }
 });
+
+test('our own server started by its published command is ours, not another route to Slack', () => {
+  // What a global install gives, and what the README says runs the server. Doctor's fix for "another server" is
+  // to remove it, which here would delete the gated server itself.
+  const result = doctor({
+    config: config({ acme: account() }),
+    now: NOW,
+    bundles: new Map([['acme', bundle()]]),
+    registeredServers: [
+      server({ name: 'slack', command: 'agent-slack', args: ['mcp', '--workspace', 'acme'] }),
+      server({ name: 'slack-global', command: '/usr/local/bin/agent-slack', args: ['mcp'] }),
+    ],
+  });
+  const check = find(result, 'other-slack-servers');
+  assert.equal(check?.status, 'ok', check?.detail);
+  assert.equal(check?.fix, null);
+});
+
+test("another server's URL is shown by host and path, never with what its query or userinfo carries", () => {
+  const result = doctor({
+    config: config({ acme: account() }),
+    now: NOW,
+    bundles: new Map([['acme', bundle()]]),
+    registeredServers: [
+      server({
+        name: 'pd',
+        command: '',
+        url: 'https://someone:fake-password-2@mcp.example.net/fake-id/slack?token=fake-secret-2#frag',
+        type: 'http',
+      }),
+    ],
+  });
+  const check = find(result, 'other-slack-servers');
+  assert.match(check?.detail ?? '', /"pd" in claude-code \(https:\/\/mcp\.example\.net\/fake-id\/slack\)/);
+  assert.doesNotMatch(JSON.stringify(result), /fake-password-2|fake-secret-2|frag/);
+});

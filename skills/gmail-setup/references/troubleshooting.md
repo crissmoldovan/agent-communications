@@ -288,6 +288,9 @@ grant can read and draft but cannot label or archive, and it carries no account 
 server through exactly the entry it wrote and completes an `initialize` and `tools/list`. A result
 with `verified: true` and a tool count means the entry runs. `verified: false` carries the reason in
 `verifyDetail`, and an entry that looks right but does not start is the failure people actually hit.
+`verification` tells the two kinds of `false` apart: `failed` is a check that ran — printed as "Failed to
+start", and the command exits non-zero — and `skipped` is one that did not run (`--no-verify`, or `--print`
+with no runtime installed yet).
 
 ```bash
 agent-gmail mcp install --client claude-code
@@ -305,13 +308,17 @@ root.
 
 | What happened | Why | Fix |
 |---|---|---|
-| The client starts the server and it exits immediately | Clients start servers with a minimal `PATH`, so `node` by bare name is not found | Re-run `mcp install`; every entry it writes uses an absolute interpreter path and an explicit `PATH` |
-| The server starts but reports no mailboxes | It is reading a different configuration directory | The written entry sets `AGENT_COMMS_CONFIG_DIR` explicitly; re-run `mcp install` rather than hand-editing |
-| The server starts but cannot read its secrets | A keychain item written by one Node build is not always readable by another, and on Linux a background process needs the session bus | Re-run `mcp install` (it prefers the `node` on `PATH` and forwards `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` on Linux); or `agentcomms secrets migrate --to file` |
-| It worked, then stopped after an upgrade | The registered command path no longer exists — `doctor`'s `mcp-command` check | `agent-gmail mcp install --client <client>` |
-| The client's config file is not valid JSON | Something else wrote it badly; the installer refuses to touch it rather than rewriting the file | Fix the file, or add the printed snippet by hand |
+| The client starts the server and it exits immediately | Clients start servers with a minimal `PATH`, so `node` by bare name is not found | Re-run `mcp install` with `--force` and the entry's own flags; every entry it writes uses an absolute interpreter path and an explicit `PATH` |
+| The server starts but reports no mailboxes | It is reading a different configuration directory | The written entry sets `AGENT_COMMS_CONFIG_DIR` explicitly; re-run `mcp install` with `--force` rather than hand-editing |
+| The server starts but cannot read its secrets | A keychain item written by one Node build is not always readable by another, and on Linux a background process needs the session bus | Re-run `mcp install` with `--force` (it prefers the `node` on `PATH` and forwards `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` on Linux); or `agentcomms secrets migrate --to file` |
+| It worked, then stopped after an upgrade | The registered command path no longer exists — `doctor`'s `mcp-command` check | the `fix` that check prints, which re-registers with the entry's own flags and `--force` |
+| The client's config file is not plain JSON | Something else wrote it badly, or it holds comments its client accepts; the installer refuses to touch it rather than rewrite it without them | Add the printed snippet by hand, or fix the file |
 | Tools appear but nothing has changed | The client has not been restarted | Restart it |
 | Nothing can reach npm to install the runtime | The default `managed` launcher installs the exact running version into its own directory | `--launcher npx` runs the published package directly instead |
+
+An entry that is already registered is replaced only with `--force`; without it `mcp install` is refused for
+that name. Pass the entry's own `--name`, `--inbox` and `--read-only` again too, or the replacement reaches more
+than the one it replaces — doctor's `fix` for a stale or broken entry already carries them.
 
 **And the one that is not a start-up problem at all.** If `doctor` reports `other-gmail-servers` as
 failing, another Gmail MCP server with send tools is registered with the user's client. It is a

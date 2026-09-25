@@ -222,8 +222,10 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    files, including attachments from strangers, under the downloads root. The command starts the server
    through the entry it just wrote and completes a handshake, so a registration that looks right but does
    not run is caught here. Tell the user to restart the client afterwards. Re-registering a newer version
-   leaves the old runtime on disk; once the client is restarted, `agent-gmail mcp prune` removes those no
-   client registers and no process is running.
+   leaves the old runtime on disk; once the client is restarted, `agent-gmail mcp prune` removes those it
+   can show are unused: named in no client config it reads, never printed as an entry to paste, and not
+   running. It removes nothing when one of those configs cannot be read, and it does not read a workspace's
+   own `.vscode/mcp.json` or `.cursor/mcp.json` — run `--dry-run` first and tell the user what it lists.
    **Complete when:** the result says `verified` with the tool count, and you have passed on any warning
    about another Gmail server registered with the same client.
 
@@ -273,7 +275,7 @@ The console renames these pages every few months; the sequence has been stable.
 | `inbox-idle` | Unused for 150 days; Google drops a token unused for six months | `agent-gmail whoami --inbox <name>` |
 | `orphaned-secrets` | A token could not be deleted when an inbox was removed | Remove it from the keychain by hand, then delete the listed file |
 | `other-gmail-servers` | Another Gmail MCP server with send tools is registered: **nothing gates sending while it is there** | the removal command the check prints |
-| `mcp-command` | A registered server's command path no longer exists | `agent-gmail mcp install --client <client>` |
+| `mcp-command` | A registered server's command path no longer exists | the `fix` the check prints: `mcp install` with the entry's own `--name`, `--inbox` and `--read-only`, and `--force` |
 
 A failing check is a finding, not a crash: the command still exits `0` and the detail is in the checks.
 Read `healthy` and the `fail` count, not the exit code.

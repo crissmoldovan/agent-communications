@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
+import { EXIT_CODES } from '../src/errors.ts';
+import { knownClientConfigs } from '../src/mcp-clients.ts';
 import {
+  handedOutRuntimesPath,
   type InstallContext,
+  installExitStatus,
   isProductServer,
   type McpProduct,
   managedRuntimeDir,
@@ -15,6 +20,7 @@ import {
   pruneManagedRuntimes,
   reusableRuntime,
 } from '../src/mcp-install.ts';
+import { renderInstall } from '../src/render.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /**
@@ -24,8 +30,13 @@ import { tempDir } from './helpers/temp.ts';
  * registration is a config file in a temporary home.
  */
 
-const SLACK = { packageName: '@agentcomms/slack', npxPackage: '@agentcomms/slack' } as const;
-const GMAIL = { packageName: '@agentcomms/gmail', npxPackage: '@agentcomms/gmail-mcp' } as const;
+const SLACK = { packageName: '@agentcomms/slack', npxPackage: '@agentcomms/slack', binary: 'agent-slack' } as const;
+const GMAIL = {
+  packageName: '@agentcomms/gmail',
+  npxPackage: '@agentcomms/gmail-mcp',
+  binary: 'agent-gmail',
+  bins: ['agent-gmail-mcp'],
+} as const;
 
 function context(dataDir: string, home: string): InstallContext {
   return { env: { HOME: home, PATH: '' }, core: { paths: { dataDir, configDir: join(home, 'config') } } };
@@ -119,7 +130,8 @@ test('--print builds the managed entry without installing anything', async () =>
   };
   const result = await mcpInstall(context(data, home), product, { client: 'json', apply: false });
   assert.equal(result.entry.args[0], managedRuntimeEntry(data, product.packageName, '0.0.1'));
-  assert.deepEqual(readdirSync(data), [], 'nothing was installed');
+  // Only the record of what was handed out, which `prune` reads: no runtime.
+  assert.deepEqual(readdirSync(data), [basename(handedOutRuntimesPath(data))], 'nothing was installed');
   assert.equal(result.verified, false);
   assert.match(result.verifyDetail ?? '', /--print installs nothing/);
 });
@@ -182,4 +194,218 @@ test('prune removes only unused runtimes of this product, and nothing else in th
   if (process.platform !== 'win32') expected.push('0.0.4-slack');
   assert.deepEqual(left, expected.sort());
   await stat(join(outside, 'node_modules', '@agentcomms', 'slack', 'dist', 'cli.mjs'));
+});
+
+/** Two runtimes, the older one registered only where the test puts it; this release is 0.0.9. */
+function twoRuntimes() {
+  const data = tempDir();
+  const home = tempDir();
+  const old = join(data, 'runtime', '0.0.1-slack');
+  makeRuntime(old, SLACK.packageName, '0.0.1');
+  makeRuntime(join(data, 'runtime', '0.0.9-slack'), SLACK.packageName, '0.0.9');
+  const entry = { command: 'node', args: [managedRuntimeEntry(data, SLACK.packageName, '0.0.1'), 'mcp'] };
+  const product = { packageName: SLACK.packageName, version: '0.0.9' };
+  return { data, home, old, entry, product, nothingRunning: { processes: async () => [] } };
+}
+
+function writeConfig(path: string, text: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, text);
+}
+
+test('prune removes nothing when a client config cannot be read, and names the file', async () => {
+  const { data, home, old, product, nothingRunning } = twoRuntimes();
+  const env = context(data, home).env;
+  const vscode = knownClientConfigs(env).find((file) => file.client === 'vscode')?.path ?? '';
+  // Half an edit: whatever it registers, nobody can say.
+  writeConfig(vscode, '{ "servers": { "slack": { "command": "node", "args": [');
+
+  const result = await pruneManagedRuntimes(context(data, home), product, nothingRunning);
+  assert.deepEqual(result.removed, []);
+  assert.ok(result.refused?.includes(vscode), `the refusal names the file: ${result.refused}`);
+  assert.deepEqual(
+    result.kept.map((item) => item.reason),
+    ['not checked', 'not checked'],
+  );
+  await stat(old);
+});
+
+test('prune keeps a runtime registered where only a closer reading finds it', async (t) => {
+  const cases: [string, (setup: ReturnType<typeof twoRuntimes>) => NodeJS.ProcessEnv][] = [
+    [
+      'a VS Code mcp.json with a comment',
+      ({ data, home, entry }) => {
+        const env = context(data, home).env;
+        const path = knownClientConfigs(env).find((file) => file.client === 'vscode')?.path ?? '';
+        writeConfig(path, `// mine\n{ "servers": { "slack": ${JSON.stringify(entry)}, } }`);
+        return env;
+      },
+    ],
+    [
+      'codex under CODEX_HOME',
+      ({ data, home, entry }) => {
+        const codexHome = tempDir();
+        writeConfig(
+          join(codexHome, 'config.toml'),
+          `[mcp_servers.slack]\ncommand = "node"\nargs = [${entry.args.map((a) => JSON.stringify(a)).join(', ')}]\n`,
+        );
+        return { ...context(data, home).env, CODEX_HOME: codexHome };
+      },
+    ],
+    [
+      "Claude Code's config under CLAUDE_CONFIG_DIR",
+      ({ data, home, entry }) => {
+        const claudeDir = tempDir();
+        writeConfig(join(claudeDir, '.claude.json'), JSON.stringify({ mcpServers: { slack: entry } }));
+        return { ...context(data, home).env, CLAUDE_CONFIG_DIR: claudeDir };
+      },
+    ],
+    [
+      "a project's .mcp.json",
+      ({ data, home, entry }) => {
+        const project = tempDir();
+        writeConfig(join(home, '.claude.json'), JSON.stringify({ projects: { [project]: { mcpServers: {} } } }));
+        writeConfig(join(project, '.mcp.json'), JSON.stringify({ mcpServers: { slack: entry } }));
+        return context(data, home).env;
+      },
+    ],
+  ];
+  for (const [label, arrange] of cases) {
+    await t.test(label, async () => {
+      const setup = twoRuntimes();
+      const env = arrange(setup);
+      const result = await pruneManagedRuntimes(
+        { env, core: context(setup.data, setup.home).core },
+        setup.product,
+        setup.nothingRunning,
+      );
+      assert.deepEqual(result.removed, [], label);
+      assert.match(result.kept.find((item) => item.version === '0.0.1')?.reason ?? '', /registered with/);
+      await stat(setup.old);
+    });
+  }
+});
+
+test('prune keeps a runtime it printed an entry for, because where that entry went cannot be read', async () => {
+  const { data, home, old, nothingRunning } = twoRuntimes();
+  const product: McpProduct = {
+    packageName: SLACK.packageName,
+    binary: 'agent-slack',
+    defaultServerName: 'slack',
+    npxPackage: SLACK.npxPackage,
+    version: '0.0.1',
+    moduleUrl: import.meta.url,
+    serverArgs: () => [],
+  };
+  // `--client json` prints; the entry is pasted wherever the person keeps it, which no scan reaches.
+  const printed = await mcpInstall(context(data, home), product, { client: 'json', apply: false, noVerify: true });
+  assert.equal(printed.entry.args[0], managedRuntimeEntry(data, SLACK.packageName, '0.0.1'));
+
+  const result = await pruneManagedRuntimes(context(data, home), { ...product, version: '0.0.9' }, nothingRunning);
+  assert.deepEqual(result.removed, []);
+  assert.match(result.kept.find((item) => item.version === '0.0.1')?.reason ?? '', /printed for json as "slack"/);
+  await stat(old);
+
+  // A record it cannot read is the same as a config it cannot read: nothing goes.
+  writeFileSync(handedOutRuntimesPath(data), 'not json\n', { flag: 'a' });
+  const blind = await pruneManagedRuntimes(context(data, home), { ...product, version: '0.0.9' }, nothingRunning);
+  assert.deepEqual(blind.removed, []);
+  assert.ok(blind.refused?.includes(handedOutRuntimesPath(data)), `${blind.refused}`);
+});
+
+test("the product's own published command, by name or by path, is ours; a package npx would fetch is not", () => {
+  const slack = (command: string, args: string[] = ['mcp', '--workspace', 'acme/slack']) =>
+    isProductServer({ command, args }, SLACK);
+  // What a global install gives, and what the Slack README says runs the server.
+  assert.equal(slack('agent-slack'), true);
+  assert.equal(slack('/usr/local/bin/agent-slack'), true);
+  assert.equal(slack('/opt/project/node_modules/.bin/agent-slack'), true);
+  assert.equal(slack('C:\\tools\\npm\\agent-slack.cmd'), true);
+  assert.equal(isProductServer({ command: 'agent-gmail-mcp', args: ['--inbox', 'work'] }, GMAIL), true);
+  // Near misses.
+  assert.equal(slack('agent-slack-evil'), false);
+  assert.equal(slack('npx', ['-y', 'agent-slack', 'mcp']), false, 'npx would fetch a package of that name');
+  assert.equal(isProductServer({ command: 'agent-slack', args: ['mcp'] }, GMAIL), false, "Slack's is not Gmail's");
+});
+
+/** A product whose flags are the ones that decide what a server may reach. */
+function pinnedProduct(): McpProduct {
+  return {
+    packageName: '@agentcomms/example',
+    binary: 'agent-example',
+    defaultServerName: 'example',
+    npxPackage: '@agentcomms/example',
+    version: '0.0.1',
+    moduleUrl: import.meta.url,
+    serverArgs: (options) => [
+      ...(options.inbox ? ['--inbox', options.inbox] : []),
+      ...(options.readOnly ? ['--read-only'] : []),
+    ],
+  };
+}
+
+test('a refusal hint repeats every flag that narrows the server, so following it widens nothing', async () => {
+  const data = tempDir();
+  const home = tempDir();
+  const env = context(data, home).env;
+  const cursor = knownClientConfigs(env).find((file) => file.client === 'cursor')?.path ?? '';
+  const ours = { command: 'node', args: [managedRuntimeEntry(data, '@agentcomms/example', '0.0.0'), 'mcp'] };
+  writeConfig(
+    cursor,
+    JSON.stringify({ mcpServers: { 'example-work': ours, theirs: { command: 'npx', args: ['x'] } } }),
+  );
+  const options = {
+    client: 'cursor',
+    name: 'example-work',
+    inbox: 'acme/work',
+    readOnly: true,
+    launcher: 'npx',
+    noVerify: true,
+  } as const;
+
+  // The command the hint gives, not the prose around it.
+  const hintOf = async (name: string) => {
+    try {
+      await mcpInstall(context(data, home), pinnedProduct(), { ...options, name });
+    } catch (error) {
+      return /`([^`]+)`/.exec((error as { hint?: string }).hint ?? '')?.[1] ?? '';
+    }
+    assert.fail('it was not refused');
+  };
+  const again = await hintOf('example-work');
+  for (const flag of ['--name example-work', '--inbox acme/work', '--read-only', '--launcher npx', '--force']) {
+    assert.ok(again.includes(flag), `the hint dropped ${flag}: ${again}`);
+  }
+  const elsewhere = await hintOf('theirs');
+  for (const flag of ['--inbox acme/work', '--read-only', '--launcher npx']) {
+    assert.ok(elsewhere.includes(flag), `the hint dropped ${flag}: ${elsewhere}`);
+  }
+  assert.doesNotMatch(elsewhere, /--force/);
+});
+
+test('an entry that was checked and failed to start says so, and ends the command non-zero', async () => {
+  // A checkout whose command exits at once — 0.4.0's npx entry without `mcp` did exactly this.
+  const checkout = tempDir();
+  writeFileSync(join(checkout, 'cli.mjs'), 'process.exit(3);\n');
+  const product = { ...pinnedProduct(), moduleUrl: pathToFileURL(join(checkout, 'module.mjs')).href };
+  const result = await mcpInstall(context(tempDir(), tempDir()), product, {
+    client: 'json',
+    launcher: 'local',
+    apply: false,
+  });
+  assert.equal(result.verification, 'failed');
+  assert.match(renderInstall(result, false), /Failed to start: /);
+  assert.doesNotMatch(renderInstall(result, false), /Not checked/);
+  assert.equal(installExitStatus(result), EXIT_CODES.UNAVAILABLE);
+
+  // Skipped is not failed: `--no-verify` asked for no check, and gets no failure.
+  const skipped = await mcpInstall(context(tempDir(), tempDir()), product, {
+    client: 'json',
+    launcher: 'local',
+    apply: false,
+    noVerify: true,
+  });
+  assert.equal(skipped.verification, 'skipped');
+  assert.match(renderInstall(skipped, false), /Not checked/);
+  assert.equal(installExitStatus(skipped), EXIT_CODES.OK);
 });

@@ -4,6 +4,7 @@ import {
   canPrompt,
   colorEnabled,
   EXIT_CODES,
+  installExitStatus,
   type LooseningConsent,
   type OutputOptions,
   paint,
@@ -1203,16 +1204,19 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           apply: options.print !== true,
           force: Boolean(options.force),
         });
-        // Asked to register and did not — the client's CLI is not on PATH. The snippet is still printed, but a
-        // zero exit told a script (or an agent) that the server was registered when nothing was.
-        if (result.notApplied) softExit = EXIT_CODES.UNAVAILABLE;
+        // Asked to register and did not — the client's CLI is not on PATH — or registered an entry that did not
+        // start. The result is still printed, but a zero exit told a script (or an agent) that it worked.
+        const status = installExitStatus(result);
+        if (status !== EXIT_CODES.OK) softExit = status;
         writeResult(result, output(), (data) => renderInstall(data, globalOptions.color), streams);
       }),
     );
 
   mcp
     .command('prune')
-    .description('remove managed runtimes that no MCP client registers and no process is running')
+    .description(
+      'remove managed runtimes that no client config it can read names, no printed entry names, and no process runs',
+    )
     .option('--dry-run', 'only say what would be removed', false)
     .action(
       act(async (context, globalOptions, options: Options) => {

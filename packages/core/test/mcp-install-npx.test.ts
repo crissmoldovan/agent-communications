@@ -29,7 +29,15 @@ function product(runsCli: boolean | undefined): McpProduct {
 
 async function npxArgs(runsCli: boolean | undefined): Promise<string[]> {
   const home = tempDir();
-  const env = { ...process.env, HOME: home, USERPROFILE: home, APPDATA: join(home, 'AppData', 'Roaming') };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    APPDATA: join(home, 'AppData', 'Roaming'),
+  };
+  // The scanner follows these to where codex and Claude Code keep their real configs; this test reads neither.
+  delete env.CODEX_HOME;
+  delete env.CLAUDE_CONFIG_DIR;
   const context = { env, core: { paths: { dataDir: join(home, 'data'), configDir: join(home, 'config') } } };
   const result = await mcpInstall(context, product(runsCli), {
     client: 'json',

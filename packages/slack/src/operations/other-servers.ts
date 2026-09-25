@@ -1,4 +1,4 @@
-import { isProductServer, type McpProduct, type RegisteredServer } from '@agentcomms/core';
+import { displayUrl, isProductServer, type McpProduct, type RegisteredServer } from '@agentcomms/core';
 
 /**
  * Other Slack MCP servers registered on this machine.
@@ -17,7 +17,7 @@ import { isProductServer, type McpProduct, type RegisteredServer } from '@agentc
  */
 export function findOtherSlackServers(
   servers: readonly RegisteredServer[],
-  product: Pick<McpProduct, 'packageName' | 'npxPackage' | 'entryFiles'>,
+  product: Pick<McpProduct, 'packageName' | 'npxPackage' | 'entryFiles' | 'binary' | 'bins'>,
 ): RegisteredServer[] {
   return servers.filter(
     (server) =>
@@ -28,15 +28,18 @@ export function findOtherSlackServers(
 
 /**
  * One line naming a server: its name, client and what it runs — never its arguments or env, which may carry a
- * token.
+ * token, and of a URL only its host and path. A remote server's URL is often the credential itself, and this
+ * line goes into `doctor --json`, which the skills tell agents to run.
  */
 export function describeOtherSlackServer(server: RegisteredServer): string {
-  const what = server.url ?? server.packageName;
+  const what = (server.url ? displayUrl(server.url) : undefined) ?? server.packageName;
   return `"${server.name}" in ${server.client}${what ? ` (${what})` : ''}`;
 }
 
 /** How to remove one, in the client's own terms. */
 export function removalFor(server: RegisteredServer): string {
+  // A project's entry is out of reach of the user-scope commands below, run from wherever `doctor` was.
+  if (server.scope === 'project') return `remove "${server.name}" from the project entry in ${server.path} by hand`;
   switch (server.client) {
     case 'claude-code':
       return `claude mcp remove ${server.name}`;

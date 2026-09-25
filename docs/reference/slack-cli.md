@@ -396,7 +396,7 @@ agent-slack mcp install [options]
 
 ### `agent-slack mcp prune`
 
-remove managed runtimes that no MCP client registers and no process is running
+remove managed runtimes that no client config it can read names, no printed entry names, and no process runs
 
 ```
 agent-slack mcp prune [options]

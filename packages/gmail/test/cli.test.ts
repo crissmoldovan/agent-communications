@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
@@ -307,6 +307,27 @@ test('mcp install writes an entry that really starts the server', async () => {
   const written = JSON.parse(await readFile(data.configPath, 'utf8')) as { mcpServers: Record<string, unknown> };
   assert.ok(written.mcpServers.gmail);
 });
+
+test(
+  'mcp install says an entry that does not start failed, and exits non-zero',
+  process.platform === 'win32' ? { skip: 'the stand-in npx is a shell script' } : {},
+  async () => {
+    // An `npx` that exits at once: the check runs, and fails. "Not checked" and exit 0 is what this printed.
+    const harness = await newHarness();
+    const bin = tempDir();
+    await writeFile(join(bin, 'npx'), '#!/bin/sh\nexit 3\n');
+    await chmod(join(bin, 'npx'), 0o755);
+    const env = { HOME: tempDir(), PATH: bin };
+    const argv = ['mcp', 'install', '--client', 'json', '--launcher', 'npx'];
+
+    const json = await cli(harness, [...argv, '--json'], { env });
+    assert.equal(json.code, EXIT_CODES.UNAVAILABLE, json.stdout);
+    assert.equal(json.json<Envelope<{ verification: string }>>().data?.verification, 'failed');
+    const text = await cli(harness, argv, { env });
+    assert.equal(text.code, EXIT_CODES.UNAVAILABLE);
+    assert.match(text.stdout, /Failed to start: /);
+  },
+);
 
 test('mcp install warns when another Gmail server is registered with that client', async () => {
   const harness = await newHarness();

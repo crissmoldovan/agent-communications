@@ -1,8 +1,9 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 // A relative import, never the package's own name: core importing `@agentcomms/core` only resolved through
 // Node's self-reference to the *built* package, so running core from source loaded its own stale dist.
 import { homeDirectory } from './paths.ts';
+import { parseToml, TomlError } from './toml.ts';
 
 /**
  * Where the MCP clients on this machine keep their server lists. Read to answer two questions: is our own server
@@ -16,6 +17,14 @@ import { homeDirectory } from './paths.ts';
 export interface ClientConfigFile {
   client: string;
   path: string;
+  /**
+   * How the client itself reads the file.
+   *
+   * VS Code's `mcp.json` is JSON with comments and trailing commas, and Gemini CLI strips comments from its
+   * settings before parsing them. A file of either with one `// note` in it is a working config to its client,
+   * and it read here as nothing registered at all — which `mcp prune` took as licence to delete what it named.
+   */
+  format: 'json' | 'jsonc' | 'toml';
 }
 
 export interface RegisteredServer {
@@ -53,36 +62,50 @@ export interface RegisteredServer {
   scope?: 'user' | 'project' | undefined;
 }
 
-/** The config file each supported client keeps its servers in, whether or not it exists. */
+/**
+ * The config file each supported client keeps its servers in, whether or not it exists.
+ *
+ * Where the client itself would look, which is not always the default: codex keeps everything under `CODEX_HOME`
+ * and Claude Code its `.claude.json` under `CLAUDE_CONFIG_DIR`, when either is set. Reading `~/.codex` regardless
+ * found nothing on a machine that had moved it, so an install wrote over somebody's server there and `prune`
+ * deleted runtimes it still named.
+ */
 export function knownClientConfigs(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): ClientConfigFile[] {
   const home = homeDirectory(env);
+  const claudeDir = env.CLAUDE_CONFIG_DIR ? resolve(env.CLAUDE_CONFIG_DIR) : home;
+  const codexDir = env.CODEX_HOME ? resolve(env.CODEX_HOME) : join(home, '.codex');
   const files: ClientConfigFile[] = [
-    { client: 'claude-code', path: join(home, '.claude.json') },
-    { client: 'cursor', path: join(home, '.cursor', 'mcp.json') },
-    { client: 'codex', path: join(home, '.codex', 'config.toml') },
-    { client: 'gemini', path: join(home, '.gemini', 'settings.json') },
+    { client: 'claude-code', path: join(claudeDir, '.claude.json'), format: 'json' },
+    { client: 'cursor', path: join(home, '.cursor', 'mcp.json'), format: 'json' },
+    { client: 'codex', path: join(codexDir, 'config.toml'), format: 'toml' },
+    { client: 'gemini', path: join(home, '.gemini', 'settings.json'), format: 'jsonc' },
   ];
   if (platform === 'darwin') {
     files.push(
       {
         client: 'claude-desktop',
         path: join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
+        format: 'json',
       },
-      { client: 'vscode', path: join(home, 'Library', 'Application Support', 'Code', 'User', 'mcp.json') },
+      {
+        client: 'vscode',
+        path: join(home, 'Library', 'Application Support', 'Code', 'User', 'mcp.json'),
+        format: 'jsonc',
+      },
     );
   } else if (platform === 'win32') {
     const appData = env.APPDATA ?? join(home, 'AppData', 'Roaming');
     files.push(
-      { client: 'claude-desktop', path: join(appData, 'Claude', 'claude_desktop_config.json') },
-      { client: 'vscode', path: join(appData, 'Code', 'User', 'mcp.json') },
+      { client: 'claude-desktop', path: join(appData, 'Claude', 'claude_desktop_config.json'), format: 'json' },
+      { client: 'vscode', path: join(appData, 'Code', 'User', 'mcp.json'), format: 'jsonc' },
     );
   } else {
     files.push(
-      { client: 'claude-desktop', path: join(home, '.config', 'Claude', 'claude_desktop_config.json') },
-      { client: 'vscode', path: join(home, '.config', 'Code', 'User', 'mcp.json') },
+      { client: 'claude-desktop', path: join(home, '.config', 'Claude', 'claude_desktop_config.json'), format: 'json' },
+      { client: 'vscode', path: join(home, '.config', 'Code', 'User', 'mcp.json'), format: 'jsonc' },
     );
   }
   return files;
@@ -104,13 +127,77 @@ function urlOf(entry: ServerEntry): string | undefined {
   return undefined;
 }
 
-function collectFromJson(text: string, client: string, path: string): RegisteredServer[] {
-  let parsed: unknown;
+/**
+ * Another server's address, as far as it is safe to print: scheme, host and path.
+ *
+ * Never the userinfo, the query or the fragment. For a remote server the URL is often the credential — some
+ * vendors put a key in the query, others ask for their URL to be kept like a password — and it was printed
+ * whole in `mcp install`'s warnings, in its refusals and in `doctor`, which agents are told to run with `--json`
+ * and so copy into their transcripts. What cannot be parsed as a URL is not printed at all.
+ */
+export function displayUrl(url: string): string | undefined {
   try {
-    parsed = JSON.parse(text);
+    const parsed = new URL(url);
+    if (!parsed.host) return undefined;
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname === '/' ? '' : parsed.pathname}`;
   } catch {
-    return [];
+    return undefined;
   }
+}
+
+/**
+ * JSON with comments and trailing commas, read the way VS Code reads its own settings.
+ *
+ * Comments become spaces and a comma before a closing bracket is dropped, both only outside strings — a URL in
+ * an argument is full of `//`. What is left has to be plain JSON, or it throws like `JSON.parse`.
+ */
+export function parseJsonc(text: string): unknown {
+  let stripped = '';
+  let pos = 0;
+  while (pos < text.length) {
+    const char = text[pos] ?? '';
+    if (char === '"') {
+      let end = pos + 1;
+      while (end < text.length && text[end] !== '"') end += text[end] === '\\' ? 2 : 1;
+      stripped += text.slice(pos, end + 1);
+      pos = end + 1;
+    } else if (char === '/' && text[pos + 1] === '/') {
+      while (pos < text.length && text[pos] !== '\n') pos += 1;
+    } else if (char === '/' && text[pos + 1] === '*') {
+      const end = text.indexOf('*/', pos + 2);
+      if (end === -1) throw new SyntaxError('a comment that never ends');
+      stripped += ' ';
+      pos = end + 2;
+    } else {
+      stripped += char;
+      pos += 1;
+    }
+  }
+  let json = '';
+  for (pos = 0; pos < stripped.length; pos += 1) {
+    const char = stripped[pos] ?? '';
+    if (char === '"') {
+      let end = pos + 1;
+      while (end < stripped.length && stripped[end] !== '"') end += stripped[end] === '\\' ? 2 : 1;
+      json += stripped.slice(pos, end + 1);
+      pos = end;
+    } else if (char === ',') {
+      let next = pos + 1;
+      while (/\s/.test(stripped[next] ?? '')) next += 1;
+      if (stripped[next] !== ']' && stripped[next] !== '}') json += char;
+    } else {
+      json += char;
+    }
+  }
+  return JSON.parse(json);
+}
+
+function collectFromJson(
+  parsed: unknown,
+  client: string,
+  path: string,
+  topScope: 'user' | 'project' = 'user',
+): RegisteredServer[] {
   const found: RegisteredServer[] = [];
   const visit = (node: unknown, scope: 'user' | 'project'): void => {
     if (!node || typeof node !== 'object') return;
@@ -147,95 +234,207 @@ function collectFromJson(text: string, client: string, path: string): Registered
       }
     }
   };
-  visit(parsed, 'user');
+  visit(parsed, topScope);
   return dedupe(found);
 }
 
-/** Codex keeps servers in TOML; only the shape we need is read, without a TOML dependency. */
+/**
+ * Codex's servers, from its `config.toml` as `parseToml` reads it.
+ *
+ * Every spelling of an entry is the same table once parsed — `[mcp_servers.x]` sections, an `[mcp_servers]` table
+ * of inline ones, dotted keys — and a subsection such as `[mcp_servers.x.env]` belongs to its server rather than
+ * becoming one. An `mcp_servers` that is not a table of tables is not something codex would start either, and is
+ * refused as unreadable rather than guessed at.
+ */
 function collectFromToml(text: string, client: string, path: string): RegisteredServer[] {
+  const servers = parseToml(text).mcp_servers;
+  if (servers === undefined) return [];
+  if (!isRecord(servers)) throw new TomlError('mcp_servers is not a table');
   const found: RegisteredServer[] = [];
-  let current: RegisteredServer | null = null;
-  let inEnv = false;
-  for (const line of text.split(/\r?\n/)) {
-    // Checked before the server-section pattern, which would otherwise match `[mcp_servers.x.env]` and invent a
-    // server called `x.env`. A subsection belongs to the server above it; without reading it a codex entry's env
-    // is invisible, and an entry cannot be restored without its env.
-    const envSection = /^\s*\[mcp_servers\.(.+)\.env\]\s*$/.exec(line);
-    if (envSection) {
-      inEnv = current !== null && (envSection[1] ?? '').replace(/^"|"$/g, '') === current.name;
-      continue;
-    }
-    const section = /^\s*\[mcp_servers\.([^\]]+)\]\s*$/.exec(line);
-    if (section) {
-      if (current) found.push(current);
-      current = { client, path, name: (section[1] ?? '').replace(/^"|"$/g, ''), command: '', args: [] };
-      inEnv = false;
-      continue;
-    }
-    if (/^\s*\[/.test(line)) {
-      if (current) found.push(current);
-      current = null;
-      inEnv = false;
-      continue;
-    }
-    if (inEnv && current) {
-      const pair = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([^"]*)"/.exec(line);
-      if (pair?.[1] !== undefined) current.env = { ...current.env, [pair[1]]: pair[2] ?? '' };
-      continue;
-    }
-    if (!current) continue;
-    const command = /^\s*command\s*=\s*"([^"]*)"/.exec(line);
-    if (command?.[1] !== undefined) current.command = command[1];
-    const url = /^\s*url\s*=\s*"([^"]*)"/.exec(line);
-    if (url?.[1] !== undefined) current.url = url[1];
-    const args = /^\s*args\s*=\s*\[(.*)\]/.exec(line);
-    if (args?.[1] !== undefined) {
-      current.args = [...args[1].matchAll(/"([^"]*)"/g)].map((match) => match[1] ?? '');
-    }
-    const inlineEnv = /^\s*env\s*=\s*\{(.*)\}/.exec(line);
-    if (inlineEnv?.[1] !== undefined) {
-      const pairs = [...inlineEnv[1].matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([^"]*)"/g)];
-      if (pairs.length > 0) {
-        current.env = Object.fromEntries(pairs.map((match) => [match[1] ?? '', match[2] ?? '']));
-      }
-    }
+  for (const [name, entry] of Object.entries(servers)) {
+    if (!isRecord(entry)) throw new TomlError(`mcp_servers.${name} is not a table`);
+    if (entry.args !== undefined && !Array.isArray(entry.args))
+      throw new TomlError(`mcp_servers.${name}.args is not an array`);
+    if (entry.env !== undefined && !isRecord(entry.env)) throw new TomlError(`mcp_servers.${name}.env is not a table`);
+    found.push({
+      client,
+      path,
+      name,
+      command: typeof entry.command === 'string' ? entry.command : '',
+      args: Array.isArray(entry.args) ? entry.args.map(String) : [],
+      ...(typeof entry.url === 'string' ? { url: entry.url } : {}),
+      ...(isRecord(entry.env)
+        ? { env: Object.fromEntries(Object.entries(entry.env).map(([key, value]) => [key, String(value)])) }
+        : {}),
+    });
   }
-  if (current) found.push(current);
-  return dedupe(found);
+  return found;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * What `codex mcp get <name> --json` says is registered, as an entry the rest of this reads.
+ *
+ * Codex's own answer, because codex is what `codex mcp add` would overwrite: its config can live where no scan
+ * looks, and in shapes a scan could misread. The entry is under `transport` in the codex versions this was
+ * written against; the top level is read too, so a flatter answer is not mistaken for no command at all. An
+ * answer with neither a command nor a URL throws, and the caller treats that as not knowing.
+ */
+export function codexServerFromGet(name: string, stdout: string, path: string): RegisteredServer {
+  const answer: unknown = JSON.parse(stdout);
+  if (!isRecord(answer)) throw new SyntaxError('not an object');
+  const entry = isRecord(answer.transport) ? answer.transport : answer;
+  const command = typeof entry.command === 'string' ? entry.command : '';
+  const url = typeof entry.url === 'string' ? entry.url : undefined;
+  if (!command && !url) throw new SyntaxError('neither a command nor a URL');
+  const server: RegisteredServer = {
+    client: 'codex',
+    path,
+    name,
+    scope: 'user',
+    command,
+    args: Array.isArray(entry.args) ? entry.args.map(String) : [],
+    ...(url ? { url } : {}),
+    ...(isRecord(entry.env)
+      ? { env: Object.fromEntries(Object.entries(entry.env).map(([key, value]) => [key, String(value)])) }
+      : {}),
+  };
+  return { ...server, packageName: packageFrom(server) };
+}
+
+/**
+ * One entry per place it is registered.
+ *
+ * The scope is part of the key. Without it the same entry at the top of `.claude.json` and under one of its
+ * `projects` came back as the project copy alone, so `--force` — which works at user scope — found nothing of its
+ * own to replace, and Claude Code then refused the add because the user-scope copy it could not see was there.
+ */
 function dedupe(servers: RegisteredServer[]): RegisteredServer[] {
   const seen = new Map<string, RegisteredServer>();
   for (const server of servers) {
     seen.set(
-      `${server.path}::${server.name}::${server.command}::${server.args.join(' ')}::${server.url ?? ''}`,
+      `${server.path}::${server.scope ?? ''}::${server.name}::${server.command}::${server.args.join(' ')}::${server.url ?? ''}`,
       server,
     );
   }
   return [...seen.values()];
 }
 
-/** Every MCP server registered with the clients on this machine. Missing or unreadable files are simply skipped. */
+/** A client config that is there and could not be read — so what it registers is not known. */
+export interface UnreadableConfig {
+  client: string;
+  path: string;
+  /** Why, in words that never quote the file: a line of somebody's config can hold a token. */
+  reason: string;
+}
+
+export interface ServerScan {
+  servers: RegisteredServer[];
+  unreadable: UnreadableConfig[];
+}
+
+/** A file's text, null when it is not there, and a reason when it is there and cannot be read. */
+async function readIfThere(path: string): Promise<string | null | { reason: string }> {
+  try {
+    return await readFile(path, 'utf8');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+    return { reason: `it could not be opened (${code ?? 'unknown error'})` };
+  }
+}
+
+function parseConfig(text: string, format: ClientConfigFile['format']): unknown {
+  const body = text.startsWith('\uFEFF') ? text.slice(1) : text;
+  return format === 'jsonc' ? parseJsonc(body) : JSON.parse(body);
+}
+
+/**
+ * Every MCP server registered with the clients on this machine, and every client config that could not be read.
+ *
+ * The second list is the point. A file this skipped used to look exactly like a file with nothing in it, and
+ * `mcp prune` deletes what nothing registers: a VS Code `mcp.json` with one comment in it was enough to lose a
+ * runtime a client still started. A caller that decides something from absence has to be able to tell the two
+ * apart. The reasons never quote the file — JSON's own parse errors do, and a line of a config can hold a token.
+ *
+ * Claude Code's project servers are read too: those it keeps under `projects` in its own file, and the
+ * `.mcp.json` at the root of each project it lists there. A project that no longer exists is not a file that
+ * cannot be read. What stays out of sight is any other file a client might be pointed at — a workspace
+ * `.vscode/mcp.json` or `.cursor/mcp.json`, a config passed on a command line — and an entry pasted from
+ * `--client json`, which is why `prune` also keeps what the installer printed.
+ */
+export async function scanRegisteredServers(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): Promise<ServerScan> {
+  const servers: RegisteredServer[] = [];
+  const unreadable: UnreadableConfig[] = [];
+  const add = (entries: RegisteredServer[]) => {
+    for (const entry of entries) servers.push({ ...entry, packageName: packageFrom(entry) });
+  };
+
+  for (const file of knownClientConfigs(env, platform)) {
+    const text = await readIfThere(file.path);
+    if (text === null) continue;
+    if (typeof text !== 'string') {
+      unreadable.push({ client: file.client, path: file.path, ...text });
+      continue;
+    }
+    if (file.format === 'toml') {
+      try {
+        add(collectFromToml(text, file.client, file.path));
+      } catch (error) {
+        const where = error instanceof TomlError ? `: ${error.message}` : '';
+        unreadable.push({ client: file.client, path: file.path, reason: `it is not TOML this can read${where}` });
+      }
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = parseConfig(text, file.format);
+    } catch {
+      unreadable.push({
+        client: file.client,
+        path: file.path,
+        reason: file.format === 'jsonc' ? 'it is not JSON, even allowing comments' : 'it is not valid JSON',
+      });
+      continue;
+    }
+    add(collectFromJson(parsed, file.client, file.path));
+
+    if (file.client !== 'claude-code' || !isRecord(parsed) || !isRecord(parsed.projects)) continue;
+    for (const root of Object.keys(parsed.projects)) {
+      if (!isAbsolute(root)) continue;
+      const path = join(root, '.mcp.json');
+      const project = await readIfThere(path);
+      if (project === null) continue;
+      if (typeof project !== 'string') {
+        unreadable.push({ client: file.client, path, ...project });
+        continue;
+      }
+      try {
+        add(collectFromJson(parseConfig(project, 'json'), file.client, path, 'project'));
+      } catch {
+        unreadable.push({ client: file.client, path, reason: 'it is not valid JSON' });
+      }
+    }
+  }
+  return { servers, unreadable };
+}
+
+/**
+ * Every MCP server registered with the clients on this machine. Files that are missing or cannot be read are
+ * skipped: for a list of what is there that is the right answer, and for a decision made from what is *not*
+ * there it is the wrong one — use `scanRegisteredServers`, which says which files those were.
+ */
 export async function listRegisteredServers(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): Promise<RegisteredServer[]> {
-  const servers: RegisteredServer[] = [];
-  for (const file of knownClientConfigs(env, platform)) {
-    let text: string;
-    try {
-      text = await readFile(file.path, 'utf8');
-    } catch {
-      continue;
-    }
-    const entries = file.path.endsWith('.toml')
-      ? collectFromToml(text, file.client, file.path)
-      : collectFromJson(text, file.client, file.path);
-    for (const entry of entries) {
-      servers.push({ ...entry, packageName: packageFrom(entry) });
-    }
-  }
-  return servers;
+  return (await scanRegisteredServers(env, platform)).servers;
 }
 
 function packageFrom(server: RegisteredServer): string | undefined {

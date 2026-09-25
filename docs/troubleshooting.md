@@ -138,7 +138,7 @@ loosening and needs a typed confirmation at a terminal.
 Then something else sent it. Check for another Gmail MCP server:
 
 ```bash
-agent-gmail doctor --json | jq '.data.checks[] | select(.name | test("Other Gmail"))'
+agent-gmail doctor --json | jq '.data.checks[] | select(.id == "other-gmail-servers")'
 ```
 
 Everything here assumes it owns the only route to Gmail's send endpoints. Another server with an ungated send tool
@@ -150,10 +150,16 @@ does not break that guarantee so much as stand beside it.
 
 Restart it. MCP clients read their server list at startup.
 
+If it still has no Gmail tools, check whether the server is registered with that client, and whether it starts:
+
 ```bash
-agent-gmail mcp install --client claude-code   # re-register
-agent-gmail mcp install --list                 # which clients were found
+agent-gmail doctor --json | jq '.data.checks[] | select(.id == "mcp-command")'   # one per registered entry
+agent-gmail mcp install --client claude-code   # when none of them is for that client
 ```
+
+A plain `mcp install` is refused for a name that is already registered. When an entry is there and broken, its
+check's `fix` is the command that replaces it: `mcp install` with the entry's own `--name`, `--inbox` and
+`--read-only`, and `--force`. Run that `fix` as it is.
 
 ### `mcp install` fails on Windows
 
@@ -203,9 +209,16 @@ and the server verified: for Claude Code and Codex the entry is written through 
 Restart the client afterwards — a running client keeps the server it started. Each version installs into its own
 directory under `<data dir>/runtime/` (`npx -y @agentcomms/core@latest paths` shows the data dir):
 `<version>-gmail/` and `<version>-slack/`, or plain `<version>/` for a Gmail runtime an earlier release installed.
-`mcp prune` deletes the old ones, and only those it can show are unused: never this release's, never one any client
-registers, never one a running process started from — and nothing at all if it cannot list the processes. Run it
-once the clients have been restarted; `--dry-run` lists what it would remove:
+`mcp prune` deletes the old ones, and only those it can show are unused. It keeps this release's; any runtime an
+entry names in a client config it reads; any runtime it printed an entry for (`--client json`, `--print`, or a
+client whose CLI was not on `PATH`), because it cannot see where that entry was pasted; and any runtime a running
+process started from. The configs it reads are Claude Code's `.claude.json` (under `CLAUDE_CONFIG_DIR` when that
+is set) and the `.mcp.json` of each project listed in it, Claude Desktop's config, codex's `config.toml` (under
+`CODEX_HOME` when that is set), Cursor's `~/.cursor/mcp.json`, Gemini CLI's `~/.gemini/settings.json` and VS
+Code's user `mcp.json`. If any of those is there and cannot be read, or the processes cannot be listed, it removes
+nothing at all and says which. What it cannot see is an entry you put by hand anywhere else — a workspace
+`.vscode/mcp.json` or `.cursor/mcp.json`, say — so check `--dry-run` first if you have one. Run it once the
+clients have been restarted:
 
 ```bash
 npx -y @agentcomms/gmail@latest mcp prune --dry-run
@@ -220,8 +233,12 @@ starting it with a different `AGENT_COMMS_CONFIG_DIR` or a different `HOME`.
 
 ```bash
 agent-gmail doctor          # as you
-agent-gmail mcp install --client <name>   # rewrites the entry with the right paths
+agent-gmail mcp install --client <name> --force   # rewrites the entry with the right paths
 ```
+
+`--force` replaces only an entry this package wrote, and a plain `mcp install` is refused while one is there.
+If the entry was registered with its own `--name`, `--inbox` or `--read-only`, pass those again, or run the
+`fix` that `doctor` prints for it, which carries them.
 
 ### An agent asks for approval in a form instead of the terminal
 
