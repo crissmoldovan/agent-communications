@@ -230,16 +230,39 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     nextTool: 'gmail_inbox_finish',
   });
 
+  /**
+   * On a pinned server, refuses an approval id that is not for the pinned mailbox — before anything reads, claims or
+   * voids it.
+   *
+   * Every approval, a send's or a change's, records the mailbox it is for, and claiming one against a different change
+   * voids it: that is how a drifted change is caught. So a server pinned to `work` handed `home`'s approval id would
+   * compute work's change, find it was not the one approved, and void home's — cancelling something a person agreed
+   * to for a mailbox this server was deliberately not given. A send approval under `confirm` would have gone further
+   * and shown home's preview in a form here. An id that is not this mailbox's is answered as one that does not exist,
+   * in the words `gmail_send_cancel` has always used.
+   */
+  const checkApprovalPin = async (approvalId: string | undefined): Promise<void> => {
+    if (!pinned || !pinnedId || approvalId === undefined) return;
+    // A malformed id is not this mailbox's either; the store refuses to read one, and that is the same answer.
+    const record = await context.core.approvals.get(approvalId).catch(() => null);
+    if (record?.inboxId === pinnedId) return;
+    throw new CommsError('NOT_FOUND', `no approval "${approvalId}" for the "${pinned}" mailbox`, {
+      hint: `This server only serves "${pinned}".`,
+    });
+  };
+
   /** Runs a change through core's one flow, from this surface, and answers in the shape above. */
   const runChange = async <T>(
     change: GatedChange<T>,
     approvalId: string | undefined,
-  ): Promise<ReturnType<typeof reply>> =>
-    reply(
+  ): Promise<ReturnType<typeof reply>> => {
+    await checkApprovalPin(approvalId);
+    return reply(
       changeToolResult(
         await gatedChange(context.core, change, { surface: 'mcp', approvalId, approveCommand: 'agent-gmail approve' }),
       ),
     );
+  };
 
   /**
    * Whether the pinned name still names the mailbox this server was started for.
@@ -1365,6 +1388,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
               hostedDomain: hd,
               detached: true,
             });
+            await checkApprovalPin(approvalId);
             const outcome = await gatedChange(context.core, change, {
               surface: 'mcp',
               approvalId,
@@ -1919,6 +1943,9 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       async ({ inbox, draftId, approvalId, expect }, ctx) => {
         try {
           const alias = targetInbox(inbox);
+          // Before the approval is read for its policy: on a pinned server, another mailbox's is not this one's to
+          // show in a form, to count a wrong code against, or to void by claiming it for the wrong draft.
+          await checkApprovalPin(approvalId);
           // Channel (a): a form the model cannot answer, but only from a client that has proved its forms reach a
           // person. An un-allowlisted client is told to use the terminal or Gmail — and the approval is left alone,
           // because being asked from the wrong client is not evidence that anything is wrong with the message.
@@ -2103,15 +2130,9 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           // Pinned means pinned. Every other tool in this file forces `pinned` or refuses a mismatch; `send_list`
           // and this one were the exceptions, so a server started with `--inbox work` could enumerate and then void
           // approvals standing against a mailbox it was explicitly not given — and an approval voided is a send the
-          // person who prepared it has to notice and redo.
-          if (pinned) {
-            const mine = await listApprovals(context, { inbox: pinned });
-            if (!mine.some((record) => record.approvalId === approvalId)) {
-              throw new CommsError('NOT_FOUND', `no approval "${approvalId}" for the "${pinned}" mailbox`, {
-                hint: `This server only serves "${pinned}".`,
-              });
-            }
-          }
+          // person who prepared it has to notice and redo. The same check now stands before every tool that takes
+          // an approval id.
+          await checkApprovalPin(approvalId);
           const record = await revokeApproval(context, approvalId);
           return reply({ approvalId: record.approvalId, state: record.state });
         } catch (error) {

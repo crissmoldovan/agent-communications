@@ -3,8 +3,9 @@ import { createServer } from 'node:net';
 import { afterEach, test } from 'node:test';
 import { GmailContext } from '../src/context.ts';
 import { createDraft, getDraft } from '../src/operations/drafts.ts';
+import { inboxPolicy } from '../src/operations/inboxes.ts';
 import { type Harness, newHarness } from './support/harness.ts';
-import { applied, cli, connect, toolError, wire } from './support/surfaces.ts';
+import { applied, approvalAsked, cli, connect, toolError, wire } from './support/surfaces.ts';
 
 /*
  * Each tool held to the command it mirrors, where the two had drifted: what it takes, what it returns, and what it
@@ -372,5 +373,119 @@ test('gmail_inbox_finish waits as long as the sign-in can, and stops waiting whe
     assert.equal(tooLong.isError, true);
   } finally {
     await close();
+  }
+});
+
+// ── a pinned server, and approvals for other mailboxes ──────────────────────────────────────────────────────
+
+/** `work`, which a server is pinned to, and `home`, which it was not given. Both send under `chat`. */
+async function workAndHome(): Promise<Harness> {
+  const harness = await newHarness({
+    accounts: [
+      { sub: 'sub-1', email: 'jo@example.test' },
+      { sub: 'sub-2', email: 'sam@example.test' },
+    ],
+  });
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', sendPolicy: 'chat' });
+  await harness.addInbox({
+    alias: 'home',
+    email: 'sam@example.test',
+    sub: 'sub-2',
+    refreshToken: 'rt_home',
+    client: 'other',
+    sendPolicy: 'chat',
+  });
+  return harness;
+}
+
+test('a pinned server refuses another mailbox’s change approval before it touches it', async () => {
+  /*
+   * `gmail_inbox_policy {approvalId: <home's>}` on a server pinned to `work` computed work's change, found it was not
+   * the one approved, and voided home's approval on the mismatch — so a server narrowed to one mailbox could cancel
+   * a change a person had agreed to for another. `gmail_send_cancel` already refused this; the change tools did not.
+   */
+  const harness = await workAndHome();
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  await inboxPolicy(context, 'work', { sendPolicy: 'never' });
+  await inboxPolicy(context, 'home', { sendPolicy: 'never' });
+
+  const whole = await connect({ core: harness.core, env: harness.env });
+  const forHome = approvalAsked(await whole.call('gmail_inbox_policy', { inbox: 'home', sendPolicy: 'chat' }));
+
+  const pinned = await connect({ core: harness.core, env: harness.env, inbox: 'work' });
+  try {
+    const refused = toolError(
+      await pinned.call('gmail_inbox_policy', { sendPolicy: 'chat', approvalId: forHome.approvalId }),
+    );
+    assert.equal(refused.code, 'NOT_FOUND');
+    assert.match(refused.message, /for the "work" mailbox/);
+    assert.equal(
+      (await harness.core.approvals.get(forHome.approvalId))?.state,
+      'pending',
+      'home’s approval was voided',
+    );
+
+    // Its own mailbox's approvals are its to claim, as before.
+    const own = approvalAsked(await pinned.call('gmail_inbox_policy', { sendPolicy: 'chat' }));
+    const done = applied<{ sendPolicy: string }>(
+      await pinned.call('gmail_inbox_policy', { sendPolicy: 'chat', approvalId: own.approvalId }),
+    );
+    assert.equal(done.sendPolicy, 'chat');
+
+    // And home's approval is still good where it belongs.
+    const claimed = applied<{ alias: string; sendPolicy: string }>(
+      await whole.call('gmail_inbox_policy', { inbox: 'home', sendPolicy: 'chat', approvalId: forHome.approvalId }),
+    );
+    assert.equal(claimed.sendPolicy, 'chat');
+  } finally {
+    await pinned.close();
+    await whole.close();
+  }
+});
+
+test('a pinned server refuses another mailbox’s send approval rather than voiding it', async () => {
+  const harness = await workAndHome();
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const draft = await createDraft(context, 'work', { to: ['sam@partner.test'], subject: 'Tue', text: 'Tuesday.' });
+  const home = (await harness.core.config.load()).inboxes.home;
+  assert.ok(home);
+  // A send prepared for home: only its mailbox matters here, so it is recorded directly.
+  const forHome = await harness.core.approvals.create({
+    inboxId: home.id,
+    inboxSub: 'sub-2',
+    draftId: 'r-home',
+    draftMessageId: 'm-home',
+    digest: 'digest-home',
+    policy: 'chat',
+    requiredPolicy: 'chat',
+    riskFlags: [],
+    expect: { to: ['kim@partner.test'], cc: [], bcc: [], subject: 'Home' },
+  });
+
+  const pinned = await connect({ core: harness.core, env: harness.env, inbox: 'work' });
+  try {
+    // Sending work's draft under home's approval voided home's approval ("belongs to a different inbox"); a
+    // `confirm` one would have put home's preview in a form on this server. Refused before either can happen.
+    const refused = toolError(
+      await pinned.call('gmail_draft_send', {
+        draftId: draft.draftId,
+        approvalId: forHome.approvalId,
+        expect: { to: ['sam@partner.test'], cc: [], bcc: [], subject: 'Tue' },
+      }),
+    );
+    assert.equal(refused.code, 'NOT_FOUND');
+    assert.equal(
+      (await harness.core.approvals.get(forHome.approvalId))?.state,
+      'pending',
+      'home’s approval was voided',
+    );
+
+    // The same words gmail_send_cancel has always used for it.
+    const cancel = toolError(await pinned.call('gmail_send_cancel', { approvalId: forHome.approvalId }));
+    assert.equal(cancel.code, refused.code);
+    assert.equal(cancel.message, refused.message);
+    assert.equal((await harness.core.approvals.get(forHome.approvalId))?.state, 'pending');
+  } finally {
+    await pinned.close();
   }
 });
