@@ -254,11 +254,14 @@ async function lsRemote(name, patterns) {
       });
       return stdout;
     } catch (error) {
+      // Every line git wrote, not the last: its reason is often on the first, and the last only says it stopped.
       last =
         String(error?.stderr ?? '')
-          .trim()
           .split('\n')
-          .at(-1) ||
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .join(' / ')
+          .slice(0, 400) ||
         error?.message ||
         String(error);
     }

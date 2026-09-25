@@ -123,13 +123,15 @@ npx -y @agentcomms/slack@$V doctor --offline
 ## 7. Reopen the clients
 
 Reopen them, and check that the Gmail and Slack tools are there. Then remove the old servers' runtimes, which stay
-on disk otherwise. `prune` keeps a runtime named in any client config it reads, one it printed an entry for, and
-one a running process uses, and it removes nothing if one of those configs cannot be read. The configs it reads
-include every one `mcp install` recorded registering into, so a Claude Code account under another
-`CLAUDE_CONFIG_DIR`, or codex under another `CODEX_HOME`, counts even when this shell does not set it; a recorded
-config that has since been deleted keeps nothing. It does not read a workspace's own `.vscode/mcp.json` or
-`.cursor/mcp.json`, so if you registered a runtime there by hand, look at `mcp prune --dry-run` first. Run it after
-the clients are back:
+on disk otherwise. `prune` keeps a runtime named in any client config it reads, one it printed an entry for, and one
+a running process uses, and it removes nothing if one of those configs cannot be read. The configs it reads include
+every one `mcp install` recorded registering into, so a Claude Code account under another `CLAUDE_CONFIG_DIR`, or
+codex under another `CODEX_HOME`, counts even when this shell does not set it; a recorded config that has since been
+deleted keeps nothing. That record starts with 0.4.1: an entry an earlier release registered under another
+`CLAUDE_CONFIG_DIR` or `CODEX_HOME` is known only once it has been registered again, so do step 4 for every such
+account before running `prune`, or run it from a shell with that variable set. It does not read a workspace's own
+`.vscode/mcp.json` or `.cursor/mcp.json`, so if you registered a runtime there by hand, look at
+`mcp prune --dry-run` first. Run it after the clients are back:
 
 ```bash
 npx -y @agentcomms/gmail@$V mcp prune

@@ -112,6 +112,22 @@ async function currentPost(
       details: { approvalId, reason: view.roomUnread },
     });
   }
+  /*
+   * A room read without its count is the same gap. Slack answers some conversations with no `num_members` — a direct
+   * message, for one — and keying the refusal only on a failed read let that `@channel` through with its reach shown
+   * as "not known". Never approved without a count, whichever way the count went missing.
+   */
+  const uncounted = notifiesRoom ? view.preview.notifies.unknown : undefined;
+  if (!edited && uncounted !== undefined) {
+    throw new CommsError(
+      'PROVIDER_UNAVAILABLE',
+      'the channel’s members could not be counted, so who this reaches cannot be shown',
+      {
+        hint: 'Nothing was approved. Remove the @channel or @here, or post it from Slack itself.',
+        details: { approvalId, reason: uncounted },
+      },
+    );
+  }
   if (edited || view.digest !== record.digest) {
     const prepared = preparedReach(record);
     const reach = view.preview.notifies.estimated;

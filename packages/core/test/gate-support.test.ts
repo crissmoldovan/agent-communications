@@ -282,6 +282,12 @@ test('a channel digest tells a reach nobody measured from a room measured at nob
     messageDigest({ ...broadcast, notifies: { ...broadcast.notifies, unmeasured: false } }),
     messageDigest(broadcast),
   );
+  /*
+   * And the same bytes as the release before it: computed with 0.4.0's digest.ts. Comparing today's code with
+   * itself cannot see a change to how every channel message is hashed — which would void every approval waiting
+   * when a machine upgrades, each one reported as a post that changed.
+   */
+  assert.equal(messageDigest(broadcast), 'cb49f3e31211c192d5b0a878b24af0593ff59b65c12950d3f119cfbb777293f5');
 });
 
 test('taint: a handle is scoped to its workspace, so the same id elsewhere is a different person', async () => {

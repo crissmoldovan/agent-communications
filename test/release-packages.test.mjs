@@ -225,13 +225,17 @@ function annotatedTag(commit) {
  * The scripts under test run `git ls-remote origin`, and nothing here may ask the real origin, so this must come first
  * on the PATH of every test that reaches that call.
  */
-async function fakeGit(dir, answer, { status = 0 } = {}) {
+async function fakeGit(dir, answer, { status = 0, stderr = '' } = {}) {
   const log = join(dir, 'git.log');
   const output = join(dir, 'git.out');
+  const errors = join(dir, 'git.err');
   await writeFile(output, answer);
-  await writeFile(join(dir, 'git'), `#!/bin/sh\necho "$@" >> "${log}"\ncat "${output}"\nexit ${status}\n`, {
-    mode: 0o755,
-  });
+  await writeFile(errors, stderr);
+  await writeFile(
+    join(dir, 'git'),
+    `#!/bin/sh\necho "$@" >> "${log}"\ncat "${output}"\ncat "${errors}" >&2\nexit ${status}\n`,
+    { mode: 0o755 },
+  );
   await rm(log, { force: true });
   return { calls: async () => (await readFile(log, 'utf8').catch(() => '')).split('\n').filter(Boolean) };
 }
@@ -894,9 +898,20 @@ test(
     assert.equal(lookalike.status, 1);
 
     // An answer it cannot get is not taken for "still there".
-    const unreachable = await check('', { status: 128 });
+    const unreachable = await check('', {
+      status: 128,
+      stderr: "fatal: could not read Username for 'https://github.com'\nfatal: the remote end hung up\n",
+    });
     assert.equal(unreachable.status, 1);
     assert.match(unreachable.stderr, /could not ask origin where v1\.2\.3 points/);
+    // The reason is on git's first line; the last only says it stopped.
+    assert.match(unreachable.stderr, /could not read Username .* \/ fatal: the remote end hung up/);
+
+    // It cannot wait for ever: bounded, and never stopped by a prompt for credentials nobody will answer.
+    const source = await readFile(CI, 'utf8');
+    const body = /async function lsRemote\([\s\S]*?\n\}\n/.exec(source)?.[0] ?? '';
+    assert.match(body, /timeout: \d[\d_]*,/);
+    assert.match(body, /GIT_TERMINAL_PROMPT: '0'/);
 
     // Without a real commit to compare with, there is nothing to check.
     for (const args of [[`v${VERSION}`], [`v${VERSION}`, 'main'], []]) {

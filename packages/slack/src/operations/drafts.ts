@@ -13,7 +13,17 @@ import { type DraftStore, isUnreadableDraft, type SlackDraft } from '../compose/
  * as absent rather than as forbidden, so a caller cannot use the difference to learn which ids exist elsewhere.
  */
 export async function ownDraft(store: DraftStore, accountId: string, draftId: string): Promise<SlackDraft> {
-  const found = await store.get(draftId);
+  let found: SlackDraft;
+  try {
+    found = await store.get(draftId);
+  } catch (error) {
+    // A damaged draft of another workspace is absent here too; "could not be read" would say that it exists.
+    if (isUnreadableDraft(error)) {
+      const owner = await store.ownerOf(draftId);
+      if (owner !== undefined && owner !== accountId) throw notHere(draftId);
+    }
+    throw error;
+  }
   if (found.accountId !== accountId) throw notHere(draftId);
   return found;
 }

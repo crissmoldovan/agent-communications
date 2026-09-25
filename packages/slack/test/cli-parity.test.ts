@@ -270,6 +270,23 @@ test('a draft that names its workspace and nothing else is skipped by the list, 
   await assert.rejects(access(path), 'and the file is gone');
 });
 
+test('a damaged draft of another workspace is absent here, as a readable one is', async () => {
+  // "Could not be read" from the wrong workspace would tell a caller the id exists somewhere else.
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', workspaceId: 'T0001' });
+  const zeta = await harness.addWorkspace({ alias: 'zeta', workspaceId: 'T0002' });
+  for (const contents of [
+    `{\n  "draftId": "${DAMAGED}",\n  "accountId": "${zeta.id}",\n  "payload": {`,
+    JSON.stringify({ accountId: zeta.id }),
+  ]) {
+    await damage(harness, contents);
+    const elsewhere = await cli(harness, ['--json', 'draft', 'show', DAMAGED, '--workspace', 'acme']);
+    assert.equal(elsewhere.code, EXIT_CODES.NOT_FOUND, elsewhere.stdout);
+    const own = await cli(harness, ['--json', 'draft', 'show', DAMAGED, '--workspace', 'zeta']);
+    assert.equal(own.json<Envelope<never>>().error?.code, 'BAD_DATA', 'its own workspace is told it is damaged');
+  }
+});
+
 test('an unreadable draft that still names another workspace is left for that workspace to delete', async () => {
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'acme', workspaceId: 'T0001' });

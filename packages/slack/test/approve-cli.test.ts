@@ -282,6 +282,25 @@ test('an @channel prepared while the room could not be read is not approved whil
   assert.equal(slack.count('chat.postMessage'), 0);
 });
 
+test('an @channel in a room Slack reads without a member count is not approved either', async () => {
+  // The read succeeds and carries no `num_members`, as for a direct message: no failure to key on, and still no count.
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'send', sendPolicy: 'confirm' });
+  const slack = scripted({
+    'conversations.info': { ok: true, channel: { id: 'C1', name: 'eng', is_member: true } },
+    'chat.postMessage': { ok: true, ts: '1700000000.000100' },
+  });
+  const { approvalId, send } = await preparedPost(harness, slack.read, ['--broadcast', 'channel']);
+  const approving = await cli(harness, ['approve', approvalId], { read: slack.read, tty: true, answerChallenge: true });
+  assert.equal(approving.code, EXIT_CODES.UNAVAILABLE, approving.stdout + approving.stderr);
+  assert.match(approving.stderr, /could not be counted/);
+  assert.doesNotMatch(approving.stderr, /Type \S+ to approve/, 'never asks for the code');
+
+  const held = await cli(harness, send, { read: slack.read });
+  assert.equal(held.json<Envelope<never>>().error?.code, 'APPROVAL_PENDING');
+  assert.equal(slack.count('chat.postMessage'), 0);
+});
+
 test('a room that stops being readable while the code is typed is not approved either', async () => {
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'acme', mode: 'send', sendPolicy: 'confirm' });

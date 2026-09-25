@@ -222,6 +222,8 @@ is set) and the `.mcp.json` of each project listed in it, Claude Desktop's confi
 Code's user `mcp.json` — and, beside those, every config `mcp install` recorded registering into or printing for,
 as it resolved them then. So a second Claude account kept under its own `CLAUDE_CONFIG_DIR`, or codex under
 another `CODEX_HOME`, is read even from a shell that does not set it, and a runtime kept for it says in which file.
+The record starts with 0.4.1, so an entry an earlier release registered there is not in it until it is registered
+again.
 If any of those is there and cannot be read, or the processes cannot be listed, it removes nothing at all and says
 which. A recorded config that is no longer there keeps nothing. What it cannot see is an entry you put by hand
 anywhere else — a workspace `.vscode/mcp.json` or `.cursor/mcp.json`, say — or pasted from a `--print` that warned
