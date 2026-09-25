@@ -463,6 +463,53 @@ test('a `--wait` that is not a number of seconds from 0 to 600 is refused as USA
   }
 });
 
+test('a wait that outlives the sign-in stops when it expires, and says so as gmail_inbox_finish does', {
+  timeout: 60_000,
+}, async () => {
+  /*
+   * The wait ran to its own end whatever the sign-in's: `--finish … --wait 10` on a sign-in with three seconds left
+   * waited all ten, then answered "nobody has finished signing in yet" and told the person to open the link and run
+   * the finish again — for a link that had expired seven seconds before. Now it stops when the sign-in ends, and
+   * answers as gmail_inbox_finish answers for one that has already ended.
+   */
+  const harness = await oneMailbox();
+  const flows = new GmailContext({ core: harness.core, env: harness.env }).flows;
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    // How the tool reports a sign-in that has ended: the answer every wait below is held to.
+    const ended = toolError(
+      await call('gmail_inbox_finish', { flowId: await waitingFlow(harness, { expiresIn: -1_000 }), waitSeconds: 0 }),
+    );
+    assert.equal(ended.code, 'AUTH_REQUIRED');
+    assert.match(ended.message, /expired/);
+    assert.match(ended.hint ?? '', /Start again/);
+
+    for (const mode of ['add', 'reauth'] as const) {
+      const flowId = await waitingFlow(harness, { mode, expiresIn: 3_000 });
+      const began = Date.now();
+      const run = await cli(harness, ['inbox', mode, '--finish', flowId, '--wait', '10', '--json']);
+      const took = Date.now() - began;
+      const error = run.envelope().error;
+      assert.equal(error?.code, ended.code, `inbox ${mode}: ${run.stdout}`);
+      assert.equal(run.code, 77, run.stdout);
+      assert.equal(error?.message, ended.message);
+      assert.equal(error?.hint ?? null, ended.hint);
+      assert.ok(took < 8_000, `inbox ${mode} waited ${took} ms, past the end of the sign-in`);
+      // Discarded, as an expired sign-in is: nothing is left to finish, and nothing says the link is still good.
+      await assert.rejects(flows.get(flowId), (error: unknown) => (error as { code?: string }).code === 'NOT_FOUND');
+    }
+
+    // The tool, asked to wait past the end, stops at it the same way.
+    const flowId = await waitingFlow(harness, { expiresIn: 3_000 });
+    const began = Date.now();
+    const waited = toolError(await call('gmail_inbox_finish', { flowId, waitSeconds: 10 }));
+    assert.ok(Date.now() - began < 8_000, 'the tool waited past the end of the sign-in');
+    assert.deepEqual(waited, ended);
+  } finally {
+    await close();
+  }
+});
+
 // ── a pinned server, and approvals for other mailboxes ──────────────────────────────────────────────────────
 
 /** `work`, which a server is pinned to, and `home`, which it was not given. Both send under `chat`. */

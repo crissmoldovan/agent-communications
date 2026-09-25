@@ -532,12 +532,19 @@ async function waitForOutcome(
   flow: OAuthFlow,
 ): Promise<{ code: string } | { error: string; description?: string | undefined }> {
   const deadline = context.now().getTime() + options.waitSeconds * 1000;
+  const expiresAt = Date.parse(flow.expiresAt);
   const pollMs = options.pollMs ?? 500;
   for (;;) {
     // Before the outcome is read: a caller that has gone never takes the grant, even one already waiting.
     const abandoned = options.signal?.aborted === true;
     const outcome = abandoned ? null : await context.flows.readOutcome(flow.flowId);
     if (outcome) return outcome;
+    /*
+     * The sign-in ended while this waited. The wait used to run on to its own deadline and then say nobody had
+     * finished yet — open the link, run the finish again — about a link that no longer worked. Reading the flow now
+     * answers exactly as a finish started after the end does: expired, how to start again, and the flow discarded.
+     */
+    if (!abandoned && context.now().getTime() >= expiresAt) await context.flows.get(flow.flowId);
     if (abandoned || context.now().getTime() >= deadline) {
       throw new CommsError('APPROVAL_PENDING', 'nobody has finished signing in yet', {
         // Named for the surface asking: over MCP the next step is the tool, not a command it may not have.
