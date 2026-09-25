@@ -23,7 +23,7 @@ import { compose, type Mention } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
-import { mcpInstall, mcpPrune, SLACK_MCP } from '../mcp/install.ts';
+import { mcpInstall, mcpPrune } from '../mcp/install.ts';
 import { createApp, updateApp } from '../operations/app.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
 import { runDoctor } from '../operations/doctor.ts';
@@ -50,7 +50,6 @@ import {
   removeWorkspace,
   requireWorkspace,
   showWorkspace,
-  viewOf,
 } from '../operations/workspaces.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
