@@ -109,6 +109,11 @@ export async function gatedChangeAtTerminal<T>(
   const person =
     agentMarker(options.env) === null && canPrompt(options.env, streams, { json: options.output.json === true });
   if (!person) {
+    /*
+     * The preview is what the agent has to show the person, so it is printed, not only tucked into the JSON
+     * envelope's details: an agent reading plain output saw "needs approval" and nothing to show.
+     */
+    if (options.output.json !== true) streams.stdout.write(`${prepared.preview}\n\n`);
     throw new CommsError('APPROVAL_PENDING', `this change needs approval first: ${prepared.summary}`, {
       hint:
         prepared.policy === 'confirm'

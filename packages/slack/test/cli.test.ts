@@ -270,6 +270,37 @@ test('removing is approved first, takes the credential with it, and says what it
   assert.match(result.stdout, /still installed in your workspace/);
 });
 
+test('agent-slack approve approves a change under confirm, so the person needs no other command', async () => {
+  const harness = await newHarness();
+  const account = await harness.addWorkspace({ alias: 'acme' });
+  // Tightening, so it needs nobody's consent: from here every change asks for a person at a terminal.
+  await harness.core.config.update((config) => ({
+    ...config,
+    defaults: { ...config.defaults, changePolicy: 'confirm' },
+  }));
+
+  const pending = pendingOf(
+    await cli(harness, ['--json', 'workspace', 'remove', 'acme'], { env: { CLAUDECODE: '1' } }),
+  );
+  // An agent cannot approve it with this command either.
+  const refused = await cli(harness, ['--json', 'approve', pending.approvalId], {
+    env: { CLAUDECODE: '1' },
+    tty: true,
+  });
+  assert.notEqual(refused.code, EXIT_CODES.OK);
+
+  const approved = await cli(harness, ['approve', pending.approvalId], { tty: true, answerChallenge: true });
+  assert.equal(approved.code, EXIT_CODES.OK, approved.stderr);
+  assert.match(approved.stdout, /the change is applied by the command that prepared it/);
+  assert.equal((await harness.core.config.load()).accounts.acme?.id, account.id, 'approving applied nothing');
+
+  const applied = await cli(harness, ['--json', 'workspace', 'remove', 'acme', '--approval', pending.approvalId], {
+    env: { CLAUDECODE: '1' },
+  });
+  assert.equal(applied.code, EXIT_CODES.OK, applied.stdout);
+  assert.equal((await harness.core.config.load()).accounts.acme, undefined);
+});
+
 test('an unknown workspace exits 66 and says how to list the real ones', async () => {
   const harness = await newHarness();
   const result = await cli(harness, ['--json', 'workspace', 'show', 'nope']);

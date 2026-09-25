@@ -152,6 +152,17 @@ test('at the CLI an agent gets the preview and the approval id, and exits 10; --
   });
   assert.equal(await policyNow(core), 'never');
 
+  // Without --json the agent still gets the preview it has to show: printed, not only inside the error's details.
+  const plain = terminal('yes');
+  await assert.rejects(
+    gatedChangeAtTerminal(core, change, {
+      ...options,
+      streams: { ...plain.streams, stdin: new PassThrough() } as unknown as Streams,
+    }),
+    (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_PENDING',
+  );
+  assert.match(plain.shown(), /send policy: never → chat/);
+
   // An agent is refused even where a terminal is attached: the approval is the person's, and a terminal is not one.
   await assert.rejects(
     gatedChangeAtTerminal(core, change, { ...options, streams: terminal('yes').streams }),
