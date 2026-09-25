@@ -75,11 +75,16 @@ function readTarball(bytes) {
 
 const { readdirSync } = await import('node:fs');
 
+// Packed with the hook every publish passes, which records the commit as `gitHead`. The release skips a package
+// already at its version only when that field names the tagged commit, so this is where a pnpm that stopped applying
+// the hook is found: in verify, before a version goes out that no later run could match.
+const recordGitHead = `--config.pnpmfile=${fileURLToPath(new URL('record-git-head.cjs', import.meta.url))}`;
+
 /** Builds and packs one workspace package, returning the tarball under a name unique to this run. */
 async function packPackage(directory, label) {
   const before = new Set(readdirSync(tempRoot).filter((name) => name.endsWith('.tgz')));
   run('pnpm', ['run', 'build'], directory);
-  run('pnpm', ['pack', '--pack-destination', tempRoot], directory);
+  run('pnpm', ['pack', recordGitHead, '--pack-destination', tempRoot], directory);
   const packed = readdirSync(tempRoot).filter((name) => name.endsWith('.tgz') && !before.has(name));
   if (packed.length !== 1) throw new Error(`expected one new tarball for ${label}, found ${packed.length}`);
   // A unique path per run: npm caches local file: sources by name and version.
@@ -117,6 +122,12 @@ try {
   const packedManifest = JSON.parse(entries.get('package/package.json').toString('utf8'));
   const deps = JSON.stringify({ ...packedManifest.dependencies, ...packedManifest.optionalDependencies });
   if (/workspace:|catalog:/.test(deps)) throw new Error(`unresolved workspace or catalog specifier: ${deps}`);
+  const head = run('git', ['rev-parse', 'HEAD'], packageDir).trim();
+  if (packedManifest.gitHead !== head) {
+    throw new Error(
+      `the packed manifest records gitHead ${packedManifest.gitHead}, not ${head}; the publish would too`,
+    );
+  }
 
   const consumer = await mkdtemp(join(tempRoot, 'consumer-'));
   await writeFile(join(consumer, 'package.json'), JSON.stringify({ name: 'consumer', private: true, type: 'module' }));

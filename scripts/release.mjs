@@ -21,6 +21,7 @@ import { join } from 'node:path';
 // The shared, ordered list. This file had its own copy, which still said three packages after the workflow learned
 // about Slack — a local release would have published three, confirmed three and reported success.
 import { PACKAGES, SCOPE } from './packages.mjs';
+import { isVisible } from './release-confirm.mjs';
 
 const args = new Set(process.argv.slice(2));
 const publish = args.has('--publish');
@@ -148,7 +149,10 @@ const sent = [];
 try {
   for (const name of PACKAGES) {
     process.stdout.write(`  ${SCOPE}/${name} … `);
+    // The hook records this commit as the version's `gitHead`. The tag run pushed after a local release skips a
+    // package only when the registry says it came from the tagged commit, and refuses one with no commit recorded.
     runLoud('pnpm', [
+      '--config.pnpmfile=scripts/record-git-head.cjs',
       '--filter',
       `${SCOPE}/${name}`,
       'publish',
@@ -180,28 +184,11 @@ try {
 // and still finish green. Trust the registry, not the loop's exit code.
 console.log('\nConfirming what reached the registry:');
 
-/**
- * Asks whether a version is really published, and asks the right endpoint.
- *
- * `npm view` reads the public packument, which is CDN-cached and can lag minutes behind a successful publish —
- * badly so just after npm maintenance. The first version of this check used it, ran immediately, and announced
- * that a publish which had in fact succeeded had "not arrived". That is the worst way to be wrong: it invites
- * someone to burn the version number and publish 0.1.1 over a perfectly good 0.1.0.
- *
- * `npm dist-tag ls` goes to the authenticated registry path instead and was accurate within seconds of the same
- * publish. It is tried first; the packument is a fallback, and the whole thing retries before giving up.
- */
-function publishedVersion(name) {
-  const tags = quiet(() => run('npm', ['dist-tag', 'ls', `${SCOPE}/${name}`]));
-  const tagged = tags?.split('\n').find((line) => line.startsWith('latest:'));
-  if (tagged) return tagged.slice('latest:'.length).trim();
-  return quiet(() => run('npm', ['view', `${SCOPE}/${name}@${version}`, 'version']));
-}
-
+const npm = (npmArgs) => quiet(() => run('npm', npmArgs));
 const pending = new Set(PACKAGES);
 for (let attempt = 1; attempt <= 10 && pending.size > 0; attempt += 1) {
   for (const name of [...pending]) {
-    if (publishedVersion(name) === version) {
+    if (isVisible({ name: `${SCOPE}/${name}`, version, distTag, npm })) {
       pending.delete(name);
       console.log(`  ✓ ${SCOPE}/${name}@${version}`);
     }
@@ -222,9 +209,8 @@ if (pending.size > 0) {
 
 console.log(`\nPublished ${version}.`);
 console.log('\nNext:');
-console.log(`  git tag v${version} && git push origin v${version}`);
-console.log('  # The tag run finds every package already at this version and skips its publish, then confirms them');
-console.log(
-  '  # and creates the GitHub release from the changelog section — so the release page is not a manual step.',
-);
+console.log(`  git tag v${version} ${local ?? 'HEAD'} && git push origin v${version}`);
+console.log('  # Tag this commit and no other. The tag run finds every package already at this version from it,');
+console.log('  # publishes nothing and proves nothing, then confirms them and creates the GitHub release from the');
+console.log('  # changelog section — so the release page is not a manual step. From any other commit it refuses.');
 console.log(`  npx -y ${SCOPE}/gmail@${version} --version     # prove it installs from a clean machine`);

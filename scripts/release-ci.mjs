@@ -2,10 +2,11 @@
 /**
  * The parts of the release workflow worth testing, kept out of YAML so they can be.
  *
- *   node scripts/release-ci.mjs preflight          # every package trusts this workflow, or nothing is published
- *   node scripts/release-ci.mjs notes 0.4.1        # prints the CHANGELOG section for a version, or fails
+ *   node scripts/release-ci.mjs pending 0.4.1 <commit>     # what this commit still has to publish, or fails
+ *   node scripts/release-ci.mjs preflight 0.4.1 <commit>   # each of those trusts this workflow, or nothing is sent
+ *   node scripts/release-ci.mjs notes 0.4.1                # prints the CHANGELOG section for a version, or fails
  *
- * Both run in `.github/workflows/release.yml`, and `test/release-packages.test.mjs` runs both against a fake
+ * All three run in `.github/workflows/release.yml`, and `test/release-packages.test.mjs` runs them against a fake
  * registry and a scratch changelog.
  */
 import { readFile } from 'node:fs/promises';
@@ -16,8 +17,85 @@ import { PACKAGES, SCOPE } from './packages.mjs';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const [command, ...rest] = process.argv.slice(2);
 
+const COMMIT = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+
+function registryUrl() {
+  return new URL(process.env.NPM_CONFIG_REGISTRY || 'https://registry.npmjs.org');
+}
+
 /**
- * Proves npm trusted publishing works for every package before any of them is published.
+ * The packages this commit still has to publish at `version`, in the shared list's order, and those it already has.
+ * Refuses, with nothing sent, if any package is already at that version from a different commit.
+ *
+ * **Why the commit, not just the version.** A package already at the version is skipped rather than re-sent, so that
+ * a re-run after a partial failure finishes the release, and a tag pushed after a local `pnpm release:publish` gets
+ * its GitHub release. But "already at this version" is not "already published from this tag". A GitHub re-run keeps
+ * the commit it started with, so a fix that needs a commit can only get in by moving the tag, and the skip then
+ * passed the packages the first run had built from the old commit: a green release of one version made of two
+ * builds, with provenance naming both. pnpm's own recursive publish also passes over a version it can resolve, with
+ * one line of info and whichever commit it came from, so this is the only thing that asks where it came from.
+ *
+ * **What records the commit.** `gitHead` in the version's manifest on the registry. `npm publish` writes it; pnpm
+ * does not, so every publish here goes through `scripts/record-git-head.cjs`, which adds it. A version with no
+ * `gitHead` was published some other way, and cannot be matched to this commit, so it is refused rather than assumed.
+ */
+async function unpublished(subcommand, version, commit) {
+  if (!version || !COMMIT.test(commit ?? '')) fail(`usage: release-ci.mjs ${subcommand} <version> <commit>`);
+  const todo = [];
+  const done = [];
+  const foreign = [];
+  for (const name of PACKAGES) {
+    const full = `${SCOPE}/${name}`;
+    const manifest = await registryManifest(full, version);
+    if (manifest === null) todo.push(name);
+    else if (manifest.gitHead === commit) done.push(full);
+    else if (typeof manifest.gitHead === 'string')
+      foreign.push(`${full}@${version} was published from ${manifest.gitHead}`);
+    else foreign.push(`${full}@${version} has no commit recorded`);
+  }
+  if (foreign.length > 0) {
+    fail(
+      `${foreign.join('; ')} — already on the registry, and not from this tag's commit, ${commit}. Nothing was ` +
+        'published. A version cannot be sent twice, so once any package of it is out the tag must not move: put it ' +
+        'back on the commit those packages came from and re-run for a failure outside the repository, or release a ' +
+        'new version for one that needs a commit.',
+    );
+  }
+  return { todo, done };
+}
+
+/**
+ * The registry's manifest for one version of a package, or null when it has none.
+ *
+ * An answer it cannot read fails the run rather than being taken for "not published": that would let a package out
+ * from another commit through without the check above, to be refused by npm only after the packages before it went.
+ */
+async function registryManifest(full, version) {
+  const url = new URL(`/${full.replace('/', '%2f')}`, registryUrl());
+  let last = 'no answer';
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (response.status === 404) return null;
+      if (response.ok) return (await response.json())?.versions?.[version] ?? null;
+      last = `HTTP ${response.status}`;
+      if (response.status < 500) break;
+    } catch (error) {
+      last = error?.cause?.code ?? error?.message ?? String(error);
+    }
+  }
+  fail(`could not read ${full} from the registry (${last}); nothing was published. Re-run the job.`);
+}
+
+/** Prints what this commit still has to publish, space-separated for the workflow's publish loop. */
+async function pending(version, commit) {
+  const { todo, done } = await unpublished('pending', version, commit);
+  for (const full of done) console.error(`  – ${full}@${version} is already out from this commit; skipping it`);
+  process.stdout.write(`${todo.join(' ')}\n`);
+}
+
+/**
+ * Proves npm trusted publishing works for every package still to publish, before any of them is published.
  *
  * **Why it exists.** Each package on npm has its own trusted-publisher configuration, and nothing public says whether
  * one is set. When it is missing, pnpm's publish only prints "Skipped OIDC" and falls back to a registry token this
@@ -31,8 +109,14 @@ const [command, ...rest] = process.argv.slice(2);
  * trusted publisher; otherwise it refuses. The token is read to confirm it exists and then dropped: it is never
  * printed, written or kept, and it expires on its own. A fresh ID token is asked for per package, because npm may
  * refuse an ID token it has already exchanged, and this must not be the thing that spends the publish's one.
+ *
+ * **Only for what will be sent.** A package already at this version from this commit is not published again, so its
+ * trust proves nothing and is not asked for. That is what lets the tag after a local `pnpm release:publish` finish:
+ * the local fallback is most likely to be used while a package has no trusted publisher, and exchanging for it
+ * anyway failed the run and skipped the GitHub release for a version that was already on npm.
  */
-async function preflight() {
+async function preflight(version, commit) {
+  if (!version || !commit) fail('usage: release-ci.mjs preflight <version> <commit>');
   const requestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
   const requestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
   if (!requestUrl || !requestToken) {
@@ -41,11 +125,18 @@ async function preflight() {
         'without it npm trusted publishing cannot work either, so nothing would publish.',
     );
   }
-  const registry = new URL(process.env.NPM_CONFIG_REGISTRY || 'https://registry.npmjs.org');
+  const registry = registryUrl();
   const audience = `npm:${registry.hostname}`;
 
+  const { todo, done } = await unpublished('preflight', version, commit);
+  for (const full of done) console.log(`  – ${full}@${version} is already out from this commit; nothing to prove`);
+  if (todo.length === 0) {
+    console.log(`Every package is already at ${version} from this commit: nothing to publish, so nothing to prove.`);
+    return;
+  }
+
   const refused = [];
-  for (const name of PACKAGES) {
+  for (const name of todo) {
     const full = `${SCOPE}/${name}`;
     const verdict = await exchange({ requestUrl, requestToken, audience, registry, full });
     if (verdict === true) {
@@ -62,7 +153,7 @@ async function preflight() {
         'publishing (this repository, `release.yml`, environment `release`), then re-runs this job.',
     );
   }
-  console.log(`All ${PACKAGES.length} packages accept this workflow's identity.`);
+  console.log(`All ${todo.length} package(s) still to publish accept this workflow's identity.`);
 }
 
 /** One package's exchange. Returns true, or a sentence saying why not; never the token. */
@@ -133,6 +224,7 @@ function fail(message) {
   process.exit(1);
 }
 
-if (command === 'preflight') await preflight();
+if (command === 'pending') await pending(rest[0], rest[1]);
+else if (command === 'preflight') await preflight(rest[0], rest[1]);
 else if (command === 'notes') await notes(rest[0]);
-else fail('usage: release-ci.mjs preflight | notes <version>');
+else fail('usage: release-ci.mjs pending <version> <commit> | preflight <version> <commit> | notes <version>');

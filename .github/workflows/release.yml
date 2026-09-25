@@ -1,7 +1,7 @@
 name: Release
 
-# Pushing a `v*` tag verifies the tagged commit on every platform the packages claim to support, then waits for a
-# human to approve the publish in GitHub before anything is sent.
+# Pushing a `v*` tag publishes. It verifies the tagged commit on every platform the packages claim to support, proves
+# npm trusts this workflow for every package it is about to send, and then sends them. Nobody approves it in between.
 #
 # **No credential lives here.** npm trusted publishing mints a short-lived one from this workflow's own identity, so
 # there is no token to leak and none to rotate. Do not add one: a long-lived npm token in a public repository is a
@@ -115,8 +115,13 @@ jobs:
       # refused — after the packages before it have gone out, leaving a half-published version. This does the same
       # OIDC token exchange the publish does, for each package, and publishes nothing; the tokens it mints are never
       # printed and expire on their own. See `scripts/release-ci.mjs`.
-      - name: every package trusts this workflow (npm OIDC preflight)
-        run: node scripts/release-ci.mjs preflight
+      #
+      # Only for the packages the publish below will send. One already at this version from this commit is skipped
+      # there, so it is not asked about here, and when every package is — a re-run after the last one landed, or the
+      # tag pushed after a local `pnpm release:publish` — there is nothing to prove and this passes. A package at
+      # this version from any other commit fails the run here, with nothing sent.
+      - name: every package still to publish trusts this workflow (npm OIDC preflight)
+        run: node scripts/release-ci.mjs preflight "${GITHUB_REF_NAME#v}" "$GITHUB_SHA"
 
       # In dependency order: a consumer installing gmail must find the exact core it pins already on the registry.
       #
@@ -125,31 +130,38 @@ jobs:
       # everybody, immediately. The version validator in `scripts/release.mjs` already accepts a prerelease string,
       # so the script invited exactly the shape the workflow then mishandled.
       #
-      # **A package already at this version is skipped, not re-sent.** npm refuses to publish over a version, so
-      # without this a re-run after a partial failure stopped at `core` and the only way forward was a new version
-      # number. Now a re-run publishes what is missing and finishes the release at the version the tag names. It is
-      # also what lets a tag pushed after a local `pnpm release:publish` complete: nothing to send, then confirm and
-      # make the GitHub release.
+      # **A package already at this version from this commit is skipped, not re-sent.** npm refuses to publish over a
+      # version, so without a skip a re-run after a partial failure stopped at `core` and the only way forward was a
+      # new version number. Now a re-run publishes what is missing and finishes the release at the version the tag
+      # names. It is also what lets a tag pushed after a local `pnpm release:publish` complete: nothing to send, then
+      # confirm and make the GitHub release.
+      #
+      # **From this commit, not merely at this version.** The skip used to pass anything at the version. A re-run
+      # keeps the commit it started with, so after a partial failure that needed a fix the tag was moved, and the
+      # next run skipped what the first had built from the old commit and published the rest from the new one: one
+      # green version made of two builds. `release-ci.mjs pending` reads the commit each version records and prints
+      # only what is left to send; anything at this version from another commit fails it, before the first publish.
+      #
+      # The commit is recorded by `record-git-head.cjs`, which every publish passes, because pnpm does not record one
+      # on its own. An empty list is not an error here — everything is already out — and the confirm step below
+      # still asks the registry for every package in `scripts/packages.mjs`.
       - name: publish
         run: |
           set -euo pipefail
-          packages=$(node scripts/packages.mjs)
-          # An empty list would loop zero times and finish green having published nothing.
-          [ -n "$packages" ] || { echo "::error::scripts/packages.mjs printed no packages" >&2; exit 1; }
           version="${GITHUB_REF_NAME#v}"
           case "$version" in
             *-*) tag=next ;;
             *)   tag=latest ;;
           esac
-          echo "publishing $version under the \"$tag\" dist-tag"
-          for package in $packages; do
+          pending=$(node scripts/release-ci.mjs pending "$version" "$GITHUB_SHA")
+          if [ -z "$pending" ]; then
+            echo "every package is already at $version from this commit; nothing to publish"
+          else
+            echo "publishing $version under the \"$tag\" dist-tag: $pending"
+          fi
+          for package in $pending; do
             echo "::group::@agentcomms/$package"
-            existing=$(npm view "@agentcomms/$package@$version" version 2>/dev/null || true)
-            if [ "$existing" = "$version" ]; then
-              echo "@agentcomms/$package@$version is already on the registry; skipping it"
-            else
-              pnpm --filter "@agentcomms/$package" publish --access public --no-git-checks --provenance --tag "$tag"
-            fi
+            pnpm --config.pnpmfile=scripts/record-git-head.cjs --filter "@agentcomms/$package" publish --access public --no-git-checks --provenance --tag "$tag"
             echo "::endgroup::"
           done
 

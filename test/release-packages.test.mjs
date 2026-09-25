@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { cp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { PACKAGES } from '../scripts/packages.mjs';
+import { isVisible } from '../scripts/release-confirm.mjs';
 import { tempDir } from './helpers/temp-dir.mjs';
 
 /**
@@ -105,15 +107,23 @@ test('the release workflow reads the shared list in every loop', async () => {
   const loops = [...workflow.matchAll(/for package in ([^;]+); do/g)].map((match) => match[1].trim());
   assert.ok(loops.length >= 2, 'expected a publish loop and a confirm loop');
   for (const loop of loops) {
-    assert.match(loop, /^\$(packages|missing)$/, `a loop iterates something other than the shared list: ${loop}`);
+    assert.match(loop, /^\$(pending|missing)$/, `a loop iterates something other than the shared list: ${loop}`);
   }
-  assert.match(workflow, /packages=\$\(node scripts\/packages\.mjs\)/, 'the publish loop reads the shared list');
+  // The publish loop walks what `release-ci.mjs pending` prints: the shared list, less what this commit has already
+  // published. That script's own reading of the list is checked below.
+  assert.match(
+    workflow,
+    /pending=\$\(node scripts\/release-ci\.mjs pending "\$version" "\$GITHUB_SHA"\)/,
+    'the publish loop reads the shared list through the commit check',
+  );
   assert.match(workflow, /missing=\$\(node scripts\/packages\.mjs\)/, 'the confirm loop reads the shared list');
-  // An empty print would loop zero times and finish green, so each read is followed by a refusal of nothing.
+  // An empty print would loop zero times and finish green, so the confirm loop refuses an empty list. The publish
+  // loop's may rightly be empty — every package already out from this commit — and the confirm step after it still
+  // asks the registry for every package in the list.
   assert.equal(
-    [...workflow.matchAll(/\[ -n "\$(packages|missing)" \] \|\| \{/g)].length,
-    2,
-    'each read of the list refuses an empty one',
+    [...workflow.matchAll(/\[ -n "\$missing" \] \|\| \{/g)].length,
+    1,
+    'the confirm loop refuses an empty list',
   );
 });
 
@@ -129,6 +139,16 @@ test('the local release script, sync-versions and the package verifier read the 
 
 // ── The publish job's shape ──────────────────────────────────────────────────────────────────────────────────────
 
+/** A version, the tagged commit and another commit, for the fake registry and the scripts that read it. */
+const VERSION = '1.2.3';
+const COMMIT = 'c'.repeat(40);
+const OTHER = 'd'.repeat(40);
+
+/** Every package already at VERSION on the fake registry, recorded as published from `commit`. */
+function allPublishedFrom(commit) {
+  return Object.fromEntries(PACKAGES.map((name) => [`@agentcomms/${name}`, { [VERSION]: commit }]));
+}
+
 /** Where `marker` first appears in the workflow; failing, rather than returning -1, when it does not. */
 function stepIndex(workflow, marker) {
   const at = workflow.indexOf(marker);
@@ -139,7 +159,7 @@ function stepIndex(workflow, marker) {
 test('the OIDC preflight runs before anything is published', async () => {
   const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
   const preflight = stepIndex(workflow, 'node scripts/release-ci.mjs preflight');
-  const publish = stepIndex(workflow, 'pnpm --filter "@agentcomms/$package" publish');
+  const publish = stepIndex(workflow, '--filter "@agentcomms/$package" publish');
   assert.ok(preflight < publish, 'the preflight must come before the first publish, or it proves nothing in time');
   // It must be in the publish job, which alone holds `id-token: write` and the `release` environment the trusted
   // publishers name. In another job the exchange would fail for every package, or pass for the wrong identity.
@@ -148,15 +168,98 @@ test('the OIDC preflight runs before anything is published', async () => {
   assert.ok(publishJob < preflight && preflight < nextJob, 'the preflight runs inside the publish job');
 });
 
-test('a re-run skips what is already published, so a partial release can be finished', async () => {
+test('the publish sends only what this commit has not already published, and asks before sending any', async () => {
   const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
-  const loop = /- name: publish\n\s+run: \|\n([\s\S]*?)\n\n/.exec(workflow)?.[1] ?? '';
-  const view = loop.indexOf('npm view "@agentcomms/$package@$version" version');
-  const skip = loop.search(/if \[ "\$existing" = "\$version" \]; then/);
-  const publish = loop.indexOf('pnpm --filter "@agentcomms/$package" publish');
-  assert.ok(view !== -1 && skip !== -1, 'the publish loop no longer asks the registry what is already there');
-  assert.ok(view < skip && skip < publish, 'the check must decide whether the publish runs');
-  assert.match(loop.slice(skip, publish), /else\s*$/, 'the publish must be the else branch of that check');
+  const step = /- name: publish\n\s+run: \|\n([\s\S]*?)\n\n/.exec(workflow)?.[1] ?? '';
+  const pending = step.indexOf('pending=$(node scripts/release-ci.mjs pending "$version" "$GITHUB_SHA")');
+  const loop = step.indexOf('for package in $pending; do');
+  const publish = step.indexOf('--filter "@agentcomms/$package" publish');
+  assert.ok(pending !== -1, 'the publish no longer asks which packages this commit has already published');
+  assert.ok(pending < loop && loop < publish, 'every package is checked before the first one is sent');
+  // The skip this replaced passed any publish at the version, whichever commit it came from.
+  assert.doesNotMatch(step, /npm view/, 'the publish decides a skip by the version alone again');
+  // The preflight is told the same version and commit, so it proves trust for exactly what will be sent.
+  assert.match(workflow, /node scripts\/release-ci\.mjs preflight "\$\{GITHUB_REF_NAME#v\}" "\$GITHUB_SHA"/);
+});
+
+// The publish step is bash, run by the ubuntu publish job; the Windows verify legs never execute it.
+const bashOnly = { skip: process.platform === 'win32' };
+
+test(
+  'the publish step sends nothing past a package from another commit, and only what is missing',
+  bashOnly,
+  async () => {
+    const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+    const step = /- name: publish\n\s+run: \|\n([\s\S]*?)\n\n/.exec(workflow)?.[1] ?? '';
+    const dir = await tempDir('publish-step-');
+    await writeFile(join(dir, 'step.sh'), step.replace(/^ {10}/gm, ''));
+    // A pnpm that writes down what it was asked to publish instead of publishing it.
+    const sent = join(dir, 'sent.log');
+    await writeFile(join(dir, 'pnpm'), `#!/bin/sh\necho "$@" >> "${sent}"\n`, { mode: 0o755 });
+
+    async function runStep(published) {
+      await rm(sent, { force: true });
+      const fake = await fakeOidc({ published });
+      try {
+        const path = `${dir}${delimiter}${process.env.PATH}`;
+        const env = { ...fake.env, PATH: path, GITHUB_REF_NAME: `v${VERSION}`, GITHUB_SHA: COMMIT };
+        const status = await exec('bash', [join(dir, 'step.sh')], { cwd: ROOT, env })
+          .then(() => 0)
+          .catch((error) => error.code);
+        const calls = await readFile(sent, 'utf8').catch(() => '');
+        return { status, calls: calls.split('\n').filter(Boolean) };
+      } finally {
+        await fake.close();
+      }
+    }
+
+    // The moved tag: core and gmail are out from another commit. The step fails, and pnpm is never called.
+    const moved = await runStep({
+      '@agentcomms/core': { [VERSION]: OTHER },
+      '@agentcomms/gmail': { [VERSION]: OTHER },
+    });
+    assert.notEqual(moved.status, 0, 'a package out from another commit must fail the step');
+    assert.deepEqual(moved.calls, [], 'and nothing may be published before it does');
+
+    // The re-run: core and gmail are out from this commit, so only the rest go, each recording its commit.
+    const rerun = await runStep({
+      '@agentcomms/core': { [VERSION]: COMMIT },
+      '@agentcomms/gmail': { [VERSION]: COMMIT },
+    });
+    assert.equal(rerun.status, 0);
+    assert.deepEqual(
+      rerun.calls.map((call) => /--filter @agentcomms\/([\w-]+) publish/.exec(call)?.[1]),
+      ['gmail-mcp', 'slack'],
+    );
+    assert.ok(rerun.calls.every((call) => call.startsWith('--config.pnpmfile=scripts/record-git-head.cjs ')));
+
+    // The tag after a local release: everything is out from this commit, and nothing is sent.
+    const local = await runStep(allPublishedFrom(COMMIT));
+    assert.equal(local.status, 0);
+    assert.deepEqual(local.calls, []);
+  },
+);
+
+test('every publish records the commit it came from, which pnpm does not do on its own', async () => {
+  // `npm publish` writes `gitHead` into the published manifest; pnpm 11 publishes the manifest from package.json
+  // and adds nothing, so without this hook the registry cannot say which commit a version came from, and the check
+  // above would refuse every package already out.
+  const { hooks } = createRequire(import.meta.url)(join(ROOT, 'scripts', 'record-git-head.cjs'));
+  const head = (await exec('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' })).stdout.trim();
+  const manifest = { name: '@agentcomms/core', version: '1.2.3', dependencies: { zod: '^4.0.0' } };
+  assert.deepEqual(await hooks.beforePacking(manifest, join(ROOT, 'packages', 'core')), { ...manifest, gitHead: head });
+
+  // Both publishes pass it, and the package verifier packs with it and reads the field back — which is what proves
+  // the pinned pnpm still applies it, before anything is sent.
+  const flag = '--config.pnpmfile=scripts/record-git-head.cjs';
+  const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  assert.ok(workflow.includes(`pnpm ${flag} --filter "@agentcomms/$package" publish`), 'the workflow publish');
+  const script = await readFile(join(ROOT, 'scripts', 'release.mjs'), 'utf8');
+  const publish = /runLoud\('pnpm', \[([^\]]*'publish'[^\]]*)\]\)/.exec(script)?.[1] ?? '';
+  assert.ok(publish.includes(`'${flag}'`), 'the local publish');
+  const verifier = await readFile(join(ROOT, 'scripts', 'verify-package.mjs'), 'utf8');
+  assert.match(verifier, /'record-git-head\.cjs'/, 'the package verifier packs as the publish does');
+  assert.match(verifier, /packedManifest\.gitHead !== head/, 'and refuses a tarball that does not name the commit');
 });
 
 test('the local release script publishes a prerelease under next, as the workflow does', async () => {
@@ -166,6 +269,37 @@ test('the local release script publishes a prerelease under next, as the workflo
   const publish = /runLoud\('pnpm', \[([^\]]*'publish'[^\]]*)\]\)/.exec(script)?.[1] ?? '';
   assert.match(publish, /'--tag',\s*distTag/, 'every publish must name the tag, or npm moves `latest`');
   assert.ok(rule.index < script.indexOf(publish), 'the tag is decided before anything is sent');
+});
+
+test('the local release confirms a prerelease it published under next, not only a stable one', async () => {
+  // What `npm dist-tag ls` printed after a `-rc.1` went out under `next`: `latest` still names the previous stable
+  // version. Reading only the `latest` line made every attempt report the release as not visible, and the script
+  // exited 1 after a publish that had succeeded.
+  const registry =
+    ({ tags, viewed = null }) =>
+    (npmArgs) =>
+      npmArgs[0] === 'dist-tag' ? tags : viewed;
+  const name = '@agentcomms/core';
+
+  const prerelease = registry({ tags: 'latest: 0.4.0\nnext: 0.4.1-rc.1' });
+  assert.equal(isVisible({ name, version: '0.4.1-rc.1', distTag: 'next', npm: prerelease }), true);
+
+  const stable = registry({ tags: 'latest: 0.4.1\nnext: 0.4.1-rc.1' });
+  assert.equal(isVisible({ name, version: '0.4.1', distTag: 'latest', npm: stable }), true);
+
+  // Not there yet, by either path: the caller retries rather than reporting success.
+  const early = registry({ tags: 'latest: 0.4.0' });
+  assert.equal(isVisible({ name, version: '0.4.1', distTag: 'latest', npm: early }), false);
+
+  // The tag endpoint behind the packument, or unreachable: the exact version on the packument is still an answer.
+  const lagging = registry({ tags: 'latest: 0.4.0', viewed: '0.4.1' });
+  assert.equal(isVisible({ name, version: '0.4.1', distTag: 'latest', npm: lagging }), true);
+  const unreachable = registry({ tags: null, viewed: '0.4.1-rc.1' });
+  assert.equal(isVisible({ name, version: '0.4.1-rc.1', distTag: 'next', npm: unreachable }), true);
+
+  // And the script asks about the tag it published under, not a fixed one.
+  const script = await readFile(join(ROOT, 'scripts', 'release.mjs'), 'utf8');
+  assert.match(script, /isVisible\(\{[^\n]*\bdistTag\b[^\n]*\}\)/, 'the confirmation must be told the dist-tag');
 });
 
 test('the registry confirmation has room for the lag seen on real releases', async () => {
@@ -192,16 +326,41 @@ test('a tag gets its GitHub release from the changelog, after the publish is con
   assert.ok(gate !== -1 && gate < stepIndex(workflow, 'node scripts/release-ci.mjs preflight'));
 });
 
-// ── The OIDC preflight, against a fake GitHub and a fake registry ────────────────────────────────────────────────
+test('the release documents say a pushed tag publishes, and that it must not move once a package is out', async () => {
+  // The required reviewer was removed, but RELEASING.md's procedure still said the tag push "does not publish", under
+  // a heading saying a person approves releases, and the workflow's header said it waited for a human. That is the
+  // part of the page people copy from, about the one step that cannot be undone.
+  const documents = ['docs/RELEASING.md', '.claude/skills/release/SKILL.md', '.github/workflows/release.yml'];
+  for (const path of documents) {
+    const text = await readFile(join(ROOT, path), 'utf8');
+    assert.doesNotMatch(text, /does not publish/i, `${path} says the tag push does not publish`);
+    const approval = /a person approves|approve the publish|waits for a\s+(?:#\s*)?human/i;
+    assert.doesNotMatch(text, approval, `${path} says somebody approves the release after the tag`);
+  }
+  // A re-run keeps the tagged commit, and a package out from another commit now stops the run, so the advice for a
+  // partial failure that needs a fix is a new version — not the moved tag both documents used to lead to.
+  for (const path of documents.slice(0, 2)) {
+    const text = (await readFile(join(ROOT, path), 'utf8')).replace(/\s+/g, ' ');
+    assert.match(text, /the tag must not move/, `${path} does not say the tag stays once a package is out`);
+    assert.doesNotMatch(text, /fix the cause and re-run the failed job/i, `${path} still offers a re-run for a fix`);
+  }
+});
+
+// ── The OIDC preflight and the commit check, against a fake GitHub and a fake registry ───────────────────────────
 
 /**
  * One loopback server playing both parts. GitHub hands out numbered ID tokens; the registry mints a publish token
  * for every package except those in `untrusted`, and records which ID token each exchange carried.
+ *
+ * The registry also serves each package's packument. `published` maps a package to the versions it has, each to the
+ * commit recorded as its `gitHead` (null for none); a package it does not name is a 404, as on npm, and
+ * `packumentStatus` makes every packument answer with that status instead.
  */
-async function fakeOidc({ untrusted = [], emptyToken = [] } = {}) {
+async function fakeOidc({ untrusted = [], emptyToken = [], published = {}, packumentStatus = 200 } = {}) {
   let issued = 0;
   const exchanges = [];
   const audiences = [];
+  const reads = [];
   const server = createServer((request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1');
     response.setHeader('Content-Type', 'application/json');
@@ -225,6 +384,23 @@ async function fakeOidc({ untrusted = [], emptyToken = [] } = {}) {
       response.end(JSON.stringify({ token }));
       return;
     }
+    const packument = /^\/(@agentcomms%2f[\w-]+)$/.exec(url.pathname);
+    if (packument && request.method === 'GET') {
+      const name = decodeURIComponent(packument[1]);
+      reads.push(name);
+      const versions = published[name];
+      if (packumentStatus !== 200 || !versions) {
+        response.statusCode = packumentStatus !== 200 ? packumentStatus : 404;
+        response.end(JSON.stringify({ error: 'Not found' }));
+        return;
+      }
+      const manifests = Object.entries(versions).map(([version, gitHead]) => [
+        version,
+        { name, version, ...(gitHead ? { gitHead } : {}) },
+      ]);
+      response.end(JSON.stringify({ name, versions: Object.fromEntries(manifests) }));
+      return;
+    }
     response.statusCode = 500;
     response.end('{}');
   });
@@ -233,6 +409,7 @@ async function fakeOidc({ untrusted = [], emptyToken = [] } = {}) {
   return {
     exchanges,
     audiences,
+    reads,
     env: {
       ...process.env,
       ACTIONS_ID_TOKEN_REQUEST_URL: `http://127.0.0.1:${port}/id-token?api-version=2.0`,
@@ -248,7 +425,7 @@ const CI = join(ROOT, 'scripts', 'release-ci.mjs');
 test('the preflight passes only when every package exchanges, and never prints a token', async () => {
   const fake = await fakeOidc();
   try {
-    const result = await runScript(CI, ['preflight'], { env: fake.env });
+    const result = await runScript(CI, ['preflight', VERSION, COMMIT], { env: fake.env });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(
       fake.exchanges.map((exchange) => exchange.name),
@@ -272,7 +449,7 @@ test('the preflight passes only when every package exchanges, and never prints a
 test('the preflight fails, naming the package, when one has no trusted publisher', async () => {
   const fake = await fakeOidc({ untrusted: ['@agentcomms/slack'] });
   try {
-    const result = await runScript(CI, ['preflight'], { env: fake.env });
+    const result = await runScript(CI, ['preflight', VERSION, COMMIT], { env: fake.env });
     assert.equal(result.status, 1, 'a package npm refuses must stop the release before any publish');
     assert.match(result.stderr, /@agentcomms\/slack has no trusted publisher for this workflow; nothing was published/);
     assert.match(result.stdout, /✗ @agentcomms\/slack: npm refused the exchange \(HTTP 404\): no trusted publisher/);
@@ -286,7 +463,7 @@ test('the preflight fails, naming the package, when one has no trusted publisher
 test('the preflight does not count a 200 without a token as trust', async () => {
   const fake = await fakeOidc({ emptyToken: ['@agentcomms/gmail'] });
   try {
-    const result = await runScript(CI, ['preflight'], { env: fake.env });
+    const result = await runScript(CI, ['preflight', VERSION, COMMIT], { env: fake.env });
     assert.equal(result.status, 1);
     assert.match(result.stdout, /✗ @agentcomms\/gmail: npm answered 200 without a token/);
   } finally {
@@ -298,9 +475,130 @@ test('the preflight refuses without the OIDC permission, since the publish could
   const env = { ...process.env };
   delete env.ACTIONS_ID_TOKEN_REQUEST_URL;
   delete env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
-  const result = await runScript(CI, ['preflight'], { env });
+  // A port nothing listens on, so a regression that asked the registry first could never reach the real one.
+  env.NPM_CONFIG_REGISTRY = 'http://127.0.0.1:9/';
+  const result = await runScript(CI, ['preflight', VERSION, COMMIT], { env });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /id-token: write/);
+});
+
+test('the preflight proves nothing for a package already out from this commit, so a tag after a local release passes', async () => {
+  // The documented fallback: `pnpm release:publish` sends every package from a laptop, then the tag is pushed for
+  // its GitHub release. A package with no trusted publisher is exactly when that fallback gets used, and the
+  // preflight exchanged for it anyway — a red run and no release page, for a version that was on npm.
+  const fake = await fakeOidc({ untrusted: ['@agentcomms/slack'], published: allPublishedFrom(COMMIT) });
+  try {
+    const result = await runScript(CI, ['preflight', VERSION, COMMIT], { env: fake.env });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(fake.exchanges, [], 'nothing is left to publish, so no token is asked for');
+    assert.match(result.stdout, /nothing to prove/);
+  } finally {
+    await fake.close();
+  }
+
+  // Part way: what is out from this commit is skipped, what is not is still proven, and a refusal still stops it.
+  const partial = await fakeOidc({
+    untrusted: ['@agentcomms/slack'],
+    published: { '@agentcomms/core': { [VERSION]: COMMIT }, '@agentcomms/gmail': { [VERSION]: COMMIT } },
+  });
+  try {
+    const result = await runScript(CI, ['preflight', VERSION, COMMIT], { env: partial.env });
+    assert.equal(result.status, 1);
+    assert.deepEqual(
+      partial.exchanges.map((exchange) => exchange.name),
+      ['@agentcomms/gmail-mcp', '@agentcomms/slack'],
+    );
+    assert.match(result.stderr, /@agentcomms\/slack has no trusted publisher for this workflow/);
+  } finally {
+    await partial.close();
+  }
+});
+
+test('a package already at the version from another commit stops the release before anything is sent', async () => {
+  // A moved tag: the first run published core and gmail from one commit, the tag moved to a fix, and the next run
+  // skipped them as "already on the registry" and published the rest from the new one — one green version made of
+  // two builds. Now it refuses, naming what is out and where it came from.
+  const fake = await fakeOidc({
+    published: { '@agentcomms/core': { [VERSION]: OTHER }, '@agentcomms/gmail': { [VERSION]: OTHER } },
+  });
+  try {
+    const pending = await runScript(CI, ['pending', VERSION, COMMIT], { env: fake.env });
+    assert.equal(pending.status, 1);
+    assert.equal(pending.stdout, '', 'nothing for the publish loop to send');
+    assert.match(pending.stderr, new RegExp(`@agentcomms/core@1\\.2\\.3 was published from ${OTHER}`));
+    assert.match(pending.stderr, /@agentcomms\/gmail@1\.2\.3 was published from/);
+    assert.match(pending.stderr, new RegExp(`not from this tag's commit, ${COMMIT}\\. Nothing was published`));
+
+    const preflight = await runScript(CI, ['preflight', VERSION, COMMIT], { env: fake.env });
+    assert.equal(preflight.status, 1);
+    assert.deepEqual(fake.exchanges, [], 'it stops before proving anything');
+  } finally {
+    await fake.close();
+  }
+
+  // A version with no commit recorded, published by hand or by a pnpm that skipped the hook, cannot be matched to
+  // this tag, so it is refused rather than assumed.
+  const unrecorded = await fakeOidc({ published: { '@agentcomms/slack': { [VERSION]: null } } });
+  try {
+    const result = await runScript(CI, ['pending', VERSION, COMMIT], { env: unrecorded.env });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /@agentcomms\/slack@1\.2\.3 has no commit recorded/);
+  } finally {
+    await unrecorded.close();
+  }
+});
+
+test('pending prints what this commit still has to publish, in order, for the publish loop', async () => {
+  const fake = await fakeOidc({
+    published: {
+      '@agentcomms/core': { [VERSION]: COMMIT },
+      '@agentcomms/gmail': { '0.4.0': OTHER, [VERSION]: COMMIT },
+      // Another version, from anywhere, is not this one.
+      '@agentcomms/slack': { '0.4.0': OTHER },
+    },
+  });
+  try {
+    const result = await runScript(CI, ['pending', VERSION, COMMIT], { env: fake.env });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'gmail-mcp slack\n');
+    assert.match(result.stderr, /@agentcomms\/core@1\.2\.3 is already out from this commit/);
+    assert.deepEqual(
+      fake.reads,
+      PACKAGES.map((name) => `@agentcomms/${name}`),
+      'every package in the list is asked about',
+    );
+  } finally {
+    await fake.close();
+  }
+
+  // Everything out from this commit — a re-run after the last package landed, or the tag after a local release.
+  const done = await fakeOidc({ published: allPublishedFrom(COMMIT) });
+  try {
+    const result = await runScript(CI, ['pending', VERSION, COMMIT], { env: done.env });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), '');
+  } finally {
+    await done.close();
+  }
+});
+
+test('a registry that cannot answer stops the release, rather than reading as "not published"', async () => {
+  const fake = await fakeOidc({ packumentStatus: 503 });
+  try {
+    const result = await runScript(CI, ['pending', VERSION, COMMIT], { env: fake.env });
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /could not read @agentcomms\/core from the registry \(HTTP 503\)/);
+
+    // And without a real commit to compare with, there is nothing to decide a skip by.
+    for (const args of [[VERSION], [VERSION, 'main'], []]) {
+      const refused = await runScript(CI, ['pending', ...args], { env: fake.env });
+      assert.equal(refused.status, 1, `pending ${args.join(' ')} should refuse`);
+      assert.match(refused.stderr, /usage: release-ci\.mjs pending <version> <commit>/);
+    }
+  } finally {
+    await fake.close();
+  }
 });
 
 // ── The changelog section ────────────────────────────────────────────────────────────────────────────────────────

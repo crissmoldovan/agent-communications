@@ -63,8 +63,9 @@ owner can add (npmjs.com → the package → Settings → Trusted publishing: th
 
 6. **Tag, and push the tag. This publishes.** `git tag vX.Y.Z && git push origin vX.Y.Z`. Six verify legs run
    first and the publish is skipped if any fails, but nothing asks for confirmation after the push. Before the first
-   package is sent, the **OIDC preflight** exchanges an ID token for every package, exactly as the publish will; if
-   any package has no trusted publisher for this workflow, the run fails there, naming it, with nothing published.
+   package is sent, the **OIDC preflight** exchanges an ID token for every package it is about to send, exactly as
+   the publish will; if any has no trusted publisher for this workflow, the run fails there, naming it, with nothing
+   published. A package already at this version from this commit is neither sent nor asked about.
    **Complete when:** the run's own registry check reports every package in `scripts/packages.mjs` at the new
    version, and the `GitHub release` job has made the release page. It asks the registry what arrived rather than
    trusting the publish command, because `pnpm --filter` exits 0 when it matches nothing.
@@ -72,9 +73,11 @@ owner can add (npmjs.com → the package → Settings → Trusted publishing: th
    **If the preflight names a package**, nothing was published. Tell the owner which package needs a trusted
    publisher; once they have added it, re-run the failed job. Do not bump the version: nothing was spent.
 
-   **If a publish fails part way**, fix the cause and re-run the failed job at the same version. The loop skips every
-   package already on the registry at that version, so the re-run finishes the release instead of stopping at
-   `core`.
+   **If a publish fails part way, the tag must not move.** When the cause was outside the repository (an npm or
+   network error, a trusted publisher added since), re-run the failed job: a re-run keeps the tagged commit, and the
+   publish skips every package the registry records as published from that commit, so it finishes the release
+   instead of stopping at `core`. When the fix needs a commit, release a new version. A run on any other commit
+   refuses the version before sending anything, naming each package already out and the commit it came from.
 
    **If a leg fails, nothing is published** and the tag names a release that did not happen — move it to the fix
    rather than leaving it. v0.1.2 did exactly this: green on macOS and Linux, broken on Windows by an absolute
@@ -102,6 +105,7 @@ owner can add (npmjs.com → the package → Settings → Trusted publishing: th
 | `sync-versions --check` fails | the version is written in more than twenty places and they must agree |
 | CHANGELOG.md has no section for the version | the GitHub release is made from it, after the packages are out |
 | A package has no trusted publisher for this workflow | found before anything is published, not after the packages before it went out |
+| A package is already at the version from another commit, or with no commit recorded | finishing it would make one version out of two builds; a moved tag did exactly that, green |
 | The repository is private | npm rejects a provenance attestation for a private source repo, with a 422 that arrives after the upload |
 | A package is not visible after publishing | `pnpm --filter` exits 0 when it matches nothing |
 
@@ -127,7 +131,8 @@ can see.
 
 The packages that went out are **on the registry for good**.
 
-- **In CI:** re-run the failed job at the same version. The publish loop skips what is already there.
+- **In CI:** the tag must not move. For a cause outside the repository, re-run the failed job; the publish skips
+  what this commit already published. For a fix that needs a commit, bump the version.
 - **With the local script:** bump the version and release again. The script refuses a version any package already
   has, says so at the point of failure and lists what it managed to send, because that list is the only thing that
   tells you which half of the release exists.
@@ -137,8 +142,10 @@ The packages that went out are **on the registry for good**.
 - **Treating the tag as the release.** The tag starts the workflow; the publish happens only if every verify leg
   and the preflight pass. A tag whose run published nothing names a release that did not happen — move it to the
   fix rather than leave it implying otherwise.
-- **Bumping the version after a partial CI failure.** Re-run the job instead; it skips what is already out. Bumping
-  is for the local script, which does not.
+- **Bumping the version, or moving the tag, after a partial CI failure.** For a cause outside the repository,
+  re-run the job: it keeps the tagged commit and skips what that commit already published. For a fix that needs a
+  commit, bump. Never move the tag once a package is out — the packages already published came from the commit it
+  names, and a run on any other commit refuses the version.
 - **Reading a preflight failure as a failed release.** Nothing was published; the fix is the owner adding a trusted
   publisher, then a re-run.
 - **Trusting the publish command's exit code.** Ask the registry, and give it time to answer.
