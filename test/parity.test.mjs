@@ -18,11 +18,10 @@ import { tempDir } from './helpers/temp-dir.mjs';
  * checked against both in both directions. Hand-written lists went stale four times in this repository; this one fails
  * the build the moment it does.
  *
- * **Strict mode, and the release.** The table carries `pending` rows: the gaps the design's phases close. They pass
- * here, because this runs on every push while those phases are under way. `PARITY_STRICT=1` — or
- * `pnpm verify:parity --strict`, the same check as a script — also fails on every pending row. The release flips it
- * on: a version shipped with a pending row ships a command nobody can reach from chat, or a tool with no command,
- * which is the defect this design exists to remove.
+ * **Strict mode.** While the design's phases were under way the table carried `pending` rows, and this test let them
+ * pass. They are closed, so `pnpm verify` now also runs `pnpm verify:parity --strict`, which fails on any pending
+ * row: a command nobody can reach from chat, or a tool with no command, is the defect this design exists to remove,
+ * and it no longer merges. `PARITY_STRICT=1` makes this test strict too.
  */
 
 const STRICT = process.env.PARITY_STRICT === '1';

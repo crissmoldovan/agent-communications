@@ -1,5 +1,5 @@
 {
-  "about": "Every capability, and the CLI command and MCP tool that provide it. Checked against both registries, read from the running product, by test/parity.test.mjs in `pnpm verify`; `pnpm verify:parity --strict` also refuses any pending row, which is what a release has to pass. `cli` is the command path without the binary; `mcp` is a tool name. How to add one: CONTRIBUTING.md, \"Adding a capability\". Design: docs/superpowers/specs/2026-09-25-cli-mcp-parity-design.md.",
+  "about": "Every capability, and the CLI command and MCP tool that provide it. Checked against both registries, read from the running product, by test/parity.test.mjs in `pnpm verify`; `pnpm verify:parity --strict`, also part of `pnpm verify`, refuses any pending row. `cli` is the command path without the binary; `mcp` is a tool name. How to add one: CONTRIBUTING.md, \"Adding a capability\". Design: docs/superpowers/specs/2026-09-25-cli-mcp-parity-design.md.",
   "capabilities": [
     { "id": "core.paths", "package": "core", "cli": "paths", "mcp": "comms_paths", "status": "both" },
     { "id": "core.doctor", "package": "core", "cli": "doctor", "mcp": "comms_doctor", "status": "both" },

@@ -70,8 +70,9 @@ something that does not exist, or when a row's status and its sides disagree.
 
 When one side is missing, the row says why:
 
-- `"status": "pending", "phase": "P4"` — the other side lands in that phase of the design. Allowed on every push;
-  refused at release, where `pnpm verify:parity --strict` fails on any pending row.
+- `"status": "pending", "phase": "P4"` — the other side is still to be written. `pnpm verify` runs
+  `pnpm verify:parity --strict`, which refuses any pending row, so a capability lands with both sides or with a
+  stated exception — never half of one.
 - `"status": "exception", "reason": "…"` — one side on purpose: `approve`, because under `confirm` approving is a
   person at a terminal; `mcp`, because it starts the server a tool would need already running. The reason is what a
   reviewer reads, so it says why rather than what.
