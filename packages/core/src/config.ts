@@ -1024,8 +1024,18 @@ const POLICY_RANK: Record<SendPolicy, number> = { chat: 0, confirm: 1, never: 2 
  * user a consent prompt for a change that is not one. Linux is case-sensitive, so case is kept.
  */
 function normalisePath(path: string): string {
-  const expanded = resolve(expandHome(path.trim(), homedir())).replace(/[/\\]+$/, '');
+  const expanded = withoutTrailingSeparators(resolve(expandHome(path.trim(), homedir())));
   return platform() === 'darwin' || platform() === 'win32' ? expanded.toLowerCase() : expanded;
+}
+
+/**
+ * The path with any separators at its end removed. A loop, not `/[/\\]+$/`: that pattern backtracks over every run of
+ * separators in the string, and the path comes from a configuration anybody can write.
+ */
+function withoutTrailingSeparators(path: string): string {
+  let end = path.length;
+  while (end > 0 && (path[end - 1] === '/' || path[end - 1] === '\\')) end -= 1;
+  return path.slice(0, end);
 }
 
 /** Whether anything in this configuration already points at a stored secret. */

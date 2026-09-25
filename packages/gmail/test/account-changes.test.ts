@@ -475,7 +475,9 @@ test('an OAuth client is registered from a path in chat, approved first, and its
   try {
     const first = await call('gmail_client_add', { path, name: 'desktop' });
     const asked = approvalAsked(first);
-    assert.match(asked.preview, new RegExp(`registers the OAuth client ${TEST_CLIENT_ID.replaceAll('.', '\\.')}`));
+    // A substring, not a pattern built from the id: an id is not a regular expression, and escaping one by hand is how
+    // a pattern comes to match more than it says.
+    assert.ok(asked.preview.includes(`registers the OAuth client ${TEST_CLIENT_ID}`), asked.preview);
     assert.match(asked.preview, /Google Cloud project proj-1 as "desktop"/);
     assert.deepEqual((await harness.core.config.load()).clients, {}, 'asking registered it');
 
