@@ -698,3 +698,41 @@ test('gmail_inbox_finish answers with the mailbox it connected, as `--finish --j
     await close();
   }
 });
+
+// ── setup: the report is the tool; the steps are the tools that take them ───────────────────────────────────
+
+test('gmail_setup answers with the report `setup --json` makes before it takes any step', async () => {
+  /*
+   * `agent-gmail setup` is a report and then up to three steps — the client, a mailbox, the agent connection — which
+   * over MCP are gmail_client_add, gmail_inbox_add and comms_server_install (capabilities.json says so row by row).
+   * gmail_setup is the report half: with no flags and no terminal, `setup --json` changes nothing and prints the same
+   * state, plus the fields about steps it took (`did`, `warnings`, `blocked`, `handoff`), which a report has none of.
+   */
+  const harness = await workAndHome();
+  const printed = await cli(harness, ['setup', '--json']);
+  const report = printed.envelope<Record<string, unknown>>().data ?? {};
+  assert.deepEqual(report.did, [], 'setup with no flags took a step');
+
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    const answered = wire(await call('gmail_setup', {}));
+    const steps = new Set(['did', 'warnings', 'blocked', 'handoff']);
+    for (const [key, value] of Object.entries(report)) {
+      if (steps.has(key)) continue;
+      assert.deepEqual(answered[key], value, key);
+    }
+    assert.deepEqual(answered.clientOf, { home: 'other', work: 'default' });
+  } finally {
+    await close();
+  }
+
+  // Pinned, it is still only its own mailbox's.
+  const pinned = await connect({ core: harness.core, env: harness.env, inbox: 'work' });
+  try {
+    const answered = wire(await pinned.call('gmail_setup', {}));
+    assert.deepEqual(answered.clientOf, { work: 'default' });
+    assert.deepEqual(answered.clients, ['default']);
+  } finally {
+    await pinned.close();
+  }
+});

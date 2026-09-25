@@ -195,14 +195,16 @@
       "package": "gmail",
       "cli": "draft new",
       "mcp": "gmail_draft_create",
-      "status": "both"
+      "status": "both",
+      "reason": "The command reads the body from `--text`, `--file <path>` or standard input (`--file -`); the tool takes it as `text`, the chat's way to pass prose that no shell has to quote."
     },
     {
       "id": "gmail.draft.reply",
       "package": "gmail",
       "cli": "draft reply",
       "mcp": "gmail_draft_reply",
-      "status": "both"
+      "status": "both",
+      "reason": "The command reads the body from `--text`, `--file <path>` or standard input (`--file -`); the tool takes it as `text`, the chat's way to pass prose that no shell has to quote."
     },
     { "id": "gmail.draft.list", "package": "gmail", "cli": "draft list", "mcp": "gmail_draft_list", "status": "both" },
     { "id": "gmail.draft.get", "package": "gmail", "cli": "draft show", "mcp": "gmail_draft_get", "status": "both" },
@@ -211,7 +213,8 @@
       "package": "gmail",
       "cli": "draft update",
       "mcp": "gmail_draft_update",
-      "status": "both"
+      "status": "both",
+      "reason": "A new body comes from `--text` or `--file` (`--file -` for standard input) at a terminal, and from `text` in chat; given none, both keep the body the draft has."
     },
     {
       "id": "gmail.draft.delete",
@@ -317,7 +320,38 @@
       "status": "both",
       "reason": "From chat this is the core server's comms_server_prune, which prunes any channel's runtimes: `channel: \"gmail\"` is this command — the same change, `serverPruneChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
-    { "id": "gmail.setup", "package": "gmail", "cli": "setup", "mcp": "gmail_setup", "status": "both" },
+    {
+      "id": "gmail.setup",
+      "package": "gmail",
+      "cli": "setup",
+      "mcp": "gmail_setup",
+      "status": "both",
+      "reason": "The report `setup` starts from: the clients and mailboxes there are, the MCP clients the server is registered with, the downloaded client files, and the one step to take next. `setup --json` with no flags and no terminal prints it and changes nothing; gmail_setup never changes anything. The steps `setup` then takes are the three rows that follow."
+    },
+    {
+      "id": "gmail.setup.client",
+      "package": "gmail",
+      "cli": "setup",
+      "mcp": "gmail_client_add",
+      "status": "both",
+      "reason": "`setup --client-json <path>` registers the OAuth client through the change `client add` runs, under the name \"desktop\"; from chat that step is gmail_client_add."
+    },
+    {
+      "id": "gmail.setup.inbox",
+      "package": "gmail",
+      "cli": "setup",
+      "mcp": "gmail_inbox_add",
+      "status": "both",
+      "reason": "`setup --inbox <name> [--email]` starts the sign-in `inbox add --start` starts; from chat that step is gmail_inbox_add, finished by gmail_inbox_finish. At a terminal, setup waits for the browser itself."
+    },
+    {
+      "id": "gmail.setup.mcp",
+      "package": "gmail",
+      "cli": "setup",
+      "mcp": "comms_server_install",
+      "status": "both",
+      "reason": "`setup --mcp-client <client>` registers the server as `mcp install` does; from chat that step is the core server's comms_server_install with `channel: \"gmail\"` (design §5)."
+    },
     { "id": "gmail.doctor", "package": "gmail", "cli": "doctor", "mcp": "gmail_doctor", "status": "both" },
 
     { "id": "slack.manifest", "package": "slack", "cli": "manifest", "mcp": "slack_manifest", "status": "both" },

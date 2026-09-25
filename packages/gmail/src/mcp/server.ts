@@ -1051,13 +1051,15 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     {
       title: 'What setup still needs',
       description:
-        'Where this machine is in connecting Gmail, and the one thing to do next: whether an OAuth client is registered, whether any mailbox is connected, and the Google Cloud steps with their links. Call this when asked to set up Gmail, before anything else. Changes nothing.',
+        'Where this machine is in connecting Gmail, and the one thing to do next: whether an OAuth client is registered, whether any mailbox is connected, which MCP clients the server is registered with, and the Google Cloud steps with their links. Call this when asked to set up Gmail, before anything else. Changes nothing: it is the report `agent-gmail setup` starts from. The steps themselves are gmail_client_add (the client), gmail_inbox_add then gmail_inbox_finish (a mailbox), and the core server’s comms_server_install with channel "gmail" (the agent connection).',
       inputSchema: z.object({}),
       outputSchema: z.object({
         next: z.string().describe('client, inbox, mcp or done — the one thing to do now'),
         done: z.array(z.string()),
         clients: z.array(z.string()),
         inboxes: z.array(z.string()),
+        clientOf: z.record(z.string(), z.string()).describe('the OAuth client each mailbox signs in through'),
+        registeredWith: z.array(z.string()).describe('the MCP clients this server is registered with'),
         candidates: z
           .array(z.object({ path: z.string(), kind: z.string(), modifiedAt: z.string() }))
           .describe(
@@ -1123,6 +1125,8 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           done: [...scoped.done],
           clients: pinned ? (pinnedClient ? [pinnedClient] : []) : state.clients,
           inboxes: pinned ? state.inboxes.filter((alias) => alias === pinned) : state.inboxes,
+          clientOf: pinned ? (pinnedClient ? { [pinned]: pinnedClient } : {}) : state.clientOf,
+          registeredWith: state.registeredWith,
           candidates: pinned ? [] : state.candidates,
           consoleSteps: CONSOLE_STEPS.map((step) => ({
             id: step.id,

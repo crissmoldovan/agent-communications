@@ -31,7 +31,7 @@ names it `from`. There is no default mailbox.
 | [`gmail_sendas_list`](#gmail_sendas_list) | The addresses this mailbox can send as, which one is the default, and whether each is verified. |
 | [`gmail_draft_list`](#gmail_draft_list) | The drafts waiting in a mailbox: who each is to, its subject, and when it was last saved. |
 | [`gmail_draft_get`](#gmail_draft_get) | Read a draft back, with the same preview the person would approve. |
-| [`gmail_setup`](#gmail_setup) | Where this machine is in connecting Gmail, and the one thing to do next: whether an OAuth client is registered, whether any mailbox is connected, and the Google Cloud steps with their links. |
+| [`gmail_setup`](#gmail_setup) | Where this machine is in connecting Gmail, and the one thing to do next: whether an OAuth client is registered, whether any mailbox is connected, which MCP clients the server is registered with, and the Google Cloud steps with their links. |
 | [`gmail_clients_list`](#gmail_clients_list) | The Google Cloud OAuth clients registered on this machine: the name, the client id, the Cloud project, when each was added, and which mailboxes sign in through it. |
 | [`gmail_inbox_add`](#gmail_inbox_add) | Begin connecting a Gmail account. |
 | [`gmail_inbox_finish`](#gmail_inbox_finish) | Complete a sign-in started by gmail_inbox_add or gmail_inbox_reauth, once Google has returned a grant for it. |
@@ -270,7 +270,7 @@ Read a draft back, with the same preview the person would approve. Show the prev
 
 ### `gmail_setup`
 
-Where this machine is in connecting Gmail, and the one thing to do next: whether an OAuth client is registered, whether any mailbox is connected, and the Google Cloud steps with their links. Call this when asked to set up Gmail, before anything else. Changes nothing.
+Where this machine is in connecting Gmail, and the one thing to do next: whether an OAuth client is registered, whether any mailbox is connected, which MCP clients the server is registered with, and the Google Cloud steps with their links. Call this when asked to set up Gmail, before anything else. Changes nothing: it is the report `agent-gmail setup` starts from. The steps themselves are gmail_client_add (the client), gmail_inbox_add then gmail_inbox_finish (a mailbox), and the core server’s comms_server_install with channel "gmail" (the agent connection).
 
 *read-only*
 
