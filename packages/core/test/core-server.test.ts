@@ -489,12 +489,14 @@ test('an approval is good only for the change the tool that prepared it plans: n
     defaults: { changePolicy: 'chat' },
     accounts: { 'acme/slack': account({ changePolicy: 'confirm' }) },
   });
-  const readClaude = fakeClaude(m.bin);
+  // Cursor, whose configuration is a file this writes itself: the `claude` stand-in is a script, which Windows cannot
+  // start, and without it a registration is only printed — which asks nobody, so there would be no approval to steal.
+  const cursorConfig = join(m.home, '.cursor', 'mcp.json');
   const { ok, call, close } = await connect(m);
   try {
     const install = await ok('comms_server_install', {
       channel: 'core',
-      client: 'claude-code',
+      client: 'cursor',
       launcher: 'npx',
       noVerify: true,
     });
@@ -510,14 +512,14 @@ test('an approval is good only for the change the tool that prepared it plans: n
     // …and to the same tool, for a different registration: refused too.
     const other = await call('comms_server_install', {
       channel: 'core',
-      client: 'claude-code',
+      client: 'cursor',
       name: 'something-else',
       launcher: 'npx',
       noVerify: true,
       approvalId: install.approvalId,
     });
     assert.equal(other.isError, true);
-    assert.deepEqual(readClaude(), [], 'nothing was registered');
+    assert.equal(existsSync(cursorConfig), false, 'nothing was registered');
   } finally {
     await close();
   }
@@ -612,10 +614,11 @@ test('a registration that would be refused is refused before anybody is asked', 
     inboxes: { 'acme/gmail': inbox() },
     formerNames: { inboxes: { work: { name: 'acme/gmail', id: MAIL } }, accounts: {} },
   });
-  fakeClaude(m.bin);
-  // Somebody else's server under the name the Slack server would take.
+  // Somebody else's server under the name the Slack server would take — in Cursor, whose configuration is a file this
+  // reads itself, so the refusal does not depend on a stand-in client Windows cannot start.
+  mkdirSync(join(m.home, '.cursor'));
   writeFileSync(
-    join(m.home, '.claude.json'),
+    join(m.home, '.cursor', 'mcp.json'),
     JSON.stringify({
       mcpServers: { slack: { command: 'npx', args: ['-y', 'some-other-slack'], env: { TOKEN: 'fake-token-1' } } },
     }),
@@ -647,7 +650,7 @@ test('a registration that would be refused is refused before anybody is asked', 
       /option of the Gmail server/,
     );
     await refused({ channel: 'core', client: 'claude-code', readOnly: true }, 'USAGE', /option of the Gmail server/);
-    await refused({ channel: 'slack', client: 'claude-code', launcher: 'npx' }, 'CONFIG', /is not this one/);
+    await refused({ channel: 'slack', client: 'cursor', launcher: 'npx', noVerify: true }, 'CONFIG', /is not this one/);
     assert.deepEqual(await m.core.approvals.list(), [], 'nobody was asked about any of them');
   } finally {
     await close();

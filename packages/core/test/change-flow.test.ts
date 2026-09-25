@@ -4,7 +4,6 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { type GatedChange, gatedChange, gatedChangeAtTerminal } from '../src/change-flow.ts';
 import type { Streams } from '../src/cli-runtime.ts';
@@ -234,7 +233,8 @@ test('importing core never starts the agentcomms CLI, whatever the running progr
    * reaches may import cli.ts; this runs a program called cli.mjs that imports the index and prints one line.
    */
   const dir = tempDir();
-  const index = fileURLToPath(new URL('../src/index.ts', import.meta.url));
+  // A URL, not a path: `import()` of an absolute Windows path reads its drive letter as a URL scheme.
+  const index = new URL('../src/index.ts', import.meta.url).href;
   const script = join(dir, 'cli.mjs');
   writeFileSync(script, `await import(${JSON.stringify(index)});\nprocess.stdout.write('imported\\n');\n`);
   const { stdout, stderr } = await promisify(execFile)(
