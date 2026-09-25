@@ -172,6 +172,21 @@ const SERVERS = [
       '`agent-slack approve` at the person’s own terminal under `confirm`. No tool approves or connects a workspace.',
     ],
   },
+  {
+    package: 'core',
+    out: 'docs/reference/core-mcp-tools.md',
+    intro: [
+      'The core server installs and manages the others, and looks after this machine. Start it with `agentcomms mcp`,',
+      'or register it with a client with `agentcomms mcp install --client claude-code` — from a terminal, since it is',
+      'the one registration that cannot come from chat. Every tool runs the operation its `agentcomms` command runs.',
+      '',
+      '**Every change is shown to a person first.** A changing tool’s first call returns `approvalRequired`, a',
+      '`preview` and an `approvalId`; the same tool called again with the same arguments and that id applies it —',
+      'after the person’s yes in the conversation under the `chat` change policy, or after they run',
+      '`agentcomms approve <approvalId>` at their own terminal under `confirm`. No tool approves a change, and none',
+      'applies a change it did not plan itself.',
+    ],
+  },
 ];
 
 /** A one-line shape for an argument, so the table says what to pass without reproducing JSON Schema. */

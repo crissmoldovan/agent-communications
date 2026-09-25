@@ -94,8 +94,11 @@ refusal on one surface is the same refusal on the other:
 | Check it works | `gmail_doctor`, `gmail_whoami` | `doctor`, `whoami --inbox <alias>` |
 
 Still the person's, at a terminal, until approving a change from chat exists: loosening a send policy,
-`client add` and `client remove`, `inbox reauth`, `inbox import`, `inbox remove`,
-`confirm-clients add`, and `mcp install` and `mcp prune`. A tool asked to loosen refuses with
+`client add` and `client remove`, `inbox reauth`, `inbox import`, `inbox remove` and
+`confirm-clients add`. Registering and pruning this server can come from chat when the core server is
+connected: `comms_server_install` and `comms_server_prune` with `channel: "gmail"` return a preview and
+an approval id — show the preview, and call again with the id once the user agrees; without the core
+server they are `mcp install` and `mcp prune` at a terminal. A tool asked to loosen refuses with
 `LOOSENING_REFUSED` and a hint naming the command — pass that on and stop. A server started
 `--read-only` offers the reads in this table and none of the changes; one pinned with `--inbox` shows
 and tightens its own mailbox, and cannot rename it.

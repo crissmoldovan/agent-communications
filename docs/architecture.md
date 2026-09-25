@@ -23,6 +23,7 @@ and ignore the rest.
 | **Library** | The TypeScript API both surfaces are built on. | `@agentcomms/gmail` | nothing else |
 | **`agent-slack`** | The Slack CLI: connect a workspace, read it, draft, and post with a person's approval. | `@agentcomms/slack` | nothing else |
 | **Slack MCP server** | The same operations over stdio. Posts only through the approval gate; no tool approves. | `@agentcomms/slack` (`agent-slack mcp`) | nothing else |
+| **Core MCP server** | Installs and manages the others from a chat — registers and prunes servers, reports what is installed, migrates names and secrets, sets the change policy. Every change is a preview a person approves. | `@agentcomms/core` (`agentcomms mcp`) | nothing else |
 | **Skills** | Markdown instructions telling an agent how to use the above, and where to stop. | `npx skills add` | neither package |
 
 ## The CLI does not need the MCP server
@@ -66,7 +67,9 @@ is the full design, including what adding an IMAP pack later would take.
 ## `@agentcomms/core` is shared, not Gmail
 
 Config, the secret store, the approval engine, the sanitiser, the untrusted-content envelope, path jails, the audit
-log, and the `agentcomms` command for the parts that are not about any one provider.
+log, and the `agentcomms` command and its MCP server for the parts that are not about any one provider — including
+installing the Gmail and Slack servers themselves, which is why `agentcomms mcp install --client <client>` is the one
+registration a person runs at a terminal before everything else can be done from chat.
 
 It is separate because the approval gate and the sanitiser are not mail-specific. The Slack package uses the same
 core, the same approval records and the same audit log.

@@ -662,8 +662,12 @@ export class ConfigStore {
       const allowed = new Set(options.consent?.paths ?? []);
       const unconsented = loosened.filter((path) => !allowed.has(path));
       if (unconsented.length > 0) {
+        /*
+         * Both routes, because both are real (design 2026-09-25 §3.2): a hint naming only the terminal sent an agent
+         * to a shell it may not have, for a change it could have asked for in the conversation.
+         */
         throw new CommsError('LOOSENING_REFUSED', `this change loosens a safety setting: ${unconsented.join(', ')}`, {
-          hint: 'Only a person at a terminal can loosen these, by running the matching command and typing the challenge it shows.',
+          hint: 'A person approves a loosening, from a chat or at a terminal. From a chat, the tool that makes the change returns a preview and an approval id: the person says yes in the chat (change policy `chat`) or runs `agentcomms approve <id>` at their own terminal (`confirm`), and the tool is called again with the id. At a terminal, run the matching command and approve the change it shows.',
           details: { paths: unconsented },
         });
       }

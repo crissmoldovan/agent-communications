@@ -1,4 +1,5 @@
 import {
+  CHANNEL_SERVERS,
   type InstallOptions,
   type InstallResult,
   mcpInstall as install,
@@ -25,29 +26,17 @@ import { VERSION } from '../version.ts';
  */
 export type { InstallOptions, InstallResult, Launcher, PruneResult, ServerEntry, SupportedClient };
 
-/** Exported for the doctor, which reads registered entries back with the same facts that wrote them. */
+/**
+ * Exported for the doctor, which reads registered entries back with the same facts that wrote them.
+ *
+ * The facts themselves — the package, its flags, how an entry is read back — are core's `CHANNEL_SERVERS.gmail`,
+ * which the core server's `comms_server_install` registers from too. What is added here is what only this package
+ * knows: its own version and code, and the warning about other Gmail servers whose send tools nothing gates.
+ */
 export const GMAIL_MCP: McpProduct = {
-  packageName: '@agentcomms/gmail',
-  binary: 'agent-gmail',
-  defaultServerName: 'gmail',
-  npxPackage: '@agentcomms/gmail-mcp',
-  // The published `agent-gmail-mcp` bin: not what the installer writes, but a real way to run this server —
-  // by its path inside a package, or by its name when installed globally.
-  entryFiles: [['node_modules', '@agentcomms', 'gmail-mcp', 'dist', 'server.mjs']],
-  bins: ['agent-gmail-mcp'],
+  ...CHANNEL_SERVERS.gmail,
   version: VERSION,
   moduleUrl: import.meta.url,
-  serverArgs: (options) => {
-    const args: string[] = [];
-    if (options.inbox) args.push('--inbox', options.inbox);
-    if (options.readOnly) args.push('--read-only');
-    return args;
-  },
-  // Read back as the doctor's repair reads them, so `--force` keeps what a registered entry narrowed.
-  narrowingOf: (args) => {
-    const inbox = args.includes('--inbox') ? args[args.indexOf('--inbox') + 1] : undefined;
-    return { ...(inbox ? { inbox } : {}), ...(args.includes('--read-only') ? { readOnly: true } : {}) };
-  },
   warnAbout: (servers: readonly RegisteredServer[]) =>
     findUngatedGmailServers(servers).map(
       (finding) =>

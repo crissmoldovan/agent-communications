@@ -91,21 +91,36 @@ setting away.
 
 ## 5. The core MCP server
 
-`agentcomms mcp` — the generic server the owner expected, which installs and manages the others.
+`agentcomms mcp` — the generic server the owner expected, which installs and manages the others. Every tool is the
+operation its `agentcomms` command runs, in `packages/core/src/operations/`, so the two return the same data and
+refuse the same things.
 
-| Tool | Does |
-|---|---|
-| `comms_paths`, `comms_doctor` | as the CLI |
-| `comms_audit_tail`, `comms_approvals_list`, `comms_approval_revoke` | as the CLI |
-| `comms_channels_available` | which channel packages exist, which are installed, at which version, registered with which clients |
-| `comms_server_install` | register a channel's MCP server with a client (change approval; returns "restart the client") |
-| `comms_server_prune` | remove unused runtimes (dry-run free; removal needs a change approval) |
-| `comms_names_migrate` | dry run free; applying it needs a change approval |
-| `comms_secrets_migrate` | change approval |
-| `comms_change_prepare`, `comms_change_claim` | the generic change-approval pair every channel's tools use underneath |
+| Tool | Command | Does |
+|---|---|---|
+| `comms_paths`, `comms_doctor` | `paths`, `doctor` | as the CLI |
+| `comms_audit_tail`, `comms_approvals_list`, `comms_approval_revoke` | `audit tail`, `approvals list`, `approvals revoke` | as the CLI |
+| `comms_channels_available` | `channels` | which channel servers exist (core, Gmail, Slack), which are installed and at which version, registered with which clients; read-only |
+| `comms_server_install` | `mcp install`, and each channel's `mcp install` | register a channel's MCP server — core, Gmail or Slack — with a client (change approval; `print` asks nobody; returns "restart the client") |
+| `comms_server_prune` | `mcp prune`, and each channel's `mcp prune` | remove unused runtimes (dry run free; removal needs a change approval and removes only the runtimes it showed) |
+| `comms_names_migrate` | `names migrate` | dry run free; applying it needs a change approval, bound to the mapping shown |
+| `comms_secrets_migrate` | `secrets migrate` | change approval |
+| `comms_change_policy` | `policy` | report the change policy of the defaults, a mailbox or a workspace; set it — tightening at once, loosening `confirm → chat` by a change approval, which the policy in force (`confirm`) makes a terminal code |
+
+Every changing tool takes an optional `approvalId` and goes through `gatedChange`: the first call returns the preview
+and an approval id, and the same tool called again with the same arguments and that id applies it. Every changing
+command takes `--approval <id>` and goes through `gatedChangeAtTerminal`, where a person at a terminal approves there
+and then.
+
+**There is no generic change tool.** `prepareChange` and `claimChange` are the internal functions every changing tool
+and command uses through that flow; they are not tools. Each tool plans its own change from its own arguments and
+claims an approval only for the change it computes again at that moment, so the only changes reachable from chat are
+the ones a tool knows how to make, each shown to a person before it happens. An agent cannot hand a tool a
+configuration and an approval id and have it written; an id prepared by one tool, or for other arguments, is refused
+by any other.
 
 Bootstrapping: the first registration of anything has to come from outside MCP — `npx -y @agentcomms/core mcp
-install --client claude-code`, one command, or the plugin. After that every other channel is installed from chat.
+install --client claude-code`, one command (itself a change a person approves), or the plugin. After that every other
+channel is installed from chat.
 
 ## 6. Channel parity
 

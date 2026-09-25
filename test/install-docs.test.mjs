@@ -48,15 +48,21 @@ async function documents() {
   return Promise.all(files.map(async (path) => ({ path: relative(ROOT, path), text: await readFile(path, 'utf8') })));
 }
 
-/** Every `mcp install` a document gives, with the CLI it belongs to and the flags it passes. */
+/**
+ * Every `mcp install` a document gives, with the CLI it belongs to and the flags it passes.
+ *
+ * The core's too: `agentcomms mcp install` is the one registration that has to come from a terminal, so it is the
+ * first command a person copies from the README.
+ */
 function installCommands(text) {
   const found = [];
-  const pattern = /(agent-gmail|agent-slack|@agentcomms\/(?:gmail|slack)(?:@\S+)?) mcp install([^`|"\n]*)/g;
+  const pattern =
+    /(agent-gmail|agent-slack|(?<![@\w/-])agentcomms|@agentcomms\/(?:gmail|slack|core)(?:@\S+)?) mcp install([^`|"\n]*)/g;
   for (const [command, binary, tail] of text.matchAll(pattern)) {
     const words = (tail.split('#')[0] ?? '').trim().split(/\s+/).filter(Boolean);
     found.push({
       command: command.trim(),
-      cli: binary.includes('slack') ? 'slack' : 'gmail',
+      cli: binary.includes('slack') ? 'slack' : binary.includes('gmail') ? 'gmail' : 'core',
       flags: words.filter((word) => word.startsWith('--')),
     });
   }
@@ -82,8 +88,13 @@ async function installFlags(cli) {
 }
 
 test('every `mcp install` a document gives names a client, and passes only flags the CLI has', async () => {
-  const known = { gmail: await installFlags('gmail'), slack: await installFlags('slack') };
+  const known = {
+    gmail: await installFlags('gmail'),
+    slack: await installFlags('slack'),
+    core: await installFlags('core'),
+  };
   assert.ok(known.gmail.has('--client') && known.slack.has('--force'), 'the help text was not read');
+  assert.ok(known.core.has('--client') && known.core.has('--approval'), 'the core usage table was not read');
 
   const wrong = [];
   let seen = 0;

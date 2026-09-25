@@ -757,25 +757,25 @@ async function backUp(
 }
 
 /**
- * Writes (or prints) the entry for one client, then starts the server through exactly that entry and completes an
- * `initialize` and `tools/list`. An entry that looks right but does not start is the failure people actually hit.
+ * Where an install with these options goes: the client's own CLI and the file it keeps its servers in, and whether
+ * anything will be written there at all — `--print`, `--client json` and a client whose CLI is not on PATH all end
+ * with an entry printed rather than registered.
+ *
+ * Exported because a registration is a change a person approves, and what they are shown has to be what then
+ * happens. The core server plans an install with this before asking, and the install itself decides with it, so the
+ * preview cannot say "registers" for an install that only prints, or say nothing for one that writes.
  */
-export async function mcpInstall(
+export async function installTarget(
   context: InstallContext,
-  product: McpProduct,
-  options: InstallOptions,
-): Promise<InstallResult> {
-  const name = options.name ?? product.defaultServerName;
+  options: Pick<InstallOptions, 'client' | 'apply'>,
+): Promise<{
+  cliName: 'claude' | 'codex' | null;
+  binary: string | null;
+  own: string | undefined;
+  configPath: string | undefined;
+  writes: boolean;
+}> {
   const apply = options.apply ?? true;
-
-  const scan = await scanRegisteredServers(context.env);
-  const existing = scan.servers;
-  // The client being installed, only. Every other client's findings were being reported here too, with removal
-  // advice that said "the file above" and meant a different file.
-  const warnings = (product.warnAbout?.(existing.filter((server) => server.client === options.client)) ?? []).filter(
-    Boolean,
-  );
-
   const cliName = options.client === 'claude-code' ? 'claude' : options.client === 'codex' ? 'codex' : null;
   const binary = cliName ? await whichExecutable(cliName, context.env) : null;
   // The file this client keeps its servers in, as this environment resolves it — for Claude Code and codex, the
@@ -783,6 +783,39 @@ export async function mcpInstall(
   const own = knownClientConfigs(context.env).find((file) => file.client === options.client)?.path;
   const configPath = options.client === 'claude-code' ? undefined : own;
   const writes = apply && (cliName ? binary !== null : configPath !== undefined);
+  return { cliName, binary, own, configPath, writes };
+}
+
+/** What an install found before it wrote anything: see `preflightInstall`. */
+export interface InstallPreflight {
+  scan: Awaited<ReturnType<typeof scanRegisteredServers>>;
+  target: Awaited<ReturnType<typeof installTarget>>;
+  /** This product's own entries under the name, which the install replaces. Empty when it adds. */
+  previous: RegisteredServer[];
+  /** The options the install goes ahead with: the caller's, plus what the entry it replaces narrowed. */
+  effective: InstallOptions;
+  /** The server flags kept from that entry, as `serverArgs` writes them. */
+  kept: string[];
+}
+
+/**
+ * Everything an install checks before it writes, and what it would then do — writing nothing.
+ *
+ * An unreadable client config, a name held by somebody else's server, and a name this product already holds without
+ * `--force` are each refused here. The install itself runs this first; the core server also runs it while planning a
+ * registration, so a registration that is going to be refused is refused before a person is asked to approve it,
+ * and what they are shown — replacing an entry, keeping its pin — is what the install then does.
+ */
+export async function preflightInstall(
+  context: InstallContext,
+  product: McpProduct,
+  options: InstallOptions,
+): Promise<InstallPreflight> {
+  const name = options.name ?? product.defaultServerName;
+  const scan = await scanRegisteredServers(context.env);
+  const existing = scan.servers;
+  const target = await installTarget(context, options);
+  const { binary, own, configPath, writes } = target;
 
   // Before anything is installed or written: a refusal should cost nothing.
   if (writes) {
@@ -802,8 +835,32 @@ export async function mcpInstall(
     const reported = await codexRegistration(binary, name, configPath ?? 'codex');
     if (reported) previous = claimName(product, options, name, [reported]);
   }
-  // What the entry being replaced narrowed, kept wherever this install left it out, and said.
   const { options: effective, kept } = keepNarrowing(product, options, previous);
+  return { scan, target, previous, effective, kept };
+}
+
+/**
+ * Writes (or prints) the entry for one client, then starts the server through exactly that entry and completes an
+ * `initialize` and `tools/list`. An entry that looks right but does not start is the failure people actually hit.
+ */
+export async function mcpInstall(
+  context: InstallContext,
+  product: McpProduct,
+  options: InstallOptions,
+): Promise<InstallResult> {
+  const name = options.name ?? product.defaultServerName;
+  const apply = options.apply ?? true;
+
+  const { scan, target, previous, effective, kept } = await preflightInstall(context, product, options);
+  const existing = scan.servers;
+  const { cliName, binary, own, configPath, writes } = target;
+  // The client being installed, only. Every other client's findings were being reported here too, with removal
+  // advice that said "the file above" and meant a different file.
+  const warnings = (product.warnAbout?.(existing.filter((server) => server.client === options.client)) ?? []).filter(
+    Boolean,
+  );
+
+  // What the entry being replaced narrowed, kept wherever this install left it out, and said.
   if (kept.length > 0) {
     const removal =
       options.client === 'claude-code'
@@ -1114,6 +1171,42 @@ export async function runningCommandLines(): Promise<string[] | null> {
 const RUNTIME_NAME = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$/;
 
 /**
+ * This product's managed runtimes on disk, oldest name first: every directory directly inside `<data>/runtime`,
+ * named like a version, that holds this product's package — never a symbolic link, never another product's runtime,
+ * never anything else in that directory.
+ *
+ * One reading, shared by `pruneManagedRuntimes`, which deletes from it, and the core server's list of what is
+ * installed, which only reports it. Two readings of one directory would be two answers to "is this installed", and
+ * the one prune acted on need not be the one a person was shown.
+ */
+export async function listManagedRuntimes(
+  dataDir: string,
+  packageName: string,
+): Promise<{ path: string; version: string }[]> {
+  const runtimeDir = join(dataDir, 'runtime');
+  let names: string[];
+  try {
+    names = await readdir(runtimeDir);
+  } catch {
+    return [];
+  }
+  const found: { path: string; version: string }[] = [];
+  const suffix = `-${unscoped(packageName)}`;
+  for (const name of names.sort()) {
+    if (!RUNTIME_NAME.test(name)) continue;
+    const path = join(runtimeDir, name);
+    try {
+      if (!(await lstat(path)).isDirectory()) continue;
+      if (!(await lstat(join(path, 'node_modules', ...packageName.split('/')))).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    found.push({ path, version: name.endsWith(suffix) ? name.slice(0, -suffix.length) : name });
+  }
+  return found;
+}
+
+/**
  * Removes this product's managed runtimes that no client config it can read names, that it never printed an
  * entry for, and that no process is running.
  *
@@ -1138,6 +1231,10 @@ const RUNTIME_NAME = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$/;
  * What it cannot see is an entry in a file it does not read — a workspace `.vscode/mcp.json`, a config a client
  * was pointed at on its command line — put there by hand, or pasted from a `--print` that warned its record could
  * not be written. The documents say so rather than promise more.
+ *
+ * `only`, when given, is the most it may remove: the runtimes a person approved removing, from a dry run shown to
+ * them. Anything else it would have removed is kept, and says why. Removal is approved as a list of paths, and a
+ * runtime that became unused after that list was shown is not on it.
  */
 export async function pruneManagedRuntimes(
   context: InstallContext,
@@ -1146,30 +1243,14 @@ export async function pruneManagedRuntimes(
     dryRun?: boolean;
     includePrinted?: boolean;
     processes?: () => Promise<readonly string[] | null>;
+    only?: readonly string[] | undefined;
   } = {},
 ): Promise<PruneResult> {
   const runtimeDir = join(context.core.paths.dataDir, 'runtime');
   const result: PruneResult = { runtimeDir, dryRun: options.dryRun === true, removed: [], kept: [] };
 
-  let names: string[];
-  try {
-    names = await readdir(runtimeDir);
-  } catch {
-    return result;
-  }
-
   const candidates: { path: string; version: string; aliases: string[] }[] = [];
-  const suffix = `-${unscoped(product.packageName)}`;
-  for (const name of names.sort()) {
-    if (!RUNTIME_NAME.test(name)) continue;
-    const path = join(runtimeDir, name);
-    try {
-      if (!(await lstat(path)).isDirectory()) continue;
-      if (!(await lstat(join(path, 'node_modules', ...product.packageName.split('/')))).isDirectory()) continue;
-    } catch {
-      continue;
-    }
-    const version = name.endsWith(suffix) ? name.slice(0, -suffix.length) : name;
+  for (const { path, version } of await listManagedRuntimes(context.core.paths.dataDir, product.packageName)) {
     const real = await realpath(path).catch(() => path);
     candidates.push({ path, version, aliases: [...new Set([path, real])] });
   }
@@ -1225,6 +1306,10 @@ export async function pruneManagedRuntimes(
               : null;
     if (reason) {
       result.kept.push({ path, version, reason });
+      continue;
+    }
+    if (options.only !== undefined && !options.only.includes(path)) {
+      result.kept.push({ path, version, reason: 'not in the removal that was approved; prune again to include it' });
       continue;
     }
     // `rm` does not follow a link, so even a directory swapped for one since the scan loses only the link.

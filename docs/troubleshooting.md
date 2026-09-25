@@ -111,6 +111,11 @@ container there may not be one. Either unlock it, or move to owner-only files:
 agentcomms secrets migrate --to file
 ```
 
+Moving credentials out of the keychain loosens how they are kept, so it shows what it will move and asks you to
+approve it: at a terminal by typing `yes` (or the code it shows, under the `confirm` change policy). An agent gets the
+preview and an approval id and exits `10`; after your yes it runs the same command with `--approval <id>`, or calls
+`comms_secrets_migrate` again with it.
+
 ### Rate limits
 
 Exit `75`. Gmail's per-user quota is generous but finite, and a wide search over many mailboxes spends it quickly.

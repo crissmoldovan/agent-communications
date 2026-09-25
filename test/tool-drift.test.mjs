@@ -37,6 +37,18 @@ const PRODUCTS = [
     reference: 'docs/reference/slack-mcp-tools.md',
     program: 'packages/slack/src/cli/program.ts',
   },
+  /*
+   * The core server, which installs the others. Its CLI is not Commander: its commands are the lines of the usage
+   * table in `src/cli.ts`, so `usage` says to read them from there.
+   */
+  {
+    tool: 'comms',
+    binary: 'agentcomms',
+    server: 'packages/core/src/mcp/server.ts',
+    reference: 'docs/reference/core-mcp-tools.md',
+    program: 'packages/core/src/cli.ts',
+    usage: true,
+  },
 ];
 
 /** Every tool a server registers. Read from the registration calls, not from a list kept beside them. */
@@ -55,6 +67,7 @@ async function registeredTools(product) {
  * `program.command('x')` calls that are assigned to a variable, which is how these CLIs spell a command group.
  */
 async function definedCommands(product) {
+  if (product.usage) return usageCommands(product);
   const source = await readFile(join(ROOT, product.program), 'utf8');
   const groups = new Map();
   for (const match of source.matchAll(/const (\w+) = program\s*\.command\('([a-z-]+)'\)/g)) {
@@ -75,6 +88,31 @@ async function definedCommands(product) {
   for (const match of source.matchAll(/\.alias\('([a-z-]+)'\)/g)) paths.add(match[1]);
   assert.ok(paths.size > 15, `the ${product.binary} commands should be readable from the program source`);
   return { paths, groups: new Set(groups.values()) };
+}
+
+/**
+ * The core CLI's commands, from the usage table it prints: a line of its own is a command, and a word that only
+ * prefixes others (`audit` in `audit tail`) is a group. `scripts/registries.mjs` reads the same table from the running
+ * CLI; this reads the source, as the rest of this file does.
+ */
+async function usageCommands(product) {
+  const source = await readFile(join(ROOT, product.program), 'utf8');
+  const help = /const HELP = `([\s\S]*?)`;/.exec(source)?.[1] ?? '';
+  const paths = new Set();
+  for (const [, rest] of help.matchAll(new RegExp(`^\\s+${product.binary}\\s+(.*)$`, 'gm'))) {
+    const words = [];
+    for (const word of rest
+      .split(/\s{2,}/)[0]
+      .trim()
+      .split(/\s+/)) {
+      if (!/^[a-z][a-z-]*$/.test(word)) break;
+      words.push(word);
+    }
+    if (words.length > 0) paths.add(words.join(' '));
+  }
+  const groups = new Set([...paths].filter((path) => path.includes(' ')).map((path) => path.split(' ')[0]));
+  assert.ok(paths.size > 10, `the ${product.binary} commands should be readable from its usage table`);
+  return { paths, groups };
 }
 
 /**
@@ -139,7 +177,11 @@ for (const product of PRODUCTS) {
     const offenders = [];
     // Spaces and tabs only: `\s` crossed from one code span into the next, reading `agent-gmail send` followed by an
     // unrelated span as the two-word command `send agent-gmail`.
-    const commandPattern = new RegExp(`${product.binary}[ \\t]+([a-z][a-z-]*)(?:[ \\t]+([a-z][a-z-]*))?`, 'g');
+    // Not inside a package name: `@agentcomms/core` and "an @agentcomms server" name no `agentcomms` command.
+    const commandPattern = new RegExp(
+      `(?<![@/\\w-])${product.binary}[ \\t]+([a-z][a-z-]*)(?:[ \\t]+([a-z][a-z-]*))?`,
+      'g',
+    );
     for (const { file, text } of await documentation()) {
       // A leading `-` is a flag, not a subcommand: `agent-gmail --json` names no command at all.
       for (const match of codeOnly(text).matchAll(commandPattern)) {

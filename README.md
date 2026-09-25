@@ -31,7 +31,8 @@ Four packages and fifteen skills.
   person's approval of that exact content — in the conversation or at their terminal, as the
   workspace's policy says.
 - **`@agentcomms/core`** — the shared core: config, secrets, the approval engine, the
-  sanitiser. Provider-neutral, so Gmail and Slack share it.
+  sanitiser. Provider-neutral, so Gmail and Slack share it. Its `agentcomms` command and MCP
+  server (`agentcomms mcp`) install and manage the others, from a terminal or from a chat.
 - **Fifteen skills** — twelve for Gmail, three for Slack — that teach an agent how to use all of it
   well, and where to stop.
 
@@ -64,7 +65,29 @@ know.
 
 ## Install
 
-Three independent things ship. Take one, or all of them.
+### From a chat: the core server first
+
+One command registers the core server with your agent. Everything after that can be done from the conversation.
+
+```bash
+npx -y @agentcomms/core mcp install --client claude-code   # or codex, cursor, gemini, claude-desktop, vscode
+```
+
+At a terminal it shows what it will register and asks you to type `yes`. Restart the client, and ask your agent to
+set things up: it can see which servers exist and where each is registered (`comms_channels_available`), register
+the Gmail and Slack servers (`comms_server_install`), remove old runtimes (`comms_server_prune`), migrate names or
+secrets, and show or change the change policy (`comms_change_policy`). Connecting a mailbox or a workspace still
+needs you in a browser for the consent screen, and a server it registers appears only once the client is restarted.
+
+**Every change is shown to you before it happens.** The tool returns a preview and an approval id. Under the default
+`chat` change policy your yes in the conversation approves it; under `confirm` you run `agentcomms approve <id>` in
+your own terminal (`npx -y @agentcomms/core approve <id>` if `agentcomms` is not installed) and type the code it shows (`agentcomms policy confirm` sets that, and moving back to `chat` needs
+the code too). No tool approves a change, and none applies a change it did not plan itself.
+[Core MCP tool reference](docs/reference/core-mcp-tools.md).
+
+### Or package by package
+
+Three independent things ship besides the core server. Take one, or all of them.
 
 First, the part everyone hits: **Gmail's API only accepts calls from a registered OAuth client, and
 you have to be the one who registers it.** There is no shared client to borrow — using somebody
@@ -185,7 +208,10 @@ reaches an already-registered client only when you re-register it:
 ```bash
 npx -y @agentcomms/gmail@latest mcp install --client claude-code --force
 npx -y @agentcomms/slack@latest mcp install --client claude-code --force
+npx -y @agentcomms/core@latest mcp install --client claude-code --force   # the core server, if you use it
 ```
+
+From a chat, `comms_server_install` with `force` does the same for any of them.
 
 `--force` is required because the client CLIs refuse to overwrite an existing entry. It keeps the
 pin (`--inbox`, `--workspace`) and `--read-only` of the entry it replaces unless you pass others, and
@@ -209,7 +235,7 @@ organisation/platform names, both MCP servers, and a prompt an agent there can f
 | [What is where](docs/architecture.md) | CLI, MCP server, library, skills — and why the CLI needs none of the others |
 | [Sending and approvals](docs/sending.md) | how the gate works, and what it does not cover |
 | [CLI reference](docs/reference/cli.md) · [Slack](docs/reference/slack-cli.md) | every command, option and exit code |
-| [MCP tool reference](docs/reference/mcp-tools.md) · [Slack](docs/reference/slack-mcp-tools.md) | every tool and argument |
+| [MCP tool reference](docs/reference/mcp-tools.md) · [Slack](docs/reference/slack-mcp-tools.md) · [Core](docs/reference/core-mcp-tools.md) | every tool and argument |
 | [The skills](docs/skills.md) | what each is for, and when it fires |
 | [Troubleshooting](docs/troubleshooting.md) | by symptom |
 | [Upgrading](docs/upgrading.md) | from any earlier release, and on each of your other computers |

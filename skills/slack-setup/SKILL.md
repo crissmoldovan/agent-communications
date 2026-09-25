@@ -104,6 +104,10 @@ printed as an entry to paste, and not running — and nothing at all when one of
 does not read a workspace's own `.vscode/mcp.json` or `.cursor/mcp.json`, so run `--dry-run` first and tell the
 user what it lists. Without the server the skills still work, through `agent-slack … --json`.
 
+From a chat with the core server connected, `comms_server_install` and `comms_server_prune` with
+`channel: "slack"` do the same. Each returns a preview and an approval id first: show the preview, and call again
+with the id once the user agrees. The server appears after the client is restarted.
+
 What the agent gets is everything the CLI does except approving and changing a workspace's connection. Posting
 and reacting go through the same approval gate as the CLI: under `chat` the person's yes in the conversation is
 the approval, under `confirm` they approve at their own terminal with `agent-slack approve`, and under `never`

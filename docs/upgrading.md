@@ -4,7 +4,8 @@ One person's accounts are usually spread over more than one computer, and each c
 configuration, its own tokens and its own MCP registrations. Nothing is shared between them, so each one is
 brought up to date on its own, with the sequence below. It works from any earlier release: a computer still on
 0.1.x with the old flat names (`work`, `personal`) ends on the current release with organisation/platform names
-(`acme/gmail`, `acme/slack`) and both MCP servers — Gmail and Slack — registered.
+(`acme/gmail`, `acme/slack`) and its MCP servers — Gmail, Slack and, from the release that adds it, the core
+server — registered.
 
 Why the order matters:
 
@@ -67,24 +68,39 @@ If it says the names are already organisation/platform, this computer was migrat
 
 ## 3. Rename
 
-The same command without `--dry-run`. At a terminal it shows the mapping and asks; anything without a terminal —
-an agent, a script — passes `--yes`:
+The same command without `--dry-run`. Renaming every account is a change a person approves. At a terminal it shows
+the mapping and the change and asks you to type `yes` — or, under the `confirm` change policy, the code it shows.
+Anything without a terminal — an agent, a script — gets the preview and an approval id instead, and exits `10`; once
+you have agreed, it runs the same command again with `--approval <id>`:
 
 ```bash
-npx -y @agentcomms/core@$V names migrate --yes \
+npx -y @agentcomms/core@$V names migrate \
+  --rename <old>=<organisation>/gmail \
+  --rename <old>=<organisation>/slack
+# without a terminal: exit 10, the preview and an approval id. Once you have said yes:
+npx -y @agentcomms/core@$V names migrate --approval <id> \
   --rename <old>=<organisation>/gmail \
   --rename <old>=<organisation>/slack
 ```
 
+The approval is for exactly the mapping shown: run again with a `--rename` left off, it is refused and nothing
+changes. Releases before the core MCP server took `--yes` here instead; `npx -y @agentcomms/core@$V --help` says which
+yours takes.
+
 It saves the configuration as it was beside itself first, as `config.json.before-names-migrate-<UTC time>`
 (owner-only), and prints where. That copy is the only way back; keep it until everything works.
 
-## 4. Register both servers
+## 4. Register the servers
 
 ```bash
 npx -y @agentcomms/gmail@$V mcp install --client claude-code --force
 npx -y @agentcomms/slack@$V mcp install --client claude-code --force
+npx -y @agentcomms/core@$V mcp install --client claude-code --force   # the core server, if you use it
 ```
+
+The core server's registration is a change a person approves, as the rename is: at a terminal you type `yes`, and
+without one it exits `10` with an approval id to run it again with. The core server exists from the release that adds
+`agentcomms mcp`; `npx -y @agentcomms/core@$V --help` lists it.
 
 For another client, change `--client` (`codex`, `cursor`, `claude-desktop`, `gemini`, `vscode`). `--force` replaces
 the entry that is already there, which is how an upgrade reaches a registered client.
@@ -136,6 +152,7 @@ account before running `prune`, or run it from a shell with that variable set. I
 ```bash
 npx -y @agentcomms/gmail@$V mcp prune
 npx -y @agentcomms/slack@$V mcp prune
+npx -y @agentcomms/core@$V mcp prune     # asks you to approve what it would remove
 ```
 
 ## Accounts this computer does not have yet
@@ -178,7 +195,7 @@ restart itself, so it does everything up to step 7 and then tells you to.
 
 ```text
 Bring agent-communications on this computer up to the current release: rename accounts to organisation/platform
-names, and register the Gmail and Slack MCP servers with Claude Code. Follow docs/upgrading.md from
+names, and register the Gmail, Slack and core MCP servers with Claude Code. Follow docs/upgrading.md from
 https://github.com/crissmoldovan/agent-communications exactly, in its order.
 
 Rules:
@@ -191,10 +208,12 @@ Rules:
     --workspace, --read-only (tell me which, so they can be carried over);
   - the dry run renames an account to a name that is not in <ALL NEW NAMES>.
 - Use these renames on every run: <RENAMES>
-- Run the dry run first and show me its output, including anything "Not applicable here". Then run it with --yes.
-  Tell me the backup path it prints.
-- Register both servers with --client claude-code --force, using the same V for both. Each result must say
-  registered and verified; if not, stop and show it.
+- Run the dry run first and show me its output, including anything "Not applicable here". Then run it without
+  --dry-run: it exits 10 with a preview and an approval id. Show me the preview and wait for my yes, then run the
+  same command again with --approval <id>. Tell me the backup path it prints.
+- Register the Gmail and Slack servers with --client claude-code --force, using the same V for both. Each result
+  must say registered and verified; if not, stop and show it. Register the core server the same way: it exits 10
+  with a preview first; show it to me, and after my yes run it again with --approval <id>.
 - Upgrade global @agentcomms commands only if they are already installed globally.
 - Run the checks in step 6. For each name in <ALL NEW NAMES> that this computer does not have, give me the one
   command that connects it, without running it.

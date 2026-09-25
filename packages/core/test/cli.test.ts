@@ -4,7 +4,6 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { needsYes } from '../src/cli.ts';
 import type { Streams } from '../src/cli-runtime.ts';
 import { secretsStoreOf } from '../src/config.ts';
 import { CommsError } from '../src/errors.ts';
@@ -126,7 +125,7 @@ test('the migration ref list carries the non-mail accounts too', async () => {
    * source and target are the same store, and the only real migration needs a keychain the CI runner may not
    * have. A test that skips on CI would not have caught this.
    */
-  const { secretRefsOf } = await import('../src/cli.ts');
+  const { secretRefsOf } = await import('../src/operations/secrets-migrate.ts');
   const { emptyConfig, newAccountId, newInboxId } = await import('../src/config.ts');
   const config = {
     ...emptyConfig(),
@@ -191,7 +190,7 @@ test('a migration does not switch backends when a credential appeared or vanishe
    * Asserted on the decision rather than by running a migration, for the reason given at the top of this file:
    * the only other backend is the real keychain, and a test must never write to it.
    */
-  const { migrationConflict, secretRefsOf } = await import('../src/cli.ts');
+  const { migrationConflict, secretRefsOf } = await import('../src/operations/secrets-migrate.ts');
   const { parseConfig } = await import('../src/config.ts');
   const base = parseConfig(
     JSON.stringify({
@@ -292,7 +291,7 @@ test('a migration whose copy throws after landing takes that copy back', async (
    * A copy was tracked only once `set` returned, so a write that threw after landing — a keychain timeout that
    * finished anyway — was a copy nobody would ever clean up: a live credential in a backend nothing reads.
    */
-  const { migrateSecrets } = await import('../src/cli.ts');
+  const { migrateSecrets } = await import('../src/operations/secrets-migrate.ts');
   const { core, source } = await coreWithTwoSlackTokens();
   const target = memoryStore('keychain', { failSet: 'slack/token/acc_BBBBBBBBBBBBBBBB' });
 
@@ -303,7 +302,7 @@ test('a migration whose copy throws after landing takes that copy back', async (
 });
 
 test('a migration that cannot take its copies back says which ones, instead of failing quietly', async () => {
-  const { migrateSecrets } = await import('../src/cli.ts');
+  const { migrateSecrets } = await import('../src/operations/secrets-migrate.ts');
   const { core, source } = await coreWithTwoSlackTokens();
   const target = memoryStore('keychain', { failSet: 'slack/token/acc_BBBBBBBBBBBBBBBB', failDelete: true });
 
@@ -324,7 +323,7 @@ test('a migration that switched but could not remove an original reports it rath
    * The originals are duplicates once the switch has happened, and `catch(() => false)` used to drop every
    * failure to remove them under a result that said the migration had simply worked.
    */
-  const { migrateSecrets } = await import('../src/cli.ts');
+  const { migrateSecrets } = await import('../src/operations/secrets-migrate.ts');
   const { core } = await coreWithTwoSlackTokens();
   const stubborn = memoryStore('file', { failDelete: true });
   stubborn.values.set('slack/token/acc_AAAAAAAAAAAAAAAA', 'fake-token-one');
@@ -350,7 +349,7 @@ test('a migration that switched but could not remove an original reports it rath
 });
 
 test('a clean migration moves everything and leaves nothing behind', async () => {
-  const { migrateSecrets } = await import('../src/cli.ts');
+  const { migrateSecrets } = await import('../src/operations/secrets-migrate.ts');
   const { core, source } = await coreWithTwoSlackTokens();
   const target = memoryStore('keychain');
   // The line written before the switch has to reach the disk before the switch does: a power cut must not be able
@@ -387,7 +386,7 @@ test('a migration that cannot record itself does not switch, and a retry records
    * migration that had happened, and a retry found the backend already switched and returned early — so the move
    * was never recorded. It is written before the switch now, and a failure to write it stops the switch.
    */
-  const { migrateSecrets } = await import('../src/cli.ts');
+  const { migrateSecrets } = await import('../src/operations/secrets-migrate.ts');
   const { core, source } = await coreWithTwoSlackTokens();
   const target = memoryStore('keychain');
   const append = core.audit.append.bind(core.audit);
@@ -407,7 +406,7 @@ test('a migration that cannot record itself does not switch, and a retry records
 });
 
 test('a switch refused after it was announced is recorded as failed', async () => {
-  const { migrateSecrets } = await import('../src/cli.ts');
+  const { migrateSecrets } = await import('../src/operations/secrets-migrate.ts');
   const { core, source } = await coreWithTwoSlackTokens();
   const target = memoryStore('keychain');
   const update = core.config.update.bind(core.config);
@@ -429,7 +428,7 @@ test('a migration whose switch committed but whose lock release failed keeps the
    * the call with the switch already in. The rollback treated every rejection as "nothing was switched" and
    * deleted the copies — the credentials the runtime now reads.
    */
-  const { migrateSecrets } = await import('../src/cli.ts');
+  const { migrateSecrets } = await import('../src/operations/secrets-migrate.ts');
   const { core, source } = await coreWithTwoSlackTokens();
   const target = memoryStore('keychain');
   const update = core.config.update.bind(core.config);
@@ -456,7 +455,7 @@ test('two opposite migrations at once cannot leave a credential in neither backe
    * A's cleanup is slowed so that interleaving happens reliably whenever nothing serialises the two. With the
    * credentials lock, B waits for A to finish entirely, reads the backend A left, and moves everything back.
    */
-  const { migrateSecrets } = await import('../src/cli.ts');
+  const { migrateSecrets } = await import('../src/operations/secrets-migrate.ts');
   const { core } = await coreWithTwoSlackTokens();
   // keychain → file is a loosening, which the command gets a person's consent for; B carries that consent here.
   const downgrade = { kind: 'loosening-consent', paths: ['secrets.store'] } as const;
@@ -489,7 +488,7 @@ test('two opposite migrations at once cannot leave a credential in neither backe
 test('moving credentials out of the keychain needs consent, and with it goes through', async () => {
   // `doctor` recommends `agentcomms secrets migrate --to file` when the keychain is unavailable, and it never
   // worked: the switch was refused as unconsented every time, after every credential had been copied.
-  const { migrateSecrets } = await import('../src/cli.ts');
+  const { migrateSecrets } = await import('../src/operations/secrets-migrate.ts');
   const { core } = await coreWithTwoSlackTokens();
   // Keychain-backed, as most installs are. Into the keychain is a tightening, so this needs no consent itself.
   await core.config.update((c) => ({ ...c, secrets: { store: 'keychain' } }));
@@ -528,7 +527,7 @@ test('moving credentials out of the keychain needs consent, and with it goes thr
   assert.equal(keychain.values.size, 0, 'and the keychain no longer holds them');
 });
 
-test('secrets migrate --to file is refused to an agent and to anything without a terminal, before copying', () => {
+test('secrets migrate --to file asks for approval from an agent and from anything without a terminal, before copying', () => {
   // A config that holds a credential, so choosing files really does loosen something. Both runs are refused before
   // any store is opened, so neither can touch the real keychain.
   const config = tempDir();
@@ -549,17 +548,22 @@ test('secrets migrate --to file is refused to an agent and to anything without a
       },
     })}\n`,
   );
-  const agent = run(['secrets', 'migrate', '--to', 'file', '--json'], {
-    AGENT_COMMS_CONFIG_DIR: config,
-    CLAUDECODE: '1',
-  });
-  assert.equal(agent.status, 10, agent.stderr);
-  assert.match(JSON.parse(agent.stdout).error.message, /not an agent's to do/);
-  assert.match(JSON.parse(agent.stdout).error.hint, /in their own terminal/);
-
-  const piped = run(['secrets', 'migrate', '--to', 'file', '--json'], { AGENT_COMMS_CONFIG_DIR: config });
-  assert.equal(piped.status, 10, piped.stderr);
-  assert.match(JSON.parse(piped.stdout).error.message, /needs a terminal/);
+  // Out of the keychain is a change a person approves. Anything that cannot ask — an agent, a pipe — gets the preview
+  // and an approval id and exits 10, as a post waiting for approval does; nothing is copied or switched until the
+  // command is run again with that id.
+  for (const extra of [{ CLAUDECODE: '1' }, {}]) {
+    const asked = run(['secrets', 'migrate', '--to', 'file', '--json'], { AGENT_COMMS_CONFIG_DIR: config, ...extra });
+    assert.equal(asked.status, 10, asked.stderr);
+    const error = JSON.parse(asked.stdout).error;
+    assert.equal(error.code, 'APPROVAL_PENDING');
+    assert.match(error.message, /Keep credentials in files on this disk/);
+    assert.match(error.details.preview, /where credentials are kept: keychain → file/);
+    assert.match(
+      error.details.preview,
+      /copies the 1 credential this configuration names .* then deletes the originals/,
+    );
+    assert.match(error.hint, new RegExp(`agentcomms secrets migrate --to file --approval ${error.details.approvalId}`));
+  }
   assert.equal(
     JSON.parse(readFileSync(join(config, 'config.json'), 'utf8')).secrets,
     undefined,
@@ -602,6 +606,18 @@ function beforeTheRename(dir: string): void {
   );
 }
 
+/**
+ * `names migrate` the way an agent runs it: the first run returns the preview and an approval id and exits 10, and the
+ * same command run again with `--approval <id>` applies it — under the default `chat` policy, once the person has said
+ * yes in the conversation.
+ */
+function namesMigrateApproved(args: string[], env: Record<string, string>) {
+  const asked = run(['names', 'migrate', '--json', ...args], env);
+  assert.equal(asked.status, 10, asked.stderr);
+  const { approvalId } = JSON.parse(asked.stdout).error.details;
+  return run(['names', 'migrate', ...args, '--approval', approvalId], env);
+}
+
 test('doctor says a version-1 config can be migrated, and stops saying it once it has been', () => {
   const config = tempDir();
   beforeTheRename(config);
@@ -614,7 +630,7 @@ test('doctor says a version-1 config can be migrated, and stops saying it once i
   assert.match(before.fix, /names migrate --dry-run/);
   assert.match(before.fix, /0\.2\.0/, 'and says what everything sharing the config has to be on first');
 
-  run(['names', 'migrate', '--yes'], { AGENT_COMMS_CONFIG_DIR: config });
+  namesMigrateApproved([], { AGENT_COMMS_CONFIG_DIR: config });
   const after = names(run(['doctor', '--json'], { AGENT_COMMS_CONFIG_DIR: config }).stdout);
   assert.equal(after.detail, 'organisation/platform');
   assert.equal(after.fix, undefined, 'said until it is done, not for ever');
@@ -638,19 +654,37 @@ test('names migrate --dry-run prints the mapping and changes nothing', () => {
   assert.equal(JSON.parse(readFileSync(join(config, 'config.json'), 'utf8')).version, 1, 'still version 1');
 });
 
-test('names migrate needs --yes where nobody can answer, and then renames everything once', () => {
+test('names migrate asks for approval where nobody can answer there, and then renames everything once', () => {
   const config = tempDir();
   beforeTheRename(config);
-  const refused = run(['names', 'migrate'], { AGENT_COMMS_CONFIG_DIR: config });
-  assert.equal(refused.status, 64, refused.stderr);
-  assert.match(refused.stderr, /--yes or a terminal/);
+  const mapping = ['--rename', 'gmail=personal/gmail', '--rename', 'live=cue/slack'];
+  const asked = run(['names', 'migrate', '--json', ...mapping], { AGENT_COMMS_CONFIG_DIR: config });
+  assert.equal(asked.status, 10, asked.stderr);
+  const pending = JSON.parse(asked.stdout).error;
+  assert.equal(pending.code, 'APPROVAL_PENDING');
+  // The preview is the mapping, each rename a line the approval is bound to.
+  assert.match(pending.details.preview, /renames mailbox "gmail" to "personal\/gmail"/);
+  assert.match(pending.details.preview, /renames workspace "live" to "cue\/slack"/);
   assert.equal(JSON.parse(readFileSync(join(config, 'config.json'), 'utf8')).version, 1);
 
-  const done = run(['names', 'migrate', '--yes', '--rename', 'gmail=personal/gmail', '--rename', 'live=cue/slack'], {
-    AGENT_COMMS_CONFIG_DIR: config,
-  });
+  // `--yes` used to answer the question; it is refused now, with what to do instead, rather than read as consent.
+  const yes = run(['names', 'migrate', '--yes', '--json'], { AGENT_COMMS_CONFIG_DIR: config });
+  assert.equal(yes.status, 64, yes.stderr);
+  assert.match(JSON.parse(yes.stdout).error.message, /--yes no longer skips the question/);
+
+  // The approval is for this mapping and no other: claimed with a rename left off, it is refused and nothing moves.
+  const other = run(
+    ['names', 'migrate', '--json', '--rename', 'gmail=personal/gmail', '--approval', pending.details.approvalId],
+    {
+      AGENT_COMMS_CONFIG_DIR: config,
+    },
+  );
+  assert.equal(other.status, 10, other.stderr);
+  assert.equal(JSON.parse(readFileSync(join(config, 'config.json'), 'utf8')).version, 1, 'still version 1');
+
+  const done = namesMigrateApproved(mapping, { AGENT_COMMS_CONFIG_DIR: config });
   assert.equal(done.status, 0, done.stderr);
-  // The mapping is shown before the write, `--yes` included: it is the only record of the old names afterwards.
+  // The mapping is shown before the write: it is the only record of the old names afterwards.
   assert.match(done.stderr, /gmail\s+→\s+personal\/gmail/);
   assert.match(done.stdout, /Renamed 3 account\(s\)/);
   const written = JSON.parse(readFileSync(join(config, 'config.json'), 'utf8'));
@@ -659,8 +693,8 @@ test('names migrate needs --yes where nobody can answer, and then renames everyt
   assert.deepEqual(Object.keys(written.accounts), ['cue/slack']);
   assert.deepEqual(written.formerNames.inboxes.gmail, { name: 'personal/gmail', id: 'ibx_BBBBBBBBBBBBBBBB' });
 
-  // Running it again says so, and changes nothing.
-  const again = run(['names', 'migrate', '--yes'], { AGENT_COMMS_CONFIG_DIR: config });
+  // Running it again says so, changes nothing, and asks nobody.
+  const again = run(['names', 'migrate'], { AGENT_COMMS_CONFIG_DIR: config });
   assert.equal(again.status, 0, again.stderr);
   assert.match(again.stdout, /already organisation\/platform/);
 
@@ -673,12 +707,9 @@ test('names migrate needs --yes where nobody can answer, and then renames everyt
 test('names migrate lists every problem at once, and applies none of them', () => {
   const config = tempDir();
   beforeTheRename(config);
-  const refused = run(
-    ['names', 'migrate', '--yes', '--rename', 'work=cue/slack', '--rename', 'nope=x/gmail', '--json'],
-    {
-      AGENT_COMMS_CONFIG_DIR: config,
-    },
-  );
+  const refused = run(['names', 'migrate', '--rename', 'work=cue/slack', '--rename', 'nope=x/gmail', '--json'], {
+    AGENT_COMMS_CONFIG_DIR: config,
+  });
   assert.equal(refused.status, 64);
   const problems = JSON.parse(refused.stdout).error.details.problems as string[];
   assert.equal(problems.length, 1, problems.join(' | '));
@@ -723,7 +754,7 @@ test('names migrate runs one mapping on a computer that has only some of its nam
     'and backs nothing up',
   );
 
-  const done = run(['names', 'migrate', '--yes', '--json', ...mapping], { AGENT_COMMS_CONFIG_DIR: config });
+  const done = namesMigrateApproved([...mapping, '--json'], { AGENT_COMMS_CONFIG_DIR: config });
   assert.equal(done.status, 0, done.stderr);
   // The skipped renames are shown with the mapping, before the write, as well as returned.
   assert.match(done.stderr, /--rename elsewhere=acme\/gmail/);
@@ -744,22 +775,9 @@ test('names migrate runs one mapping on a computer that has only some of its nam
   // The text form says where the copy is, too.
   const other = tempDir();
   beforeTheRename(other);
-  const text = run(['names', 'migrate', '--yes'], { AGENT_COMMS_CONFIG_DIR: other });
+  const text = namesMigrateApproved([], { AGENT_COMMS_CONFIG_DIR: other });
   assert.equal(text.status, 0, text.stderr);
   assert.match(text.stdout, /The configuration as it was is saved at .*config\.json\.before-names-migrate-/);
-});
-
-test('an agent is never asked, even with a terminal: it can answer its own question', () => {
-  const terminal = {
-    stdout: { isTTY: true },
-    stderr: { isTTY: true },
-    stdin: { isTTY: true },
-  } as unknown as Streams;
-  assert.equal(needsYes({}, terminal, {}), false, 'a person at a terminal is asked');
-  assert.equal(needsYes({ CLAUDECODE: '1' }, terminal, {}), true, 'an agent must pass --yes');
-  assert.equal(needsYes({}, terminal, { json: true }), true, '--json is never interactive');
-  const piped = { ...terminal, stdin: { isTTY: false } } as unknown as Streams;
-  assert.equal(needsYes({}, piped, {}), true, 'a pipe cannot answer');
 });
 
 test('requirePerson refuses an agent before it asks about a terminal, and names the command either way', async () => {

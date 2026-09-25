@@ -1,47 +1,44 @@
 {
   "about": "Every capability, and the CLI command and MCP tool that provide it. Checked against both registries, read from the running product, by test/parity.test.mjs in `pnpm verify`; `pnpm verify:parity --strict` also refuses any pending row, which is what a release has to pass. `cli` is the command path without the binary; `mcp` is a tool name. How to add one: CONTRIBUTING.md, \"Adding a capability\". Design: docs/superpowers/specs/2026-09-25-cli-mcp-parity-design.md.",
   "capabilities": [
-    { "id": "core.paths", "package": "core", "cli": "paths", "mcp": null, "status": "pending", "phase": "P2" },
-    { "id": "core.doctor", "package": "core", "cli": "doctor", "mcp": null, "status": "pending", "phase": "P2" },
-    {
-      "id": "core.audit.tail",
-      "package": "core",
-      "cli": "audit tail",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P2"
-    },
+    { "id": "core.paths", "package": "core", "cli": "paths", "mcp": "comms_paths", "status": "both" },
+    { "id": "core.doctor", "package": "core", "cli": "doctor", "mcp": "comms_doctor", "status": "both" },
+    { "id": "core.audit.tail", "package": "core", "cli": "audit tail", "mcp": "comms_audit_tail", "status": "both" },
     {
       "id": "core.approvals.list",
       "package": "core",
       "cli": "approvals list",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P2"
+      "mcp": "comms_approvals_list",
+      "status": "both"
     },
     {
       "id": "core.approvals.revoke",
       "package": "core",
       "cli": "approvals revoke",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P2"
+      "mcp": "comms_approval_revoke",
+      "status": "both"
     },
     {
       "id": "core.secrets.migrate",
       "package": "core",
       "cli": "secrets migrate",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P2"
+      "mcp": "comms_secrets_migrate",
+      "status": "both"
     },
     {
       "id": "core.names.migrate",
       "package": "core",
       "cli": "names migrate",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P2"
+      "mcp": "comms_names_migrate",
+      "status": "both"
+    },
+    { "id": "core.policy", "package": "core", "cli": "policy", "mcp": "comms_change_policy", "status": "both" },
+    {
+      "id": "core.channels",
+      "package": "core",
+      "cli": "channels",
+      "mcp": "comms_channels_available",
+      "status": "both"
     },
     {
       "id": "core.approve",
@@ -49,7 +46,31 @@
       "cli": "approve",
       "mcp": null,
       "status": "exception",
-      "reason": "Approving a change under the `confirm` change policy means a person at a terminal typing the code shown; a tool that approved would make `confirm` mean nothing (design §6.3). Under `chat`, comms_change_claim takes the approval given in the conversation."
+      "reason": "Approving a change under the `confirm` change policy means a person at a terminal typing the code shown; a tool that approved would make `confirm` mean nothing (design §6.3). Under `chat` there is nothing to approve from a tool: the tool that prepared the change applies it when called again with the approval id, after the person's yes."
+    },
+    {
+      "id": "core.mcp.serve",
+      "package": "core",
+      "cli": "mcp",
+      "mcp": null,
+      "status": "exception",
+      "reason": "It runs the MCP server. A tool is a call into a server that is already running, so no tool can be the one that starts it."
+    },
+    {
+      "id": "core.mcp.install",
+      "package": "core",
+      "cli": "mcp install",
+      "mcp": "comms_server_install",
+      "status": "both",
+      "reason": "`agentcomms mcp install` registers the core server; comms_server_install registers any channel's, and with `channel: \"core\"` is this command."
+    },
+    {
+      "id": "core.mcp.prune",
+      "package": "core",
+      "cli": "mcp prune",
+      "mcp": "comms_server_prune",
+      "status": "both",
+      "reason": "`agentcomms mcp prune` prunes the core's own runtimes; comms_server_prune takes the channel, and with `channel: \"core\"` is this command."
     },
 
     {
@@ -288,19 +309,17 @@
       "id": "gmail.mcp.install",
       "package": "gmail",
       "cli": "mcp install",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P2",
-      "reason": "From chat this is the core server's comms_server_install, which registers any channel's server (design §5)."
+      "mcp": "comms_server_install",
+      "status": "both",
+      "reason": "From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"gmail\"` is this command (design §5)."
     },
     {
       "id": "gmail.mcp.prune",
       "package": "gmail",
       "cli": "mcp prune",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P2",
-      "reason": "From chat this is the core server's comms_server_prune (design §5)."
+      "mcp": "comms_server_prune",
+      "status": "both",
+      "reason": "From chat this is the core server's comms_server_prune, which prunes any channel's runtimes: `channel: \"gmail\"` is this command (design §5)."
     },
     { "id": "gmail.setup", "package": "gmail", "cli": "setup", "mcp": "gmail_setup", "status": "both" },
     { "id": "gmail.doctor", "package": "gmail", "cli": "doctor", "mcp": "gmail_doctor", "status": "both" },
@@ -431,19 +450,17 @@
       "id": "slack.mcp.install",
       "package": "slack",
       "cli": "mcp install",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P2",
-      "reason": "From chat this is the core server's comms_server_install, which registers any channel's server (design §5)."
+      "mcp": "comms_server_install",
+      "status": "both",
+      "reason": "From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"slack\"` is this command (design §5)."
     },
     {
       "id": "slack.mcp.prune",
       "package": "slack",
       "cli": "mcp prune",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P2",
-      "reason": "From chat this is the core server's comms_server_prune (design §5)."
+      "mcp": "comms_server_prune",
+      "status": "both",
+      "reason": "From chat this is the core server's comms_server_prune, which prunes any channel's runtimes: `channel: \"slack\"` is this command (design §5)."
     },
     {
       "id": "slack.app.update",

@@ -1,6 +1,6 @@
 // Runs inside a fresh project that installed the packed tarball (scripts/verify-package.mjs).
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -84,4 +84,49 @@ assert.equal(migrated.version, 2);
 assert.deepEqual(Object.keys(migrated.inboxes), ['work/gmail']);
 assert.deepEqual(migrated.formerNames.inboxes.work, { name: 'work/gmail', id: 'ibx_AAAAAAAAAAAAAAAA' });
 
-console.log('core consumer check: imports, sanitiser, digest, core wiring, the agentcomms bin and a real migration OK');
+// The core MCP server, from the package as installed. The MCP SDK is bundled rather than depended on, so a server
+// that started from the source tree but not from the tarball would be a server nobody who installed it could run.
+const tools = await new Promise((resolve, reject) => {
+  const server = spawn(process.execPath, [join('node_modules', '@agentcomms', 'core', 'dist', 'cli.mjs'), 'mcp'], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let out = '';
+  let err = '';
+  const timer = setTimeout(() => {
+    server.kill();
+    reject(new Error(`agentcomms mcp did not answer tools/list:\n${err}`));
+  }, 30_000);
+  server.stderr.on('data', (chunk) => {
+    err += chunk;
+  });
+  server.stdout.on('data', (chunk) => {
+    out += chunk;
+    for (const line of out.split('\n')) {
+      if (!line.startsWith('{')) continue;
+      try {
+        const message = JSON.parse(line);
+        if (message.id === 2) {
+          clearTimeout(timer);
+          server.kill();
+          resolve(message.result.tools.map((tool) => tool.name));
+        }
+      } catch {
+        // a partial line: the next chunk completes it
+      }
+    }
+  });
+  const send = (message) => server.stdin.write(`${JSON.stringify(message)}\n`);
+  send({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'consumer-check', version: '0' } },
+  });
+  send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
+});
+assert.ok(tools.includes('comms_server_install'), `the core server offered: ${tools.join(', ')}`);
+
+console.log(
+  'core consumer check: imports, sanitiser, digest, core wiring, the agentcomms bin, a real migration and the MCP server OK',
+);

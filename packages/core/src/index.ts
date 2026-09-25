@@ -3,6 +3,7 @@ export * from './approvals.ts';
 export * from './audit.ts';
 export * from './change-flow.ts';
 export * from './changes.ts';
+export * from './channel-servers.ts';
 export * from './chars.ts';
 export * from './cli-runtime.ts';
 export * from './compose-profile.ts';

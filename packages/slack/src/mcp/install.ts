@@ -1,4 +1,5 @@
 import {
+  CHANNEL_SERVERS,
   type InstallOptions,
   type InstallResult,
   mcpInstall as install,
@@ -23,29 +24,17 @@ import { VERSION } from '../version.ts';
  */
 export type { InstallOptions, InstallResult, Launcher, PruneResult, ServerEntry, SupportedClient };
 
-/** Exported for the doctor, which reads registered entries back with the same facts that wrote them. */
+/**
+ * Exported for the doctor, which reads registered entries back with the same facts that wrote them.
+ *
+ * The facts themselves — the package, the `mcp` argument `npx` needs, the `--workspace` pin — are core's
+ * `CHANNEL_SERVERS.slack`, which the core server's `comms_server_install` registers from too. What is added here is
+ * what only this package knows: its own version and code, and the warning about other Slack servers.
+ */
 export const SLACK_MCP: McpProduct = {
-  packageName: '@agentcomms/slack',
-  binary: 'agent-slack',
-  defaultServerName: 'slack',
-  /*
-   * The package itself, not a thin `-mcp` wrapper.
-   *
-   * Gmail ships `@agentcomms/gmail-mcp` so an `npx` launcher downloads a small package rather than the whole CLI.
-   * Slack has no such package, so `npx` fetches this one; saying so here is better than pointing at a name that
-   * does not exist on the registry, which is a launcher that fails only on the machine that chose it.
-   */
-  npxPackage: '@agentcomms/slack',
-  // …and because it is the whole CLI, the server is its `mcp` command.
-  npxArgs: ['mcp'],
+  ...CHANNEL_SERVERS.slack,
   version: VERSION,
   moduleUrl: import.meta.url,
-  serverArgs: (options) => (options.workspace ? ['--workspace', options.workspace] : []),
-  // Read back as the doctor's repair reads it, so `--force` keeps the workspace a registered entry was pinned to.
-  narrowingOf: (args) => {
-    const workspace = args.includes('--workspace') ? args[args.indexOf('--workspace') + 1] : undefined;
-    return workspace ? { workspace } : {};
-  },
   /*
    * Our own `read` token cannot post, whatever else is installed — but that was never the point. Another Slack
    * server posts with *its* token, and an agent uses whichever tool it finds; every approval step here stands
