@@ -24,6 +24,7 @@ function product(runsCli: boolean | undefined): McpProduct {
     version: '9.9.9',
     moduleUrl: import.meta.url,
     serverArgs: () => ['--pin', 'acme'],
+    narrowingOf: () => ({}),
   };
 }
 

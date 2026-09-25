@@ -43,6 +43,11 @@ export const GMAIL_MCP: McpProduct = {
     if (options.readOnly) args.push('--read-only');
     return args;
   },
+  // Read back as the doctor's repair reads them, so `--force` keeps what a registered entry narrowed.
+  narrowingOf: (args) => {
+    const inbox = args.includes('--inbox') ? args[args.indexOf('--inbox') + 1] : undefined;
+    return { ...(inbox ? { inbox } : {}), ...(args.includes('--read-only') ? { readOnly: true } : {}) };
+  },
   warnAbout: (servers: readonly RegisteredServer[]) =>
     findUngatedGmailServers(servers).map(
       (finding) =>

@@ -95,6 +95,29 @@ test('codex is read from CODEX_HOME, and Claude Code from CLAUDE_CONFIG_DIR, whe
   assert.equal(fileOf(env, 'codex'), join(codexHome, 'config.toml'));
 });
 
+test("a config a caller names is read in its client's format, once, and one for an unknown client is never skipped", async () => {
+  const home = tempDir();
+  const env = { HOME: home };
+  // Another CODEX_HOME, as a record of an earlier install would name it: TOML, because codex writes TOML.
+  const codex = join(tempDir(), 'config.toml');
+  write(codex, '[mcp_servers.slack]\ncommand = "node"\nargs = ["/r/cli.mjs", "mcp"]\n');
+  const scan = await scanRegisteredServers(env, 'linux', [
+    { client: 'codex', path: codex },
+    { client: 'codex', path: codex },
+  ]);
+  assert.deepEqual(
+    scan.servers.map((server) => [server.client, server.path, server.args[0]]),
+    [['codex', codex, '/r/cli.mjs']],
+  );
+
+  // A client this does not know: read as JSON with comments, so TOML is unreadable rather than nothing registered.
+  const unknown = await scanRegisteredServers(env, 'linux', [{ client: 'someday', path: codex }]);
+  assert.deepEqual(
+    unknown.unreadable.map((file) => file.path),
+    [codex],
+  );
+});
+
 test("a project's .mcp.json, for each project Claude Code lists, is read as a project-scoped entry", async () => {
   const home = tempDir();
   const project = tempDir();

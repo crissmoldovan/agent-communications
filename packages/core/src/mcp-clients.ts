@@ -367,10 +367,16 @@ function parseConfig(text: string, format: ClientConfigFile['format']): unknown 
  * cannot be read. What stays out of sight is any other file a client might be pointed at — a workspace
  * `.vscode/mcp.json` or `.cursor/mcp.json`, a config passed on a command line — and an entry pasted from
  * `--client json`, which is why `prune` also keeps what the installer printed.
+ *
+ * `also` names further configs to read as the client named would: `prune` passes every one the installer recorded
+ * writing to, which a shell with another `CLAUDE_CONFIG_DIR` or `CODEX_HOME` would not otherwise find. One for a
+ * client this does not know is read as JSON with comments, which reads every JSON config and calls anything else
+ * unreadable — a reason for `prune` to stop, rather than a file skipped in silence.
  */
 export async function scanRegisteredServers(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
+  also: readonly Pick<ClientConfigFile, 'client' | 'path'>[] = [],
 ): Promise<ServerScan> {
   const servers: RegisteredServer[] = [];
   const unreadable: UnreadableConfig[] = [];
@@ -378,7 +384,12 @@ export async function scanRegisteredServers(
     for (const entry of entries) servers.push({ ...entry, packageName: packageFrom(entry) });
   };
 
-  for (const file of knownClientConfigs(env, platform)) {
+  const files = knownClientConfigs(env, platform);
+  for (const { client, path } of also) {
+    const format = files.find((file) => file.client === client)?.format ?? 'jsonc';
+    if (!files.some((file) => file.path === path)) files.push({ client, path, format });
+  }
+  for (const file of files) {
     const text = await readIfThere(file.path);
     if (text === null) continue;
     if (typeof text !== 'string') {

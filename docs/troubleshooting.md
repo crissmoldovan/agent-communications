@@ -157,9 +157,9 @@ agent-gmail doctor --json | jq '.data.checks[] | select(.id == "mcp-command")'  
 agent-gmail mcp install --client claude-code   # when none of them is for that client
 ```
 
-A plain `mcp install` is refused for a name that is already registered. When an entry is there and broken, its
-check's `fix` is the command that replaces it: `mcp install` with the entry's own `--name`, `--inbox` and
-`--read-only`, and `--force`. Run that `fix` as it is.
+A plain `mcp install` is refused for a name that is already registered, and its hint is the command that replaces
+the entry as it is. When an entry is there and broken, its check's `fix` is that command too: `mcp install` with
+the entry's own `--name`, `--inbox` and `--read-only`, and `--force`. Run that `fix` as it is.
 
 ### `mcp install` fails on Windows
 
@@ -202,9 +202,13 @@ npx -y @agentcomms/slack@latest mcp install --client claude-code --force    # th
 ```
 
 `--force` removes the existing entry of that name first; Claude Code refuses to add a server whose name is already
-taken, so without it the upgrade stops at "already exists". Check that the result says the entry was registered
-and the server verified: for Claude Code and Codex the entry is written through their own CLI, and if `claude` or
-`codex` is not on `PATH` the install prints the entry for you to add instead of registering it.
+taken, so without it the upgrade stops at "already exists". It never widens the entry it replaces: a pin
+(`--inbox`, `--workspace`) or `--read-only` that entry had and the command leaves out is kept, and the result says
+so in a warning; one you pass instead wins. To register a wider server on purpose, remove the entry with the
+client's own command (`claude mcp remove gmail --scope user`, say) and then install. Check that the result says
+the entry was registered and the server verified: for Claude Code and Codex the entry is written through their own
+CLI, and if `claude` or `codex` is not on `PATH` the install prints the entry for you to add instead of
+registering it.
 
 Restart the client afterwards — a running client keeps the server it started. Each version installs into its own
 directory under `<data dir>/runtime/` (`npx -y @agentcomms/core@latest paths` shows the data dir):
@@ -215,12 +219,15 @@ client whose CLI was not on `PATH`), because it cannot see where that entry was 
 process started from. The configs it reads are Claude Code's `.claude.json` (under `CLAUDE_CONFIG_DIR` when that
 is set) and the `.mcp.json` of each project listed in it, Claude Desktop's config, codex's `config.toml` (under
 `CODEX_HOME` when that is set), Cursor's `~/.cursor/mcp.json`, Gemini CLI's `~/.gemini/settings.json` and VS
-Code's user `mcp.json`. If any of those is there and cannot be read, or the processes cannot be listed, it removes
-nothing at all and says which. What it cannot see is an entry you put by hand anywhere else — a workspace
-`.vscode/mcp.json` or `.cursor/mcp.json`, say — so check `--dry-run` first if you have one. A runtime kept only
-because its entry was printed stays until you say that entry is gone: `mcp prune --include-printed` removes those
-too, and still keeps anything a config it reads or a running process names. Run it once the clients have been
-restarted:
+Code's user `mcp.json` — and, beside those, every config `mcp install` recorded registering into or printing for,
+as it resolved them then. So a second Claude account kept under its own `CLAUDE_CONFIG_DIR`, or codex under
+another `CODEX_HOME`, is read even from a shell that does not set it, and a runtime kept for it says in which file.
+If any of those is there and cannot be read, or the processes cannot be listed, it removes nothing at all and says
+which. A recorded config that is no longer there keeps nothing. What it cannot see is an entry you put by hand
+anywhere else — a workspace `.vscode/mcp.json` or `.cursor/mcp.json`, say — or pasted from a `--print` that warned
+it could not record the entry; check `--dry-run` first if you have one. A runtime kept only because its entry was
+printed stays until you say that entry is gone: `mcp prune --include-printed` removes those too, and still keeps
+anything a config it reads or a running process names. Run it once the clients have been restarted:
 
 ```bash
 npx -y @agentcomms/gmail@latest mcp prune --dry-run
@@ -238,9 +245,10 @@ agent-gmail doctor          # as you
 agent-gmail mcp install --client <name> --force   # rewrites the entry with the right paths
 ```
 
-`--force` replaces only an entry this package wrote, and a plain `mcp install` is refused while one is there.
-If the entry was registered with its own `--name`, `--inbox` or `--read-only`, pass those again, or run the
-`fix` that `doctor` prints for it, which carries them.
+`--force` replaces only an entry this package wrote, and a plain `mcp install` is refused while one is there. It
+keeps the `--inbox` and `--read-only` of the entry it replaces unless you pass others. If the entry was registered
+under its own `--name`, pass that again — another name is another entry — or run the `fix` that `doctor` prints
+for it, which carries every one of them.
 
 ### An agent asks for approval in a form instead of the terminal
 

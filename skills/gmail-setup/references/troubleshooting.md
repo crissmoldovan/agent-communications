@@ -317,8 +317,10 @@ root.
 | Nothing can reach npm to install the runtime | The default `managed` launcher installs the exact running version into its own directory | `--launcher npx` runs the published package directly instead |
 
 An entry that is already registered is replaced only with `--force`; without it `mcp install` is refused for
-that name. Pass the entry's own `--name`, `--inbox` and `--read-only` again too, or the replacement reaches more
-than the one it replaces — doctor's `fix` for a stale or broken entry already carries them.
+that name, with the command that replaces it as it is. `--force` keeps the `--inbox` and `--read-only` of the
+entry it replaces unless others are passed, and says so in a warning; pass the entry's own `--name` again, since
+another name is another entry — doctor's `fix` for a stale or broken entry already carries all three. To widen an
+entry, remove it with the client's own command first, and only when the user asks for that.
 
 **And the one that is not a start-up problem at all.** If `doctor` reports `other-gmail-servers` as
 failing, another Gmail MCP server with send tools is registered with the user's client. It is a

@@ -176,8 +176,10 @@ npx -y @agentcomms/gmail@latest mcp install --client claude-code --force
 npx -y @agentcomms/slack@latest mcp install --client claude-code --force
 ```
 
-`--force` is required because the client CLIs refuse to overwrite an existing entry. Restart the
-client afterwards. `agent-gmail doctor` warns when the registered Gmail server is older than what you have.
+`--force` is required because the client CLIs refuse to overwrite an existing entry. It keeps the
+pin (`--inbox`, `--workspace`) and `--read-only` of the entry it replaces unless you pass others, and
+says so, so an upgrade never widens what the server may reach. Restart the client afterwards.
+`agent-gmail doctor` warns when the registered Gmail server is older than what you have.
 
 Coming from an older release, or bringing another computer up to date — the rename to
 organisation/platform names, both MCP servers, and a prompt an agent there can follow:

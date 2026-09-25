@@ -1302,6 +1302,9 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
            * that finishes it, and hands both back rather than waiting for something that is not going to happen.
            */
           const did: string[] = [];
+          // What the install had to say — a pin it kept from the entry it replaced, another Gmail server with send
+          // tools. The interactive branch prints them with the rest of the install; this one dropped them.
+          const warnings: string[] = [];
           let blocked: { step: string; needs: string; hint?: string } | null = null;
           let handoff: { authUrl: string; finish: string } | null = null;
 
@@ -1373,6 +1376,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
                 force: options.replaceServer === true,
                 ...(options.launcher ? { launcher: String(options.launcher) as 'managed' | 'npx' | 'local' } : {}),
               });
+              warnings.push(...result.warnings);
               // Only what happened. Reporting "registered" for an install that did not apply, or that failed its
               // own start-up check, is the kind of claim the `did` list exists to make impossible.
               if (result.applied && result.verified) did.push(`registered the server with ${which}`);
@@ -1388,7 +1392,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             }
           }
 
-          const report = { ...state, did, blocked, handoff };
+          const report = { ...state, did, warnings, blocked, handoff };
           const nameExample = (await context.config()).version === 2 ? 'acme/gmail' : 'work';
           writeResult(
             report,

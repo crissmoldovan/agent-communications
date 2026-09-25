@@ -465,6 +465,32 @@ test("a refusal's hint keeps the name and the workspace pin it was given", async
   );
 });
 
+test('--force keeps the workspace pin of the entry it replaces, and its refusal hint names it', async () => {
+  /*
+   * The pin lived only in the entry. The upgrade command every document gives passes none, and it registered a
+   * server pinned to nothing — every workspace on the machine — with no warning; the refusal's hint was built from
+   * the caller's flags, so following it did the same.
+   */
+  const { context, fileOf } = await setUp();
+  const file = fileOf('cursor');
+  await writeJson(file, { mcpServers: { slack: { ...OURS, args: [...OURS.args, '--workspace', 'acme/slack'] } } });
+
+  await assert.rejects(
+    mcpInstall(context, { client: 'cursor', launcher: 'local', noVerify: true }),
+    (error: unknown) =>
+      error instanceof CommsError &&
+      (error.hint ?? '').includes('--workspace acme/slack') &&
+      (error.hint ?? '').includes('--force'),
+  );
+  const result = await mcpInstall(context, { client: 'cursor', launcher: 'local', noVerify: true, force: true });
+  const written = JSON.parse(await readFile(file, 'utf8')) as { mcpServers: Record<string, { args: string[] }> };
+  assert.deepEqual(written.mcpServers.slack?.args.slice(-2), ['--workspace', 'acme/slack'], 'the pin was dropped');
+  assert.ok(
+    result.warnings.some((warning) => warning.includes('--workspace acme/slack')),
+    result.warnings.join('\n'),
+  );
+});
+
 test(
   'a config kept elsewhere and linked into place stays linked, and its directory keeps its mode',
   NOT_ON_WINDOWS,

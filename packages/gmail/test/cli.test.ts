@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { chmod, readFile, writeFile } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -784,6 +784,53 @@ test('setup --launcher reaches the headless agent step, and the entry it writes 
   // so this is the flag having arrived rather than merely having been accepted.
   assert.match(written, /packages[/\\]+gmail[/\\]+(src|dist)[/\\]+cli\./, `${written}\n${result.stderr}`);
   assert.doesNotMatch(written, /node_modules/, `the managed default was used instead:\n${written}`);
+});
+
+test('setup --replace-server keeps the mailbox pin and --read-only of the entry it replaces, and says so', async () => {
+  /*
+   * `setup` passes no pin and no `--read-only` at all, so replacing an entry that had them registered a server
+   * for every mailbox with every tool that changes one, and nothing in the report said a thing.
+   */
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
+  const home = tempDir();
+  const cursor = join(home, '.cursor', 'mcp.json');
+  const runtime = join(
+    home,
+    'data',
+    'runtime',
+    '0.0.1-gmail',
+    'node_modules',
+    '@agentcomms',
+    'gmail',
+    'dist',
+    'cli.mjs',
+  );
+  await mkdir(dirname(cursor), { recursive: true });
+  await writeFile(
+    cursor,
+    JSON.stringify({
+      mcpServers: { gmail: { command: 'node', args: [runtime, 'mcp', '--inbox', 'work', '--read-only'] } },
+    }),
+  );
+
+  const result = await cli(
+    harness,
+    ['setup', '--mcp-client', 'cursor', '--launcher', 'local', '--replace-server', '--json'],
+    { env: { HOME: home, USERPROFILE: home } },
+  );
+
+  const written = JSON.parse(await readFile(cursor, 'utf8')) as { mcpServers: { gmail: { args: string[] } } };
+  assert.deepEqual(
+    written.mcpServers.gmail.args.slice(-4),
+    ['mcp', '--inbox', 'work', '--read-only'],
+    `${JSON.stringify(written)}\n${result.stderr}`,
+  );
+  const report = result.json<Envelope<{ warnings?: string[] }>>().data;
+  assert.ok(
+    report?.warnings?.some((warning) => warning.includes('--inbox work --read-only')),
+    `the report does not say what it kept: ${result.stdout}`,
+  );
 });
 
 /** The long options a command's `--help` lists, which is what Commander actually defined for it. */

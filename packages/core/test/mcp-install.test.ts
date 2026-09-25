@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -127,6 +127,7 @@ test('--print builds the managed entry without installing anything', async () =>
     version: '0.0.1',
     moduleUrl: import.meta.url,
     serverArgs: () => [],
+    narrowingOf: () => ({}),
   };
   const result = await mcpInstall(context(data, home), product, { client: 'json', apply: false });
   assert.equal(result.entry.args[0], managedRuntimeEntry(data, product.packageName, '0.0.1'));
@@ -296,6 +297,7 @@ test('prune keeps a runtime it printed an entry for, because where that entry we
     version: '0.0.1',
     moduleUrl: import.meta.url,
     serverArgs: () => [],
+    narrowingOf: () => ({}),
   };
   // `--client json` prints; the entry is pasted wherever the person keeps it, which no scan reaches.
   const printed = await mcpInstall(context(data, home), product, { client: 'json', apply: false, noVerify: true });
@@ -313,6 +315,189 @@ test('prune keeps a runtime it printed an entry for, because where that entry we
   assert.ok(blind.refused?.includes(handedOutRuntimesPath(data)), `${blind.refused}`);
 });
 
+const NOT_ON_WINDOWS =
+  process.platform === 'win32' ? { skip: 'mcp install cannot spawn a .cmd; see install-force.test.ts in gmail' } : {};
+
+/**
+ * A stand-in for `claude`, on PATH, that keeps its servers in the one `.claude.json` it is given.
+ *
+ * That is what Claude Code does with the `CLAUDE_CONFIG_DIR` of the shell that ran it. The path is written into
+ * the script rather than read from its environment, which is this test process's own and may name a real one.
+ */
+function fakeClaude(config: string): string {
+  const bin = tempDir();
+  const script = [
+    '#!/usr/bin/env node',
+    'const fs = require("node:fs");',
+    `const config = ${JSON.stringify(config)};`,
+    'const [, sub, name, entry] = process.argv.slice(2);',
+    'if (sub === "add-json") {',
+    '  const current = fs.existsSync(config) ? JSON.parse(fs.readFileSync(config, "utf8")) : {};',
+    '  current.mcpServers = { ...current.mcpServers, [name]: JSON.parse(entry) };',
+    '  fs.writeFileSync(config, JSON.stringify(current));',
+    '}',
+  ].join('\n');
+  writeFileSync(join(bin, 'claude'), script, { mode: 0o755 });
+  return bin;
+}
+
+test(
+  'prune keeps a runtime the installer registered under a CLAUDE_CONFIG_DIR its own shell does not have',
+  NOT_ON_WINDOWS,
+  async () => {
+    const { data, home, old, product, nothingRunning } = twoRuntimes();
+    // A second Claude account, chosen per shell: the install ran with it set, and the prune below does not.
+    const work = tempDir();
+    const config = join(work, '.claude.json');
+    const installing: InstallContext = {
+      env: { HOME: home, PATH: fakeClaude(config), CLAUDE_CONFIG_DIR: work },
+      core: context(data, home).core,
+    };
+    const slack: McpProduct = {
+      packageName: SLACK.packageName,
+      binary: 'agent-slack',
+      defaultServerName: 'slack',
+      npxPackage: SLACK.npxPackage,
+      version: '0.0.1',
+      moduleUrl: import.meta.url,
+      serverArgs: () => [],
+      narrowingOf: () => ({}),
+    };
+    const installed = await mcpInstall(installing, slack, { client: 'claude-code', noVerify: true });
+    assert.equal(installed.method, 'cli');
+    assert.match(readFileSync(config, 'utf8'), /0\.0\.1-slack/, 'the stand-in wrote the entry where it was told');
+
+    const kept = await pruneManagedRuntimes(context(data, home), product, nothingRunning);
+    assert.deepEqual(kept.removed, [], 'a runtime the work account still starts was removed');
+    const reason = kept.kept.find((item) => item.version === '0.0.1')?.reason ?? '';
+    assert.match(reason, /registered with claude-code as "slack"/);
+    assert.ok(reason.includes(config), `the reason says where, which this shell would not guess: ${reason}`);
+    await stat(old);
+
+    // A recorded config that is there and cannot be read is the same as a known one: nothing goes, and it is named.
+    writeFileSync(config, '{ "mcpServers": ');
+    const blind = await pruneManagedRuntimes(context(data, home), product, nothingRunning);
+    assert.deepEqual(blind.removed, []);
+    assert.ok(blind.refused?.includes(config), `the refusal names the file: ${blind.refused}`);
+
+    // One that is no longer there is not a reason to keep anything: the record is of where to look, not a hold.
+    rmSync(config);
+    const gone = await pruneManagedRuntimes(context(data, home), product, nothingRunning);
+    assert.deepEqual(
+      gone.removed.map((item) => item.version),
+      ['0.0.1'],
+    );
+  },
+);
+
+test('with a data directory it cannot write, --print still prints the entry and a write is refused untouched', async (t) => {
+  if (process.platform === 'win32' || process.getuid?.() === 0) {
+    t.skip('a mode cannot stop this process writing there');
+    return;
+  }
+  const data = tempDir();
+  const home = tempDir();
+  const product: McpProduct = {
+    packageName: '@agentcomms/no-such-package-for-tests',
+    binary: 'agent-test',
+    defaultServerName: 'test',
+    npxPackage: '@agentcomms/no-such-package-for-tests',
+    version: '0.0.1',
+    moduleUrl: import.meta.url,
+    serverArgs: () => [],
+    narrowingOf: () => ({}),
+  };
+  // What a sandbox whose writable roots leave out the data directory looks like from inside it.
+  chmodSync(data, 0o500);
+  try {
+    const result = await mcpInstall(context(data, home), product, { client: 'cursor', apply: false, noVerify: true });
+    assert.match(result.snippet, /no-such-package-for-tests/);
+    assert.ok(
+      result.warnings.some((warning) => /mcp prune/.test(warning) && warning.includes(handedOutRuntimesPath(data))),
+      result.warnings.join('\n'),
+    );
+  } finally {
+    chmodSync(data, 0o700);
+  }
+  assert.deepEqual(readdirSync(data), [], 'and nothing was written there');
+
+  // An entry that would be written is different: unrecorded, prune could delete what it starts. So it is refused,
+  // in words, before the client's config is touched.
+  makeRuntime(managedRuntimeDir(data, product.packageName, '0.0.1'), product.packageName, '0.0.1');
+  chmodSync(data, 0o500);
+  try {
+    await assert.rejects(
+      mcpInstall(context(data, home), product, { client: 'cursor', noVerify: true }),
+      (error: { message?: string; hint?: string }) =>
+        /nothing was registered/.test(error.message ?? '') && /--print/.test(error.hint ?? ''),
+    );
+  } finally {
+    chmodSync(data, 0o700);
+  }
+  const cursor = knownClientConfigs(context(data, home).env).find((file) => file.client === 'cursor')?.path ?? '';
+  await assert.rejects(stat(cursor), 'the client config was written without a record');
+});
+
+test('--force keeps the pin and --read-only of the entry it replaces, unless the caller gives its own', async () => {
+  const data = tempDir();
+  const home = tempDir();
+  const cursor = knownClientConfigs(context(data, home).env).find((file) => file.client === 'cursor')?.path ?? '';
+  const narrowed = {
+    command: 'node',
+    args: [managedRuntimeEntry(data, '@agentcomms/example', '0.0.0'), 'mcp', '--inbox', 'acme/work', '--read-only'],
+  };
+  writeConfig(cursor, JSON.stringify({ mcpServers: { example: narrowed } }));
+  const product = pinnedProduct();
+  const asked = { client: 'cursor', launcher: 'npx', noVerify: true } as const;
+
+  // The hint is the command that replaces this entry as it is, so following it keeps what it narrowed.
+  const hint = await mcpInstall(context(data, home), product, asked).then(
+    () => assert.fail('it was not refused'),
+    (error: { hint?: string }) => /`([^`]+)`/.exec(error.hint ?? '')?.[1] ?? '',
+  );
+  for (const flag of ['--inbox acme/work', '--read-only', '--launcher npx', '--force']) {
+    assert.ok(hint.includes(flag), `the hint dropped ${flag}: ${hint}`);
+  }
+
+  // And so does the bare `--force` that the upgrade instructions give, saying what it kept.
+  const forced = await mcpInstall(context(data, home), product, { ...asked, force: true });
+  assert.deepEqual(forced.entry.args, ['-y', '@agentcomms/example@0.0.1', '--inbox', 'acme/work', '--read-only']);
+  const written = JSON.parse(readFileSync(cursor, 'utf8')) as { mcpServers: { example: { args: string[] } } };
+  assert.deepEqual(written.mcpServers.example.args, forced.entry.args, 'the file holds what the result says');
+  assert.ok(
+    forced.warnings.some((warning) => warning.includes('--inbox acme/work --read-only') && /remove/.test(warning)),
+    forced.warnings.join('\n'),
+  );
+
+  // A flag the caller gives wins over the one it replaces; what the caller leaves out is still kept.
+  const repinned = await mcpInstall(context(data, home), product, { ...asked, force: true, inbox: 'acme/home' });
+  assert.deepEqual(repinned.entry.args, ['-y', '@agentcomms/example@0.0.1', '--inbox', 'acme/home', '--read-only']);
+
+  // Nothing to keep is nothing to say.
+  writeConfig(
+    cursor,
+    JSON.stringify({ mcpServers: { example: { command: 'node', args: [narrowed.args[0], 'mcp'] } } }),
+  );
+  const plain = await mcpInstall(context(data, home), product, { ...asked, force: true });
+  assert.deepEqual(plain.entry.args, ['-y', '@agentcomms/example@0.0.1']);
+  assert.deepEqual(plain.warnings, []);
+
+  // The launcher, too, comes off the entry when the caller named none, as the doctors' repair reads it.
+  writeConfig(
+    cursor,
+    JSON.stringify({
+      mcpServers: { example: { command: 'npx', args: ['-y', '@agentcomms/example@0.0.0', '--read-only'] } },
+    }),
+  );
+  const npx = await mcpInstall(context(data, home), product, { client: 'cursor', noVerify: true }).then(
+    () => assert.fail('it was not refused'),
+    (error: { hint?: string }) => /`([^`]+)`/.exec(error.hint ?? '')?.[1] ?? '',
+  );
+  for (const flag of ['--read-only', '--launcher npx', '--force']) {
+    assert.ok(npx.includes(flag), `the hint dropped ${flag}: ${npx}`);
+  }
+});
+
 test('--include-printed removes a runtime kept only for a printed entry, and the record forgets only that one', async () => {
   const { data, home, old, nothingRunning } = twoRuntimes();
   const product: McpProduct = {
@@ -323,6 +508,7 @@ test('--include-printed removes a runtime kept only for a printed entry, and the
     version: '0.0.1',
     moduleUrl: import.meta.url,
     serverArgs: () => [],
+    narrowingOf: () => ({}),
   };
   await mcpInstall(context(data, home), product, { client: 'json', apply: false, noVerify: true });
   // Somebody else's line, for the other product: forgetting 0.0.1 must not take it with it.
@@ -400,6 +586,10 @@ function pinnedProduct(): McpProduct {
       ...(options.inbox ? ['--inbox', options.inbox] : []),
       ...(options.readOnly ? ['--read-only'] : []),
     ],
+    narrowingOf: (args) => ({
+      ...(args.includes('--inbox') ? { inbox: args[args.indexOf('--inbox') + 1] } : {}),
+      ...(args.includes('--read-only') ? { readOnly: true } : {}),
+    }),
   };
 }
 

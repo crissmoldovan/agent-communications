@@ -92,10 +92,14 @@ the entry that is already there, which is how an upgrade reaches a registered cl
 Each result should say the entry was registered and that the server started. If it only printed an entry, the
 client's CLI was not found: see "Before you start".
 
-If an existing entry was registered with its own flags — a different `--name`, `--read-only`, or pinned to one
-mailbox or workspace — pass the same flags again, with the pinned account's **new** name. `agent-gmail doctor`
-prints the exact command for each stale Gmail entry; see
-[Troubleshooting](troubleshooting.md#the-server-is-running-an-old-version).
+`--force` never widens the entry it replaces: a pin to one mailbox or workspace, or `--read-only`, that the entry
+had and the command leaves out is kept, and the result says so in a warning. The pin it keeps is the name the
+entry was registered with, though, and after the rename that is the **old** one, which is refused. So if an
+existing entry was registered with its own flags — a different `--name`, `--read-only`, or pinned to one mailbox
+or workspace — pass the same flags again, with the pinned account's **new** name. `agent-gmail doctor` prints the
+exact command for each stale Gmail entry; see
+[Troubleshooting](troubleshooting.md#the-server-is-running-an-old-version). To register a wider server on
+purpose, remove the entry with the client's own command (`claude mcp remove gmail --scope user`) and install again.
 
 ## 5. Upgrade the global commands, where there are any
 
@@ -120,9 +124,12 @@ npx -y @agentcomms/slack@$V doctor --offline
 
 Reopen them, and check that the Gmail and Slack tools are there. Then remove the old servers' runtimes, which stay
 on disk otherwise. `prune` keeps a runtime named in any client config it reads, one it printed an entry for, and
-one a running process uses, and it removes nothing if one of those configs cannot be read. It does not read a
-workspace's own `.vscode/mcp.json` or `.cursor/mcp.json`, so if you registered a runtime there by hand, look at
-`mcp prune --dry-run` first. Run it after the clients are back:
+one a running process uses, and it removes nothing if one of those configs cannot be read. The configs it reads
+include every one `mcp install` recorded registering into, so a Claude Code account under another
+`CLAUDE_CONFIG_DIR`, or codex under another `CODEX_HOME`, counts even when this shell does not set it; a recorded
+config that has since been deleted keeps nothing. It does not read a workspace's own `.vscode/mcp.json` or
+`.cursor/mcp.json`, so if you registered a runtime there by hand, look at `mcp prune --dry-run` first. Run it after
+the clients are back:
 
 ```bash
 npx -y @agentcomms/gmail@$V mcp prune

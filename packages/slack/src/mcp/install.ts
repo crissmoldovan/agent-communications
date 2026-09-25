@@ -41,6 +41,11 @@ export const SLACK_MCP: McpProduct = {
   version: VERSION,
   moduleUrl: import.meta.url,
   serverArgs: (options) => (options.workspace ? ['--workspace', options.workspace] : []),
+  // Read back as the doctor's repair reads it, so `--force` keeps the workspace a registered entry was pinned to.
+  narrowingOf: (args) => {
+    const workspace = args.includes('--workspace') ? args[args.indexOf('--workspace') + 1] : undefined;
+    return workspace ? { workspace } : {};
+  },
   /*
    * Our own `read` token cannot post, whatever else is installed — but that was never the point. Another Slack
    * server posts with *its* token, and an agent uses whichever tool it finds; every approval step here stands

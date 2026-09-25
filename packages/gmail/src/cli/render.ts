@@ -627,6 +627,8 @@ export function renderSetupPlan(
     candidates: { path: string; kind: string; modifiedAt: string }[];
     /** What this run changed, when it was driven by flags rather than by questions. */
     did?: readonly string[] | undefined;
+    /** What a step it ran had to warn about: a pin the MCP install kept, another Gmail server. */
+    warnings?: readonly string[] | undefined;
     /** Why it stopped, if it did. */
     blocked?: { step: string; needs: string; hint?: string | undefined } | null | undefined;
     /** The link and the command, when the only thing left is a person approving it. */
@@ -642,7 +644,8 @@ export function renderSetupPlan(
   // What this run actually changed, before anything about what is left. A caller that supplied flags did not ask
   // for a plan and needs to know what happened first.
   for (const action of state.did ?? []) lines.push(`${paint(color, 'green', 'done')} ${action}`);
-  if ((state.did ?? []).length > 0) lines.push('');
+  for (const warning of state.warnings ?? []) lines.push(paint(color, 'red', warning));
+  if ((state.did ?? []).length + (state.warnings ?? []).length > 0) lines.push('');
 
   if (state.handoff) {
     lines.push(paint(color, 'bold', 'This step needs a browser.'));
