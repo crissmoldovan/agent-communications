@@ -494,6 +494,40 @@ test('a pinned server refuses another mailbox’s send approval rather than void
   }
 });
 
+test('a pinned gmail_send_list refuses another mailbox, as every pinned tool does, rather than listing its own', async () => {
+  /*
+   * `{inbox: 'home'}` on a server pinned to `work` was answered with work's approvals, as if it had been asked for
+   * work's: the pin replaced the argument instead of refusing it. An agent that named home read the answer as "home
+   * has these approvals waiting" — work's list, under the wrong name.
+   */
+  const harness = await workAndHome();
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const draft = await createDraft(context, 'work', { to: ['sam@partner.test'], subject: 'Tue', text: 'Tuesday.' });
+  const prepared = await prepareSend(context, 'work', draft.draftId);
+
+  const pinned = await connect({ core: harness.core, env: harness.env, inbox: 'work' });
+  try {
+    const refused = toolError(await pinned.call('gmail_send_list', { inbox: 'home' }));
+    // The same refusal, word for word, as another pinned tool asked about the same mailbox.
+    const byAnother = toolError(await pinned.call('gmail_whoami', { inbox: 'home' }));
+    assert.equal(refused.code, 'USAGE');
+    assert.equal(refused.message, byAnother.message);
+    assert.equal(refused.hint, byAnother.hint);
+    assert.match(refused.message, /only serves the "work" mailbox/);
+
+    // Its own mailbox, named or not, is listed as before.
+    for (const args of [{}, { inbox: 'work' }]) {
+      const listed = wire(await pinned.call('gmail_send_list', args)).approvals as Array<{ approvalId: string }>;
+      assert.deepEqual(
+        listed.map((approval) => approval.approvalId),
+        [prepared.approvalId],
+      );
+    }
+  } finally {
+    await pinned.close();
+  }
+});
+
 // ── a pinned doctor ─────────────────────────────────────────────────────────────────────────────────────────
 
 test('a pinned gmail_doctor answers for its own mailbox only, and refuses another, as `doctor --inbox` scopes', async () => {

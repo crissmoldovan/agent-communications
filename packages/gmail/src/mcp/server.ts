@@ -2226,10 +2226,12 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       try {
         // Pinned means pinned. Every other tool in this file forces `pinned` or refuses a mismatch; these two were
         // the exceptions, so a server started with `--inbox work` could still enumerate — and cancel — approvals
-        // standing against a mailbox it was explicitly not given.
+        // standing against a mailbox it was explicitly not given. And another mailbox named here is refused, as
+        // every pinned tool refuses it: `{inbox: 'home'}` used to be answered with work's approvals, under home's
+        // name. Unpinned, `inbox` narrows the list or, left out, every mailbox's is listed.
         // The records as `send list --json` prints them: the store's public view, which leaves out the hash of the
         // code a person types, and nothing else is a secret.
-        return reply({ approvals: await listApprovals(context, { inbox: pinned ?? inbox }) });
+        return reply({ approvals: await listApprovals(context, { inbox: pinned ? targetInbox(inbox) : inbox }) });
       } catch (error) {
         return fail(error);
       }
