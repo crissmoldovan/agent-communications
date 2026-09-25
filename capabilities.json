@@ -297,7 +297,7 @@
     { "id": "gmail.setup", "package": "gmail", "cli": "setup", "mcp": "gmail_setup", "status": "both" },
     { "id": "gmail.doctor", "package": "gmail", "cli": "doctor", "mcp": "gmail_doctor", "status": "both" },
 
-    { "id": "slack.manifest", "package": "slack", "cli": "manifest", "mcp": null, "status": "pending", "phase": "P3" },
+    { "id": "slack.manifest", "package": "slack", "cli": "manifest", "mcp": "slack_manifest", "status": "both" },
     {
       "id": "slack.workspace.add",
       "package": "slack",
@@ -317,9 +317,8 @@
       "id": "slack.workspace.show",
       "package": "slack",
       "cli": "workspace show",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P3"
+      "mcp": "slack_workspace_show",
+      "status": "both"
     },
     { "id": "slack.mode.report", "package": "slack", "cli": "workspace mode", "mcp": "slack_mode", "status": "both" },
     {
@@ -363,7 +362,7 @@
       "status": "pending",
       "phase": "P3"
     },
-    { "id": "slack.doctor", "package": "slack", "cli": "doctor", "mcp": null, "status": "pending", "phase": "P3" },
+    { "id": "slack.doctor", "package": "slack", "cli": "doctor", "mcp": "slack_doctor", "status": "both" },
     { "id": "slack.channels", "package": "slack", "cli": "channels", "mcp": "slack_channels", "status": "both" },
     { "id": "slack.read", "package": "slack", "cli": "read", "mcp": "slack_read", "status": "both" },
     { "id": "slack.thread", "package": "slack", "cli": "thread", "mcp": "slack_thread", "status": "both" },
@@ -394,15 +393,16 @@
       "mcp": "slack_post_prepare",
       "status": "both"
     },
+    { "id": "slack.post.send", "package": "slack", "cli": "post send", "mcp": "slack_post_send", "status": "both" },
+    { "id": "slack.react", "package": "slack", "cli": "react", "mcp": "slack_react", "status": "both" },
     {
-      "id": "slack.post.send",
+      "id": "slack.react.send",
       "package": "slack",
-      "cli": "post send",
-      "mcp": null,
-      "status": "pending",
-      "phase": "P3"
+      "cli": "react",
+      "mcp": "slack_react_send",
+      "status": "both",
+      "reason": "The CLI claims a reaction's approval as `react --approval <id>`. Over MCP that is a call of its own, as posting is."
     },
-    { "id": "slack.react", "package": "slack", "cli": "react", "mcp": null, "status": "pending", "phase": "P3" },
     {
       "id": "slack.approve",
       "package": "slack",
