@@ -70,8 +70,7 @@ export interface ImportResult {
 export interface ImportOptions {
   dir?: string | undefined;
   clientName?: string | undefined;
-  /** keychain or file, as given; checked before anything is read. */
-  store?: string | undefined;
+  store?: StoreKind | undefined;
   dryRun?: boolean | undefined;
   /**
    * `<legacy name>=<name>`, one per mailbox to name differently. The legacy name is the one the file implies —
@@ -87,6 +86,11 @@ export interface ImportOptions {
    * strength of an approval that did not mention it.
    */
   approved?: ApprovedImport | undefined;
+}
+
+/** An import as a surface hands it over: the store is a word, checked by `inboxImportChange`. */
+export interface ImportRequest extends Omit<ImportOptions, 'store'> {
+  store?: string | undefined;
 }
 
 export interface ApprovedImport {
@@ -143,9 +147,9 @@ export function importDirectory(context: GmailContext, dir: string | undefined):
  *
  * Asked for as a dry run, it is one: no effects, so nobody is asked, and nothing is written.
  */
-export function inboxImportChange(context: GmailContext, options: ImportOptions): GatedChange<ImportResult> {
+export function inboxImportChange(context: GmailContext, request: ImportRequest): GatedChange<ImportResult> {
   // Checked before anything is read, dry run included, and before any approval could be prepared for it.
-  parseStore(options.store);
+  const options: ImportOptions = { ...request, store: parseStore(request.store) };
   if (options.dryRun) {
     return {
       plan: (config) => ({ before: config, after: config, summary: 'Say what an import would do' }),
@@ -156,7 +160,7 @@ export function inboxImportChange(context: GmailContext, options: ImportOptions)
   return {
     plan: async (config) => {
       // Refused here, before anybody is asked, when it names a store other than the one credentials are kept in.
-      const { store } = secretsStoreFor(config, parseStore(options.store));
+      const { store } = secretsStoreFor(config, options.store);
       const found = await importLegacy(context, { ...options, dryRun: true, approved: undefined });
       const client = found.client;
       approved = {
@@ -203,7 +207,6 @@ export function inboxImportChange(context: GmailContext, options: ImportOptions)
 }
 
 export async function importLegacy(context: GmailContext, options: ImportOptions = {}): Promise<ImportResult> {
-  const requested = parseStore(options.store);
   const directory = importDirectory(context, options.dir);
   const clientName = options.clientName ?? 'imported';
   const dryRun = options.dryRun ?? false;
@@ -281,7 +284,7 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
   // included, since that says what the import would do. It was silently ignored where a store was recorded, and
   // where none was but Slack had stored a token in the keychain, it was taken: the client's secret went into files,
   // and only the last write refused to record them.
-  const { store } = secretsStoreFor(config, requested);
+  const { store } = secretsStoreFor(config, options.store);
   const secrets = dryRun ? null : await context.core.secrets(store);
   if (!dryRun && secrets && !existingClient) {
     const ref = clientSecretRef(clientKey);

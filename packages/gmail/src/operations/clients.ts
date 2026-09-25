@@ -32,6 +32,19 @@ export interface ClientView {
   inboxes: string[];
 }
 
+export interface ClientAddOptions {
+  path: string;
+  name?: string | undefined;
+  /** Only meaningful for the first secret written to this config directory. */
+  store?: StoreKind | undefined;
+  /** Deletes the downloaded JSON once the secret is safely stored. */
+  move?: boolean | undefined;
+  /** Rotates the secret of an existing client with the same client id. */
+  replace?: boolean | undefined;
+  /** Skips the live check of the credentials (offline setup). */
+  noProbe?: boolean | undefined;
+}
+
 /** Where secrets can be kept. */
 export const STORE_KINDS: readonly StoreKind[] = ['keychain', 'file'];
 
@@ -40,20 +53,9 @@ export function parseStore(value: string | undefined): StoreKind | undefined {
   return oneOf(value, STORE_KINDS, 'a secret store');
 }
 
-export interface ClientAddOptions {
-  path: string;
-  name?: string | undefined;
-  /**
-   * keychain or file, as given; checked before anything is read. Only meaningful for the first secret written to this
-   * config directory.
-   */
+/** A registration as a surface hands it over: the store is a word, checked by `clientAddChange`. */
+export interface ClientAddRequest extends Omit<ClientAddOptions, 'store'> {
   store?: string | undefined;
-  /** Deletes the downloaded JSON once the secret is safely stored. */
-  move?: boolean | undefined;
-  /** Rotates the secret of an existing client with the same client id. */
-  replace?: boolean | undefined;
-  /** Skips the live check of the credentials (offline setup). */
-  noProbe?: boolean | undefined;
 }
 
 export interface ClientAddResult extends ClientView {
@@ -140,16 +142,16 @@ function refuseClientConflict(config: Config, name: string, parsed: InstalledCli
  *
  * The file is read when the change is planned, and what that read found is what `apply` registers.
  */
-export function clientAddChange(context: GmailContext, options: ClientAddOptions): GatedChange<ClientAddResult> {
+export function clientAddChange(context: GmailContext, request: ClientAddRequest): GatedChange<ClientAddResult> {
   // Checked before the file is read, and before any approval could be prepared for a store that does not exist.
-  const requested = parseStore(options.store);
+  const options: ClientAddOptions = { ...request, store: parseStore(request.store) };
   let read: ClientFile | undefined;
   return {
     plan: async (config) => {
       read = await readClientFile(context, options.path);
       const name = options.name ?? 'default';
       refuseClientConflict(config, name, read.client, options.replace === true);
-      const store = await chooseStore(context, requested);
+      const store = await chooseStore(context, options.store);
       const existing = config.clients[name];
       const after = structuredClone(config);
       after.secrets = { store };
@@ -176,7 +178,7 @@ export function clientAddChange(context: GmailContext, options: ClientAddOptions
     },
     apply: (consent) => {
       if (!read) throw new CommsError('UNEXPECTED', 'the client file was not read before it was registered');
-      return registerClient(context, read, { ...options, store: requested, consent });
+      return registerClient(context, read, { ...options, consent });
     },
   };
 }
@@ -186,14 +188,13 @@ export function clientAddChange(context: GmailContext, options: ClientAddOptions
  * downloaded file can be deleted. The secret is never printed, and never written to config.
  */
 export async function clientAdd(context: GmailContext, options: ClientAddOptions): Promise<ClientAddResult> {
-  const store = parseStore(options.store);
-  return registerClient(context, await readClientFile(context, options.path), { ...options, store });
+  return registerClient(context, await readClientFile(context, options.path), options);
 }
 
 async function registerClient(
   context: GmailContext,
   file: ClientFile,
-  options: Omit<ClientAddOptions, 'store'> & { store?: StoreKind | undefined; consent?: LooseningConsent | undefined },
+  options: ClientAddOptions & { consent?: LooseningConsent | undefined },
 ): Promise<ClientAddResult> {
   const name = options.name ?? 'default';
   const { path, client: parsed } = file;
