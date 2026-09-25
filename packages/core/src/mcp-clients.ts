@@ -1,14 +1,17 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homeDirectory } from '@agentcomms/core';
+// A relative import, never the package's own name: core importing `@agentcomms/core` only resolved through
+// Node's self-reference to the *built* package, so running core from source loaded its own stale dist.
+import { homeDirectory } from './paths.ts';
 
 /**
  * Where the MCP clients on this machine keep their server lists. Read to answer two questions: is our own server
- * registered in a way that will actually start, and **is another Gmail server registered that can send mail?**
+ * registered in a way that will actually start, and **is another server for the same service registered that can
+ * act with no approval step?**
  *
- * The second question matters more than it looks. Every promise this package makes about sending assumes it owns the
- * only path to Gmail's send endpoints; a second server with an ungated `send_email` tool makes those promises false,
- * and the agent will happily use whichever tool it finds.
+ * The second question matters more than it looks. Every promise these packages make about sending or posting
+ * assumes they own the only route to it; a second server with an ungated `send_email` or `post_message` tool makes
+ * those promises false, and the agent will happily use whichever tool it finds.
  */
 export interface ClientConfigFile {
   client: string;
@@ -21,6 +24,15 @@ export interface RegisteredServer {
   name: string;
   command: string;
   args: string[];
+  /**
+   * The address of a remote server, for an entry that has one instead of a command.
+   *
+   * Read because the official Slack server is exactly such an entry — `https://mcp.slack.com/mcp` — and a scan
+   * that looked only at `command` and `args` could not see the one other Slack server most people will have.
+   */
+  url?: string | undefined;
+  /** The entry's own `type` (`stdio`, `http`, `sse`), when it declares one. */
+  type?: string | undefined;
   /** The npm package the entry launches, when one can be read from the command line. */
   packageName?: string | undefined;
   /**
@@ -41,7 +53,7 @@ export interface RegisteredServer {
   scope?: 'user' | 'project' | undefined;
 }
 
-/** Gmail MCP servers known to expose ungated send tools. Matched against the whole command line. */
+/** The config file each supported client keeps its servers in, whether or not it exists. */
 export function knownClientConfigs(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
@@ -80,6 +92,16 @@ interface ServerEntry {
   command?: unknown;
   args?: unknown;
   env?: unknown;
+  url?: unknown;
+  serverUrl?: unknown;
+  httpUrl?: unknown;
+  type?: unknown;
+}
+
+/** The remote address, under whichever key the client uses: `url` for most, `serverUrl` and `httpUrl` for some. */
+function urlOf(entry: ServerEntry): string | undefined {
+  for (const value of [entry.url, entry.serverUrl, entry.httpUrl]) if (typeof value === 'string') return value;
+  return undefined;
 }
 
 function collectFromJson(text: string, client: string, path: string): RegisteredServer[] {
@@ -105,6 +127,8 @@ function collectFromJson(text: string, client: string, path: string): Registered
             scope,
             command: typeof entry.command === 'string' ? entry.command : '',
             args: Array.isArray(entry.args) ? entry.args.map(String) : [],
+            ...(urlOf(entry) ? { url: urlOf(entry) } : {}),
+            ...(typeof entry.type === 'string' ? { type: entry.type } : {}),
             ...(entry.env && typeof entry.env === 'object'
               ? {
                   env: Object.fromEntries(
@@ -162,6 +186,8 @@ function collectFromToml(text: string, client: string, path: string): Registered
     if (!current) continue;
     const command = /^\s*command\s*=\s*"([^"]*)"/.exec(line);
     if (command?.[1] !== undefined) current.command = command[1];
+    const url = /^\s*url\s*=\s*"([^"]*)"/.exec(line);
+    if (url?.[1] !== undefined) current.url = url[1];
     const args = /^\s*args\s*=\s*\[(.*)\]/.exec(line);
     if (args?.[1] !== undefined) {
       current.args = [...args[1].matchAll(/"([^"]*)"/g)].map((match) => match[1] ?? '');
@@ -181,7 +207,10 @@ function collectFromToml(text: string, client: string, path: string): Registered
 function dedupe(servers: RegisteredServer[]): RegisteredServer[] {
   const seen = new Map<string, RegisteredServer>();
   for (const server of servers) {
-    seen.set(`${server.path}::${server.name}::${server.command}::${server.args.join(' ')}`, server);
+    seen.set(
+      `${server.path}::${server.name}::${server.command}::${server.args.join(' ')}::${server.url ?? ''}`,
+      server,
+    );
   }
   return [...seen.values()];
 }
@@ -214,8 +243,3 @@ function packageFrom(server: RegisteredServer): string | undefined {
   const match = /(@[\w.-]+\/[\w.-]+|(?<=\s)[\w.-]+-mcp)(?=@|\s|$)/.exec(line);
   return match?.[1];
 }
-
-/**
- * Gmail servers other than ours that can send mail. Reported by `doctor` and after an import, because with one of
- * these connected an agent can send without any of this package's approval steps.
- */

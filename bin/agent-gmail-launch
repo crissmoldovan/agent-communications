@@ -67,7 +67,6 @@ if ! NODE_DIR=$(find_node_dir); then
   # environment with nothing on PATH.
   printf '%s\n' >&2 \
 "agent-gmail: could not find Node." \
-
 "" \
 "This launcher looked on PATH, then in Volta, fnm, asdf, nvm, Homebrew and the usual system" \
 "directories, and found no node in any of them. Node 22.12 or newer is required." \

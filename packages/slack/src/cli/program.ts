@@ -3,11 +3,17 @@ import {
   CommsError,
   canPrompt,
   colorEnabled,
+  EXIT_CODES,
+  isProductServer,
   type LooseningConsent,
+  listRegisteredServers,
   lookupName,
+  missingEntryFile,
   type OutputOptions,
   paint,
+  type RegisteredServer,
   renderChannelPreview,
+  renderPrune,
   requirePerson,
   runCommand,
   type SecretStore,
@@ -24,6 +30,7 @@ import { compose, type Mention } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
+import { mcpInstall, mcpPrune, SLACK_MCP } from '../mcp/install.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
 import { doctor, type IdentityProbe, type StoreUnavailable } from '../operations/doctor.ts';
 import { type ProbeFetch, probeIdentity } from '../operations/identity.ts';
@@ -578,7 +585,17 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
             );
           }
         }
-        const result = doctor({ config, now: context.now(), bundles, identities });
+        /*
+         * What the MCP clients have registered: other Slack servers, and whether our own entries run this release
+         * and still start. Read from their config files, so it needs no network and is done offline too.
+         */
+        const registeredServers = await listRegisteredServers(context.env);
+        const missingFiles = new Map<RegisteredServer, string>();
+        for (const server of registeredServers.filter((entry) => isProductServer(entry, SLACK_MCP))) {
+          const missing = await missingEntryFile(server);
+          if (missing) missingFiles.set(server, missing);
+        }
+        const result = doctor({ config, now: context.now(), bundles, identities, registeredServers, missingFiles });
         if (!result.healthy) softExit = 78;
         writeResult(result, output(), () => renderDoctor(result, options.color), streams);
       }),
@@ -929,10 +946,22 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
     .option('--workspace <name>', 'pin the server to one workspace')
     .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
     .option('--no-verify', 'do not start the server to check the entry works')
-    .option('--force', 'replace an entry of the same name — this is how you upgrade', false)
+    .option('--force', "replace this server's own earlier entry — this is how you upgrade", false)
     .option('--print', 'only print what would be written', false)
     .action(
       act(async (context, options, flags: Options) => {
+        /*
+         * Named, never assumed — the same rule as Gmail's.
+         *
+         * This defaulted to `claude-code` while Gmail refused without one, so the same command wrote to a
+         * client's config in one CLI and asked which client in the other. Writing into a configuration nobody
+         * named is the thing to ask about.
+         */
+        if (!flags.client) {
+          throw new CommsError('USAGE', 'name the client with --client', {
+            hint: 'For example: `agent-slack mcp install --client claude-code`.',
+          });
+        }
         /*
          * The parent's value counts too — see the note in the Gmail package, which had this bug shipped.
          *
@@ -940,9 +969,8 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
          * the subcommand's own option is always undefined and the pin is silently dropped.
          */
         const pinned = (flags.workspace ?? mcp.opts().workspace) as string | undefined;
-        const { mcpInstall } = await import('../mcp/install.ts');
         const result = await mcpInstall(context, {
-          client: (flags.client ?? 'claude-code') as Parameters<typeof mcpInstall>[1]['client'],
+          client: flags.client as Parameters<typeof mcpInstall>[1]['client'],
           name: flags.name as string | undefined,
           workspace: pinned,
           launcher: flags.launcher as 'managed' | 'npx' | 'local' | undefined,
@@ -950,7 +978,21 @@ Exit codes: 0 ok · 1 unexpected · 10 waiting for someone to finish signing in 
           apply: flags.print !== true,
           force: flags.force === true,
         });
+        // Asked to register and did not — the client's CLI is not on PATH. The snippet is still printed, but a
+        // zero exit told a script (or an agent) that the server was registered when nothing was.
+        if (result.notApplied) softExit = EXIT_CODES.UNAVAILABLE;
         writeResult(result, output(), () => renderInstall(result, options.color), streams);
+      }),
+    );
+
+  mcp
+    .command('prune')
+    .description('remove managed runtimes that no MCP client registers and no process is running')
+    .option('--dry-run', 'only say what would be removed', false)
+    .action(
+      act(async (context, options, flags: Options) => {
+        const result = await mcpPrune(context, { dryRun: flags.dryRun === true });
+        writeResult(result, output(), () => renderPrune(result, options.color), streams);
       }),
     );
 

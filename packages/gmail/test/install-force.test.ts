@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { CommsError } from '@agentcomms/core';
+import { CommsError, managedRuntimeEntry } from '@agentcomms/core';
 import { GmailContext } from '../src/context.ts';
 import { mcpInstall } from '../src/mcp/install.ts';
 import { newHarness, tempDir } from './support/harness.ts';
@@ -72,11 +72,17 @@ async function fakeClaude(options: { failAdd?: boolean; failRestore?: boolean; f
   };
 }
 
-/** A `.claude.json` holding one registered server, so `--force` has something to preserve. */
+/**
+ * A `.claude.json` holding an older install of this server, so `--force` has something to preserve.
+ *
+ * An older *Gmail* runtime, built with the installer's own path helper. It was `/old/cli.mjs` — a server that is
+ * not this one — and `--force` replaced it: exactly the overwrite of somebody else's entry that is now refused.
+ */
+const OLD_ENTRY = managedRuntimeEntry(join('/old', 'data'), '@agentcomms/gmail', '0.0.1');
 async function withRegistered(home: string, env: Record<string, string>) {
   await writeFile(
     join(home, '.claude.json'),
-    JSON.stringify({ mcpServers: { gmail: { command: 'node', args: ['/old/cli.mjs', 'mcp'], env } } }),
+    JSON.stringify({ mcpServers: { gmail: { command: 'node', args: [OLD_ENTRY, 'mcp'], env } } }),
   );
 }
 
@@ -113,7 +119,7 @@ test('--force restores the previous entry, with its env, when the replacement fa
   // The restore must carry the env back. Without it the "restored" server points at another config directory,
   // starts fine, and reports no mailboxes — to somebody who was just told their entry survived.
   const restore = calls.filter((call) => call.startsWith('mcp add-json')).at(-1) ?? '';
-  assert.match(restore, /\/old\/cli\.mjs/, 'the old command, not the new one');
+  assert.ok(restore.includes('0.0.1-gmail'), `the old command, not the new one: ${restore}`);
   assert.match(restore, /AGENT_COMMS_CONFIG_DIR/, 'and its env');
   assert.match(restore, /\/cfg\/previous/);
 });

@@ -4,6 +4,8 @@ import {
   mcpInstall as install,
   type Launcher,
   type McpProduct,
+  type PruneResult,
+  pruneManagedRuntimes,
   type RegisteredServer,
   type ServerEntry,
   type SupportedClient,
@@ -21,13 +23,16 @@ import { VERSION } from '../version.ts';
  * is actually about Gmail: the package to install, the flags it takes, and the warning about third-party servers
  * whose send tools no approval gates.
  */
-export type { InstallOptions, InstallResult, Launcher, ServerEntry, SupportedClient };
+export type { InstallOptions, InstallResult, Launcher, PruneResult, ServerEntry, SupportedClient };
 
-const GMAIL: McpProduct = {
+/** Exported for the doctor, which reads registered entries back with the same facts that wrote them. */
+export const GMAIL_MCP: McpProduct = {
   packageName: '@agentcomms/gmail',
   binary: 'agent-gmail',
   defaultServerName: 'gmail',
   npxPackage: '@agentcomms/gmail-mcp',
+  // The published `agent-gmail-mcp` bin: not what the installer writes, but a real way to run this server.
+  entryFiles: [['node_modules', '@agentcomms', 'gmail-mcp', 'dist', 'server.mjs']],
   version: VERSION,
   moduleUrl: import.meta.url,
   serverArgs: (options) => {
@@ -52,9 +57,14 @@ export async function mcpInstall(context: GmailContext, options: InstallOptions)
    * rather than in the shared code.
    */
   if (options.inbox) await context.inbox(options.inbox);
-  return install(context, GMAIL, options);
+  return install(context, GMAIL_MCP, options);
 }
 
 export function verifyEntry(entry: ServerEntry): Promise<{ ok: boolean; detail: string }> {
-  return verify(entry, { binary: GMAIL.binary, version: GMAIL.version });
+  return verify(entry, { binary: GMAIL_MCP.binary, version: GMAIL_MCP.version });
+}
+
+/** Removes Gmail's managed runtimes that nothing registers and nothing runs. */
+export function mcpPrune(context: GmailContext, options: { dryRun?: boolean } = {}): Promise<PruneResult> {
+  return pruneManagedRuntimes(context, GMAIL_MCP, options);
 }

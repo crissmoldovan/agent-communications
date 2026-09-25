@@ -64,6 +64,7 @@ import {
   renderLabels,
   renderMessage,
   renderModify,
+  renderPrune,
   renderSearch,
   renderSendAs,
   renderSendPreparation,
@@ -1167,13 +1168,13 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .option('--read-only', 'leave out every tool that changes the mailbox', false)
     .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
     .option('--no-verify', 'do not start the server to check the entry works')
-    .option('--force', 'replace an entry of the same name — this is how you upgrade', false)
+    .option('--force', "replace this server's own earlier entry — this is how you upgrade", false)
     .option('--print', 'only print what would be written', false)
     .action(
       act(async (context, globalOptions, options: Options) => {
         if (!options.client) {
           throw new CommsError('USAGE', 'name the client with --client', {
-            hint: 'For example: `agent-gmail mcp-install --client claude-code`.',
+            hint: 'For example: `agent-gmail mcp install --client claude-code`.',
           });
         }
         /*
@@ -1191,13 +1192,33 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           client: options.client as SupportedClient,
           name: String(options.name ?? 'gmail'),
           inbox: pinned ? String(pinned) : undefined,
-          readOnly: Boolean(options.readOnly),
+          /*
+           * The same, for `--read-only`, which the `--inbox` fix above missed: `mcp install --read-only`
+           * registered a server with every tool that trashes, labels and drafts, and doctor's repair — which keeps
+           * `--read-only` precisely so a narrowed server stays narrow — lost it the same way.
+           */
+          readOnly: Boolean(options.readOnly || mcp.opts().readOnly),
           launcher: options.launcher as Launcher | undefined,
           noVerify: options.verify === false,
           apply: options.print !== true,
           force: Boolean(options.force),
         });
+        // Asked to register and did not — the client's CLI is not on PATH. The snippet is still printed, but a
+        // zero exit told a script (or an agent) that the server was registered when nothing was.
+        if (result.notApplied) softExit = EXIT_CODES.UNAVAILABLE;
         writeResult(result, output(), (data) => renderInstall(data, globalOptions.color), streams);
+      }),
+    );
+
+  mcp
+    .command('prune')
+    .description('remove managed runtimes that no MCP client registers and no process is running')
+    .option('--dry-run', 'only say what would be removed', false)
+    .action(
+      act(async (context, globalOptions, options: Options) => {
+        const { mcpPrune } = await import('../mcp/install.ts');
+        const result = await mcpPrune(context, { dryRun: options.dryRun === true });
+        writeResult(result, output(), (data) => renderPrune(data, globalOptions.color), streams);
       }),
     );
 

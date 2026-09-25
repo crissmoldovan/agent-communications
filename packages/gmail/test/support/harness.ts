@@ -82,8 +82,15 @@ export async function newHarness(options: FakeGoogleOptions = {}): Promise<Harne
    * they name their mailbox `work`, which version 2 does not accept. So the fixture pins version 1, and the tests
    * that *are* about names migrate it with `migrateNamesForTest`, exactly as a person's config will be migrated.
    * `names.test.ts` also covers a config created fresh at version 2.
+   *
+   * The file secret store from the start, not only once a mailbox is added. With no mailbox the store defaulted
+   * to the keychain, and `doctor` proves a keychain works by writing, reading and deleting an item in it — so
+   * every doctor test on a harness with no mailbox did that to the real login keychain of whoever ran the suite.
    */
-  writeFileSync(join(configDir, 'config.json'), `${JSON.stringify({ version: 1 }, null, 2)}\n`);
+  writeFileSync(
+    join(configDir, 'config.json'),
+    `${JSON.stringify({ version: 1, secrets: { store: 'file' } }, null, 2)}\n`,
+  );
   const endpoints = resolveEndpoints(env);
 
   const addInbox: Harness['addInbox'] = async (inboxOptions) => {

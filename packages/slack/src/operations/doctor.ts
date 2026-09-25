@@ -1,7 +1,10 @@
-import type { Config } from '@agentcomms/core';
+import { type Config, isProductServer, pinnedVersion, type RegisteredServer } from '@agentcomms/core';
 import { scopeMismatch } from '../auth/authorize.ts';
 import { REFRESH_EXPIRY_WARNING_MS, type TokenBundle } from '../auth/bundle.ts';
 import type { InstallMode } from '../manifest.ts';
+import { SLACK_MCP } from '../mcp/install.ts';
+import { VERSION } from '../version.ts';
+import { describeOtherSlackServer, findOtherSlackServers, removalFor } from './other-servers.ts';
 import { listWorkspaces } from './workspaces.ts';
 
 /**
@@ -70,13 +73,14 @@ export interface DoctorInput {
     | { readonly lastThrottledAt?: string | undefined; readonly retryAfterSeconds?: number }
     | undefined;
   /**
-   * Other Slack MCP servers registered on this machine, by client name.
+   * Every MCP server registered with the clients on this machine, from core's scanner.
    *
-   * Absent and empty are different answers and are reported differently. Nothing scans for these yet — the
-   * command that registers MCP servers arrives with the MCP surface — and printing "none registered" for a scan
+   * Absent and empty are different answers and are reported differently: printing "none registered" for a scan
    * that never happened would be a clean bill of health for something nobody looked at.
    */
-  readonly otherSlackServers?: readonly string[] | undefined;
+  readonly registeredServers?: readonly RegisteredServer[] | undefined;
+  /** For each of our registered entries whose interpreter or script is gone, the path that is missing. */
+  readonly missingFiles?: ReadonlyMap<RegisteredServer, string> | undefined;
   /**
    * What Slack says about each stored credential, when it was asked.
    *
@@ -401,30 +405,7 @@ export function doctor(input: DoctorInput): DoctorResult {
     workspace: null,
   });
 
-  /*
-   * Another Slack server on this machine is the Gmail finding repeated.
-   *
-   * Six other Gmail MCP servers were registered on the author's own machine, any of which could send with no
-   * approval step. Everything here assumes it owns the only route to Slack's posting methods; a second server
-   * holding a `chat:write` token does not break that guarantee so much as stand beside it.
-   */
-  const others = input.otherSlackServers;
-  checks.push({
-    id: 'other-slack-servers',
-    title: 'Other Slack MCP servers',
-    status: others === undefined ? 'unknown' : others.length > 0 ? 'warn' : 'ok',
-    detail:
-      others === undefined
-        ? 'not checked on this machine'
-        : others.length > 0
-          ? `also registered: ${others.join(', ')}`
-          : 'none registered',
-    fix:
-      others && others.length > 0
-        ? 'An agent can post through those without any approval here. Remove them if this is meant to be the only route.'
-        : null,
-    workspace: null,
-  });
+  checks.push(...registrationChecks(input));
 
   const summary = {
     ok: checks.filter((check) => check.status === 'ok').length,
@@ -433,4 +414,111 @@ export function doctor(input: DoctorInput): DoctorResult {
     fail: checks.filter((check) => check.status === 'fail').length,
   };
   return { healthy: summary.fail === 0, summary, checks };
+}
+
+/**
+ * The command that re-registers *this* entry, not a default one.
+ *
+ * A generic `mcp install --force` would turn a server registered under its own name, or pinned to one workspace,
+ * into the default: every workspace, under another name. That is a widening of what an agent may reach, not a
+ * repair — so the flags are read back off the entry that is there.
+ */
+function repairCommand(server: RegisteredServer): string {
+  // Every write targets user scope; a project-scoped entry cannot be reached by any flag, so the honest answer
+  // is the manual one.
+  if (server.scope === 'project') {
+    return `remove "${server.name}" from the project entry in ${server.path} by hand, then re-run agent-slack mcp install`;
+  }
+  const flags = [`--client ${server.client}`];
+  if (server.name !== SLACK_MCP.defaultServerName) flags.push(`--name ${server.name}`);
+  const pinned = server.args[server.args.indexOf('--workspace') + 1];
+  if (server.args.includes('--workspace') && pinned) flags.push(`--workspace ${pinned}`);
+  if (server.args.some((argument) => argument.startsWith(`${SLACK_MCP.npxPackage}@`))) flags.push('--launcher npx');
+  return `agent-slack mcp install ${flags.join(' ')} --force`;
+}
+
+/**
+ * What the MCP clients on this machine have registered: other Slack servers, and our own entries' versions.
+ *
+ * An entry pins an exact version, so that upgrading the package elsewhere cannot change what an agent runs. The
+ * silent half of that trade is that a new release reaches no client until somebody re-registers, and nothing
+ * said so: the Slack entry on the author's machine would have gone on running 0.4.0 through every upgrade.
+ */
+function registrationChecks(input: DoctorInput): Check[] {
+  const servers = input.registeredServers;
+  if (servers === undefined) {
+    return [
+      {
+        id: 'other-slack-servers',
+        title: 'Other Slack MCP servers',
+        status: 'unknown',
+        detail: 'not checked on this machine',
+        fix: null,
+        workspace: null,
+      },
+      {
+        id: 'registered-server-version',
+        title: 'Registered server version',
+        status: 'unknown',
+        detail: 'not checked on this machine',
+        fix: null,
+        workspace: null,
+      },
+    ];
+  }
+  const checks: Check[] = [];
+
+  const others = findOtherSlackServers(servers, SLACK_MCP);
+  checks.push({
+    id: 'other-slack-servers',
+    title: 'Other Slack MCP servers',
+    status: others.length > 0 ? 'warn' : 'ok',
+    detail:
+      others.length > 0
+        ? `also registered: ${others.map(describeOtherSlackServer).join(', ')}; an agent can post through those without any approval here`
+        : // What a config-file scan cannot see, said rather than implied away.
+          'none in the MCP clients’ config files (servers added by plugins, claude.ai connectors or bridges are not visible from here)',
+    fix: others.length > 0 ? others.map(removalFor).join(' && ') : null,
+    workspace: null,
+  });
+
+  const ours = servers.filter((server) => isProductServer(server, SLACK_MCP));
+  const stale = ours
+    .map((server) => ({
+      server,
+      version: server.args.map((argument) => pinnedVersion(argument, SLACK_MCP)).find((pin) => pin !== null),
+    }))
+    .filter((entry): entry is { server: RegisteredServer; version: string } => Boolean(entry.version))
+    .filter((entry) => entry.version !== VERSION);
+  checks.push({
+    id: 'registered-server-version',
+    title: 'Registered server version',
+    status: stale.length > 0 ? 'warn' : 'ok',
+    detail:
+      stale.length > 0
+        ? stale
+            .map(
+              (entry) =>
+                `${entry.server.client} runs ${entry.version} as "${entry.server.name}"; this release is ${VERSION}`,
+            )
+            .join('; ')
+        : ours.length > 0
+          ? `this release, ${VERSION}`
+          : 'not registered with any MCP client; `agent-slack mcp install --client <client>` does that',
+    fix: stale.length > 0 ? stale.map((entry) => repairCommand(entry.server)).join(' && ') : null,
+    workspace: null,
+  });
+
+  for (const server of ours) {
+    const missing = input.missingFiles?.get(server);
+    checks.push({
+      id: 'mcp-command',
+      title: `MCP entry "${server.name}" (${server.client})`,
+      status: missing ? 'fail' : 'ok',
+      detail: missing ? `${missing} is not there any more` : [server.command, ...server.args].join(' '),
+      fix: missing ? repairCommand(server) : null,
+      workspace: null,
+    });
+  }
+  return checks;
 }

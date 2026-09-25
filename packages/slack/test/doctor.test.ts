@@ -1,9 +1,18 @@
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import { test } from 'node:test';
-import { type AccountConfig, type Config, emptyConfig, newAccountId } from '@agentcomms/core';
+import {
+  type AccountConfig,
+  type Config,
+  emptyConfig,
+  managedRuntimeEntry,
+  newAccountId,
+  type RegisteredServer,
+} from '@agentcomms/core';
 import { BUNDLE_VERSION, type TokenBundle } from '../src/auth/bundle.ts';
 import { scopesForMode } from '../src/manifest.ts';
 import { doctor } from '../src/operations/doctor.ts';
+import { VERSION } from '../src/version.ts';
 
 /**
  * `doctor` is what somebody runs when something is wrong and the reason is not obvious, so every check has to
@@ -257,37 +266,128 @@ test('the rate-limit check reports expected versus observed, and never probes', 
 });
 
 test('not having looked for other Slack servers is reported as not having looked', () => {
-  /*
-   * "None registered" for a scan that never ran is a clean bill of health nobody earned. Nothing scans for these
-   * yet — that arrives with the MCP surface — so absent and empty have to read differently.
-   */
+  // "None registered" for a scan that never ran is a clean bill of health nobody earned, so absent and empty
+  // have to read differently.
   const result = doctor({ config: config({ acme: account() }), now: NOW, bundles: new Map([['acme', bundle()]]) });
   const check = find(result, 'other-slack-servers');
   assert.equal(check?.status, 'unknown');
   assert.equal(check?.detail, 'not checked on this machine');
+  assert.equal(find(result, 'registered-server-version')?.status, 'unknown');
 
   const scanned = doctor({
     config: config({ acme: account() }),
     now: NOW,
     bundles: new Map([['acme', bundle()]]),
-    otherSlackServers: [],
+    registeredServers: [],
   });
-  assert.equal(find(scanned, 'other-slack-servers')?.detail, 'none registered');
+  assert.equal(find(scanned, 'other-slack-servers')?.status, 'ok');
+  // And it says what a config-file scan cannot see, rather than implying there is nothing.
+  assert.match(find(scanned, 'other-slack-servers')?.detail ?? '', /not visible from here/);
 });
 
-test('another Slack server on this machine is reported, because it is a second route', () => {
-  // The Gmail release found six other Gmail servers registered locally, any of which could send with no approval
-  // step. Everything here assumes it owns the only route to Slack's posting methods.
+/** A registered entry as core's scanner reports one. */
+function server(over: Partial<RegisteredServer> & Pick<RegisteredServer, 'name'>): RegisteredServer {
+  return { client: 'claude-code', path: '/cfg/.claude.json', command: 'node', args: [], scope: 'user', ...over };
+}
+
+test('another Slack server on this machine is reported, because it is a second route — including a URL entry', () => {
+  /*
+   * The reference server keeps a bot token in its env and posts with no approval step from here; the official
+   * one is a bare URL, which a scan of command lines could not see at all. Our own entry is not a finding.
+   */
+  const ours = server({
+    name: 'slack',
+    args: [managedRuntimeEntry('/data', '@agentcomms/slack', VERSION), 'mcp'],
+  });
   const result = doctor({
     config: config({ acme: account() }),
     now: NOW,
     bundles: new Map([['acme', bundle()]]),
-    otherSlackServers: ['cursor'],
+    registeredServers: [
+      ours,
+      server({
+        name: 'team-chat',
+        client: 'cursor',
+        path: '/cfg/.cursor/mcp.json',
+        command: 'npx',
+        args: ['-y', '@modelcontextprotocol/server-slack'],
+        packageName: '@modelcontextprotocol/server-slack',
+        env: { SLACK_BOT_TOKEN: 'fake-bot-token-2' },
+      }),
+      server({ name: 'official', command: '', url: 'https://mcp.slack.com/mcp', type: 'http' }),
+    ],
   });
   const check = find(result, 'other-slack-servers');
   assert.equal(check?.status, 'warn');
-  assert.match(check?.detail ?? '', /cursor/);
-  assert.match(check?.fix ?? '', /without any approval/);
+  assert.match(check?.detail ?? '', /"team-chat" in cursor/);
+  assert.match(check?.detail ?? '', /mcp\.slack\.com/);
+  assert.doesNotMatch(check?.detail ?? '', /"slack"/, 'our own entry is not another server');
+  // Named, never shown: an entry's env is where these servers keep their tokens.
+  assert.doesNotMatch(JSON.stringify(result), /fake-bot-token-2/);
+  assert.match(check?.fix ?? '', /claude mcp remove official/);
+});
+
+test('a registered Slack server older than this release is reported, with a repair that keeps what it was', () => {
+  // Built with core's helper, in the layout the installer writes, and in the one it wrote before the move.
+  const stale = server({
+    name: 'work-slack',
+    args: [managedRuntimeEntry('/data', '@agentcomms/slack', '0.0.1'), 'mcp', '--workspace', 'acme'],
+  });
+  const oldLayout = server({
+    name: 'slack',
+    client: 'cursor',
+    args: [join('/data', 'runtime', '0.0.2', 'node_modules', '@agentcomms', 'slack', 'dist', 'cli.mjs'), 'mcp'],
+  });
+  // With the package read off the command line, as core's scanner does.
+  const viaNpx = server({
+    name: 'slack',
+    client: 'codex',
+    command: 'npx',
+    args: ['-y', '@agentcomms/slack@0.0.3', 'mcp'],
+    packageName: '@agentcomms/slack',
+  });
+  const result = doctor({
+    config: config({ acme: account() }),
+    now: NOW,
+    bundles: new Map([['acme', bundle()]]),
+    registeredServers: [stale, oldLayout, viaNpx],
+  });
+  const check = find(result, 'registered-server-version');
+  assert.equal(check?.status, 'warn');
+  assert.match(check?.detail ?? '', /runs 0\.0\.1 as "work-slack"/);
+  assert.match(check?.detail ?? '', /runs 0\.0\.2 as "slack"/);
+  assert.match(check?.detail ?? '', /runs 0\.0\.3 as "slack"/);
+  const fix = check?.fix ?? '';
+  for (const flag of ['--name work-slack', '--workspace acme', '--launcher npx', '--force']) {
+    assert.ok(fix.includes(flag), `the repair dropped ${flag}: ${fix}`);
+  }
+
+  // This release, in the new layout, is current: the Gmail doctor once called every such install stale for ever.
+  const current = doctor({
+    config: config({ acme: account() }),
+    now: NOW,
+    bundles: new Map([['acme', bundle()]]),
+    registeredServers: [
+      server({ name: 'slack', args: [managedRuntimeEntry('/data', '@agentcomms/slack', VERSION), 'mcp'] }),
+    ],
+  });
+  assert.equal(find(current, 'registered-server-version')?.status, 'ok');
+  assert.equal(find(current, 'registered-server-version')?.fix, null);
+});
+
+test('a registered entry whose runtime is gone is a failure with the command that reinstalls it', () => {
+  const gone = server({ name: 'slack', args: [managedRuntimeEntry('/data', '@agentcomms/slack', VERSION), 'mcp'] });
+  const result = doctor({
+    config: config({ acme: account() }),
+    now: NOW,
+    bundles: new Map([['acme', bundle()]]),
+    registeredServers: [gone],
+    missingFiles: new Map([[gone, gone.args[0] ?? '']]),
+  });
+  const check = find(result, 'mcp-command');
+  assert.equal(check?.status, 'fail');
+  assert.match(check?.detail ?? '', /is not there any more/);
+  assert.match(check?.fix ?? '', /agent-slack mcp install --client claude-code --force/);
 });
 
 test('every check names its workspace, or says it is not about one', () => {

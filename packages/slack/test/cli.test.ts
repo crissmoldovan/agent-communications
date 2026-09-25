@@ -8,7 +8,7 @@ import { parseBundle } from '../src/auth/bundle.ts';
 import { openFlowStore } from '../src/auth/flow.ts';
 import { run } from '../src/cli/program.ts';
 import { scopesForMode } from '../src/manifest.ts';
-import { type Harness, newHarness, slackOk, TEST_CLIENT_ID } from './support/harness.ts';
+import { type Harness, newHarness, slackOk, TEST_CLIENT_ID, tempDir } from './support/harness.ts';
 
 /**
  * The command, end to end.
@@ -1563,6 +1563,63 @@ test('one workspace cannot prepare or post another’s draft', async () => {
   const stolen = await cli(harness, ['--json', 'post', 'prepare', '--workspace', 'zeta', '--draft', draftId], { read });
   assert.equal(stolen.code, EXIT_CODES.NOT_FOUND);
   assert.match(JSON.stringify(stolen.json<Envelope<never>>()), /no draft/);
+});
+
+/** The long options a command's `--help` lists, which is what Commander actually defined for it. */
+async function optionsOf(harness: Harness, argv: string[]): Promise<Set<string>> {
+  const help = await cli(harness, [...argv, '--help']);
+  return new Set([...help.stdout.matchAll(/^ {2}(?:-\w, )?(--[\w-]+)/gm)].map((match) => match[1] ?? ''));
+}
+
+test('every option `mcp` and `mcp install` both define reaches the registered entry, wherever it is typed', async () => {
+  /*
+   * Commander gives an option name defined on both a command and its subcommand to the *parent*. Gmail lost
+   * `--inbox` and then `--read-only` to it, one at a time. This walks the options as Commander defines them, so
+   * a new shared option fails here until it is handled and listed.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  const parent = await optionsOf(harness, ['mcp']);
+  const child = await optionsOf(harness, ['mcp', 'install']);
+  const shared = [...parent].filter((option) => child.has(option) && option !== '--help');
+
+  const expected: Record<string, { value?: string; inEntry: string[] }> = {
+    '--workspace': { value: 'acme', inEntry: ['--workspace', 'acme'] },
+  };
+  assert.deepEqual(shared.sort(), Object.keys(expected).sort(), 'a shared option this test does not know about');
+
+  for (const option of shared) {
+    const typed = [option, ...(expected[option]?.value ? [expected[option].value] : [])];
+    const install = ['--client', 'json', '--launcher', 'local', '--no-verify'];
+    for (const argv of [
+      ['mcp', 'install', ...typed, ...install],
+      ['mcp', ...typed, 'install', ...install],
+    ]) {
+      const result = await cli(harness, ['--json', ...argv]);
+      assert.equal(result.code, EXIT_CODES.OK, `${argv.join(' ')}: ${result.stdout}${result.stderr}`);
+      const args = result.json<Envelope<{ entry: { args: string[] } }>>().data?.entry.args ?? [];
+      const want = expected[option]?.inEntry ?? [];
+      const at = args.indexOf(want[0] ?? '');
+      assert.ok(
+        at >= 0 && want.every((part, index) => args[at + index] === part),
+        `${argv.join(' ')} → ${args.join(' ')}`,
+      );
+    }
+  }
+});
+
+test("mcp install names its client, and exits non-zero when that client's CLI is missing", async () => {
+  const harness = await newHarness();
+  // No silent default: writing into a configuration nobody named is the thing to ask about.
+  const unnamed = await cli(harness, ['--json', 'mcp', 'install', '--launcher', 'local', '--no-verify']);
+  assert.equal(unnamed.code, EXIT_CODES.USAGE);
+
+  const missing = await cli(
+    harness,
+    ['--json', 'mcp', 'install', '--client', 'claude-code', '--launcher', 'local', '--no-verify'],
+    { env: { HOME: tempDir(), PATH: tempDir() } },
+  );
+  assert.equal(missing.code, EXIT_CODES.UNAVAILABLE, missing.stdout);
 });
 
 test('`mcp install --workspace` actually pins the registered server', async () => {

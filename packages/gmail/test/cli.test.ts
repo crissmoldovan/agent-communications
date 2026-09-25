@@ -765,6 +765,63 @@ test('setup --launcher reaches the headless agent step, and the entry it writes 
   assert.doesNotMatch(written, /node_modules/, `the managed default was used instead:\n${written}`);
 });
 
+/** The long options a command's `--help` lists, which is what Commander actually defined for it. */
+async function optionsOf(harness: Harness, argv: string[]): Promise<Set<string>> {
+  const help = await cli(harness, [...argv, '--help']);
+  return new Set([...help.stdout.matchAll(/^ {2}(?:-\w, )?(--[\w-]+)/gm)].map((match) => match[1] ?? ''));
+}
+
+test('every option `mcp` and `mcp install` both define reaches the registered entry, wherever it is typed', async () => {
+  /*
+   * Commander gives an option name defined on both a command and its subcommand to the *parent*, so the
+   * subcommand's own copy reads as undefined. `--inbox` was dropped that way and fixed; `--read-only` was dropped
+   * the same way and missed — `mcp install --read-only` registered a server with every tool that changes a
+   * mailbox. So this walks the options as Commander defines them rather than a list somebody remembers, and a
+   * new shared option fails here until it is handled and listed.
+   */
+  const harness = await newHarness();
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1' });
+  const parent = await optionsOf(harness, ['mcp']);
+  const child = await optionsOf(harness, ['mcp', 'install']);
+  const shared = [...parent].filter((option) => child.has(option) && option !== '--help');
+
+  const expected: Record<string, { value?: string; inEntry: string[] }> = {
+    '--inbox': { value: 'work', inEntry: ['--inbox', 'work'] },
+    '--read-only': { inEntry: ['--read-only'] },
+  };
+  assert.deepEqual(shared.sort(), Object.keys(expected).sort(), 'a shared option this test does not know about');
+
+  for (const option of shared) {
+    const typed = [option, ...(expected[option]?.value ? [expected[option].value] : [])];
+    const install = ['--client', 'json', '--launcher', 'local', '--no-verify'];
+    for (const argv of [
+      ['mcp', 'install', ...typed, ...install],
+      ['mcp', ...typed, 'install', ...install],
+    ]) {
+      const result = await cli(harness, ['--json', ...argv]);
+      assert.equal(result.code, 0, `${argv.join(' ')}: ${result.stdout}${result.stderr}`);
+      const args: string[] = JSON.parse(result.stdout).data.entry.args;
+      const want = expected[option]?.inEntry ?? [];
+      const at = args.indexOf(want[0] ?? '');
+      assert.ok(
+        at >= 0 && want.every((part, index) => args[at + index] === part),
+        `${argv.join(' ')} → ${args.join(' ')}`,
+      );
+    }
+  }
+});
+
+test('mcp install exits non-zero when the client CLI is missing and nothing was registered', async () => {
+  const harness = await newHarness();
+  const result = await cli(
+    harness,
+    ['--json', 'mcp', 'install', '--client', 'claude-code', '--launcher', 'local', '--no-verify'],
+    { env: { HOME: tempDir(), PATH: tempDir() } },
+  );
+  assert.equal(result.code, EXIT_CODES.UNAVAILABLE, result.stdout);
+  assert.match(JSON.parse(result.stdout).data.notApplied, /claude was not found on PATH/);
+});
+
 test('`mcp install --inbox` actually pins the registered server', async () => {
   /*
    * `mcp` and `mcp install` both take `--inbox`, and Commander gives a repeated option name to the *parent* — so

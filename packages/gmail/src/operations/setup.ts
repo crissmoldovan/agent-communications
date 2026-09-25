@@ -1,9 +1,10 @@
 import { lstat, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { listRegisteredServers } from '@agentcomms/core';
+import { isProductServer, listRegisteredServers } from '@agentcomms/core';
 import { parseClientJson } from '../auth/oauth.ts';
 import type { GmailContext } from '../context.ts';
+import { GMAIL_MCP } from '../mcp/install.ts';
 import { readSmallFile } from './small-file.ts';
 
 /**
@@ -315,46 +316,17 @@ export interface SetupStateOptions {
  * So it is written against what the installer actually emits, which is one of three shapes:
  *
  *   npx      `npx -y @agentcomms/gmail-mcp@<version> …`   → read from `packageName`
- *   managed  `node <data>/runtime/<v>/node_modules/@agentcomms/gmail/dist/cli.mjs mcp serve`
+ *   managed  `node <data>/runtime/<v>-gmail/node_modules/@agentcomms/gmail/dist/cli.mjs mcp serve`
  *   local    `node <checkout>/packages/gmail/{src/cli.ts,dist/cli.mjs} mcp serve`
  *
  * The middle one is matched on the two consecutive segments `@agentcomms` and `gmail` — exactly, so
  * `gmail-evil` is not one of ours — and the last on this package's own directory followed by the entry it runs.
  */
 export function isOurServer(server: { command: string; args: string[]; packageName?: string | undefined }): boolean {
-  if (server.packageName) return OUR_PACKAGES.has(server.packageName);
-  return [server.command, ...server.args].some((part) => {
-    const segments = part.split(/[\\/]+/).filter(Boolean);
-    return OUR_ENTRIES.some(
-      (entry) =>
-        segments.length >= entry.length &&
-        entry.every((wanted, index) => segments[segments.length - entry.length + index] === wanted),
-    );
-  });
+  // One matcher, in core, shared with the installer: what counts as ours here is also what `mcp install --force`
+  // may replace, and two copies of that rule are two chances for them to disagree.
+  return isProductServer(server, GMAIL_MCP);
 }
-
-/**
- * The exact paths this package is started by, matched as a trailing run of segments.
- *
- * Checking the parts independently — a scope somewhere, a directory somewhere, a filename at the end — accepts
- * combinations none of these packages contains: `@agentcomms/gmail/dist/server.mjs` (that file belongs to the
- * other package), `@agentcomms/gmail/not-dist/cli.mjs`, `packages/gmail/src/nested/cli.ts`. None of them is a
- * server, and each was reported as a completed registration.
- *
- * Whole tuples instead, so a path either ends exactly like something that runs this or it does not. The first
- * two are what `mcpEntry` writes; the third is the published `agent-gmail-mcp` bin, which our installer does not
- * emit but is a real way to run this server and is included so a hand-written entry is not called somebody
- * else's.
- */
-const OUR_ENTRIES: readonly (readonly string[])[] = [
-  ['packages', 'gmail', 'src', 'cli.ts'],
-  ['packages', 'gmail', 'dist', 'cli.mjs'],
-  ['node_modules', '@agentcomms', 'gmail', 'dist', 'cli.mjs'],
-  ['node_modules', '@agentcomms', 'gmail-mcp', 'dist', 'server.mjs'],
-];
-
-/** The npm packages that are this server. An entry naming one of these, and no other, is ours. */
-const OUR_PACKAGES = new Set(['@agentcomms/gmail', '@agentcomms/gmail-mcp']);
 
 /** Where this machine is in the setup, what is already behind it, and the single next thing to do. */
 export async function setupState(context: GmailContext, options: SetupStateOptions = {}): Promise<SetupState> {

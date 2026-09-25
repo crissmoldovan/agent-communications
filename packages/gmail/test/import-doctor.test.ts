@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { CommsError, listRegisteredServers } from '@agentcomms/core';
+import { CommsError, listRegisteredServers, managedRuntimeEntry, secretsStoreOf } from '@agentcomms/core';
 import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
 import { GmailContext } from '../src/context.ts';
@@ -262,10 +262,14 @@ test('doctor says when the registered MCP server is an older version than this o
 
   // `mcp install` pins an exact version into the path, so that upgrading the package elsewhere cannot change what
   // an agent runs. The silent half of that trade is what this check exists to say out loud.
-  // Built with `join` for both versions, never by string-replacing a separator into an existing path: on Windows
-  // these are backslashes, so a replace of `/runtime/0.0.1/` silently matches nothing and the "current" case
-  // quietly re-tests the stale one.
+  //
+  // Built with core's `managedRuntimeEntry`, the function the installer itself uses — never a hand-written `join`.
+  // This test once built `runtime/<version>/…` by hand after the installer had moved to `runtime/<version>-gmail/…`,
+  // and went on passing while doctor called every real install stale. The old layout is still on people's
+  // machines, so it is kept as a case of its own below.
   const runtimeEntry = (version: string) =>
+    managedRuntimeEntry(harness.core.paths.dataDir, '@agentcomms/gmail', version);
+  const oldLayout = (version: string) =>
     join(harness.core.paths.dataDir, 'runtime', version, 'node_modules', '@agentcomms', 'gmail', 'dist', 'cli.mjs');
   const stalePath = runtimeEntry('0.0.1');
   await writeFile(
@@ -291,7 +295,66 @@ test('doctor says when the registered MCP server is an older version than this o
     JSON.stringify({ mcpServers: { gmail: { command: 'node', args: [runtimeEntry(VERSION), 'mcp'] } } }),
   );
   const current = await doctor(new GmailContext({ core: harness.core, env }));
-  assert.equal(byId(current.checks, 'registered-server-version')?.status, 'ok');
+  assert.equal(
+    byId(current.checks, 'registered-server-version')?.status,
+    'ok',
+    byId(current.checks, 'registered-server-version')?.detail,
+  );
+
+  // Both layouts are read: an old-layout install of an old version is stale, and of this version is not.
+  await writeFile(
+    join(harness.configDir, '.claude.json'),
+    JSON.stringify({ mcpServers: { gmail: { command: 'node', args: [oldLayout('0.0.1'), 'mcp'] } } }),
+  );
+  const staleOld = byId(
+    (await doctor(new GmailContext({ core: harness.core, env }))).checks,
+    'registered-server-version',
+  );
+  assert.equal(staleOld?.status, 'warn');
+  assert.match(staleOld?.detail ?? '', /runs 0\.0\.1 as "gmail"/);
+  await writeFile(
+    join(harness.configDir, '.claude.json'),
+    JSON.stringify({ mcpServers: { gmail: { command: 'node', args: [oldLayout(VERSION), 'mcp'] } } }),
+  );
+  const currentOld = await doctor(new GmailContext({ core: harness.core, env }));
+  assert.equal(byId(currentOld.checks, 'registered-server-version')?.status, 'ok');
+});
+
+test('doctor says when a registered entry’s runtime is gone, and recognises entries the installer really writes', async () => {
+  /*
+   * This check looked for `agent-gmail` in the command line, which neither a managed nor an npx entry contains —
+   * so it skipped every real registration and could only ever pass. A runtime deleted by hand leaves an entry
+   * that looks right and a client that says only "failed".
+   */
+  const harness = await newHarness({ accounts: [] });
+  const env = { ...harness.env, HOME: harness.configDir };
+  const gone = managedRuntimeEntry(harness.core.paths.dataDir, '@agentcomms/gmail', VERSION);
+  await writeFile(
+    join(harness.configDir, '.claude.json'),
+    JSON.stringify({ mcpServers: { gmail: { command: process.execPath, args: [gone, 'mcp', '--read-only'] } } }),
+  );
+  const result = await doctor(new GmailContext({ core: harness.core, env }));
+  const check = result.checks.find((entry) => entry.id === 'mcp-command');
+  assert.equal(check?.status, 'fail', JSON.stringify(result.checks.map((entry) => entry.id)));
+  assert.ok(check?.detail.includes(gone), check?.detail);
+  // The repair keeps what the entry was, as the version check's does.
+  assert.match(check?.fix ?? '', /mcp install --client claude-code --read-only --force/);
+});
+
+test('doctor’s tests never reach the real keychain: the harness starts on the file store', async () => {
+  /*
+   * `doctor` proves a keychain works by writing, reading and deleting an item in it. On a harness with no
+   * mailbox the store defaulted to the keychain, so every doctor test here did that to the login keychain of
+   * whoever ran the suite. The store is checked *before* doctor runs, so that if the pin is ever lost this test
+   * fails without touching the keychain itself.
+   */
+  const harness = await newHarness({ accounts: [] });
+  assert.equal(secretsStoreOf(await harness.core.config.load()), 'file', 'the harness must pin the file store');
+  const result = await doctor(
+    new GmailContext({ core: harness.core, env: { ...harness.env, HOME: harness.configDir } }),
+  );
+  const store = result.checks.find((check) => check.id === 'secret-store');
+  assert.equal(store?.detail, 'owner-only files in the config directory');
 });
 
 test('doctor’s repair for a stale server preserves what that server was, not the defaults', async () => {

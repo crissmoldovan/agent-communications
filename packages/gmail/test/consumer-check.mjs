@@ -1,6 +1,7 @@
 // Runs inside a fresh project that installed the packed tarball (scripts/verify-package.mjs).
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createGmailMcpServer, PACKAGE_NAME, VERSION } from '@agentcomms/gmail';
 
@@ -36,8 +37,22 @@ const missing = run('inbox', 'show', 'nope', '--json');
 assert.equal(missing.status, 66);
 assert.equal(JSON.parse(missing.stdout).error.code, 'NOT_FOUND');
 
+/*
+ * The file secret store, before `doctor` runs. A fresh config defaults to the keychain, and `doctor` proves a
+ * keychain works by writing, reading and deleting an item in it — so this check, run by `pnpm verify`, did that to
+ * the real login keychain of whoever was verifying a release.
+ */
+const configDir = process.env.AGENT_COMMS_CONFIG_DIR;
+assert.ok(configDir, 'verify-package runs this with its own config directory');
+mkdirSync(configDir, { recursive: true });
+writeFileSync(join(configDir, 'config.json'), `${JSON.stringify({ version: 2, secrets: { store: 'file' } })}\n`);
+
 const doctor = JSON.parse(run('doctor', '--json').stdout);
 assert.equal(doctor.ok, true);
 assert.ok(doctor.data.checks.some((check) => check.id === 'oauth-client'));
+assert.equal(
+  doctor.data.checks.find((check) => check.id === 'secret-store')?.detail,
+  'owner-only files in the config directory',
+);
 
 console.log('gmail consumer check: library entry, agent-gmail bin, envelopes and doctor OK');

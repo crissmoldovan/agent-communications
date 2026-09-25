@@ -1,4 +1,4 @@
-import { access, constants, readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   type CommsError,
@@ -8,8 +8,11 @@ import {
   formerNameRefusal,
   homeDirectory,
   isGroupOrWorldAccessible,
+  isProductServer,
   listRegisteredServers,
   lookupName,
+  missingEntryFile,
+  pinnedVersion,
   probeKeychain,
   type RegisteredServer,
   secretsStoreOf,
@@ -17,24 +20,17 @@ import {
 import { capabilitiesOf, scopesFor, TIERS, type Tier } from '../auth/scopes.ts';
 import { TokenSource } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';
+import { GMAIL_MCP } from '../mcp/install.ts';
 import { VERSION } from '../version.ts';
 import { findUngatedGmailServers } from './client-configs.ts';
+import { orphanedSecretsPath } from './inboxes.ts';
 
-/**
- * The version an argument pins, or null when it pins none.
- *
- * Two launchers pin, and they look nothing alike. `managed` writes a path —
- * `…/runtime/<version>/node_modules/@agentcomms/gmail/dist/cli.mjs`, matched with either separator and allowed to
- * start the string, so a relative path is not missed. `npx` writes a package spec, `@agentcomms/gmail-mcp@<version>`.
- * Reading only the first reported an `npx`-pinned install as current forever, which is the failure this check
- * exists to prevent wearing the other launcher's clothes. `local` pins nothing and is correctly ignored.
+/*
+ * Which version a registered entry runs is read with core's `pinnedVersion`, the same code that knows how the
+ * installer lays a runtime out. This file used to carry its own pattern for `runtime/<version>/…`; when the
+ * installer moved to `runtime/<version>-gmail/…` the pattern captured `0.4.0-gmail`, never equal to `0.4.0`, and
+ * every install made since was "stale" — with a repair that re-created the same path.
  */
-const PINNED_RUNTIME = /(?:^|[/\\])runtime[/\\]([^/\\]+)[/\\]node_modules[/\\]@agentcomms[/\\]gmail[/\\]/;
-const PINNED_SPEC = /^@agentcomms\/gmail(?:-mcp)?@(\d[^\s]*)$/;
-
-function pinnedVersion(argument: string): string | null {
-  return PINNED_RUNTIME.exec(argument)?.[1] ?? PINNED_SPEC.exec(argument)?.[1] ?? null;
-}
 
 /**
  * The command that re-registers *this* entry, not a default one.
@@ -56,11 +52,9 @@ function repairCommand(server: RegisteredServer): string {
   const inbox = server.args[server.args.indexOf('--inbox') + 1];
   if (server.args.includes('--inbox') && inbox) flags.push(`--inbox ${inbox}`);
   if (server.args.includes('--read-only')) flags.push('--read-only');
-  if (server.args.some((argument) => PINNED_SPEC.test(argument))) flags.push('--launcher npx');
+  if (server.args.some((argument) => argument.startsWith(`${GMAIL_MCP.npxPackage}@`))) flags.push('--launcher npx');
   return `agent-gmail mcp install ${flags.join(' ')} --force`;
 }
-
-import { orphanedSecretsPath } from './inboxes.ts';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'skipped';
 
@@ -460,7 +454,7 @@ async function mcpChecks(context: GmailContext): Promise<Check[]> {
   });
 
   /*
-   * A registered entry names an exact version — `runtime/<version>/…`, pinned so that upgrading the package
+   * A registered entry names an exact version — `runtime/<version>-gmail/…`, pinned so that upgrading the package
    * elsewhere on the machine cannot change what an agent runs underneath you. That is the right trade, but it has
    * a silent half: publishing a new version does nothing for an already-registered client, and nothing anywhere
    * said so. A release once sat unused on a machine through two versions because the only symptom was a fixed bug
@@ -468,7 +462,7 @@ async function mcpChecks(context: GmailContext): Promise<Check[]> {
    */
   const stale = servers
     .map((server) => {
-      const pin = server.args.map((arg) => pinnedVersion(arg)).find((version) => version !== null);
+      const pin = server.args.map((arg) => pinnedVersion(arg, GMAIL_MCP)).find((version) => version !== null);
       return pin ? { server, version: pin } : null;
     })
     .filter((entry): entry is { server: RegisteredServer; version: string } => entry !== null)
@@ -490,21 +484,19 @@ async function mcpChecks(context: GmailContext): Promise<Check[]> {
     fix: stale.length === 0 ? undefined : stale.map((entry) => repairCommand(entry.server)).join(' && '),
   });
 
-  const ours = servers.filter((server) => [server.command, ...server.args].join(' ').includes('agent-gmail'));
-  for (const server of ours) {
-    if (!server.command || server.command === 'npx' || !server.command.includes('/')) continue;
-    let runnable = true;
-    try {
-      await access(server.command, constants.X_OK);
-    } catch {
-      runnable = false;
-    }
+  /*
+   * Whether each of our entries still starts. Matched with the installer's own idea of "ours": this looked for
+   * `agent-gmail` in the command line, which neither a managed nor an npx entry contains, so the check skipped
+   * every real registration and could only ever pass.
+   */
+  for (const server of servers.filter((entry) => isProductServer(entry, GMAIL_MCP))) {
+    const missing = await missingEntryFile(server);
     checks.push({
       id: 'mcp-command',
       title: `MCP entry "${server.name}" (${server.client})`,
-      status: runnable ? 'ok' : 'fail',
-      detail: runnable ? server.command : `${server.command} is not there any more`,
-      fix: runnable ? undefined : `agent-gmail mcp install --client ${server.client}`,
+      status: missing ? 'fail' : 'ok',
+      detail: missing ? `${missing} is not there any more` : server.command,
+      fix: missing ? repairCommand(server) : undefined,
     });
   }
   return checks;

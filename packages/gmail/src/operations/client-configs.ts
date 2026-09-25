@@ -5,8 +5,7 @@ import type { RegisteredServer } from '@agentcomms/core';
  *
  * This stayed behind when the client-config machinery moved to `@agentcomms/core`, and the split is the point:
  * *where a client keeps its servers* is the same question for every product, while *which third-party servers
- * send mail with no approval step* is a fact about Gmail. Slack has no equivalent — a `read` workspace's token
- * cannot post at all — so there is nothing here for it to inherit.
+ * send mail with no approval step* is a fact about Gmail. Slack keeps its own answer for Slack.
  */
 
 export interface LegacyServerFinding extends RegisteredServer {
@@ -20,37 +19,39 @@ export interface LegacyServerFinding extends RegisteredServer {
 const UNGATED_GMAIL_SERVERS: Array<{
   pattern: RegExp;
   name: string;
-  removal: (client: string, server: string) => string;
+  removal: (client: string, server: string, path: string) => string;
 }> = [
   {
     pattern: /@artymclabin\/gmail-mcp/,
     name: '@artymclabin/gmail-mcp',
-    removal: (client, server) => removalCommand(client, server),
+    removal: (client, server, path) => removalCommand(client, server, path),
   },
   {
     pattern: /@gongrzhe\/server-gmail-autoauth-mcp|(?<![\w@/-])server-gmail-autoauth-mcp/,
     name: '@gongrzhe/server-gmail-autoauth-mcp',
-    removal: (client, server) => removalCommand(client, server),
+    removal: (client, server, path) => removalCommand(client, server, path),
   },
   {
     pattern: /@shinzolabs\/gmail-mcp/,
     name: '@shinzolabs/gmail-mcp',
-    removal: (client, server) => removalCommand(client, server),
+    removal: (client, server, path) => removalCommand(client, server, path),
   },
 ];
 
-function removalCommand(client: string, server: string): string {
+function removalCommand(client: string, server: string, path: string): string {
   switch (client) {
     case 'claude-code':
       return `claude mcp remove ${server}`;
     case 'codex':
       return `codex mcp remove ${server}`;
     default:
-      return `remove the "${server}" entry from the file above, then restart ${client}`;
+      // The file named, not "the file above": this is printed under a different client's install, and by
+      // `doctor` in a list of several, where the file above is somebody else's.
+      return `remove the "${server}" entry from ${path}, then restart ${client}`;
   }
 }
 
-/** The config files worth looking at, whether or not they exist. */
+/** Registered servers known to send mail with no approval step, each with why it matters and how to remove it. */
 export function findUngatedGmailServers(servers: readonly RegisteredServer[]): LegacyServerFinding[] {
   const findings: LegacyServerFinding[] = [];
   for (const server of servers) {
@@ -61,7 +62,7 @@ export function findUngatedGmailServers(servers: readonly RegisteredServer[]): L
         ...server,
         packageName: known.name,
         reason: `${known.name} exposes send tools that no approval step gates`,
-        removal: known.removal(server.client, server.name),
+        removal: known.removal(server.client, server.name, server.path),
       });
       break;
     }

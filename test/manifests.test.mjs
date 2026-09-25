@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { access, constants, readdir, readFile } from 'node:fs/promises';
+import { access, constants, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -85,6 +86,30 @@ test('the launcher needs no external command to say it cannot find Node', async 
   assert.match(source, /could not find Node/, 'and it says so plainly');
   assert.match(source, /agent-gmail mcp install/, 'and names the way out');
   assert.match(source, /exit 127/, 'with the status a host reports for a missing interpreter');
+});
+
+test('the launcher prints the whole of its could-not-find-Node message', {
+  skip: process.platform === 'win32',
+}, async () => {
+  /*
+   * Run, with the search forced to find nothing, because reading the source did not catch this: a blank line
+   * inside the `printf` continuation ended the command after its first line, and the shell then tried to run the
+   * rest of the message as a command called "". A person saw one line and "command not found" — the opposite of
+   * the useful message the test above checks is written down.
+   */
+  const source = await readFile(join(ROOT, 'bin', 'agent-gmail-launch'), 'utf8');
+  const probe = 'NODE_DIR=$(find_node_dir)';
+  assert.ok(source.includes(probe), 'the launcher still searches through find_node_dir');
+  const copy = join(await mkdtemp(join(tmpdir(), 'launcher-')), 'agent-gmail-launch');
+  await writeFile(copy, source.replace(probe, 'NODE_DIR=$(false)'));
+  const failed = await run('/bin/sh', [copy]).then(
+    () => assert.fail('it should exit when no Node is found'),
+    (error) => error,
+  );
+  assert.equal(failed.code, 127);
+  assert.doesNotMatch(failed.stderr, /command not found/);
+  assert.match(failed.stderr, /could not find Node\.\n\nThis launcher looked on PATH/);
+  assert.match(failed.stderr, /agent-gmail mcp install --client <your client>\n$/);
 });
 
 test('the Gemini extension launches the version it declares', async () => {

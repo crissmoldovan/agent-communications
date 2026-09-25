@@ -1,5 +1,4 @@
 import { paint } from '@agentcomms/core';
-import type { InstallResult } from '../mcp/install.ts';
 import type { LabelSummary, SendAsSummary } from '../operations/analyse.ts';
 import type { DownloadResult, FindAttachmentsResult } from '../operations/attachments.ts';
 import type { ClientAddResult, ClientView } from '../operations/clients.ts';
@@ -716,4 +715,4 @@ export function renderSetupPlan(
 }
 
 // Moved to `@agentcomms/core` when Slack needed the same renderer; re-exported so callers here are unchanged.
-export { renderInstall } from '@agentcomms/core';
+export { renderInstall, renderPrune } from '@agentcomms/core';

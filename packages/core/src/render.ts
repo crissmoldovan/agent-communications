@@ -1,6 +1,6 @@
 import { isDangerous } from './chars.ts';
 import { paint } from './cli-runtime.ts';
-import type { InstallResult } from './mcp-install.ts';
+import type { InstallResult, PruneResult } from './mcp-install.ts';
 
 /**
  * One renderer for every surface a send preview is shown on — the chat, an elicitation form, a terminal. Text the
@@ -348,16 +348,29 @@ export function renderInstall(result: InstallResult, color: boolean): string {
       'Restart the client to pick it up.',
     );
   } else {
+    if (result.notApplied) lines.push(paint(color, 'red', `Not registered: ${result.notApplied}.`));
     lines.push(
       paint(color, 'bold', `Add this to ${result.configPath ?? `the MCP configuration of ${result.client}`}:`),
       result.snippet.trimEnd(),
     );
   }
+  if (result.backupPath) lines.push(`The entry it replaced was saved to ${result.backupPath}.`);
   lines.push(
     result.verified
       ? paint(color, 'green', `Checked: ${result.verifyDetail}`)
       : paint(color, 'yellow', `Not checked: ${result.verifyDetail ?? 'skipped'}`),
   );
   for (const warning of result.warnings) lines.push('', paint(color, 'red', warning));
+  return lines.join('\n');
+}
+
+/** What `mcp prune` removed and kept, and why each one it kept is still needed. */
+export function renderPrune(result: PruneResult, color: boolean): string {
+  const lines: string[] = [];
+  if (result.refused) lines.push(paint(color, 'yellow', `Nothing removed: ${result.refused}.`));
+  const verb = result.dryRun ? 'Would remove' : 'Removed';
+  for (const item of result.removed) lines.push(paint(color, 'green', `${verb} ${item.version}: ${item.path}`));
+  for (const item of result.kept) lines.push(`Kept ${item.version} (${item.reason}): ${item.path}`);
+  if (lines.length === 0) lines.push(`No managed runtimes to remove in ${result.runtimeDir}.`);
   return lines.join('\n');
 }
