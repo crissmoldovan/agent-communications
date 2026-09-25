@@ -100,6 +100,8 @@ export async function buildInstructions(context: GmailContext, pinned: string | 
     '',
     'Changing an account: a call that loosens a safety setting or removes something returns `approvalRequired` and a',
     'preview instead. Show the preview in full and ask; call again with its `approvalId` only after the user says yes.',
+    'Under `confirm` — a mailbox’s send policy, or the change policy — the user approves outside this chat, at their',
+    'own terminal (`agent-gmail approve <id>`); you cannot approve it yourself.',
     '',
     pinned
       ? `This server is pinned to the "${pinned}" mailbox; the inbox argument may be omitted.`

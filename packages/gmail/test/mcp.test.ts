@@ -295,6 +295,9 @@ test('the instructions tell the model the three things it must know, and stay un
   assert.ok(Buffer.byteLength(instructions) < 2048, 'Claude Code truncates instructions at 2 KB');
   assert.match(instructions, /untrusted-content/);
   assert.match(instructions, /approve/);
+  // The core and Slack greetings name the `confirm` route; this one said only "ask", which under `confirm` sends a
+  // model looking for a yes it cannot use.
+  assert.match(instructions, /Under `confirm`[\s\S]*agent-gmail approve <id>[\s\S]*you cannot approve it yourself/);
   assert.match(instructions, /Pass `inbox` on every call/);
   assert.match(instructions, /work/);
   assert.match(instructions, /personal/, 'an unpinned server lists what it serves');
@@ -303,6 +306,44 @@ test('the instructions tell the model the three things it must know, and stay un
   // The greeting is the first thing a model reads, and it used to list every alias on the machine whatever the
   // server was pinned to. Naming the pin is not enough: the others have to be absent.
   assert.doesNotMatch(pinnedText, /personal/, 'a pinned server named a mailbox it does not serve');
+});
+
+test('the instructions stay under 2 KB with more mailboxes than they list', async () => {
+  // Two mailboxes is not the case that overflows. Fourteen, past the twelve the greeting names, is the longest it gets.
+  const aliases = [
+    'beamtech-gmail',
+    'cue-gmail',
+    'cue-gmail-billing',
+    'discovrx-gmail',
+    'personal-gmail',
+    'reprezent-gmail',
+    'rgc-gmail',
+    'rgc-gmail-clients',
+    'rgc-labs-gmail',
+    'studio-lasers-gmail',
+    'wf-gmail',
+    'wf-gmail-tech',
+    'wherefrom-gmail-support',
+    'zeta-gmail',
+  ];
+  const harness = await newHarness({
+    accounts: aliases.map((_, index) => ({ sub: `sub-${index}`, email: `box${index}@example.test` })),
+  });
+  for (const [index, alias] of aliases.entries()) {
+    await harness.addInbox({
+      alias,
+      email: `box${index}@example.test`,
+      sub: `sub-${index}`,
+      refreshToken: `rt_${index}`,
+    });
+  }
+  const instructions = await buildInstructions(new GmailContext({ core: harness.core, env: harness.env }), undefined);
+  assert.ok(
+    Buffer.byteLength(instructions) < 2048,
+    `${Buffer.byteLength(instructions)} bytes; Claude Code truncates instructions at 2 KB`,
+  );
+  assert.match(instructions, /Known mailboxes: [^\n]*, and 2 more\./);
+  assert.match(instructions, /Call gmail_inboxes_list/, 'the last line survives too');
 });
 
 test('arguments some clients send as strings are accepted exactly, never guessed', () => {
