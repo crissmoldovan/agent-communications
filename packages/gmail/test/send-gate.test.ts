@@ -145,7 +145,12 @@ test('under confirm, no argument an agent can pass will send: only a typed appro
 
   await assert.rejects(
     executeSend(context, 'work', { draftId, approvalId: prepared.approvalId, expect: prepared.expect }),
-    (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_PENDING',
+    (error: unknown) =>
+      error instanceof CommsError &&
+      error.code === 'APPROVAL_PENDING' &&
+      // Gmail's own words, which it passes itself: the approval store's default names no product.
+      /agent-gmail approve/.test(error.hint ?? '') &&
+      /send it from Gmail/.test(error.hint ?? ''),
   );
   assert.equal(google.requests.filter((request) => request.path.endsWith('/send')).length, 0);
 

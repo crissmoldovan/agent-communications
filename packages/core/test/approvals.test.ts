@@ -130,6 +130,29 @@ test('confirm: a claim before approval is refused without voiding; after a human
   assert.equal((await store.claimForSend(record.approvalId, live({ policy: 'confirm' }))).state, 'sending');
 });
 
+test('a claim waiting for a person says what the product making it tells it to, and no product by default', async () => {
+  // The store is shared by every product and the command that approves is not: its own default named
+  // `agent-gmail approve`, so a Slack post held for approval sent the agent to a command that could not approve it.
+  const { store, record } = await setup('confirm');
+  const hint = async (options?: Parameters<ApprovalStore['claimForSend']>[2]) => {
+    try {
+      await store.claimForSend(record.approvalId, live({ policy: 'confirm' }), options);
+    } catch (error) {
+      assert.ok(error instanceof CommsError && error.code === 'APPROVAL_PENDING');
+      return error.hint ?? '';
+    }
+    assert.fail('the claim should wait for a person');
+  };
+  assert.equal(
+    await hint({ pendingHint: 'Run the product’s own approve command.' }),
+    'Run the product’s own approve command.',
+  );
+  const neutral = await hint();
+  assert.match(neutral, /approve/);
+  assert.doesNotMatch(neutral, /gmail|slack/i, 'a default that names a product is wrong for every other one');
+  assert.equal((await store.get(record.approvalId))?.state, 'pending', 'and asking twice changed nothing');
+});
+
 test('an escalated chat send needs a human approval; a looser live policy never relaxes it', async () => {
   const { store, record } = await setup('chat', true);
   assert.equal(record.requiredPolicy, 'confirm');

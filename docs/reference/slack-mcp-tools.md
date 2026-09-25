@@ -152,7 +152,7 @@ One draft, exactly as it would be posted, and the text it was written from.
 
 ### `slack_draft_delete`
 
-Throw a draft away. An approval prepared from it can no longer be used, because there is nothing left to post.
+Throw a draft away. One too damaged to read is removed too, unless it names another workspace, and the result says so. An approval prepared from it can no longer be used, because there is nothing left to post.
 
 *writes · destructive*
 

@@ -100,8 +100,10 @@ This is a **widening**, and an agent never does it. It takes two steps, in this 
 2. `agent-slack workspace reauth <name> --mode send --port <port>`, which asks a person to type a challenge.
 
 `agent-slack workspace mode <name>` reports where a workspace stands and prints these steps. A workspace signed in
-with 0.4.1 or later remembers its port, so `--port` can be left out of both; an older one prints `<port>` until
-it is given one.
+with 0.4.1 or later remembers its port, so `--port` can be left out of `workspace reauth` and `workspace mode`,
+which use the recorded one. `agent-slack manifest` names no workspace, so it has no recorded port to use and still
+needs `--port` given: take the number from the steps `workspace mode <name>` prints. An older workspace prints
+`<port>` there until it is given one.
 
 ## Going back to `read`
 

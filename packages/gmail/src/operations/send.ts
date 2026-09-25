@@ -519,14 +519,22 @@ export async function executeSend(
   const before = await readDraft(context, alias, options.draftId);
   if (before.refusals.length > 0) throw unsendable(before.refusals);
 
-  const claimed = await context.core.approvals.claimForSend(options.approvalId, {
-    draftMessageId: before.draftMessageId,
-    digest: before.analysis.digest,
-    inboxId: resolved.inbox.id,
-    inboxSub: resolved.inbox.sub,
-    policy: livePolicy,
-    expect: options.expect,
-  });
+  const claimed = await context.core.approvals.claimForSend(
+    options.approvalId,
+    {
+      draftMessageId: before.draftMessageId,
+      digest: before.analysis.digest,
+      inboxId: resolved.inbox.id,
+      inboxSub: resolved.inbox.sub,
+      policy: livePolicy,
+      expect: options.expect,
+    },
+    {
+      // Gmail's own words, given here because the approval store is shared and no longer speaks for any product.
+      pendingHint:
+        'Ask the user to approve it in the terminal (`agent-gmail approve <id>`) or in a trusted client form, or to send it from Gmail.',
+    },
+  );
   if (claimed.draftId !== options.draftId) {
     await context.core.approvals.revoke(options.approvalId, 'the approval names a different draft');
     throw new CommsError('APPROVAL_VOID', 'nothing was sent: this approval was prepared for a different draft', {

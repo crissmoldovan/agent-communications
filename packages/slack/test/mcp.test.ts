@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { access, mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
@@ -332,6 +334,50 @@ test('drafts can be listed, read and deleted, and only within their own workspac
     assert.notEqual(deleted.isError, true);
     const gone = await call('slack_draft_list', { workspace: 'acme' });
     assert.deepEqual((gone.structuredContent as { drafts: unknown[] }).drafts, []);
+  } finally {
+    await close();
+  }
+});
+
+test('an unreadable draft can be deleted through the tool, and only from the workspace it still names', async () => {
+  /*
+   * The tool read the draft to check whose it was, and a draft it could not read stopped the delete there — while
+   * `slack_draft_list` skipped it, so an agent could neither see it nor clear it up. The CLI has the same test in
+   * `cli-parity.test.ts`; both call one function, and this proves the tool is on it.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', workspaceId: 'T0001' });
+  const zeta = await harness.addWorkspace({ alias: 'zeta', workspaceId: 'T0002' });
+  const directory = join(harness.core.paths.stateDir, 'slack', 'drafts');
+  await mkdir(directory, { recursive: true });
+  const nameless = 'dft_AAAAAAAAAAAAAAAAAAAAAA';
+  const zetas = 'dft_BBBBBBBBBBBBBBBBBBBBBB';
+  await writeFile(join(directory, `${nameless}.json`), '{not json');
+  await writeFile(
+    join(directory, `${zetas}.json`),
+    `{\n  "draftId": "${zetas}",\n  "accountId": "${zeta.id}",\n  "pay`,
+  );
+
+  const { client, close } = await connect(harness);
+  const call = async (name: string, args: Record<string, unknown>) =>
+    (await client.callTool({ name, arguments: args })) as ToolResult;
+  try {
+    const deleted = await call('slack_draft_delete', { workspace: 'acme', draftId: nameless });
+    assert.notEqual(deleted.isError, true, JSON.stringify(deleted.structuredContent));
+    assert.deepEqual(deleted.structuredContent, {
+      draftId: nameless,
+      deleted: true,
+      unreadable: true,
+      workspaceConfirmed: false,
+    });
+    await assert.rejects(access(join(directory, `${nameless}.json`)));
+
+    const stolen = await call('slack_draft_delete', { workspace: 'acme', draftId: zetas });
+    assert.equal(stolen.isError, true, 'another workspace’s damaged draft is not this one’s to delete');
+    await access(join(directory, `${zetas}.json`));
+    const own = await call('slack_draft_delete', { workspace: 'zeta', draftId: zetas });
+    assert.notEqual(own.isError, true, JSON.stringify(own.structuredContent));
+    assert.equal((own.structuredContent as { workspaceConfirmed: boolean }).workspaceConfirmed, true);
   } finally {
     await close();
   }

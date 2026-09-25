@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, writeFile } from 'node:fs/promises';
+import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -178,6 +178,29 @@ test('a manifest with no port is refused rather than guessed', async () => {
   assert.equal(result.code, EXIT_CODES.USAGE);
   const envelope = result.json<Envelope<never>>();
   assert.equal(envelope.error?.code, 'USAGE');
+});
+
+test('the setup skill never says `--port` may be left off `manifest`, which has no recorded port to use', async () => {
+  /*
+   * A recorded port is a workspace's, and `manifest` names no workspace — so it has nothing to fall back on and
+   * still needs the number given. The skill listed it and `workspace reauth` as two steps and then said `--port`
+   * could be left out of "both", which sent a reader to a refusal on the first of them.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'read', redirectPort: 50123 });
+  const bare = await cli(harness, ['--json', 'manifest', '--mode', 'send']);
+  assert.equal(bare.code, EXIT_CODES.USAGE, 'a recorded port does not reach `manifest`');
+
+  const skill = await readFile(new URL('../../../skills/slack-setup/SKILL.md', import.meta.url), 'utf8');
+  const claims = skill
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[.;])\s/)
+    .filter((sentence) => /--port`? can be left out/.test(sentence));
+  assert.ok(claims.length > 0, 'the skill still says where the port can be left out');
+  for (const claim of claims) {
+    assert.doesNotMatch(claim, /\bboth\b|\ball\b|\bmanifest\b/, `names only commands that fill it in: ${claim}`);
+  }
+  assert.match(skill.replace(/\s+/g, ' '), /`agent-slack manifest` [^.]*needs `--port`/, 'and says manifest needs it');
 });
 
 test('--json puts exactly one document on stdout', async () => {

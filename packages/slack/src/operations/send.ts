@@ -2,6 +2,7 @@ import {
   type ApprovalRecord,
   type CanonicalChannelMessage,
   type ChannelPreview,
+  type ClaimOptions,
   CommsError,
   type Expectation,
   messageDigest,
@@ -139,18 +140,27 @@ function risksOf(
   return flags;
 }
 
+/** A post as it would go now: what a person is shown, and the digest that binds exactly that. */
+export interface PostView {
+  readonly preview: ChannelPreview;
+  readonly digest: string;
+  /** Why the room could not be read, when it could not — so its reach is a gap, not a number. */
+  readonly roomUnread: string | undefined;
+}
+
 /**
- * Prepares one post, and shows what it will be.
+ * Reads the room once and builds both halves from that one reading.
  *
- * Nothing is posted here and nothing can be: the permit stays closed, and the only Slack call made is a read of
- * the channel so the reach can be counted.
+ * One function for the three places that need them — preparing, the approval screen, and posting. They were two
+ * copies, and the approval screen, which had neither, rendered a room of four hundred as a count it could not read:
+ * the person typing the code was never shown the reach their approval bound. Built in one place, what is shown and
+ * what is bound cannot drift apart between the three.
  */
-export async function preparePost(deps: PrepareDeps, draft: SlackDraft, book: NameBook): Promise<PreparedPost> {
-  if (deps.policy === 'never') {
-    throw new CommsError('POLICY_NEVER', 'posting is turned off for this workspace (policy: never)', {
-      hint: 'The preview below is pasteable — send it yourself in Slack, or change the policy at a terminal.',
-    });
-  }
+export async function viewPost(
+  deps: Pick<PrepareDeps, 'call' | 'workspaceId' | 'workspaceName' | 'postingAs'>,
+  draft: SlackDraft,
+  book: NameBook,
+): Promise<PostView> {
   const payload = draft.payload;
   const { channel, members, why } = await roomOf(deps.call, payload.channel);
   if (channel) book.addChannel(channel);
@@ -184,6 +194,23 @@ export async function preparePost(deps: PrepareDeps, draft: SlackDraft, book: Na
     },
     attachments: [],
   };
+  return { preview, digest: messageDigest(canonical), roomUnread: why };
+}
+
+/**
+ * Prepares one post, and shows what it will be.
+ *
+ * Nothing is posted here and nothing can be: the permit stays closed, and the only Slack call made is a read of
+ * the channel so the reach can be counted.
+ */
+export async function preparePost(deps: PrepareDeps, draft: SlackDraft, book: NameBook): Promise<PreparedPost> {
+  if (deps.policy === 'never') {
+    throw new CommsError('POLICY_NEVER', 'posting is turned off for this workspace (policy: never)', {
+      hint: 'The preview below is pasteable — send it yourself in Slack, or change the policy at a terminal.',
+    });
+  }
+  const payload = draft.payload;
+  const { preview, digest } = await viewPost(deps, draft, book);
 
   const riskFlags = risksOf(payload, preview.notifies);
   /*
@@ -199,7 +226,7 @@ export async function preparePost(deps: PrepareDeps, draft: SlackDraft, book: Na
     inboxSub: deps.postingAs,
     draftId: draft.draftId,
     draftMessageId: draft.revision,
-    digest: messageDigest(canonical),
+    digest,
     policy: deps.policy,
     requiredPolicy,
     riskFlags,
@@ -256,6 +283,7 @@ export interface PostDeps extends PrepareDeps {
         policy: SendPolicy;
         expect: Expectation;
       },
+      options?: ClaimOptions,
     ): Promise<ApprovalRecord>;
     complete(approvalId: string, outcome: { sentMessageId: string } | { error: string }): Promise<ApprovalRecord>;
   };
@@ -301,45 +329,23 @@ export async function postPrepared(
       },
     );
   }
-  const { channel, members, why } = await roomOf(deps.call, payload.channel);
-  if (channel) book.addChannel(channel);
-  const preview = previewOf({
-    draft,
-    workspace: deps.workspaceName,
-    postingAs: deps.postingAs,
-    channel,
-    book,
-    memberCount: members,
-    countUnknown: why,
-  });
+  const { preview, digest } = await viewPost(deps, draft, book);
 
-  const canonical: CanonicalChannelMessage = {
-    kind: 'channel',
-    workspace: deps.workspaceId,
-    postingAs: deps.postingAs,
-    channel: payload.channel,
-    ...(channel?.name?.text ? { channelName: channel.name.text } : {}),
-    ...(payload.thread_ts ? { threadTs: payload.thread_ts } : {}),
-    visibleText: preview.body,
-    payloadSha256: sha256Hex(JSON.stringify(payload)),
-    notifies: {
-      here: preview.notifies.here,
-      channel: preview.notifies.channel,
-      users: mentionedUserIds(payload.text),
-      estimated: preview.notifies.estimated,
+  await deps.approvals.claimForSend(
+    approvalId,
+    {
+      draftMessageId: draft.revision,
+      digest,
+      inboxId: deps.accountId,
+      inboxSub: deps.postingAs,
+      policy: deps.policy,
+      // Built from the live values, the same way `preparePost` built the stored one — one source, so they agree.
+      expect: expectationFor(payload, preview.notifies),
     },
-    attachments: [],
-  };
-
-  await deps.approvals.claimForSend(approvalId, {
-    draftMessageId: draft.revision,
-    digest: messageDigest(canonical),
-    inboxId: deps.accountId,
-    inboxSub: deps.postingAs,
-    policy: deps.policy,
-    // Built from the live values, the same way `preparePost` built the stored one — one source, so they agree.
-    expect: expectationFor(payload, preview.notifies),
-  });
+    {
+      pendingHint: `Show the user the preview, then ask them to run \`agent-slack approve ${approvalId}\` in their own terminal. When they have, run the same \`agent-slack post send\` again. You cannot approve this yourself.`,
+    },
+  );
 
   try {
     const response = await spendOn(deps.permit, approvalId, 'chat.postMessage', () =>
@@ -429,6 +435,41 @@ function reactionExpectation(options: ReactionOptions): Expectation {
   return { to: [options.channel], cc: [], bcc: [], subject: `:${options.name}: on ${options.ts}` };
 }
 
+/** Where a reaction's approval says what it is for, in place of the draft a post has. */
+function reactionDraftId(options: ReactionOptions): string {
+  return `reaction:${options.channel}:${options.ts}`;
+}
+
+/**
+ * The reaction an approval was prepared for, read back from the record — or `undefined` when it is a post's.
+ *
+ * A reaction has no draft file: what it is lives in the record itself, spread over fields the approval store
+ * already has — the message in the draft id, the emoji in the expectation, a removal in the risk flags. Approving
+ * one used to read `draftId` as a draft, which it is not, so every reaction under `confirm` was refused at the
+ * approval screen and could never be made.
+ *
+ * What comes back is only believed once it reproduces the record's own digest. That is what makes the one line a
+ * person reads the act the approval permits, rather than a reading of some fields that happen to sit near it.
+ */
+export function reactionOfApproval(record: ApprovalRecord, workspaceId: string): ReactionOptions | undefined {
+  const where = /^reaction:([^:]+):(.+)$/.exec(record.draftId);
+  if (!where) return undefined;
+  const what = /^:(.+): on (.+)$/.exec(record.expect.subject);
+  const options: ReactionOptions = {
+    channel: where[1] ?? '',
+    ts: where[2] ?? '',
+    name: what?.[1] ?? '',
+    remove: record.riskFlags.includes('removes-reaction'),
+  };
+  if (!what || reactionDigest({ workspaceId, postingAs: record.inboxSub ?? '' }, options) !== record.digest) {
+    throw new CommsError('BAD_DATA', 'this approval does not describe the reaction it is bound to', {
+      hint: 'Nothing was approved. Run the `agent-slack react` command again for a new approval.',
+      details: { approvalId: record.approvalId },
+    });
+  }
+  return options;
+}
+
 export async function prepareReaction(deps: PrepareDeps, options: ReactionOptions): Promise<PreparedReaction> {
   if (deps.policy === 'never') {
     throw new CommsError('POLICY_NEVER', 'posting is turned off for this workspace (policy: never)');
@@ -437,7 +478,7 @@ export async function prepareReaction(deps: PrepareDeps, options: ReactionOption
   const record = await deps.approvals.create({
     inboxId: deps.accountId,
     inboxSub: deps.postingAs,
-    draftId: `reaction:${options.channel}:${options.ts}`,
+    draftId: reactionDraftId(options),
     // No draft to edit, so the reaction's own digest stands in: the same value means the same act.
     draftMessageId: digest,
     digest,
@@ -471,14 +512,21 @@ export async function reactPrepared(
   options: ReactionOptions,
 ): Promise<{ approvalId: string }> {
   const digest = reactionDigest(deps, options);
-  await deps.approvals.claimForSend(approvalId, {
-    draftMessageId: digest,
-    digest,
-    inboxId: deps.accountId,
-    inboxSub: deps.postingAs,
-    policy: deps.policy,
-    expect: reactionExpectation(options),
-  });
+  await deps.approvals.claimForSend(
+    approvalId,
+    {
+      draftMessageId: digest,
+      digest,
+      inboxId: deps.accountId,
+      inboxSub: deps.postingAs,
+      policy: deps.policy,
+      expect: reactionExpectation(options),
+    },
+    {
+      // No input is echoed here: the emoji and the channel are the caller's own, and this is printed at a terminal.
+      pendingHint: `Tell the user which emoji and which message, then ask them to run \`agent-slack approve ${approvalId}\` in their own terminal. When they have, run the same \`agent-slack react\` command again with \`--approval ${approvalId}\` added. You cannot approve this yourself.`,
+    },
+  );
   const method = options.remove ? 'reactions.remove' : 'reactions.add';
   try {
     await spendOn(deps.permit, approvalId, method, () =>

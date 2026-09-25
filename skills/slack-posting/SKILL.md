@@ -51,7 +51,13 @@ this needs a person to approve it at a terminal before it posts
 
 `@channel` is eight characters whether the room holds three people or four hundred, and a person approving the
 four-hundred case is agreeing to something quite different. If the count could not be read, the preview says so —
-**never present a missing count as a small one.**
+**never present a missing count as a small one.** `agent-slack approve` reads the room again and shows the same
+channel and count; if either has changed since the preview it refuses, and the post has to be prepared again. If
+the room cannot be read at that moment it says so and approves nothing, and the approval is still there to retry.
+
+Under `confirm`, `agent-slack post send` stops with `APPROVAL_PENDING` until the person has run
+`agent-slack approve <approvalId>`. That is waiting, not failure: the approval is still alive. Run the same
+`post send` again once they have.
 
 ## What the gate refuses, and why
 
@@ -60,6 +66,7 @@ four-hundred case is agreeing to something quite different. If the count could n
 | the draft was edited after the preview | The approved bytes are the posted bytes, or nothing is |
 | the room grew after the preview | The words did not change; who reads them did |
 | already claimed | An approval is single-use, across processes |
+| refused at `agent-slack approve` | The draft or the room changed since the preview; the screen is only shown when it is still what the approval binds |
 | prepared for a different account | Two accounts in one workspace are two different people speaking |
 | policy `never` | Posting is off for this workspace |
 
@@ -86,8 +93,20 @@ Widening a workspace to `send` is a person's job and needs their own Slack app's
 ## Reactions
 
 A reaction notifies somebody and is attributed to them, so it goes through the same permit. It is not a message,
-though, so under `chat` policy it takes one line — which emoji, on which message — and a yes. Under `confirm` it
-needs the same typed approval as a message.
+though, so under `chat` policy it takes one line — which emoji, on which message — and a yes, and then
+`agent-slack react --workspace <name> --channel <id> --ts <ts> --emoji <name>` adds it.
+
+Under `confirm` it takes the same typed approval as a message, in the same two steps:
+
+1. `agent-slack react …` adds nothing. It makes an approval and stops with `APPROVAL_PENDING`, naming the
+   approval id. Tell the person which emoji and which message, and stop.
+2. The person runs `agent-slack approve <approvalId>` in their own terminal. It shows one line — the workspace,
+   the channel, the message and the emoji — and they type the code.
+3. Run the same `agent-slack react` command again with `--approval <approvalId>` added. It adds the reaction once.
+
+The approval is bound to that channel, that message and that emoji, and to adding rather than removing: change
+any of them and it is void. It is single-use, so a second run with the same id is refused. Running `react` again
+*without* `--approval` does not help — it makes a second approval nobody has seen.
 
 ## Pitfalls
 

@@ -84,6 +84,18 @@ export interface DraftStore {
   list(accountId?: string): Promise<SlackDraft[]>;
   update(draftId: string, payload: ComposedPayload, source: string): Promise<SlackDraft>;
   remove(draftId: string): Promise<void>;
+  /**
+   * The account a draft `get` cannot read still names, or `undefined` when it names none.
+   *
+   * For deleting one, and nothing else. A draft that would not parse was refused by the delete as well, because the
+   * delete read it first to check whose it was — so the refusal's own advice, "delete it", could not be followed.
+   */
+  ownerOf(draftId: string): Promise<string | undefined>;
+}
+
+/** Whether an error is `get` saying a draft file exists but is not a draft. */
+export function isUnreadableDraft(error: unknown): boolean {
+  return error instanceof CommsError && error.code === 'BAD_DATA' && error.details?.reason === 'unreadable';
 }
 
 export function openDraftStore(stateDir: string, now: () => Date): DraftStore {
@@ -104,13 +116,25 @@ export function openDraftStore(stateDir: string, now: () => Date): DraftStore {
         hint: 'List them with `agent-slack draft list --workspace <name>`.',
       });
     }
+    let parsed: unknown;
     try {
-      return JSON.parse(raw) as SlackDraft;
+      parsed = JSON.parse(raw);
     } catch {
+      parsed = undefined;
+    }
+    /*
+     * Parsed is not the same as readable. `null` and `[]` parse, and a caller reading `accountId` off either threw a
+     * TypeError instead of saying which draft was damaged — so a draft with no owner is as unreadable as one that
+     * would not parse at all.
+     */
+    const owner = (parsed as { accountId?: unknown } | null | undefined)?.accountId;
+    if (typeof parsed !== 'object' || parsed === null || typeof owner !== 'string') {
       throw new CommsError('BAD_DATA', `draft "${draftId}" could not be read`, {
-        hint: 'Delete it with `agent-slack draft delete` and compose it again.',
+        hint: `Delete it with \`agent-slack draft delete ${draftId} --workspace <name>\` and compose it again.`,
+        details: { reason: 'unreadable' },
       });
     }
+    return parsed as SlackDraft;
   };
 
   const write = async (draft: SlackDraft): Promise<SlackDraft> => {
@@ -164,6 +188,23 @@ export function openDraftStore(stateDir: string, now: () => Date): DraftStore {
     },
     async remove(draftId) {
       await rm(pathFor(stateDir, draftId), { force: true });
+    },
+    async ownerOf(draftId) {
+      const path = pathFor(stateDir, draftId);
+      let raw: string;
+      try {
+        raw = await readFile(path, 'utf8');
+      } catch {
+        throw new CommsError('NOT_FOUND', `no draft "${draftId}"`, {
+          hint: 'List them with `agent-slack draft list --workspace <name>`.',
+        });
+      }
+      /*
+       * Read off the raw text, because a draft that got here would not parse. Drafts are written with `accountId` on
+       * their second line, so a file cut off part-way — the usual way one breaks — still says whose it was.
+       */
+      const named = /"accountId"\s*:\s*"([^"\\]+)"/.exec(raw);
+      return named?.[1];
     },
   };
 }

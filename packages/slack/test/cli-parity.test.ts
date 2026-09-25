@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { access, mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { EXIT_CODES } from '@agentcomms/core';
@@ -18,7 +20,7 @@ type FakeFetch = (input: string | URL | Request, init?: RequestInit) => Promise<
 interface Envelope<T> {
   ok: boolean;
   data?: T;
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; hint?: string };
 }
 
 async function cli(harness: Harness, argv: string[], options: { read?: FakeFetch } = {}) {
@@ -159,4 +161,75 @@ test('`post prepare` leaves an audit record naming the CLI', async () => {
     records.some((record) => record.operation.startsWith('slack.post.prepare') && record.surface === 'cli'),
     `a prepare record from the CLI: ${JSON.stringify(records.map((r) => [r.operation, r.surface]))}`,
   );
+});
+
+// ── An unreadable draft ─────────────────────────────────────────────────────────────────────────────────────────
+
+const DAMAGED = 'dft_AAAAAAAAAAAAAAAAAAAAAA';
+
+/** Writes a draft file that is not a draft any more — a disk that filled, a hand edit gone wrong. */
+async function damage(harness: Harness, contents: string): Promise<string> {
+  const directory = join(harness.core.paths.stateDir, 'slack', 'drafts');
+  await mkdir(directory, { recursive: true });
+  const path = join(directory, `${DAMAGED}.json`);
+  await writeFile(path, contents);
+  return path;
+}
+
+test('an unreadable draft can be deleted as its refusal says, and the result says what went', async () => {
+  /*
+   * The refusal to read it said "delete it with `agent-slack draft delete`", and the delete read it first, so it
+   * refused too. `draft list` skips a file it cannot read, so the draft was invisible as well as undeletable.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  const path = await damage(harness, '{not json');
+
+  const shown = await cli(harness, ['--json', 'draft', 'show', DAMAGED, '--workspace', 'acme']);
+  assert.equal(shown.code, EXIT_CODES.BAD_DATA);
+  assert.match(
+    shown.json<Envelope<never>>().error?.hint ?? '',
+    new RegExp(`agent-slack draft delete ${DAMAGED}`),
+    'the refusal names the draft to delete',
+  );
+
+  const deleted = await cli(harness, ['--json', 'draft', 'delete', DAMAGED, '--workspace', 'acme']);
+  assert.equal(deleted.code, EXIT_CODES.OK, deleted.stdout);
+  assert.deepEqual(deleted.json<Envelope<unknown>>().data, {
+    draftId: DAMAGED,
+    deleted: true,
+    unreadable: true,
+    workspaceConfirmed: false,
+  });
+  await assert.rejects(access(path), 'and the file is gone');
+
+  // The words a person reads say what was removed, since nobody ever saw what it said.
+  await damage(harness, '{not json');
+  const human = await cli(harness, ['draft', 'delete', DAMAGED, '--workspace', 'acme']);
+  assert.equal(human.code, EXIT_CODES.OK, human.stderr);
+  assert.match(human.stdout, /could not be read/);
+  assert.match(human.stdout, /did not say which workspace/);
+
+  // JSON that parses is not therefore a draft: `null` has no owner to check, and used to crash the check instead.
+  await damage(harness, 'null');
+  const empty = await cli(harness, ['--json', 'draft', 'delete', DAMAGED, '--workspace', 'acme']);
+  assert.equal(empty.code, EXIT_CODES.OK, empty.stdout);
+  assert.equal(empty.json<Envelope<{ unreadable: boolean }>>().data?.unreadable, true);
+});
+
+test('an unreadable draft that still names another workspace is left for that workspace to delete', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', workspaceId: 'T0001' });
+  const zeta = await harness.addWorkspace({ alias: 'zeta', workspaceId: 'T0002' });
+  // Cut off part-way, as a full disk leaves it: the owner is still on its second line.
+  const path = await damage(harness, `{\n  "draftId": "${DAMAGED}",\n  "accountId": "${zeta.id}",\n  "payload": {`);
+
+  const stolen = await cli(harness, ['--json', 'draft', 'delete', DAMAGED, '--workspace', 'acme']);
+  assert.equal(stolen.code, EXIT_CODES.NOT_FOUND, stolen.stdout);
+  await access(path);
+
+  const own = await cli(harness, ['--json', 'draft', 'delete', DAMAGED, '--workspace', 'zeta']);
+  assert.equal(own.code, EXIT_CODES.OK, own.stdout);
+  assert.equal(own.json<Envelope<{ workspaceConfirmed: boolean }>>().data?.workspaceConfirmed, true);
+  await assert.rejects(access(path));
 });

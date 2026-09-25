@@ -1,12 +1,14 @@
-import { CommsError, renderChannelPreview } from '@agentcomms/core';
+import { type ApprovalRecord, CommsError, renderChannelPreview, truncateDisplay } from '@agentcomms/core';
 import { openDraftStore } from '../compose/drafts.ts';
-import { previewOf } from '../compose/preview.ts';
 import type { SlackContext } from '../context.ts';
+import { gateDepsFor } from './gate.ts';
 import { NameBook } from './people.ts';
+import { type ReactionOptions, reactionOfApproval, viewPost } from './send.ts';
+import type { SessionDeps } from './session.ts';
 import { requireWorkspace } from './workspaces.ts';
 
 /**
- * Approving a post at a terminal.
+ * Approving a post or a reaction at a terminal.
  *
  * Separate from posting, and that separation is the point: an agent that could approve and post in one step could
  * post anything it liked. This command approves and does not post; the posting is a second act, which the
@@ -18,18 +20,20 @@ import { requireWorkspace } from './workspaces.ts';
 
 export interface ApprovalPrompt {
   readonly approvalId: string;
-  /** The preview as a person should read it, rendered from the draft the approval is bound to. */
+  /** What the approval permits, so the command can say what it did and did not do. */
+  readonly kind: 'post' | 'reaction';
+  /** The preview as a person should read it, rendered from what the approval is bound to. */
   readonly preview: string;
   /** The code to type back. Never stored; only its hash is. */
   readonly challenge: string;
 }
 
-/** Shows what is being approved, and issues the code that binds this screen to this approval. */
-export async function beginApproval(context: SlackContext, approvalId: string): Promise<ApprovalPrompt> {
+/** The approval, and the workspace it belongs to by its current name. */
+async function approvalAndWorkspace(context: SlackContext, approvalId: string) {
   const record = await context.core.approvals.get(approvalId);
   if (!record) {
     throw new CommsError('NOT_FOUND', `no approval ${approvalId}`, {
-      hint: 'Prepare the post again; an approval expires ten minutes after it is made.',
+      hint: 'Prepare it again; an approval expires ten minutes after it is made.',
     });
   }
   const config = await context.config();
@@ -37,35 +41,119 @@ export async function beginApproval(context: SlackContext, approvalId: string): 
   if (!entry) {
     throw new CommsError('NOT_FOUND', 'the workspace this approval belongs to is no longer connected');
   }
-  const [name] = entry;
+  const [name, account] = entry;
+  return { record, name, account };
+}
+
+/**
+ * A reaction is one line, and this is it: which emoji, on which message, in which channel, as whom.
+ *
+ * Every part is escaped and cut to one line. The emoji name and the channel are whatever the agent passed, and this
+ * is printed at the terminal of the person about to type a code — the one place a control sequence would do most
+ * harm.
+ */
+function renderReaction(workspace: string, record: ApprovalRecord, reaction: ReactionOptions): string {
+  const act = reaction.remove
+    ? `Remove :${truncateDisplay(reaction.name, 60)}: from`
+    : `Add :${truncateDisplay(reaction.name, 60)}: to`;
+  return [
+    [
+      'REACTION PREVIEW',
+      `workspace ${truncateDisplay(workspace, 120)}`,
+      `approval ${record.approvalId}`,
+      'nothing has been added — approving does not add it',
+    ].join(' · '),
+    `${act} the message at ${truncateDisplay(reaction.ts, 40)} in ${truncateDisplay(reaction.channel, 40)}, as ${truncateDisplay(record.inboxSub ?? 'this account', 60)}.`,
+  ].join('\n');
+}
+
+/** What the reach of a post was when it was prepared, read from its expectation — `reaches 412`. */
+function preparedReach(record: ApprovalRecord): string | undefined {
+  return /^reaches (\d+)$/.exec(record.expect.subject)?.[1];
+}
+
+/**
+ * Shows what is being approved, and issues the code that binds this screen to this approval.
+ *
+ * `deps` reaches Slack for a post, to read the room: see below. A reaction asks Slack nothing.
+ */
+export async function beginApproval(
+  context: SlackContext,
+  approvalId: string,
+  deps: SessionDeps = {},
+): Promise<ApprovalPrompt> {
+  const { record, name, account } = await approvalAndWorkspace(context, approvalId);
+
+  const reaction = reactionOfApproval(record, account.workspace);
+  if (reaction) {
+    const challenge = await context.core.approvals.issueChallenge(approvalId);
+    return { approvalId, kind: 'reaction', preview: renderReaction(name, record, reaction), challenge };
+  }
 
   /*
-   * Rendered from the draft, not from anything the preparing process said.
+   * Rendered from the draft and the room as they are *now*, and shown only if that is what the approval binds.
    *
-   * The approval binds a digest; this is the human-readable form of the same thing. Reading it from the draft as
-   * it is *now* means a draft edited since the preparation shows its edited self here — and the digest check at
-   * post time then refuses it, rather than a person approving one thing and another going out.
+   * The draft alone is not enough. A post's approval binds who it reaches, and this screen used to render without
+   * the room, so `@channel` to four hundred people read as a count that could not be read: the person typing the
+   * code was never shown the number they were agreeing to. So the room is read again, the digest recomputed as the
+   * post will recompute it, and a screen that does not match the approval is never shown — an edited draft or a
+   * room that grew would be refused at post time anyway, and a person should not be asked to agree to it first.
    */
   const drafts = openDraftStore(context.core.paths.stateDir, context.now);
   const draft = await drafts.get(record.draftId);
-  const preview = previewOf({
-    draft,
-    workspace: name,
-    postingAs: record.inboxSub ?? 'this account',
-    channel: undefined,
-    book: new NameBook(),
-    approvalId,
-    note: 'nothing has been posted — approving does not post it',
+  const gate = await gateDepsFor(context, name, deps);
+  const view = await viewPost(gate, draft, new NameBook());
+  if (draft.revision !== record.draftMessageId || view.digest !== record.digest) {
+    const prepared = preparedReach(record);
+    const reach = view.preview.notifies.estimated;
+    if (draft.revision === record.draftMessageId && view.roomUnread) {
+      // Nothing is known to have changed; the room simply could not be read. The approval stays as it was.
+      throw new CommsError(
+        'PROVIDER_UNAVAILABLE',
+        'the channel could not be read, so who this reaches cannot be shown',
+        {
+          hint: 'Nothing was approved. Try again in a moment.',
+          details: { approvalId, reason: view.roomUnread },
+        },
+      );
+    }
+    const reason =
+      draft.revision !== record.draftMessageId
+        ? 'the draft was edited after the preview'
+        : prepared !== undefined && prepared !== String(reach)
+          ? `the channel now reaches ${reach}, not the ${prepared} it was prepared for`
+          : 'the channel, or the account it posts as, is not what the preview showed';
+    await context.core.approvals.revoke(approvalId, reason);
+    throw new CommsError('APPROVAL_VOID', `nothing was approved: ${reason}`, {
+      hint: 'Prepare the post again, and approve the preview that prints.',
+      details: { approvalId },
+    });
+  }
+  const preview = renderChannelPreview({
+    ...view.preview,
+    context: { ...view.preview.context, approvalId, note: 'nothing has been posted — approving does not post it' },
   });
 
   const challenge = await context.core.approvals.issueChallenge(approvalId);
-  return { approvalId, preview: renderChannelPreview(preview), challenge };
+  return { approvalId, kind: 'post', preview, challenge };
 }
 
 /** Records the approval, if the code typed back is the one shown. */
 export async function finishApproval(context: SlackContext, approvalId: string, answer: string): Promise<void> {
-  const record = await context.core.approvals.get(approvalId);
-  if (!record) throw new CommsError('NOT_FOUND', `no approval ${approvalId}`);
+  const { record, account } = await approvalAndWorkspace(context, approvalId);
+  /*
+   * A reaction binds the record's own digest, checked again here as `beginApproval` checked it: there is no draft
+   * to read, and reading its draft id as one is what made every reaction unapprovable.
+   */
+  if (reactionOfApproval(record, account.workspace)) {
+    await context.core.approvals.approve(
+      approvalId,
+      'terminal',
+      { draftMessageId: record.draftMessageId, digest: record.digest },
+      answer,
+    );
+    return;
+  }
   const drafts = openDraftStore(context.core.paths.stateDir, context.now);
   const draft = await drafts.get(record.draftId);
   await context.core.approvals.approve(

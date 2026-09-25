@@ -1,5 +1,6 @@
 import { paint, stripInvisible } from '@agentcomms/core';
 import type { DoctorResult } from '../operations/doctor.ts';
+import type { DeletedDraft } from '../operations/drafts.ts';
 import type { ModeReport } from '../operations/mode.ts';
 import type {
   ChannelsResult,
@@ -108,6 +109,14 @@ export function renderRemoved(alias: string): string {
     'The Slack app is still installed in your workspace. Remove it there through Slack’s own app settings —',
     'nothing here will do that for you.',
   ].join('\n');
+}
+
+/** What `draft delete` removed — and, for a draft nobody could read, that what it said is gone unseen. */
+export function renderDeletedDraft(deleted: DeletedDraft): string {
+  if (!deleted.unreadable) return `Deleted ${deleted.draftId}.`;
+  return deleted.workspaceConfirmed
+    ? `Deleted ${deleted.draftId}. It could not be read, so what it said was never shown and is gone now.`
+    : `Deleted ${deleted.draftId}. It could not be read and did not say which workspace it belonged to, so it was removed on its id alone; what it said is gone.`;
 }
 
 const FAILED: { text: string; colour: Parameters<typeof paint>[1] } = { text: 'fail', colour: 'red' };

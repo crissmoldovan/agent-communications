@@ -34,7 +34,7 @@ import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
 import { mcpInstall, mcpPrune, SLACK_MCP } from '../mcp/install.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
 import { doctor, type IdentityProbe, type StoreUnavailable } from '../operations/doctor.ts';
-import { ownDraft } from '../operations/drafts.ts';
+import { deleteOwnDraft, ownDraft } from '../operations/drafts.ts';
 import { gateDepsFor } from '../operations/gate.ts';
 import { type ProbeFetch, probeIdentity } from '../operations/identity.ts';
 import { modeReport, narrowingSteps, wideningSteps } from '../operations/mode.ts';
@@ -56,6 +56,7 @@ import { askFor } from './prompt.ts';
 import {
   renderChannels,
   renderConnected,
+  renderDeletedDraft,
   renderDoctor,
   renderFiles,
   renderHistory,
@@ -839,9 +840,8 @@ configuration problem.`,
       act(async (context, _options, draftId: string, flags: Options) => {
         const { account } = requireWorkspace(await context.config(), String(flags.workspace));
         const store = openDraftStore(context.core.paths.stateDir, context.now);
-        await ownDraft(store, account.id, draftId);
-        await store.remove(draftId);
-        writeResult({ draftId, deleted: true }, output(), () => `Deleted ${draftId}.`, streams);
+        const deleted = await deleteOwnDraft(store, account.id, draftId);
+        writeResult(deleted, output(), renderDeletedDraft, streams);
       }),
     );
 
@@ -887,6 +887,7 @@ configuration problem.`,
     .requiredOption('--ts <ts>', 'the message timestamp')
     .requiredOption('--emoji <name>', 'the emoji name, without colons')
     .option('--remove', 'take one off instead', false)
+    .option('--approval <approvalId>', 'the approval a person gave with `agent-slack approve`, under `confirm`')
     .action(
       act(async (context, options, flags: Options) => {
         const gate = await gateDeps(context, String(flags.workspace));
@@ -896,15 +897,23 @@ configuration problem.`,
           name: String(flags.emoji),
           remove: flags.remove === true,
         };
-        const prepared = await prepareReaction(gate, wanted);
-        const done = await reactPrepared(gate, prepared.approvalId, wanted);
+        /*
+         * One step under `chat`, two under `confirm` — the shape a post has.
+         *
+         * Without `--approval` this makes an approval and tries it at once: under `chat` that is the yes the
+         * conversation already gave, and under `confirm` the claim waits, naming the approval a person has to give.
+         * With it, this claims that approval and makes none. There was no such option, so a rerun after a person
+         * approved made a new approval nobody had seen, and a reaction under `confirm` could never be made.
+         */
+        const approvalId = flags.approval ? String(flags.approval) : (await prepareReaction(gate, wanted)).approvalId;
+        const done = await reactPrepared(gate, approvalId, wanted);
         writeResult(done, output(), () => `:${wanted.name}: on ${wanted.ts}.`, streams);
       }),
     );
 
   program
     .command('approve <approvalId>')
-    .description('approve a post at this terminal: read it, then type the code back')
+    .description('approve a post or a reaction at this terminal: read it, then type the code back')
     .action(
       act(async (context, globalOptions, approvalId: string) => {
         /*
@@ -927,18 +936,19 @@ configuration problem.`,
           });
         }
         void (await workspaceForApproval(context, approvalId));
-        const prompt = await beginApproval(context, approvalId);
+        const prompt = await beginApproval(context, approvalId, { fetch: deps.read, baseUrl: deps.slackBaseUrl });
+        const verb = prompt.kind === 'reaction' ? 'react' : 'post';
         streams.stdout.write(`${prompt.preview}\n\n`);
         const answer = await askFor(streams, {
           question: `Type ${paint(globalOptions.color, 'bold', prompt.challenge)} to approve this, or press Enter to cancel: `,
         });
         if (!answer.trim()) {
           await revokeApproval(context, approvalId);
-          streams.stdout.write('Cancelled. Nothing was posted.\n');
+          streams.stdout.write(`Cancelled. Nothing was ${verb === 'react' ? 'added' : 'posted'}.\n`);
           return;
         }
         await finishApproval(context, approvalId, answer);
-        streams.stdout.write('Approved. This command approves; it does not post.\n');
+        streams.stdout.write(`Approved. This command approves; it does not ${verb}.\n`);
       }),
     );
 

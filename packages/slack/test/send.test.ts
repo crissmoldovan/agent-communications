@@ -10,7 +10,13 @@ import { compose } from '../src/compose/blocks.ts';
 import { openDraftStore } from '../src/compose/drafts.ts';
 import { mentionedUserIds, notifiesOf } from '../src/compose/preview.ts';
 import { NameBook, personOf } from '../src/operations/people.ts';
-import { postPrepared, preparePost, prepareReaction, reactPrepared } from '../src/operations/send.ts';
+import {
+  postPrepared,
+  preparePost,
+  prepareReaction,
+  reactionOfApproval,
+  reactPrepared,
+} from '../src/operations/send.ts';
 
 /**
  * The gate.
@@ -280,6 +286,38 @@ test('a reaction is a real approval, claimed once, not a permit opened on a bare
     /nothing was sent/,
     'the approval is bound to this emoji on this message',
   );
+});
+
+test('a reaction approval reads back as the reaction it binds, and is refused when it does not', async () => {
+  /*
+   * The approval screen renders a reaction from its record, having no draft to read — so the record has to say
+   * exactly what the digest binds. A skin-tone emoji carries colons of its own, and a removal lives in the flags.
+   */
+  const { deps, approvals } = await setUp({ policy: 'confirm' });
+  for (const wanted of [
+    { channel: 'C1', ts: '1.1', name: 'thumbsup::skin-tone-2', remove: false },
+    { channel: 'C2', ts: '2.2', name: 'eyes', remove: true },
+  ]) {
+    const prepared = await prepareReaction(deps, wanted);
+    const record = await approvals.get(prepared.approvalId);
+    assert.ok(record);
+    assert.deepEqual(reactionOfApproval(record, 'T0001'), wanted);
+    assert.throws(() => reactionOfApproval(record, 'T0002'), /does not describe/, 'another workspace’s digest');
+  }
+
+  // A post's approval is not a reaction's, and is left for the post path.
+  const post = await setUp({ policy: 'confirm' });
+  const prepared = await preparePost(post.deps, post.draft, post.book);
+  const record = await post.approvals.get(prepared.approvalId);
+  assert.ok(record);
+  assert.equal(reactionOfApproval(record, 'T0001'), undefined);
+
+  // A record whose words say one emoji while its digest binds another shows neither.
+  const bound = await prepareReaction(deps, { channel: 'C1', ts: '1.1', name: 'thumbsdown' });
+  const honest = await approvals.get(bound.approvalId);
+  assert.ok(honest);
+  const relabelled = { ...honest, expect: { ...honest.expect, subject: ':tada: on 1.1' } };
+  assert.throws(() => reactionOfApproval(relabelled, 'T0001'), /does not describe the reaction it is bound to/);
 });
 
 test('`never` refuses a reaction before an approval is even made', async () => {

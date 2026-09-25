@@ -79,6 +79,19 @@ export interface LiveDraft {
   digest: string;
 }
 
+/** What the product making a claim tells the store about itself. */
+export interface ClaimOptions {
+  /**
+   * What the caller is told when the send is waiting for a person: which command approves it, and what to run after.
+   *
+   * The product's to say, because the store is shared and the command that approves is not. The store used to say
+   * it itself, in Gmail's words, so a Slack post held for approval told the agent to hand the person
+   * `agent-gmail approve` — which cannot approve a Slack record — or to "send it from Gmail". Left out, the hint
+   * names no product at all rather than the wrong one.
+   */
+  pendingHint?: string | undefined;
+}
+
 export const APPROVAL_TTL_MS: number = 10 * 60 * 1000;
 /** A record left in `sending` this long belongs to a process that died mid-send: the outcome is unknown. */
 export const SENDING_STALE_MS: number = 5 * 60 * 1000;
@@ -271,6 +284,7 @@ export class ApprovalStore {
   async claimForSend(
     approvalId: string,
     live: LiveDraft & { inboxId: string; inboxSub?: string | undefined; policy: SendPolicy; expect: Expectation },
+    options: ClaimOptions = {},
   ): Promise<ApprovalRecord> {
     let failure: Failure | null = null;
     const result = await this.#transition(approvalId, (current) => {
@@ -314,7 +328,8 @@ export class ApprovalStore {
               'APPROVAL_PENDING',
               'this send needs approval outside the chat first',
               current,
-              'Ask the user to approve it in the terminal (`agent-gmail approve <id>`) or in a trusted client form, or to send it from Gmail.',
+              options.pendingHint ??
+                'Ask the user to approve it outside the chat, then try again with the same approval.',
             );
           }
           if (current.approvedDigest !== live.digest) {

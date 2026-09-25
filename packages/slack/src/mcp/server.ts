@@ -7,7 +7,7 @@ import { compose } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { parseMode } from '../manifest.ts';
-import { ownDraft } from '../operations/drafts.ts';
+import { deleteOwnDraft, ownDraft } from '../operations/drafts.ts';
 import { gateDepsFor } from '../operations/gate.ts';
 import { modeReport, narrowingSteps, wideningSteps } from '../operations/mode.ts';
 import { NameBook } from '../operations/people.ts';
@@ -447,17 +447,14 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     {
       title: 'Delete a draft',
       description:
-        'Throw a draft away. An approval prepared from it can no longer be used, because there is nothing left to post.',
+        'Throw a draft away. One too damaged to read is removed too, unless it names another workspace, and the result says so. An approval prepared from it can no longer be used, because there is nothing left to post.',
       inputSchema: { ...workspaceArg, draftId: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
     async (args) => {
       try {
         const { account } = requireWorkspace(await context.config(), await resolve(args.workspace));
-        const store = drafts();
-        await ownDraft(store, account.id, args.draftId);
-        await store.remove(args.draftId);
-        return reply({ draftId: args.draftId, deleted: true });
+        return reply(await deleteOwnDraft(drafts(), account.id, args.draftId));
       } catch (error) {
         return fail(error);
       }

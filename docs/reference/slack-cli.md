@@ -46,7 +46,7 @@ Scripts should read these rather than parse output.
 | [`draft`](#agent-slack-draft) | compose and keep messages locally; nothing reaches Slack |
 | [`post`](#agent-slack-post) | take a draft through the approval gate |
 | [`react`](#agent-slack-react) | add or remove a reaction. Behind the same gate, at lower ceremony |
-| [`approve`](#agent-slack-approve) | approve a post at this terminal: read it, then type the code back |
+| [`approve`](#agent-slack-approve) | approve a post or a reaction at this terminal: read it, then type the code back |
 | [`mcp`](#agent-slack-mcp) | run the MCP server on stdio, for a coding agent to connect to |
 
 ### `agent-slack manifest`
@@ -355,10 +355,11 @@ agent-slack react [options]
 | `--ts <ts>` | the message timestamp | — |
 | `--emoji <name>` | the emoji name, without colons | — |
 | `--remove` | take one off instead | `false` |
+| `--approval <approvalId>` | the approval a person gave with `agent-slack approve`, under `confirm` | — |
 
 ### `agent-slack approve`
 
-approve a post at this terminal: read it, then type the code back
+approve a post or a reaction at this terminal: read it, then type the code back
 
 ```
 agent-slack approve [options] <approvalId>
