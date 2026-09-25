@@ -286,7 +286,7 @@ Takes no arguments.
 
 ### `gmail_inbox_add`
 
-Begin connecting a Gmail account. Returns a sign-in link and stops — this server does not open browsers and cannot grant the consent itself. Give the user the link, warn them Google will call the app unverified (Advanced → "Go to … (unsafe)" is expected for a client they made themselves), then call gmail_inbox_finish.
+Begin connecting a Gmail account. Returns a sign-in link and stops — this server does not open browsers and cannot grant the consent itself. Give the user the link, warn them Google will call the app unverified (Advanced → "Go to … (unsafe)" is expected for a client they made themselves), then call gmail_inbox_finish. The same as `agent-gmail inbox add --start`.
 
 *writes*
 
@@ -295,6 +295,10 @@ Begin connecting a Gmail account. Returns a sign-in link and stops — this serv
 | `alias` | string | **yes** | a name for the mailbox: organisation/gmail, e.g. acme/gmail, once names have been migrated (gmail_inboxes_list shows which); before that, one plain word |
 | `email` | string | no | the address it must turn out to be; refuses any other |
 | `tier` | string | no | read, draft or organize — how much access to ask for |
+| `contacts` | boolean | no | ask for the address book too; true when left out |
+| `client` | string | no | sign in through this OAuth client, by the name gmail_clients_list gives; the first one when left out |
+| `port` | integer | no | the loopback port Google sends the browser back to, for a network where only some ports are free; any free one when left out |
+| `hd` | string | no | limit Google’s account chooser to this Google Workspace domain |
 
 ### `gmail_inbox_finish`
 
@@ -330,6 +334,9 @@ Start signing in to a connected mailbox again: to renew a grant Google stopped h
 | `tier` | `read` \\| `draft` \\| `organize` | no | how much access to ask for; the tier it was connected with when left out |
 | `contacts` | boolean | no | ask for the address book too; as it is now when left out |
 | `client` | string | no | sign in through this OAuth client; its own when left out |
+| `email` | string | no | the address it must turn out to be; the one it was connected with when left out |
+| `port` | integer | no | the loopback port Google sends the browser back to, for a network where only some ports are free; any free one when left out |
+| `hd` | string | no | limit Google’s account chooser to this Google Workspace domain |
 | `approvalId` | string | no | the approvalId an earlier call returned for this change, once the user has approved it |
 
 ### `gmail_inbox_import`

@@ -46,7 +46,7 @@ import {
   revokeApproval,
 } from '../operations/send.ts';
 import { CONSOLE_STEPS, setupState } from '../operations/setup.ts';
-import { finishSignIn, inboxReauthChange, startSignIn } from '../operations/signin.ts';
+import { finishSignIn, inboxReauthChange, type StartedSignIn, startSignIn } from '../operations/signin.ts';
 import { VERSION } from '../version.ts';
 import { inboxArgument, mcpBoolean, mcpInboxes, mcpInteger, mcpStringArray } from './schemas.ts';
 
@@ -191,6 +191,43 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     .min(1)
     .optional()
     .describe('the approvalId an earlier call returned for this change, once the user has approved it');
+
+  /** The sign-in options `inbox add --start` takes at a terminal, as tool arguments. */
+  const signInArguments = {
+    contacts: mcpBoolean().optional().describe('ask for the address book too; true when left out'),
+    client: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('sign in through this OAuth client, by the name gmail_clients_list gives; the first one when left out'),
+    port: mcpInteger()
+      .optional()
+      .describe(
+        'the loopback port Google sends the browser back to, for a network where only some ports are free; any free one when left out',
+      ),
+    hd: z.string().min(1).optional().describe('limit Google’s account chooser to this Google Workspace domain'),
+  };
+
+  /** A sign-in started and waiting for the browser: what `inbox add --start` and `inbox reauth --start` print. */
+  const signInLink = z.object({
+    flowId: z.string(),
+    authUrl: z.string().describe('show this to the person; it expires in ten minutes'),
+    redirectUri: z.string().describe('where Google sends the browser back to: a listener on this machine'),
+    expiresAt: z.string(),
+    expectedEmail: z
+      .string()
+      .optional()
+      .describe('the address the sign-in must turn out to be; when absent, nothing checks which account consents'),
+    nextTool: z.string().describe('call this once the user says the sign-in is done'),
+  });
+  const linkOf = (started: StartedSignIn) => ({
+    flowId: started.flowId,
+    authUrl: started.authUrl,
+    redirectUri: started.redirectUri,
+    expiresAt: started.expiresAt,
+    expectedEmail: started.expectedEmail,
+    nextTool: 'gmail_inbox_finish',
+  });
 
   /** Runs a change through core's one flow, from this surface, and answers in the shape above. */
   const runChange = async <T>(
@@ -1144,7 +1181,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         {
           title: 'Start connecting a mailbox',
           description:
-            'Begin connecting a Gmail account. Returns a sign-in link and stops — this server does not open browsers and cannot grant the consent itself. Give the user the link, warn them Google will call the app unverified (Advanced → "Go to … (unsafe)" is expected for a client they made themselves), then call gmail_inbox_finish.',
+            'Begin connecting a Gmail account. Returns a sign-in link and stops — this server does not open browsers and cannot grant the consent itself. Give the user the link, warn them Google will call the app unverified (Advanced → "Go to … (unsafe)" is expected for a client they made themselves), then call gmail_inbox_finish. The same as `agent-gmail inbox add --start`.',
           inputSchema: z.object({
             alias: z
               .string()
@@ -1154,30 +1191,28 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
               ),
             email: z.string().min(3).optional().describe('the address it must turn out to be; refuses any other'),
             tier: z.string().optional().describe('read, draft or organize — how much access to ask for'),
+            ...signInArguments,
           }),
-          outputSchema: z.object({
-            flowId: z.string(),
-            authUrl: z.string().describe('show this to the person; it expires in ten minutes'),
-            expiresAt: z.string(),
-            nextTool: z.string().describe('call this once the user says the sign-in is done'),
-          }),
+          outputSchema: signInLink,
           annotations: { readOnlyHint: false, openWorldHint: true },
         },
-        async ({ alias, email, tier }) => {
+        async ({ alias, email, tier, contacts, client, port, hd }) => {
           try {
+            // The same options `inbox add --start` takes, passed the same way: `client` and `contacts` used to be
+            // stripped as unknown keys, so a sign-in asked for through another client, or without the address book,
+            // went through the first client and asked for the address book anyway.
             const started = await startSignIn(context, {
               mode: 'add',
               alias,
-              ...(email ? { email } : {}),
-              ...(tier ? { tier } : {}),
+              email,
+              tier,
+              contacts,
+              client,
+              port,
+              hostedDomain: hd,
               detached: true,
             });
-            return reply({
-              flowId: started.flowId,
-              authUrl: started.authUrl,
-              expiresAt: started.expiresAt,
-              nextTool: 'gmail_inbox_finish',
-            });
+            return reply(linkOf(started));
           } catch (error) {
             return fail(error);
           }
@@ -1288,36 +1323,37 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
               .describe('how much access to ask for; the tier it was connected with when left out'),
             contacts: mcpBoolean().optional().describe('ask for the address book too; as it is now when left out'),
             client: z.string().min(1).optional().describe('sign in through this OAuth client; its own when left out'),
+            email: z
+              .string()
+              .min(3)
+              .optional()
+              .describe('the address it must turn out to be; the one it was connected with when left out'),
+            port: signInArguments.port,
+            hd: signInArguments.hd,
             approvalId: approvalArgument,
           }),
-          outputSchema: changeOutput(
-            z.object({
-              flowId: z.string(),
-              authUrl: z.string().describe('show this to the person; it expires in ten minutes'),
-              redirectUri: z.string(),
-              expiresAt: z.string(),
-              expectedEmail: z.string().optional().describe('the address the sign-in must turn out to be'),
-              nextTool: z.string().describe('call this once the user says the sign-in is done'),
-            }),
-          ),
+          outputSchema: changeOutput(signInLink),
           annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
         },
-        async ({ inbox, tier, contacts, client, approvalId }) => {
+        async ({ inbox, tier, contacts, client, email, port, hd, approvalId }) => {
           try {
-            const change = inboxReauthChange(context, { alias: inbox, tier, contacts, client, detached: true });
+            const change = inboxReauthChange(context, {
+              alias: inbox,
+              tier,
+              contacts,
+              client,
+              email,
+              port,
+              hostedDomain: hd,
+              detached: true,
+            });
             const outcome = await gatedChange(context.core, change, {
               surface: 'mcp',
               approvalId,
               approveCommand: 'agent-gmail approve',
             });
             if (outcome.status !== 'applied') return reply(changeToolResult(outcome));
-            const { flowId, authUrl, redirectUri, expiresAt, expectedEmail } = outcome.result;
-            return reply(
-              changeToolResult({
-                status: 'applied',
-                result: { flowId, authUrl, redirectUri, expiresAt, expectedEmail, nextTool: 'gmail_inbox_finish' },
-              }),
-            );
+            return reply(changeToolResult({ status: 'applied', result: linkOf(outcome.result) }));
           } catch (error) {
             return fail(error);
           }
