@@ -2,7 +2,7 @@
 name: gmail-triage
 description: "Sort a window of mail across every connected mailbox into Reply needed, Review, FYI and Noise, and propose archive and label changes for the user to approve as one batch. Symptoms: 'triage my inboxes', 'what needs my attention today', 'catch me up on email'. Not for applying the changes — gmail-organize does that."
 license: MIT
-compatibility: "@agentcomms/gmail@0.4.1"
+compatibility: "@agentcomms/gmail@0.4.2"
 metadata:
   group: communications
   lifecycle: release

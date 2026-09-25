@@ -2,7 +2,7 @@
 name: gmail-follow-ups
 description: "What a mailbox shows as waiting: threads the user spoke last in that nobody answered, and threads that arrived and were never answered. Symptoms: 'what am I waiting on?', 'who owes me a reply?', 'did anyone come back on that?', 'what have I not answered?'. Not for writing the nudge — gmail-compose drafts it and gmail-send sends it."
 license: MIT
-compatibility: "@agentcomms/gmail@0.4.1"
+compatibility: "@agentcomms/gmail@0.4.2"
 metadata:
   group: communications
   lifecycle: release

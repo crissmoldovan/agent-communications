@@ -3,6 +3,20 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.4.2
+
+**A home directory passed in the environment is used.** `openCore` and `resolvePaths` took the
+home directory from the running process, whatever environment they were given, so a program
+embedding `@agentcomms/core` with its own `HOME` still had data and downloads placed in the real
+user's. They now read `HOME` from the environment given (`USERPROFILE` on Windows), which is where
+Node itself looks for the running process, so the CLIs and MCP servers resolve exactly the
+directories they did before. The same mistake had let this repository's own tests write backups
+of fixture MCP entries into the maintainer's data directory; they now stay in their temporary
+home.
+
+Nothing else changed for anyone using the packages. A sign-in listener started by the Slack tests
+no longer outlives the test that started it.
+
 ## 0.4.1
 
 **`agent-slack mcp install` connects Slack to your agent**, the way `agent-gmail mcp install` connects Gmail — it is

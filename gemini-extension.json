@@ -1,15 +1,15 @@
 {
   "name": "agent-communications",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Gmail and Slack for coding agents: search, read, analyse, draft and organise mail across several mailboxes, and read Slack workspaces and prepare posts. Nothing is sent or posted without your approval.",
   "mcpServers": {
     "gmail": {
       "command": "npx",
-      "args": ["-y", "@agentcomms/gmail-mcp@0.4.1"]
+      "args": ["-y", "@agentcomms/gmail-mcp@0.4.2"]
     },
     "slack": {
       "command": "npx",
-      "args": ["-y", "@agentcomms/slack@0.4.1", "mcp"]
+      "args": ["-y", "@agentcomms/slack@0.4.2", "mcp"]
     }
   }
 }

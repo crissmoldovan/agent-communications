@@ -2,7 +2,7 @@
 name: slack-reading
 description: "Read a Slack workspace — channels, threads, search, people and files — and report what was read without overstating it. Symptoms: 'what did they say in #engineering', 'catch me up on that thread', 'search Slack for the invoice', 'who is in this channel'. Not for drafting or posting — slack-posting does that."
 license: MIT
-compatibility: "@agentcomms/slack@0.4.1"
+compatibility: "@agentcomms/slack@0.4.2"
 metadata:
   group: communications
   lifecycle: release
