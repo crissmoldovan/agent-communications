@@ -29,7 +29,7 @@ export interface GmailContextOptions {
   core?: Core;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
-  /** Which surface is calling, for the audit log. */
+  /** Which surface is calling: for the audit log, and for refusals that name the next step as that surface takes it. */
   surface?: 'cli' | 'mcp';
   /** Replaced in tests by a fake; the default builds the real Google transport. */
   createTransport?: (request: TransportRequest) => GmailTransport;
@@ -56,7 +56,7 @@ export class GmailContext {
     this.endpoints = resolveEndpoints(this.env);
     this.now = options.now ?? (() => new Date());
     this.surface = options.surface ?? 'cli';
-    this.flows = new FlowStore(this.core.paths.stateDir, this.now);
+    this.flows = new FlowStore(this.core.paths.stateDir, this.now, this.surface);
     this.#createTransport = options.createTransport ?? defaultTransport;
   }
 

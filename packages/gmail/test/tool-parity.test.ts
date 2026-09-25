@@ -386,12 +386,12 @@ test('gmail_inbox_finish waits as long as the sign-in can, and stops waiting whe
  */
 async function waitingFlow(
   harness: Harness,
-  options: { mode?: 'add' | 'reauth'; expiresIn?: number } = {},
+  options: { mode?: 'add' | 'reauth'; expiresIn?: number; alias?: string } = {},
 ): Promise<string> {
   const flows = new GmailContext({ core: harness.core, env: harness.env }).flows;
   const flow = await flows.create({
     mode: options.mode ?? 'add',
-    alias: 'later',
+    alias: options.alias ?? 'later',
     clientName: 'default',
     tier: 'organize',
     contacts: true,
@@ -478,7 +478,8 @@ test('a wait that outlives the sign-in stops when it expires, and says so as gma
    * The wait ran to its own end whatever the sign-in's: `--finish … --wait 10` on a sign-in with three seconds left
    * waited all ten, then answered "nobody has finished signing in yet" and told the person to open the link and run
    * the finish again — for a link that had expired seven seconds before. Now it stops when the sign-in ends, and
-   * answers as gmail_inbox_finish answers for one that has already ended.
+   * answers as gmail_inbox_finish answers for one that has already ended — the same code and words, and the next step
+   * as each surface takes it (the test after this one holds that step to the kind of sign-in and the surface).
    */
   const harness = await oneMailbox();
   const flows = new GmailContext({ core: harness.core, env: harness.env }).flows;
@@ -493,6 +494,10 @@ test('a wait that outlives the sign-in stops when it expires, and says so as gma
     assert.match(ended.hint ?? '', /Start again/);
 
     for (const mode of ['add', 'reauth'] as const) {
+      // And how the command reports one of this kind that has already ended, for the step it names.
+      const over = await waitingFlow(harness, { mode, expiresIn: -1_000 });
+      const endedHere = (await cli(harness, ['inbox', mode, '--finish', over, '--wait', '0', '--json'])).envelope()
+        .error;
       const flowId = await waitingFlow(harness, { mode, expiresIn: 3_000 });
       const began = Date.now();
       const run = await cli(harness, ['inbox', mode, '--finish', flowId, '--wait', '10', '--json']);
@@ -501,7 +506,8 @@ test('a wait that outlives the sign-in stops when it expires, and says so as gma
       assert.equal(error?.code, ended.code, `inbox ${mode}: ${run.stdout}`);
       assert.equal(run.code, 77, run.stdout);
       assert.equal(error?.message, ended.message);
-      assert.equal(error?.hint ?? null, ended.hint);
+      assert.equal(error?.hint, endedHere?.hint);
+      assert.match(error?.hint ?? '', /Start again/);
       assert.ok(took < 8_000, `inbox ${mode} waited ${took} ms, past the end of the sign-in`);
       // Discarded, as an expired sign-in is: nothing is left to finish, and nothing says the link is still good.
       await assert.rejects(flows.get(flowId), (error: unknown) => (error as { code?: string }).code === 'NOT_FOUND');
@@ -513,6 +519,125 @@ test('a wait that outlives the sign-in stops when it expires, and says so as gma
     const waited = toolError(await call('gmail_inbox_finish', { flowId, waitSeconds: 10 }));
     assert.ok(Date.now() - began < 8_000, 'the tool waited past the end of the sign-in');
     assert.deepEqual(waited, ended);
+  } finally {
+    await close();
+  }
+});
+
+test('an expired sign-in says how to start that one again: its own kind, in the words of the caller’s surface', {
+  timeout: 60_000,
+}, async () => {
+  /*
+   * Every expired sign-in said "Start again with `agent-gmail inbox add <alias> --start`": to a person whose
+   * re-authorisation had run out, sending them to connect the mailbox as a new one — which is refused, since the name
+   * is taken — and to an agent over MCP, sending it to a command it may have no shell to run, for a step its own
+   * tools take. The refusal is the same on both surfaces, code and message; only the next step is named for whoever
+   * asked, and for the kind of sign-in that ran out. Checked where it can run out: at `--finish`, during a `--wait`,
+   * and at gmail_inbox_finish, before and during its wait.
+   */
+  const harness = await oneMailbox();
+  // The next step each kind of sign-in names, by surface, and what it must never name instead.
+  const next = {
+    add: { alias: 'later', cli: '`agent-gmail inbox add later --start`', tool: 'gmail_inbox_add', not: /reauth/ },
+    reauth: { alias: 'work', cli: '`agent-gmail inbox reauth work --start`', tool: 'gmail_inbox_reauth', not: /add/ },
+  } as const;
+  type Refusal = { where: string; surface: 'cli' | 'mcp'; code?: string; message?: string; hint?: string | null };
+  const byCommand = async (where: string, argv: string[]): Promise<Refusal> => {
+    const run = await cli(harness, [...argv, '--json']);
+    assert.equal(run.code, 77, `${argv.join(' ')}: ${run.stdout}`);
+    return { where, surface: 'cli', ...run.envelope().error };
+  };
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  const byTool = async (where: string, args: Record<string, unknown>): Promise<Refusal> => ({
+    where,
+    surface: 'mcp',
+    ...toolError(await call('gmail_inbox_finish', args)),
+  });
+  try {
+    for (const mode of ['add', 'reauth'] as const) {
+      const { alias } = next[mode];
+      // Already over when asked, and running out while the caller waits — `expiresIn` in milliseconds.
+      const over = () => waitingFlow(harness, { mode, alias, expiresIn: -1_000 });
+      const ending = () => waitingFlow(harness, { mode, alias, expiresIn: 1_500 });
+      const refusals = [
+        await byCommand('--finish', ['inbox', mode, '--finish', await over(), '--wait', '0']),
+        await byCommand('--wait', ['inbox', mode, '--finish', await ending(), '--wait', '10']),
+        await byTool('gmail_inbox_finish', { flowId: await over(), waitSeconds: 0 }),
+        await byTool('gmail_inbox_finish, waiting', { flowId: await ending(), waitSeconds: 10 }),
+      ];
+
+      for (const { where, surface, code, message, hint } of refusals) {
+        const label = `${mode}, ${where}: ${hint}`;
+        // One refusal: the same code and the same words, wherever it was asked from.
+        assert.equal(code, 'AUTH_REQUIRED', label);
+        assert.equal(message, 'that sign-in took longer than ten minutes and has expired', label);
+        // The next step for this kind of sign-in, on this surface: never the other kind's, or the other surface's.
+        if (surface === 'cli') {
+          assert.ok(hint?.includes(next[mode].cli), label);
+          assert.doesNotMatch(hint ?? '', /gmail_inbox_/, label);
+        } else {
+          assert.ok(hint?.includes(next[mode].tool), label);
+          assert.ok(hint?.includes(`"${alias}"`), label);
+          assert.doesNotMatch(hint ?? '', /agent-gmail/, label);
+        }
+        assert.doesNotMatch(hint ?? '', next[mode].not, label);
+      }
+    }
+  } finally {
+    await close();
+  }
+});
+
+test('a sign-in that is gone, or already finished, names the next step on the caller’s surface too', async () => {
+  /*
+   * The same sentence was in the other two refusals a finish can meet: a sign-in that is not there — which is what an
+   * expired one is the second time it is asked about, since the first refusal discards it — and one another finish
+   * already claimed. Both sent every caller to `agent-gmail inbox add`.
+   */
+  const harness = await oneMailbox();
+  const flows = new GmailContext({ core: harness.core, env: harness.env }).flows;
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    // Gone: nothing says which kind it was, so both ways to start again are named — each as its surface takes it.
+    const gone = await waitingFlow(harness, { expiresIn: -1_000 });
+    assert.equal(toolError(await call('gmail_inbox_finish', { flowId: gone, waitSeconds: 0 })).code, 'AUTH_REQUIRED');
+    const byTool = toolError(await call('gmail_inbox_finish', { flowId: gone, waitSeconds: 0 }));
+    const byCommand = (await cli(harness, ['inbox', 'reauth', '--finish', gone, '--wait', '0', '--json'])).envelope()
+      .error;
+    assert.equal(byTool.code, 'NOT_FOUND');
+    assert.equal(byCommand?.code, 'NOT_FOUND');
+    assert.equal(byCommand?.message, byTool.message);
+    assert.match(byTool.hint ?? '', /gmail_inbox_add\b.*gmail_inbox_reauth\b/);
+    assert.doesNotMatch(byTool.hint ?? '', /agent-gmail/);
+    assert.match(
+      byCommand?.hint ?? '',
+      /`agent-gmail inbox add <alias> --start`.*`agent-gmail inbox reauth <alias> --start`/,
+    );
+    assert.doesNotMatch(byCommand?.hint ?? '', /gmail_inbox_/);
+
+    // Already finished: the grant is in, and another finish holds the claim on it.
+    const claimed = async (mode: 'add' | 'reauth'): Promise<string> => {
+      const flowId = await waitingFlow(harness, { mode, alias: mode === 'add' ? 'later' : 'work' });
+      await flows.recordOutcome(flowId, { code: 'a-code-another-finish-took' });
+      await writeFile(join(flows.directory, `${flowId}.claim`), '{}\n');
+      return flowId;
+    };
+    for (const [mode, tool, command] of [
+      ['add', 'gmail_inbox_add with alias "later"', '`agent-gmail inbox add later --start`'],
+      ['reauth', 'gmail_inbox_reauth with inbox "work"', '`agent-gmail inbox reauth work --start`'],
+    ] as const) {
+      const refused = toolError(await call('gmail_inbox_finish', { flowId: await claimed(mode), waitSeconds: 0 }));
+      const run = await cli(harness, ['inbox', mode, '--finish', await claimed(mode), '--wait', '0', '--json']);
+      const error = run.envelope().error;
+      assert.equal(refused.code, 'AUTH_REQUIRED', mode);
+      assert.equal(error?.code, refused.code, run.stdout);
+      assert.equal(error?.message, refused.message, mode);
+      assert.match(refused.message, /already been finished/);
+      assert.ok(refused.hint?.includes(tool), `${mode}: ${refused.hint}`);
+      assert.doesNotMatch(refused.hint ?? '', /agent-gmail/, mode);
+      assert.ok(error?.hint?.includes(command), `${mode}: ${error?.hint}`);
+      assert.doesNotMatch(error?.hint ?? '', /gmail_inbox_/, mode);
+    }
   } finally {
     await close();
   }

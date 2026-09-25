@@ -51,14 +51,34 @@ export function newFlowId(): string {
   return out;
 }
 
+/**
+ * How to start a sign-in like this one again, in the words of the surface asking.
+ *
+ * Every refusal of a sign-in that had run out said "Start again with `agent-gmail inbox add <alias> --start`" —
+ * to somebody re-authorising a mailbox, which would connect it as a new one and is refused because the name is taken,
+ * and to an agent over MCP, sending it to a command it may have no shell for, for a step its own tools take. The
+ * flow knows which kind it was and for which mailbox, and the store knows who is asking, so the step is named here.
+ */
+function startAgain(flow: Pick<OAuthFlow, 'mode' | 'alias'>, surface: 'cli' | 'mcp'): string {
+  if (surface === 'mcp') {
+    return flow.mode === 'reauth'
+      ? `call gmail_inbox_reauth with inbox "${flow.alias}"`
+      : `call gmail_inbox_add with alias "${flow.alias}"`;
+  }
+  return `run \`agent-gmail inbox ${flow.mode === 'reauth' ? 'reauth' : 'add'} ${flow.alias} --start\``;
+}
+
 /** Flow files, each usable exactly once. The claim is an `O_EXCL` marker, so two `--finish` calls cannot both win. */
 export class FlowStore {
   readonly directory: string;
   readonly #now: () => Date;
+  /** Who is asking, so a refusal names the next step as that surface takes it. */
+  readonly #surface: 'cli' | 'mcp';
 
-  constructor(stateDir: string, now: () => Date = () => new Date()) {
+  constructor(stateDir: string, now: () => Date = () => new Date(), surface: 'cli' | 'mcp' = 'cli') {
     this.directory = join(stateDir, 'flows');
     this.#now = now;
+    this.#surface = surface;
   }
 
   #path(flowId: string, suffix = '.json'): string {
@@ -130,15 +150,20 @@ export class FlowStore {
       text = await readFile(this.#path(flowId), 'utf8');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      // Nothing says which kind it was — an expired one is discarded when it is refused — so both are named.
       throw new CommsError('NOT_FOUND', `no sign-in is waiting under ${flowId}`, {
-        hint: 'A sign-in lasts ten minutes and can be finished once. Start again with `agent-gmail inbox add <alias> --start`.',
+        hint: `A sign-in lasts ten minutes and can be finished once. ${
+          this.#surface === 'mcp'
+            ? 'Start again with gmail_inbox_add, or gmail_inbox_reauth for a mailbox already connected.'
+            : 'Start again with `agent-gmail inbox add <alias> --start`, or `agent-gmail inbox reauth <alias> --start` for a mailbox already connected.'
+        }`,
       });
     }
     const flow = JSON.parse(text) as OAuthFlow;
     if (Date.parse(flow.expiresAt) <= this.#now().getTime()) {
       await this.discard(flowId);
       throw new CommsError('AUTH_REQUIRED', 'that sign-in took longer than ten minutes and has expired', {
-        hint: 'Start again with `agent-gmail inbox add <alias> --start`.',
+        hint: `Start again: ${startAgain(flow, this.#surface)}.`,
       });
     }
     return flow;
@@ -176,7 +201,7 @@ export class FlowStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       throw new CommsError('AUTH_REQUIRED', 'that sign-in has already been finished', {
-        hint: 'Each sign-in completes once. Start another with `agent-gmail inbox add <alias> --start`.',
+        hint: `Each sign-in completes once. To start another, ${startAgain(flow, this.#surface)}.`,
       });
     }
     return flow;
