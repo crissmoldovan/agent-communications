@@ -215,7 +215,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     port: mcpInteger()
       .optional()
       .describe(
-        'the loopback port Google sends the browser back to, for a network where only some ports are free; any free one when left out',
+        'the loopback port Google sends the browser back to, for a network where only some ports are free: 1–65535, or 0 or left out for any free one',
       ),
     hd: z.string().min(1).optional().describe('limit Google’s account chooser to this Google Workspace domain'),
   };
@@ -711,7 +711,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         maxBytes: mcpInteger().optional(),
         mimeType: z.string().optional(),
         query: z.string().optional().describe('extra Gmail search syntax'),
-        limit: mcpInteger().optional(),
+        limit: mcpInteger().optional().describe('rows to return, 1–100 (default 25)'),
       }),
       outputSchema: z.object({
         rows: z.array(z.looseObject({})),
@@ -752,7 +752,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         messageIds: mcpStringArray().describe('the messages whose attachments to save'),
         partId: z.string().optional().describe('one specific attachment of a single message'),
         out: z.string().optional().describe('a folder inside the downloads root; never an absolute path'),
-        maxFiles: mcpInteger().optional(),
+        maxFiles: mcpInteger().optional().describe('stop after this many files, 1–200 (default 50)'),
       }),
       outputSchema: z.object({
         directory: z.string(),
@@ -788,7 +788,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         query: z.string().min(1).describe('a name, part of an address, or a domain'),
         inboxes: mcpInboxes().optional(),
         sources: mcpStringArray().optional().describe('contacts, other-contacts, history'),
-        limit: mcpInteger().optional(),
+        limit: mcpInteger().optional().describe('rows to return, 1–50 (default 20)'),
       }),
       outputSchema: z.object({
         contacts: z.array(z.looseObject({})),
@@ -828,7 +828,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         direction: z.string().min(1).optional().describe('who is being waited on: them (the default), or me'),
         olderThanDays: mcpInteger().optional(),
         lookbackDays: mcpInteger().optional(),
-        limit: mcpInteger().optional(),
+        limit: mcpInteger().optional().describe('rows to return, 1–50 (default 20)'),
       }),
       outputSchema: z.object({
         rows: z.array(z.looseObject({})),

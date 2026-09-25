@@ -1,6 +1,7 @@
 import { CommsError, canonicalAddress, decodeHeaderWords, neutralise, parseAddressList } from '@agentcomms/core';
 import type { GmailContext } from '../context.ts';
 import { headerValue } from '../domain/mime.ts';
+import { type NumberOption, numberOption } from './numbers.ts';
 import { resolveInboxes } from './search.ts';
 import { oneOf } from './words.ts';
 
@@ -36,8 +37,11 @@ export interface ContactsOptions {
   inboxes?: string[] | 'all' | undefined;
   /** Which sources to use; all three by default. */
   sources?: ContactSource[] | undefined;
-  limit?: number | undefined;
+  /** How many rows, as given; checked by `searchContacts` against {@link CONTACTS_LIMIT}. Twenty when left out. */
+  limit?: unknown;
 }
+
+export const CONTACTS_LIMIT: NumberOption = { flag: '--limit', arg: 'limit', min: 1, max: 50 };
 
 const RANK: Record<ContactSource, number> = { contacts: 0, history: 1, 'other-contacts': 2 };
 
@@ -51,9 +55,9 @@ export async function searchContacts(
       hint: 'Pass a name, part of an address, or a domain.',
     });
   }
+  const limit = numberOption(context, options.limit, CONTACTS_LIMIT) ?? 20;
   const aliases = await resolveInboxes(context, options.inboxes);
   const sources = new Set<ContactSource>(options.sources ?? ['contacts', 'other-contacts', 'history']);
-  const limit = Math.min(Math.max(1, options.limit ?? 20), 50);
   const errors: ContactsResult['errors'] = [];
   const found = new Map<string, Contact>();
 
@@ -188,17 +192,25 @@ export interface FollowUpOptions {
    * Defaults to 3 days for `them` and 0 for `me`: nagging somebody the day after you wrote is rude, and hiding
    * this morning's unanswered mail is unhelpful.
    */
-  olderThanDays?: number | undefined;
+  olderThanDays?: unknown;
   /** How far back to look. Default 30 days, and never less than `olderThanDays + 1`. */
-  lookbackDays?: number | undefined;
+  lookbackDays?: unknown;
   /**
    * How many rows to return in total.
    *
    * One budget across every mailbox, spent in the order they resolve — so a small limit over several mailboxes can
    * return nothing from the last of them. Raise it, or name one inbox, when the answer has to be complete.
    */
-  limit?: number | undefined;
+  limit?: unknown;
 }
+
+/*
+ * The follow-up numbers, as given and checked by `followUps`: whole days, and rows up to fifty. A lookback shorter
+ * than the quiet threshold is still raised to one day past it, as it always was — that is not a number out of range.
+ */
+export const OLDER_THAN_DAYS: NumberOption = { flag: '--older-than', arg: 'olderThanDays', min: 0 };
+export const LOOKBACK_DAYS: NumberOption = { flag: '--lookback', arg: 'lookbackDays', min: 1 };
+export const FOLLOW_UP_LIMIT: NumberOption = { flag: '--limit', arg: 'limit', min: 1, max: 50 };
 
 /**
  * Threads that are waiting on somebody. Computed from Gmail's own view of what was sent and received, not from a
@@ -207,13 +219,16 @@ export interface FollowUpOptions {
 export async function followUps(context: GmailContext, options: FollowUpOptions = {}): Promise<FollowUpsResult> {
   // Checked before anything is read, so a word that is not a direction is refused the same way from either surface.
   const direction = oneOf(options.direction, FOLLOW_UP_DIRECTIONS, 'a direction') ?? 'them';
+  // And the numbers, which used to be clamped into range whatever arrived.
+  const olderThanDays = numberOption(context, options.olderThanDays, OLDER_THAN_DAYS);
+  const lookbackDays = numberOption(context, options.lookbackDays, LOOKBACK_DAYS);
+  const limit = numberOption(context, options.limit, FOLLOW_UP_LIMIT) ?? 20;
   const aliases = await resolveInboxes(context, options.inboxes);
   // The default differs by direction, because the question does. "Who has not replied to me" should not nag
   // somebody after a day; "what have I not answered" should show this morning's mail, which is precisely the mail
   // most likely to be forgotten. An explicit threshold applies to both.
-  const olderThan = Math.max(0, options.olderThanDays ?? (direction === 'me' ? 0 : 3));
-  const lookback = Math.max(olderThan + 1, options.lookbackDays ?? 30);
-  const limit = Math.min(Math.max(1, options.limit ?? 20), 50);
+  const olderThan = olderThanDays ?? (direction === 'me' ? 0 : 3);
+  const lookback = Math.max(olderThan + 1, lookbackDays ?? 30);
 
   // Awaiting them: we wrote it, and it has not been touched since. Awaiting me: it arrived and is still in the inbox.
   const query =

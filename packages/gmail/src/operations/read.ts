@@ -13,6 +13,7 @@ import type { GmailContext } from '../context.ts';
 import { type AuthResults, readAuthResults, readSenderWarnings, type SenderWarnings } from '../domain/auth-results.ts';
 import { type BodyOptions, buildBody, DEFAULT_MAX_CHARS, type MessageBody } from '../domain/body.ts';
 import { type GmailPart, headerValue, readParts } from '../domain/mime.ts';
+import { type NumberOption, numberOption } from './numbers.ts';
 
 /**
  * Reading mail — the operation with the largest blast radius in this package, because everything it returns was
@@ -126,6 +127,30 @@ export interface GmailMessage {
 export interface ReadOptions extends BodyOptions {
   /** The boundary to use for the untrusted envelope; one per response. */
   boundary?: string | undefined;
+}
+
+/** What a read takes: the body options, with its numbers as given — checked by the read, for either surface. */
+export interface ReadRequest extends Omit<ReadOptions, 'maxChars' | 'offset'> {
+  /** How much of a body to return; checked against {@link MAX_CHARS}. */
+  maxChars?: unknown;
+  /** Where a truncated body continues from; checked against {@link OFFSET}. */
+  offset?: unknown;
+}
+
+// No characters at all returned an empty body marked truncated, continuing from where it began: a reader paging
+// through it never got anywhere.
+export const MAX_CHARS: NumberOption = { flag: '--max-chars', arg: 'maxChars', min: 1 };
+export const OFFSET: NumberOption = { flag: '--offset', arg: 'offset', min: 0 };
+
+/** The read's numbers, checked before anything is read. */
+function bodyNumbers(
+  context: GmailContext,
+  options: ReadRequest,
+): { maxChars: number | undefined; offset: number | undefined } {
+  return {
+    maxChars: numberOption(context, options.maxChars, MAX_CHARS),
+    offset: numberOption(context, options.offset, OFFSET),
+  };
 }
 
 /**
@@ -254,8 +279,9 @@ export async function readThread(
   context: GmailContext,
   alias: string,
   threadId: string,
-  options: ReadOptions & { maxThreadChars?: number | undefined } = {},
+  options: ReadRequest & { maxThreadChars?: number | undefined } = {},
 ): Promise<ReadThreadResult> {
+  const { maxChars, offset } = bodyNumbers(context, options);
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'read');
   const transport = await context.transport(alias);
@@ -281,7 +307,7 @@ export async function readThread(
       inbox: alias,
       boundary,
       collector,
-      body: { ...options, maxChars: Math.min(options.maxChars ?? DEFAULT_MAX_CHARS, remaining) },
+      body: { ...options, maxChars: Math.min(maxChars ?? DEFAULT_MAX_CHARS, remaining), offset },
     });
     // What was actually kept, not what the message contains. The budget exists to cap the conversation, so spending
     // a 40,000-character message against it when one character was returned ended a timeline five messages in — and
@@ -321,8 +347,9 @@ export async function readMessage(
   context: GmailContext,
   alias: string,
   messageId: string,
-  options: ReadOptions = {},
+  options: ReadRequest = {},
 ): Promise<ReadMessageResult> {
+  const numbers = bodyNumbers(context, options);
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'read');
   const transport = await context.transport(alias);
@@ -333,7 +360,7 @@ export async function readMessage(
     inbox: alias,
     boundary: options.boundary ?? newBoundary(),
     collector,
-    body: options,
+    body: { ...options, ...numbers },
   });
   await collector.flush(context.core.taint, await taintExclusions(context, alias));
   await context.core.states.update(resolved.inbox.id, { lastUsedAt: context.now().toISOString() });

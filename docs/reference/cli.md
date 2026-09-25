@@ -127,7 +127,7 @@ agent-gmail inbox add [options] [alias]
 | `--no-contacts` | do not ask for contacts access | — |
 | `--contacts` | ask for contacts access (the default) | — |
 | `--client <name>` | sign in through this OAuth client | — |
-| `--port <number>` | use this loopback port for the redirect | — |
+| `--port <number>` | use this loopback port for the redirect: 1 to 65535, or 0 for any free one | — |
 | `--no-browser` | do not open the link, just print it | — |
 | `--hd <domain>` | restrict the account chooser to a Google Workspace domain | — |
 | `--start` | start the sign-in and return the link, to be finished later | `false` |
@@ -150,7 +150,7 @@ agent-gmail inbox reauth [options] [alias]
 | `--no-contacts` | do not ask for contacts access | — |
 | `--contacts` | ask for contacts access (the default) | — |
 | `--client <name>` | sign in through this OAuth client | — |
-| `--port <number>` | use this loopback port for the redirect | — |
+| `--port <number>` | use this loopback port for the redirect: 1 to 65535, or 0 for any free one | — |
 | `--no-browser` | do not open the link, just print it | — |
 | `--hd <domain>` | restrict the account chooser to a Google Workspace domain | — |
 | `--start` | start the sign-in and return the link, to be finished later | `false` |
@@ -240,7 +240,7 @@ agent-gmail search [options] <query>
 | `--inbox <alias...>` | search these mailboxes | `all` |
 | `--all` | search every connected mailbox | `false` |
 | `--messages` | return messages rather than threads | `false` |
-| `--limit <number>` | how many rows | — |
+| `--limit <number>` | how many rows: 1 to 50 (default 20) | — |
 | `--cursor <cursor>` | continue a previous search | — |
 | `--include-spam-trash` | include spam and trash | `false` |
 
@@ -314,7 +314,7 @@ agent-gmail attachments find [options]
 | `--max-bytes <number>` | at most this big | — |
 | `--type <mimeType>` | only this content type | — |
 | `--query <query>` | extra Gmail search syntax | — |
-| `--limit <number>` | how many rows | — |
+| `--limit <number>` | how many rows: 1 to 100 (default 25) | — |
 
 ### `agent-gmail attachments download`
 
@@ -329,7 +329,7 @@ agent-gmail attachments download [options] <messageId...>
 | `--inbox <alias>` | which mailbox | — |
 | `--part <partId>` | one specific attachment | — |
 | `--out <subpath>` | a folder inside the downloads root | — |
-| `--max-files <number>` | stop after this many files | — |
+| `--max-files <number>` | stop after this many files: 1 to 200 (default 50) | — |
 
 ### `agent-gmail contacts`
 
@@ -343,7 +343,7 @@ agent-gmail contacts [options] <query>
 |---|---|---|
 | `--inbox <alias...>` | search these mailboxes | `all` |
 | `--sources <source...>` | contacts, other-contacts, history | — |
-| `--limit <number>` | how many rows | — |
+| `--limit <number>` | how many rows: 1 to 50 (default 20) | — |
 
 ### `agent-gmail followups`
 
@@ -359,7 +359,7 @@ agent-gmail followups [options]
 | `--direction <who>` | who is being waited on (choices: "them", "me") | — |
 | `--older-than <days>` | only threads quiet for this long | — |
 | `--lookback <days>` | how far back to look | — |
-| `--limit <number>` | how many rows | — |
+| `--limit <number>` | how many rows: 1 to 50 (default 20) | — |
 
 ### `agent-gmail export`
 
@@ -440,7 +440,7 @@ agent-gmail draft list [options]
 | Option | What it does | Default |
 |---|---|---|
 | `--inbox <alias>` | which mailbox | — |
-| `--limit <number>` | how many rows | — |
+| `--limit <number>` | how many rows (default 20) | — |
 
 ### `agent-gmail draft show`
 

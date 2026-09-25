@@ -18,6 +18,7 @@ import {
 import type { GmailContext } from '../context.ts';
 import { headerValue, readParts } from '../domain/mime.ts';
 import { compileQuery } from '../domain/query.ts';
+import { type NumberOption, numberOption } from './numbers.ts';
 import { attachmentRisks } from './read.ts';
 import { resolveInboxes } from './search.ts';
 
@@ -53,11 +54,25 @@ export interface FindAttachmentsOptions {
   filename?: string | undefined;
   after?: string | undefined;
   before?: string | undefined;
+  /** At least this many bytes, as given; checked by `findAttachments` against {@link MIN_BYTES}. */
+  minBytes?: unknown;
+  /** At most this many bytes, as given; checked against {@link MAX_BYTES}. */
+  maxBytes?: unknown;
+  mimeType?: string | undefined;
+  /** How many rows, as given; checked against {@link FIND_LIMIT}. Twenty-five when left out. */
+  limit?: unknown;
+}
+
+/** The filters as `attachmentQuery` writes them: sizes that have been checked. */
+export type AttachmentFilters = Omit<FindAttachmentsOptions, 'minBytes' | 'maxBytes' | 'limit'> & {
   minBytes?: number | undefined;
   maxBytes?: number | undefined;
-  mimeType?: string | undefined;
-  limit?: number | undefined;
-}
+};
+
+// 0 bytes at least is no lower bound, as it always was; at most 0 bytes was ignored, so it is refused instead.
+export const MIN_BYTES: NumberOption = { flag: '--min-bytes', arg: 'minBytes', min: 0 };
+export const MAX_BYTES: NumberOption = { flag: '--max-bytes', arg: 'maxBytes', min: 1 };
+export const FIND_LIMIT: NumberOption = { flag: '--limit', arg: 'limit', min: 1, max: 100 };
 
 export interface FindAttachmentsResult {
   query: string;
@@ -69,7 +84,7 @@ export interface FindAttachmentsResult {
 }
 
 /** Builds the Gmail query for the filters, so a caller does not have to know the syntax. */
-export function attachmentQuery(options: FindAttachmentsOptions): string {
+export function attachmentQuery(options: AttachmentFilters): string {
   const parts = ['has:attachment'];
   if (options.from) parts.push(`from:${options.from}`);
   if (options.filename) parts.push(`filename:${options.filename}`);
@@ -85,10 +100,15 @@ export async function findAttachments(
   context: GmailContext,
   options: FindAttachmentsOptions = {},
 ): Promise<FindAttachmentsResult> {
+  // Checked before anything is read, so a number out of range is refused the same way from either surface.
+  const minBytes = numberOption(context, options.minBytes, MIN_BYTES);
+  const maxBytes = numberOption(context, options.maxBytes, MAX_BYTES);
+  const limit = numberOption(context, options.limit, FIND_LIMIT) ?? 25;
   const config = await context.config();
   const aliases = await resolveInboxes(context, options.inboxes);
-  const query = compileQuery(attachmentQuery(options), { timezone: config.defaults.timezone }).compiled;
-  const limit = Math.min(Math.max(1, options.limit ?? 25), 100);
+  const query = compileQuery(attachmentQuery({ ...options, minBytes, maxBytes }), {
+    timezone: config.defaults.timezone,
+  }).compiled;
 
   const rows: AttachmentRow[] = [];
   const errors: FindAttachmentsResult['errors'] = [];
@@ -112,8 +132,8 @@ export async function findAttachments(
           if (part.disposition === 'inline' && !part.filename) continue;
           const filename = part.filename ?? '(unnamed)';
           if (options.mimeType && !part.mimeType.includes(options.mimeType.toLowerCase())) continue;
-          if (options.minBytes && part.size < options.minBytes) continue;
-          if (options.maxBytes && part.size > options.maxBytes) continue;
+          if (minBytes && part.size < minBytes) continue;
+          if (maxBytes && part.size > maxBytes) continue;
           if (!part.attachmentId) {
             // A Drive link is a link in the body, not bytes in the message.
             driveLinks += 1;
@@ -175,11 +195,13 @@ export interface DownloadResult {
 export interface DownloadOptions {
   /** A subdirectory of the downloads root. Never an absolute path from an agent. */
   out?: string | undefined;
-  maxFiles?: number | undefined;
+  /** How many files at most, as given; checked by `downloadAttachments` against {@link MAX_FILES}. */
+  maxFiles?: unknown;
   maxBytes?: number | undefined;
 }
 
 export const DEFAULT_MAX_FILES = 50;
+export const MAX_FILES: NumberOption = { flag: '--max-files', arg: 'maxFiles', min: 1, max: 200 };
 export const DEFAULT_MAX_BYTES: number = 500 * 1024 * 1024;
 
 /** The downloads root: `~/Downloads/agent-communications` unless the config says otherwise. */
@@ -201,6 +223,8 @@ export async function downloadAttachments(
   targets: Array<{ messageId: string; partId?: string | undefined; filename?: string | undefined }>,
   options: DownloadOptions = {},
 ): Promise<DownloadResult> {
+  // Before the mailbox is read or a folder made: none at all saved nothing and said each file was one too many.
+  const maxFiles = numberOption(context, options.maxFiles, MAX_FILES) ?? DEFAULT_MAX_FILES;
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'read');
   const transport = await context.transport(alias);
@@ -210,7 +234,6 @@ export async function downloadAttachments(
   const directory = await resolveInsideRoot(root, join(alias, relativeSubpath(options.out)));
   await mkdir(directory, { recursive: true, mode: 0o700 });
 
-  const maxFiles = Math.min(options.maxFiles ?? DEFAULT_MAX_FILES, 200);
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
 
   const files: DownloadedFile[] = [];

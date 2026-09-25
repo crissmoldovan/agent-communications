@@ -168,7 +168,7 @@ Find files people sent, across mailboxes, with filters for sender, name, date an
 | `maxBytes` | integer | no |  |
 | `mimeType` | string | no |  |
 | `query` | string | no | extra Gmail search syntax |
-| `limit` | integer | no |  |
+| `limit` | integer | no | rows to return, 1–100 (default 25) |
 
 ### `gmail_attachment_download`
 
@@ -182,7 +182,7 @@ Save the attachments of one or more messages to disk, under the downloads folder
 | `messageIds` | string[] | **yes** | the messages whose attachments to save |
 | `partId` | string | no | one specific attachment of a single message |
 | `out` | string | no | a folder inside the downloads root; never an absolute path |
-| `maxFiles` | integer | no |  |
+| `maxFiles` | integer | no | stop after this many files, 1–200 (default 50) |
 
 ### `gmail_contacts_search`
 
@@ -195,7 +195,7 @@ Find someone’s email address from the saved address book, from people the user
 | `query` | string | **yes** | a name, part of an address, or a domain |
 | `inboxes` | any | no |  |
 | `sources` | string[] | no | contacts, other-contacts, history |
-| `limit` | integer | no |  |
+| `limit` | integer | no | rows to return, 1–50 (default 20) |
 
 ### `gmail_followups`
 
@@ -209,7 +209,7 @@ Conversations waiting on somebody: threads where the user spoke last and nobody 
 | `direction` | string | no | who is being waited on: them (the default), or me |
 | `olderThanDays` | integer | no |  |
 | `lookbackDays` | integer | no |  |
-| `limit` | integer | no |  |
+| `limit` | integer | no | rows to return, 1–50 (default 20) |
 
 ### `gmail_export`
 
@@ -297,7 +297,7 @@ Begin connecting a Gmail account. Returns a sign-in link and stops — this serv
 | `tier` | string | no | read, draft or organize — how much access to ask for |
 | `contacts` | boolean | no | ask for the address book too; true when left out |
 | `client` | string | no | sign in through this OAuth client, by the name gmail_clients_list gives; the first one when left out |
-| `port` | integer | no | the loopback port Google sends the browser back to, for a network where only some ports are free; any free one when left out |
+| `port` | integer | no | the loopback port Google sends the browser back to, for a network where only some ports are free: 1–65535, or 0 or left out for any free one |
 | `hd` | string | no | limit Google’s account chooser to this Google Workspace domain |
 
 ### `gmail_inbox_finish`
@@ -336,7 +336,7 @@ Start signing in to a connected mailbox again: to renew a grant Google stopped h
 | `contacts` | boolean | no | ask for the address book too; as it is now when left out |
 | `client` | string | no | sign in through this OAuth client; its own when left out |
 | `email` | string | no | the address it must turn out to be; the one it was connected with when left out |
-| `port` | integer | no | the loopback port Google sends the browser back to, for a network where only some ports are free; any free one when left out |
+| `port` | integer | no | the loopback port Google sends the browser back to, for a network where only some ports are free: 1–65535, or 0 or left out for any free one |
 | `hd` | string | no | limit Google’s account chooser to this Google Workspace domain |
 | `approvalId` | string | no | the approvalId an earlier call returned for this change, once the user has approved it |
 

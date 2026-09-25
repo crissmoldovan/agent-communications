@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { afterEach, test } from 'node:test';
@@ -891,6 +891,263 @@ test('every word argument a tool takes refuses a word that is not one as USAGE, 
     assert.deepEqual(await harness.core.approvals.list(), []);
   } finally {
     await close();
+  }
+});
+
+test('a number option that is not a whole number in its range is refused as USAGE, naming it and the range, by the command and the tool alike', {
+  timeout: 120_000,
+}, async () => {
+  /*
+   * Every number option of the command was `Number.parseInt`: `--limit abc` was NaN, `--limit 1e2` was 1,
+   * `--max-chars 12abc` was 12, and `--port abc` was no port at all — a sign-in on whichever port was free. The tools'
+   * schemas took whole numbers only, but a number out of range was clamped by the operation (`limit: 500` searched
+   * 50) or, for a port, handed to the listener to fail on. Each is checked by its operation now, before anything is
+   * read, for both surfaces: refused as USAGE, naming the option as its caller spells it, and the range.
+   */
+  const harness = await oneMailbox();
+  const nothing = 'fl_aaaaaaaaaaaaaaaaaaaaaa';
+  const cases: Array<{
+    argv: (value: string) => string[];
+    flag: string;
+    tool: string;
+    args: Record<string, unknown>;
+    arg: string;
+    range: string;
+    typed: string[];
+    given: number[];
+  }> = [
+    {
+      argv: (value) => ['search', 'Tuesday', `--limit=${value}`],
+      flag: '--limit',
+      tool: 'gmail_search',
+      args: { query: 'Tuesday' },
+      arg: 'limit',
+      range: 'from 1 to 50',
+      typed: ['abc', '1e2', '12abc', '0', '51', '-1', '2.5', '0x10', ''],
+      given: [0, 51, -1],
+    },
+    {
+      // The message and thread ids name nothing: a check made after the read would answer NOT_FOUND.
+      argv: (value) => ['read', 'nope', '--inbox', 'work', `--max-chars=${value}`],
+      flag: '--max-chars',
+      tool: 'gmail_message_get',
+      args: { inbox: 'work', messageId: 'nope' },
+      arg: 'maxChars',
+      range: 'of 1 or more',
+      typed: ['0', '1e3', '12abc', 'all'],
+      given: [0, -5],
+    },
+    {
+      argv: (value) => ['read', 'nope', '--inbox', 'work', `--offset=${value}`],
+      flag: '--offset',
+      tool: 'gmail_message_get',
+      args: { inbox: 'work', messageId: 'nope' },
+      arg: 'offset',
+      range: 'of 0 or more',
+      typed: ['-1', '1e3', 'next'],
+      given: [-1],
+    },
+    {
+      argv: (value) => ['thread', 'nope', '--inbox', 'work', `--max-chars=${value}`],
+      flag: '--max-chars',
+      tool: 'gmail_thread_get',
+      args: { inbox: 'work', threadId: 'nope' },
+      arg: 'maxChars',
+      range: 'of 1 or more',
+      typed: ['0', '8k'],
+      given: [0],
+    },
+    {
+      argv: (value) => ['attachments', 'find', `--min-bytes=${value}`],
+      flag: '--min-bytes',
+      tool: 'gmail_attachments_find',
+      args: {},
+      arg: 'minBytes',
+      range: 'of 0 or more',
+      typed: ['-1', '1e6', '1MB'],
+      given: [-1],
+    },
+    {
+      argv: (value) => ['attachments', 'find', `--max-bytes=${value}`],
+      flag: '--max-bytes',
+      tool: 'gmail_attachments_find',
+      args: {},
+      arg: 'maxBytes',
+      range: 'of 1 or more',
+      typed: ['0', '10k'],
+      given: [0],
+    },
+    {
+      argv: (value) => ['attachments', 'find', `--limit=${value}`],
+      flag: '--limit',
+      tool: 'gmail_attachments_find',
+      args: {},
+      arg: 'limit',
+      range: 'from 1 to 100',
+      typed: ['0', '101', '1e2'],
+      given: [0, 101],
+    },
+    {
+      argv: (value) => ['attachments', 'download', 'nope', '--inbox', 'work', `--max-files=${value}`],
+      flag: '--max-files',
+      tool: 'gmail_attachment_download',
+      args: { inbox: 'work', messageIds: ['nope'] },
+      arg: 'maxFiles',
+      range: 'from 1 to 200',
+      typed: ['0', '201', '5x'],
+      given: [0, 201],
+    },
+    {
+      argv: (value) => ['contacts', 'sam', `--limit=${value}`],
+      flag: '--limit',
+      tool: 'gmail_contacts_search',
+      args: { query: 'sam' },
+      arg: 'limit',
+      range: 'from 1 to 50',
+      typed: ['0', '51', '1e1'],
+      given: [0, 51],
+    },
+    {
+      argv: (value) => ['followups', `--older-than=${value}`],
+      flag: '--older-than',
+      tool: 'gmail_followups',
+      args: {},
+      arg: 'olderThanDays',
+      range: 'of 0 or more',
+      typed: ['-1', '3d', '1e1'],
+      given: [-1],
+    },
+    {
+      argv: (value) => ['followups', `--lookback=${value}`],
+      flag: '--lookback',
+      tool: 'gmail_followups',
+      args: {},
+      arg: 'lookbackDays',
+      range: 'of 1 or more',
+      typed: ['0', '30d'],
+      given: [0],
+    },
+    {
+      argv: (value) => ['followups', `--limit=${value}`],
+      flag: '--limit',
+      tool: 'gmail_followups',
+      args: {},
+      arg: 'limit',
+      range: 'from 1 to 50',
+      typed: ['0', '51'],
+      given: [0, 51],
+    },
+    {
+      argv: (value) => ['draft', 'list', '--inbox', 'work', `--limit=${value}`],
+      flag: '--limit',
+      tool: 'gmail_draft_list',
+      args: { inbox: 'work' },
+      arg: 'limit',
+      range: 'of 1 or more',
+      typed: ['0', '1e2', 'x'],
+      given: [0],
+    },
+    {
+      // 0, as ever, is any free port: the check leaves it alone.
+      argv: (value) => ['inbox', 'add', 'fresh', '--start', `--port=${value}`],
+      flag: '--port',
+      tool: 'gmail_inbox_add',
+      args: { alias: 'fresh' },
+      arg: 'port',
+      range: 'from 0 to 65535',
+      typed: ['abc', '1e3', '80abc', '-1', '65536', '8.0'],
+      given: [-1, 65536],
+    },
+    {
+      argv: (value) => ['inbox', 'reauth', 'work', '--start', `--port=${value}`],
+      flag: '--port',
+      tool: 'gmail_inbox_reauth',
+      args: { inbox: 'work' },
+      arg: 'port',
+      range: 'from 0 to 65535',
+      typed: ['abc', '70000'],
+      given: [70000],
+    },
+    {
+      // Asking for the address book widens the grant, so it is approved before the sign-in starts: a port that is not
+      // one is refused before an approval is asked for a sign-in that could never start.
+      argv: (value) => ['inbox', 'reauth', 'work', '--contacts', '--start', `--port=${value}`],
+      flag: '--port',
+      tool: 'gmail_inbox_reauth',
+      args: { inbox: 'work', contacts: true },
+      arg: 'port',
+      range: 'from 0 to 65535',
+      typed: ['70000'],
+      given: [70000],
+    },
+    {
+      // Given with `--finish`, where no port is used, a port that is not one is still refused rather than ignored.
+      argv: (value) => ['inbox', 'add', '--finish', nothing, `--port=${value}`],
+      flag: '--port',
+      tool: 'gmail_inbox_add',
+      args: { alias: 'fresh' },
+      arg: 'port',
+      range: 'from 0 to 65535',
+      typed: ['abc'],
+      given: [],
+    },
+  ];
+
+  const asked = harness.google.requests.length;
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    for (const { argv, flag, tool, args, arg, range, typed, given } of cases) {
+      for (const value of typed) {
+        const run = await cli(harness, [...argv(value), '--json']);
+        // A sign-in the old parse let through is stopped, not left listening.
+        stopLater(harness, run.envelope<{ flowId?: string }>().data?.flowId);
+        const label = argv(value).join(' ');
+        assert.equal(run.code, 64, `${label}: ${run.stdout}`);
+        const error = run.envelope().error;
+        assert.equal(error?.code, 'USAGE', label);
+        assert.equal(error?.message, `${flag} "${value}" is not a whole number ${range}`, label);
+      }
+      // The tool refuses what the command refuses, from the same check, naming the argument as a tool call spells it.
+      for (const value of given) {
+        const result = await call(tool, { ...args, [arg]: value });
+        stopLater(harness, result.structuredContent?.flowId);
+        const refused = toolError(result);
+        const label = `${tool} ${arg}: ${value}`;
+        assert.equal(refused.code, 'USAGE', label);
+        assert.equal(refused.message, `${arg} "${value}" is not a whole number ${range}`, label);
+      }
+    }
+  } finally {
+    await close();
+  }
+  // Refused before anything was read, asked for or started.
+  assert.equal(harness.google.requests.length, asked, 'Google was asked something');
+  assert.deepEqual(await harness.core.approvals.list(), []);
+  const flows = await readdir(join(harness.core.paths.stateDir, 'flows')).catch(() => []);
+  assert.deepEqual(
+    flows.filter((name) => name.endsWith('.json')),
+    [],
+    'a sign-in was started',
+  );
+
+  // And the ends of each range are still taken, from both surfaces.
+  for (const argv of [
+    ['search', 'Tuesday', '--limit', '50'],
+    ['search', 'Tuesday', '--limit', '1'],
+    ['attachments', 'find', '--limit', '100', '--min-bytes', '0', '--max-bytes', '1'],
+    ['contacts', 'sam', '--limit', '50', '--sources', 'history'],
+    ['followups', '--older-than', '0', '--lookback', '1', '--limit', '50'],
+  ]) {
+    const run = await cli(harness, [...argv, '--json']);
+    assert.equal(run.code, 0, `${argv.join(' ')}: ${run.stdout}`);
+  }
+  const again = await connect({ core: harness.core, env: harness.env });
+  try {
+    assert.equal(wire(await again.call('gmail_search', { query: 'Tuesday', limit: 50 })).complete, true);
+    assert.equal(wire(await again.call('gmail_search', { query: 'Tuesday', limit: '1' })).complete, true);
+    assert.equal(wire(await again.call('gmail_followups', { olderThanDays: 0, lookbackDays: 1 })).complete, true);
+  } finally {
+    await again.close();
   }
 });
 

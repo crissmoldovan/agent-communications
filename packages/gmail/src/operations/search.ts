@@ -13,6 +13,7 @@ import type { GmailContext } from '../context.ts';
 import { headerValue, readParts } from '../domain/mime.ts';
 import { compileQuery } from '../domain/query.ts';
 import type { GmailTransport, RawMessage } from '../gmail-api/transport.ts';
+import { type NumberOption, numberOption } from './numbers.ts';
 import { taintExclusions } from './read.ts';
 import { oneOf } from './words.ts';
 
@@ -88,13 +89,15 @@ export interface SearchOptions {
   inboxes?: string[] | 'all' | undefined;
   /** threads or messages, as given; checked by `search`. Threads when left out. */
   kind?: string | undefined;
-  limit?: number | undefined;
+  /** How many rows, as given; checked by `search` against {@link SEARCH_LIMIT}. Twenty when left out. */
+  limit?: unknown;
   cursor?: string | undefined;
   includeSpamTrash?: boolean | undefined;
 }
 
 export const DEFAULT_LIMIT = 20;
 export const MAX_LIMIT = 50;
+export const SEARCH_LIMIT: NumberOption = { flag: '--limit', arg: 'limit', min: 1, max: MAX_LIMIT };
 
 interface CursorState {
   v: 1;
@@ -299,8 +302,9 @@ export async function resolveInboxes(
 export async function search(context: GmailContext, options: SearchOptions): Promise<SearchResult> {
   // Checked before anything is read, so a word that is not a kind is refused the same way from either surface.
   const kind = oneOf(options.kind, SEARCH_KINDS, 'a kind of result') ?? 'threads';
+  // And a limit that is not a number in range, which used to be clamped into one — or searched with as NaN.
+  const limit = numberOption(context, options.limit, SEARCH_LIMIT) ?? DEFAULT_LIMIT;
   const config = await context.config();
-  const limit = Math.min(Math.max(1, options.limit ?? DEFAULT_LIMIT), MAX_LIMIT);
   const aliases = await resolveInboxes(context, options.inboxes);
   const compiled = compileQuery(options.query, { timezone: config.defaults.timezone });
   const hash = queryHash(`${compiled.compiled}|${kind}`);

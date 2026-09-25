@@ -3,7 +3,15 @@ import { constants } from 'node:fs';
 import { access, mkdir, open } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CommsError, findById, type GatedChange, lookupName, requireInbox } from '@agentcomms/core';
+import {
+  CommsError,
+  findById,
+  type GatedChange,
+  lookupName,
+  readWholeNumber,
+  requireInbox,
+  wholeNumber,
+} from '@agentcomms/core';
 import type { OAuthFlow } from '../auth/flows.ts';
 import { aboutFlow, FLOW_TTL_MS } from '../auth/flows.ts';
 import { startLoopback } from '../auth/loopback.ts';
@@ -22,8 +30,11 @@ export interface StartOptions {
   /** The address this sign-in must turn out to be. Refused afterwards if it is not. */
   email?: string | undefined;
   hostedDomain?: string | undefined;
-  /** A fixed loopback port, for a network where only some ports are free. */
-  port?: number | undefined;
+  /**
+   * A fixed loopback port, for a network where only some ports are free — as given, and checked here by
+   * {@link checkedPort} for both surfaces. Any free one when left out, or 0.
+   */
+  port?: unknown;
   /** Command used to start the detached listener; tests point it at the source entry. */
   listenerCommand?: { command: string; args: string[] } | undefined;
   /** False keeps the listener in this process (the interactive flow, which waits). */
@@ -80,6 +91,8 @@ export function inboxReauthChange(
   context: GmailContext,
   options: Omit<StartOptions, 'mode'>,
 ): GatedChange<StartedSignIn> {
+  // Before anything is planned or approved: a port that is not one would only fail once the sign-in was started.
+  checkedPort(options.port, context.surface);
   return {
     plan: (config) => {
       const inbox = requireInbox(config, options.alias);
@@ -115,6 +128,7 @@ export function inboxReauthChange(
  * person has read a consent screen. `--finish` then collects the result.
  */
 export async function startSignIn(context: GmailContext, options: StartOptions): Promise<StartedSignIn> {
+  const port = checkedPort(options.port, context.surface);
   const config = await context.config();
   // Resolved per mode, below, and deliberately not before: adding an inbox has no inbox to ask, but re-authorising
   // one does, and `Object.keys(config.clients)[0]` is insertion order rather than an answer to the question.
@@ -169,8 +183,8 @@ export async function startSignIn(context: GmailContext, options: StartOptions):
 
   const started =
     options.detached === false
-      ? await startInProcess(context, flow, options.port)
-      : await startDetached(context, flow, options);
+      ? await startInProcess(context, flow, port)
+      : await startDetached(context, flow, options, port);
 
   const authUrl = buildAuthUrl({
     client: { clientId: client.clientId, clientSecret: '' },
@@ -231,6 +245,7 @@ async function startDetached(
   context: GmailContext,
   flow: OAuthFlow,
   options: StartOptions,
+  port: number | undefined,
 ): Promise<{ redirectUri: string; listener: undefined }> {
   const entry = options.listenerCommand ?? (await defaultListenerCommand());
 
@@ -258,7 +273,7 @@ async function startDetached(
         detached: true,
         // An IPC channel only for the "ready" message: nothing else passes between the processes.
         stdio: ['ignore', 'ignore', log.fd, 'ipc'],
-        env: { ...process.env, ...listenerEnv(context, options.port) },
+        env: { ...process.env, ...listenerEnv(context, port) },
       });
       // Attached before the next `await`, not after it. `spawn` reports a missing or unexecutable command on the
       // following tick, which lands in the middle of `log.close()` — and an 'error' event with no listener is
@@ -434,6 +449,24 @@ export interface FinishOptions {
   signal?: AbortSignal | undefined;
 }
 
+/**
+ * The loopback port a sign-in listens on, checked rather than coerced: a whole number from 0 to 65535, where 0 — as
+ * leaving it out — is any free port.
+ *
+ * `--port` was `Number.parseInt`, so `--port abc` was NaN: the detached listener read that as no port and took any
+ * free one, and a person who had opened one port in a firewall got a link to another. `--port 70000` reached the
+ * listener and failed there as an unexpected error. The tool's schema took any whole number. One check for both
+ * surfaces now, naming the option as each spells it.
+ */
+export function checkedPort(raw: unknown, surface: 'cli' | 'mcp'): number | undefined {
+  return wholeNumber(raw, {
+    name: surface === 'mcp' ? 'port' : '--port',
+    min: 0,
+    max: 65535,
+    hint: 'A loopback port, from 1 to 65535; 0, or leaving it out, lets the system pick a free one.',
+  });
+}
+
 /** The longest a finish waits for the browser: the sign-in's own life, since nothing can arrive after it ends. */
 export const MAX_WAIT_SECONDS: number = FLOW_TTL_MS / 1000;
 
@@ -447,13 +480,9 @@ export const MAX_WAIT_SECONDS: number = FLOW_TTL_MS / 1000;
  */
 export function checkedWait(raw: unknown, surface: 'cli' | 'mcp'): number {
   const given = raw ?? 60;
-  const seconds =
-    typeof given === 'number'
-      ? given
-      : typeof given === 'string' && /^\d+$/.test(given.trim())
-        ? Number(given.trim())
-        : Number.NaN;
-  if (!Number.isInteger(seconds) || seconds < 0 || seconds > MAX_WAIT_SECONDS) {
+  // Digits, or a whole number: read as every number option is (core's `readWholeNumber`).
+  const seconds = readWholeNumber(given);
+  if (Number.isNaN(seconds) || seconds < 0 || seconds > MAX_WAIT_SECONDS) {
     throw new CommsError('USAGE', `"${String(given)}" is not a wait`, {
       hint:
         surface === 'mcp'

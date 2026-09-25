@@ -28,6 +28,7 @@ import {
 import { headerValue, readParts } from '../domain/mime.ts';
 import type { GmailTransport, RawMessage } from '../gmail-api/transport.ts';
 import { ownAddresses } from './analyse.ts';
+import { type NumberOption, numberOption } from './numbers.ts';
 import { oneOf } from './words.ts';
 
 /**
@@ -496,7 +497,11 @@ export interface DraftSummary {
   updatedAt: string | null;
 }
 
-export async function listDrafts(context: GmailContext, alias: string, limit = 20): Promise<DraftSummary[]> {
+export const DRAFT_LIST_LIMIT: NumberOption = { flag: '--limit', arg: 'limit', min: 1 };
+
+/** The drafts in a mailbox. `limit` is as given, and checked before the mailbox is read; twenty when left out. */
+export async function listDrafts(context: GmailContext, alias: string, given?: unknown): Promise<DraftSummary[]> {
+  const limit = numberOption(context, given, DRAFT_LIST_LIMIT) ?? 20;
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'draft');
   const transport = await context.transport(alias);

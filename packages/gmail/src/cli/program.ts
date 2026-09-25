@@ -60,7 +60,14 @@ import {
   prepareSend,
   revokeApproval,
 } from '../operations/send.ts';
-import { checkedWait, finishSignIn, inboxReauthChange, MAX_WAIT_SECONDS, startSignIn } from '../operations/signin.ts';
+import {
+  checkedPort,
+  checkedWait,
+  finishSignIn,
+  inboxReauthChange,
+  MAX_WAIT_SECONDS,
+  startSignIn,
+} from '../operations/signin.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
 import { askFor } from './prompt.ts';
@@ -396,7 +403,9 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       .option('--no-contacts', 'do not ask for contacts access', undefined)
       .option('--contacts', 'ask for contacts access (the default)')
       .option('--client <name>', 'sign in through this OAuth client')
-      .option('--port <number>', 'use this loopback port for the redirect', (value) => Number.parseInt(value, 10))
+      // As typed, and checked by the operation (`checkedPort`): `Number.parseInt` made `abc` NaN, which the listener
+      // took as any free port.
+      .option('--port <number>', 'use this loopback port for the redirect: 1 to 65535, or 0 for any free one')
       .option('--no-browser', 'do not open the link, just print it')
       .option('--hd <domain>', 'restrict the account chooser to a Google Workspace domain')
       .option('--start', 'start the sign-in and return the link, to be finished later', false)
@@ -417,8 +426,9 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     alias: string | undefined,
     options: Options,
   ): Promise<void> => {
-    // Whatever else is asked: a wait that is not one is refused as USAGE, not taken as some other number.
+    // Whatever else is asked: a wait or a port that is not one is refused as USAGE, not taken as some other number.
     const waitSeconds = checkedWait(options.wait, context.surface);
+    const port = checkedPort(options.port, context.surface);
     if (options.finish) {
       const result = await finishSignIn(context, {
         flowId: String(options.finish),
@@ -447,7 +457,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       client: options.client ? String(options.client) : undefined,
       email: options.email ? String(options.email) : undefined,
       hostedDomain: options.hd ? String(options.hd) : undefined,
-      port: options.port === undefined ? undefined : Number(options.port),
+      port,
       detached: !interactive,
       listenerCommand: deps.listenerCommand,
     };
@@ -628,7 +638,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .option('--inbox <alias...>', 'search these mailboxes (default: all)')
     .option('--all', 'search every connected mailbox', false)
     .option('--messages', 'return messages rather than threads', false)
-    .option('--limit <number>', 'how many rows', (value) => Number.parseInt(value, 10))
+    .option('--limit <number>', 'how many rows: 1 to 50 (default 20)')
     .option('--cursor <cursor>', 'continue a previous search')
     .option('--include-spam-trash', 'include spam and trash', false)
     .action(
@@ -637,7 +647,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           query,
           inboxes: options.all ? 'all' : (options.inbox as string[] | undefined),
           kind: options.messages ? 'messages' : 'threads',
-          limit: options.limit === undefined ? undefined : Number(options.limit),
+          limit: options.limit,
           cursor: options.cursor ? String(options.cursor) : undefined,
           includeSpamTrash: Boolean(options.includeSpamTrash),
         });
@@ -650,14 +660,14 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .description('read one message: headers, body, attachments and what was hidden in it')
     .requiredOption('--inbox <alias>', 'which mailbox')
     .option('--quoted', 'keep quoted history and signatures', false)
-    .option('--max-chars <number>', 'how much body to return', (value) => Number.parseInt(value, 10))
-    .option('--offset <number>', 'continue from this character', (value) => Number.parseInt(value, 10))
+    .option('--max-chars <number>', 'how much body to return')
+    .option('--offset <number>', 'continue from this character')
     .action(
       act(async (context, globalOptions, messageId: string, options: Options) => {
         const result = await readMessage(context, String(options.inbox), messageId, {
           includeQuoted: Boolean(options.quoted),
-          maxChars: options.maxChars === undefined ? undefined : Number(options.maxChars),
-          offset: options.offset === undefined ? undefined : Number(options.offset),
+          maxChars: options.maxChars,
+          offset: options.offset,
         });
         writeResult(result, output(), (data) => renderMessage(data, globalOptions.color), streams);
       }),
@@ -668,12 +678,12 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .description('read a whole conversation, oldest first')
     .requiredOption('--inbox <alias>', 'which mailbox')
     .option('--quoted', 'keep quoted history and signatures', false)
-    .option('--max-chars <number>', 'how much of each body to return', (value) => Number.parseInt(value, 10))
+    .option('--max-chars <number>', 'how much of each body to return')
     .action(
       act(async (context, globalOptions, threadId: string, options: Options) => {
         const result = await readThread(context, String(options.inbox), threadId, {
           includeQuoted: Boolean(options.quoted),
-          maxChars: options.maxChars === undefined ? undefined : Number(options.maxChars),
+          maxChars: options.maxChars,
         });
         writeResult(result, output(), (data) => renderThread(data, globalOptions.color), streams);
       }),
@@ -709,11 +719,11 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .option('--filename <text>', 'name or extension')
     .option('--after <date>', 'only after this date')
     .option('--before <date>', 'only before this date')
-    .option('--min-bytes <number>', 'at least this big', (value) => Number.parseInt(value, 10))
-    .option('--max-bytes <number>', 'at most this big', (value) => Number.parseInt(value, 10))
+    .option('--min-bytes <number>', 'at least this big')
+    .option('--max-bytes <number>', 'at most this big')
     .option('--type <mimeType>', 'only this content type')
     .option('--query <query>', 'extra Gmail search syntax')
-    .option('--limit <number>', 'how many rows', (value) => Number.parseInt(value, 10))
+    .option('--limit <number>', 'how many rows: 1 to 100 (default 25)')
     .action(
       act(async (context, globalOptions, options: Options) => {
         const result = await findAttachments(context, {
@@ -722,11 +732,11 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           filename: options.filename ? String(options.filename) : undefined,
           after: options.after ? String(options.after) : undefined,
           before: options.before ? String(options.before) : undefined,
-          minBytes: options.minBytes === undefined ? undefined : Number(options.minBytes),
-          maxBytes: options.maxBytes === undefined ? undefined : Number(options.maxBytes),
+          minBytes: options.minBytes,
+          maxBytes: options.maxBytes,
           mimeType: options.type ? String(options.type) : undefined,
           query: options.query ? String(options.query) : undefined,
-          limit: options.limit === undefined ? undefined : Number(options.limit),
+          limit: options.limit,
         });
         writeResult(result, output(), (data) => renderAttachments(data, globalOptions.color), streams);
       }),
@@ -737,7 +747,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .requiredOption('--inbox <alias>', 'which mailbox')
     .option('--part <partId>', 'one specific attachment')
     .option('--out <subpath>', 'a folder inside the downloads root')
-    .option('--max-files <number>', 'stop after this many files', (value) => Number.parseInt(value, 10))
+    .option('--max-files <number>', 'stop after this many files: 1 to 200 (default 50)')
     .action(
       act(async (context, globalOptions, messageIds: string[], options: Options) => {
         const result = await downloadAttachments(
@@ -746,7 +756,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           messageIds.map((messageId) => ({ messageId, partId: options.part ? String(options.part) : undefined })),
           {
             out: options.out ? String(options.out) : undefined,
-            maxFiles: options.maxFiles === undefined ? undefined : Number(options.maxFiles),
+            maxFiles: options.maxFiles,
           },
         );
         writeResult(result, output(), (data) => renderDownloads(data, globalOptions.color), streams);
@@ -758,13 +768,13 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .description('find someone’s address: from the address book, from people written to, and from past mail')
     .option('--inbox <alias...>', 'search these mailboxes (default: all)')
     .option('--sources <source...>', 'contacts, other-contacts, history')
-    .option('--limit <number>', 'how many rows', (value) => Number.parseInt(value, 10))
+    .option('--limit <number>', 'how many rows: 1 to 50 (default 20)')
     .action(
       act(async (context, globalOptions, query: string, options: Options) => {
         const result = await searchContacts(context, query, {
           inboxes: options.inbox as string[] | undefined,
           sources: options.sources as Array<'contacts' | 'other-contacts' | 'history'> | undefined,
-          limit: options.limit === undefined ? undefined : Number(options.limit),
+          limit: options.limit,
         });
         writeResult(result, output(), (data) => renderContacts(data, globalOptions.color), streams);
       }),
@@ -775,17 +785,17 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .description('conversations waiting on somebody')
     .option('--inbox <alias...>', 'these mailboxes (default: all)')
     .addOption(new Option('--direction <who>', 'who is being waited on').choices([...FOLLOW_UP_DIRECTIONS]))
-    .option('--older-than <days>', 'only threads quiet for this long', (value) => Number.parseInt(value, 10))
-    .option('--lookback <days>', 'how far back to look', (value) => Number.parseInt(value, 10))
-    .option('--limit <number>', 'how many rows', (value) => Number.parseInt(value, 10))
+    .option('--older-than <days>', 'only threads quiet for this long')
+    .option('--lookback <days>', 'how far back to look')
+    .option('--limit <number>', 'how many rows: 1 to 50 (default 20)')
     .action(
       act(async (context, globalOptions, options: Options) => {
         const result = await followUps(context, {
           inboxes: options.inbox as string[] | undefined,
           direction: options.direction === undefined ? undefined : String(options.direction),
-          olderThanDays: options.olderThan === undefined ? undefined : Number(options.olderThan),
-          lookbackDays: options.lookback === undefined ? undefined : Number(options.lookback),
-          limit: options.limit === undefined ? undefined : Number(options.limit),
+          olderThanDays: options.olderThan,
+          lookbackDays: options.lookback,
+          limit: options.limit,
         });
         writeResult(result, output(), (data) => renderFollowUps(data, globalOptions.color), streams);
       }),
@@ -853,14 +863,10 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .command('list')
     .description('the drafts in a mailbox')
     .requiredOption('--inbox <alias>', 'which mailbox')
-    .option('--limit <number>', 'how many rows', (value) => Number.parseInt(value, 10))
+    .option('--limit <number>', 'how many rows (default 20)')
     .action(
       act(async (context, globalOptions, options: Options) => {
-        const result = await listDrafts(
-          context,
-          String(options.inbox),
-          options.limit === undefined ? undefined : Number(options.limit),
-        );
+        const result = await listDrafts(context, String(options.inbox), options.limit);
         writeResult(result, output(), (data) => renderDrafts(data, globalOptions.color), streams);
       }),
     );
