@@ -1,5 +1,7 @@
 import {
   agentMarker,
+  approvalKind,
+  approveChangeAtTerminal,
   CommsError,
   canPrompt,
   colorEnabled,
@@ -941,9 +943,30 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
 
   program
     .command('approve <approvalId>')
-    .description('approve a send at this terminal: read the message, then type the code back')
+    .description('approve a send or a change at this terminal: read it, then type the code back')
     .action(
       act(async (context, globalOptions, approvalId: string) => {
+        /*
+         * A change approval too. `agentcomms` is not installed beside this package, and a person told to run
+         * `agentcomms approve` has nothing to run — so the command they already have approves a change as well, through
+         * core's own terminal approval, which refuses an agent and anything without a terminal in the same words.
+         */
+        const pending = await context.core.approvals.get(approvalId);
+        if (pending && approvalKind(pending) === 'change') {
+          const outcome = await approveChangeAtTerminal(
+            context.core,
+            approvalId,
+            env,
+            { json: globalOptions.json, color: globalOptions.color },
+            streams,
+          );
+          streams.stdout.write(
+            outcome.state === 'approved'
+              ? 'Approved. This command approves; the change is applied by the command that prepared it.\n'
+              : 'Cancelled. Nothing was changed.\n',
+          );
+          return;
+        }
         // The one command an agent may not run for the user. A shell agent can defeat this — `script -q /dev/null`
         // makes any command see a terminal — and SECURITY.md says so. It is a speed bump against the ordinary case,
         // not a boundary; the boundary for an agent with a shell is the `never` policy and sending from Gmail.

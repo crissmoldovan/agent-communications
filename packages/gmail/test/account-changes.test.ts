@@ -222,6 +222,25 @@ test('moving a mailbox off the confirm change policy is approved at a terminal, 
   }
 });
 
+test('agent-gmail approve approves a change under confirm, so the person needs no other command', async () => {
+  const harness = await mailbox();
+  // Tightening asks nobody; from here every change to this mailbox needs a person at a terminal.
+  assert.equal((await cli(harness, ['inbox', 'policy', 'work', '--change', 'confirm', '--json'])).code, 0);
+
+  const id = pendingApproval(await cli(harness, ['inbox', 'remove', 'work', '--json']));
+  const refused = await cli(harness, ['approve', id, '--json'], { tty: true, env: { CLAUDECODE: '1' } });
+  assert.notEqual(refused.code, 0, 'an agent approved its own change');
+
+  const approved = await cli(harness, ['approve', id], { tty: true, answer: true });
+  assert.equal(approved.code, 0, approved.stderr);
+  assert.match(approved.stdout, /the change is applied by the command that prepared it/);
+  assert.ok((await harness.core.config.load()).inboxes.work, 'approving applied nothing');
+
+  const applied = await cli(harness, ['inbox', 'remove', 'work', '--json', '--approval', id]);
+  assert.equal(applied.code, 0, applied.stdout);
+  assert.equal((await harness.core.config.load()).inboxes.work, undefined);
+});
+
 test('inbox policy refuses the same things from both surfaces, in the same words', async () => {
   const harness = await mailbox();
   const { call, close } = await connect({ core: harness.core, env: harness.env });
