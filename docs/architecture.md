@@ -7,7 +7,7 @@ and ignore the rest.
                        ┌──────────────────────────────────┬───────────────────────────────────┐
   people, scripts ───► │  agent-gmail        (the CLI)    │  agent-slack        (the CLI)     │
                        ├──────────────────────────────────┼───────────────────────────────────┤
-  agents ────────────► │  MCP server         (44 tools)   │  MCP server         (26 tools)    │
+  agents ────────────► │  MCP server         (44 tools)   │  MCP server         (27 tools)    │
                        ├──────────────────────────────────┼───────────────────────────────────┤
                        │  @agentcomms/gmail  (library)    │  @agentcomms/slack  (library)     │
                        ├──────────────────────────────────┴───────────────────────────────────┤

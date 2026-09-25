@@ -740,10 +740,9 @@
       "id": "slack.draft.create",
       "package": "slack",
       "cli": "draft create",
-      "mcp": "slack_post_prepare",
+      "mcp": "slack_draft_create",
       "status": "both",
-      "unchecked": "Not one operation, found by the operation check and left as it is for a change of its own: `draft create` runs createDraft, while slack_post_prepare runs prepareDraftPost, which writes the draft itself (the draft store's `create`) and prepares it in the same call.",
-      "reason": "slack_post_prepare writes the draft and prepares it in one call; the CLI takes those as two steps, `draft create` then `post prepare`."
+      "operation": "createDraft"
     },
     {
       "id": "slack.draft.list",
@@ -751,7 +750,7 @@
       "cli": "draft list",
       "mcp": "slack_draft_list",
       "status": "both",
-      "unchecked": "No operation on either side, found by the operation check and left as it is for a change of its own: `draft list` and slack_draft_list each resolve the workspace (requireWorkspace) and read the draft store's `list` themselves."
+      "operation": "listDrafts"
     },
     {
       "id": "slack.draft.get",
@@ -759,7 +758,7 @@
       "cli": "draft show",
       "mcp": "slack_draft_get",
       "status": "both",
-      "operation": "ownDraft"
+      "operation": "showDraft"
     },
     {
       "id": "slack.draft.delete",

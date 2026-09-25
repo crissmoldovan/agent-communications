@@ -194,7 +194,7 @@ the person says yes in the conversation under the `chat` policy, or after they a
 `confirm` — which any broadcast needs. Connecting, widening, re-authorising, removing a workspace and setting its
 policies work from chat too: whatever loosens a workspace or removes one is shown as a preview and applied only once
 the person approves that change — in the conversation under the `chat` change policy, at their terminal under
-`confirm`. 26 tools over stdio, none of which approves.
+`confirm`. 27 tools over stdio, none of which approves.
 [Slack CLI reference](docs/reference/slack-cli.md) ·
 [Slack MCP tool reference](docs/reference/slack-mcp-tools.md) · [the package](packages/slack/README.md).
 

@@ -1055,3 +1055,54 @@ test('a draft the composer wrote, in this version or an older one, is not taken 
     await close();
   }
 });
+
+test('slack_draft_create writes the draft `draft create` writes, and prepares nothing', async () => {
+  /*
+   * `draft create` had no tool of its own: it was paired with slack_post_prepare, which writes a draft and prepares
+   * it in one call. The operation check found they were not one operation. Both now run `createDraft`: the same draft,
+   * the same checks, and no approval until slack_post_prepare is called with its id.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'send' });
+  const { call, close } = await connect(harness);
+  try {
+    const input = { channel: 'C1', text: 'ready & waiting', mentionUsers: ['U024BE7LH'] };
+    const byCommand = await cliData<{ draftId: string; payload: unknown; source: string }>(harness, [
+      'draft',
+      'create',
+      '--workspace',
+      'acme',
+      '--channel',
+      input.channel,
+      '--text',
+      input.text,
+      '--mention',
+      'U024BE7LH',
+    ]);
+    const byTool = ok<{ draftId: string; payload: unknown; source: string }>(
+      await call('slack_draft_create', { workspace: 'acme', ...input }),
+    );
+    assert.notEqual(byTool.draftId, byCommand.draftId);
+    assert.deepEqual(byTool.payload, byCommand.payload);
+    assert.equal(byTool.source, byCommand.source);
+    assert.deepEqual(await harness.core.approvals.list(), [], 'writing a draft asks nobody');
+
+    // The same refusals: a mention that is not a user id, and a broadcast the preview could not count.
+    const badMention = failed(
+      await call('slack_draft_create', { workspace: 'acme', channel: 'C1', text: 'x', mentionUsers: ['U1> <!here'] }),
+    );
+    assert.equal(badMention.code, 'USAGE');
+    const badBroadcast = failed(
+      await call('slack_draft_create', { workspace: 'acme', channel: 'C1', text: 'x', broadcast: 'subteam^S0123' }),
+    );
+    assert.equal(badBroadcast.code, 'USAGE');
+
+    // And the draft it wrote is one slack_post_prepare takes by id.
+    const prepared = ok<{ approvalId: string }>(
+      await call('slack_post_prepare', { workspace: 'acme', draftId: byTool.draftId }),
+    );
+    assert.equal(typeof prepared.approvalId, 'string');
+  } finally {
+    await close();
+  }
+});

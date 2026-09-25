@@ -30,6 +30,7 @@ preview, and `slack_post_send` is the third. Both surfaces run one operation, so
 | `slack_post_send` | `agent-slack post send` |
 | `slack_react` | `agent-slack react` |
 | `slack_react_send` | `agent-slack react --approval <approvalId>` |
+| `slack_draft_create` | `agent-slack draft create` — writes a draft and prepares nothing; prepare it by id |
 | `slack_draft_list` | `agent-slack draft list` |
 | `slack_draft_get` | `agent-slack draft show <draftId>` |
 | `slack_draft_delete` | `agent-slack draft delete <draftId>` |

@@ -27,7 +27,7 @@ import {
   signInStarted,
 } from '../operations/changes.ts';
 import { runDoctor } from '../operations/doctor.ts';
-import { deleteOwnDraft, listDrafts, showDraft } from '../operations/drafts.ts';
+import { createDraft, deleteOwnDraft, listDrafts, showDraft } from '../operations/drafts.ts';
 import type { ProbeFetch } from '../operations/identity.ts';
 import { manifestFor } from '../operations/manifest.ts';
 import { prepareDraftPost, react, sendPost } from '../operations/post.ts';
@@ -666,6 +666,44 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
    * so they piled up with nothing but a shell to reach them. Scoped to the workspace like everything else: drafts
    * share one directory, and a draft id from another workspace is reported as absent.
    */
+  /*
+   * Writing a draft without preparing it: `agent-slack draft create`. slack_post_prepare also writes one, but prepares
+   * it in the same call, so it is not this command's operation — the parity check found `draft create` had no tool
+   * of its own. Nothing reaches Slack, and the draft still goes through the gate like any other.
+   */
+  server.registerTool(
+    'slack_draft_create',
+    {
+      title: 'Write a draft',
+      description:
+        'Write a draft on this machine, without preparing it. **Nothing reaches Slack** — Slack keeps no server-side draft. Mentions are by user id and checked as slack_post_prepare checks them, and `broadcast` is only `here`, `channel` or `everyone`. To post it, call slack_post_prepare with its `draftId`, show the preview, and wait for the person. The same as `agent-slack draft create`.',
+      inputSchema: {
+        ...workspaceArg,
+        channel: z.string().describe('the channel or conversation id'),
+        text: z.string().describe('what to say. Markup in it is shown, not interpreted'),
+        threadTs: z.string().optional().describe('reply inside this thread'),
+        mentionUsers: z.array(z.string()).optional().describe('user ids to mention, by id — never by name'),
+        broadcast: oneOfWords(BROADCASTS).optional().describe('interrupts the room; posting it needs a person'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      try {
+        return reply(
+          await createDraft(context, await resolve(args.workspace), {
+            channel: args.channel,
+            text: args.text,
+            threadTs: args.threadTs,
+            mentionUsers: args.mentionUsers,
+            broadcast: args.broadcast,
+          }),
+        );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
   server.registerTool(
     'slack_draft_list',
     {
