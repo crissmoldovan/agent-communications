@@ -159,6 +159,15 @@ test('a re-run skips what is already published, so a partial release can be fini
   assert.match(loop.slice(skip, publish), /else\s*$/, 'the publish must be the else branch of that check');
 });
 
+test('the local release script publishes a prerelease under next, as the workflow does', async () => {
+  const script = await readFile(join(ROOT, 'scripts', 'release.mjs'), 'utf8');
+  const rule = /const distTag = version\.includes\('-'\) \? 'next' : 'latest';/.exec(script);
+  assert.ok(rule, 'the script no longer chooses the dist-tag from the version');
+  const publish = /runLoud\('pnpm', \[([^\]]*'publish'[^\]]*)\]\)/.exec(script)?.[1] ?? '';
+  assert.match(publish, /'--tag',\s*distTag/, 'every publish must name the tag, or npm moves `latest`');
+  assert.ok(rule.index < script.indexOf(publish), 'the tag is decided before anything is sent');
+});
+
 test('the registry confirmation has room for the lag seen on real releases', async () => {
   const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
   const attempts = Number(/for attempt in \$\(seq 1 (\d+)\)/.exec(workflow)?.[1]);

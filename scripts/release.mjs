@@ -140,12 +140,24 @@ if (!publish) {
 }
 
 // ── The irreversible part ─────────────────────────────────────────────────────────────────────────────────────
-console.log(`\nPublishing ${PACKAGES.length} packages at ${version}, in dependency order.\n`);
+// A prerelease goes out under `next`, as it does from the workflow. npm moves `latest` on every publish that names no
+// other tag, so without this a `-rc.1` sent from here became what `npm i` installs, for everybody, at once.
+const distTag = version.includes('-') ? 'next' : 'latest';
+console.log(`\nPublishing ${PACKAGES.length} packages at ${version} under "${distTag}", in dependency order.\n`);
 const sent = [];
 try {
   for (const name of PACKAGES) {
     process.stdout.write(`  ${SCOPE}/${name} … `);
-    runLoud('pnpm', ['--filter', `${SCOPE}/${name}`, 'publish', '--access', 'public', '--no-git-checks']);
+    runLoud('pnpm', [
+      '--filter',
+      `${SCOPE}/${name}`,
+      'publish',
+      '--access',
+      'public',
+      '--no-git-checks',
+      '--tag',
+      distTag,
+    ]);
     sent.push(name);
     console.log(`  ${SCOPE}/${name} sent`);
   }

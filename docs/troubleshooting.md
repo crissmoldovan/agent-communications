@@ -203,7 +203,15 @@ and the server verified: for Claude Code and Codex the entry is written through 
 Restart the client afterwards — a running client keeps the server it started. Each version installs into its own
 directory under `<data dir>/runtime/` (`npx -y @agentcomms/core@latest paths` shows the data dir):
 `<version>-gmail/` and `<version>-slack/`, or plain `<version>/` for a Gmail runtime an earlier release installed.
-Once nothing registers an old one and no client started before the upgrade is still open, it can be deleted.
+`mcp prune` deletes the old ones, and only those it can show are unused: never this release's, never one any client
+registers, never one a running process started from — and nothing at all if it cannot list the processes. Run it
+once the clients have been restarted; `--dry-run` lists what it would remove:
+
+```bash
+npx -y @agentcomms/gmail@latest mcp prune --dry-run
+npx -y @agentcomms/gmail@latest mcp prune
+npx -y @agentcomms/slack@latest mcp prune
+```
 
 ### The server starts but every call fails
 

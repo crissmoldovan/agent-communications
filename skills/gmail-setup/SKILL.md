@@ -221,7 +221,9 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    disk — `gmail_attachment_download` and `gmail_export` are registered either way — so say it can write
    files, including attachments from strangers, under the downloads root. The command starts the server
    through the entry it just wrote and completes a handshake, so a registration that looks right but does
-   not run is caught here. Tell the user to restart the client afterwards.
+   not run is caught here. Tell the user to restart the client afterwards. Re-registering a newer version
+   leaves the old runtime on disk; once the client is restarted, `agent-gmail mcp prune` removes those no
+   client registers and no process is running.
    **Complete when:** the result says `verified` with the tool count, and you have passed on any warning
    about another Gmail server registered with the same client.
 

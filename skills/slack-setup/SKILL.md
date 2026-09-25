@@ -73,8 +73,9 @@ agent-slack mcp install --client cursor --workspace acme/slack   # pinned to one
 
 `--client` also takes `codex`, `claude-desktop`, `gemini`, `vscode` and `json` (print the entry to paste by hand).
 The entry pins the exact version it was installed from, so a newer release reaches the agent only when it is
-registered again with `--force`; restart the client afterwards. Without the server the skills still work, through
-`agent-slack … --json`.
+registered again with `--force`; restart the client afterwards. Each version installs its own runtime, and the old
+one stays; `agent-slack mcp prune` removes those no client registers and no process is running (`--dry-run` lists
+them first). Without the server the skills still work, through `agent-slack … --json`.
 
 What the agent gets is reading, drafting and preparing — never posting:
 

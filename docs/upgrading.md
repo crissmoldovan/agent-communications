@@ -118,8 +118,14 @@ npx -y @agentcomms/slack@$V doctor --offline
 
 ## 7. Reopen the clients
 
-Reopen them, and check that the Gmail and Slack tools are there. The old servers' runtimes stay on disk until you
-delete them (see [Troubleshooting](troubleshooting.md#the-server-is-running-an-old-version)).
+Reopen them, and check that the Gmail and Slack tools are there. Then remove the old servers' runtimes, which stay
+on disk otherwise. `prune` keeps anything a client registers or a running process uses, so run it after the
+clients are back:
+
+```bash
+npx -y @agentcomms/gmail@$V mcp prune
+npx -y @agentcomms/slack@$V mcp prune
+```
 
 ## Accounts this computer does not have yet
 

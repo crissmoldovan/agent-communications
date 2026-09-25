@@ -18,7 +18,7 @@ a *higher* version, never by replacing the one that went out.
 
 Everything below follows from that.
 
-## Who publishes, and what approves it
+## Who publishes, and what can start it
 
 CI, via npm trusted publishing — a short-lived credential minted from the workflow's own identity. No token is
 stored anywhere, and none should be added: a long-lived npm token in a public repository is a standing risk nobody
@@ -84,12 +84,12 @@ owner can add (npmjs.com → the package → Settings → Trusted publishing: th
    that can lag minutes behind a successful publish. Run `npm dist-tag ls @agentcomms/<name>`, which goes to the
    authenticated path. If that reports the version, the publish landed.
 
-8. **Prove it from outside.** `npx -y @agentcomms/gmail@X.Y.Z --version`, then `doctor`, in a directory that is not
+7. **Prove it from outside.** `npx -y @agentcomms/gmail@X.Y.Z --version`, then `doctor`, in a directory that is not
    this repository. Then `npx skills add crissmoldovan/agent-communications --skill '*'` in a scratch directory and
    check a skill brought its `references/` with it.
    **Complete when:** the published artefact has been run by something that did not build it.
 
-9. **Check the GitHub release** the workflow made from the changelog section. It is automatic now — every release
+8. **Check the GitHub release** the workflow made from the changelog section. It is automatic now — every release
    up to 0.4.0 was made by hand, and 0.3.2's was forgotten for a day. The body is the changelog section verbatim, so
    development-phase notes that say "nothing to install yet" belong out of the entry, not edited out of the page.
    **Complete when:** `gh release view vX.Y.Z` shows the release, made by `github-actions[bot]`.
@@ -134,15 +134,17 @@ The packages that went out are **on the registry for good**.
 
 ## Pitfalls
 
-- **Treating the tag as the release.** The tag starts the workflow; the approval publishes. A tag whose job was
-  never approved names a release that did not happen — delete it rather than leave it implying otherwise.
+- **Treating the tag as the release.** The tag starts the workflow; the publish happens only if every verify leg
+  and the preflight pass. A tag whose run published nothing names a release that did not happen — move it to the
+  fix rather than leave it implying otherwise.
 - **Bumping the version after a partial CI failure.** Re-run the job instead; it skips what is already out. Bumping
   is for the local script, which does not.
 - **Reading a preflight failure as a failed release.** Nothing was published; the fix is the owner adding a trusted
   publisher, then a re-run.
 - **Trusting the publish command's exit code.** Ask the registry, and give it time to answer.
 - **Adding an npm token so CI "just publishes".** It already publishes, through OIDC, with nothing stored. A token
-  would add a standing credential to a public repository *and* remove the approval that keeps a person in the loop.
+  would add a standing credential to a public repository — one that publishes from anywhere, not only from this
+  workflow on a `v*` tag.
 - **Reading "not visible yet" as a failed publish.** It is usually CDN lag. Check `npm dist-tag ls` first.
 - **Running the release while agents are working in this checkout.** They share the working tree and can change
   branches under you. Give them worktree isolation, or do not run them during a release.
