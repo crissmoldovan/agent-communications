@@ -20,7 +20,8 @@ import { CommsError } from './errors.ts';
  *
  * The arguments themselves, not what is inside them: an object passed as one argument — `gmail_draft_send`'s
  * `expect`, `gmail_organise_undo`'s records — is handed back from another tool's answer, and every key it declares is
- * required already, so a misspelt one is refused as missing.
+ * required already, so a misspelt one is refused as missing. That refusal names where it is — "`expect.to` is
+ * required", "`undo[0]` does not take `messageID`" — rather than the argument, which was an object all along.
  */
 
 /** What a server answers a refused call with: its own error envelope, the same as for every other refusal. */
@@ -47,6 +48,7 @@ interface JsonSchema {
   description?: string;
   properties?: Record<string, JsonSchema>;
   required?: string[];
+  additionalProperties?: boolean | JsonSchema;
 }
 
 const APPLIED = Symbol.for('agentcomms.strictToolArguments');
@@ -175,7 +177,13 @@ function refusal(tool: string, published: JsonSchema, input: unknown, issues: re
   }
 
   const given = typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {};
-  const problems = new Map<string, string>();
+  /*
+   * One entry per thing wrong, in the order zod found them. An argument itself — missing, or not what it takes — is
+   * one entry, keyed by its name. What is wrong *inside* an object argument is named by its full path (`expect.to`,
+   * `undo[0].messageId`): reporting it against the argument said "`expect` takes an object" of an object, and named
+   * neither the key that was missing nor the one misspelt beside it.
+   */
+  const problems = new Map<string, Problem>();
   const general: string[] = [];
   for (const issue of issues) {
     const [key] = issue.path;
@@ -183,15 +191,186 @@ function refusal(tool: string, published: JsonSchema, input: unknown, issues: re
       general.push(issue.message);
       continue;
     }
-    if (problems.has(key)) continue;
-    problems.set(key, problemWith(key, properties[key], issue, given[key] === undefined && issue.path.length === 1));
+    if (issue.path.length === 1 && issue.code !== 'unrecognized_keys') {
+      if (!problems.has(key)) {
+        const text = problemWith(key, properties[key], issue, given[key] === undefined);
+        problems.set(key, { argument: key, path: key, inside: false, text: () => text, hint: undefined });
+      }
+      continue;
+    }
+    if (issue.code === 'unrecognized_keys') {
+      // A strict object inside an argument: its keys are refused where they are, as the top level's are.
+      unknownInside(problems, published, given, issue.path, issue.keys);
+      continue;
+    }
+    const path = pathName(issue.path);
+    if (!problems.has(path)) {
+      const container = issue.path.slice(0, -1);
+      const holder = valueAt(given, container);
+      const last = issue.path.at(-1);
+      const missing =
+        typeof holder === 'object' &&
+        holder !== null &&
+        (holder as Record<PropertyKey, unknown>)[last as PropertyKey] === undefined;
+      const text = problemWith(path, schemaAt(published, issue.path), issue, missing);
+      problems.set(path, {
+        argument: key,
+        path,
+        inside: true,
+        text: () => text,
+        hint: nearestSignature(published, container),
+      });
+    }
+    // A misspelt key beside a missing one is the likeliest reason it is missing, so it is named too. An object inside
+    // an argument drops a key it does not declare, so zod says nothing of it; it is looked for here, but only in an
+    // object already refused for something else — naming it is never itself a reason to refuse.
+    if (typeof issue.path.at(-1) === 'string') unknownInside(problems, published, given, issue.path.slice(0, -1));
   }
-  const first = [...problems.keys()][0];
-  const description = first === undefined ? undefined : properties[first]?.description;
-  return new CommsError('USAGE', [...problems.values(), ...general].join('; ') || `${tool} was called wrongly`, {
-    hint: description ? `\`${first}\`: ${sentence(description)}` : signature,
-    details: { tool, arguments: [...problems.keys()], takes },
+
+  const entries = [...problems.values()];
+  let inside = 0;
+  const named = entries.filter((entry) => !entry.inside || ++inside <= NESTED_SHOWN);
+  const shown = named.map((entry) => entry.text());
+  if (inside > NESTED_SHOWN) shown.push(`and ${inside - NESTED_SHOWN} more`);
+
+  const first = entries[0];
+  const description = first === undefined || first.inside ? undefined : properties[first.argument]?.description;
+  return new CommsError('USAGE', [...shown, ...general].join('; ') || `${tool} was called wrongly`, {
+    hint: first?.hint ?? (description ? `\`${first?.argument}\`: ${sentence(description)}` : signature),
+    details: {
+      tool,
+      arguments: [...new Set(entries.map((entry) => entry.argument))],
+      paths: named.map((entry) => entry.path),
+      takes,
+    },
   });
+}
+
+/** How many problems inside object arguments a refusal names: a list of records wrong the same way is not a page. */
+const NESTED_SHOWN = 5;
+
+/** One thing wrong with a call: the argument it is in, where exactly, what to say, and a hint of its own if any. */
+interface Problem {
+  argument: string;
+  path: string;
+  /** Inside an object argument, rather than the argument itself. */
+  inside: boolean;
+  text: () => string;
+  hint: string | undefined;
+}
+
+/**
+ * Names the keys an object inside an argument does not take: those zod reported (a strict object), and those it
+ * dropped without a word (a plain one), found by comparing what was given with the properties published there. Only
+ * key names are named — the caller's own spelling — never what they hold. Nothing is added for an object whose schema
+ * takes any key, or one that was not an object at all.
+ */
+function unknownInside(
+  problems: Map<string, Problem>,
+  published: JsonSchema,
+  given: Record<string, unknown>,
+  path: readonly PropertyKey[],
+  reported: readonly string[] = [],
+): void {
+  const [argument] = path;
+  if (typeof argument !== 'string' || path.length === 0) return;
+  const schema = schemaAt(published, path);
+  const value = valueAt(given, path);
+  const declared = schema?.properties;
+  const closed = schema?.additionalProperties === undefined || schema.additionalProperties === false;
+  const stray =
+    declared && closed && typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? Object.keys(value).filter((key) => !Object.hasOwn(declared, key))
+      : [];
+  const keys = [...new Set([...reported, ...stray])];
+  if (keys.length === 0) return;
+
+  const name = pathName(path);
+  const id = `${name}\u0000unknown`;
+  const existing = problems.get(id) as (Problem & { keys: Set<string> }) | undefined;
+  if (existing) {
+    for (const key of keys) existing.keys.add(key);
+    return;
+  }
+  const entry: Problem & { keys: Set<string> } = {
+    argument,
+    path: name,
+    inside: true,
+    keys: new Set(keys),
+    text: () =>
+      `\`${name}\` does not take ${spoken(
+        [...entry.keys].map((key) => `\`${key}\``),
+        'or',
+      )}`,
+    hint: nearestSignature(published, path),
+  };
+  problems.set(id, entry);
+}
+
+/** `expect.to`, `undo[0].messageId`: a path into the arguments as it would be written to reach it. */
+function pathName(path: readonly PropertyKey[]): string {
+  let name = '';
+  for (const segment of path) {
+    if (typeof segment === 'number') name += `[${segment}]`;
+    else name += name === '' ? String(segment) : `.${String(segment)}`;
+  }
+  return name;
+}
+
+/** What the call held at a path, or `undefined` where there is nothing — read only through objects and arrays. */
+function valueAt(value: unknown, path: readonly PropertyKey[]): unknown {
+  let at = value;
+  for (const segment of path) {
+    if (typeof at !== 'object' || at === null) return undefined;
+    at = (at as Record<PropertyKey, unknown>)[segment];
+  }
+  return at;
+}
+
+/** The published schema at a path: through `properties` for a key and `items` for an index, into either side of a union. */
+function schemaAt(schema: JsonSchema | undefined, path: readonly PropertyKey[]): JsonSchema | undefined {
+  let at = schema;
+  for (const segment of path) {
+    at = step(at, segment);
+    if (!at) return undefined;
+  }
+  return at;
+}
+
+function step(schema: JsonSchema | undefined, segment: PropertyKey): JsonSchema | undefined {
+  if (!schema) return undefined;
+  const alternatives = schema.anyOf ?? schema.oneOf;
+  if (Array.isArray(alternatives)) {
+    for (const alternative of alternatives) {
+      const found = step(alternative, segment);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (typeof segment === 'number') return schema.items;
+  if (typeof segment === 'string' && schema.properties && Object.hasOwn(schema.properties, segment)) {
+    return schema.properties[segment];
+  }
+  return undefined;
+}
+
+/**
+ * What the nearest object at or above a path takes, as the hint for a problem there: "`undo[0]` takes `messageId`
+ * (required), …". It spells each key as the tool does, which is what a caller who misspelt one needs to see.
+ */
+function nearestSignature(published: JsonSchema, path: readonly PropertyKey[]): string | undefined {
+  for (let length = path.length; length > 0; length -= 1) {
+    const at = path.slice(0, length);
+    const schema = schemaAt(published, at);
+    const keys = Object.keys(schema?.properties ?? {});
+    if (keys.length === 0) continue;
+    const required = new Set(schema?.required ?? []);
+    return `\`${pathName(at)}\` takes ${spoken(
+      keys.map((key) => (required.has(key) ? `\`${key}\` (required)` : `\`${key}\``)),
+      'and',
+    )}.`;
+  }
+  return undefined;
 }
 
 /** One argument's problem, in words: missing, or not what it takes — or the schema's own message, where it has one. */

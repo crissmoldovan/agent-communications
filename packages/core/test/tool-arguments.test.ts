@@ -165,6 +165,113 @@ test('arguments that fail the schema are refused as USAGE naming the argument an
   }
 });
 
+test('a problem inside an object argument is named by its full path and what is wrong there, never by its value', async () => {
+  /*
+   * A misspelt key inside an object argument was reported against the argument itself: `gmail_draft_send` with
+   * `expect: {To: [...], cc, bcc, subject}` was told "`expect` takes an object" — though an object was passed — and
+   * `gmail_organise_undo` with `undo: [{messageID}]` "`undo` takes a list". Neither named the key that was missing, nor
+   * the one that was misspelt, so an agent had nothing to correct.
+   */
+  const { call, seen, close } = await bare((server, seen) => {
+    server.registerTool(
+      'nested',
+      {
+        description: 'object arguments',
+        inputSchema: {
+          expect: z
+            .object({ to: z.array(z.string()).describe('who it goes to'), subject: z.string() })
+            .describe('what you believe it is'),
+          undo: z.array(z.object({ messageId: z.string().min(1), labels: z.array(z.string()) })).min(1),
+          sealed: z.strictObject({ a: z.string() }).optional(),
+          open: z.looseObject({ a: z.string() }).optional(),
+        },
+      },
+      async (args: unknown) => {
+        seen.push([args]);
+        return done(args);
+      },
+    );
+  });
+  const sentinel = 'sentinel-value-7c1f';
+  const good = { expect: { to: [sentinel], subject: sentinel }, undo: [{ messageId: sentinel, labels: [] }] };
+  try {
+    const cases: Array<[Record<string, unknown>, RegExp[], RegExp]> = [
+      [
+        { ...good, expect: { To: [sentinel], subject: sentinel } },
+        [/`expect\.to` is required, and takes a list of strings/, /`expect` does not take `To`/],
+        /`expect` takes `to` \(required\) and `subject` \(required\)/,
+      ],
+      [
+        { ...good, undo: [{ messageID: sentinel, labels: [] }] },
+        [/`undo\[0\]\.messageId` is required, and takes a non-empty string/, /`undo\[0\]` does not take `messageID`/],
+        /`undo\[0\]` takes `messageId` \(required\) and `labels` \(required\)/,
+      ],
+      [
+        { ...good, expect: { to: sentinel, subject: sentinel } },
+        [/`expect\.to` takes a list of strings/],
+        /`expect` takes/,
+      ],
+      [
+        { ...good, undo: [good.undo[0], { messageId: 5, labels: [sentinel] }] },
+        [/`undo\[1\]\.messageId` takes a non-empty string/],
+        /`undo\[1\]` takes/,
+      ],
+      [
+        { ...good, undo: [{ messageId: '', labels: [7] }] },
+        [/`undo\[0\]\.messageId` takes a non-empty string/, /`undo\[0\]\.labels\[0\]` takes a string/],
+        /`undo\[0\]` takes/,
+      ],
+      // A nested object that is strict itself: its unknown key is named where it is, as the top level's is.
+      [
+        { ...good, sealed: { a: sentinel, [sentinel]: 1 } },
+        [/`sealed` does not take `sentinel-value-7c1f`/],
+        /`sealed`/,
+      ],
+    ];
+    // An object that takes any key has none it does not take: only what is wrong in it is named.
+    const open = refused(await call('nested', { ...good, open: { b: 1 } }));
+    assert.equal(open.message, '`open.a` is required, and takes a string');
+    for (const [args, messages, hint] of cases) {
+      const label = JSON.stringify(args);
+      const error = refused(await call('nested', args));
+      assert.equal(error.code, 'USAGE', label);
+      for (const message of messages) assert.match(error.message, message, label);
+      assert.doesNotMatch(error.message, /`expect` takes an object|`undo` takes a list/, `not the argument: ${label}`);
+      assert.doesNotMatch(error.message, /Input validation error|Invalid input|Unrecognized key/, label);
+      assert.match(error.hint ?? '', hint, label);
+      if (!/sealed/.test(label)) {
+        // A key name is the caller's own spelling and is named; a value is not, wherever it sits.
+        assert.doesNotMatch(`${error.message} ${error.hint}`, new RegExp(sentinel), `a value was echoed: ${label}`);
+      }
+    }
+
+    // Many records wrong the same way are named a few at a time, not one clause per record.
+    const many = refused(
+      await call('nested', { ...good, undo: Array.from({ length: 9 }, () => ({ messageID: sentinel, labels: [] })) }),
+    );
+    assert.match(many.message, /`undo\[0\]\.messageId` is required/);
+    assert.doesNotMatch(many.message, /undo\[8\]/);
+    assert.match(many.message, /and \d+ more/);
+    assert.doesNotMatch(many.message, new RegExp(sentinel));
+
+    // The argument itself wrong is still said as it was.
+    assert.match(refused(await call('nested', { ...good, expect: sentinel })).message, /^`expect` takes an object$/);
+    assert.match(refused(await call('nested', { ...good, undo: [] })).message, /^`undo` takes a list$/);
+    assert.match(
+      refused(await call('nested', { undo: good.undo })).message,
+      /^`expect` is required, and takes an object$/,
+    );
+    assert.deepEqual(seen, [], 'no handler ran');
+
+    // And a call right all the way down still reaches the handler.
+    const ok = await call('nested', good);
+    assert.notEqual(ok.isError, true, JSON.stringify(ok.structuredContent));
+    assert.equal(seen.length, 1);
+  } finally {
+    await close();
+  }
+});
+
 test('a call the schema accepts reaches the handler with what it parsed, exactly as before', async () => {
   const { call, seen, close } = await bare((server, seen) => {
     registerThree(server, seen);

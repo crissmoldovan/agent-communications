@@ -160,6 +160,48 @@ test('a fraction, a word for a number or a missing argument is USAGE naming it, 
   assert.deepEqual(flows(harness), []);
 });
 
+test('a misspelt key inside `expect` or an `undo` record is named where it is, not reported as the wrong kind of argument', async () => {
+  /*
+   * `gmail_draft_send` with `expect: {To: [...], cc, bcc, subject}` was refused with "`expect` takes an object" — an
+   * object was passed — and `gmail_organise_undo` with `undo: [{messageID, ...}]` with "`undo` takes a list". Neither
+   * named the key that was missing nor the one that was misspelt, so an agent handed that had nothing to correct.
+   */
+  const harness = await oneMailbox();
+  const asked = harness.google.requests.length;
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    const sent = usage(
+      await call('gmail_draft_send', {
+        inbox: 'work',
+        draftId: 'r1',
+        approvalId: `ap_${'0'.repeat(26)}`,
+        expect: { To: ['sam@partner.test'], cc: [], bcc: [], subject: 'Tue' },
+      }),
+    );
+    assert.match(sent.message, /`expect\.to` is required, and takes a list of strings/);
+    assert.match(sent.message, /`expect` does not take `To`/);
+    assert.doesNotMatch(sent.message, /`expect` takes an object/);
+    assert.match(sent.hint ?? '', /`expect` takes `to` \(required\), `cc` \(required\), `bcc` \(required\)/);
+    assert.doesNotMatch(`${sent.message} ${sent.hint}`, /sam@partner\.test|Tue/, 'no value is echoed');
+
+    const undone = usage(
+      await call('gmail_organise_undo', {
+        inbox: 'work',
+        undo: [{ messageID: 'm1', addLabelIds: [], removeLabelIds: ['INBOX'] }],
+      }),
+    );
+    assert.match(undone.message, /`undo\[0\]\.messageId` is required, and takes a non-empty string/);
+    assert.match(undone.message, /`undo\[0\]` does not take `messageID`/);
+    assert.doesNotMatch(undone.message, /`undo` takes a list/);
+    assert.match(undone.hint ?? '', /`undo\[0\]` takes `messageId` \(required\)/);
+    assert.doesNotMatch(`${undone.message} ${undone.hint}`, /m1|INBOX/, 'no value is echoed');
+  } finally {
+    await close();
+  }
+  assert.equal(harness.google.requests.length, asked, 'nothing reached Gmail');
+  assert.deepEqual(await harness.core.approvals.list(), [], 'nothing was prepared');
+});
+
 test('a pinned server refuses an unknown key before it looks at the pin', async () => {
   const harness = await oneMailbox();
   const { call, close } = await connect({ core: harness.core, env: harness.env, inbox: 'work' });
