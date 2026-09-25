@@ -4,7 +4,7 @@ packages:
 # One version of each shared tool across every package.
 catalog:
   "@biomejs/biome": 2.5.14
-  "@types/node": ^22.18.0
+  "@types/node": ^26.6.2
   tsdown: 0.23.0
   typescript: 7.0.2
   zod: ^4.6.5
