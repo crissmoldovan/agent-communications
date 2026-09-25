@@ -191,6 +191,31 @@ test('narrowing is offered as a path, because Slack never takes a scope back fro
   }
 });
 
+test('the mode steps name the port the workspace signed in with, and never guess one', async () => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'known', mode: 'send', redirectPort: 50123 });
+  await harness.addWorkspace({ alias: 'unknown' });
+  const { client, close } = await connect(harness);
+  try {
+    const narrow = (await client.callTool({
+      name: 'slack_mode_narrow',
+      arguments: { workspace: 'known' },
+    })) as ToolResult;
+    assert.match((narrow.structuredContent as { steps: string[] }).steps.join('\n'), /--port 50123/);
+
+    // No port recorded and none given: the steps say so, rather than naming one a person may not have used.
+    const widen = (await client.callTool({
+      name: 'slack_mode_request_send',
+      arguments: { workspace: 'unknown' },
+    })) as ToolResult;
+    const steps = (widen.structuredContent as { steps: string[] }).steps.join('\n');
+    assert.match(steps, /--port <port>/);
+    assert.doesNotMatch(steps, /51234/);
+  } finally {
+    await close();
+  }
+});
+
 test('preparing a post writes a draft, returns a preview, audits it, and posts nothing', async () => {
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'acme' });

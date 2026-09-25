@@ -56,6 +56,8 @@ export interface Harness {
     oauthClientId?: string | undefined;
     appId?: string | undefined;
     sendPolicy?: 'chat' | 'confirm' | 'never';
+    /** The port the workspace last signed in with. Absent by default, as in a config written before it was kept. */
+    redirectPort?: number | undefined;
     bundle?: Partial<TokenBundle>;
   }): Promise<AccountConfig>;
 }
@@ -147,6 +149,7 @@ export async function newHarness(): Promise<Harness> {
           : { oauthClientId: options.oauthClientId }),
         ...(options.appId === undefined ? { appId: 'A0001' } : { appId: options.appId }),
         ...(options.sendPolicy ? { sendPolicy: options.sendPolicy } : {}),
+        ...(options.redirectPort === undefined ? {} : { redirectPort: options.redirectPort }),
         createdAt: new Date('2026-09-22T12:00:00.000Z').toISOString(),
       };
       const secrets = await core.secrets('file');

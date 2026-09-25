@@ -32,7 +32,9 @@ export interface ModeReport {
   readonly toRead: readonly string[];
 }
 
-export function modeReport(alias: string, account: AccountConfig, port?: number): ModeReport {
+export function modeReport(alias: string, account: AccountConfig, requested?: number): ModeReport {
+  // The port asked for, else the one the workspace was signed in with; neither, and the steps say `<port>`.
+  const port = requested ?? account.redirectPort;
   const mode = parseMode(account.mode ?? account.tier, `"${alias}"`);
   const granted = new Set(account.grantedScopes ?? []);
   const outwardScopes = OUTWARD_SCOPES.filter((scope) => granted.has(scope));

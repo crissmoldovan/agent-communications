@@ -122,6 +122,14 @@ export interface AccountConfig {
    * worth reporting, and a value derived from the scopes could never disagree.
    */
   mode?: string | undefined;
+  /**
+   * The loopback port the last sign-in used, which is the one in the app's redirect URL.
+   *
+   * Slack matches redirect URLs exactly, so every later sign-in and every set of steps that edits the app has to
+   * name this number. Without it the steps said `<port>`, or — from the MCP server — guessed 51234, and a person who
+   * had chosen another port followed them to a sign-in that failed on the way back.
+   */
+  redirectPort?: number | undefined;
 }
 
 interface ConfigBody {
@@ -232,6 +240,7 @@ const accountSchema = z.looseObject({
   oauthClientId: z.string().min(1).optional(),
   appId: z.string().min(1).optional(),
   mode: z.string().min(1).optional(),
+  redirectPort: z.number().int().min(1).max(65535).optional(),
 });
 
 // Loose at every level, nested objects included. `sendCaps` and `confirm` were plain objects, which strip what they do

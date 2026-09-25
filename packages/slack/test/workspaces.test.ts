@@ -280,11 +280,12 @@ test('the account records which app issued its token', () => {
   const built = accountFrom({
     token: token(),
     mode: 'send',
-    flow: flow({ clientId: '1.2' }),
+    flow: flow({ clientId: '1.2', port: 50123 }),
     accountId: ACCOUNT_ID,
     now: NOW,
   });
   assert.equal(built.oauthClientId, '1.2');
+  assert.equal(built.redirectPort, 50123, 'and the port its redirect used, which every later sign-in must repeat');
   assert.equal(built.appId, 'A0001');
   assert.equal(built.mode, 'send');
   assert.equal(built.secretRef, `slack/token/${ACCOUNT_ID}`);

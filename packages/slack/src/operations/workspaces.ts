@@ -293,6 +293,7 @@ export function accountFrom(options: {
     secretRef: secretRefFor(accountId),
     oauthClientId: flow.clientId,
     ...(token.appId ? { appId: token.appId } : {}),
+    redirectPort: flow.port,
     createdAt: now.toISOString(),
   };
 }

@@ -1057,6 +1057,36 @@ test('reauth keeps the send policy the person set, on both sides of the default'
   }
 });
 
+test('without --port, the mode steps and a reauth use the port the workspace signed in with', async () => {
+  /*
+   * Slack matches the redirect URL exactly, so the port is not a preference: it is the one in the app. The
+   * configuration did not keep it, so every one of these asked for it again — and the MCP server, which cannot ask,
+   * guessed 51234.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'loud', mode: 'send', redirectPort: 50123 });
+  const read = await cli(harness, ['--json', 'workspace', 'mode', 'loud', 'read'], { env: { CLAUDECODE: '1' } });
+  assert.equal(read.code, EXIT_CODES.OK, read.stderr);
+  const steps = read.json<Envelope<{ steps: string[] }>>().data?.steps.join('\n') ?? '';
+  assert.match(steps, /workspace reauth loud --mode read --port 50123/);
+
+  const port = await freePort();
+  await harness.addWorkspace({ alias: 'acme', redirectPort: port });
+  const result = await cli(harness, ['workspace', 'reauth', 'acme', '--no-browser'], browserOn());
+  assert.equal(result.code, EXIT_CODES.OK, result.stderr);
+  assert.equal((await harness.core.config.load()).accounts.acme?.redirectPort, port, 'and the new record keeps it');
+
+  // A reauth on another port — the app's redirect was changed to match — records that one instead.
+  const moved = await freePort();
+  const again = await cli(
+    harness,
+    ['workspace', 'reauth', 'acme', '--port', String(moved), '--no-browser'],
+    browserOn(),
+  );
+  assert.equal(again.code, EXIT_CODES.OK, again.stderr);
+  assert.equal((await harness.core.config.load()).accounts.acme?.redirectPort, moved);
+});
+
 test('a stored mode that is neither read nor send is refused, never read as send', async () => {
   /*
    * Core stores `mode` as any non-empty string, and this package used to treat every value except `read` as

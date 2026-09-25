@@ -97,7 +97,9 @@ This is a **widening**, and an agent never does it. It takes two steps, in this 
    changes no installation.
 2. `agent-slack workspace reauth <name> --mode send --port <port>`, which asks a person to type a challenge.
 
-`agent-slack workspace mode <name>` reports where a workspace stands and prints these steps.
+`agent-slack workspace mode <name>` reports where a workspace stands and prints these steps. A workspace signed in
+with 0.4.1 or later remembers its port, so `--port` can be left out of both; an older one prints `<port>` until
+it is given one.
 
 ## Going back to `read`
 

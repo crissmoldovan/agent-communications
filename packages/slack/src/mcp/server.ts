@@ -510,7 +510,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         }
         return reply({
           alreadySend: false,
-          steps: wideningSteps(name, args.port ?? 51234),
+          steps: wideningSteps(name, args.port ?? account.redirectPort),
           note: 'Nothing has changed. A person must do these at a terminal; this tool cannot.',
         });
       } catch (error) {
@@ -531,8 +531,11 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     async (args) => {
       try {
         const name = await resolve(args.workspace);
+        const { account } = requireWorkspace(await context.config(), name);
         return reply({
-          steps: narrowingSteps(name, args.port ?? 51234),
+          steps: narrowingSteps(name, args.port ?? account.redirectPort, {
+            knowsItsApp: account.oauthClientId !== undefined,
+          }),
           note: 'Nothing has changed. Slack adds scopes to a token and never removes one.',
         });
       } catch (error) {

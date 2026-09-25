@@ -176,8 +176,9 @@ configuration problem.`,
   const modeOption = (): Option =>
     new Option('--mode <mode>', 'how much access to ask Slack for').choices(['read', 'send']).default('read');
 
-  const portOf = (flags: Options): number => {
-    const raw = flags.port;
+  /** `--port`, else the port the workspace last signed in with, which is the one its app's redirect names. */
+  const portOf = (flags: Options, recorded?: number): number => {
+    const raw = flags.port ?? recorded;
     if (raw === undefined) {
       throw new CommsError('USAGE', 'the loopback port is needed, and must match the one in the manifest', {
         hint: 'Slack matches redirect URLs exactly. Pass the same `--port` you built the manifest with.',
@@ -359,13 +360,14 @@ configuration problem.`,
         const found = requireWorkspace(await context.config(), alias);
         const port = flags.port === undefined ? undefined : portOf(flags);
         const report = modeReport(found.alias, found.account, port);
+        const recorded = found.account.redirectPort;
         if (target === undefined || target === report.mode) {
           writeResult(report, output(), () => renderMode(report, options.color), streams);
           return;
         }
         if (target === 'read') {
-          // The port is in two of the steps and the configuration does not keep it, so it is asked for, as for `send`.
-          const steps = narrowingSteps(found.alias, portOf(flags), {
+          // The port is in two of the steps: the one asked for, else the one this workspace last signed in with.
+          const steps = narrowingSteps(found.alias, portOf(flags, recorded), {
             knowsItsApp: found.account.oauthClientId !== undefined,
           });
           writeResult(
@@ -389,8 +391,8 @@ configuration problem.`,
             hint: `Remove and add it again: \`agent-slack workspace remove ${found.alias}\`.`,
           });
         }
-        // Both steps name the port, and the configuration does not keep it, so it is asked for rather than guessed.
-        const chosen = portOf(flags);
+        // Both steps name the port: the one asked for, else the one this workspace last signed in with — never a guess.
+        const chosen = portOf(flags, recorded);
         streams.stderr.write(
           `${renderSteps('Moving to send takes two steps:', wideningSteps(found.alias, chosen), options.color)}\n`,
         );
@@ -481,13 +483,15 @@ configuration problem.`,
         const was = parseMode(account.mode ?? account.tier, `"${alias}"`);
         const mode = command.getOptionValueSource('mode') === 'default' ? was : (String(flags.mode) as InstallMode);
         const consent =
-          mode === 'send' && was === 'read' ? await confirmWidening(options, alias, portOf(flags)) : undefined;
+          mode === 'send' && was === 'read'
+            ? await confirmWidening(options, alias, portOf(flags, account.redirectPort))
+            : undefined;
         await signIn(context, options, {
           alias,
           mode,
           ...(consent ? { consent } : {}),
           clientId: account.oauthClientId,
-          port: portOf(flags),
+          port: portOf(flags, account.redirectPort),
           start: flags.start === true,
           browser: flags.browser !== false,
           expect: {
