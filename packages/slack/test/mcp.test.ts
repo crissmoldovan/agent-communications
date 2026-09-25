@@ -130,6 +130,68 @@ test('the greeting says how a post is approved under each policy, and that the a
   }
 });
 
+test('the greeting stays under 2 KB with many workspaces, and what must not be lost comes first', async () => {
+  /*
+   * Claude Code cuts a server's instructions at 2,048 bytes (design 2026-09-18 §11; Gmail's test holds the same
+   * line). This greeting reached 2.7 KB with nothing connected, and what fell off the end was "you cannot approve
+   * it yourself", `never`, which workspaces can post and "pass `workspace`". Twelve workspaces, nine of which can
+   * post, fill both lists past their cap — the longest this greeting gets on a machine that is not contrived.
+   */
+  const harness = await newHarness();
+  const names = [
+    'beamtech-slack',
+    'cue-slack',
+    'cueplusplus-slack-support',
+    'discovrx-slack',
+    'personal-slack',
+    'reprezent-slack',
+    'rgc-labs-slack',
+    'rgc-slack',
+    'rgc-slack-clients',
+    'studio-lasers-slack',
+    'wherefrom-slack',
+    'wherefrom-slack-tech',
+  ];
+  for (const [index, alias] of names.entries()) {
+    await harness.addWorkspace({
+      alias,
+      workspaceId: `T${1000 + index}`,
+      userId: `U${1000 + index}`,
+      mode: index % 4 === 3 ? 'read' : 'send',
+    });
+  }
+  const { client, close } = await connect(harness);
+  const greeting = client.getInstructions() ?? '';
+  await close();
+
+  assert.ok(Buffer.byteLength(greeting) < 2048, `${Buffer.byteLength(greeting)} bytes; Claude Code keeps 2,048`);
+  assert.match(greeting, /Workspaces that could post if a person approves: [^\n]*, and 1 more\./);
+  assert.match(greeting, /Known workspaces: [^\n]*, and 4 more\./);
+  // In order: what is data, what a post needs, who can post, which workspace — and only then how a change is made.
+  const order = [
+    /<untrusted-content>/,
+    /`mismatch`/,
+    /`unrenderable`/,
+    /@channel, @here or a room of 50 or more/,
+    /agent-slack approve <id>/,
+    /you cannot approve it yourself/,
+    /Under `never` nothing posts/,
+    /Workspaces that could post/,
+    /Pass `workspace` on every call/,
+    /Known workspaces/,
+    /Changing a workspace/,
+  ].map((said) => {
+    const at = greeting.search(said);
+    assert.ok(at >= 0, `the greeting says ${said}`);
+    return at;
+  });
+  assert.deepEqual(
+    order,
+    [...order].sort((a, b) => a - b),
+    'the lines a model must not lose come before the ones it can do without',
+  );
+});
+
 test('a pinned server refuses another workspace by name rather than quietly using its own', async () => {
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'acme' });

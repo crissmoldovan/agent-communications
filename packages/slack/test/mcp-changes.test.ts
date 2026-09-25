@@ -536,19 +536,27 @@ test('the greeting says how a change is approved, and a pinned one offers no way
     await Promise.all([client.close(), server.close()]);
     return greeting;
   };
+  /*
+   * The greeting no longer walks through the change tools one by one: that list pushed it past the 2 KB a client
+   * keeps, and each tool's description carries its own steps. What it must still say is how any change is approved.
+   */
   const open = await greetingOf();
   for (const said of [
-    /slack_workspace_add/,
-    /slack_workspace_finish/,
-    /slack_mode_set/,
-    /slack_workspace_policy/,
+    /`send` mode, a looser policy, removing one/,
     /approvalRequired/,
+    /`approvalId` after their yes/,
     /agentcomms approve <id>/,
     /you cannot approve it yourself/,
+    /Tightening applies at once/,
   ]) {
     assert.match(open, said);
   }
   const pinned = await greetingOf('acme');
-  assert.doesNotMatch(pinned, /slack_workspace_add|slack_workspace_remove/, 'it names tools this server does not have');
-  assert.match(pinned, /slack_mode_set/);
+  assert.doesNotMatch(
+    pinned,
+    /slack_workspace_add|slack_workspace_remove|removing one/,
+    'it offers what this server does not have',
+  );
+  assert.match(pinned, /approvalRequired/);
+  assert.match(pinned, /you cannot approve it yourself/);
 });
