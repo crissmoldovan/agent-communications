@@ -158,3 +158,25 @@ export function payloadOf(text: string, channel: string, threadTs: string | unde
     unfurl_media: false,
   };
 }
+
+/*
+ * What can stand in front of the author's words: the mentions `compose` writes, a space after each — and, in a draft an
+ * older version wrote, a `<!…>` its `--broadcast` wrote from whatever word it was given. Spans only, and nothing the
+ * author's escaped words can hold: escaping leaves no `<` or `>` in them.
+ */
+const MENTIONS = /^<[@#!][^<>]*>(?: <[@#!][^<>]*>)*$/;
+
+/**
+ * Whether `text` is what the composer writes for an author who typed `source`: their words escaped, after any
+ * mentions.
+ *
+ * A draft keeps both — `source` so that an edit starts from what the author typed, `text` because it is what posts —
+ * and nothing but the composer writes either. A draft whose `text` is not this for its `source` was changed outside
+ * agent-slack, and its `source` is words it does not post: showing them as the draft is showing one message while
+ * another is prepared, approved and posted.
+ */
+export function composedFrom(source: string, text: string): boolean {
+  const body = escapeForSlack(source);
+  if (text === body) return true;
+  return text.endsWith(` ${body}`) && MENTIONS.test(text.slice(0, text.length - body.length - 1));
+}

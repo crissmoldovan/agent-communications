@@ -31,8 +31,8 @@ Tightening applies at once. No tool approves.
 | [`slack_files`](#slack_files) | Files this account can see. |
 | [`slack_post_prepare`](#slack_post_prepare) | Return the preview a person must approve, with its approval id. |
 | [`slack_post_send`](#slack_post_send) | Post a draft `slack_post_prepare` prepared — only after the person has seen that whole preview and said yes to it in this conversation. |
-| [`slack_draft_list`](#slack_draft_list) | The drafts held on this machine for this workspace, newest first. |
-| [`slack_draft_get`](#slack_draft_get) | One draft, exactly as it would be posted, and the text it was written from. |
+| [`slack_draft_list`](#slack_draft_list) | The drafts held on this machine for this workspace, newest first, each as slack_draft_get shows it. |
+| [`slack_draft_get`](#slack_draft_get) | One draft, exactly as it would be posted: `text` is what the channel would read and `payload` what would be sent, and `source` the words it was typed as. |
 | [`slack_draft_delete`](#slack_draft_delete) | Throw a draft away. |
 | [`slack_react`](#slack_react) | Add or remove one reaction. |
 | [`slack_react_send`](#slack_react_send) | Add or remove the reaction a person approved at their own terminal with `agent-slack approve <approvalId>`, once — you cannot approve it yourself. |
@@ -196,7 +196,7 @@ Post a draft `slack_post_prepare` prepared — only after the person has seen th
 
 ### `slack_draft_list`
 
-The drafts held on this machine for this workspace, newest first. Nothing in them has reached Slack.
+The drafts held on this machine for this workspace, newest first, each as slack_draft_get shows it. Nothing in them has reached Slack. One whose file was changed outside agent-slack carries a `problem` (BAD_DATA): `not-composed` means it cannot be prepared or posted, and its row has no `text`; `source-differs` means it would post its `text`, not the words it was typed as. The same as `agent-slack draft list`.
 
 *read-only*
 
@@ -206,7 +206,7 @@ The drafts held on this machine for this workspace, newest first. Nothing in the
 
 ### `slack_draft_get`
 
-One draft, exactly as it would be posted, and the text it was written from.
+One draft, exactly as it would be posted: `text` is what the channel would read and `payload` what would be sent, and `source` the words it was typed as. A draft whose file was changed outside agent-slack so that it is not what its text composes to is refused (BAD_DATA), in the words slack_post_prepare refuses it with; one whose typed words are not what it posts has a `problem` in place of `source`. The same as `agent-slack draft show`.
 
 *read-only*
 

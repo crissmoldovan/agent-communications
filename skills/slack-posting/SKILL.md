@@ -36,6 +36,10 @@ preview, and `slack_post_send` is the third. Both surfaces run one operation, so
 
 Every prepare leaves a draft behind, so clear up the ones that will not be posted.
 
+`slack_draft_get` and `agent-slack draft show` give a draft as it would post: `text` is what the channel would read.
+A draft whose file was changed outside agent-slack is refused there as the gate refuses it, or carries a `problem`
+(`BAD_DATA`), in `slack_draft_list` too. Do not prepare it; say so, and delete it.
+
 There is no tool that approves, and there will not be one. Under `confirm`, `agent-slack approve` is a person's
 command at their own terminal: that is what the policy means, and it is refused to an agent.
 

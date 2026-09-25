@@ -179,13 +179,20 @@ export function postedPayload(draft: SlackDraft): ComposedPayload {
     throw new CommsError(
       'BAD_DATA',
       `nothing was sent: draft "${draft.draftId}" is not what its text composes to, so its preview would not be what posts`,
-      {
-        hint: `It was changed outside agent-slack. Delete it with \`agent-slack draft delete ${draft.draftId} --workspace <name>\` and compose it again.`,
-        details: { draftId: draft.draftId, reason: 'not-composed' },
-      },
+      { hint: changedOutsideHint(draft.draftId), details: { draftId: draft.draftId, reason: 'not-composed' } },
     );
   }
   return posted;
+}
+
+/**
+ * What to do about a draft file changed outside agent-slack: there is no mending one, only composing it again.
+ *
+ * One sentence for every place that finds one — the gate, and `draft show` and `slack_draft_get`, which show a draft as
+ * the gate would post it — so the advice cannot differ between showing a draft and trying to post it.
+ */
+export function changedOutsideHint(draftId: string): string {
+  return `It was changed outside agent-slack. Delete it with \`agent-slack draft delete ${draftId} --workspace <name>\` and compose it again.`;
 }
 
 /**

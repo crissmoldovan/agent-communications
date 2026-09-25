@@ -20,7 +20,7 @@ import {
   signInStarted,
 } from '../operations/changes.ts';
 import { runDoctor } from '../operations/doctor.ts';
-import { deleteOwnDraft, ownDraft } from '../operations/drafts.ts';
+import { deleteOwnDraft, listDrafts, showDraft } from '../operations/drafts.ts';
 import type { ProbeFetch } from '../operations/identity.ts';
 import { manifestFor } from '../operations/manifest.ts';
 import { prepareDraftPost, react, sendPost } from '../operations/post.ts';
@@ -660,14 +660,13 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     {
       title: 'List drafts',
       description:
-        'The drafts held on this machine for this workspace, newest first. Nothing in them has reached Slack.',
+        'The drafts held on this machine for this workspace, newest first, each as slack_draft_get shows it. Nothing in them has reached Slack. One whose file was changed outside agent-slack carries a `problem` (BAD_DATA): `not-composed` means it cannot be prepared or posted, and its row has no `text`; `source-differs` means it would post its `text`, not the words it was typed as. The same as `agent-slack draft list`.',
       inputSchema: { ...workspaceArg },
       annotations: readsLocal,
     },
     async (args) => {
       try {
-        const { account } = requireWorkspace(await context.config(), await resolve(args.workspace));
-        return reply({ drafts: await drafts().list(account.id) });
+        return reply({ drafts: await listDrafts(context, await resolve(args.workspace)) });
       } catch (error) {
         return fail(error);
       }
@@ -678,14 +677,14 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     'slack_draft_get',
     {
       title: 'Read a draft',
-      description: 'One draft, exactly as it would be posted, and the text it was written from.',
+      description:
+        'One draft, exactly as it would be posted: `text` is what the channel would read and `payload` what would be sent, and `source` the words it was typed as. A draft whose file was changed outside agent-slack so that it is not what its text composes to is refused (BAD_DATA), in the words slack_post_prepare refuses it with; one whose typed words are not what it posts has a `problem` in place of `source`. The same as `agent-slack draft show`.',
       inputSchema: { ...workspaceArg, draftId: z.string() },
       annotations: readsLocal,
     },
     async (args) => {
       try {
-        const { account } = requireWorkspace(await context.config(), await resolve(args.workspace));
-        return reply({ draft: await ownDraft(drafts(), account.id, args.draftId) });
+        return reply({ draft: await showDraft(context, await resolve(args.workspace), args.draftId) });
       } catch (error) {
         return fail(error);
       }

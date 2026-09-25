@@ -1,7 +1,9 @@
 import { CommsError } from '@agentcomms/core';
-import { type Broadcast, type ComposedPayload, compose, type Mention } from '../compose/blocks.ts';
+import { type Broadcast, type ComposedPayload, compose, composedFrom, type Mention } from '../compose/blocks.ts';
 import { type DraftStore, isUnreadableDraft, openDraftStore, type SlackDraft } from '../compose/drafts.ts';
 import type { SlackContext } from '../context.ts';
+import { decodeSlackText } from '../text/decode.ts';
+import { changedOutsideHint, postedPayload } from './send.ts';
 import { requireWorkspace } from './workspaces.ts';
 
 /** A message to write as a draft: what `draft create` takes, and `slack_post_prepare` when it is given no draft. */
@@ -110,4 +112,130 @@ export async function deleteOwnDraft(store: DraftStore, accountId: string, draft
   }
   await store.remove(draftId);
   return { draftId, deleted: true };
+}
+
+/**
+ * Why a draft is not as agent-slack wrote it: the code and the words the gate uses, and which of two things it is.
+ *
+ * - `not-composed` — its blocks, or another part of its payload, are not what its text composes to. The gate refuses
+ *   to prepare, approve or post it, and showing it is refused in the same words; a list names it with them.
+ * - `source-differs` — what it posts is whole, but the words it keeps as typed are not the ones it posts. The gate
+ *   would post its `text`, so that is what it is shown as, and the words it keeps are not shown at all.
+ */
+export interface DraftProblem {
+  readonly code: 'BAD_DATA';
+  readonly reason: 'not-composed' | 'source-differs';
+  readonly message: string;
+  readonly hint: string;
+}
+
+/**
+ * A draft as it would post: what `draft show`, `draft list`, `slack_draft_get` and `slack_draft_list` give.
+ *
+ * They gave the draft file, and a person reading one was shown its `source` — the words the author typed, which
+ * nothing posts. The gate composes the payload again from the draft's `text` and posts that, so a file edited so the
+ * two disagreed was shown as one message and prepared, approved and posted as another. This is built from the
+ * payload the gate would send, by the gate's own `postedPayload`, so what a draft is shown as and what it posts are
+ * one reading of one file, refused for the same reason in the same words.
+ */
+export interface DraftView {
+  readonly draftId: string;
+  /** Where it would post. */
+  readonly channel: string;
+  readonly threadTs?: string | undefined;
+  /**
+   * What it would post, as the channel will read it: the payload's text with Slack's escaping undone and each mention
+   * as its id — `@U024BE7LH`, which the preview puts a name to. Absent from a list's row for a draft the gate refuses.
+   */
+  readonly text?: string | undefined;
+  /** The words as the author typed them, which an edit starts from: only when they are the words it posts. */
+  readonly source?: string | undefined;
+  /** Set when the file was changed outside agent-slack — see {@link DraftProblem}. */
+  readonly problem?: DraftProblem | undefined;
+  /** What would be sent, byte for byte: the payload the gate composes again and posts. Absent when it refuses. */
+  readonly payload?: ComposedPayload | undefined;
+  readonly revision: string;
+  readonly accountId: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** The part of a view every draft has, whether or not it would post. */
+function heading(draft: SlackDraft): Pick<DraftView, 'draftId' | 'channel' | 'threadTs'> {
+  // Only a string: a file the gate refuses may hold anything here, and this is shown beside the refusal.
+  const threadTs: unknown = draft.payload.thread_ts;
+  return {
+    draftId: draft.draftId,
+    channel: draft.payload.channel,
+    ...(typeof threadTs === 'string' ? { threadTs } : {}),
+  };
+}
+
+function kept(draft: SlackDraft): Pick<DraftView, 'revision' | 'accountId' | 'createdAt' | 'updatedAt'> {
+  return {
+    revision: draft.revision,
+    accountId: draft.accountId,
+    createdAt: draft.createdAt,
+    updatedAt: draft.updatedAt,
+  };
+}
+
+/**
+ * One draft as it would post — or the gate's refusal, thrown as the gate throws it.
+ *
+ * The payload is `postedPayload`'s, which is what `viewPost` checks before anyone is shown anything and what
+ * `postPrepared` sends, so a draft is refused here exactly when preparing or posting it would be, and is shown as
+ * exactly what they would send.
+ */
+export function viewDraft(draft: SlackDraft): DraftView {
+  const payload = postedPayload(draft);
+  const written = composedFrom(draft.source, payload.text);
+  return {
+    ...heading(draft),
+    text: decodeSlackText(payload.text).text,
+    ...(written
+      ? { source: draft.source }
+      : {
+          problem: {
+            code: 'BAD_DATA',
+            reason: 'source-differs',
+            message: `draft "${draft.draftId}" is not what its source composes to, so the words it keeps as typed are not what it posts`,
+            hint: changedOutsideHint(draft.draftId),
+          },
+        }),
+    payload,
+    ...kept(draft),
+  };
+}
+
+/** One draft of this workspace, as it would post: `agent-slack draft show` and `slack_draft_get`. */
+export async function showDraft(context: SlackContext, alias: string, draftId: string): Promise<DraftView> {
+  const { account } = requireWorkspace(await context.config(), alias);
+  // Whose it is before what it says: another workspace's draft is absent here, refused or not.
+  const draft = await ownDraft(openDraftStore(context.core.paths.stateDir, context.now), account.id, draftId);
+  return viewDraft(draft);
+}
+
+/**
+ * This workspace's drafts, newest first, each as it would post: `agent-slack draft list` and `slack_draft_list`.
+ *
+ * A draft the gate refuses is listed, not dropped and not shown: its row carries the gate's refusal and neither the
+ * text nor the payload it holds, since neither is what would post. Dropping it would hide the one draft somebody
+ * needs to delete; failing the list for it would hide all the others.
+ */
+export async function listDrafts(context: SlackContext, alias: string): Promise<DraftView[]> {
+  const { account } = requireWorkspace(await context.config(), alias);
+  const drafts = await openDraftStore(context.core.paths.stateDir, context.now).list(account.id);
+  return drafts.map((draft) => {
+    try {
+      return viewDraft(draft);
+    } catch (error) {
+      if (!(error instanceof CommsError) || error.details?.reason !== 'not-composed') throw error;
+      return {
+        ...heading(draft),
+        problem: { code: 'BAD_DATA', reason: 'not-composed', message: error.message, hint: error.hint ?? '' },
+        ...kept(draft),
+      };
+    }
+  });
 }

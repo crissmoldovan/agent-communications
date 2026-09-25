@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
+import { readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, test } from 'node:test';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { openFlowStore } from '../src/auth/flow.ts';
 import { run } from '../src/cli/program.ts';
+import { payloadOf } from '../src/compose/blocks.ts';
 import { openDraftStore } from '../src/compose/drafts.ts';
 import { SlackContext } from '../src/context.ts';
 import { createSlackMcpServer } from '../src/mcp/server.ts';
@@ -104,6 +107,26 @@ async function cli(harness: Harness, argv: string[], read: FakeFetch = slack()) 
     read,
   });
   return { code, envelope: JSON.parse(stdout) as Envelope<unknown> };
+}
+
+/** The CLI as a person runs it: what it prints for a person to read. */
+async function printed(harness: Harness, argv: string[], read: FakeFetch = slack()): Promise<string> {
+  let stdout = '';
+  const out = new PassThrough();
+  out.on('data', (chunk) => {
+    stdout += String(chunk);
+  });
+  const code = await run(argv, {
+    core: harness.core,
+    env: harness.env,
+    exchange: (params) => harness.exchange(params),
+    streams: { stdout: out, stderr: new PassThrough(), stdin: new PassThrough() },
+    openBrowser: () => undefined,
+    listenerCommand: LISTENER_COMMAND,
+    read,
+  });
+  assert.equal(code, 0, stdout);
+  return stdout;
 }
 
 async function cliData<T>(harness: Harness, argv: string[], read?: FakeFetch): Promise<T> {
@@ -829,6 +852,205 @@ test('search and files refuse a limit above the page they read, by the command a
         ['200', '3'],
       ],
     );
+  } finally {
+    await close();
+  }
+});
+
+// ── A draft is shown as what it would post ──────────────────────────────────────────────────────────────────────
+
+/** What `draft show`, `draft list`, `slack_draft_get` and `slack_draft_list` give for one draft. */
+interface ShownDraft {
+  draftId: string;
+  channel: string;
+  text?: string;
+  payload?: { text: string; blocks: unknown[] };
+  source?: string;
+  problem?: { code: string; reason: string; message: string; hint: string };
+}
+
+/** A draft file rewritten by hand, which anything with a shell can do. */
+async function handEdit(harness: Harness, draftId: string, edit: (draft: Record<string, unknown>) => void) {
+  const path = join(harness.core.paths.stateDir, 'slack', 'drafts', `${draftId}.json`);
+  const draft = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+  edit(draft);
+  await writeFile(path, `${JSON.stringify(draft, null, 2)}\n`);
+}
+
+test('a draft is shown as what it would post, by `draft show` and `slack_draft_get` alike, not as the words its file keeps', async () => {
+  /*
+   * Both showed the draft's `source` — the words it was typed as, which nothing posts. A file edited so `source` said
+   * one thing and the payload another was shown as the one, and prepared, approved and posted as the other: the gate
+   * previews from the payload, so the post was safe, but `draft show` and `slack_draft_get` misreported it. They show
+   * the payload the gate would send now, decoded as the channel reads it, and say when the file was changed.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'send' });
+  const { call, close } = await connect(harness);
+  try {
+    const { draftId } = await cliData<{ draftId: string }>(harness, [
+      'draft',
+      'create',
+      '--workspace',
+      'acme',
+      '--channel',
+      'C1',
+      '--text',
+      'ready & waiting',
+      '--mention',
+      'U024BE7LH',
+    ]);
+    const show = ['draft', 'show', draftId, '--workspace', 'acme'];
+
+    // As written: what it posts, as the channel reads it, and the words it was typed as.
+    const fresh = await cliData<ShownDraft>(harness, show);
+    assert.equal(fresh.text, '@U024BE7LH ready & waiting');
+    assert.equal(fresh.payload?.text, '<@U024BE7LH> ready &amp; waiting');
+    assert.equal(fresh.source, 'ready & waiting');
+    assert.equal(fresh.problem, undefined);
+
+    await handEdit(harness, draftId, (draft) => {
+      draft.source = 'lunch at noon?';
+    });
+
+    const shown = await cliData<ShownDraft>(harness, show);
+    assert.equal(shown.text, '@U024BE7LH ready & waiting', 'what it would post');
+    assert.deepEqual(shown.payload, fresh.payload);
+    assert.equal(shown.source, undefined, 'words it does not post are not offered as its own');
+    assert.equal(shown.problem?.code, 'BAD_DATA');
+    assert.equal(shown.problem?.reason, 'source-differs');
+    assert.match(
+      shown.problem?.hint ?? '',
+      new RegExp(`^It was changed outside agent-slack\\..*\`agent-slack draft delete ${draftId} --workspace <name>\``),
+    );
+    assert.doesNotMatch(JSON.stringify(shown), /lunch/);
+
+    // The tool says what the command says, and so does each surface's list.
+    assert.deepEqual(
+      ok<{ draft: ShownDraft }>(await call('slack_draft_get', { workspace: 'acme', draftId })).draft,
+      shown,
+    );
+    assert.deepEqual(ok<{ drafts: ShownDraft[] }>(await call('slack_draft_list', { workspace: 'acme' })).drafts, [
+      shown,
+    ]);
+    assert.deepEqual(await cliData<ShownDraft[]>(harness, ['draft', 'list', '--workspace', 'acme']), [shown]);
+
+    // At a terminal, as a person reads it.
+    for (const argv of [show, ['draft', 'list', '--workspace', 'acme']]) {
+      const words = await printed(harness, argv);
+      assert.match(words, /@U024BE7LH ready & waiting/, argv.join(' '));
+      assert.doesNotMatch(words, /lunch/, argv.join(' '));
+      assert.match(words, /changed outside agent-slack/, argv.join(' '));
+    }
+
+    // And showing and posting agree: the preview a person approves has the text the draft was shown with.
+    const prepared = ok<{ preview: { body: string } }>(
+      await call('slack_post_prepare', { workspace: 'acme', draftId }),
+    );
+    assert.equal(prepared.preview.body, shown.text);
+  } finally {
+    await close();
+  }
+});
+
+test('a draft whose blocks are not its text is refused by `draft show` and `slack_draft_get` in the gate’s words, and marked so in the list', async () => {
+  /*
+   * The gate refuses it — preparing, approving and posting — because a client renders and notifies from the blocks,
+   * which say something the text does not. Showing it as its text would show one message where the gate sees
+   * another, so showing refuses it exactly as the gate does, and a list names it with the gate's words instead of
+   * dropping it or printing either half.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'send' });
+  await harness.addWorkspace({ alias: 'zeta', workspaceId: 'T0002' });
+  const { call, close } = await connect(harness);
+  try {
+    const { draftId } = await cliData<{ draftId: string }>(harness, [
+      'draft',
+      'create',
+      '--workspace',
+      'acme',
+      '--channel',
+      'C1',
+      '--text',
+      'shipping now',
+    ]);
+    await handEdit(harness, draftId, (draft) => {
+      const payload = draft.payload as Record<string, unknown>;
+      payload.blocks = [{ type: 'section', text: { type: 'mrkdwn', text: '<!channel> wire the money' } }];
+    });
+
+    const gate = failed(await call('slack_post_prepare', { workspace: 'acme', draftId }));
+    assert.equal(gate.code, 'BAD_DATA');
+    assert.equal(gate.details?.reason, 'not-composed');
+    const refusals = {
+      'post prepare': await cliError(harness, ['post', 'prepare', '--workspace', 'acme', '--draft', draftId]),
+      'draft show': await cliError(harness, ['draft', 'show', draftId, '--workspace', 'acme']),
+      slack_draft_get: failed(await call('slack_draft_get', { workspace: 'acme', draftId })),
+    };
+    for (const [where, refused] of Object.entries(refusals)) {
+      assert.deepEqual([refused.code, refused.message, refused.hint], [gate.code, gate.message, gate.hint], where);
+    }
+
+    // Listed, with the gate's words, and with neither the text nor the blocks offered as what it would post.
+    const listed = await cliData<ShownDraft[]>(harness, ['draft', 'list', '--workspace', 'acme']);
+    assert.deepEqual(
+      listed.map((row) => [row.draftId, row.channel, row.problem, row.text, row.payload, row.source]),
+      [
+        [
+          draftId,
+          'C1',
+          { code: 'BAD_DATA', reason: 'not-composed', message: gate.message, hint: gate.hint },
+          undefined,
+          undefined,
+          undefined,
+        ],
+      ],
+    );
+    assert.deepEqual(
+      ok<{ drafts: ShownDraft[] }>(await call('slack_draft_list', { workspace: 'acme' })).drafts,
+      listed,
+    );
+    const words = await printed(harness, ['draft', 'list', '--workspace', 'acme']);
+    assert.match(words, new RegExp(`${draftId}.*is not what its text composes to`));
+    assert.doesNotMatch(words, /shipping now|wire the money/);
+
+    // Another workspace is told there is no such draft, as for any draft of acme's: a refusal would say it exists.
+    assert.equal(failed(await call('slack_draft_get', { workspace: 'zeta', draftId })).code, 'NOT_FOUND');
+    assert.equal((await cliError(harness, ['draft', 'show', draftId, '--workspace', 'zeta'])).code, 'NOT_FOUND');
+  } finally {
+    await close();
+  }
+});
+
+test('a draft the composer wrote, in this version or an older one, is not taken for one changed by hand', async () => {
+  /*
+   * `source` is the author's words before the composer escaped them and put any mentions in front. An older version's
+   * `--broadcast` wrote whatever word it was given as a mention — `<!subteam^S0123>` — which the gate previews and
+   * sends as it is: that is still the author's words after mentions, not a file somebody changed.
+   */
+  const harness = await newHarness();
+  const acme = await harness.addWorkspace({ alias: 'acme' });
+  const store = openDraftStore(harness.core.paths.stateDir, () => new Date());
+  const { call, close } = await connect(harness);
+  try {
+    for (const [text, source, shownAs, changed] of [
+      ['standup moved', 'standup moved', 'standup moved', false],
+      ['<!subteam^S0123> standup moved', 'standup moved', '@S0123 standup moved', false],
+      ['<@U024BE7LH> <!here> a &amp; b &lt;c&gt;', 'a & b <c>', '@U024BE7LH @here a & b <c>', false],
+      ['<@U024BE7LH> ', '', '@U024BE7LH ', false],
+      ['standup moved!', 'standup moved', 'standup moved!', true],
+      ['<@U024BE7LH> standup moved', 'moved', '@U024BE7LH standup moved', true],
+      ['a &amp; b', 'a &amp; b', 'a & b', true],
+      ['x <!here> standup', 'standup', 'x @here standup', true],
+    ] as const) {
+      const { draftId } = await store.create(acme.id, payloadOf(text, 'C1', undefined), source);
+      const { draft } = ok<{ draft: ShownDraft }>(await call('slack_draft_get', { workspace: 'acme', draftId }));
+      assert.equal(draft.text, shownAs, text);
+      assert.equal(draft.problem?.reason, changed ? 'source-differs' : undefined, text);
+      assert.equal(draft.source, changed ? undefined : source, text);
+      await store.remove(draftId);
+    }
   } finally {
     await close();
   }

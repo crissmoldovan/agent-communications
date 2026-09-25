@@ -118,6 +118,13 @@ mismatch**, the same way the Gmail body pipeline reports a plain/HTML mismatch. 
 > that payload, in preparing, at the approval screen and at posting alike; the post sends that composed payload, which
 > is the one the digest is taken over.
 
+> **Shown as it posts, 2026-09-26.** `draft show`, `draft list`, `slack_draft_get` and `slack_draft_list` still showed
+> a draft's `source` — the words it was typed as, which nothing posts — so a file edited so the two disagreed was shown
+> as one message while the gate prepared and posted the other. They now show what the gate would send, through the
+> gate's own check: `text` is that payload decoded as the channel reads it. A draft the gate refuses is refused by
+> `show` in the gate's words and named with them in a list; one whose `source` is not what its text was composed from
+> is shown as its text, flagged (`BAD_DATA`, `source-differs`), and its `source` is left out.
+
 ### D5 — Everything the Gmail sanitiser does, minus HTML, plus five Slack-shaped things
 
 The core package's sanitiser is provider-neutral in the parts that matter: invisible-character stripping, the

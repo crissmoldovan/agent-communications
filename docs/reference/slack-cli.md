@@ -329,7 +329,7 @@ agent-slack draft create [options]
 
 ### `agent-slack draft list`
 
-the drafts held for this workspace
+the drafts held for this workspace, each as it would be posted
 
 ```
 agent-slack draft list [options]

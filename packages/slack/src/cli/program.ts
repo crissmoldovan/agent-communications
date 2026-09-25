@@ -41,7 +41,7 @@ import {
   signInStarted,
 } from '../operations/changes.ts';
 import { runDoctor } from '../operations/doctor.ts';
-import { createDraft, deleteOwnDraft, ownDraft } from '../operations/drafts.ts';
+import { createDraft, deleteOwnDraft, listDrafts, showDraft } from '../operations/drafts.ts';
 import type { ProbeFetch } from '../operations/identity.ts';
 import { checkedPort, manifestFor } from '../operations/manifest.ts';
 import { prepareDraftPost, react, sendPost } from '../operations/post.ts';
@@ -61,6 +61,8 @@ import {
   renderConnected,
   renderDeletedDraft,
   renderDoctor,
+  renderDraft,
+  renderDrafts,
   renderFiles,
   renderHistory,
   renderInstall,
@@ -791,21 +793,12 @@ configuration problem.`,
     );
 
   workspaceOption(draft.command('list'))
-    .description('the drafts held for this workspace')
+    .description('the drafts held for this workspace, each as it would be posted')
     .action(
       act(async (context, options, flags: Options) => {
-        const { account } = requireWorkspace(await context.config(), String(flags.workspace));
-        const store = openDraftStore(context.core.paths.stateDir, context.now);
-        const drafts = await store.list(account.id);
-        writeResult(
-          drafts,
-          output(),
-          (rows) =>
-            rows.length === 0
-              ? 'No drafts.'
-              : rows.map((row) => `${row.draftId}  ${row.payload.channel}  ${row.source.slice(0, 60)}`).join('\n'),
-          streams,
-        );
+        // The same operation as `slack_draft_list`: each draft as the gate would post it — see `listDrafts`.
+        const drafts = await listDrafts(context, String(flags.workspace));
+        writeResult(drafts, output(), (rows) => renderDrafts(rows, options.color), streams);
       }),
     );
 
@@ -813,16 +806,9 @@ configuration problem.`,
     .description('one draft, exactly as it would be posted')
     .action(
       act(async (context, options, draftId: string, flags: Options) => {
-        const { account } = requireWorkspace(await context.config(), String(flags.workspace));
-        const store = openDraftStore(context.core.paths.stateDir, context.now);
-        const found = await ownDraft(store, account.id, draftId);
-        writeResult(
-          found,
-          output(),
-          (row) =>
-            `${row.draftId}  ${row.payload.channel}${row.payload.thread_ts ? ` (thread ${row.payload.thread_ts})` : ''}\n\n${row.source}`,
-          streams,
-        );
+        // The same operation as `slack_draft_get`: refused when the gate would refuse it, in its words.
+        const shown = await showDraft(context, String(flags.workspace), draftId);
+        writeResult(shown, output(), (row) => renderDraft(row, options.color), streams);
       }),
     );
 

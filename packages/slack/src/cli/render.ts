@@ -3,7 +3,7 @@ import { renderManifest } from '../manifest.ts';
 import type { AppCreated, AppUpdated } from '../operations/app.ts';
 import type { AppUpdateNeeded, PolicyResult } from '../operations/changes.ts';
 import type { DoctorResult } from '../operations/doctor.ts';
-import type { DeletedDraft } from '../operations/drafts.ts';
+import type { DeletedDraft, DraftView } from '../operations/drafts.ts';
 import type { ModeReport } from '../operations/mode.ts';
 import type {
   ChannelsResult,
@@ -112,6 +112,50 @@ export function renderRemoved(alias: string): string {
     'The Slack app is still installed in your workspace. Remove it there through Slack’s own app settings —',
     'nothing here will do that for you.',
   ].join('\n');
+}
+
+/**
+ * One draft as it would be posted: `draft show`.
+ *
+ * Its text is the payload's, decoded — what the channel would read — and never the words the file keeps as typed,
+ * which nothing posts. A draft whose file was changed outside agent-slack says so under it.
+ */
+export function renderDraft(draft: DraftView, color: boolean): string {
+  const lines = [
+    `${draft.draftId}  ${cell(draft.channel, 30)}${draft.threadTs ? ` (thread ${cell(draft.threadTs, 30)})` : ''}`,
+    '',
+    stripInvisible(draft.text ?? '').text,
+  ];
+  if (draft.problem) {
+    lines.push(
+      '',
+      paint(color, 'yellow', `${draft.problem.message}.`),
+      `Shown above is what it would post. ${draft.problem.hint}`,
+    );
+  }
+  return lines.join('\n');
+}
+
+/**
+ * The drafts held for a workspace, one line each: `draft list`.
+ *
+ * Each as it would be posted, as `draft show` gives it. One the gate refuses is on its own line with the gate's
+ * words, and nothing of what the file holds — neither half is what would post.
+ */
+export function renderDrafts(drafts: readonly DraftView[], color: boolean): string {
+  if (drafts.length === 0) return 'No drafts.';
+  return drafts
+    .map((draft) => {
+      const head = `${draft.draftId}  ${cell(draft.channel, 30)}`;
+      if (draft.text === undefined) {
+        return `${head}  ${paint(color, 'yellow', cell(draft.problem?.message ?? 'cannot be posted', 200))}`;
+      }
+      const changed = draft.problem
+        ? paint(color, 'yellow', '  · changed outside agent-slack; shown as it would post')
+        : '';
+      return `${head}  ${cell(draft.text, 60)}${changed}`;
+    })
+    .join('\n');
 }
 
 /** What `draft delete` removed — and, for a draft nobody could read, that what it said is gone unseen. */
