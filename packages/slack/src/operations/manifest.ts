@@ -1,4 +1,4 @@
-import { CommsError } from '@agentcomms/core';
+import { CommsError, wholeNumber } from '@agentcomms/core';
 import type { SlackContext } from '../context.ts';
 import { appManifestUrl, buildManifest, INSTALL_MODES, type InstallMode, type SlackManifest } from '../manifest.ts';
 import { requireWorkspace } from './workspaces.ts';
@@ -38,11 +38,8 @@ export function checkedPort(raw: unknown, recorded?: number): number {
       hint: 'Slack matches redirect URLs exactly. Pass the same `--port` you built the manifest with.',
     });
   }
-  const port = Number(value);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new CommsError('USAGE', `"${String(value)}" is not a port`, { hint: 'A whole number from 1 to 65535.' });
-  }
-  return port;
+  // Named as the tool spells it, which the command's `--port` reads as too: both surfaces refuse it in the same words.
+  return wholeNumber(value, { name: 'port', min: 1, max: 65535 }) as number;
 }
 
 /**

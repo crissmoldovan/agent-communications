@@ -17,6 +17,7 @@ import {
   type Streams,
   serverInstallChange,
   serverPruneChange,
+  wholeNumber,
   writeResult,
 } from '@agentcomms/core';
 import { Command, CommanderError, Option } from 'commander';
@@ -223,22 +224,16 @@ configuration problem.`,
   const portOf = (flags: Options, recorded?: number): number => checkedPort(flags.port, recorded);
 
   /**
-   * `--limit` and `--page`, checked as the MCP tools check them.
+   * `--limit` and `--page`, checked as the MCP tools check them: whole numbers from 1.
    *
    * They were `Number(value)` in Commander's parser, so `--limit abc` became `NaN`, was sent to Slack as
    * `limit=NaN`, and came back `ok` — a result bounded by whatever Slack made of that, reported as if it were the
-   * bound asked for. The same input over MCP was refused by the schema. Checked here rather than in Commander's
-   * parser because a parser that throws escapes the envelope, and `--json` promises exactly one document.
+   * bound asked for. The same input over MCP was refused by the schema. And `Number` still read `1e2` as 100 and
+   * `0x10` as 16, so digits are all core's `wholeNumber` takes. Checked here rather than in Commander's parser because
+   * a parser that throws escapes the envelope, and `--json` promises exactly one document.
    */
-  const countOf = (flags: Options, flag: 'limit' | 'page'): number | undefined => {
-    const raw = flags[flag];
-    if (raw === undefined) return undefined;
-    const count = Number(raw);
-    if (!Number.isInteger(count) || count < 1) {
-      throw new CommsError('USAGE', `--${flag} "${String(raw)}" is not a count`, { hint: 'A whole number from 1.' });
-    }
-    return count;
-  };
+  const countOf = (flags: Options, flag: 'limit' | 'page'): number | undefined =>
+    wholeNumber(flags[flag], { name: `--${flag}`, min: 1 });
   /** `--limit`, which always has a default, so it is never absent by the time a command reads it. */
   const limitOf = (flags: Options): number => countOf(flags, 'limit') as number;
 

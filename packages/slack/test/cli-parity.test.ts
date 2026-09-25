@@ -101,12 +101,60 @@ test('a --limit or --page that is not a count is refused before anything is aske
     ['search', 'x', '--page', '0'],
     ['files', '--page', 'two'],
     ['people', '--limit', 'NaN'],
+    // `Number` read these as 100, 16, 0 and 5: numbers nobody typed, sent to Slack as the bound asked for.
+    ['channels', '--limit', '1e2'],
+    ['read', 'C1', '--limit', '0x10'],
+    ['files', '--page', ''],
+    ['search', 'x', '--limit', '+5'],
   ]) {
     const result = await cli(harness, ['--json', ...argv, '--workspace', 'acme'], { read });
     assert.equal(result.code, EXIT_CODES.USAGE, `${argv.join(' ')} should be a usage error`);
-    assert.match(result.stdout, /is not a count/);
+    const [flag, value] = argv.slice(-2);
+    assert.equal(
+      result.json<Envelope<never>>().error?.message,
+      `${flag} "${value}" is not a whole number of 1 or more`,
+      argv.join(' '),
+    );
   }
   assert.equal(asked, 0, 'nothing reached Slack');
+
+  // A count written in digits is still taken.
+  const taken = await cli(harness, ['--json', 'channels', '--limit', '007', '--workspace', 'acme'], { read });
+  assert.equal(taken.code, EXIT_CODES.OK, taken.stdout);
+});
+
+test('a --port that is not a whole number from 1 to 65535 is refused, in the words slack_manifest uses', async () => {
+  // `Number` read `1e3` as 1000 and `0x50` as 80, and put that port in the manifest's redirect URL.
+  const harness = await newHarness();
+  for (const port of ['1e3', '0x50', '80abc', '8.0', '', '0', '65536']) {
+    const result = await cli(harness, ['--json', 'manifest', '--port', port]);
+    assert.equal(result.code, EXIT_CODES.USAGE, `--port ${port}: ${result.stdout}`);
+    assert.equal(
+      result.json<Envelope<never>>().error?.message,
+      `port "${port}" is not a whole number from 1 to 65535`,
+      `--port ${port}`,
+    );
+  }
+  const taken = await cli(harness, ['--json', 'manifest', '--port', '51234']);
+  assert.equal(taken.code, EXIT_CODES.OK, taken.stdout);
+});
+
+test('a --wait that is not a whole number of seconds is refused rather than read as another number', async () => {
+  // `Number` read `''` as 0 (look once), `0x10` as 16 and `1e2` as 100.
+  const harness = await newHarness();
+  for (const wait of ['', ' ', '0x10', '1e2', '2.5', '+5']) {
+    const result = await cli(harness, [
+      '--json',
+      'workspace',
+      'add',
+      '--finish',
+      'sfl_aaaaaaaaaaaaaaaaaaaaaa',
+      '--wait',
+      wait,
+    ]);
+    assert.equal(result.code, EXIT_CODES.USAGE, `--wait ${JSON.stringify(wait)}: ${result.stdout}`);
+    assert.equal(result.json<Envelope<never>>().error?.message, `"${wait}" is not a wait`);
+  }
 });
 
 test('`draft show` reads this workspace’s draft, and not another’s', async () => {

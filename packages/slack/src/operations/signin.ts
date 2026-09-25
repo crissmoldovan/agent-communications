@@ -10,6 +10,7 @@ import {
   findById,
   type LooseningConsent,
   newAccountId,
+  readWholeNumber,
   type SecretStore,
   secretsStoreOf,
 } from '@agentcomms/core';
@@ -430,17 +431,20 @@ export const MAX_WAIT_SECONDS = { cli: 600, mcp: 120 } as const;
  * `Number(flags.wait) || 60` turned `--wait 0` into sixty seconds, accepted a negative number, and accepted `Infinity`
  * — an unbounded deadline on a command whose whole job is to return. `0` means what it says: look once and report. One
  * check for both surfaces, so the tool refuses what the command refuses, with a code rather than a schema's message.
+ *
+ * Whole seconds, read as core's `readWholeNumber` reads them — as Gmail's wait is: `Number` still read `''` as 0 (look
+ * once), `0x10` as 16 and `1e2` as 100.
  */
 export function checkedWait(raw: unknown, surface: 'cli' | 'mcp'): number {
   const given = raw ?? 60;
-  const seconds = typeof given === 'number' || typeof given === 'string' ? Number(given) : Number.NaN;
+  const seconds = readWholeNumber(given);
   const most = MAX_WAIT_SECONDS[surface];
-  if (!Number.isFinite(seconds) || seconds < 0 || seconds > most) {
+  if (Number.isNaN(seconds) || seconds < 0 || seconds > most) {
     throw new CommsError('USAGE', `"${String(given)}" is not a wait`, {
       hint:
         surface === 'mcp'
-          ? `A number of seconds from 0 to ${most}: a client may not hold a call open longer. The sign-in stays open for ten minutes, so call slack_workspace_finish again rather than waiting longer.`
-          : `A number of seconds from 0 to ${most}. A sign-in lasts ten minutes, so there is nothing to wait for after that.`,
+          ? `A whole number of seconds from 0 to ${most}: a client may not hold a call open longer. The sign-in stays open for ten minutes, so call slack_workspace_finish again rather than waiting longer.`
+          : `A whole number of seconds from 0 to ${most}. A sign-in lasts ten minutes, so there is nothing to wait for after that.`,
     });
   }
   return seconds;
