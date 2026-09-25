@@ -140,6 +140,10 @@ try {
   const names = tools.result.tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, [
     'slack_channels',
+    // Local drafts only: none of the three reaches Slack.
+    'slack_draft_delete',
+    'slack_draft_get',
+    'slack_draft_list',
     'slack_files',
     'slack_mode',
     'slack_mode_narrow',

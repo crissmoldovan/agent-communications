@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { PACKAGES } from '../scripts/packages.mjs';
 
 /**
  * The manifests are the only part of this project nobody runs during development: a plugin manifest is read by a
@@ -154,11 +155,14 @@ test('a version bump reaches the Slack pin in the Gemini extension', async () =>
     for (const path of [
       'package.json',
       'scripts/sync-versions.mjs',
+      // What sync-versions imports, and the list of manifests it rewrites — read, not copied out, so a package
+      // added there is carried here too.
+      'scripts/packages.mjs',
       '.claude-plugin/marketplace.json',
       'gemini-extension.json',
       'bin/agent-gmail-launch',
       'skills',
-      ...['core', 'gmail', 'gmail-mcp', 'slack'].map((name) => `packages/${name}/package.json`),
+      ...PACKAGES.map((name) => `packages/${name}/package.json`),
     ]) {
       await cp(join(ROOT, path), join(scratch, path), { recursive: true });
     }

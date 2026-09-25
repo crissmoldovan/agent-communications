@@ -679,8 +679,20 @@ agent-gmail mcp install [options]
 | `--read-only` | leave out every tool that changes the mailbox | `false` |
 | `--launcher <launcher>` | how the server is started (choices: "managed", "npx", "local") | — |
 | `--no-verify` | do not start the server to check the entry works | — |
-| `--force` | replace an entry of the same name — this is how you upgrade | `false` |
+| `--force` | replace this server's own earlier entry — this is how you upgrade | `false` |
 | `--print` | only print what would be written | `false` |
+
+### `agent-gmail mcp prune`
+
+remove managed runtimes that no MCP client registers and no process is running
+
+```
+agent-gmail mcp prune [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--dry-run` | only say what would be removed | `false` |
 
 ### `agent-gmail setup`
 
