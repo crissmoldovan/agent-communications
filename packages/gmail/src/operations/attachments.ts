@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
-  type CommsError,
+  CommsError,
   createUniqueFile,
   decodeHeaderWords,
   ensurePrivateDir,
@@ -223,6 +223,13 @@ export async function downloadAttachments(
   targets: Array<{ messageId: string; partId?: string | undefined; filename?: string | undefined }>,
   options: DownloadOptions = {},
 ): Promise<DownloadResult> {
+  // Before the mailbox is read or a folder made: no messages at all made a folder, wrote a manifest of nothing and
+  // answered `files: []`, as if there had been nothing to save. The command takes one message id or more.
+  if (targets.length === 0) {
+    throw new CommsError('USAGE', 'name the messages whose attachments to save', {
+      hint: context.surface === 'mcp' ? 'Pass one message id or more in `messageIds`.' : 'Pass one message id or more.',
+    });
+  }
   // Before the mailbox is read or a folder made: none at all saved nothing and said each file was one too many.
   const maxFiles = numberOption(context, options.maxFiles, MAX_FILES) ?? DEFAULT_MAX_FILES;
   const resolved = await context.inbox(alias);

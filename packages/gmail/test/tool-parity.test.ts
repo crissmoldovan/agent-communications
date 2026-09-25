@@ -3,8 +3,9 @@ import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { afterEach, test } from 'node:test';
-import { managedRuntimeEntry } from '@agentcomms/core';
+import { type CommsError, managedRuntimeEntry } from '@agentcomms/core';
 import { GmailContext } from '../src/context.ts';
+import { searchContacts } from '../src/operations/contacts.ts';
 import { createDraft, getDraft } from '../src/operations/drafts.ts';
 import { inboxPolicy, orphanedSecretsPath } from '../src/operations/inboxes.ts';
 import { prepareSend } from '../src/operations/send.ts';
@@ -1340,6 +1341,134 @@ test('a source gmail_contacts_search does not know is refused before anything is
   } finally {
     await close();
   }
+});
+
+test('an empty `sources` is refused before anything is searched, naming the sources there are', async () => {
+  /*
+   * `sources: []` — or its JSON text, `"[]"` — searched nothing at all and answered `{contacts: [], complete: true}`:
+   * the answer a person reads as "nobody by that name", from a search that never looked. The list of words came
+   * back empty rather than missing, so the "all three when left out" default never applied. The command cannot send
+   * an empty list (`--sources` takes one or more), so the tool refusing it is what keeps the two surfaces alike.
+   */
+  const at = String(Date.parse('2026-09-01T00:00:00Z'));
+  const harness = await newHarness({
+    accounts: [
+      {
+        sub: 'sub-1',
+        email: 'jo@example.test',
+        messages: {
+          m1: {
+            id: 'm1',
+            threadId: 'm1',
+            labelIds: ['INBOX'],
+            internalDate: at,
+            payload: {
+              partId: '',
+              mimeType: 'text/plain',
+              headers: [
+                { name: 'From', value: 'Ana Lopez <ana@corp.test>' },
+                { name: 'To', value: 'Jo <jo@example.test>' },
+                { name: 'Subject', value: 'hi' },
+              ],
+              body: { size: 2, data: Buffer.from('hi').toString('base64url') },
+            },
+          },
+        },
+      },
+    ],
+  });
+  await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1' });
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    // The mailbox does hold her: a source that is named finds her.
+    const found = wire(await call('gmail_contacts_search', { query: 'ana', inboxes: ['work'], sources: ['history'] }));
+    assert.deepEqual(
+      (found.contacts as Array<{ email: string }>).map((contact) => contact.email),
+      ['ana@corp.test'],
+    );
+
+    const asked = harness.google.requests.length;
+    for (const sources of [[], '[]']) {
+      const refused = toolError(await call('gmail_contacts_search', { query: 'ana', inboxes: ['work'], sources }));
+      assert.equal(refused.code, 'USAGE', JSON.stringify(sources));
+      assert.match(refused.message, /`sources` names no source/);
+      assert.match(refused.hint ?? '', /contacts, other-contacts or history/);
+      assert.match(refused.hint ?? '', /leave `sources` out/);
+    }
+    assert.equal(harness.google.requests.length, asked, 'a mailbox was read for a search of nowhere');
+  } finally {
+    await close();
+  }
+  // And the operation refuses it for any caller, in the command's words where the command is the caller.
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  await assert.rejects(searchContacts(context, 'ana', { sources: [] }), (error: CommsError) => {
+    assert.equal(error.code, 'USAGE');
+    assert.match(error.message, /`--sources` names no source/);
+    return true;
+  });
+});
+
+test('an empty `inboxes` list is refused by every tool that takes one, pinned or not, rather than searching nowhere', async () => {
+  /*
+   * `inboxes: []` reached the operation as a list of no mailboxes, which it searched: nothing was read, and the answer
+   * was no rows, no errors and `complete: true` — gmail_search, gmail_attachments_find, gmail_contacts_search and
+   * gmail_followups alike. A pinned server meanwhile took the same call to mean its own mailbox. The command cannot
+   * send an empty list (`--inbox` takes one or more, and `--all` means all), so refusing it keeps the surfaces alike.
+   */
+  const harness = await oneMailbox();
+  const calls: Array<[string, Record<string, unknown>]> = [
+    ['gmail_search', { query: 'Tuesday' }],
+    ['gmail_attachments_find', {}],
+    ['gmail_contacts_search', { query: 'sam' }],
+    ['gmail_followups', {}],
+  ];
+  for (const options of [{}, { inbox: 'work' }]) {
+    const { call, close } = await connect({ core: harness.core, env: harness.env, ...options });
+    try {
+      const asked = harness.google.requests.length;
+      for (const [tool, args] of calls) {
+        for (const inboxes of [[], '[]']) {
+          const label = `${tool} ${JSON.stringify(inboxes)} ${JSON.stringify(options)}`;
+          const refused = toolError(await call(tool, { ...args, inboxes }));
+          assert.equal(refused.code, 'USAGE', label);
+          assert.match(refused.message, /`inboxes` names no mailbox/, label);
+          assert.match(refused.hint ?? '', /"all"/, label);
+          assert.match(refused.hint ?? '', /leave `inboxes` out/, label);
+        }
+      }
+      assert.equal(harness.google.requests.length, asked, `a mailbox was read ${JSON.stringify(options)}`);
+      // A list that names one, and "all", are searched as before.
+      for (const [tool, args] of calls) {
+        for (const inboxes of [['work'], 'all']) {
+          const answer = await call(tool, { ...args, inboxes });
+          assert.notEqual(
+            answer.isError,
+            true,
+            `${tool} ${JSON.stringify(inboxes)}: ${JSON.stringify(answer.content)}`,
+          );
+        }
+      }
+    } finally {
+      await close();
+    }
+  }
+});
+
+test('gmail_attachment_download with no messages is refused, rather than saving nothing and calling it done', async () => {
+  // It answered `files: []` with a manifest of nothing. `attachments download` takes one message id or more.
+  const harness = await oneMailbox();
+  const asked = harness.google.requests.length;
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    for (const messageIds of [[], '[]']) {
+      const refused = toolError(await call('gmail_attachment_download', { inbox: 'work', messageIds }));
+      assert.equal(refused.code, 'USAGE', JSON.stringify(messageIds));
+      assert.match(refused.message, /name the messages whose attachments to save/);
+    }
+  } finally {
+    await close();
+  }
+  assert.equal(harness.google.requests.length, asked, 'the mailbox was read');
 });
 
 // ── the tool answers with what the command prints ───────────────────────────────────────────────────────────

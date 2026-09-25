@@ -269,11 +269,30 @@ function rowFrom(alias: string, message: RawMessage, threadId: string): SearchRo
   };
 }
 
-/** Resolves the mailbox list: named aliases, or every connected mailbox. */
+/**
+ * Resolves the mailbox list: named aliases, or every connected mailbox — and refuses a list that names none.
+ *
+ * `inboxes: []` was taken as given, so gmail_search, gmail_attachments_find, gmail_contacts_search and
+ * gmail_followups each read no mailbox and answered with no rows, no errors and `complete: true`: an answer about
+ * nothing, in the words of one about everything asked. The command cannot send an empty list (`--inbox` takes one or
+ * more, and `--all` is all), so refusing it here keeps the two surfaces alike.
+ */
 export async function resolveInboxes(
   context: GmailContext,
   requested: string[] | 'all' | undefined,
 ): Promise<string[]> {
+  if (Array.isArray(requested) && requested.length === 0) {
+    throw new CommsError(
+      'USAGE',
+      `${context.surface === 'mcp' ? '`inboxes`' : '`--inbox`'} names no mailbox, so nothing would be searched`,
+      {
+        hint:
+          context.surface === 'mcp'
+            ? 'Name one or more mailboxes, pass "all", or leave `inboxes` out to search them all.'
+            : 'Name one or more mailboxes with `--inbox`, or pass `--all`.',
+      },
+    );
+  }
   const config = await context.config();
   const known = Object.keys(config.inboxes);
   if (requested === undefined || requested === 'all') {

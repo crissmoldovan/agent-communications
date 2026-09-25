@@ -3,7 +3,7 @@ import type { GmailContext } from '../context.ts';
 import { headerValue } from '../domain/mime.ts';
 import { type NumberOption, numberOption } from './numbers.ts';
 import { resolveInboxes } from './search.ts';
-import { allOf, oneOf } from './words.ts';
+import { allOf, oneOf, spoken } from './words.ts';
 
 /**
  * Finding someone's address.
@@ -40,7 +40,7 @@ export interface ContactsOptions {
   inboxes?: string[] | 'all' | undefined;
   /**
    * Which sources to use, as given: each is checked by `searchContacts` against {@link CONTACT_SOURCES}. All three
-   * when left out.
+   * when left out; an empty list is refused, since it names none.
    */
   sources?: readonly string[] | undefined;
   /** How many rows, as given; checked by `searchContacts` against {@link CONTACTS_LIMIT}. Twenty when left out. */
@@ -68,6 +68,17 @@ export async function searchContacts(
    * contacts — which a person reads as nobody by that name.
    */
   const sources = new Set<ContactSource>(allOf(options.sources, CONTACT_SOURCES, 'a source') ?? CONTACT_SOURCES);
+  /*
+   * And a list that names none. "All three when left out" read an empty list as given, so `sources: []` looked
+   * nowhere and answered `complete: true` with no contacts — the same "nobody by that name" as above, from a search
+   * that never ran. The command cannot send one (`--sources` takes one or more), so refusing it keeps them alike.
+   */
+  if (options.sources !== undefined && sources.size === 0) {
+    const name = context.surface === 'mcp' ? '`sources`' : '`--sources`';
+    throw new CommsError('USAGE', `${name} names no source, so nothing would be searched`, {
+      hint: `Name one or more of ${spoken(CONTACT_SOURCES)}, or leave ${name} out to look in all three.`,
+    });
+  }
   const limit = numberOption(context, options.limit, CONTACTS_LIMIT) ?? 20;
   const aliases = await resolveInboxes(context, options.inboxes);
   const errors: ContactsResult['errors'] = [];

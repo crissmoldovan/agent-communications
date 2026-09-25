@@ -194,7 +194,7 @@ Find someone’s email address from the saved address book, from people the user
 |---|---|---|---|
 | `query` | string | **yes** | a name, part of an address, or a domain |
 | `inboxes` | any | no |  |
-| `sources` | string[] | no | where to look: any of contacts, other-contacts or history; all three when left out |
+| `sources` | string[] | no | where to look: one or more of contacts, other-contacts or history; all three when left out |
 | `limit` | integer | no | rows to return, 1–50 (default 20) |
 
 ### `gmail_followups`

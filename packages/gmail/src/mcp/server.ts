@@ -366,7 +366,8 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
    * answered with work's results under home's name, and `['work', 'home']` quietly dropped home.
    */
   const targetInboxes = (requested: string[] | 'all' | undefined): string[] | 'all' | undefined => {
-    if (!pinned) return requested;
+    // An empty list names no mailbox — not this one — and is refused by the operation, as an unpinned server does.
+    if (!pinned || (Array.isArray(requested) && requested.length === 0)) return requested;
     if (Array.isArray(requested)) for (const alias of requested) targetInbox(alias);
     return [pinned];
   };
@@ -799,7 +800,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         // Words the operation checks, as `direction` and `kind` are: one that is not a source is refused as USAGE.
         sources: mcpStringArray()
           .optional()
-          .describe('where to look: any of contacts, other-contacts or history; all three when left out'),
+          .describe('where to look: one or more of contacts, other-contacts or history; all three when left out'),
         limit: mcpInteger().optional().describe('rows to return, 1–50 (default 20)'),
       }),
       outputSchema: z.object({
