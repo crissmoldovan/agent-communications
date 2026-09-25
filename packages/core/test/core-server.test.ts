@@ -228,6 +228,28 @@ test('the server offers the core tools, and no tool that approves or claims a ch
   }
 });
 
+test('the greeting says how a change is approved, names the policy in force, and stays under 2 KB', async () => {
+  /*
+   * Claude Code cuts a server's instructions at 2,048 bytes (design 2026-09-18 §11). The Gmail and Slack greetings
+   * have a test holding them under it; this one had none, and the Slack greeting was 2.7 KB before anyone measured.
+   */
+  for (const changePolicy of ['chat', 'confirm'] as const) {
+    const m = machine({ defaults: { changePolicy } });
+    const { client, close } = await connect(m);
+    try {
+      const greeting = client.getInstructions() ?? '';
+      assert.ok(Buffer.byteLength(greeting) < 2048, `${Buffer.byteLength(greeting)} bytes; Claude Code keeps 2,048`);
+      assert.match(greeting, /approvalRequired/);
+      assert.match(greeting, /agentcomms approve <approvalId>/);
+      assert.match(greeting, /you cannot approve it for them/);
+      assert.match(greeting, new RegExp(`The default change policy here is ${changePolicy}\\.`));
+      assert.match(greeting, /restarted/, 'the last line survives too');
+    } finally {
+      await close();
+    }
+  }
+});
+
 // ── Reading: the same data as the command ───────────────────────────────────────────────────────────────────────
 
 test('paths, the audit log and the approvals list return what their commands print', async () => {
