@@ -2,7 +2,7 @@
 name: slack-posting
 description: "Draft a Slack message and take it through the approval gate, including how many people a post would interrupt. Symptoms: 'post this to #engineering', 'reply in that thread', 'let the team know', 'react to that message'. Not for reading — slack-reading does that; not for connecting a workspace — slack-setup does."
 license: MIT
-compatibility: "@agentcomms/slack@0.5.0"
+compatibility: "@agentcomms/slack@0.5.1"
 metadata:
   group: communications
   lifecycle: release

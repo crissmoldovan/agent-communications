@@ -2,7 +2,7 @@
 name: gmail-contacts
 description: "Find somebody's address and who they are, across saved contacts, people written to before, and past mail — showing every candidate with where it came from so the user chooses. Symptoms: 'what's X's email', 'do we have an address for her', 'which of these two Sams is it', 'when did I last hear from him'. Not for writing to them — gmail-compose does that."
 license: MIT
-compatibility: "@agentcomms/gmail@0.5.0"
+compatibility: "@agentcomms/gmail@0.5.1"
 metadata:
   group: communications
   lifecycle: release

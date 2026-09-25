@@ -3,6 +3,49 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.5.1
+
+**Tools refuse what they used to ignore.** Every MCP tool, in core, Gmail and Slack, now refuses an argument it
+does not take, and an argument of the wrong kind, as `USAGE`, before it does anything. The message names the
+argument and what the tool takes. An unknown argument used to be dropped without a word, so a call could quietly do
+something other than what was asked. And a wrong type, a fraction or an unknown word came back as the MCP library's
+plain-text error, with no code an agent could act on. `tools/list` now publishes `additionalProperties: false` for
+every tool, so a client can see the rule before it calls.
+
+Why: the design has always said an unknown argument is refused. The MCP library dropped it instead. That is how
+`gmail_inbox_add`, before 0.5.0 declared `client`, signed a mailbox in with the default OAuth client when an agent
+had asked for another.
+
+What it means for you: a patch, because only input that was already wrong behaves differently. A call that was
+correct gets the same answer as before, and there is nothing to migrate. An agent or script passing a field a tool
+does not declare now gets `USAGE` and the list of fields it takes, where it used to get a result that ignored the
+field. To pick this up, register each server again with `--force` and restart your client.
+
+**Slack `search` and `files` refuse a limit they cannot read.** Above 100 for `search` and 200 for `files`, the
+limit is refused, as the Gmail tools have refused one since 0.5.0. Before, they read fewer and did not say so.
+
+**A Slack draft is shown as what it would post.** `agent-slack draft show`, `draft list`, `slack_draft_get` and
+`slack_draft_list` show the text the post gate would send, as the channel would read it, not the words kept in the
+draft file. A draft the gate would refuse is refused by `show` too, in the gate's own words, so showing a draft and
+posting it can no longer disagree about what it says.
+
+**An expired Gmail sign-in says how to start that one again.** It names `inbox reauth` for a re-sign-in and
+`inbox add` for a new mailbox, and the mailbox it was for. Over MCP it names the tool, not a terminal command. Before,
+every expiry said `agent-gmail inbox add <alias> --start`.
+
+**`agent-gmail contacts --sources` and `gmail_contacts_search` refuse a source they do not know.** An unknown word
+used to be dropped, and the search reported itself complete with fewer results or none.
+
+**`slack_draft_create` writes a draft without preparing it**, as `agent-slack draft create` does, with the same
+mention and broadcast checks and no approval until `slack_post_prepare` is called with its id. Until now the command
+had no tool of its own; the nearest was `slack_post_prepare`, which writes and prepares in one call. Slack's server
+now has 27 tools.
+
+**For contributors: the parity check proves each row is one operation.** Each row in `capabilities.json` names the
+operation its command and its tool both run, and `pnpm verify` drives both sides against stand-ins to prove that each
+reaches that operation first. Before, it checked only that the two named sides existed, so swapping two rows passed —
+and so did the channel CLIs' `mcp install` in 0.5.0 without the approval its tool asked for, until a review found it.
+
 ## 0.5.0
 
 **Changes are now approved in chat by default.** A change that loosens a setting, or cannot be undone — a looser

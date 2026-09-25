@@ -10,7 +10,7 @@
       "name": "gmail",
       "source": "./",
       "description": "Gmail and Slack for coding agents. The Gmail server is included: search, read, analyse, draft and organise mail, with sending behind your approval. The Slack skills read a workspace and post only what a person approves; connect their server with `npx -y @agentcomms/slack mcp install --client claude-code` (or `--client` codex, cursor, gemini, claude-desktop or vscode), a registration you approve. The onboarding skill works through the core server, which the plugin does not start either: `npx -y @agentcomms/core mcp install --client claude-code`.",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "author": {
         "name": "crissmoldovan"
       },

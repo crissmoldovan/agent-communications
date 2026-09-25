@@ -1,15 +1,15 @@
 {
   "name": "agent-communications",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Gmail and Slack for coding agents: search, read, analyse, draft and organise mail across several mailboxes, and read and post to Slack workspaces. Nothing is sent or posted without your approval. The core server, which sets the rest up from chat, is `npx -y @agentcomms/core mcp install --client gemini`.",
   "mcpServers": {
     "gmail": {
       "command": "npx",
-      "args": ["-y", "@agentcomms/gmail-mcp@0.5.0"]
+      "args": ["-y", "@agentcomms/gmail-mcp@0.5.1"]
     },
     "slack": {
       "command": "npx",
-      "args": ["-y", "@agentcomms/slack@0.5.0", "mcp"]
+      "args": ["-y", "@agentcomms/slack@0.5.1", "mcp"]
     }
   }
 }

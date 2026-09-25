@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/slack",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Slack for coding agents: read channels, threads and search across workspaces, and draft messages nothing posts without a person.",
   "type": "module",
   "license": "MIT",
