@@ -3,11 +3,12 @@ import { McpServer, type Transport } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { FetchLike } from '../api/guard.ts';
 import { exitAfterRefreshes, settleBeforeExit, type WarningSink } from '../auth/exit.ts';
-import { compose } from '../compose/blocks.ts';
+import { BROADCASTS } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
-import { parseMode } from '../manifest.ts';
+import { INSTALL_MODES } from '../manifest.ts';
 import {
+  CHANGE_POLICIES,
   connectWorkspace,
   planModeSet,
   policyChange,
@@ -15,20 +16,17 @@ import {
   policyWanted,
   reauthWorkspace,
   removeWorkspaceChange,
+  SEND_POLICIES,
   signInStarted,
 } from '../operations/changes.ts';
 import { runDoctor } from '../operations/doctor.ts';
 import { deleteOwnDraft, ownDraft } from '../operations/drafts.ts';
-import { gateDepsFor } from '../operations/gate.ts';
 import type { ProbeFetch } from '../operations/identity.ts';
 import { manifestFor } from '../operations/manifest.ts';
-import { modeReport, narrowingSteps, wideningSteps } from '../operations/mode.ts';
-import { NameBook } from '../operations/people.ts';
-import { react, sendPost } from '../operations/post.ts';
+import { prepareDraftPost, react, sendPost } from '../operations/post.ts';
 import { listChannels, listFiles, listPeople, readChannel, readThread, searchMessages } from '../operations/read.ts';
-import { preparePost } from '../operations/send.ts';
 import { openWorkspace } from '../operations/session.ts';
-import { finishSignIn, type ListenerEntry, type StartedSignIn } from '../operations/signin.ts';
+import { finishSignIn, type ListenerEntry, MAX_WAIT_SECONDS, type StartedSignIn } from '../operations/signin.ts';
 import { listWorkspaces, requireWorkspace, showWorkspace } from '../operations/workspaces.ts';
 import { VERSION } from '../version.ts';
 
@@ -255,6 +253,15 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
   const readsSlack = { readOnlyHint: true, openWorldHint: true } as const;
   const readsLocal = { readOnlyHint: true, openWorldHint: false } as const;
   const workspaceArg = { workspace: z.string().optional().describe('which workspace, as `organisation/slack`') };
+  /**
+   * A word from a fixed set, listed in the schema a client reads and checked by the operation.
+   *
+   * `z.enum` refused a word outside the set inside the SDK, before any of this code ran, so the caller got "Input
+   * validation error" and no `error.code` — where the command refuses the same word with `USAGE`, from the operation
+   * both run. The schema still lists the words, so a client and a model see exactly what they did; the refusal is now
+   * the operation's, in the same words at both surfaces.
+   */
+  const oneOfWords = (values: readonly string[]) => z.string().meta({ enum: [...values] });
 
   server.registerTool(
     'slack_workspaces_list',
@@ -339,7 +346,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         'The manifest for a Slack app in `read` or `send` mode, for a loopback port. Given a connected workspace, it uses the port that workspace signed in with and returns the direct link to its own app’s manifest page. Changes nothing: pasting the JSON there and saving is the person’s to do — give them the link and the JSON. An app’s scopes are only what a token may be granted; moving a workspace to `send` also needs a sign-in approved in Slack, which this does not start.',
       inputSchema: {
         workspace: z.string().optional().describe('a workspace already connected, as `organisation/slack`'),
-        mode: z.enum(['read', 'send']).optional().describe('`read` when left out'),
+        mode: oneOfWords(INSTALL_MODES).optional().describe('`read` when left out'),
         port: z
           .number()
           .int()
@@ -517,32 +524,39 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     {
       title: 'Prepare a post',
       description:
-        'Compose a message, store it as a local draft, and return the preview a person must approve. **Nothing is posted.** The preview says how many people it would interrupt; show it in full and wait.',
+        'Return the preview a person must approve, with its approval id. **Nothing is posted.** Either compose a new message — `channel` and `text`, stored as a local draft — or pass `draftId` alone to prepare a draft already written: one from `agent-slack draft create`, or one whose approval expired. Not both. The preview says how many people it would interrupt; show it in full and wait. The same as `agent-slack draft create` then `agent-slack post prepare --draft`.',
       inputSchema: {
         ...workspaceArg,
-        channel: z.string(),
-        text: z.string(),
-        threadTs: z.string().optional(),
+        draftId: z
+          .string()
+          .optional()
+          .describe('a draft already written, to prepare as it is; leave out to compose one'),
+        channel: z.string().optional().describe('the channel id, for a new message'),
+        text: z.string().optional().describe('what to say, for a new message. Markup in it is shown, not interpreted'),
+        threadTs: z.string().optional().describe('reply inside this thread, for a new message'),
         mentionUsers: z.array(z.string()).optional().describe('user ids to mention, by id — never by name'),
-        broadcast: z.enum(['here', 'channel', 'everyone']).optional().describe('interrupts the room; needs a person'),
+        broadcast: oneOfWords(BROADCASTS).optional().describe('interrupts the room; needs a person'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     async (args) => {
       try {
-        // The same dependencies `post prepare` uses, audit sink and all: see `gateDepsFor` for what a copy cost.
-        const gate = await gateDepsFor(context, await resolve(args.workspace), slackDeps);
-        const payload = compose({
-          channel: args.channel,
-          text: args.text,
-          threadTs: args.threadTs,
-          mentions: [
-            ...(args.mentionUsers ?? []).map((id) => ({ kind: 'user' as const, id })),
-            ...(args.broadcast ? [{ kind: 'broadcast' as const, who: args.broadcast }] : []),
-          ],
-        });
-        const draft = await drafts().create(gate.accountId, payload, args.text);
-        return reply(await preparePost(gate, draft, new NameBook()));
+        // The operation `post prepare` runs, gate dependencies and audit sink and all: see `prepareDraftPost`.
+        return reply(
+          await prepareDraftPost(
+            context,
+            await resolve(args.workspace),
+            {
+              draftId: args.draftId,
+              channel: args.channel,
+              text: args.text,
+              threadTs: args.threadTs,
+              mentionUsers: args.mentionUsers,
+              broadcast: args.broadcast,
+            },
+            slackDeps,
+          ),
+        );
       } catch (error) {
         return fail(error);
       }
@@ -575,9 +589,10 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     },
     async (args) => {
       try {
+        const name = await resolve(args.workspace);
         const posted = await sendPost(
           context,
-          await resolve(args.workspace),
+          name,
           { draftId: args.draftId, approvalId: args.approvalId, expectChannel: args.expectChannel },
           slackDeps,
         );
@@ -700,7 +715,8 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     },
     async (args) => {
       try {
-        return reply(await react(context, await resolve(args.workspace), reactionOf(args), args.approvalId, slackDeps));
+        const name = await resolve(args.workspace);
+        return reply(await react(context, name, reactionOf(args), args.approvalId, slackDeps));
       } catch (error) {
         return fail(error);
       }
@@ -708,22 +724,43 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
   );
 
   /*
-   * The mode tools. `slack_mode` reports; `slack_mode_request_send` and `slack_mode_narrow` return the procedures as
-   * text and change nothing, for a person who wants to read them first; `slack_mode_set`, below, makes the move.
+   * The mode tools, each `planModeSet` — the operation `agent-slack workspace mode` runs — so a tool and the command
+   * read the same mode (`mode`, else the `tier` an older record holds), check the same port, and return the same shape.
+   *
+   * `slack_mode` is `workspace mode <name>`. `slack_mode_request_send` and `slack_mode_narrow` are `workspace mode <name>
+   * send` and `… read` stopped before anything is asked or started: they return the report, or the steps, and change
+   * nothing, for a person who wants to read them first. `slack_mode_set`, below, makes the move. Each used to hold its
+   * own reading, and they drifted: a `send` workspace recorded before `mode` existed was offered the steps to widen it,
+   * a port of 70000 was written into steps the command refused, and narrowing a `read` workspace gave steps to remove
+   * an app it had never widened.
    */
+  /** Every sign-in a tool starts is detached: a tool call cannot sit waiting on a browser (see below). */
+  const detached = { detached: true, listenerCommand: options.listenerCommand } as const;
+  const modePort = {
+    port: z
+      .number()
+      .int()
+      .optional()
+      .describe('the loopback port in the app’s manifest; the one it last signed in with when left out'),
+  };
+
   server.registerTool(
     'slack_mode',
     {
       title: 'What a workspace may do',
-      description: 'Reports whether this workspace can post, upload or react, and what its recorded grant allows.',
-      inputSchema: { ...workspaceArg },
+      description:
+        'Reports whether this workspace can post, upload or react, what its recorded grant allows, and the steps each way (`toSend`, `toRead`). Changes nothing. The same as `agent-slack workspace mode <name>`.',
+      inputSchema: { ...workspaceArg, ...modePort },
       annotations: readsLocal,
     },
     async (args) => {
       try {
-        const name = await resolve(args.workspace);
-        const { account } = requireWorkspace(await context.config(), name);
-        return reply(modeReport(name, account));
+        const planned = await planModeSet(context, await resolve(args.workspace), undefined, {
+          port: args.port,
+          ...detached,
+        });
+        if (planned.kind !== 'report') throw new CommsError('UNEXPECTED', 'asking for no mode reported none');
+        return reply(planned.report);
       } catch (error) {
         return fail(error);
       }
@@ -735,22 +772,26 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     {
       title: 'The steps to let a workspace post',
       description:
-        'Returns the steps that let this workspace post, as text, and changes nothing: update its app’s manifest (the person’s step, on the page linked), then move it. To make the move from here, call slack_mode_set with mode `send` — it hands over the manifest while the app still needs it, and asks the person to approve the change.',
-      inputSchema: { ...workspaceArg, port: z.number().int().positive().optional() },
+        'The steps that let this workspace post, and changes nothing — `agent-slack workspace mode <name> send`, stopped before any change is asked for. While its recorded grant cannot show its app offers posting: `appUpdateNeeded`, with the steps, the manifest and the link to that app’s manifest page, exactly as slack_mode_set returns them. Once it can: the `steps`. Already `send`: the report, as slack_mode. To make the move from here, call slack_mode_set with mode `send` — it asks the person to approve the change.',
+      inputSchema: { ...workspaceArg, ...modePort },
       annotations: readsLocal,
     },
     async (args) => {
       try {
-        const name = await resolve(args.workspace);
-        const { account } = requireWorkspace(await context.config(), name);
-        if (parseMode(account.mode ?? 'read', name) === 'send') {
-          return reply({ alreadySend: true, steps: [], note: `"${name}" can already post.` });
-        }
-        return reply({
-          alreadySend: false,
-          steps: wideningSteps(name, args.port ?? account.redirectPort, account.appId),
-          note: 'Nothing has changed. slack_mode_set makes the move once the app is updated and the person approves it.',
+        const planned = await planModeSet(context, await resolve(args.workspace), 'send', {
+          port: args.port,
+          ...detached,
         });
+        switch (planned.kind) {
+          case 'report':
+            return reply(planned.report);
+          case 'steps':
+          case 'app-update-needed':
+            return reply(planned.result);
+          case 'change':
+            // Where the command would go on to ask for the change, this stops: the move is slack_mode_set's.
+            return reply(planned.steps);
+        }
       } catch (error) {
         return fail(error);
       }
@@ -762,20 +803,25 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     {
       title: 'Give up posting access',
       description:
-        'The path back to read-only. Tightening needs nobody’s consent, but Slack never removes a scope from a token — only removing the app’s installation resets it — so this returns the steps rather than pretending to do it.',
-      inputSchema: { ...workspaceArg, port: z.number().int().positive().optional() },
+        'The path back to read-only, as `agent-slack workspace mode <name> read` returns it, and changes nothing. Tightening needs nobody’s consent, but Slack never removes a scope from a token — only removing the app’s installation resets it — so this returns the `steps` rather than pretending to do it. A workspace already `read` gets the report, as slack_mode. The steps name `port`, else the port it last signed in with; with neither it is refused, as the command refuses it.',
+      inputSchema: { ...workspaceArg, ...modePort },
       annotations: readsLocal,
     },
     async (args) => {
       try {
-        const name = await resolve(args.workspace);
-        const { account } = requireWorkspace(await context.config(), name);
-        return reply({
-          steps: narrowingSteps(name, args.port ?? account.redirectPort, {
-            knowsItsApp: account.oauthClientId !== undefined,
-          }),
-          note: 'Nothing has changed. Slack adds scopes to a token and never removes one.',
+        const planned = await planModeSet(context, await resolve(args.workspace), 'read', {
+          port: args.port,
+          ...detached,
         });
+        switch (planned.kind) {
+          case 'report':
+            return reply(planned.report);
+          case 'steps':
+          case 'app-update-needed':
+            return reply(planned.result);
+          case 'change':
+            return reply(planned.steps);
+        }
       } catch (error) {
         return fail(error);
       }
@@ -806,7 +852,6 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     idempotentHint: false,
     openWorldHint: true,
   } as const;
-  const detached = { detached: true, listenerCommand: options.listenerCommand } as const;
 
   /** A gated change, run and shaped for a tool, with a started sign-in reported as both surfaces report it. */
   const runChange = async <T>(change: GatedChange<T>, approvalId: string | undefined) =>
@@ -842,7 +887,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
           workspace: z.string().describe('the name to connect it under, as `organisation/slack`'),
           clientId: z.string().describe('the app’s Client ID, from its Basic Information page; not a secret'),
           port: z.number().int().optional().describe('the loopback port in the app’s manifest'),
-          mode: z.enum(['read', 'send']).optional().describe('`read` when left out'),
+          mode: oneOfWords(INSTALL_MODES).optional().describe('`read` when left out'),
           ...approvalArg,
         },
         annotations: signingIn,
@@ -853,7 +898,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
             await runSignIn(
               connectWorkspace(context, {
                 alias: args.workspace,
-                mode: args.mode ?? 'read',
+                mode: args.mode,
                 clientId: args.clientId,
                 port: args.port,
                 ...detached,
@@ -879,7 +924,8 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       },
       async (args) => {
         try {
-          return reply(await runChange(removeWorkspaceChange(context, await resolve(args.workspace)), args.approvalId));
+          const name = await resolve(args.workspace);
+          return reply(await runChange(removeWorkspaceChange(context, name), args.approvalId));
         } catch (error) {
           return fail(error);
         }
@@ -891,15 +937,24 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     'slack_workspace_finish',
     {
       title: 'Finish a sign-in',
-      description:
-        'Complete a sign-in slack_workspace_add, slack_workspace_reauth or slack_mode_set started, once the person has approved it in Slack. Nothing is recorded until everything Slack granted has been checked: the scopes against the mode, and on a sign-in again the same person, workspace and app. APPROVAL_PENDING means they have not finished in the browser yet and the link is still good — wait and call again; do not start another. The same as `agent-slack workspace add --finish` and `workspace reauth --finish`.',
+      description: `Complete a sign-in slack_workspace_add, slack_workspace_reauth or slack_mode_set started, once the person has approved it in Slack. Nothing is recorded until everything Slack granted has been checked: the scopes against the mode, and on a sign-in again the same person, workspace and app. It waits up to \`waitSeconds\` for the browser — at most ${MAX_WAIT_SECONDS.mcp}, because a client may not hold a call open longer. APPROVAL_PENDING means they have not finished in the browser yet and the link is still good for the ten minutes a sign-in lasts — call again; do not start another. When the browser is on another machine than this server, the redirect to this machine fails: ask the person to paste the whole address from their browser’s address bar and pass it as \`url\`, which finishes at once — the same PKCE check applies, and the code in it is useless without the secret this machine kept. The same as \`agent-slack workspace add --finish\` and \`workspace reauth --finish\`, with \`--url\` and \`--wait\`.`,
       inputSchema: {
         workspace: z
           .string()
           .optional()
           .describe('the workspace the sign-in is for, as `organisation/slack`; a sign-in for any other is refused'),
         flowId: z.string().describe('from the call that started the sign-in'),
-        waitSeconds: z.number().int().min(0).max(120).optional().describe('how long to wait for the browser; 60'),
+        url: z
+          .string()
+          .optional()
+          .describe('the address the browser landed on after approving, pasted back whole; finishes without waiting'),
+        waitSeconds: z
+          .number()
+          .meta({ minimum: 0, maximum: MAX_WAIT_SECONDS.mcp })
+          .optional()
+          .describe(
+            `how long to wait for the browser, in seconds: 60 when left out, 0 to look once, at most ${MAX_WAIT_SECONDS.mcp}`,
+          ),
       },
       annotations: signingIn,
     },
@@ -914,7 +969,9 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         return reply(
           await finishSignIn(context, {
             flowId: args.flowId,
-            waitSeconds: args.waitSeconds ?? 60,
+            // Checked by the operation, as `--wait` is, so a wait out of range is refused with a code: `checkedWait`.
+            waitSeconds: args.waitSeconds,
+            ...(args.url === undefined ? {} : { url: args.url }),
             ...(name === undefined ? {} : { expectAlias: name }),
           }),
         );
@@ -932,7 +989,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         'Start signing a workspace in again, through the app it was connected with: to renew its grant, or with `mode` to change its access. The same person, workspace and app must come back, or nothing is recorded. Renewing, and `read`, start at once. `read` → `send` is a change a person approves first — this returns `approvalRequired` with a preview; show it, ask, and call again with `approvalId` once they say yes (under `confirm`, once they have run `agent-slack approve <id>`). The app’s manifest must already be `send` — slack_mode_set checks that first. Returns a sign-in link: the person approves it in Slack, then call slack_workspace_finish. The same as `agent-slack workspace reauth`.',
       inputSchema: {
         ...workspaceArg,
-        mode: z.enum(['read', 'send']).optional().describe('the access to ask for; its own when left out'),
+        mode: oneOfWords(INSTALL_MODES).optional().describe('the access to ask for; its own when left out'),
         port: z.number().int().optional().describe('the loopback port; the one it last signed in with when left out'),
         ...approvalArg,
       },
@@ -940,14 +997,10 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     },
     async (args) => {
       try {
+        const name = await resolve(args.workspace);
         return reply(
           await runSignIn(
-            reauthWorkspace(context, {
-              alias: await resolve(args.workspace),
-              mode: args.mode,
-              port: args.port,
-              ...detached,
-            }),
+            reauthWorkspace(context, { alias: name, mode: args.mode, port: args.port, ...detached }),
             args.approvalId,
             true,
           ),
@@ -966,7 +1019,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         'Move a workspace to `send` (its token can post, upload and react, each still only with a person’s approval) or back to `read`. `send`, while the recorded grant cannot show its app offers posting: returns `appUpdateNeeded` with the manifest and the link to that app’s manifest page, and starts nothing — the person pastes it there and saves (or runs the `terminalAlternative` themselves; never ask for an app configuration token in chat); call again with `appUpdated: true` once they say they have. Then it is a change a person approves: `approvalRequired` and a preview — show it, ask, call again with `approvalId` (and `appUpdated`) once they say yes (under `confirm`, once they have run `agent-slack approve <id>`). Then a sign-in link: they approve it in Slack, then call slack_workspace_finish. `read` returns the procedure and changes nothing: Slack never removes a scope from a token. The same as `agent-slack workspace mode <name> send|read`.',
       inputSchema: {
         ...workspaceArg,
-        mode: z.enum(['read', 'send']).describe('the mode to move it to'),
+        mode: oneOfWords(INSTALL_MODES).describe('the mode to move it to'),
         port: z.number().int().optional().describe('the loopback port; the one it last signed in with when left out'),
         appUpdated: z.boolean().optional().describe('the person says the app’s manifest now asks for the send scopes'),
         ...approvalArg,
@@ -975,7 +1028,8 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     },
     async (args) => {
       try {
-        const planned = await planModeSet(context, await resolve(args.workspace), args.mode, {
+        const name = await resolve(args.workspace);
+        const planned = await planModeSet(context, name, args.mode, {
           port: args.port,
           appUpdated: args.appUpdated === true,
           ...detached,
@@ -1003,9 +1057,8 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         'Report or set how this workspace’s posts and reactions are approved (`sendPolicy`: `chat`, `confirm` or `never`) and how changes to it are approved (`changePolicy`: `chat` or `confirm`). With neither, it reports. Tightening — towards `never`, towards `confirm` — applies at once. Loosening is a change a person approves first, under the change policy in force before it: this returns `approvalRequired` with a preview; show it, ask, and call again with `approvalId` once they say yes — or, under `confirm`, once they have run `agent-slack approve <id>` at their terminal. Never loosen a policy the person did not ask to loosen. The same as `agent-slack workspace policy`.',
       inputSchema: {
         ...workspaceArg,
-        sendPolicy: z.enum(['chat', 'confirm', 'never']).optional().describe('how a post or reaction is approved'),
-        changePolicy: z
-          .enum(['chat', 'confirm'])
+        sendPolicy: oneOfWords(SEND_POLICIES).optional().describe('how a post or reaction is approved'),
+        changePolicy: oneOfWords(CHANGE_POLICIES)
           .optional()
           .describe('how a change that loosens or removes this workspace is approved'),
         ...approvalArg,

@@ -29,16 +29,16 @@ Tightening applies at once. No tool approves.
 | [`slack_search`](#slack_search) | Slack’s own search, in Slack’s syntax. |
 | [`slack_people`](#slack_people) | Members of the workspace. |
 | [`slack_files`](#slack_files) | Files this account can see. |
-| [`slack_post_prepare`](#slack_post_prepare) | Compose a message, store it as a local draft, and return the preview a person must approve. |
+| [`slack_post_prepare`](#slack_post_prepare) | Return the preview a person must approve, with its approval id. |
 | [`slack_post_send`](#slack_post_send) | Post a draft `slack_post_prepare` prepared — only after the person has seen that whole preview and said yes to it in this conversation. |
 | [`slack_draft_list`](#slack_draft_list) | The drafts held on this machine for this workspace, newest first. |
 | [`slack_draft_get`](#slack_draft_get) | One draft, exactly as it would be posted, and the text it was written from. |
 | [`slack_draft_delete`](#slack_draft_delete) | Throw a draft away. |
 | [`slack_react`](#slack_react) | Add or remove one reaction. |
 | [`slack_react_send`](#slack_react_send) | Add or remove the reaction a person approved at their own terminal with `agent-slack approve <approvalId>`, once — you cannot approve it yourself. |
-| [`slack_mode`](#slack_mode) | Reports whether this workspace can post, upload or react, and what its recorded grant allows. |
-| [`slack_mode_request_send`](#slack_mode_request_send) | Returns the steps that let this workspace post, as text, and changes nothing: update its app’s manifest (the person’s step, on the page linked), then move it. |
-| [`slack_mode_narrow`](#slack_mode_narrow) | The path back to read-only. |
+| [`slack_mode`](#slack_mode) | Reports whether this workspace can post, upload or react, what its recorded grant allows, and the steps each way (`toSend`, `toRead`). |
+| [`slack_mode_request_send`](#slack_mode_request_send) | The steps that let this workspace post, and changes nothing — `agent-slack workspace mode <name> send`, stopped before any change is asked for. |
+| [`slack_mode_narrow`](#slack_mode_narrow) | The path back to read-only, as `agent-slack workspace mode <name> read` returns it, and changes nothing. |
 | [`slack_workspace_add`](#slack_workspace_add) | Start connecting a Slack workspace through the person’s own app, in `read` (the default: its token cannot post, and Slack enforces that) or `send`. |
 | [`slack_workspace_remove`](#slack_workspace_remove) | Disconnect a workspace from this machine and delete its token. |
 | [`slack_workspace_finish`](#slack_workspace_finish) | Complete a sign-in slack_workspace_add, slack_workspace_reauth or slack_mode_set started, once the person has approved it in Slack. |
@@ -167,16 +167,17 @@ Files this account can see. URLs are carried, never fetched.
 
 ### `slack_post_prepare`
 
-Compose a message, store it as a local draft, and return the preview a person must approve. **Nothing is posted.** The preview says how many people it would interrupt; show it in full and wait.
+Return the preview a person must approve, with its approval id. **Nothing is posted.** Either compose a new message — `channel` and `text`, stored as a local draft — or pass `draftId` alone to prepare a draft already written: one from `agent-slack draft create`, or one whose approval expired. Not both. The preview says how many people it would interrupt; show it in full and wait. The same as `agent-slack draft create` then `agent-slack post prepare --draft`.
 
 *writes*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `workspace` | string | no | which workspace, as `organisation/slack` |
-| `channel` | string | **yes** |  |
-| `text` | string | **yes** |  |
-| `threadTs` | string | no |  |
+| `draftId` | string | no | a draft already written, to prepare as it is; leave out to compose one |
+| `channel` | string | no | the channel id, for a new message |
+| `text` | string | no | what to say, for a new message. Markup in it is shown, not interpreted |
+| `threadTs` | string | no | reply inside this thread, for a new message |
 | `mentionUsers` | string[] | no | user ids to mention, by id — never by name |
 | `broadcast` | `here` \\| `channel` \\| `everyone` | no | interrupts the room; needs a person |
 
@@ -256,35 +257,36 @@ Add or remove the reaction a person approved at their own terminal with `agent-s
 
 ### `slack_mode`
 
-Reports whether this workspace can post, upload or react, and what its recorded grant allows.
+Reports whether this workspace can post, upload or react, what its recorded grant allows, and the steps each way (`toSend`, `toRead`). Changes nothing. The same as `agent-slack workspace mode <name>`.
 
 *read-only*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `workspace` | string | no | which workspace, as `organisation/slack` |
+| `port` | integer | no | the loopback port in the app’s manifest; the one it last signed in with when left out |
 
 ### `slack_mode_request_send`
 
-Returns the steps that let this workspace post, as text, and changes nothing: update its app’s manifest (the person’s step, on the page linked), then move it. To make the move from here, call slack_mode_set with mode `send` — it hands over the manifest while the app still needs it, and asks the person to approve the change.
+The steps that let this workspace post, and changes nothing — `agent-slack workspace mode <name> send`, stopped before any change is asked for. While its recorded grant cannot show its app offers posting: `appUpdateNeeded`, with the steps, the manifest and the link to that app’s manifest page, exactly as slack_mode_set returns them. Once it can: the `steps`. Already `send`: the report, as slack_mode. To make the move from here, call slack_mode_set with mode `send` — it asks the person to approve the change.
 
 *read-only*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `workspace` | string | no | which workspace, as `organisation/slack` |
-| `port` | integer | no |  |
+| `port` | integer | no | the loopback port in the app’s manifest; the one it last signed in with when left out |
 
 ### `slack_mode_narrow`
 
-The path back to read-only. Tightening needs nobody’s consent, but Slack never removes a scope from a token — only removing the app’s installation resets it — so this returns the steps rather than pretending to do it.
+The path back to read-only, as `agent-slack workspace mode <name> read` returns it, and changes nothing. Tightening needs nobody’s consent, but Slack never removes a scope from a token — only removing the app’s installation resets it — so this returns the `steps` rather than pretending to do it. A workspace already `read` gets the report, as slack_mode. The steps name `port`, else the port it last signed in with; with neither it is refused, as the command refuses it.
 
 *read-only*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `workspace` | string | no | which workspace, as `organisation/slack` |
-| `port` | integer | no |  |
+| `port` | integer | no | the loopback port in the app’s manifest; the one it last signed in with when left out |
 
 ### `slack_workspace_add`
 
@@ -313,7 +315,7 @@ Disconnect a workspace from this machine and delete its token. It cannot be take
 
 ### `slack_workspace_finish`
 
-Complete a sign-in slack_workspace_add, slack_workspace_reauth or slack_mode_set started, once the person has approved it in Slack. Nothing is recorded until everything Slack granted has been checked: the scopes against the mode, and on a sign-in again the same person, workspace and app. APPROVAL_PENDING means they have not finished in the browser yet and the link is still good — wait and call again; do not start another. The same as `agent-slack workspace add --finish` and `workspace reauth --finish`.
+Complete a sign-in slack_workspace_add, slack_workspace_reauth or slack_mode_set started, once the person has approved it in Slack. Nothing is recorded until everything Slack granted has been checked: the scopes against the mode, and on a sign-in again the same person, workspace and app. It waits up to `waitSeconds` for the browser — at most 120, because a client may not hold a call open longer. APPROVAL_PENDING means they have not finished in the browser yet and the link is still good for the ten minutes a sign-in lasts — call again; do not start another. When the browser is on another machine than this server, the redirect to this machine fails: ask the person to paste the whole address from their browser’s address bar and pass it as `url`, which finishes at once — the same PKCE check applies, and the code in it is useless without the secret this machine kept. The same as `agent-slack workspace add --finish` and `workspace reauth --finish`, with `--url` and `--wait`.
 
 *writes*
 
@@ -321,7 +323,8 @@ Complete a sign-in slack_workspace_add, slack_workspace_reauth or slack_mode_set
 |---|---|---|---|
 | `workspace` | string | no | the workspace the sign-in is for, as `organisation/slack`; a sign-in for any other is refused |
 | `flowId` | string | **yes** | from the call that started the sign-in |
-| `waitSeconds` | integer | no | how long to wait for the browser; 60 |
+| `url` | string | no | the address the browser landed on after approving, pasted back whole; finishes without waiting |
+| `waitSeconds` | number | no | how long to wait for the browser, in seconds: 60 when left out, 0 to look once, at most 120 |
 
 ### `slack_workspace_reauth`
 

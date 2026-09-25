@@ -406,8 +406,56 @@ export interface FinishOptions {
   readonly expectAlias?: string | undefined;
   /** The address-bar URL, pasted back on a machine whose browser is elsewhere. */
   readonly url?: string | undefined;
-  readonly waitSeconds?: number | undefined;
+  /**
+   * How long to wait for the browser, as given — checked here, by {@link checkedWait}, for both surfaces.
+   * Left out, sixty seconds.
+   */
+  readonly waitSeconds?: unknown;
   readonly pollMs?: number | undefined;
+}
+
+/**
+ * The longest one call waits for the browser, by surface.
+ *
+ * At a terminal, the sign-in's own life: nothing can arrive after it has expired. A tool call is held open by a client
+ * that may give up on it well before that — a minute is common — and a call the client abandoned reports nothing, while
+ * one that returns `APPROVAL_PENDING` can simply be made again: the wait leaves the sign-in alone. So a tool waits two
+ * minutes at most, and says so, rather than promising a wait the client may not honour.
+ */
+export const MAX_WAIT_SECONDS = { cli: 600, mcp: 120 } as const;
+
+/**
+ * How long `--finish` or `slack_workspace_finish` waits for the browser, checked rather than coerced.
+ *
+ * `Number(flags.wait) || 60` turned `--wait 0` into sixty seconds, accepted a negative number, and accepted `Infinity`
+ * — an unbounded deadline on a command whose whole job is to return. `0` means what it says: look once and report. One
+ * check for both surfaces, so the tool refuses what the command refuses, with a code rather than a schema's message.
+ */
+export function checkedWait(raw: unknown, surface: 'cli' | 'mcp'): number {
+  const given = raw ?? 60;
+  const seconds = typeof given === 'number' || typeof given === 'string' ? Number(given) : Number.NaN;
+  const most = MAX_WAIT_SECONDS[surface];
+  if (!Number.isFinite(seconds) || seconds < 0 || seconds > most) {
+    throw new CommsError('USAGE', `"${String(given)}" is not a wait`, {
+      hint:
+        surface === 'mcp'
+          ? `A number of seconds from 0 to ${most}: a client may not hold a call open longer. The sign-in stays open for ten minutes, so call slack_workspace_finish again rather than waiting longer.`
+          : `A number of seconds from 0 to ${most}. A sign-in lasts ten minutes, so there is nothing to wait for after that.`,
+    });
+  }
+  return seconds;
+}
+
+/** How the caller finishes this sign-in, in the words of the surface it is using. */
+function finishStep(context: SlackContext, flow: SlackFlow): string {
+  return context.surface === 'mcp'
+    ? `call \`slack_workspace_finish\` with flowId ${flow.flowId}`
+    : `run \`agent-slack workspace ${flow.expect ? `reauth ${flow.alias}` : 'add'} --finish ${flow.flowId}\``;
+}
+
+/** How the caller lists what is connected, in the words of the surface it is using. */
+function listStep(context: SlackContext): string {
+  return context.surface === 'mcp' ? '`slack_workspaces_list`' : '`agent-slack workspace list`';
 }
 
 /**
@@ -417,13 +465,23 @@ export interface FinishOptions {
  * claims it.
  */
 export async function finishSignIn(context: SlackContext, options: FinishOptions): Promise<WorkspaceView> {
+  // Checked before anything is read, as the command always did: a wait that is not one is refused whatever the flow.
+  const waitSeconds = checkedWait(options.waitSeconds, context.surface);
   const flow = await context.flows.get(options.flowId);
   const kind = flow.expect ? 'reauth' : 'add';
+  /*
+   * The refusals name the caller's next step on the caller's surface. A tool told to run `agent-slack … --finish` is
+   * sent looking for a shell it may not have, to take a step its own tool takes — the mistake the posting hints made
+   * first (see `waitingHint` in send.ts).
+   */
   if (options.expectAlias && !(await namesThisFlow(context, flow, options.expectAlias))) {
     throw new CommsError('USAGE', `that sign-in is for "${flow.alias}", not "${options.expectAlias}"`, {
-      hint: `Finish it as \`agent-slack workspace ${kind === 'reauth' ? `reauth ${flow.alias}` : 'add'} --finish ${
-        options.flowId
-      }\`.`,
+      hint:
+        context.surface === 'mcp'
+          ? `Finish it with \`slack_workspace_finish\`, flowId ${options.flowId}, on a server that serves "${flow.alias}".`
+          : `Finish it as \`agent-slack workspace ${kind === 'reauth' ? `reauth ${flow.alias}` : 'add'} --finish ${
+              options.flowId
+            }\`.`,
     });
   }
   if (options.only && kind !== options.only) {
@@ -432,7 +490,7 @@ export async function finishSignIn(context: SlackContext, options: FinishOptions
       `that sign-in is ${kind === 'reauth' ? 're-authorising an existing workspace' : 'a new workspace'}, and this can only finish ${
         options.only === 'add' ? 'a new workspace' : 're-authorising an existing workspace'
       }`,
-      { hint: `Finish it where it was started: \`agent-slack workspace ${kind} --finish ${options.flowId}\`.` },
+      { hint: `Finish it where it was started: ${finishStep(context, flow)}.` },
     );
   }
 
@@ -440,7 +498,7 @@ export async function finishSignIn(context: SlackContext, options: FinishOptions
   if (options.url) {
     code = codeFromUrl(options.url, flow);
   } else {
-    const outcome = await waitForOutcome(context, flow, options);
+    const outcome = await waitForOutcome(context, flow, { ...options, waitSeconds });
     if ('error' in outcome) {
       await context.flows.discard(flow.flowId);
       throw slackDenied(outcome.error, outcome.description);
@@ -465,9 +523,9 @@ export async function finishSignIn(context: SlackContext, options: FinishOptions
 async function waitForOutcome(
   context: SlackContext,
   flow: SlackFlow,
-  options: FinishOptions,
+  options: { waitSeconds: number; pollMs?: number | undefined },
 ): Promise<{ code: string } | { error: string; description?: string | undefined }> {
-  const deadline = context.now().getTime() + (options.waitSeconds ?? 60) * 1000;
+  const deadline = context.now().getTime() + options.waitSeconds * 1000;
   const pollMs = options.pollMs ?? 500;
   for (;;) {
     const outcome = await context.flows.readOutcome(flow.flowId);
@@ -476,9 +534,12 @@ async function waitForOutcome(
       // Not a failure: the person is still reading the consent screen. The flow is left alone so the same
       // `--finish` works when they are done.
       throw new CommsError('APPROVAL_PENDING', 'nobody has finished signing in yet', {
-        hint: `Open the link, approve it in Slack, then run \`agent-slack workspace ${
-          flow.expect ? 'reauth' : 'add'
-        } --finish ${flow.flowId} --wait 60\` again.`,
+        hint:
+          context.surface === 'mcp'
+            ? `Open the link, approve it in Slack, then ${finishStep(context, flow)} again. The link is good until ${flow.expiresAt}.`
+            : `Open the link, approve it in Slack, then run \`agent-slack workspace ${
+                flow.expect ? `reauth ${flow.alias}` : 'add'
+              } --finish ${flow.flowId} --wait 60\` again.`,
         details: { flowId: flow.flowId, expiresAt: flow.expiresAt },
       });
     }
@@ -732,13 +793,13 @@ async function withdrawStaged(secrets: SecretStore, ref: string, original: unkno
 }
 
 /** The workspace a reauth set out to renew, found by its id wherever it now lives — or a refusal. */
-function renewing(config: Config, flow: SlackFlow): { alias: string; account: AccountConfig } {
+function renewing(context: SlackContext, config: Config, flow: SlackFlow): { alias: string; account: AccountConfig } {
   const found = flow.expect ? findById(config, 'account', flow.expect.accountId) : null;
   if (!found || found.account.platform !== 'slack') {
     // The same refusal as the check inside the lock: the account this set out to renew is not the one there now —
     // renewed by another sign-in, or removed.
     throw new CommsError('CONFIG', `"${flow.alias}" changed while this sign-in was being completed`, {
-      hint: `Check it with \`agent-slack workspace list\`, then re-authorise if it is still yours.`,
+      hint: `Check it with ${listStep(context)}, then re-authorise if it is still yours.`,
     });
   }
   return found;
@@ -789,7 +850,7 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
      * starting and finishing renames every workspace, and the reauth should follow its workspace to the new name
      * rather than be refused for using the old one.
      */
-    const existing = flow.expect ? renewing(config, flow) : undefined;
+    const existing = flow.expect ? renewing(context, config, flow) : undefined;
     if (!existing) checkAliasFree(config, flow.alias);
     validateExchange({ token, mode: flow.mode, flow, config, existing });
 
@@ -862,7 +923,7 @@ export async function completeSignIn(context: SlackContext, flowId: string, code
               throw new CommsError('CONFIG', `"${flow.alias}" changed while this sign-in was being completed`, {
                 // `list`, not `show <the name it started with>`: after a migration that name is refused, so the
                 // command in the hint would answer with a second refusal rather than with the workspace.
-                hint: 'Check it with `agent-slack workspace list`, then re-authorise if it is still yours.',
+                hint: `Check it with ${listStep(context)}, then re-authorise if it is still yours.`,
               });
             }
           } else {

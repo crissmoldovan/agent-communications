@@ -1,6 +1,6 @@
 import { CommsError } from '@agentcomms/core';
 import type { SlackContext } from '../context.ts';
-import { appManifestUrl, buildManifest, type InstallMode, type SlackManifest } from '../manifest.ts';
+import { appManifestUrl, buildManifest, INSTALL_MODES, type InstallMode, type SlackManifest } from '../manifest.ts';
 import { requireWorkspace } from './workspaces.ts';
 
 /**
@@ -45,11 +45,25 @@ export function checkedPort(raw: unknown, recorded?: number): number {
   return port;
 }
 
+/**
+ * A mode asked for, checked rather than trusted: `read`, `send`, or left out.
+ *
+ * Here, in the operations, so the command and the tool refuse the same word the same way — with `USAGE` and these
+ * words. A tool's schema listing the two was the only check it had, and a word outside them came back as the SDK's
+ * "Input validation error", with no code for a caller to act on. The CLI's `--mode` has choices too; they refuse first
+ * there, and this is the check every caller reaches.
+ */
+export function modeWanted(value: unknown): InstallMode | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'string' && (INSTALL_MODES as readonly string[]).includes(value)) return value as InstallMode;
+  throw new CommsError('USAGE', `"${String(value)}" is not a mode`, { hint: `One of: ${INSTALL_MODES.join(', ')}.` });
+}
+
 export async function manifestFor(
   context: SlackContext,
-  options: { mode?: InstallMode | undefined; port?: unknown; workspace?: string | undefined },
+  options: { mode?: unknown; port?: unknown; workspace?: string | undefined },
 ): Promise<ManifestResult> {
-  const mode = options.mode ?? 'read';
+  const mode = modeWanted(options.mode) ?? 'read';
   const found =
     options.workspace === undefined ? undefined : requireWorkspace(await context.config(), options.workspace);
   /*

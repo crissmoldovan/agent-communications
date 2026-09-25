@@ -242,8 +242,9 @@ test('an agent may report a mode', async () => {
 
 test('an agent asking for the steps to widen gets them, and nothing changes', async () => {
   /*
-   * The steps as text, for a person who wants to read them first. Making the move is `slack_mode_set`, through a
-   * change a person approves — this tool performs none of it, and says which one does.
+   * The steps as text, for a person who wants to read them first — `workspace mode <name> send` stopped before any
+   * change is asked for. Making the move is `slack_mode_set`, through a change a person approves; this tool performs
+   * none of it, and says which one does.
    */
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'acme', mode: 'read' });
@@ -254,15 +255,22 @@ test('an agent asking for the steps to widen gets them, and nothing changes', as
       arguments: { workspace: 'acme', port: 51234 },
     })) as ToolResult;
     assert.notEqual(result.isError, true);
-    const data = result.structuredContent as { alreadySend: boolean; steps: string[]; note: string };
-    assert.equal(data.alreadySend, false);
+    const data = result.structuredContent as {
+      changed: boolean;
+      appUpdateNeeded: boolean;
+      steps: string[];
+      manifest: { port: number; manifestUrl: string };
+    };
+    assert.equal(data.changed, false, 'it says plainly that it did not do it');
+    assert.equal(data.appUpdateNeeded, true);
     assert.ok(data.steps.length > 0, 'it says what has to happen');
     assert.match(data.steps[0] ?? '', /apps\/A0001\/app-manifest/, 'the app step links the workspace’s own app');
-    assert.match(data.note, /Nothing has changed/, 'and says plainly that it did not do it');
-    assert.match(data.note, /slack_mode_set/, 'and which tool does');
+    assert.match(data.steps.join('\n'), /slack_mode_set/, 'and which tool makes the move');
+    assert.equal(data.manifest.port, 51234);
 
     const account = (await harness.core.config.load()).accounts.acme;
     assert.equal(account?.mode, 'read', 'the workspace is exactly as read-only as it was');
+    assert.deepEqual(await harness.core.approvals.list(), [], 'and nobody was asked anything');
   } finally {
     await close();
   }
@@ -270,16 +278,17 @@ test('an agent asking for the steps to widen gets them, and nothing changes', as
 
 test('narrowing is offered as a path, because Slack never takes a scope back from a token', async () => {
   const harness = await newHarness();
-  await harness.addWorkspace({ alias: 'acme', mode: 'send' });
+  await harness.addWorkspace({ alias: 'acme', mode: 'send', redirectPort: 50123 });
   const { client, close } = await connect(harness);
   try {
     const result = (await client.callTool({
       name: 'slack_mode_narrow',
       arguments: { workspace: 'acme' },
     })) as ToolResult;
-    const data = result.structuredContent as { steps: string[]; note: string };
+    const data = result.structuredContent as { changed: boolean; steps: string[] };
+    assert.equal(data.changed, false);
     assert.ok(data.steps.length > 0);
-    assert.match(data.note, /never removes/i, 'the honest reason it cannot just do it');
+    assert.match(data.steps.join('\n'), /Remove app/, 'the one step that actually takes posting away');
   } finally {
     await close();
   }
@@ -297,14 +306,21 @@ test('the mode steps name the port the workspace signed in with, and never guess
     })) as ToolResult;
     assert.match((narrow.structuredContent as { steps: string[] }).steps.join('\n'), /--port 50123/);
 
-    // No port recorded and none given: the steps say so, rather than naming one a person may not have used.
+    // No port recorded and none given: refused, as `workspace mode unknown send` refuses it, rather than naming one.
     const widen = (await client.callTool({
       name: 'slack_mode_request_send',
       arguments: { workspace: 'unknown' },
     })) as ToolResult;
-    const steps = (widen.structuredContent as { steps: string[] }).steps.join('\n');
-    assert.match(steps, /--port <port>/);
-    assert.doesNotMatch(steps, /51234/);
+    assert.equal(widen.isError, true);
+    const error = (widen.structuredContent as { error: { code: string; message: string } }).error;
+    assert.equal(error.code, 'USAGE');
+    assert.match(error.message, /loopback port is needed/);
+
+    // The report names no port it does not have: its steps say `<port>`, as the command's do.
+    const report = (await client.callTool({ name: 'slack_mode', arguments: { workspace: 'unknown' } })) as ToolResult;
+    const toSend = (report.structuredContent as { toSend: string[] }).toSend.join('\n');
+    assert.match(toSend, /--port <port>/);
+    assert.doesNotMatch(toSend, /51234/);
   } finally {
     await close();
   }

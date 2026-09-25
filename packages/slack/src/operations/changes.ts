@@ -11,7 +11,7 @@ import {
 } from '@agentcomms/core';
 import type { SlackContext } from '../context.ts';
 import { type InstallMode, parseMode } from '../manifest.ts';
-import { checkedPort, type ManifestResult, manifestFor } from './manifest.ts';
+import { checkedPort, type ManifestResult, manifestFor, modeWanted } from './manifest.ts';
 import { type ModeReport, modeReport, narrowingSteps, wideningSteps } from './mode.ts';
 import { type ListenerEntry, type StartedSignIn, startSignIn } from './signin.ts';
 import { checkAliasFree, type RemovedWorkspace, removeWorkspace, requireWorkspace } from './workspaces.ts';
@@ -83,7 +83,8 @@ function postingSignIn(alias: string, clientId?: string): string {
 
 export interface ConnectInput extends SignInSurface {
   readonly alias: string;
-  readonly mode: InstallMode;
+  /** `read` or `send`, checked here: see `modeWanted`. */
+  readonly mode: unknown;
   /** The app's Client ID, from its Basic Information page. Not a secret. */
   readonly clientId?: string | undefined;
   /** The loopback port in the app's manifest; checked, never guessed. */
@@ -122,6 +123,8 @@ function arriving(mode: InstallMode): AccountConfig {
  * travels on the flow to the write at the end, which `ConfigStore.update` refuses without it.
  */
 export function connectWorkspace(context: SlackContext, input: ConnectInput): GatedChange<StartedSignIn> {
+  // Checked once, before anything is read: a word that is not a mode is the caller's mistake whatever is connected.
+  const mode = modeWanted(input.mode) ?? 'read';
   const checked = (config: Config): { clientId: string; port: number } => {
     checkAliasFree(config, input.alias);
     if (!input.clientId) {
@@ -135,23 +138,21 @@ export function connectWorkspace(context: SlackContext, input: ConnectInput): Ga
     plan: (config) => {
       const { clientId } = checked(config);
       const after = structuredClone(config);
-      after.accounts = { ...after.accounts, [input.alias]: arriving(input.mode) };
+      after.accounts = { ...after.accounts, [input.alias]: arriving(mode) };
       return {
         account: input.alias,
         before: config,
         after,
         summary:
-          input.mode === 'send'
-            ? `Connect ${input.alias} able to post to Slack`
-            : `Connect ${input.alias} to read Slack`,
-        effects: input.mode === 'send' ? [postingSignIn(input.alias, clientId)] : [],
+          mode === 'send' ? `Connect ${input.alias} able to post to Slack` : `Connect ${input.alias} to read Slack`,
+        effects: mode === 'send' ? [postingSignIn(input.alias, clientId)] : [],
       };
     },
     apply: async (consent, request) => {
       const { clientId, port } = checked(request.before);
       return startSignIn(context, {
         alias: input.alias,
-        mode: input.mode,
+        mode,
         clientId,
         port,
         detached: input.detached,
@@ -166,8 +167,11 @@ export function connectWorkspace(context: SlackContext, input: ConnectInput): Ga
 
 export interface ReauthInput extends SignInSurface {
   readonly alias: string;
-  /** The access to ask for. Left out, the workspace's own: renewing a grant never quietly changes what it can do. */
-  readonly mode?: InstallMode | undefined;
+  /**
+   * The access to ask for, checked here: see `modeWanted`. Left out, the workspace's own: renewing a grant never quietly
+   * changes what it can do.
+   */
+  readonly mode?: unknown;
   /** The loopback port; the one the workspace last signed in with when left out. */
   readonly port?: unknown;
 }
@@ -186,7 +190,7 @@ function reauthTarget(config: Config, input: ReauthInput) {
     found,
     clientId,
     was,
-    mode: input.mode ?? was,
+    mode: modeWanted(input.mode) ?? was,
     port: checkedPort(input.port, found.account.redirectPort),
   };
 }
@@ -200,6 +204,8 @@ function reauthTarget(config: Config, input: ReauthInput) {
  * rather than recorded under this name.
  */
 export function reauthWorkspace(context: SlackContext, input: ReauthInput): GatedChange<StartedSignIn> {
+  // Refused before the workspace is looked up, as `connectWorkspace` refuses it.
+  modeWanted(input.mode);
   return {
     plan: (config) => {
       const { found, was, mode } = reauthTarget(config, input);
@@ -265,7 +271,15 @@ export type ModeSetPlan =
   | { readonly kind: 'report'; readonly report: ModeReport }
   | { readonly kind: 'steps'; readonly result: ModeSteps }
   | { readonly kind: 'app-update-needed'; readonly result: AppUpdateNeeded }
-  | { readonly kind: 'change'; readonly change: GatedChange<StartedSignIn> };
+  | {
+      readonly kind: 'change';
+      readonly change: GatedChange<StartedSignIn>;
+      /**
+       * The same move as steps, for a caller that only reports them: `slack_mode_request_send`, which changes nothing,
+       * returns this where the command would go on to ask for the change.
+       */
+      readonly steps: ModeSteps;
+    };
 
 export interface ModeSetOptions extends SignInSurface {
   readonly port?: unknown;
@@ -292,9 +306,10 @@ export interface ModeSetOptions extends SignInSurface {
 export async function planModeSet(
   context: SlackContext,
   alias: string,
-  target: string | undefined,
+  wanted: unknown,
   options: ModeSetOptions,
 ): Promise<ModeSetPlan> {
+  const target = modeWanted(wanted);
   const found = requireWorkspace(await context.config(), alias);
   const asked = options.port === undefined ? undefined : checkedPort(options.port);
   const report = modeReport(found.alias, found.account, asked);
@@ -305,9 +320,6 @@ export async function planModeSet(
       knowsItsApp: found.account.oauthClientId !== undefined,
     });
     return { kind: 'steps', result: { alias: found.alias, mode: report.mode, changed: false, steps } };
-  }
-  if (target !== 'send') {
-    throw new CommsError('USAGE', `"${target}" is not a mode`, { hint: 'The modes are `read` and `send`.' });
   }
   if (!found.account.oauthClientId) {
     throw new CommsError('CONFIG', `"${found.alias}" does not record which Slack app it was connected through`, {
@@ -341,6 +353,12 @@ export async function planModeSet(
       detached: options.detached,
       listenerCommand: options.listenerCommand,
     }),
+    steps: {
+      alias: found.alias,
+      mode: report.mode,
+      changed: false,
+      steps: wideningSteps(found.alias, port, found.account.appId),
+    },
   };
 }
 

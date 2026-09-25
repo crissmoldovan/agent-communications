@@ -41,13 +41,10 @@ import {
 } from '../operations/changes.ts';
 import { runDoctor } from '../operations/doctor.ts';
 import { createDraft, deleteOwnDraft, ownDraft } from '../operations/drafts.ts';
-import { gateDepsFor } from '../operations/gate.ts';
 import type { ProbeFetch } from '../operations/identity.ts';
 import { checkedPort, manifestFor } from '../operations/manifest.ts';
-import { NameBook } from '../operations/people.ts';
-import { react, sendPost } from '../operations/post.ts';
+import { prepareDraftPost, react, sendPost } from '../operations/post.ts';
 import { listChannels, listFiles, listPeople, readChannel, readThread, searchMessages } from '../operations/read.ts';
-import { preparePost } from '../operations/send.ts';
 import { openWorkspace } from '../operations/session.ts';
 import { finishSignIn, type ListenerEntry, runSignInListener, type StartedSignIn } from '../operations/signin.ts';
 import { checkAliasFree, listWorkspaces, requireWorkspace, showWorkspace } from '../operations/workspaces.ts';
@@ -224,24 +221,6 @@ configuration problem.`,
 
   /** `--port`, else the port the workspace last signed in with, which is the one its app's redirect names. */
   const portOf = (flags: Options, recorded?: number): number => checkedPort(flags.port, recorded);
-
-  /**
-   * How long `--finish` waits for the browser, checked rather than coerced.
-   *
-   * `Number(flags.wait) || 60` turned `--wait 0` into sixty seconds, accepted a negative number, and accepted
-   * `Infinity` — an unbounded deadline on a command whose whole job is to return. `0` now means what it says:
-   * look once and report. The ceiling is the flow's own life, since nothing can arrive after it has expired.
-   */
-  const waitOf = (flags: Options): number => {
-    const raw = flags.wait ?? '60';
-    const seconds = Number(raw);
-    if (!Number.isFinite(seconds) || seconds < 0 || seconds > 600) {
-      throw new CommsError('USAGE', `"${String(raw)}" is not a wait`, {
-        hint: 'A number of seconds from 0 to 600. A sign-in lasts ten minutes, so there is nothing to wait for after that.',
-      });
-    }
-    return seconds;
-  };
 
   /**
    * `--limit` and `--page`, checked as the MCP tools check them.
@@ -439,7 +418,8 @@ configuration problem.`,
           // Optional here, so bound only when it was given rather than invented from the flow.
           ...(alias ? { expectAlias: alias } : {}),
           ...(flags.url ? { url: String(flags.url) } : {}),
-          waitSeconds: waitOf(flags),
+          // Checked in `finishSignIn`, as `slack_workspace_finish` is: see `checkedWait`.
+          waitSeconds: flags.wait,
         });
         writeResult(view, output(), () => renderConnected(view, false, options.color), streams);
         return;
@@ -589,7 +569,8 @@ configuration problem.`,
           // The caller named a workspace; a flow id names one too, and they have to be the same one.
           expectAlias: alias,
           ...(flags.url ? { url: String(flags.url) } : {}),
-          waitSeconds: waitOf(flags),
+          // Checked in `finishSignIn`, as `slack_workspace_finish` is: see `checkedWait`.
+          waitSeconds: flags.wait,
         });
         writeResult(view, output(), () => renderConnected(view, true, options.color), streams);
         return;
@@ -775,10 +756,6 @@ configuration problem.`,
 
   // ── Drafting and posting ────────────────────────────────────────────────────────────────────────────────────
 
-  /** The gate's dependencies, from the one function the MCP server uses too — see `gateDepsFor`. */
-  const gateDeps = (context: SlackContext, alias: string) =>
-    gateDepsFor(context, alias, { fetch: deps.read, baseUrl: deps.slackBaseUrl });
-
   const draft = program.command('draft').description('compose and keep messages locally; nothing reaches Slack');
 
   workspaceOption(draft.command('create'))
@@ -868,10 +845,13 @@ configuration problem.`,
     .requiredOption('--draft <draftId>', 'the draft to prepare')
     .action(
       act(async (context, options, flags: Options) => {
-        const gate = await gateDeps(context, String(flags.workspace));
-        const store = openDraftStore(context.core.paths.stateDir, context.now);
-        const target = await ownDraft(store, gate.accountId, String(flags.draft));
-        const prepared = await preparePost(gate, target, new NameBook());
+        // The same operation as `slack_post_prepare` given a `draftId`: one draft, one preview, from either surface.
+        const prepared = await prepareDraftPost(
+          context,
+          String(flags.workspace),
+          { draftId: String(flags.draft) },
+          { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+        );
         writeResult(prepared, output(), (data) => renderChannelPreview(data.preview), streams);
       }),
     );
