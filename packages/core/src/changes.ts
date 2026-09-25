@@ -469,8 +469,14 @@ const SETTING_LABELS: Readonly<Record<string, string>> = {
   'secrets.store': 'where credentials are kept',
 };
 
-/** What the loosening means for the person, in their terms. */
-function meaning(field: string, after: SettingValue): string {
+/**
+ * What the loosening means for the person, in their terms.
+ *
+ * `scope` is where the setting lives — a mailbox, an account, or (undefined) the whole configuration — because the
+ * same words do not fit both. The change policy's line said "loosen its settings" for the default too, where there is
+ * no "it": the default governs the whole configuration and every account without a change policy of its own.
+ */
+function meaning(field: string, after: SettingValue, scope: 'inboxes' | 'accounts' | undefined): string {
   switch (field) {
     case 'sendPolicy':
     case 'defaults.sendPolicy':
@@ -478,8 +484,9 @@ function meaning(field: string, after: SettingValue): string {
         ? 'a yes in the chat will be enough to send'
         : 'sending will be possible, with a code typed at a terminal';
     case 'changePolicy':
+      return `a yes in the chat will be enough to loosen this ${scope === 'inboxes' ? 'mailbox' : 'account'}’s settings`;
     case 'defaults.changePolicy':
-      return 'a yes in the chat will be enough to loosen its settings';
+      return 'a yes in the chat will be enough to loosen settings for the whole configuration, and for every mailbox or account without a change policy of its own';
     case 'mode':
       return 'it will be able to send, not only read';
     case 'internalDomains':
@@ -523,7 +530,7 @@ function describeLoosening(loosening: Loosening): string {
   const what = scoped
     ? `${scoped[2]} ${label}${loosening.id === undefined ? ' (connected by this change)' : ''}`
     : label;
-  const words = meaning(field, loosening.after);
+  const words = meaning(field, loosening.after, scoped ? (scoped[1] as 'inboxes' | 'accounts') : undefined);
   const line = `${what}: ${shown(loosening.before)} → ${shown(loosening.after)}${words ? ` — ${words}` : ''}`;
   // Every part is escaped and cut to one line: an effect or a value can be whatever a caller passed, and this is
   // printed at the terminal of the person about to type a code — the one place a control sequence would do most harm.

@@ -405,7 +405,12 @@ test('loosening the change policy itself is approved under the policy in force b
     { surface: 'mcp' },
   );
   assert.equal(prepared.policy, 'confirm', 'confirm → chat is asked under confirm, not under the chat it asks for');
-  assert.match(prepared.preview, /default change policy: confirm → chat — a yes in the chat will be enough/);
+  // It said "loosen its settings" here, with no "it" for the default to be: say what the default governs.
+  assert.match(
+    prepared.preview,
+    /default change policy: confirm → chat — a yes in the chat will be enough to loosen settings for the whole configuration, and for every mailbox or account without a change policy of its own/,
+  );
+  assert.doesNotMatch(prepared.preview, /its settings/);
   await assert.rejects(
     claimChange(core, prepared.approvalId, { before, after }, { surface: 'mcp' }),
     refusedWith('APPROVAL_PENDING', /at a terminal first/),
@@ -415,6 +420,30 @@ test('loosening the change policy itself is approved under the policy in force b
   await assert.rejects(
     prepareChange(core, { before: after, after: before, summary: 'Back to confirm' }, { surface: 'mcp' }),
     refusedWith('USAGE', /nothing to approve/),
+  );
+});
+
+test('a mailbox’s or an account’s own change policy, loosened, names what it lets a yes in the chat change', async () => {
+  const { core } = coreWith({
+    inboxes: { 'acme/gmail': inbox(MAIL, { changePolicy: 'confirm' }) },
+    accounts: { 'acme/slack': account(ACME, { changePolicy: 'confirm' }) },
+  });
+  const before = await core.config.load();
+  const after = structuredClone(before);
+  (after.inboxes['acme/gmail'] as InboxConfig).changePolicy = 'chat';
+  (after.accounts['acme/slack'] as AccountConfig).changePolicy = 'chat';
+  const prepared = await prepareChange(
+    core,
+    { before, after, summary: 'Approve changes to both in chat' },
+    { surface: 'cli' },
+  );
+  assert.match(
+    prepared.preview,
+    /acme\/gmail change policy: confirm → chat — a yes in the chat will be enough to loosen this mailbox’s settings/,
+  );
+  assert.match(
+    prepared.preview,
+    /acme\/slack change policy: confirm → chat — a yes in the chat will be enough to loosen this account’s settings/,
   );
 });
 
