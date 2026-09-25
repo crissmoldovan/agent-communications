@@ -698,7 +698,7 @@ function terminal(answer: (challenge: string) => string) {
 }
 
 test('agentcomms approve: a person reads the change and types the code; Enter cancels it', async () => {
-  const { approveChangeAtTerminal } = await import('../src/cli.ts');
+  const { approveChangeAtTerminal } = await import('../src/change-flow.ts');
   const { core } = coreWith({ defaults: { changePolicy: 'confirm' }, accounts: { 'acme/slack': account(ACME) } });
   const spec = await widening(core);
 

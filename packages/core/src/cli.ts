@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { access, constants, stat } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { publicView } from './approvals.ts';
-import { beginChangeApproval, finishChangeApproval, recordChangeApprovalRefused, revokeChange } from './changes.ts';
+import { approveChangeAtTerminal } from './change-flow.ts';
 import {
   agentMarker,
   canPrompt,
@@ -11,7 +11,6 @@ import {
   defaultStreams,
   type OutputOptions,
   paint,
-  refuseUnlessPerson,
   requirePerson,
   runCommand,
   type Streams,
@@ -770,52 +769,6 @@ export async function confirmLoosening(
 
 export function needsYes(env: NodeJS.ProcessEnv, streams: Streams, options: { json?: boolean }): boolean {
   return agentMarker(env) !== null || !canPrompt(env, streams, options);
-}
-
-/**
- * Approves a configuration change at a terminal, the way a person approves a send: read the preview, type the code.
- *
- * Under the `confirm` change policy this is what "a person approved it" means, so it is the one command here an agent
- * may not run for the user, and it is refused by the same gate every other loosening goes through. A shell agent can
- * get past that gate — `script -q /dev/null` makes any command see a terminal — so it is a speed bump against the
- * ordinary case, as it is for every approval, not a boundary.
- *
- * It approves and changes nothing. What prepared the change makes it, by claiming the approval once; and a refusal to
- * even ask is recorded, so the audit trail shows an agent that tried.
- *
- * Exported so the whole command can be tested with streams that are a terminal: a subprocess test cannot have one.
- */
-export async function approveChangeAtTerminal(
-  core: Core,
-  approvalId: string,
-  env: NodeJS.ProcessEnv,
-  output: { json?: boolean | undefined; color: boolean },
-  streams: Streams = defaultStreams,
-): Promise<{ approvalId: string; state: 'approved' | 'cancelled' }> {
-  try {
-    refuseUnlessPerson(env, streams, {
-      refusedToAgent: 'only a person can approve a change, not an agent',
-      refusedWithoutTerminal: 'approving a change needs an interactive terminal',
-      command: `agentcomms approve ${approvalId}`,
-      color: output.color,
-      json: output.json,
-    });
-  } catch (error) {
-    await recordChangeApprovalRefused(core, approvalId, error, { surface: 'cli' });
-    throw error;
-  }
-  const prompt = await beginChangeApproval(core, approvalId, { surface: 'cli' });
-  streams.stdout.write(`${prompt.preview}\n\n`);
-  const answer = await ask(
-    streams,
-    `Type ${paint(output.color, 'bold', prompt.challenge)} to approve this change, or press Enter to cancel: `,
-  );
-  if (!answer.trim()) {
-    await revokeChange(core, approvalId, 'cancelled at the terminal', { surface: 'cli' });
-    return { approvalId, state: 'cancelled' };
-  }
-  await finishChangeApproval(core, approvalId, answer, { surface: 'cli' });
-  return { approvalId, state: 'approved' };
 }
 
 /** Asks one question at the terminal and returns what was typed. */
