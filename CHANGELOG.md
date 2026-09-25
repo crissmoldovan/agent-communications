@@ -65,7 +65,9 @@ person through the whole setup from a conversation; there are now sixteen skills
 **A server pinned to one mailbox or workspace keeps to it.** Given another account's approval id, a pinned server
 voided it — so an agent talking to the `work` server could cancel an approval waiting for `home`. It is now refused
 before it is touched. A pinned `gmail_doctor` answers for its own mailbox only, and a pinned `gmail_send_list`
-refuses another mailbox instead of answering for its own. A Slack workspace keeps its id when it signs in again, so a
+refuses another mailbox instead of answering for its own, as do the tools that take `inboxes` — `gmail_search`,
+`gmail_attachments_find`, `gmail_contacts_search` and `gmail_followups` used to search the pinned mailbox whatever
+they were asked. A Slack workspace keeps its id when it signs in again, so a
 server pinned to it no longer stops working after `workspace reauth`; drafts and approvals waiting on it survive the
 reauth too.
 
@@ -106,6 +108,11 @@ the words it takes, as the command refuses it, rather than with the MCP library'
 and `gmail_export` refuse a format other than `md`, `json` or `eml`; another word used to write Markdown under that
 extension. `--wait` takes whole seconds from 0 to 600 (`--wait abc` waited for ever), and a wait that outlives the
 sign-in stops when the sign-in expires, as `gmail_inbox_finish` does, instead of saying the link was still good.
+
+Every number option on the three CLIs takes a whole number written in digits, in its range, and anything else is
+refused as `USAGE` naming the option and the range: `--limit 1e2` used to be read as 1, `--port abc` started a
+sign-in on a random port, and `followups --older-than 3d` was read as 3. The Gmail tools refuse an out-of-range number
+the same way, where they used to clamp it — `gmail_search` with `limit: 500` searched 50 without saying so.
 
 `agentcomms names migrate --yes` is refused (exit 64): the rename is shown and approved like any other change.
 `agent-slack workspace mode <name> send` now stops at the Slack app step until you pass `--app-updated`, so a
