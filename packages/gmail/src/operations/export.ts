@@ -4,6 +4,7 @@ import { CommsError, createUniqueFile, relativeSubpath, resolveInsideRoot, safeF
 import type { GmailContext } from '../context.ts';
 import { downloadsRoot } from './attachments.ts';
 import { type ReadMessageResult, type ReadThreadResult, readMessage, readThread } from './read.ts';
+import { oneOf } from './words.ts';
 
 /**
  * Writing a message or a thread to a file.
@@ -15,6 +16,9 @@ import { type ReadMessageResult, type ReadThreadResult, readMessage, readThread 
 
 export type ExportFormat = 'md' | 'eml' | 'json';
 
+/** The formats a message or thread can be written in, in the order they are offered. */
+export const EXPORT_FORMATS: readonly ExportFormat[] = ['md', 'json', 'eml'];
+
 export interface ExportResult {
   path: string;
   format: ExportFormat;
@@ -25,7 +29,8 @@ export interface ExportResult {
 }
 
 export interface ExportOptions {
-  format?: ExportFormat | undefined;
+  /** md, json or eml, as given; checked by `exportMail`. Markdown when left out. */
+  format?: string | undefined;
   /** Export the whole thread the message belongs to. */
   thread?: boolean | undefined;
   /** A folder inside the downloads root. */
@@ -75,7 +80,8 @@ export async function exportMail(
   id: string,
   options: ExportOptions = {},
 ): Promise<ExportResult> {
-  const format = options.format ?? 'md';
+  // Checked before anything is read: a word that is not a format used to be written out as Markdown under its name.
+  const format = oneOf(options.format, EXPORT_FORMATS, 'an export format') ?? 'md';
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'read');
 

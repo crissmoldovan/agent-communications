@@ -14,7 +14,6 @@ import {
   type OutputOptions,
   paint,
   runCommand,
-  type StoreKind,
   type Streams,
   serverInstallChange,
   serverPruneChange,
@@ -26,12 +25,20 @@ import { GmailContext, type GmailContextOptions } from '../context.ts';
 import type { Launcher, SupportedClient } from '../mcp/install.ts';
 import { listLabels, listSendAs, threadTimeline } from '../operations/analyse.ts';
 import { downloadAttachments, findAttachments } from '../operations/attachments.ts';
-import { clientAddChange, clientList, clientRemoveChange } from '../operations/clients.ts';
+import { clientAddChange, clientList, clientRemoveChange, STORE_KINDS } from '../operations/clients.ts';
 import { confirmClientAddChange, listConfirmClients, removeConfirmClient } from '../operations/confirm-clients.ts';
-import { followUps, searchContacts } from '../operations/contacts.ts';
+import { FOLLOW_UP_DIRECTIONS, followUps, searchContacts } from '../operations/contacts.ts';
 import { doctor } from '../operations/doctor.ts';
-import { createDraft, deleteDraft, getDraft, listDrafts, replyDraft, updateDraft } from '../operations/drafts.ts';
-import { exportMail } from '../operations/export.ts';
+import {
+  createDraft,
+  deleteDraft,
+  getDraft,
+  listDrafts,
+  REPLY_MODES,
+  replyDraft,
+  updateDraft,
+} from '../operations/drafts.ts';
+import { EXPORT_FORMATS, exportMail } from '../operations/export.ts';
 import { inboxImportChange } from '../operations/import-legacy.ts';
 import {
   inboxList,
@@ -330,7 +337,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .command('add <path>')
     .description('register a Desktop OAuth client JSON downloaded from Google Cloud (needs a change approval)')
     .option('--name <name>', 'register it under this name', 'default')
-    .addOption(new Option('--store <store>', 'where secrets are kept (first time only)').choices(['keychain', 'file']))
+    .addOption(new Option('--store <store>', 'where secrets are kept (first time only)').choices([...STORE_KINDS]))
     .option('--move', 'delete the downloaded file once the secret is stored', false)
     .option('--replace', 'rotate the secret of the client already registered under this name', false)
     .option('--no-probe', 'do not check the credentials with Google first')
@@ -340,7 +347,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         const change = clientAddChange(context, {
           path,
           name: String(options.name ?? 'default'),
-          store: options.store as StoreKind | undefined,
+          store: options.store === undefined ? undefined : String(options.store),
           move: Boolean(options.move),
           replace: Boolean(options.replace),
           noProbe: options.probe === false,
@@ -554,7 +561,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     )
     .option('--dir <path>', 'where that server keeps its files', '~/.gmail-mcp')
     .option('--name <name>', 'register its OAuth client under this name', 'imported')
-    .addOption(new Option('--store <store>', 'where secrets are kept (first time only)').choices(['keychain', 'file']))
+    .addOption(new Option('--store <store>', 'where secrets are kept (first time only)').choices([...STORE_KINDS]))
     .option('--dry-run', 'say what would be imported, and change nothing', false)
     .option(
       '--rename <old=new>',
@@ -573,7 +580,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         const change = inboxImportChange(context, {
           dir: options.dir ? String(options.dir) : undefined,
           clientName: options.name ? String(options.name) : undefined,
-          store: options.store as StoreKind | undefined,
+          store: options.store === undefined ? undefined : String(options.store),
           dryRun: Boolean(options.dryRun),
           renames: Array.isArray(options.rename) ? options.rename.map(String) : [],
         });
@@ -767,7 +774,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .command('followups')
     .description('conversations waiting on somebody')
     .option('--inbox <alias...>', 'these mailboxes (default: all)')
-    .addOption(new Option('--direction <who>', 'who is being waited on').choices(['them', 'me']))
+    .addOption(new Option('--direction <who>', 'who is being waited on').choices([...FOLLOW_UP_DIRECTIONS]))
     .option('--older-than <days>', 'only threads quiet for this long', (value) => Number.parseInt(value, 10))
     .option('--lookback <days>', 'how far back to look', (value) => Number.parseInt(value, 10))
     .option('--limit <number>', 'how many rows', (value) => Number.parseInt(value, 10))
@@ -775,7 +782,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       act(async (context, globalOptions, options: Options) => {
         const result = await followUps(context, {
           inboxes: options.inbox as string[] | undefined,
-          direction: options.direction as 'them' | 'me' | undefined,
+          direction: options.direction === undefined ? undefined : String(options.direction),
           olderThanDays: options.olderThan === undefined ? undefined : Number(options.olderThan),
           lookbackDays: options.lookback === undefined ? undefined : Number(options.lookback),
           limit: options.limit === undefined ? undefined : Number(options.limit),
@@ -789,14 +796,14 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .description('write a message or a thread to a file, to read without filling the conversation')
     .requiredOption('--inbox <alias>', 'which mailbox')
     .option('--thread', 'export the whole conversation', false)
-    .addOption(new Option('--format <format>', 'md, json or eml').choices(['md', 'json', 'eml']))
+    .addOption(new Option('--format <format>', 'md, json or eml').choices([...EXPORT_FORMATS]))
     .option('--out <subpath>', 'a folder inside the downloads root')
     .option('--quoted', 'keep quoted history', false)
     .action(
       act(async (context, _globalOptions, id: string, options: Options) => {
         const result = await exportMail(context, String(options.inbox), id, {
           thread: Boolean(options.thread),
-          format: options.format as 'md' | 'json' | 'eml' | undefined,
+          format: options.format === undefined ? undefined : String(options.format),
           out: options.out ? String(options.out) : undefined,
           includeQuoted: Boolean(options.quoted),
         });
@@ -829,13 +836,13 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
 
   withDraftOptions(draft.command('reply <messageId>').description('reply, reply to all, or forward'))
     .requiredOption('--inbox <alias>', 'which mailbox')
-    .addOption(new Option('--mode <mode>', 'how to answer').choices(['reply', 'reply_all', 'forward']))
+    .addOption(new Option('--mode <mode>', 'how to answer').choices([...REPLY_MODES]))
     .option('--to <address...>', 'who it goes to (a forward needs this; a reply computes it)')
     .action(
       act(async (context, globalOptions, messageId: string, options: Options) => {
         const result = await replyDraft(context, String(options.inbox), messageId, {
           ...(await draftInput(options)),
-          mode: options.mode as 'reply' | 'reply_all' | 'forward' | undefined,
+          mode: options.mode === undefined ? undefined : String(options.mode),
           quote: options.quote !== false,
         });
         writeResult(result, output(), (data) => renderDraft(data, globalOptions.color), streams);
@@ -1421,7 +1428,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
      * again with `--store file` — a flag `setup` did not accept. The instruction was correct and impossible to
      * follow, in the one command whose whole purpose is to be where a new install starts.
      */
-    .addOption(new Option('--store <store>', 'where secrets are kept (first time only)').choices(['keychain', 'file']))
+    .addOption(new Option('--store <store>', 'where secrets are kept (first time only)').choices([...STORE_KINDS]))
     .option('--move', 'delete the downloaded client JSON once its secret is stored', false)
     /*
      * Parity with `mcp install`, which has had this since the start. Without it `setup` could only ever register
@@ -1525,7 +1532,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
                 clientAddChange(context, {
                   path,
                   name: 'desktop',
-                  ...(options.store ? { store: String(options.store) as 'keychain' | 'file' } : {}),
+                  ...(options.store ? { store: String(options.store) } : {}),
                   ...(options.move === true ? { move: true } : {}),
                 }),
                 options.approval,
@@ -1753,7 +1760,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             clientAddChange(context, {
               path,
               name: 'desktop',
-              ...(options.store ? { store: String(options.store) as 'keychain' | 'file' } : {}),
+              ...(options.store ? { store: String(options.store) } : {}),
               ...(options.move === true ? { move: true } : {}),
             }),
             options.approval,

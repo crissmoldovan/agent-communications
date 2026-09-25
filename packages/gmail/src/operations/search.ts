@@ -14,6 +14,7 @@ import { headerValue, readParts } from '../domain/mime.ts';
 import { compileQuery } from '../domain/query.ts';
 import type { GmailTransport, RawMessage } from '../gmail-api/transport.ts';
 import { taintExclusions } from './read.ts';
+import { oneOf } from './words.ts';
 
 /**
  * Searching across mailboxes.
@@ -26,6 +27,9 @@ import { taintExclusions } from './read.ts';
  */
 
 export type SearchKind = 'threads' | 'messages';
+
+/** What a search can return rows of. */
+export const SEARCH_KINDS: readonly SearchKind[] = ['threads', 'messages'];
 
 export interface SearchRow {
   inbox: string;
@@ -82,7 +86,8 @@ export interface SearchOptions {
   query: string;
   /** Aliases, or `all`. */
   inboxes?: string[] | 'all' | undefined;
-  kind?: SearchKind | undefined;
+  /** threads or messages, as given; checked by `search`. Threads when left out. */
+  kind?: string | undefined;
   limit?: number | undefined;
   cursor?: string | undefined;
   includeSpamTrash?: boolean | undefined;
@@ -292,8 +297,9 @@ export async function resolveInboxes(
 }
 
 export async function search(context: GmailContext, options: SearchOptions): Promise<SearchResult> {
+  // Checked before anything is read, so a word that is not a kind is refused the same way from either surface.
+  const kind = oneOf(options.kind, SEARCH_KINDS, 'a kind of result') ?? 'threads';
   const config = await context.config();
-  const kind = options.kind ?? 'threads';
   const limit = Math.min(Math.max(1, options.limit ?? DEFAULT_LIMIT), MAX_LIMIT);
   const aliases = await resolveInboxes(context, options.inboxes);
   const compiled = compileQuery(options.query, { timezone: config.defaults.timezone });

@@ -107,7 +107,7 @@ Search one or more mailboxes with Gmail search syntax (from:, subject:, has:atta
 |---|---|---|---|
 | `query` | string | **yes** | Gmail search syntax |
 | `inboxes` | any | no | mailbox names, or "all"; defaults to all |
-| `kind` | `threads` \\| `messages` | no | threads (default) or individual messages |
+| `kind` | string | no | threads (the default) or messages, for individual messages |
 | `limit` | integer | no | rows to return, 1–50 (default 20) |
 | `cursor` | string | no | continue a previous search |
 | `includeSpamTrash` | boolean | no |  |
@@ -206,7 +206,7 @@ Conversations waiting on somebody: threads where the user spoke last and nobody 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `inboxes` | any | no |  |
-| `direction` | `them` \\| `me` | no | who is being waited on; "them" by default |
+| `direction` | string | no | who is being waited on: them (the default), or me |
 | `olderThanDays` | integer | no |  |
 | `lookbackDays` | integer | no |  |
 | `limit` | integer | no |  |
@@ -222,7 +222,7 @@ Write a message or a whole thread to a file under the downloads folder, as Markd
 | `inbox` | string | **yes** | which mailbox, by the name it was connected under (there is no default) |
 | `id` | string | **yes** | a message id, or a thread id with thread: true |
 | `thread` | boolean | no |  |
-| `format` | `md` \\| `json` \\| `eml` | no |  |
+| `format` | string | no | md (the default), json, or eml — the message as it arrived, for one message only |
 | `out` | string | no | a folder inside the downloads root |
 | `includeQuoted` | boolean | no |  |
 
@@ -350,7 +350,7 @@ Copy the mailboxes another Gmail MCP server set up (@artymclabin/gmail-mcp and t
 |---|---|---|---|
 | `dir` | string | no | where that server keeps its files; ~/.gmail-mcp by default |
 | `name` | string | no | the name to register its OAuth client under; "imported" |
-| `store` | `keychain` \\| `file` | no | where secrets are kept, the first time only |
+| `store` | string | no | where secrets are kept, the first time only: keychain or file |
 | `renames` | string[] | no | `<legacy name>=<name>`, for any that should be named otherwise |
 | `dryRun` | boolean | no | say what would be imported, and change nothing |
 | `approvalId` | string | no | the approvalId an earlier call returned for this change, once the user has approved it |
@@ -377,7 +377,7 @@ Register the Google Cloud Desktop OAuth client every mailbox signs in through, f
 |---|---|---|---|
 | `path` | string | **yes** | where the downloaded client JSON is on this machine, e.g. ~/Downloads/client_secret_….json |
 | `name` | string | no | the name to register it under; "default" |
-| `store` | `keychain` \\| `file` | no | where secrets are kept, the first time only |
+| `store` | string | no | where secrets are kept, the first time only: keychain or file |
 | `move` | boolean | no | delete the downloaded file once its secret is stored |
 | `replace` | boolean | no | rotate the secret of the client already registered under the name |
 | `probe` | boolean | no | check the credentials with Google first; true by default |
@@ -435,7 +435,7 @@ Draft an answer to a message, or forward it. The recipients are computed from th
 |---|---|---|---|
 | `inbox` | string | **yes** | which mailbox, by the name it was connected under (there is no default) |
 | `messageId` | string | **yes** | the message being answered |
-| `mode` | `reply` \\| `reply_all` \\| `forward` | no | default: reply |
+| `mode` | string | no | reply (the default), reply_all or forward |
 | `quote` | boolean | no | quote the original below your text (default true); a forward without it is not a forward |
 | `to` | string[] | no | required for a forward; computed for a reply |
 | `cc` | string[] | no |  |

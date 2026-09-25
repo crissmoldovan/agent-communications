@@ -542,7 +542,10 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       inputSchema: z.object({
         query: z.string().min(1).describe('Gmail search syntax'),
         inboxes: mcpInboxes().optional().describe('mailbox names, or "all"; defaults to all'),
-        kind: z.enum(['threads', 'messages']).optional().describe('threads (default) or individual messages'),
+        // Every word argument here is a string the operation checks, as `sendPolicy` and `tier` are: a word that is
+        // not one is refused as USAGE with the choices named — as the command refuses it — rather than with the SDK's
+        // "Input validation error", which carries no `error.code` for an agent to act on.
+        kind: z.string().min(1).optional().describe('threads (the default) or messages, for individual messages'),
         limit: mcpInteger().optional().describe('rows to return, 1–50 (default 20)'),
         cursor: z.string().optional().describe('continue a previous search'),
         includeSpamTrash: mcpBoolean().optional(),
@@ -810,7 +813,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         'Conversations waiting on somebody: threads where the user spoke last and nobody replied (direction "them"), or that arrived and have not been answered (direction "me"). Computed from what Gmail records as sent and received, not from reading the text.',
       inputSchema: z.object({
         inboxes: mcpInboxes().optional(),
-        direction: z.enum(['them', 'me']).optional().describe('who is being waited on; "them" by default'),
+        direction: z.string().min(1).optional().describe('who is being waited on: them (the default), or me'),
         olderThanDays: mcpInteger().optional(),
         lookbackDays: mcpInteger().optional(),
         limit: mcpInteger().optional(),
@@ -849,7 +852,11 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         inbox: inboxArgument(Boolean(pinned)),
         id: z.string().min(1).describe('a message id, or a thread id with thread: true'),
         thread: mcpBoolean().optional(),
-        format: z.enum(['md', 'json', 'eml']).optional(),
+        format: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('md (the default), json, or eml — the message as it arrived, for one message only'),
         out: z.string().optional().describe('a folder inside the downloads root'),
         includeQuoted: mcpBoolean().optional(),
       }),
@@ -1435,7 +1442,11 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           inputSchema: z.object({
             dir: z.string().min(1).optional().describe('where that server keeps its files; ~/.gmail-mcp by default'),
             name: z.string().min(1).optional().describe('the name to register its OAuth client under; "imported"'),
-            store: z.enum(['keychain', 'file']).optional().describe('where secrets are kept, the first time only'),
+            store: z
+              .string()
+              .min(1)
+              .optional()
+              .describe('where secrets are kept, the first time only: keychain or file'),
             renames: mcpStringArray()
               .optional()
               .describe('`<legacy name>=<name>`, for any that should be named otherwise'),
@@ -1507,7 +1518,11 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
               .min(1)
               .describe('where the downloaded client JSON is on this machine, e.g. ~/Downloads/client_secret_….json'),
             name: z.string().min(1).optional().describe('the name to register it under; "default"'),
-            store: z.enum(['keychain', 'file']).optional().describe('where secrets are kept, the first time only'),
+            store: z
+              .string()
+              .min(1)
+              .optional()
+              .describe('where secrets are kept, the first time only: keychain or file'),
             move: mcpBoolean().optional().describe('delete the downloaded file once its secret is stored'),
             replace: mcpBoolean()
               .optional()
@@ -1660,7 +1675,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         inputSchema: z.object({
           inbox: inboxArgument(Boolean(pinned)),
           messageId: z.string().min(1).describe('the message being answered'),
-          mode: z.enum(['reply', 'reply_all', 'forward']).optional().describe('default: reply'),
+          mode: z.string().min(1).optional().describe('reply (the default), reply_all or forward'),
           quote: mcpBoolean()
             .optional()
             .describe('quote the original below your text (default true); a forward without it is not a forward'),

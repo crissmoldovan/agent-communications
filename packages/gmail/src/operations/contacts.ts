@@ -2,6 +2,7 @@ import { CommsError, canonicalAddress, decodeHeaderWords, neutralise, parseAddre
 import type { GmailContext } from '../context.ts';
 import { headerValue } from '../domain/mime.ts';
 import { resolveInboxes } from './search.ts';
+import { oneOf } from './words.ts';
 
 /**
  * Finding someone's address.
@@ -174,10 +175,13 @@ export interface FollowUpsResult {
   complete: boolean;
 }
 
+/** Who a follow-up waits on: them, or me. */
+export const FOLLOW_UP_DIRECTIONS: readonly ['them', 'me'] = ['them', 'me'];
+
 export interface FollowUpOptions {
   inboxes?: string[] | 'all' | undefined;
-  /** `them` = we wrote and nobody replied; `me` = they wrote and we have not. */
-  direction?: 'them' | 'me' | undefined;
+  /** `them` = we wrote and nobody replied; `me` = they wrote and we have not. As given; checked by `followUps`. */
+  direction?: string | undefined;
   /**
    * Only threads whose last real message is at least this old, in either direction.
    *
@@ -201,8 +205,9 @@ export interface FollowUpOptions {
  * model's reading of the text — a follow-up list that invents obligations is worse than none.
  */
 export async function followUps(context: GmailContext, options: FollowUpOptions = {}): Promise<FollowUpsResult> {
+  // Checked before anything is read, so a word that is not a direction is refused the same way from either surface.
+  const direction = oneOf(options.direction, FOLLOW_UP_DIRECTIONS, 'a direction') ?? 'them';
   const aliases = await resolveInboxes(context, options.inboxes);
-  const direction = options.direction ?? 'them';
   // The default differs by direction, because the question does. "Who has not replied to me" should not nag
   // somebody after a day; "what have I not answered" should show this morning's mail, which is precisely the mail
   // most likely to be forgotten. An explicit threshold applies to both.

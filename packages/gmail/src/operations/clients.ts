@@ -21,6 +21,7 @@ import { type InstalledClient, parseClientJson, probeClientCredentials } from '.
 import { clientSecretRef } from '../auth/session.ts';
 import type { GmailContext } from '../context.ts';
 import { MAX_CLIENT_BYTES, readSmallFile } from './small-file.ts';
+import { oneOf } from './words.ts';
 
 export interface ClientView {
   name: string;
@@ -31,11 +32,22 @@ export interface ClientView {
   inboxes: string[];
 }
 
+/** Where secrets can be kept. */
+export const STORE_KINDS: readonly StoreKind[] = ['keychain', 'file'];
+
+/** A secret store as somebody named it, `undefined` when they did not, or the USAGE refusal naming the two there are. */
+export function parseStore(value: string | undefined): StoreKind | undefined {
+  return oneOf(value, STORE_KINDS, 'a secret store');
+}
+
 export interface ClientAddOptions {
   path: string;
   name?: string | undefined;
-  /** Only meaningful for the first secret written to this config directory. */
-  store?: StoreKind | undefined;
+  /**
+   * keychain or file, as given; checked before anything is read. Only meaningful for the first secret written to this
+   * config directory.
+   */
+  store?: string | undefined;
   /** Deletes the downloaded JSON once the secret is safely stored. */
   move?: boolean | undefined;
   /** Rotates the secret of an existing client with the same client id. */
@@ -129,13 +141,15 @@ function refuseClientConflict(config: Config, name: string, parsed: InstalledCli
  * The file is read when the change is planned, and what that read found is what `apply` registers.
  */
 export function clientAddChange(context: GmailContext, options: ClientAddOptions): GatedChange<ClientAddResult> {
+  // Checked before the file is read, and before any approval could be prepared for a store that does not exist.
+  const requested = parseStore(options.store);
   let read: ClientFile | undefined;
   return {
     plan: async (config) => {
       read = await readClientFile(context, options.path);
       const name = options.name ?? 'default';
       refuseClientConflict(config, name, read.client, options.replace === true);
-      const store = await chooseStore(context, options.store);
+      const store = await chooseStore(context, requested);
       const existing = config.clients[name];
       const after = structuredClone(config);
       after.secrets = { store };
@@ -162,7 +176,7 @@ export function clientAddChange(context: GmailContext, options: ClientAddOptions
     },
     apply: (consent) => {
       if (!read) throw new CommsError('UNEXPECTED', 'the client file was not read before it was registered');
-      return registerClient(context, read, { ...options, consent });
+      return registerClient(context, read, { ...options, store: requested, consent });
     },
   };
 }
@@ -172,13 +186,14 @@ export function clientAddChange(context: GmailContext, options: ClientAddOptions
  * downloaded file can be deleted. The secret is never printed, and never written to config.
  */
 export async function clientAdd(context: GmailContext, options: ClientAddOptions): Promise<ClientAddResult> {
-  return registerClient(context, await readClientFile(context, options.path), options);
+  const store = parseStore(options.store);
+  return registerClient(context, await readClientFile(context, options.path), { ...options, store });
 }
 
 async function registerClient(
   context: GmailContext,
   file: ClientFile,
-  options: ClientAddOptions & { consent?: LooseningConsent | undefined },
+  options: Omit<ClientAddOptions, 'store'> & { store?: StoreKind | undefined; consent?: LooseningConsent | undefined },
 ): Promise<ClientAddResult> {
   const name = options.name ?? 'default';
   const { path, client: parsed } = file;

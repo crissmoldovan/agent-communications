@@ -743,6 +743,112 @@ test('a tier that is not one is refused as USAGE by gmail_inbox_reauth, as `inbo
   }
 });
 
+test('every word argument a tool takes refuses a word that is not one as USAGE, naming the choices, as its command does', async () => {
+  /*
+   * `sendPolicy`, `changePolicy` and `tier` were already words the operation checks. Every other choice a Gmail tool
+   * offered was a schema enum, so `gmail_followups {direction: 'sideways'}` was answered with the SDK's bare "Input
+   * validation error: … expected one of …" — no `error.code` for an agent to act on — while `followups --direction
+   * sideways` exits 64 with USAGE. Each is refused here before anything is read: the ids and paths below name nothing,
+   * so a check made any later would answer NOT_FOUND instead.
+   */
+  const harness = await oneMailbox();
+  const missing = join(harness.configDir, 'no-such-client.json');
+  const cases: Array<{
+    tool: string;
+    args: Record<string, unknown>;
+    word: string;
+    choices: string[];
+    argv?: string[];
+  }> = [
+    {
+      tool: 'gmail_search',
+      args: { query: 'Tuesday', kind: 'emails' },
+      word: 'emails',
+      choices: ['threads', 'messages'],
+    },
+    {
+      tool: 'gmail_followups',
+      args: { direction: 'sideways' },
+      word: 'sideways',
+      choices: ['them', 'me'],
+      argv: ['followups', '--direction', 'sideways'],
+    },
+    {
+      tool: 'gmail_export',
+      args: { inbox: 'work', id: 'nope', format: 'pdf' },
+      word: 'pdf',
+      choices: ['md', 'json', 'eml'],
+      argv: ['export', 'nope', '--inbox', 'work', '--format', 'pdf'],
+    },
+    {
+      tool: 'gmail_draft_reply',
+      args: { inbox: 'work', messageId: 'nope', text: 'Yes.', mode: 'reply_most' },
+      word: 'reply_most',
+      choices: ['reply', 'reply_all', 'forward'],
+      argv: ['draft', 'reply', 'nope', '--inbox', 'work', '--text', 'Yes.', '--mode', 'reply_most'],
+    },
+    {
+      tool: 'gmail_client_add',
+      args: { path: missing, store: 'vault' },
+      word: 'vault',
+      choices: ['keychain', 'file'],
+      argv: ['client', 'add', missing, '--store', 'vault'],
+    },
+    {
+      tool: 'gmail_inbox_import',
+      args: { dir: missing, store: 'vault' },
+      word: 'vault',
+      choices: ['keychain', 'file'],
+      argv: ['inbox', 'import', '--dir', missing, '--store', 'vault'],
+    },
+    {
+      tool: 'gmail_inbox_import',
+      args: { dir: missing, store: 'vault', dryRun: true },
+      word: 'vault',
+      choices: ['keychain', 'file'],
+      argv: ['inbox', 'import', '--dir', missing, '--store', 'vault', '--dry-run'],
+    },
+  ];
+
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    for (const { tool, args, word, choices, argv } of cases) {
+      const refused = toolError(await call(tool, args));
+      assert.equal(refused.code, 'USAGE', `${tool}: ${JSON.stringify(refused)}`);
+      assert.match(refused.message, new RegExp(`^"${word}" is not `), tool);
+      for (const choice of choices)
+        assert.match(refused.hint ?? '', new RegExp(`\\b${choice}\\b`), `${tool} names ${choice}`);
+
+      // The command refuses the same word with the same code.
+      if (argv) {
+        const byCommand = await cli(harness, [...argv, '--json']);
+        assert.equal(byCommand.code, 64, `${argv.join(' ')}: ${byCommand.stdout}`);
+        assert.equal(byCommand.envelope().error?.code, 'USAGE');
+      }
+    }
+    // Refused before anything was prepared: no approval stands for a store that does not exist.
+    assert.deepEqual(await harness.core.approvals.list(), []);
+  } finally {
+    await close();
+  }
+});
+
+test('the tools still take every word that is one', async () => {
+  // The other half of the check above: a schema that stops refusing must not start refusing what is right.
+  const harness = await oneMailbox();
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    for (const kind of ['threads', 'messages']) {
+      assert.equal(wire(await call('gmail_search', { query: 'Tuesday', kind })).kind, kind);
+    }
+    for (const direction of ['them', 'me']) {
+      assert.equal(wire(await call('gmail_followups', { direction })).complete, true);
+    }
+  } finally {
+    await close();
+  }
+});
+
 // ── the tool answers with what the command prints ───────────────────────────────────────────────────────────
 
 test('gmail_inboxes_list, gmail_send_list and gmail_search answer with everything the command’s --json prints', async () => {

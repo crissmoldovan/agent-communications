@@ -28,6 +28,7 @@ import {
 import { headerValue, readParts } from '../domain/mime.ts';
 import type { GmailTransport, RawMessage } from '../gmail-api/transport.ts';
 import { ownAddresses } from './analyse.ts';
+import { oneOf } from './words.ts';
 
 /**
  * Drafts: writing a message, and leaving it where a person can see it.
@@ -242,8 +243,12 @@ export async function createDraft(context: GmailContext, alias: string, input: D
   };
 }
 
+/** How a message can be answered. */
+export const REPLY_MODES: readonly ['reply', 'reply_all', 'forward'] = ['reply', 'reply_all', 'forward'];
+
 export interface ReplyInput extends DraftInput {
-  mode?: 'reply' | 'reply_all' | 'forward' | undefined;
+  /** reply, reply_all or forward, as given; checked by `replyDraft`. A reply when left out. */
+  mode?: string | undefined;
   /**
    * Quote the original below the new text. On by default, and a forward without it is not a forward.
    *
@@ -366,13 +371,14 @@ export async function replyDraft(
   messageId: string,
   input: ReplyInput,
 ): Promise<DraftResult> {
+  // Checked before anything is read, so a word that is not a mode is refused the same way from either surface.
+  const mode = oneOf(input.mode, REPLY_MODES, 'a reply mode') ?? 'reply';
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'draft');
   const transport = await context.transport(alias);
 
   const original = await transport.getMessage(messageId);
   const headers = original.payload?.headers ?? [];
-  const mode = input.mode ?? 'reply';
 
   const plan = planReply(
     {
