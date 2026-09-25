@@ -43,6 +43,14 @@
       "status": "pending",
       "phase": "P2"
     },
+    {
+      "id": "core.approve",
+      "package": "core",
+      "cli": "approve",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Approving a change under the `confirm` change policy means a person at a terminal typing the code shown; a tool that approved would make `confirm` mean nothing (design §6.3). Under `chat`, comms_change_claim takes the approval given in the conversation."
+    },
 
     {
       "id": "gmail.client.add",
