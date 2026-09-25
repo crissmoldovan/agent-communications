@@ -4,6 +4,7 @@ import {
   type ClientConfig,
   CommsError,
   type Config,
+  committedSecretsStore,
   expandHome,
   type GatedChange,
   homeDirectory,
@@ -11,6 +12,7 @@ import {
   type LooseningConsent,
   probeKeychain,
   type StoreKind,
+  secretsStoreFor,
   secretsStoreOf,
   withCredentialsLock,
   writeOutcome,
@@ -207,8 +209,9 @@ async function registerClient(
    */
   const client = await withCredentialsLock(context.core.paths.configDir, async () => {
     const fresh = await context.config();
-    // The store was chosen before the lock; `secrets migrate` holds it too, and may have finished in between.
-    if (fresh.secrets?.store && fresh.secrets.store !== chosen) {
+    // The store was chosen before the lock; `secrets migrate` holds it too, and may have finished in between — and a
+    // Slack sign-in may have stored a token in the keychain meanwhile, which commits this configuration to it.
+    if ((committedSecretsStore(fresh) ?? chosen) !== chosen) {
       throw new CommsError('TRANSIENT', 'the secret store was changed while this ran', {
         hint: 'Run the command again.',
       });
@@ -259,8 +262,8 @@ async function registerClient(
       await context.core.config.update(
         (current) => {
           refused = true;
-          // Never switch the store back: only `secrets migrate` changes it, and it moves the secrets with it.
-          if (current.secrets?.store && current.secrets.store !== chosen) {
+          // Never switch the store: only `secrets migrate` changes it, and it moves the secrets with it.
+          if ((committedSecretsStore(current) ?? chosen) !== chosen) {
             throw new CommsError('TRANSIENT', 'the secret store was changed while this ran', {
               hint: 'Run the command again.',
             });
@@ -331,18 +334,14 @@ async function registerClient(
   };
 }
 
+/**
+ * The store this registration keeps its secret in: the one the configuration already uses — recorded, or the keychain
+ * that a Slack token already sits in — or, when nothing is stored yet, the one asked for. A different one is refused
+ * before anybody is asked to approve it (`secretsStoreFor`): switching here would record a store and move nothing.
+ */
 async function chooseStore(context: GmailContext, requested: StoreKind | undefined): Promise<StoreKind> {
-  const config = await context.config();
-  const current = config.secrets?.store;
-  if (current) {
-    if (requested && requested !== current) {
-      throw new CommsError('CONFIG', `this configuration already keeps its secrets in the ${current} store`, {
-        hint: `Everything here uses one store. To change it, run \`agentcomms secrets migrate --to ${requested}\`.`,
-      });
-    }
-    return current;
-  }
-  const chosen = requested ?? 'keychain';
+  const { store: chosen, choosing } = secretsStoreFor(await context.config(), requested);
+  if (!choosing) return chosen;
   if (chosen === 'keychain') {
     const probe = await probeKeychain();
     if (!probe.ok) {

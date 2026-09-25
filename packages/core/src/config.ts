@@ -499,6 +499,40 @@ export function secretsStoreOf(config: Config): StoreKind {
   return config.secrets?.store ?? 'keychain';
 }
 
+/**
+ * The backend this configuration already keeps credentials in, or null when nothing has chosen one yet.
+ *
+ * The recorded one — or, with nothing recorded, the keychain whenever anything already refers to a stored secret.
+ * Slack uses the backend in force and never records it, so a machine with only Slack connected holds its tokens in
+ * the keychain and has no `secrets` block. Reading that as "nothing chosen" let the next command that stores a secret
+ * choose files and record them: nothing moved, and every Slack token was left where nothing looks any more.
+ */
+export function committedSecretsStore(config: Config): StoreKind | null {
+  if (config.secrets) return config.secrets.store;
+  return holdsSecrets(config) ? secretsStoreOf(config) : null;
+}
+
+/**
+ * The backend a command that stores a secret uses: the one already committed to, or — when nothing is — the one
+ * asked for, the keychain by default. `choosing` says this command is the one choosing it.
+ *
+ * A different backend asked for is refused, not taken: one backend holds everything here, and changing it has to move
+ * what is already stored, which is what `agentcomms secrets migrate` does and nothing else does.
+ */
+export function secretsStoreFor(
+  config: Config,
+  requested: StoreKind | undefined,
+): { store: StoreKind; choosing: boolean } {
+  const committed = committedSecretsStore(config);
+  if (committed === null) return { store: requested ?? 'keychain', choosing: true };
+  if (requested !== undefined && requested !== committed) {
+    throw new CommsError('CONFIG', `this configuration already keeps its secrets in the ${committed} store`, {
+      hint: `Everything here uses one store, and changing it moves what is already stored. To change it, run \`agentcomms secrets migrate --to ${requested}\`, then run this again.`,
+    });
+  }
+  return { store: committed, choosing: false };
+}
+
 /** True when `alias` is a valid inbox or client name. */
 export function isValidAlias(alias: string): boolean {
   return ALIAS_PATTERN.test(alias);

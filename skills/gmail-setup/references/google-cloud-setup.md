@@ -145,6 +145,8 @@ What that command does, in order:
 2. Chooses the secret store, once per configuration directory: the system keychain by default,
    probed first; `--store file` keeps owner-only files instead, which is what a headless Linux box
    needs. Both stores cannot be mixed — changing later is `agentcomms secrets migrate --to …`.
+   A machine where Slack is already connected has chosen already, though nothing records it: its
+   tokens are in the keychain, so `--store file` there is refused and names that command.
 3. Checks the credentials with Google before storing them, by redeeming a code that cannot work. A
    live client answers `invalid_grant` ("that code is not real"), which counts as success; a deleted
    client or a wrong secret answers `invalid_client`, and the command refuses to store it. With no

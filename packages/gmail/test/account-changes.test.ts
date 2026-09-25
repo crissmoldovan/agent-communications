@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { approveChangeAtTerminal, type Core } from '@agentcomms/core';
 import { buildAuthUrl, exchangeCode, newPkce } from '../src/auth/oauth.ts';
 import { SCOPES } from '../src/auth/scopes.ts';
@@ -10,7 +12,7 @@ import { clientSecretRef, refreshTokenRef } from '../src/auth/session.ts';
 import { GmailContext } from '../src/context.ts';
 import { clientAdd, clientAddChange, clientRemove } from '../src/operations/clients.ts';
 import { completeProbe, startProbe } from '../src/operations/confirm-clients.ts';
-import { importLegacy } from '../src/operations/import-legacy.ts';
+import { importLegacy, inboxImportChange } from '../src/operations/import-legacy.ts';
 import { inboxRemove } from '../src/operations/inboxes.ts';
 import { type Harness, newHarness, TEST_CLIENT_ID, TEST_CLIENT_SECRET, tempDir } from './support/harness.ts';
 import {
@@ -624,6 +626,151 @@ test('the client removal itself refuses a client that is not the one approved', 
   assert.ok((await harness.core.config.load()).clients.spare, 'the wrong client was removed');
 });
 
+/**
+ * A machine where only Slack has stored a credential: a workspace's token in the keychain, and no `secrets` block,
+ * because Slack uses the store in force without ever recording it. Only the reference is written; nothing here
+ * reads or writes a keychain.
+ */
+async function slackOnly(harness: Harness): Promise<void> {
+  const account = {
+    id: 'acc_AAAAAAAAAAAAAAAA',
+    platform: 'slack',
+    workspace: 'T_TEAM',
+    userId: 'U_TEAM',
+    tier: 'read',
+    mode: 'read',
+    grantedScopes: [],
+    secretRef: 'slack/token/acc_AAAAAAAAAAAAAAAA',
+    createdAt: '2026-09-20T00:00:00.000Z',
+  };
+  await writeFile(
+    join(harness.configDir, 'config.json'),
+    `${JSON.stringify({ version: 1, accounts: { team: account } }, null, 2)}\n`,
+  );
+}
+
+/** Runs `action` just before each secret this harness's core writes, whichever store it goes to. */
+function beforeEachSecretWrite(harness: Harness, action: (ref: string) => Promise<void>): void {
+  const open = harness.core.secrets.bind(harness.core);
+  harness.core.secrets = async (kind) => {
+    const store = await open(kind);
+    return new Proxy(store, {
+      get(target, property) {
+        if (property === 'set') {
+          return async (ref: string, value: string) => {
+            await action(ref);
+            await target.set(ref, value);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  };
+}
+
+/**
+ * Has a Slack sign-in land at the moment a secret is written: the token stored, the store not recorded. For the checks
+ * a write makes under its lock, after the store was chosen and before the row that records it.
+ */
+function slackSignsInAtTheNextSecretWrite(harness: Harness): void {
+  beforeEachSecretWrite(harness, () => slackOnly(harness));
+}
+
+/** The refusal of a store other than the one credentials are already kept in, as both surfaces give it. */
+function refusedStore(
+  refused: { code: string; message: string; hint?: string | null } | undefined,
+  kept: string,
+  asked: string,
+): void {
+  assert.equal(refused?.code, 'CONFIG', JSON.stringify(refused));
+  assert.match(refused?.message ?? '', new RegExp(`already keeps its secrets in the ${kept} store`));
+  assert.match(refused?.hint ?? '', new RegExp(`agentcomms secrets migrate --to ${asked}`));
+}
+
+test('client add refuses a store other than the one credentials are kept in, even where nothing records it', async () => {
+  /*
+   * Slack never records the store, so a machine with only Slack connected has credentials in the keychain and no
+   * `secrets` block. `client add --store file` there was approved as "credentials will move out of the system
+   * keychain", then recorded `file` and moved nothing: every Slack token was left where nothing looks any more.
+   */
+  const harness = await newHarness();
+  await slackOnly(harness);
+  const path = await clientJson();
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    const byTool = toolError(await call('gmail_client_add', { path, name: 'desktop', store: 'file' }));
+    const byCommand = (
+      await cli(harness, ['client', 'add', path, '--name', 'desktop', '--store', 'file', '--json'], { env: CLAUDE })
+    ).envelope().error;
+    refusedStore(byTool, 'keychain', 'file');
+    refusedStore(byCommand, 'keychain', 'file');
+    assert.equal(byTool.message, byCommand?.message);
+    assert.deepEqual(await harness.core.approvals.list(), [], 'an approval was prepared for a store switch');
+    const config = await harness.core.config.load();
+    assert.equal(config.secrets, undefined, 'the store was recorded');
+    assert.deepEqual(config.clients, {});
+  } finally {
+    await close();
+  }
+});
+
+test('a Slack token stored while client add runs stops it recording a different store', async () => {
+  /*
+   * The last lines of the same guard. Between choosing the store and taking the lock, `client add` asks Google whether
+   * the client works; inside the lock, it stores the secret before the row. A Slack sign-in finishing in either window
+   * stores a token in the keychain and commits this configuration to it, so the file store chosen a moment earlier
+   * must not be recorded over it.
+   */
+  const settled = async (harness: Harness) => {
+    const config = await harness.core.config.load();
+    assert.equal(config.secrets, undefined, 'a store was recorded over the keychain a Slack token is in');
+    assert.deepEqual(config.clients, {});
+    assert.equal(await (await harness.core.secrets('file')).get(clientSecretRef('default')), null);
+  };
+
+  // While Google is asked: refused when the lock is taken, before any secret is written.
+  const harness = await newHarness();
+  await writeFile(join(harness.configDir, 'config.json'), `${JSON.stringify({ version: 1 }, null, 2)}\n`);
+  const google = createServer((request, response) => {
+    request.resume();
+    request.on('end', async () => {
+      await slackOnly(harness);
+      response.writeHead(400, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: 'invalid_grant' }));
+    });
+  });
+  await new Promise<void>((settle) => google.listen(0, '127.0.0.1', () => settle()));
+  after(() => google.close());
+  const { port } = google.address() as AddressInfo;
+  const env = { ...harness.env, AGENT_COMMS_GOOGLE_ROOT_URL: `http://127.0.0.1:${port}` };
+  const context = new GmailContext({ core: harness.core, env });
+  const written: string[] = [];
+  beforeEachSecretWrite(harness, async (ref) => {
+    written.push(ref);
+  });
+  await assert.rejects(
+    clientAdd(context, { path: await clientJson(), store: 'file' }),
+    /the secret store was changed while this ran/,
+  );
+  assert.deepEqual(written, [], 'a secret was written before the refusal');
+  await settled(harness);
+
+  // While the secret is written: refused by the write that would record the store, and the secret taken back.
+  const writing = await newHarness();
+  await writeFile(join(writing.configDir, 'config.json'), `${JSON.stringify({ version: 1 }, null, 2)}\n`);
+  slackSignsInAtTheNextSecretWrite(writing);
+  await assert.rejects(
+    clientAdd(new GmailContext({ core: writing.core, env: writing.env }), {
+      path: await clientJson(),
+      store: 'file',
+      noProbe: true,
+    }),
+    /the secret store was changed while this ran/,
+  );
+  await settled(writing);
+});
+
 // ── inbox import ────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A refresh token the fake Google will renew, as the other server's files hold one. */
@@ -785,6 +932,77 @@ test('inbox import at the CLI asks the same way, and --dry-run asks nobody', asy
   const done = await approving(harness, ['inbox', 'import', '--dir', dir]);
   assert.equal(done.code, 0, done.stdout);
   assert.deepEqual(Object.keys((await harness.core.config.load()).inboxes), ['work']);
+});
+
+test('inbox import refuses a store other than the one credentials are kept in, recorded or not, dry run too', async () => {
+  /*
+   * Where nothing records the store (only Slack has stored anything), an approved `--store file` import was refused
+   * only at its last write, after the client's secret had gone into files. Where the store is recorded, a different
+   * `--store` was silently ignored, while `client add` refused it. Both now refuse it before anybody is asked.
+   */
+  const accounts = [{ sub: 'sub-1', email: 'jo@example.test' }];
+  for (const [kept, asked, prepare] of [
+    ['keychain', 'file', slackOnly],
+    ['file', 'keychain', async () => undefined],
+  ] as const) {
+    const harness = await newHarness({ accounts });
+    await prepare(harness);
+    const dir = await legacyDirectory(harness, { work: 'sub-1' });
+    const before = await harness.core.config.load();
+    const { call, close } = await connect({ core: harness.core, env: harness.env });
+    try {
+      for (const args of [
+        { dir, store: asked },
+        { dir, store: asked, dryRun: true },
+      ]) {
+        refusedStore(toolError(await call('gmail_inbox_import', args)), kept, asked);
+      }
+      const byCommand = await cli(harness, ['inbox', 'import', '--dir', dir, '--store', asked, '--json'], {
+        env: CLAUDE,
+      });
+      refusedStore(byCommand.envelope().error, kept, asked);
+      assert.deepEqual(await harness.core.approvals.list(), [], 'an approval was prepared for a store switch');
+      assert.deepEqual(await harness.core.config.load(), before, 'the import wrote something');
+    } finally {
+      await close();
+    }
+  }
+});
+
+test('a Slack token stored while an import writes its client stops it recording a different store', async () => {
+  // The write's own check, under the lock: the secret goes in first and the row second, and a Slack sign-in landing
+  // between the two commits this configuration to the keychain — so `file` must not be recorded over it.
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  await writeFile(join(harness.configDir, 'config.json'), `${JSON.stringify({ version: 1 }, null, 2)}\n`);
+  const dir = await legacyDirectory(harness, { work: 'sub-1' });
+  slackSignsInAtTheNextSecretWrite(harness);
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  await assert.rejects(importLegacy(context, { dir, store: 'file' }), /the secret store was changed while this ran/);
+  const config = await harness.core.config.load();
+  assert.equal(config.secrets, undefined, 'a store was recorded over the keychain a Slack token is in');
+  assert.deepEqual([config.clients, config.inboxes], [{}, {}]);
+});
+
+test('an import that registers its client declares where the secret goes, so what is approved is what is written', async () => {
+  const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
+  // Nothing stored and nothing recorded: this import is what chooses the store.
+  await writeFile(join(harness.configDir, 'config.json'), `${JSON.stringify({ version: 1 }, null, 2)}\n`);
+  const dir = await legacyDirectory(harness, { work: 'sub-1' });
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  const planned = await inboxImportChange(context, { dir, store: 'file' }).plan(await harness.core.config.load());
+  assert.deepEqual(planned.after.secrets, { store: 'file' }, 'the plan is not the write the import makes');
+
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    const asked = approvalAsked(await call('gmail_inbox_import', { dir, store: 'file' }));
+    assert.match(asked.preview, /registers the OAuth client .* and keeps its secret in the file store/);
+    applied(await call('gmail_inbox_import', { dir, store: 'file', approvalId: asked.approvalId }));
+    const config = await harness.core.config.load();
+    assert.deepEqual(config.secrets, { store: 'file' });
+    assert.deepEqual(Object.keys(config.inboxes), ['work']);
+  } finally {
+    await close();
+  }
 });
 
 // ── confirm-clients add ─────────────────────────────────────────────────────────────────────────────────────

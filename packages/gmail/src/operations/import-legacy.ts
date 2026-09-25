@@ -3,6 +3,7 @@ import { basename, join } from 'node:path';
 import {
   CommsError,
   type Config,
+  committedSecretsStore,
   defaultInternalDomains,
   duplicateInbox,
   expandHome,
@@ -20,6 +21,7 @@ import {
   PUBLIC_MAILBOX_DOMAINS,
   type SecretStore,
   type StoreKind,
+  secretsStoreFor,
   withCredentialsLock,
   withdrawStaged,
   writeOutcome,
@@ -149,6 +151,8 @@ export function inboxImportChange(context: GmailContext, options: ImportOptions)
   let approved: ApprovedImport | undefined;
   return {
     plan: async (config) => {
+      // Refused here, before anybody is asked, when it names a store other than the one credentials are kept in.
+      const { store } = secretsStoreFor(config, options.store);
       const found = await importLegacy(context, { ...options, dryRun: true, approved: undefined });
       const client = found.client;
       approved = {
@@ -163,7 +167,7 @@ export function inboxImportChange(context: GmailContext, options: ImportOptions)
       const effects = [
         ...(approved.registersClient && client
           ? [
-              `registers the OAuth client ${client.clientId} from ${join(directory, 'gcp-oauth.keys.json')} as "${client.name}", and keeps its secret on this machine`,
+              `registers the OAuth client ${client.clientId} from ${join(directory, 'gcp-oauth.keys.json')} as "${client.name}", and keeps its secret in the ${store} store on this machine`,
             ]
           : []),
         ...found.imported.map(
@@ -172,9 +176,16 @@ export function inboxImportChange(context: GmailContext, options: ImportOptions)
         ),
       ];
       const count = found.imported.length;
+      /*
+       * The write the import makes to the configuration itself, declared: registering the client records the store
+       * its secret went into. Planned as the unchanged configuration, a store that loosened anything went unseen
+       * until the last write refused it — after the secret had been stored. Declared, the classifier measures it
+       * here, the preview shows it, and the approval binds it.
+       */
+      const after = approved.registersClient ? { ...config, secrets: { store } } : config;
       return {
         before: config,
-        after: config,
+        after,
         summary: `Import ${count} mailbox${count === 1 ? '' : 'es'} from ${directory}`,
         effects,
       };
@@ -260,7 +271,12 @@ export async function importLegacy(context: GmailContext, options: ImportOptions
   // import into a fresh configuration wrote the refresh token to disk and left the registry pointing at a
   // keychain entry that was never created — a mailbox that looks connected and cannot read its own token. The
   // skill's own procedure runs `inbox import` before `client add`, which is exactly the case with no store set.
-  const store = config.secrets?.store ?? options.store ?? 'keychain';
+  //
+  // And the one already in use wins over `--store`, which is refused when it differs (`secretsStoreFor`) — dry run
+  // included, since that says what the import would do. It was silently ignored where a store was recorded, and
+  // where none was but Slack had stored a token in the keychain, it was taken: the client's secret went into files,
+  // and only the last write refused to record them.
+  const { store } = secretsStoreFor(config, options.store);
   const secrets = dryRun ? null : await context.core.secrets(store);
   if (!dryRun && secrets && !existingClient) {
     const ref = clientSecretRef(clientKey);
@@ -567,9 +583,12 @@ export function importNames(config: Config, files: readonly string[], renames: r
   return names;
 }
 
-/** Refuses a write whose secret went into a backend that is no longer the one recorded. */
+/**
+ * Refuses a write whose secret went into a backend that is no longer the one in use: recorded, or — with none
+ * recorded — the keychain a token stored meanwhile commits this configuration to.
+ */
 function requireStore(config: Config, kind: StoreKind): void {
-  if (config.secrets && config.secrets.store !== kind) {
+  if ((committedSecretsStore(config) ?? kind) !== kind) {
     throw new CommsError('TRANSIENT', 'the secret store was changed while this ran', {
       hint: 'Run the import again.',
     });
