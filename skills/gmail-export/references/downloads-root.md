@@ -105,7 +105,7 @@ The configuration layer classifies a change to it as **loosening a safety settin
 differs from the old one, and is **not inside** the old one. Narrowing — pointing it at a subdirectory of
 where it already was — is not a loosening, and neither is clearing the setting, because clearing it returns to
 the built-in default. A write that does loosen is refused with `LOOSENING_REFUSED` (CLI exit 10) unless it
-carries a consent proof produced by a person at an interactive terminal typing a challenge back.
+carries a person's consent: a change approval they gave, or a challenge they typed back at a terminal.
 
 Two things follow, and both belong in what you tell the user:
 

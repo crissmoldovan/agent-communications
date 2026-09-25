@@ -19,10 +19,16 @@ We will acknowledge a report within 7 days and provide status updates while it i
 
 ## Scope
 
-This project reads and writes people's email. In scope, among others:
+This project reads and writes people's email and Slack workspaces. In scope, among others:
 
-- **Sending without approval** — any way to make Gmail transmit a message without the approval flow described in the
-  safety model (`docs/safety-model.md`), under any send policy.
+- **Sending without approval** — any way to make Gmail transmit a message without the approval flow described in
+  [Sending and approvals](docs/sending.md), under any send policy.
+- **Posting without approval** — any way to make Slack post a message, share a file or add a reaction through this
+  project without the approval of that exact content, under any policy.
+- **Loosening without a change approval** — any way to loosen a safety setting (a send or change policy, a
+  workspace's mode, a mailbox's access, where credentials are kept, a trusted client), register a server, or remove
+  an account without an approval bound to that exact change, or to claim one under the `confirm` change policy that
+  no person approved at a terminal.
 - **Token and credential exposure** — OAuth refresh tokens, client secrets or approval keys leaking into logs, output,
   files with loose permissions, or model context.
 - **Prompt injection through email content** — a crafted message that escapes the untrusted-content envelope, hides
@@ -39,7 +45,12 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
 - **An agent with a shell is outside the boundary.** A program that runs as your user with shell or file access can
   read the stored tokens and call Gmail directly, and can make any command believe it runs in a terminal. Terminal
   approval and the agent-marker checks are speed bumps against that, not walls. For coding agents, use the `confirm`
-  policy with a client whose approval form you have verified, or the `never` policy and send from Gmail.
+  policy with a client whose approval form you have verified, or the `never` policy and send from Gmail — and the
+  `confirm` change policy (`agentcomms policy confirm`), so moving a mailbox back to `chat` needs the code too.
+- **Under the default `chat` change policy the software cannot tell your yes from an agent's.** An agent can loosen
+  a mailbox or workspace from `confirm` or `never` to `chat`, move credentials out of the keychain, or remove an
+  account on its own claim. Each such change is audited. Set `agentcomms policy confirm` for an agent you do not
+  watch.
 - **Under the default `chat` policy, a message that asks you to reply to its own sender with private data** is
   caught only by you reading the preview. Risk escalation covers being told by a message to write to *someone
   else*; `confirm` covers both.

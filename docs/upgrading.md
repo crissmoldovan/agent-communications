@@ -4,8 +4,7 @@ One person's accounts are usually spread over more than one computer, and each c
 configuration, its own tokens and its own MCP registrations. Nothing is shared between them, so each one is
 brought up to date on its own, with the sequence below. It works from any earlier release: a computer still on
 0.1.x with the old flat names (`work`, `personal`) ends on the current release with organisation/platform names
-(`acme/gmail`, `acme/slack`) and its MCP servers — Gmail, Slack and, from the release that adds it, the core
-server — registered.
+(`acme/gmail`, `acme/slack`) and its MCP servers — Gmail, Slack and, from 0.5.0, the core server — registered.
 
 Why the order matters:
 
@@ -30,7 +29,8 @@ Why the order matters:
   V=$(npm view @agentcomms/gmail version); echo "$V"
   ```
 
-  It must be 0.4.1 or later: 0.4.1 is the first release in which `agent-slack` has `mcp install`.
+  It must be 0.5.0 or later: the steps below are written for it — the approvals in steps 3 and 4, and the core
+  server, arrived in 0.5.0.
 
 ## 1. Close every agent client
 
@@ -91,6 +91,18 @@ It saves the configuration as it was beside itself first, as `config.json.before
 (owner-only), and prints where. That copy is the only way back; keep it until everything works.
 
 ## 4. Register the servers
+
+**First, decide how changes are approved. From 0.5.0 a loosening is approved in chat by default.** A configuration
+from an earlier release has no change policy, and reads as `chat`: a registration, a looser send policy or a removed
+account is approved by a yes in the conversation, where 0.4.x asked for a code typed at a terminal — and the software
+cannot tell your yes from an agent's. To keep terminal approval, run this before letting an agent loose on this
+computer. It applies at once; going back needs the code:
+
+```bash
+npx -y @agentcomms/core@$V policy confirm
+```
+
+Then register the servers:
 
 ```bash
 npx -y @agentcomms/gmail@$V mcp install --client claude-code --force
@@ -164,8 +176,9 @@ npx -y @agentcomms/gmail@$V inbox add <organisation>/gmail
 npx -y @agentcomms/slack@$V workspace add <organisation>/slack --client-id <the app's Client ID> --port <its port>
 ```
 
-For a Slack workspace connected on another computer, `agent-slack workspace show <organisation>/slack` there gives
-the Client ID and port to use — the app is the same one.
+For a Slack workspace connected on another computer, use the same app: on that computer,
+`agent-slack workspace show <organisation>/slack --json` gives its Client ID (`oauthClientId`), and
+`agent-slack manifest --workspace <organisation>/slack --json` its port (`port`).
 
 ## Example: one person's mapping
 
@@ -200,9 +213,14 @@ https://github.com/crissmoldovan/agent-communications exactly, in its order.
 
 Rules:
 - Never send mail, post to Slack, or start a sign-in. Never print a token, a secret, or an env value.
+- Before registering any server, tell me that from 0.5.0 a change is approved by my yes in chat unless the change
+  policy is confirm, and ask me whether to run `npx -y @agentcomms/core@$V policy confirm`. Run it only if I say so.
+- When a preview says its policy is confirm, give me `npx -y @agentcomms/core@$V approve <id>` to run in my own
+  terminal and wait until I say it is done before running the command again with --approval <id>. Never run approve
+  yourself.
 - Stop and tell me, changing nothing further, if any command fails or any of these is true:
   - `node --version` is older than 22.12, or `claude` is not on PATH;
-  - the release (V=$(npm view @agentcomms/gmail version)) is older than 0.4.1;
+  - the release (V=$(npm view @agentcomms/gmail version)) is older than 0.5.0;
   - an existing gmail or slack entry in Claude Code is not @agentcomms (another vendor's server with that name);
   - an @agentcomms server is registered under another name, or its entry carries any of the flags --inbox,
     --workspace, --read-only (tell me which, so they can be carried over);

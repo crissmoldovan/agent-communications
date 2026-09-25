@@ -68,8 +68,9 @@ bind here:
   long message belongs in a file, and the path is what you quote. Say how much was written.
 - **Cite ids.** The message or thread id, the inbox alias and the path are what make the export
   checkable later. An export with no id attached cannot be repeated.
-- **Downloads land in one directory, and that directory is a safety setting.** Changing it takes a
-  person at a terminal. `--out` is a subpath inside it, not an escape from it.
+- **Downloads land in one directory, and that directory is a safety setting.** No command or tool
+  here changes it; moving it is the user's own edit to their configuration. `--out` is a subpath
+  inside it, not an escape from it.
 - **This skill never sends.** Only `gmail-send` transmits anything, only from a draft, and only after
   a person has approved that exact content. Writing a file is not a step towards sending one.
 - **Report a refusal as an answer.** A path that leaves the root, a thread asked for as one `.eml` —
@@ -203,9 +204,8 @@ it in one place is what makes it possible to say what arrived from mail and what
   result is proved to still be inside it, after following symlinks in any folder that already exists.
   A `..`, an absolute path, or a link pointing out is refused. A refusal is the correct answer.
 - Moving the root itself means `defaults.downloadsDir` in the user's configuration, and the package
-  classifies that as **loosening a safety setting**: it needs a person at an interactive terminal
-  typing a challenge. An agent cannot do it — the attempt is refused outright when an agent marker is
-  in the environment. There is no tool here that changes it.
+  classifies that as **loosening a safety setting**. No tool and no command here changes it: it is
+  the user's own edit to their configuration, and not one for you to make or offer.
 - So when the location is inconvenient, the honest move is to say where the file went and let the
   user decide. Suggesting they widen the root to suit an export is the wrong instinct even when it
   would work.

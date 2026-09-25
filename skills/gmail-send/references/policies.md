@@ -65,7 +65,7 @@ There are exactly two channels:
 | Channel | How it happens | What stops an agent using it |
 |---|---|---|
 | Terminal | The user runs `agent-gmail approve <approvalId>`, reads the preview it prints, and types the code | The command refuses when an agent marker is present in the environment (`APPROVAL_REQUIRED`), and again when there is no interactive terminal |
-| Trusted client form | An MCP client raises a form carrying the preview and the code; the person types it back | The client's `clientInfo.name` must already be on `defaults.confirm.elicitationClients`, which is empty by default and can only be added to by a person at a terminal, after that client has passed a probe in the last ten minutes. Taking a name off it needs nobody: `gmail_confirm_client_remove`, or `agent-gmail confirm-clients remove` |
+| Trusted client form | An MCP client raises a form carrying the preview and the code; the person types it back | The client's `clientInfo.name` must already be on `defaults.confirm.elicitationClients`, which is empty by default; a name is added by `gmail_confirm_client_add` or `agent-gmail confirm-clients add`, only after that client passed a probe in the last ten minutes, and only through a change approval (a yes in chat under the `chat` change policy, `agentcomms approve` under `confirm`). Taking a name off it needs nobody: `gmail_confirm_client_remove`, or `agent-gmail confirm-clients remove` |
 
 An un-allowlisted client asking to send under `confirm` gets `APPROVAL_REQUIRED` with the terminal
 command in the hint, and **the record is left pending** — being asked from the wrong client is not
@@ -75,6 +75,12 @@ evidence that anything is wrong with the message.
 they read the preview rather than skipping to the prompt. And `SECURITY.md` says the terminal check
 is a speed bump, not a boundary: an agent with a shell can make any command believe it has a
 terminal. The boundary for that threat is `never`.
+
+Nor that the mailbox stays on `confirm`. Moving it to `chat` is a loosening, approved under the
+mailbox's **change policy** — and under the default change policy, `chat`, that approval is a yes in
+the conversation, which the software cannot tell from the agent's own. Only with the change policy
+at `confirm` too (`agent-gmail inbox policy <alias> --change confirm`, or `agentcomms policy confirm`
+for the default) does moving it off `confirm` need a code typed at a terminal.
 
 ### `never`
 
@@ -115,9 +121,10 @@ Escalation only ever raises to `confirm`. It cannot raise to `never`, and nothin
 ## 3. Risk escalation: every trigger, its evidence, and its blind spots
 
 Escalation runs inside prepare, and only when `defaults.riskEscalation` is true. It is true by
-default, and turning it off is classified as loosening a safety setting (`defaults.riskEscalation`),
-which needs a person at a terminal. When it is off, no facts are gathered at all: the preview shows
-no recipient notes and no flag can fire.
+default, and turning it off is classified as loosening a safety setting (`defaults.riskEscalation`).
+No command or tool here turns it off: it is the user's own edit to their configuration, and not one to
+offer. When it is off, no facts are gathered at all: the preview shows no recipient notes and no flag
+can fire.
 
 First, the facts it computes for every address in `To`, `Cc` and `Bcc`:
 
@@ -180,8 +187,8 @@ bill of health.
 
 Renaming a mailbox does not reset the count, because the ledger is keyed by the id rather than the
 alias. Removing and re-adding one does, because that mints a new id — which is worth knowing and not
-worth suggesting. Raising the caps is classified as loosening `defaults.sendCaps` and needs a person
-at a terminal; lowering them needs nothing.
+worth suggesting. Raising the caps is classified as loosening `defaults.sendCaps`; no command or tool
+here raises them, so it is the user's own edit to their configuration. Lowering them needs nothing.
 
 ## 5. The ten-minute lifetime
 

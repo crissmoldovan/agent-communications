@@ -141,7 +141,19 @@ when the mailbox's change policy is `confirm`.
 
 ### An agent sent mail without asking me
 
-Then something else sent it. Check for another Gmail MCP server:
+Check this package's audit log first:
+
+```bash
+npx -y @agentcomms/core audit tail --inbox <alias>
+```
+
+A `send.execute` line means it went through this package: under the `chat` policy the agent's claim that you said
+yes is all a send needs, and nothing here can check it. A `change.claim` line whose paths end in `sendPolicy` means
+the mailbox's policy was loosened, and its reason says whether that was approved in chat or at a terminal. Under the
+default `chat` change policy an agent can do that on its own claim too; `agentcomms policy confirm` puts it behind a
+code you type.
+
+If neither is there, something else sent it. Check for another Gmail MCP server:
 
 ```bash
 agent-gmail doctor --json | jq '.data.checks[] | select(.id == "other-gmail-servers")'

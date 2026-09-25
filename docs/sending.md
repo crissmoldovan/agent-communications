@@ -48,13 +48,14 @@ Each mailbox has one. `agent-gmail inbox list` shows it.
 | Policy | What it takes | When to use it |
 |---|---|---|
 | `chat` (default) | your yes in the conversation | an agent you are watching |
-| `confirm` | a code typed at a terminal, or into a form from a client that has proved its forms reach a person | an agent you are not watching |
+| `confirm` | a code typed at a terminal, or into a form from a client that has proved its forms reach a person | an agent you are not watching — with the change policy `confirm` too (`agentcomms policy confirm`) |
 | `never` | nothing sends; the draft waits in Gmail | mailboxes an agent should never speak for |
 
 Changing a policy to something weaker is a loosening, and a loosening is a change you approve: the command, or
-`gmail_inbox_policy` from chat, shows you exactly what would change and does nothing until you say yes — no flag an
-agent passes on its own makes it happen. How that yes is given is the mailbox's **change policy**: `chat` (the
-default), your yes in the conversation, or `confirm`, a code typed at a terminal with `agentcomms approve <id>`.
+`gmail_inbox_policy` from chat, shows you exactly what would change and does nothing until the approval it returns
+is claimed. How that is approved is the mailbox's **change policy**. Under `chat`, the default, the agent claims it
+after your yes in the conversation, and nothing can check that you said it. Under `confirm` it cannot be claimed
+until you have typed the code at a terminal with `agentcomms approve <id>`.
 `agent-gmail inbox policy <alias> --change confirm` sets it, and moving it back to `chat` is itself approved at a
 terminal. Making a policy stricter needs nobody — `agent-gmail inbox policy <alias> --send confirm`, or the same
 change from chat.
@@ -81,7 +82,12 @@ the request, not at review.
 Stated plainly, because a security claim that overstates itself is worse than one that does not try.
 
 - **An agent with a shell** can read your tokens, run this CLI, drive a pseudo-terminal, or call Gmail directly. No
-  MCP server can stop that. `confirm` with a trusted client, or `never`, is the answer.
+  MCP server can stop that. `confirm` with a trusted client, or `never`, is the answer — with the change policy
+  `confirm` too (`agentcomms policy confirm`), or the agent can move the mailbox back to `chat` on its own say-so.
+- **An agent you do not watch, under the default `chat` change policy.** The software cannot tell your yes from an
+  agent's, so such an agent can loosen a mailbox from `confirm` or `never` to `chat`, move credentials out of the
+  keychain, or remove an account, each on its own claim — and every one of those is in the audit log. Set
+  `agentcomms policy confirm` for an agent you are not watching.
 - **Another Gmail MCP server** installed beside this one. Everything above assumes it owns the only route to
   Gmail's send endpoints. A second server with an ungated send tool does not break the guarantee so much as stand
   beside it — an agent simply uses the other one. `doctor` lists any it can find, in every client config it can

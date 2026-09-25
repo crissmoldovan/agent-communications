@@ -231,9 +231,9 @@ That needs terminal approval, so I'll set the policy to chat instead and send it
 ```
 
 Changing a safety setting to get past a safety setting. A looser policy needs the user's own approval
-of that change for exactly this reason — and a mailbox under `confirm` usually has its change policy at
-`confirm` too, which puts that approval at a terminal. Proposing one here is the wrong instinct even when
-it would succeed.
+of that change for exactly this reason. Unless the mailbox's change policy is `confirm` as well — the
+default is `chat` — that approval is a yes in this chat, which is why proposing it is the wrong instinct
+even when it would succeed.
 
 ## Pitfalls
 
