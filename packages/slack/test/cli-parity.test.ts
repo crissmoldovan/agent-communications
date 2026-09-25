@@ -110,9 +110,11 @@ test('a --limit or --page that is not a count is refused before anything is aske
     const result = await cli(harness, ['--json', ...argv, '--workspace', 'acme'], { read });
     assert.equal(result.code, EXIT_CODES.USAGE, `${argv.join(' ')} should be a usage error`);
     const [flag, value] = argv.slice(-2);
+    // A search reads one page of results, so its `--limit` has a most as well: see `mcp-parity.test.ts`.
+    const range = flag === '--limit' && argv[0] === 'search' ? 'from 1 to 100' : 'of 1 or more';
     assert.equal(
       result.json<Envelope<never>>().error?.message,
-      `${flag} "${value}" is not a whole number of 1 or more`,
+      `${flag} "${value}" is not a whole number ${range}`,
       argv.join(' '),
     );
   }

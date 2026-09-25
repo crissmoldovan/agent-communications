@@ -271,7 +271,7 @@ agent-slack search [options] <query>
 | Option | What it does | Default |
 |---|---|---|
 | `--workspace <name>` | which workspace, as `organisation/slack` | — |
-| `--limit <n>` | how many matches | `"20"` |
+| `--limit <n>` | how many matches: 1 to 100, one page of results | `"20"` |
 | `--page <n>` | which page of results; `nextPage` in an incomplete result says which is next | — |
 
 ### `agent-slack files`
@@ -286,7 +286,7 @@ agent-slack files [options]
 |---|---|---|
 | `--workspace <name>` | which workspace, as `organisation/slack` | — |
 | `--channel <id>` | only files in one channel | — |
-| `--limit <n>` | how many | `"50"` |
+| `--limit <n>` | how many: 1 to 200, one page of files | `"50"` |
 | `--page <n>` | which page; an incomplete result says which is next | — |
 
 ### `agent-slack people`

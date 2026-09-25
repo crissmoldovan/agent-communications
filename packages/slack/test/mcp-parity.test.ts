@@ -725,3 +725,111 @@ test('a pinned server refuses another workspace’s approval before touching it,
     await Promise.all([unpinned.close(), pinned.close()]);
   }
 });
+
+// ── A number out of range is refused, never clamped ─────────────────────────────────────────────────────────────
+
+test('search and files refuse a limit above the page they read, by the command and the tool alike, rather than clamping it', async () => {
+  /*
+   * `searchMessages` and `listFiles` took `Math.min(limit, 100)` and `Math.min(limit, 200)`, so `search --limit 500`
+   * and `slack_search {limit: 500}` searched 100 and said nothing — and the limit is also the page size, so the
+   * `nextPage` that came back counted pages of 100 for a caller that had asked for 500. Gmail's tools refuse the same
+   * input as USAGE (`gmail_search {limit: 500}`); these are checked by the operation now, before Slack is asked
+   * anything, naming the number as the surface spells it and the range it takes.
+   */
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme' });
+  const counts: Record<string, unknown>[] = [];
+  const read: FakeFetch = async (_input, init) => {
+    counts.push(Object.fromEntries(new URLSearchParams(String(init?.body ?? ''))));
+    return new Response(
+      JSON.stringify({ ok: true, messages: { matches: [], paging: { page: 1, pages: 1 } }, files: [], paging: {} }),
+    );
+  };
+  const cases: Array<{
+    argv: (value: string) => string[];
+    flag: string;
+    tool: string;
+    args: Record<string, unknown>;
+    arg: string;
+    range: string;
+    typed: string[];
+    given: number[];
+  }> = [
+    {
+      argv: (value) => ['search', 'standup', '--workspace', 'acme', `--limit=${value}`],
+      flag: '--limit',
+      tool: 'slack_search',
+      args: { workspace: 'acme', query: 'standup' },
+      arg: 'limit',
+      range: 'from 1 to 100',
+      typed: ['101', '500', '0', '1e2', 'abc'],
+      given: [101, 500, 0, -1],
+    },
+    {
+      argv: (value) => ['files', '--workspace', 'acme', `--limit=${value}`],
+      flag: '--limit',
+      tool: 'slack_files',
+      args: { workspace: 'acme' },
+      arg: 'limit',
+      range: 'from 1 to 200',
+      typed: ['201', '1000', '0', '2e2'],
+      given: [201, 1000, 0],
+    },
+    {
+      argv: (value) => ['search', 'standup', '--workspace', 'acme', `--page=${value}`],
+      flag: '--page',
+      tool: 'slack_search',
+      args: { workspace: 'acme', query: 'standup' },
+      arg: 'page',
+      range: 'of 1 or more',
+      typed: ['0', 'two'],
+      given: [0, -2],
+    },
+    {
+      argv: (value) => ['files', '--workspace', 'acme', `--page=${value}`],
+      flag: '--page',
+      tool: 'slack_files',
+      args: { workspace: 'acme' },
+      arg: 'page',
+      range: 'of 1 or more',
+      typed: ['0'],
+      given: [0],
+    },
+  ];
+  const { call, close } = await connect(harness, { fetch: read });
+  try {
+    for (const { argv, flag, tool, args, arg, range, typed, given } of cases) {
+      for (const value of typed) {
+        const label = argv(value).join(' ');
+        const refused = await cliError(harness, argv(value), read);
+        assert.equal(refused.code, 'USAGE', label);
+        assert.equal(refused.message, `${flag} "${value}" is not a whole number ${range}`, label);
+      }
+      // The tool refuses what the command refuses, from the same check, naming the argument as a tool call spells it.
+      for (const value of given) {
+        const label = `${tool} ${arg}: ${value}`;
+        const refused = failed(await call(tool, { ...args, [arg]: value }));
+        assert.equal(refused.code, 'USAGE', label);
+        assert.equal(refused.message, `${arg} "${value}" is not a whole number ${range}`, label);
+      }
+    }
+    assert.deepEqual(counts, [], 'refused before Slack was asked anything');
+
+    // The most each takes is sent as given, from either surface: a page of 100 matches, and one of 200 files.
+    await cliData(harness, ['search', 'standup', '--workspace', 'acme', '--limit', '100'], read);
+    ok(await call('slack_search', { workspace: 'acme', query: 'standup', limit: 100 }));
+    await cliData(harness, ['files', '--workspace', 'acme', '--limit', '200', '--page', '3'], read);
+    ok(await call('slack_files', { workspace: 'acme', limit: 200, page: 3 }));
+    assert.deepEqual(
+      counts.map(({ count, page }) => [count, page]),
+      [
+        ['100', '1'],
+        ['100', '1'],
+        ['200', '3'],
+        ['200', '3'],
+      ],
+    );
+  } finally {
+    await close();
+  }
+});

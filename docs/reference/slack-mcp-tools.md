@@ -138,8 +138,8 @@ Slack’s own search, in Slack’s syntax. The query is sent verbatim.
 |---|---|---|---|
 | `workspace` | string | no | which workspace, as `organisation/slack` |
 | `query` | string | **yes** |  |
-| `limit` | integer | no |  |
-| `page` | integer | no |  |
+| `limit` | integer | no | matches to return, 1–100: one page of results (default 20) |
+| `page` | integer | no | which page of results, from 1; `nextPage` in an incomplete result says which is next |
 
 ### `slack_people`
 
@@ -162,8 +162,8 @@ Files this account can see. URLs are carried, never fetched.
 |---|---|---|---|
 | `workspace` | string | no | which workspace, as `organisation/slack` |
 | `channel` | string | no |  |
-| `limit` | integer | no |  |
-| `page` | integer | no |  |
+| `limit` | integer | no | files to return, 1–200: one page of files (default 50) |
+| `page` | integer | no | which page, from 1; an incomplete result says which is next |
 
 ### `slack_post_prepare`
 

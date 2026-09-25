@@ -491,8 +491,13 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       inputSchema: {
         ...workspaceArg,
         query: z.string(),
-        limit: z.number().int().positive().optional(),
-        page: z.number().int().positive().optional(),
+        // Whole numbers here; their range is the operation's to check, so this refuses what `search` refuses.
+        limit: z.number().int().optional().describe('matches to return, 1–100: one page of results (default 20)'),
+        page: z
+          .number()
+          .int()
+          .optional()
+          .describe('which page of results, from 1; `nextPage` in an incomplete result says which is next'),
       },
       annotations: readsSlack,
     },
@@ -500,7 +505,12 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       try {
         const { call, name, teamId } = await session(await resolve(args.workspace));
         return reply(
-          await searchMessages(call, name, args.query, { limit: args.limit ?? 20, page: args.page, ourTeamId: teamId }),
+          await searchMessages(call, name, args.query, {
+            limit: args.limit,
+            page: args.page,
+            ourTeamId: teamId,
+            surface: 'mcp',
+          }),
         );
       } catch (error) {
         return fail(error);
@@ -535,15 +545,18 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       inputSchema: {
         ...workspaceArg,
         channel: z.string().optional(),
-        limit: z.number().int().positive().optional(),
-        page: z.number().int().positive().optional(),
+        // Whole numbers here; their range is the operation's to check, so this refuses what `files` refuses.
+        limit: z.number().int().optional().describe('files to return, 1–200: one page of files (default 50)'),
+        page: z.number().int().optional().describe('which page, from 1; an incomplete result says which is next'),
       },
       annotations: readsSlack,
     },
     async (args) => {
       try {
         const { call } = await session(await resolve(args.workspace));
-        return reply(await listFiles(call, { channel: args.channel, limit: args.limit ?? 50, page: args.page }));
+        return reply(
+          await listFiles(call, { channel: args.channel, limit: args.limit, page: args.page, surface: 'mcp' }),
+        );
       } catch (error) {
         return fail(error);
       }

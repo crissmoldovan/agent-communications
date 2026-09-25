@@ -224,18 +224,18 @@ configuration problem.`,
   const portOf = (flags: Options, recorded?: number): number => checkedPort(flags.port, recorded);
 
   /**
-   * `--limit` and `--page`, checked as the MCP tools check them: whole numbers from 1.
+   * `--limit` on `channels`, `read`, `thread` and `people`, checked as the MCP tools check it: a whole number from 1.
    *
-   * They were `Number(value)` in Commander's parser, so `--limit abc` became `NaN`, was sent to Slack as
-   * `limit=NaN`, and came back `ok` — a result bounded by whatever Slack made of that, reported as if it were the
-   * bound asked for. The same input over MCP was refused by the schema. And `Number` still read `1e2` as 100 and
-   * `0x10` as 16, so digits are all core's `wholeNumber` takes. Checked here rather than in Commander's parser because
-   * a parser that throws escapes the envelope, and `--json` promises exactly one document.
+   * It was `Number(value)` in Commander's parser, so `--limit abc` became `NaN`, was sent to Slack as `limit=NaN`, and
+   * came back `ok` — a result bounded by whatever Slack made of that, reported as if it were the bound asked for. The
+   * same input over MCP was refused by the schema. And `Number` still read `1e2` as 100 and `0x10` as 16, so digits
+   * are all core's `wholeNumber` takes. Checked here rather than in Commander's parser because a parser that throws
+   * escapes the envelope, and `--json` promises exactly one document. `search` and `files` hand theirs, and `--page`,
+   * to the operation as typed: those have a most, and the operation checks it for the tool as well.
+   *
+   * It always has a default, so it is never absent by the time a command reads it.
    */
-  const countOf = (flags: Options, flag: 'limit' | 'page'): number | undefined =>
-    wholeNumber(flags[flag], { name: `--${flag}`, min: 1 });
-  /** `--limit`, which always has a default, so it is never absent by the time a command reads it. */
-  const limitOf = (flags: Options): number => countOf(flags, 'limit') as number;
+  const limitOf = (flags: Options): number => wholeNumber(flags.limit, { name: '--limit', min: 1 }) as number;
 
   // ── manifest ────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -705,17 +705,19 @@ configuration problem.`,
 
   workspaceOption(program.command('search <query>'))
     .description('Slack’s own search, in Slack’s syntax, over this workspace')
-    .option('--limit <n>', 'how many matches', '20')
+    .option('--limit <n>', 'how many matches: 1 to 100, one page of results', '20')
     .option('--page <n>', 'which page of results; `nextPage` in an incomplete result says which is next')
     .action(
       act(async (context, options, query: string, flags: Options) => {
         // `teamId` too, as `read` and `thread` pass it: without it an author from another organisation was not
         // marked `external` here, while the same search over MCP marked them — one message, two answers.
         const { call, name, teamId } = await session(context, String(flags.workspace));
+        // As typed: the operation checks both, for `slack_search` too — see `SEARCH_LIMIT`.
         const result = await searchMessages(call, name, query, {
-          limit: limitOf(flags),
-          page: countOf(flags, 'page'),
+          limit: flags.limit,
+          page: flags.page,
           ourTeamId: teamId,
+          surface: context.surface,
         });
         writeResult(result, output(), () => renderSearch(result, options.color), streams);
       }),
@@ -724,15 +726,17 @@ configuration problem.`,
   workspaceOption(program.command('files'))
     .description('files shared in this workspace')
     .option('--channel <id>', 'only files in one channel')
-    .option('--limit <n>', 'how many', '50')
+    .option('--limit <n>', 'how many: 1 to 200, one page of files', '50')
     .option('--page <n>', 'which page; an incomplete result says which is next')
     .action(
       act(async (context, options, flags: Options) => {
         const { call } = await session(context, String(flags.workspace));
+        // As typed: the operation checks both, for `slack_files` too — see `FILES_LIMIT`.
         const result = await listFiles(call, {
           channel: flags.channel as string | undefined,
-          limit: limitOf(flags),
-          page: countOf(flags, 'page'),
+          limit: flags.limit,
+          page: flags.page,
+          surface: context.surface,
         });
         writeResult(result, output(), () => renderFiles(result, options.color), streams);
       }),

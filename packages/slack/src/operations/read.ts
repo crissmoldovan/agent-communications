@@ -2,6 +2,7 @@ import { newBoundary } from '@agentcomms/core';
 import { callSlack, paginate, type SlackCall } from '../api/call.ts';
 import { senderField } from '../text/field.ts';
 import { type ReadMessage, readMessage } from '../text/message.ts';
+import { type NumberOption, numberOption } from './numbers.ts';
 import { type Channel, channelOf, NameBook, type Person, personOf } from './people.ts';
 
 /**
@@ -232,24 +233,43 @@ export interface SearchResult {
 }
 
 /**
+ * Which page of a search or a file list: Slack's own numbering, from 1. The last page is Slack's to say, in `paging`.
+ */
+export const PAGE: NumberOption = { flag: '--page', arg: 'page', min: 1 };
+
+/** How many matches one search returns: at most one page of `search.messages`, which holds 100. */
+export const SEARCH_LIMIT: NumberOption = { flag: '--limit', arg: 'limit', min: 1, max: 100 };
+
+export interface SearchOptions {
+  /** How many matches, as given; checked against {@link SEARCH_LIMIT}. Twenty when left out. */
+  limit?: unknown;
+  /** Which page, as given; checked against {@link PAGE}. The first when left out. */
+  page?: unknown;
+  ourTeamId?: string | undefined;
+  /** Which surface asked, so a refusal names the number as that surface spells it: `--limit` or `limit`. */
+  surface?: 'cli' | 'mcp' | undefined;
+}
+
+/**
  * Slack's own search, which is a user-token method with no bot equivalent.
  *
  * The query goes to Slack verbatim — it is the person's search, in Slack's syntax, and rewriting it would mean
  * reporting results for a question nobody asked. What comes *back* is sender-controlled and goes through the same
  * funnel as everything else.
+ *
+ * The limit is refused above what one page holds, not cut down to it. It is also the page size, so a limit of 500
+ * searched as 100 came back with a `nextPage` counted in pages of 100 — for a caller that believed it had asked for 500
+ * at a time. Checked before Slack is asked anything, for the command and the tool alike.
  */
 export async function searchMessages(
   call: SlackCall,
   accountName: string,
   query: string,
-  options: { limit?: number | undefined; page?: number | undefined; ourTeamId?: string | undefined } = {},
+  options: SearchOptions = {},
 ): Promise<SearchResult> {
-  const limit = Math.min(options.limit ?? 20, 100);
-  const response = await callSlack(call, 'search.messages', {
-    query,
-    count: limit,
-    page: options.page ?? 1,
-  });
+  const limit = numberOption(options.surface, options.limit, SEARCH_LIMIT) ?? 20;
+  const page = numberOption(options.surface, options.page, PAGE) ?? 1;
+  const response = await callSlack(call, 'search.messages', { query, count: limit, page });
   const matches = (response.messages as Raw | undefined) ?? {};
   const raws = list(matches.matches);
   const book = new NameBook();
@@ -334,22 +354,34 @@ export interface FilesResult {
   readonly page?: number | undefined;
 }
 
-/** The files this account can see, newest first, bounded. */
-export async function listFiles(
-  call: SlackCall,
-  options: {
-    channel?: string | undefined;
-    user?: string | undefined;
-    limit?: number | undefined;
-    page?: number | undefined;
-  } = {},
-): Promise<FilesResult> {
-  const limit = Math.min(options.limit ?? 50, 200);
+/** How many files one list returns: at most 200, one page of `files.list` as this reads it. */
+export const FILES_LIMIT: NumberOption = { flag: '--limit', arg: 'limit', min: 1, max: 200 };
+
+export interface FilesOptions {
+  channel?: string | undefined;
+  user?: string | undefined;
+  /** How many files, as given; checked against {@link FILES_LIMIT}. Fifty when left out. */
+  limit?: unknown;
+  /** Which page, as given; checked against {@link PAGE}. The first when left out. */
+  page?: unknown;
+  /** Which surface asked, so a refusal names the number as that surface spells it: `--limit` or `limit`. */
+  surface?: 'cli' | 'mcp' | undefined;
+}
+
+/**
+ * The files this account can see, newest first, bounded.
+ *
+ * The limit is the page size, as it is for {@link searchMessages}, and is refused above 200 rather than cut down to it
+ * — for the same reason: the `page` an incomplete result names would be counted in pages the caller never asked for.
+ */
+export async function listFiles(call: SlackCall, options: FilesOptions = {}): Promise<FilesResult> {
+  const limit = numberOption(options.surface, options.limit, FILES_LIMIT) ?? 50;
+  const page = numberOption(options.surface, options.page, PAGE) ?? 1;
   const response = await callSlack(call, 'files.list', {
     channel: options.channel,
     user: options.user,
     count: limit,
-    page: options.page ?? 1,
+    page,
   });
   const paging = (response.paging as Raw | undefined) ?? {};
   const pages = typeof paging.pages === 'number' ? paging.pages : 1;
