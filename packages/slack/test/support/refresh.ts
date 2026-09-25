@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { type AccountConfig, CommsError, type SecretStore } from '@agentcomms/core';
 import { parseBundle, type TokenBundle } from '../../src/auth/bundle.ts';
+import type { ExitSignal, SignalHost } from '../../src/auth/exit.ts';
 import type { PersistPolicy } from '../../src/auth/refresh.ts';
 import { SlackContext } from '../../src/context.ts';
 import type { Harness } from './harness.ts';
@@ -85,6 +87,68 @@ export function flakyStore(inner: SecretStore): FlakyStore {
     },
   };
   return self;
+}
+
+/**
+ * The keychain's timeout, as it really behaves: the call is reported failed while the native write it started
+ * stays pending on an OS dialog, and lands when the person answers — `landsAfterMs` later. Reads fail fast while
+ * it is pending, and `settled()` resolves once it has landed.
+ */
+export function markerLandsLate(inner: SecretStore, landsAfterMs: number): SecretStore & { settled(): Promise<void> } {
+  let landing: Promise<void> | null = null;
+  let busy = false;
+  const refuse = (): never => {
+    throw new CommsError('KEYCHAIN_APPROVAL_PENDING', 'the keychain is waiting for a person');
+  };
+  return {
+    kind: inner.kind,
+    async get(ref) {
+      if (busy) refuse();
+      return inner.get(ref);
+    },
+    delete: (ref) => inner.delete(ref),
+    invalidate: (ref) => inner.invalidate(ref),
+    async set(ref, value) {
+      if (busy) refuse();
+      if (landing === null) {
+        busy = true;
+        landing = (async () => {
+          await new Promise((resolve) => setTimeout(resolve, landsAfterMs));
+          await inner.set(ref, value);
+          busy = false;
+        })();
+        refuse();
+      }
+      return inner.set(ref, value);
+    },
+    settled: async () => {
+      await landing;
+    },
+  };
+}
+
+/** A process to send signals to, which records a signal it is sent back instead of dying of it. */
+export interface FakeProcess extends SignalHost {
+  emit(signal: ExitSignal): boolean;
+  /**
+   * Every signal sent with `kill`, and how many handlers for either signal were still installed at that moment. One
+   * for the signal sent back catches it, so it never reaches Node's default and ends nothing; one for the other
+   * starts a second hold in a process that has already decided to go.
+   */
+  readonly raised: { pid: number; signal: ExitSignal; listening: number }[];
+}
+
+export function fakeProcess(): FakeProcess {
+  const raised: FakeProcess['raised'] = [];
+  const host = Object.assign(new EventEmitter(), {
+    pid: 4242,
+    raised,
+    kill(pid: number, signal: ExitSignal) {
+      raised.push({ pid, signal, listening: host.listenerCount('SIGINT') + host.listenerCount('SIGTERM') });
+      return true;
+    },
+  });
+  return host;
 }
 
 /** Polls for a condition rather than sleeping a fixed time, which a loaded machine makes too short. */

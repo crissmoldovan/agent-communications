@@ -9,10 +9,18 @@ import { settleRefreshes } from './refresh.ts';
  * same way, because the same refresh runs inside either.
  */
 
-/** What `exitAfterRefreshes` needs from the process, so a test can send the signal without being killed by it. */
+/** The two signals a process is asked to leave by: a client's SIGTERM, and a person's Ctrl-C. */
+export type ExitSignal = 'SIGTERM' | 'SIGINT';
+
+/**
+ * What `exitAfterRefreshes` needs from the process, so a test can send the signal — and see it sent again — without
+ * being killed by it.
+ */
 export interface SignalHost {
-  once(signal: 'SIGTERM' | 'SIGINT', listener: () => void): unknown;
-  removeListener(signal: 'SIGTERM' | 'SIGINT', listener: () => void): unknown;
+  readonly pid: number;
+  once(signal: ExitSignal, listener: () => void): unknown;
+  removeListener(signal: ExitSignal, listener: () => void): unknown;
+  kill(pid: number, signal: ExitSignal): unknown;
 }
 
 /** Where the warnings go: stderr, which for an MCP server is the log its client keeps. */
@@ -26,6 +34,14 @@ export interface WarningSink {
  * Bounded, because a client is entitled to its server going away and a person to their prompt back.
  */
 const EXIT_WAIT_MS = 45_000;
+
+/**
+ * How long a process that re-raised its signal is given to die of it before it exits with the conventional status.
+ *
+ * On POSIX the re-raised signal ends the process before this starts to count. It is for a platform where re-raising
+ * does not — Windows has no POSIX signals — so that a signal can never leave the process running.
+ */
+const REDELIVERY_GRACE_MS = 1_000;
 
 /**
  * Settles every refresh this process has started, and says on `stderr` which workspace anything was left for.
@@ -50,6 +66,13 @@ export async function settleBeforeExit(stderr: WarningSink, waitMs: number = EXI
  * Each signal is taken once, so a second one — a person pressing Ctrl-C again — gets Node's default and ends the
  * process immediately. With nothing in flight the exit is as prompt as the default's. Returns a function that
  * removes the handlers.
+ *
+ * Once settled, the process dies **by the signal**, as it would have with no handler, rather than exiting with 130
+ * or 143. The difference is what a parent sees, and bash acts on it: running a script, it takes a child that exits
+ * normally after SIGINT as one that dealt with the interrupt, and goes on to the next line — so Ctrl-C on a loop of
+ * `agent-slack` commands, or on a read followed by an approved `post send`, stopped one command and ran the next.
+ * With nothing to settle that happens at once, so a command with no refresh to protect ends exactly as it would
+ * have without the hold.
  */
 export function exitAfterRefreshes(
   options: { host?: SignalHost; waitMs?: number; exit?: (code: number) => void; stderr?: WarningSink } = {},
@@ -58,15 +81,21 @@ export function exitAfterRefreshes(
   const waitMs = options.waitMs ?? EXIT_WAIT_MS;
   const exit = options.exit ?? ((code: number) => process.exit(code));
   const stderr = options.stderr ?? process.stderr;
-  const on = (signal: 'SIGTERM' | 'SIGINT') => () => {
-    void settleBeforeExit(stderr, waitMs).finally(() => exit(signal === 'SIGINT' ? 130 : 143));
+  const on = (signal: ExitSignal) => () => {
+    void settleBeforeExit(stderr, waitMs).finally(() => {
+      // With no listener left, the signal sent again meets Node's default, which is to die of it.
+      release();
+      setTimeout(() => exit(signal === 'SIGINT' ? 130 : 143), REDELIVERY_GRACE_MS);
+      host.kill(host.pid, signal);
+    });
   };
   const onTerm = on('SIGTERM');
   const onInt = on('SIGINT');
-  host.once('SIGTERM', onTerm);
-  host.once('SIGINT', onInt);
-  return () => {
+  const release = () => {
     host.removeListener('SIGTERM', onTerm);
     host.removeListener('SIGINT', onInt);
   };
+  host.once('SIGTERM', onTerm);
+  host.once('SIGINT', onInt);
+  return release;
 }

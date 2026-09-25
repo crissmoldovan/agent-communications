@@ -95,7 +95,10 @@ export interface CliDeps extends SlackContextOptions {
   read?: FetchLike;
   /** Where Slack is, for a test that stands one up locally rather than relaxing the origin check. */
   slackBaseUrl?: string;
-  /** Where the hold on SIGINT and SIGTERM listens, and how it exits. Injected so a test is not killed by it. */
+  /**
+   * Where the hold on SIGINT and SIGTERM listens and sends the signal back once it is done, and how it exits where
+   * that does not end the process. Injected so a test is not killed by it.
+   */
   signals?: { host: SignalHost; exit(code: number): void };
 }
 

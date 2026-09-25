@@ -1,15 +1,15 @@
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
+import { spawn } from 'node:child_process';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
+import { EXIT_CODES } from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport, type Transport } from '@modelcontextprotocol/server';
-import type { SignalHost } from '../src/auth/exit.ts';
 import { settleRefreshes } from '../src/auth/refresh.ts';
 import { run } from '../src/cli/program.ts';
 import { createSlackMcpServer, serveUntilClosed } from '../src/mcp/server.ts';
-import { newHarness, slackOk } from './support/harness.ts';
-import { expired, flakyStore, QUICK, stored, until } from './support/refresh.ts';
+import { newHarness, slackOk, tempDir } from './support/harness.ts';
+import { expired, fakeProcess, flakyStore, markerLandsLate, QUICK, stored, until } from './support/refresh.ts';
 
 /**
  * Leaving a process with a renewed token in hand: a CLI command that ends, an MCP client that closes the
@@ -102,6 +102,51 @@ test('a CLI command that cannot write down its renewed token says so on stderr, 
   }
 });
 
+test('a CLI command takes back a marker that lands after the wait for it was given up, before it returns', async () => {
+  /*
+   * The keychain dialog raised by the marker write is answered after the refresh has stopped waiting for it, so
+   * the marker lands with nothing behind it. A command makes no next call, so the end of the command is the only
+   * moment left to take it back — and it has to wait for the store to be free, because every read fails fast until
+   * the dialog is answered. Left there, the marker becomes a re-authorisation for a token that never left.
+   */
+  const harness = await newHarness();
+  const account = await expired(harness);
+  // QUICK gives up waiting for the store after 200 ms; the marker lands at 400.
+  const store = markerLandsLate(await harness.core.secrets('file'), 400);
+  const stderr = captured();
+  const running = run(['--json', 'channels', '--workspace', 'acme'], {
+    core: { ...harness.core, secrets: async () => store },
+    env: harness.env,
+    exchange: (params) => harness.exchange(params),
+    persist: QUICK,
+    streams: { stdout: new PassThrough(), stderr: stderr.stream, stdin: new PassThrough() },
+    read: noChannels,
+  });
+  try {
+    // Bounded: an exit that waits on the store for ever would stall the suite rather than fail it.
+    let timer: NodeJS.Timeout | undefined;
+    const code = await Promise.race([
+      running,
+      new Promise<'hung'>((resolve) => {
+        timer = setTimeout(resolve, 10_000, 'hung');
+      }),
+    ]);
+    clearTimeout(timer);
+    assert.notEqual(code, 'hung', 'the command never returned');
+    assert.equal(code, EXIT_CODES.TRANSIENT, 'the command did not report the keychain waiting for a person');
+    assert.equal(harness.calls.length, 0, 'the token was sent without its marker');
+    await store.settled();
+    const after = await stored(harness, account.secretRef);
+    assert.equal(after?.state, 'ready', 'the command left a marker nobody is behind');
+    assert.equal(after?.attempt, undefined);
+    assert.equal(after?.refreshToken, 'fake-refresh-token-0', 'the credential changed although nothing was sent');
+    assert.equal(stderr.text(), '');
+  } finally {
+    await running;
+    await settleRefreshes(5_000);
+  }
+});
+
 test('Ctrl-C during a CLI command’s refresh waits for Slack’s reply to be written before exiting', async () => {
   // The MCP server has held SIGTERM and SIGINT for this since it had a refresh; a command runs the same refresh.
   const harness = await newHarness();
@@ -114,7 +159,7 @@ test('Ctrl-C during a CLI command’s refresh waits for Slack’s reply to be wr
     await answered;
     return renewed();
   };
-  const host = new EventEmitter();
+  const host = fakeProcess();
   const exits: number[] = [];
   const running = run(['--json', 'channels', '--workspace', 'acme'], {
     core: harness.core,
@@ -122,23 +167,91 @@ test('Ctrl-C during a CLI command’s refresh waits for Slack’s reply to be wr
     exchange: (params) => harness.exchange(params),
     streams: { stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough() },
     read: noChannels,
-    signals: { host: host as unknown as SignalHost, exit: (code) => exits.push(code) },
+    signals: { host, exit: (code) => exits.push(code) },
   });
   try {
     await until(() => harness.calls.length === 1);
     host.emit('SIGINT');
     await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(host.raised, [], 'the command died with a refresh in flight');
     assert.deepEqual(exits, [], 'the command exited with a refresh in flight');
     answer();
     assert.equal(await running, 0);
-    await until(() => exits.length > 0, 5_000);
-    assert.deepEqual(exits, [130]);
+    await until(() => host.raised.length > 0, 5_000);
+    /*
+     * Then it dies of the Ctrl-C, as it would have with no hold: sent again with nothing left to catch it. An exit
+     * status of 130 instead is what a bash script takes for a command that dealt with the interrupt, and it runs
+     * the next line.
+     */
+    assert.deepEqual(host.raised, [{ pid: host.pid, signal: 'SIGINT', listening: 0 }]);
+    assert.deepEqual(exits, [], 'the command exited with a status instead of dying by the signal');
     assert.equal((await stored(harness, account.secretRef))?.refreshToken, 'fake-new-refresh');
   } finally {
     answer();
     await running;
   }
 });
+
+/** Windows has no POSIX signals for a process to die of; there the status the signal stands for is used instead. */
+const posixOnly = { skip: process.platform === 'win32' };
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  test(
+    `${signal} ends a process holding for refreshes by ${signal}, so a script running it stops as well`,
+    posixOnly,
+    async () => {
+      /*
+       * What a parent is told, from a real process. bash waits on a command, and when the command exits normally
+       * after SIGINT it takes the interrupt as handled and carries on with the script — the next command in a
+       * loop, or an approved `post send` after a read. Only a child that died by the signal stops the script.
+       */
+      const exitModule = new URL('../src/auth/exit.ts', import.meta.url).href;
+      const script = [
+        `const { exitAfterRefreshes } = await import(${JSON.stringify(exitModule)});`,
+        'exitAfterRefreshes();',
+        'setInterval(() => {}, 60_000);',
+        "process.stdout.write('holding\\n');",
+      ].join('\n');
+      const child = spawn(
+        process.execPath,
+        [
+          '--experimental-strip-types',
+          '--disable-warning=ExperimentalWarning',
+          '--input-type=module',
+          '--eval',
+          script,
+        ],
+        { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, AGENT_COMMS_CONFIG_DIR: tempDir() } },
+      );
+      let output = '';
+      child.stdout.on('data', (chunk) => {
+        output += String(chunk);
+      });
+      child.stderr.on('data', (chunk) => {
+        output += String(chunk);
+      });
+      const ended = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
+        child.on('exit', (code, signal) => resolve({ code, signal })),
+      );
+      try {
+        await until(() => output.includes('holding'), 10_000);
+        child.kill(signal);
+        // Bounded: a process that ignored the signal would otherwise stall the suite rather than fail it.
+        let timer: NodeJS.Timeout | undefined;
+        const result = await Promise.race([
+          ended,
+          new Promise<'running'>((resolve) => {
+            timer = setTimeout(resolve, 10_000, 'running');
+          }),
+        ]);
+        clearTimeout(timer);
+        assert.deepEqual(result, { code: null, signal }, `the process did not die by ${signal}:\n${output}`);
+      } finally {
+        child.kill('SIGKILL');
+      }
+    },
+  );
+}
 
 test('an MCP client that closes the connection without a signal still gets the kept token written down', async () => {
   /*

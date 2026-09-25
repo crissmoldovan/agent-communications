@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
 import { CommsError, type SecretStore } from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
@@ -7,12 +6,22 @@ import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { callSlack } from '../src/api/call.ts';
 import { closedPermit } from '../src/api/guard.ts';
 import { serialiseBundle, type TokenBundle } from '../src/auth/bundle.ts';
-import { exitAfterRefreshes, type SignalHost } from '../src/auth/exit.ts';
+import { exitAfterRefreshes } from '../src/auth/exit.ts';
 import { accessTokenFor } from '../src/auth/refresh.ts';
 import { run } from '../src/cli/program.ts';
 import { openWorkspace } from '../src/operations/session.ts';
 import { newHarness, slackOk } from './support/harness.ts';
-import { contextFor, expired, flakyStore, HOUR, QUICK, stored, until } from './support/refresh.ts';
+import {
+  contextFor,
+  expired,
+  fakeProcess,
+  flakyStore,
+  HOUR,
+  markerLandsLate,
+  QUICK,
+  stored,
+  until,
+} from './support/refresh.ts';
 
 /**
  * Where the result goes: the error surfaces, a store that will not take it, a forced renewal, and shutdown.
@@ -277,44 +286,6 @@ test('while the store fails reads as well as writes, the renewed token this proc
   assert.equal(harness.calls.length, 1, 'Slack was asked again to fix a storage problem');
 });
 
-/**
- * The keychain's timeout, as it really behaves: the call is reported failed while the native write it started
- * stays pending on an OS dialog, and lands when the person answers — `landsAfterMs` later. Reads fail fast while
- * it is pending, and `settled()` resolves once it has landed.
- */
-function markerLandsLate(inner: SecretStore, landsAfterMs: number): SecretStore & { settled(): Promise<void> } {
-  let landing: Promise<void> | null = null;
-  let busy = false;
-  const refuse = (): never => {
-    throw new CommsError('KEYCHAIN_APPROVAL_PENDING', 'the keychain is waiting for a person');
-  };
-  return {
-    kind: inner.kind,
-    async get(ref) {
-      if (busy) refuse();
-      return inner.get(ref);
-    },
-    delete: (ref) => inner.delete(ref),
-    invalidate: (ref) => inner.invalidate(ref),
-    async set(ref, value) {
-      if (busy) refuse();
-      if (landing === null) {
-        busy = true;
-        landing = (async () => {
-          await new Promise((resolve) => setTimeout(resolve, landsAfterMs));
-          await inner.set(ref, value);
-          busy = false;
-        })();
-        refuse();
-      }
-      return inner.set(ref, value);
-    },
-    settled: async () => {
-      await landing;
-    },
-  };
-}
-
 test('a marker whose write failed but landed later is taken back before anyone else can find it', async () => {
   /*
    * Nothing was sent — the exchange never started — but the marker arrives once the dialog is answered, with no
@@ -462,19 +433,22 @@ test('SIGTERM during a refresh waits for Slack’s reply to be written before ex
     await answered;
     return slackOk({ authed_user: { access_token: 'fake-new-access', refresh_token: 'fake-new-refresh' } });
   };
-  const host = new EventEmitter();
+  const host = fakeProcess();
   const exits: number[] = [];
-  const release = exitAfterRefreshes({ host: host as unknown as SignalHost, exit: (code) => exits.push(code) });
+  const release = exitAfterRefreshes({ host, exit: (code) => exits.push(code) });
   try {
     const opening = openWorkspace(contextFor(harness), 'acme');
     await until(() => harness.calls.length === 1);
     host.emit('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(host.raised, [], 'the process died with a refresh in flight');
     assert.deepEqual(exits, [], 'the process exited with a refresh in flight');
     answer();
     await opening;
-    await until(() => exits.length > 0);
-    assert.deepEqual(exits, [143]);
+    await until(() => host.raised.length > 0);
+    // Sent again with nothing left to catch it, so the process dies of it — what its parent is told happened.
+    assert.deepEqual(host.raised, [{ pid: host.pid, signal: 'SIGTERM', listening: 0 }]);
+    assert.deepEqual(exits, [], 'the process exited with a status instead of dying by the signal');
     assert.equal((await stored(harness, account.secretRef))?.refreshToken, 'fake-new-refresh');
   } finally {
     release();
@@ -492,20 +466,19 @@ test('SIGTERM with a refresh that never settles still exits, after the bound', a
     await gate;
     return slackOk();
   };
-  const host = new EventEmitter();
-  const exits: number[] = [];
-  const release = exitAfterRefreshes({
-    host: host as unknown as SignalHost,
-    waitMs: 100,
-    exit: (code) => exits.push(code),
-  });
+  const host = fakeProcess();
+  const release = exitAfterRefreshes({ host, waitMs: 100, exit: () => {} });
   const opening = openWorkspace(contextFor(harness), 'acme');
   try {
     await until(() => harness.calls.length === 1);
     host.emit('SIGINT');
     // The exchange is never answered before this resolves, so only the bound can end the wait.
-    await until(() => exits.length > 0, 10_000);
-    assert.deepEqual(exits, [130], 'a stuck refresh held the process past its bound');
+    await until(() => host.raised.length > 0, 10_000);
+    assert.deepEqual(
+      host.raised,
+      [{ pid: host.pid, signal: 'SIGINT', listening: 0 }],
+      'a stuck refresh held the process past its bound',
+    );
   } finally {
     release();
     answer();
@@ -527,14 +500,31 @@ test('SIGTERM writes down a renewed token this process is still holding before i
   await openWorkspace(context, 'acme', { persist: QUICK });
   store.failing = false;
 
-  const host = new EventEmitter();
-  const exits: number[] = [];
-  const release = exitAfterRefreshes({ host: host as unknown as SignalHost, exit: (code) => exits.push(code) });
+  const host = fakeProcess();
+  const release = exitAfterRefreshes({ host, exit: () => {} });
   try {
     host.emit('SIGTERM');
-    await until(() => exits.length > 0);
-    assert.deepEqual(exits, [143]);
+    await until(() => host.raised.length > 0);
+    assert.deepEqual(host.raised, [{ pid: host.pid, signal: 'SIGTERM', listening: 0 }]);
     assert.equal((await stored(harness, account.secretRef))?.refreshToken, 'fake-new-refresh');
+  } finally {
+    release();
+  }
+});
+
+test('a process its re-raised signal does not end still exits, with the status that signal stands for', async () => {
+  /*
+   * Where sending the signal again does not end the process — Windows has no POSIX signals — the hold must not be
+   * what keeps it running. This process survives the signal it is sent back, as a Windows one would.
+   */
+  const host = fakeProcess();
+  const exits: number[] = [];
+  const release = exitAfterRefreshes({ host, exit: (code) => exits.push(code) });
+  try {
+    host.emit('SIGINT');
+    await until(() => exits.length > 0, 5_000);
+    assert.deepEqual(exits, [130]);
+    assert.equal(host.raised.length, 1, 'the status was used without first trying to die by the signal');
   } finally {
     release();
   }

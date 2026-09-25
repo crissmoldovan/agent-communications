@@ -622,6 +622,13 @@ export async function settleRefreshes(timeoutMs: number): Promise<UnsettledRefre
             lockPathFor(deps.stateDir, accountId),
             async () => {
               const secrets = await deps.openSecrets();
+              /*
+               * Wait for the store to be free before looking. A keychain call held by an OS dialog makes every read
+               * fail fast until the dialog is answered — and the call it is holding may be this very entry's marker,
+               * which lands when the person clicks Allow. Read now, and the read fails, nothing is written, and the
+               * marker arrives after the process's last chance to take it back.
+               */
+              if (secrets.settled) await within(secrets.settled(), deadline - Date.now());
               secrets.invalidate(secretRef);
               const current = parseBundle(await secrets.get(secretRef));
               if (current) await settlePending(secrets, accountId, secretRef, pending, current);
