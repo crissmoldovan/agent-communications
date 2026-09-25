@@ -370,6 +370,76 @@ test('the change policy: reported the same by the tool and the command, tightene
   }
 });
 
+test('tightening the default says which mailboxes and workspaces still approve in chat, and how to tighten each', async () => {
+  /*
+   * Under the default `chat`, setting a mailbox to `chat` itself loosens nothing, so it asks nobody (design §3.3). It
+   * then outlives the person tightening the default: `policy confirm` left it approving its own changes in chat, and
+   * said so only as one more line in a list. The result of tightening, and every report of the default while it
+   * lasts, now names each one and the command that tightens it, from either surface.
+   */
+  const m = machine({
+    accounts: { 'acme/slack': account({ changePolicy: 'chat' }) },
+    inboxes: { 'acme/gmail': inbox() },
+  });
+  const { ok, close } = await connect(m);
+  try {
+    // Loosening nothing, it is applied at once — unchanged, and what the design says.
+    assert.equal((await ok('comms_change_policy', { inbox: 'acme/gmail', set: 'chat' })).applied, true);
+    assert.equal((await ok('comms_change_policy')).looser, undefined, 'a chat default has nothing to warn of');
+
+    // At a terminal: the warning, in words, with a command for each.
+    const byCommand = cli(m, ['policy', 'confirm'], { CLAUDECODE: '1' });
+    assert.equal(byCommand.status, 0, byCommand.stderr);
+    assert.match(byCommand.stdout, /Default change policy: confirm/);
+    assert.match(byCommand.stdout, /Warning: .*2 .*still approve .* in the chat/);
+    assert.match(byCommand.stdout, /\n {2}agentcomms policy --inbox acme\/gmail confirm\n/);
+    assert.match(byCommand.stdout, /\n {2}agentcomms policy --account acme\/slack confirm(\n|$)/);
+
+    // From chat: the same list, with the call that tightens each.
+    const tightened = (await ok('comms_change_policy', { set: 'confirm' })) as { result: Record<string, unknown> };
+    assert.equal(tightened.result.changePolicy, 'confirm');
+    assert.deepEqual(tightened.result.looser, [
+      {
+        kind: 'inbox',
+        name: 'acme/gmail',
+        changePolicy: 'chat',
+        tighten: {
+          command: 'agentcomms policy --inbox acme/gmail confirm',
+          tool: 'comms_change_policy',
+          arguments: { inbox: 'acme/gmail', set: 'confirm' },
+        },
+      },
+      {
+        kind: 'account',
+        name: 'acme/slack',
+        changePolicy: 'chat',
+        tighten: {
+          command: 'agentcomms policy --account acme/slack confirm',
+          tool: 'comms_change_policy',
+          arguments: { account: 'acme/slack', set: 'confirm' },
+        },
+      },
+    ]);
+    assert.match(String(tightened.result.warning), /acme\/gmail/);
+    assert.match(String(tightened.result.warning), /acme\/slack/);
+
+    // A report of the default carries it while it lasts, the same from both surfaces.
+    const report = await ok('comms_change_policy');
+    assert.deepEqual(report, tightened.result);
+    assert.deepEqual(report, cli(m, ['policy', '--json']).json().data);
+
+    // Tightened one by one, it goes.
+    await ok('comms_change_policy', { inbox: 'acme/gmail', set: 'confirm' });
+    await ok('comms_change_policy', { account: 'acme/slack', set: 'confirm' });
+    const settled = await ok('comms_change_policy');
+    assert.equal(settled.looser, undefined);
+    assert.equal(settled.warning, undefined);
+    assert.doesNotMatch(cli(m, ['policy']).stdout, /Warning/);
+  } finally {
+    await close();
+  }
+});
+
 test('loosening the change policy from chat needs a code typed at a terminal, whatever surface asks', async () => {
   const m = machine({ defaults: { changePolicy: 'confirm' }, accounts: { 'acme/slack': account() } });
   const { ok, call, close } = await connect(m);

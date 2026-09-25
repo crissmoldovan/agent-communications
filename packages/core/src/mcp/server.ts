@@ -235,7 +235,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'The change policy',
       description:
-        'Report or set the change policy — how a loosening is approved: `chat`, a yes in this conversation, or `confirm`, a code the person types at their own terminal — for the defaults, one mailbox, or one workspace. Without `set` it only reports. Tightening to `confirm` applies at once. Loosening to `chat` is itself a change, approved under the policy in force, `confirm`: the person runs `agentcomms approve <approvalId>` before you call again with the id.',
+        'Report or set the change policy — how a loosening is approved: `chat`, a yes in this conversation, or `confirm`, a code the person types at their own terminal — for the defaults, one mailbox, or one workspace. Without `set` it only reports. Tightening to `confirm` applies at once. Loosening to `chat` is itself a change, approved under the policy in force, `confirm`: the person runs `agentcomms approve <approvalId>` before you call again with the id. A mailbox or workspace that sets `chat` itself keeps it when the default is tightened: the result then carries `warning` and `looser`, each with the call that tightens it — show the warning to the person.',
       inputSchema: {
         inbox: z.string().optional().describe('one mailbox, as `organisation/gmail`'),
         account: z.string().optional().describe('one workspace, as `organisation/slack`'),

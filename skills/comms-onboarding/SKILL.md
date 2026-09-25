@@ -82,7 +82,9 @@ is `port` in `slack_manifest` with `workspace` (CLI: `agent-slack manifest --wor
 ## 4. Set the policies
 
 `gmail_inbox_policy` and `slack_workspace_policy` set how sends are approved; `comms_change_policy`
-sets how changes are. Tightening applies at once; loosening is a change like any other.
+sets how changes are. Tightening applies at once; loosening is a change like any other. A mailbox or
+workspace set to `chat` itself stays `chat` when the default goes to `confirm`: show the person the
+result's `warning`, and tighten each one it lists if that is what they meant.
 
 ## 5. Check, and hand over
 

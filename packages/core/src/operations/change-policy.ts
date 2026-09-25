@@ -34,6 +34,18 @@ export interface PolicyOverride {
   changePolicy: ChangePolicy;
 }
 
+/** A mailbox or workspace that sets `chat` itself under a `confirm` default, and how to tighten it from either surface. */
+export interface LooserOverride extends PolicyOverride {
+  changePolicy: 'chat';
+  tighten: {
+    /** At a terminal. */
+    command: string;
+    /** From a chat: this tool, with these arguments. */
+    tool: 'comms_change_policy';
+    arguments: { inbox?: string; account?: string; set: 'confirm' };
+  };
+}
+
 export interface ChangePolicyReport {
   scope: 'defaults' | 'inbox' | 'account';
   /** The mailbox or workspace, by the name it has now; null for the defaults. */
@@ -44,6 +56,18 @@ export interface ChangePolicyReport {
   setHere: ChangePolicy | null;
   /** For the defaults: every mailbox and workspace that sets its own, since a default says nothing about those. */
   overrides?: PolicyOverride[];
+  /**
+   * For the defaults under `confirm`: every mailbox and workspace that still sets `chat` itself, with how to tighten
+   * it. Absent when there is none.
+   *
+   * Setting `chat` on one of them under a `chat` default loosens nothing, so it asks nobody (design §3.3) — and it
+   * outlives the default being tightened, since a default never overrides what an account sets. Listed as one more
+   * override, it read as settled. Named here, with the command and the call, so the person tightening the default
+   * sees what their `confirm` does not cover.
+   */
+  looser?: LooserOverride[];
+  /** The same, as a sentence for the person. Absent when `looser` is. */
+  warning?: string;
 }
 
 export function isChangePolicy(value: unknown): value is ChangePolicy {
@@ -81,12 +105,15 @@ export function changePolicyReport(config: Config, scope: PolicyScope = {}): Cha
         account.changePolicy ? [{ kind: 'account' as const, name, changePolicy: account.changePolicy }] : [],
       ),
     ];
+    const changePolicy = defaultChangePolicy(config);
+    const looser = changePolicy === 'confirm' ? overrides.flatMap(stillChat) : [];
     return {
       scope: 'defaults',
       name: null,
-      changePolicy: defaultChangePolicy(config),
+      changePolicy,
       setHere: config.defaults.changePolicy ?? null,
       overrides,
+      ...(looser.length > 0 ? { looser, warning: looserWarning(looser) } : {}),
     };
   }
   const own = target.entry.changePolicy ?? null;
@@ -96,6 +123,35 @@ export function changePolicyReport(config: Config, scope: PolicyScope = {}): Cha
     changePolicy: own ?? defaultChangePolicy(config),
     setHere: own,
   };
+}
+
+/** An override that approves in chat, with how to tighten it; nothing for one that does not. */
+function stillChat(override: PolicyOverride): LooserOverride[] {
+  if (override.changePolicy !== 'chat') return [];
+  // Names are held to a grammar of letters, digits, `-` and `/`, so they go into a command line as they are.
+  const flag = override.kind === 'inbox' ? '--inbox' : '--account';
+  return [
+    {
+      kind: override.kind,
+      name: override.name,
+      changePolicy: 'chat',
+      tighten: {
+        command: `agentcomms policy ${flag} ${override.name} confirm`,
+        tool: 'comms_change_policy',
+        arguments:
+          override.kind === 'inbox'
+            ? { inbox: override.name, set: 'confirm' }
+            : { account: override.name, set: 'confirm' },
+      },
+    },
+  ];
+}
+
+function looserWarning(looser: readonly LooserOverride[]): string {
+  const named = looser.map((entry) => `${entry.kind === 'inbox' ? 'mailbox' : 'workspace'} ${entry.name}`);
+  return looser.length === 1
+    ? `The default is confirm, but ${named[0]} still approves a loosening with a yes in the chat: it sets chat itself, and a default never overrides that.`
+    : `The default is confirm, but ${looser.length} still approve a loosening with a yes in the chat — ${named.join(', ')}: each sets chat itself, and a default never overrides that.`;
 }
 
 /**
