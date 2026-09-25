@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "Set a person up with agent-communications from chat: which channels and accounts, which mode each account should have, the servers registered, every sign-in started, and the steps only they can take named."
+}
