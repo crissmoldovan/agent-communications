@@ -22,12 +22,14 @@ does not declare now gets `USAGE` and the list of fields it takes, where it used
 field. To pick this up, register each server again with `--force` and restart your client.
 
 **Slack `search` and `files` refuse a limit they cannot read.** Above 100 for `search` and 200 for `files`, the
-limit is refused, as the Gmail tools have refused one since 0.5.0. Before, they read fewer and did not say so.
+limit is refused, as the Gmail tools have refused one since 0.5.0. Before, they read fewer and did not say so. The
+limit is checked before the workspace is opened, so a bad one reads no credential and renews no token.
 
 **A Slack draft is shown as what it would post.** `agent-slack draft show`, `draft list`, `slack_draft_get` and
 `slack_draft_list` show the text the post gate would send, as the channel would read it, not the words kept in the
 draft file. A draft the gate would refuse is refused by `show` too, in the gate's own words, so showing a draft and
-posting it can no longer disagree about what it says.
+posting it can no longer disagree about what it says. At the terminal, `draft show` and `draft list` show a hidden
+character escaped (`<U+200B>`), as the post preview does; they used to drop it silently.
 
 **An expired Gmail sign-in says how to start that one again.** It names `inbox reauth` for a re-sign-in and
 `inbox add` for a new mailbox, and the mailbox it was for. Over MCP it names the tool, not a terminal command. Before,
