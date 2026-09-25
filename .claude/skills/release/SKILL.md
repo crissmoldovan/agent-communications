@@ -67,7 +67,7 @@ owner can add (npmjs.com → the package → Settings → Trusted publishing: th
    the publish will; if any has no trusted publisher for this workflow, the run fails there, naming it, with nothing
    published. A package already at this version from this commit is neither sent nor asked about.
    **Complete when:** the run's own registry check reports every package in `scripts/packages.mjs` at the new
-   version, and the `GitHub release` job has made the release page. It asks the registry what arrived rather than
+   version, from the tagged commit, and the `GitHub release` job has made the release page. It asks the registry what arrived rather than
    trusting the publish command, because `pnpm --filter` exits 0 when it matches nothing.
 
    **If the preflight names a package**, nothing was published. Tell the owner which package needs a trusted
@@ -79,9 +79,16 @@ owner can add (npmjs.com → the package → Settings → Trusted publishing: th
    instead of stopping at `core`. When the fix needs a commit, release a new version. A run on any other commit
    refuses the version before sending anything, naming each package already out and the commit it came from.
 
-   **If a leg fails, nothing is published** and the tag names a release that did not happen — move it to the fix
-   rather than leaving it. v0.1.2 did exactly this: green on macOS and Linux, broken on Windows by an absolute
-   path handed to a dynamic `import`, which only the tag workflow could catch.
+   **If a leg fails, nothing is published** and the tag names a release that did not happen — once the run has
+   finished, move it to the fix rather than leaving it. v0.1.2 did exactly this: green on macOS and Linux, broken on
+   Windows by an absolute path handed to a dynamic `import`, which only the tag workflow could catch.
+
+   **Never move or delete a tag while its run is in progress** — cancel the run first, or let it finish. The run
+   checks that the tag still names the commit it started from just before the preflight, again just before the
+   first publish, and before making the GitHub release, and stops, naming both commits, at whichever finds the tag
+   moved or gone. The run the move started waits for it to end. A move after the check before the first publish is
+   too late: the packages go out from the old commit, the run fails at the release page, and the moved tag's run
+   refuses the version; put the tag back and re-run the failed job.
 
    **If it says a package "is not visible yet", do not bump the version.** `npm view` reads a CDN-cached document
    that can lag minutes behind a successful publish. Run `npm dist-tag ls @agentcomms/<name>`, which goes to the
@@ -105,9 +112,10 @@ owner can add (npmjs.com → the package → Settings → Trusted publishing: th
 | `sync-versions --check` fails | the version is written in more than twenty places and they must agree |
 | CHANGELOG.md has no section for the version | the GitHub release is made from it, after the packages are out |
 | A package has no trusted publisher for this workflow | found before anything is published, not after the packages before it went out |
+| The tag no longer names the commit the run started from, before the preflight, the first publish or the release page | a tag moved mid-run left that run to publish the old commit and hang the release page on the new one, green |
 | A package is already at the version from another commit, or with no commit recorded | finishing it would make one version out of two builds; a moved tag did exactly that, green |
 | The repository is private | npm rejects a provenance attestation for a private source repo, with a 422 that arrives after the upload |
-| A package is not visible after publishing | `pnpm --filter` exits 0 when it matches nothing |
+| A package is not visible after publishing, or is there from another commit | `pnpm --filter` exits 0 when it matches nothing, and the release page is made only for what this commit published |
 
 ## What the fallback script refuses, and why
 
@@ -140,8 +148,11 @@ The packages that went out are **on the registry for good**.
 ## Pitfalls
 
 - **Treating the tag as the release.** The tag starts the workflow; the publish happens only if every verify leg
-  and the preflight pass. A tag whose run published nothing names a release that did not happen — move it to the
-  fix rather than leave it implying otherwise.
+  and the preflight pass. A tag whose run has finished without publishing names a release that did not happen —
+  move it to the fix rather than leave it implying otherwise.
+- **Moving a tag while its run is still going.** A run still verifying has published nothing yet, but it will. It
+  stops if it finds its tag moved before its first publish; after that, the old commit is what went out. Cancel the
+  run, or let it finish, before moving or deleting the tag.
 - **Bumping the version, or moving the tag, after a partial CI failure.** For a cause outside the repository,
   re-run the job: it keeps the tagged commit and skips what that commit already published. For a fix that needs a
   commit, bump. Never move the tag once a package is out — the packages already published came from the commit it

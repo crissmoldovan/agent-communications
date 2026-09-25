@@ -20,9 +20,9 @@ name: Release
 # that is always opened is worse than none — it reports a control nobody is exercising.
 #
 # What remains is real rather than ceremonial: the environment accepts `v*` tags and nothing else, the tag must
-# match the version the repository declares, six verify legs must pass first, and every published version carries
-# provenance naming the commit and the run. The residual risk is stated in docs/RELEASING.md rather than papered
-# over: anything that can push a tag to this repository can publish.
+# match the version the repository declares and still name the commit the run started from, six verify legs must pass
+# first, and every published version carries provenance naming the commit and the run. The residual risk is stated in
+# docs/RELEASING.md rather than papered over: anything that can push a tag to this repository can publish.
 
 on:
   push:
@@ -35,6 +35,13 @@ on:
         default: true
 
 permissions: {}
+
+# One run per tag at a time. Moving a tag starts a second run for it, which waits here for the first to end instead of
+# racing it to the registry; the first, asking where the tag points now, stops before its publish (see the tag check
+# below). Queued rather than cancelled: a run cancelled part way through its publish loop leaves a version half out.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   verify:
@@ -110,6 +117,14 @@ jobs:
       - run: pnpm build
       - run: pnpm verify:packages
 
+      # **The tag must still name the commit this run started from.** A run builds the commit its tag named when it
+      # started, whatever the tag names later. Moved to a fix while the verify legs ran, the tag used to leave this run
+      # to publish every package from the old commit and make the GitHub release on the new one, green, and the run for
+      # the fix was refused only afterwards. Asked here, again just before the first publish, and before the release
+      # page; a moved or deleted tag stops the run at whichever finds it. See `scripts/release-ci.mjs tag`.
+      - name: the tag still names this commit
+        run: node scripts/release-ci.mjs tag "$GITHUB_REF_NAME" "$GITHUB_SHA"
+
       # **Prove every package trusts this workflow before publishing any.** Trust is configured per package on npm
       # and cannot be read from outside. When it is missing, pnpm only warns "Skipped OIDC" and that one publish is
       # refused — after the packages before it have gone out, leaving a half-published version. This does the same
@@ -159,6 +174,8 @@ jobs:
           else
             echo "publishing $version under the \"$tag\" dist-tag: $pending"
           fi
+          # Asked again as late as it can be: the build, the package checks and the preflight take minutes of their own.
+          node scripts/release-ci.mjs tag "$GITHUB_REF_NAME" "$GITHUB_SHA"
           for package in $pending; do
             echo "::group::@agentcomms/$package"
             pnpm --config.pnpmfile=scripts/record-git-head.cjs --filter "@agentcomms/$package" publish --access public --no-git-checks --provenance --tag "$tag"
@@ -173,6 +190,11 @@ jobs:
       # 40 attempts, 15 s apart: ten minutes. Twenty was nearly spent on releases that succeeded — the last package
       # became visible on attempt 11 at 0.3.2, 14 at 0.3.1 and 15 at 0.4.0 — and a timeout here now also skips the
       # GitHub release.
+      #
+      # **At this version from this commit, not merely at this version.** The GitHub release waits for this step, and it
+      # used to count a version by its number alone, so one from any commit passed. It reads the commit each version
+      # records instead, as `pending` does, which is empty until the version is visible. One from another commit fails
+      # at once rather than being waited for: what a published version records never changes.
       - name: confirm what reached the registry
         run: |
           set -euo pipefail
@@ -182,9 +204,12 @@ jobs:
           for attempt in $(seq 1 40); do
             still=""
             for package in $missing; do
-              found=$(npm view "@agentcomms/$package@$version" version 2>/dev/null || true)
-              if [ "$found" = "$version" ]; then
-                echo "  ✓ @agentcomms/$package@$version"
+              from=$(npm view "@agentcomms/$package@$version" gitHead 2>/dev/null || true)
+              if [ "$from" = "$GITHUB_SHA" ]; then
+                echo "  ✓ @agentcomms/$package@$version, from $GITHUB_SHA"
+              elif [ -n "$from" ]; then
+                echo "::error::@agentcomms/$package@$version was published from $from, not from this run's commit, $GITHUB_SHA" >&2
+                exit 1
               else
                 still="$still $package"
               fi
@@ -195,10 +220,10 @@ jobs:
             sleep 15
           done
           if [ -n "$missing" ]; then
-            echo "::error::not visible after retrying:$missing — check \`npm dist-tag ls\` before assuming it failed" >&2
+            echo "::error::not visible, or with no commit recorded, after retrying:$missing — check \`npm dist-tag ls\` before assuming it failed" >&2
             exit 1
           fi
-          echo "All confirmed at $version."
+          echo "All confirmed at $version, from $GITHUB_SHA."
 
   # The GitHub release page, made from the changelog section once the registry has confirmed every package. Every
   # release from 0.1.0 to 0.4.0 was made by hand, and 0.3.2's was forgotten for a day. Only for a tag: a manual run
@@ -229,6 +254,8 @@ jobs:
             echo "$GITHUB_REF_NAME already has a release; leaving it as it is."
             exit 0
           fi
+          # `--verify-tag` hangs the release on wherever the tag points by now, which must be what was published.
+          node scripts/release-ci.mjs tag "$GITHUB_REF_NAME" "$GITHUB_SHA"
           node scripts/release-ci.mjs notes "$version" > "$RUNNER_TEMP/notes.md"
           prerelease=""
           case "$version" in *-*) prerelease="--prerelease" ;; esac

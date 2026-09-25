@@ -182,36 +182,93 @@ test('the publish sends only what this commit has not already published, and ask
   assert.match(workflow, /node scripts\/release-ci\.mjs preflight "\$\{GITHUB_REF_NAME#v\}" "\$GITHUB_SHA"/);
 });
 
-// The publish step is bash, run by the ubuntu publish job; the Windows verify legs never execute it.
+// The publish job's steps are bash, and its scripts run on the ubuntu publish runner; the Windows verify legs never
+// execute them, and cannot run the fake `git`, `npm` and `gh` below, which are shell scripts.
 const bashOnly = { skip: process.platform === 'win32' };
+
+/** One step's `run: |` block from the workflow, as the script bash runs, or '' when there is no such step. */
+function stepScript(workflow, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const body = new RegExp(
+    `- name: ${escaped}\\n(?:\\s+env:\\n(?:\\s{10}.*\\n)+)?\\s+run: \\|\\n([\\s\\S]*?)(?:\\n\\n|$)`,
+  ).exec(workflow)?.[1];
+  return body ? `${body.replace(/^ {10}/gm, '')}\n` : '';
+}
+
+/**
+ * Runs a step's script under bash, returning its exit status and output. Bounded, so a step that loops for ever
+ * fails here with a message rather than hanging the suite.
+ */
+async function runStepScript(script, options) {
+  try {
+    const { stdout, stderr } = await exec('bash', [script], { encoding: 'utf8', timeout: 60_000, ...options });
+    return { status: 0, stdout, stderr };
+  } catch (error) {
+    assert.ok(!error.killed, `${script} was still running after a minute`);
+    return { status: error.code, stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') };
+  }
+}
+
+/** What `git ls-remote` prints for the release tag: a lightweight tag is the commit itself. */
+function lightweightTag(commit) {
+  return `${commit}\trefs/tags/v${VERSION}\n`;
+}
+
+/** An annotated tag is an object of its own, and the line after it, `^{}`, is the commit it points to. */
+function annotatedTag(commit) {
+  return `${'e'.repeat(40)}\trefs/tags/v${VERSION}\n${commit}\trefs/tags/v${VERSION}^{}\n`;
+}
+
+/**
+ * A `git` in `dir` that answers every call with `answer` and exits with `status`, writing down what it was asked.
+ *
+ * The scripts under test run `git ls-remote origin`, and nothing here may ask the real origin, so this must come first
+ * on the PATH of every test that reaches that call.
+ */
+async function fakeGit(dir, answer, { status = 0 } = {}) {
+  const log = join(dir, 'git.log');
+  const output = join(dir, 'git.out');
+  await writeFile(output, answer);
+  await writeFile(join(dir, 'git'), `#!/bin/sh\necho "$@" >> "${log}"\ncat "${output}"\nexit ${status}\n`, {
+    mode: 0o755,
+  });
+  await rm(log, { force: true });
+  return { calls: async () => (await readFile(log, 'utf8').catch(() => '')).split('\n').filter(Boolean) };
+}
 
 test(
   'the publish step sends nothing past a package from another commit, and only what is missing',
   bashOnly,
   async () => {
     const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
-    const step = /- name: publish\n\s+run: \|\n([\s\S]*?)\n\n/.exec(workflow)?.[1] ?? '';
     const dir = await tempDir('publish-step-');
-    await writeFile(join(dir, 'step.sh'), step.replace(/^ {10}/gm, ''));
+    await writeFile(join(dir, 'step.sh'), stepScript(workflow, 'publish'));
     // A pnpm that writes down what it was asked to publish instead of publishing it.
     const sent = join(dir, 'sent.log');
     await writeFile(join(dir, 'pnpm'), `#!/bin/sh\necho "$@" >> "${sent}"\n`, { mode: 0o755 });
 
-    async function runStep(published) {
+    async function runStep(published, tag = lightweightTag(COMMIT)) {
       await rm(sent, { force: true });
+      const git = await fakeGit(dir, tag);
       const fake = await fakeOidc({ published });
       try {
         const path = `${dir}${delimiter}${process.env.PATH}`;
         const env = { ...fake.env, PATH: path, GITHUB_REF_NAME: `v${VERSION}`, GITHUB_SHA: COMMIT };
-        const status = await exec('bash', [join(dir, 'step.sh')], { cwd: ROOT, env })
-          .then(() => 0)
-          .catch((error) => error.code);
+        const { status, stderr } = await runStepScript(join(dir, 'step.sh'), { cwd: ROOT, env });
         const calls = await readFile(sent, 'utf8').catch(() => '');
-        return { status, calls: calls.split('\n').filter(Boolean) };
+        return { status, stderr, calls: calls.split('\n').filter(Boolean), asked: await git.calls() };
       } finally {
         await fake.close();
       }
     }
+
+    // The tag moved to a fix while this run was verifying. Nothing is out yet, and this run sends none of it: the
+    // packages would be built from the commit the tag no longer names, and the run for the fix refused afterwards.
+    const retagged = await runStep({}, lightweightTag(OTHER));
+    assert.notEqual(retagged.status, 0, 'a tag that no longer names this commit must stop the publish');
+    assert.deepEqual(retagged.calls, [], 'and nothing may be published before it does');
+    assert.match(retagged.stderr, new RegExp(`v1\\.2\\.3 now names ${OTHER}, not ${COMMIT}`));
+    assert.deepEqual(retagged.asked, [`ls-remote origin refs/tags/v${VERSION} refs/tags/v${VERSION}^{}`]);
 
     // The moved tag: core and gmail are out from another commit. The step fails, and pnpm is never called.
     const moved = await runStep({
@@ -239,6 +296,159 @@ test(
     assert.deepEqual(local.calls, []);
   },
 );
+
+test('a run asks where its tag points now before the preflight, before the first publish and before the release page', async () => {
+  // A run builds the commit its tag named when it started. Moved to a fix while the verify legs ran, the tag left
+  // that run to publish every package from the old commit and then hang the release page on the new one, green.
+  const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  const check = 'node scripts/release-ci.mjs tag "$GITHUB_REF_NAME" "$GITHUB_SHA"';
+
+  // The step just before the preflight is the check, with only the preflight's comments between them.
+  const beforePreflight = new RegExp(
+    `run: ${check.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n(?:[ \\t]*(?:#.*)?\\n)*\\s+- name: every package still to publish trusts this workflow`,
+  );
+  assert.match(workflow, beforePreflight, 'the tag is not checked immediately before the OIDC preflight');
+
+  // Again in the publish step, after `pending` has read the registry and immediately before the loop that sends.
+  const publish = stepScript(workflow, 'publish');
+  const at = publish.indexOf(check);
+  assert.ok(at > publish.indexOf('pending=$(node scripts/release-ci.mjs pending'), 'checked after pending');
+  const loop = publish.indexOf('for package in $pending; do');
+  assert.ok(at !== -1 && at < loop, 'the tag is not checked again before the first publish');
+  assert.doesNotMatch(
+    publish.slice(at + check.length, loop),
+    /\n\s*[^\s#]/,
+    'nothing runs between the check and the loop',
+  );
+
+  // And before the release page is made, which `--verify-tag` hangs on wherever the tag points by then.
+  const release = stepScript(workflow, 'create the release from the changelog');
+  const beforeRelease = release.indexOf(check);
+  assert.ok(beforeRelease !== -1 && beforeRelease < release.indexOf('gh release create'));
+});
+
+test('two runs for one tag never reach the publish together', async () => {
+  // Moving a tag starts a second run for it. Queued behind the first, it cannot race it to the registry; the first,
+  // asked where the tag points now, stops before publishing. Not cancelled, because a run cancelled part way through
+  // its publish loop leaves a version half out.
+  const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  assert.match(workflow, /^concurrency:\n {2}group: release-\$\{\{ github\.ref \}\}\n {2}cancel-in-progress: false\n/m);
+});
+
+test('the GitHub release is not made on a tag that has moved since the run started', bashOnly, async () => {
+  const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  const dir = await tempDir('release-step-');
+  await writeFile(join(dir, 'step.sh'), stepScript(workflow, 'create the release from the changelog'));
+  const changelog = join(dir, 'CHANGELOG.md');
+  await writeFile(changelog, `# Changelog\n\n## ${VERSION}\n\nA thing.\n`);
+  // A gh with no release for the tag yet, which writes down what it was asked to create.
+  const made = join(dir, 'gh.log');
+  await writeFile(join(dir, 'gh'), `#!/bin/sh\n[ "$1 $2" = "release view" ] && exit 1\necho "$@" >> "${made}"\n`, {
+    mode: 0o755,
+  });
+
+  async function runStep(tag) {
+    await rm(made, { force: true });
+    await fakeGit(dir, tag);
+    const env = {
+      ...process.env,
+      PATH: `${dir}${delimiter}${process.env.PATH}`,
+      GITHUB_REF_NAME: `v${VERSION}`,
+      GITHUB_SHA: COMMIT,
+      GITHUB_REPOSITORY: 'example/agent-communications',
+      RUNNER_TEMP: dir,
+      RELEASE_CHANGELOG: changelog,
+    };
+    const { status, stderr } = await runStepScript(join(dir, 'step.sh'), { cwd: ROOT, env });
+    const calls = (await readFile(made, 'utf8').catch(() => '')).split('\n').filter(Boolean);
+    return { status, stderr, calls };
+  }
+
+  const still = await runStep(annotatedTag(COMMIT));
+  assert.equal(still.status, 0, still.stderr);
+  assert.equal(still.calls.length, 1);
+  assert.match(still.calls[0], /^release create v1\.2\.3 .*--verify-tag/);
+
+  // The packages went out from this commit, then the tag moved: a page on the new commit would name a build that
+  // is not the one on npm. The run fails instead, and the moved tag's own run says to put it back.
+  const moved = await runStep(annotatedTag(OTHER));
+  assert.notEqual(moved.status, 0);
+  assert.deepEqual(moved.calls, [], 'no release page for a tag that no longer names what was published');
+  assert.match(moved.stderr, new RegExp(`v1\\.2\\.3 now names ${OTHER}, not ${COMMIT}`));
+});
+
+test('the confirm step passes only what the registry records as published from this commit', bashOnly, async () => {
+  // It is what the GitHub release waits for. Counting a version by its number alone, it passed one from any commit.
+  const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  const dir = await tempDir('confirm-step-');
+  await writeFile(join(dir, 'step.sh'), stepScript(workflow, 'confirm what reached the registry'));
+  const { version } = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
+  const registry = join(dir, 'registry');
+  const late = join(dir, 'late');
+  // An npm that answers `npm view <package>@<version> gitHead` from `registry/`, and only that; and a sleep that
+  // makes whatever is in `late/` visible instead of waiting, so a retry costs nothing here.
+  await writeFile(
+    join(dir, 'npm'),
+    '#!/bin/sh\n' +
+      `[ "$1" = view ] && [ "$3" = gitHead ] || { echo "unexpected npm $*" >&2; exit 2; }\n` +
+      `answer="${registry}/$(printf %s "$2" | tr / _)"\n` +
+      '[ -f "$answer" ] || { echo "npm error code E404" >&2; exit 1; }\n' +
+      'cat "$answer"\n',
+    { mode: 0o755 },
+  );
+  const waits = join(dir, 'sleep.log');
+  await writeFile(
+    join(dir, 'sleep'),
+    `#!/bin/sh\necho "$@" >> "${waits}"\nfor f in "${late}"/*; do [ -e "$f" ] && mv "$f" "${registry}/"; done\nexit 0\n`,
+    { mode: 0o755 },
+  );
+
+  /** `now` and `later` map a package to the commit its version records; `later` appears after the first wait. */
+  async function confirm({ now = {}, later = {} }) {
+    for (const path of [registry, late, waits]) await rm(path, { recursive: true, force: true });
+    await mkdir(registry);
+    await mkdir(late);
+    for (const [into, answers] of [
+      [registry, now],
+      [late, later],
+    ]) {
+      for (const [name, head] of Object.entries(answers)) {
+        await writeFile(join(into, `@agentcomms_${name}@${version}`), `${head}\n`);
+      }
+    }
+    const env = { ...process.env, PATH: `${dir}${delimiter}${process.env.PATH}`, GITHUB_SHA: COMMIT };
+    const result = await runStepScript(join(dir, 'step.sh'), { cwd: ROOT, env });
+    const slept = (await readFile(waits, 'utf8').catch(() => '')).split('\n').filter(Boolean).length;
+    return { ...result, slept };
+  }
+
+  const everyPackage = (head) => Object.fromEntries(PACKAGES.map((name) => [name, head]));
+
+  const done = await confirm({ now: everyPackage(COMMIT) });
+  assert.equal(done.status, 0, done.stderr);
+  assert.match(done.stdout, /All confirmed/);
+  assert.equal(done.slept, 0);
+
+  // Not visible yet is still waited for, as before: confirmed once it arrives, and a failure if it never does.
+  const [first, ...rest] = PACKAGES;
+  const others = Object.fromEntries(rest.map((name) => [name, COMMIT]));
+  const arrived = await confirm({ now: others, later: { [first]: COMMIT } });
+  assert.equal(arrived.status, 0, arrived.stderr);
+  assert.equal(arrived.slept, 1, 'one that arrives after a wait is confirmed then');
+  const never = await confirm({ now: others });
+  assert.equal(never.status, 1, 'a package that never arrives is not a pass');
+  assert.match(never.stderr, new RegExp(`after retrying:\\s*${first}\\b`));
+
+  // At the version, from another commit: it fails at once, since a published version never changes, naming it —
+  // and the GitHub release, which needs this job, is not made.
+  const foreign = await confirm({ now: { ...everyPackage(COMMIT), [PACKAGES.at(-1)]: OTHER } });
+  assert.equal(foreign.status, 1);
+  assert.equal(foreign.slept, 0, 'nothing to wait for: the commit a version records cannot change');
+  assert.match(
+    foreign.stderr,
+    new RegExp(`@agentcomms/${PACKAGES.at(-1)}@${version.replace(/\./g, '\\.')} was published from ${OTHER}`),
+  );
+});
 
 test('every publish records the commit it came from, which pnpm does not do on its own', async () => {
   // `npm publish` writes `gitHead` into the published manifest; pnpm 11 publishes the manifest from package.json
@@ -353,6 +563,22 @@ test('the release documents say a pushed tag publishes, and that it must not mov
     const text = (await readFile(join(ROOT, path), 'utf8')).replace(/\s+/g, ' ');
     assert.match(text, /the tag must not move/, `${path} does not say the tag stays once a package is out`);
     assert.doesNotMatch(text, /fix the cause and re-run the failed job/i, `${path} still offers a re-run for a fix`);
+  }
+});
+
+test('the release documents say what moving a tag does to a run still going', async () => {
+  // Both said a tag "whose run published nothing" could be moved to the fix. A run still in its verify legs has
+  // published nothing too, and moving its tag left it to publish the old commit. Now the run stops if its tag has
+  // moved when it asks, but a move after its last ask is too late, so the advice is to cancel it or let it finish.
+  for (const path of ['docs/RELEASING.md', '.claude/skills/release/SKILL.md']) {
+    const text = (await readFile(join(ROOT, path), 'utf8')).replace(/\s+/g, ' ');
+    assert.doesNotMatch(text, /whose run published nothing/i, `${path} still lets a tag move under a run in progress`);
+    assert.match(text, /never move or delete a tag while its run is in progress/i, `${path}: moving a tag mid-run`);
+    assert.match(
+      text,
+      /still names the commit (?:it|the run) started from/i,
+      `${path} does not say what the run checks`,
+    );
   }
 });
 
@@ -626,6 +852,60 @@ test('a registry that cannot answer stops the release, rather than reading as "n
     await fake.close();
   }
 });
+
+// ── Where the tag points now, against a fake git ─────────────────────────────────────────────────────────────────
+
+test(
+  'the tag check passes only while the remote tag still names the commit the run started from',
+  bashOnly,
+  async () => {
+    const dir = await tempDir('tag-check-');
+    const env = { ...process.env, PATH: `${dir}${delimiter}${process.env.PATH}` };
+    async function check(answer, options) {
+      const git = await fakeGit(dir, answer, options);
+      // Outside any repository, too: were the fake ever bypassed, the real git would find no origin to ask.
+      const result = await runScript(CI, ['tag', `v${VERSION}`, COMMIT], { cwd: dir, env, timeout: 60_000 });
+      return { ...result, asked: await git.calls() };
+    }
+
+    const lightweight = await check(lightweightTag(COMMIT));
+    assert.equal(lightweight.status, 0, lightweight.stderr);
+    // Both names, because `refs/tags/v1.2.3` alone does not match the peeled line an annotated tag adds.
+    assert.deepEqual(lightweight.asked, [`ls-remote origin refs/tags/v${VERSION} refs/tags/v${VERSION}^{}`]);
+
+    // An annotated tag's first line is the tag object, never the commit: the peeled line is the one compared.
+    const annotated = await check(annotatedTag(COMMIT));
+    assert.equal(annotated.status, 0, annotated.stderr);
+
+    // Moved to a fix while this run was going: it stops, naming both commits.
+    for (const moved of [lightweightTag(OTHER), annotatedTag(OTHER)]) {
+      const result = await check(moved);
+      assert.equal(result.status, 1, `a moved tag passed: ${moved}`);
+      assert.match(result.stderr, new RegExp(`v1\\.2\\.3 now names ${OTHER}, not ${COMMIT}, the commit this run`));
+    }
+
+    // Deleted: stops too, rather than publishing a version whose tag is gone.
+    const deleted = await check('');
+    assert.equal(deleted.status, 1);
+    assert.match(deleted.stderr, /v1\.2\.3 is no longer on origin/);
+
+    // A ref that only ends like the tag is not the tag.
+    const lookalike = await check(`${COMMIT}\trefs/heads/refs/tags/v${VERSION}\n`);
+    assert.equal(lookalike.status, 1);
+
+    // An answer it cannot get is not taken for "still there".
+    const unreachable = await check('', { status: 128 });
+    assert.equal(unreachable.status, 1);
+    assert.match(unreachable.stderr, /could not ask origin where v1\.2\.3 points/);
+
+    // Without a real commit to compare with, there is nothing to check.
+    for (const args of [[`v${VERSION}`], [`v${VERSION}`, 'main'], []]) {
+      const refused = await runScript(CI, ['tag', ...args], { cwd: dir, env });
+      assert.equal(refused.status, 1, `tag ${args.join(' ')} should refuse`);
+      assert.match(refused.stderr, /usage: release-ci\.mjs tag <tag> <commit>/);
+    }
+  },
+);
 
 // ── The changelog section ────────────────────────────────────────────────────────────────────────────────────────
 

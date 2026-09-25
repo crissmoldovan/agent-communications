@@ -4,18 +4,22 @@
  *
  *   node scripts/release-ci.mjs pending 0.4.1 <commit>     # what this commit still has to publish, or fails
  *   node scripts/release-ci.mjs preflight 0.4.1 <commit>   # each of those trusts this workflow, or nothing is sent
+ *   node scripts/release-ci.mjs tag v0.4.1 <commit>        # the tag on origin still names this commit, or fails
  *   node scripts/release-ci.mjs notes 0.4.1                # prints the CHANGELOG section for a version, or fails
  *
- * All three run in `.github/workflows/release.yml`, and `test/release-packages.test.mjs` runs them against a fake
- * registry and a scratch changelog.
+ * All four run in `.github/workflows/release.yml`, and `test/release-packages.test.mjs` runs them against a fake
+ * registry, a fake `git` and a scratch changelog.
  */
+import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { PACKAGES, SCOPE } from './packages.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const [command, ...rest] = process.argv.slice(2);
+const execFileAsync = promisify(execFile);
 
 const COMMIT = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
@@ -201,6 +205,68 @@ async function exchange({ requestUrl, requestToken, audience, registry, full }) 
 }
 
 /**
+ * Fails unless the tag that started this run still names, on origin, the commit this run is building.
+ *
+ * **Why it exists.** A run builds the commit its tag named when it started, whatever the tag names later, and a re-run
+ * keeps that commit too. Moving a tag whose run had published nothing was the documented way past a failed verify
+ * leg, but a run still in its verify legs has also published nothing. Moved to a fix then, the tag left that run to
+ * publish every package from the old commit and make its GitHub release on the tag where it pointed by then, the new
+ * commit, while the run for the fix was refused only afterwards. So the workflow asks just before the preflight, again
+ * just before the first publish, and before making the release page, and stops at whichever finds the tag moved or
+ * gone.
+ *
+ * **What it compares.** `git ls-remote` prints an annotated tag as the tag object and then, named `<tag>^{}`, the
+ * commit it points to; a lightweight tag is one line, the commit itself. `GITHUB_SHA` is a commit, so the peeled line
+ * is the one compared when there is one. Both names are asked for, because the pattern `refs/tags/v1.2.3` does not
+ * match `refs/tags/v1.2.3^{}`, and only those exact names are read, because ls-remote matches a pattern against the
+ * tail of any ref.
+ *
+ * It asks origin as the checkout left it, with no credentials: the repository has to be public for provenance, and the
+ * workflow stops before this when it is not.
+ */
+async function tag(name, commit) {
+  if (!name || !COMMIT.test(commit ?? '')) fail('usage: release-ci.mjs tag <tag> <commit>');
+  const ref = `refs/tags/${name}`;
+  const listed = new Map();
+  for (const line of (await lsRemote(name, [ref, `${ref}^{}`])).split(/\r?\n/)) {
+    const [object, listedRef] = line.split('\t');
+    if (object && listedRef) listed.set(listedRef, object);
+  }
+  const points = listed.get(`${ref}^{}`) ?? listed.get(ref);
+  const stop =
+    'This run stops here: it publishes nothing more and makes no release page. If any package of this version is ' +
+    `already out from ${commit}, the tag must name that commit: put it back there and re-run this job.`;
+  if (!points) fail(`${name} is no longer on origin. ${stop}`);
+  if (points !== commit) fail(`${name} now names ${points}, not ${commit}, the commit this run started from. ${stop}`);
+  console.log(`  ✓ ${name} still names ${commit}`);
+}
+
+/** What `git ls-remote origin` prints for `patterns`. Retried like the registry reads: a flaky answer costs a retry. */
+async function lsRemote(name, patterns) {
+  let last = 'no answer';
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const { stdout } = await execFileAsync('git', ['ls-remote', 'origin', ...patterns], {
+        encoding: 'utf8',
+        timeout: 60_000,
+        // A prompt for credentials would wait for ever on a runner with nobody to answer it; failing is the answer.
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+      return stdout;
+    } catch (error) {
+      last =
+        String(error?.stderr ?? '')
+          .trim()
+          .split('\n')
+          .at(-1) ||
+        error?.message ||
+        String(error);
+    }
+  }
+  fail(`could not ask origin where ${name} points (${last}). This run stops here; re-run the job.`);
+}
+
+/**
  * Prints the changelog section for one version: the lines after `## <version>` up to the next `## `.
  *
  * Used twice. The tag gate runs it **before** publishing, so a tag with no entry stops there rather than publishing and
@@ -228,5 +294,11 @@ function fail(message) {
 
 if (command === 'pending') await pending(rest[0], rest[1]);
 else if (command === 'preflight') await preflight(rest[0], rest[1]);
+else if (command === 'tag') await tag(rest[0], rest[1]);
 else if (command === 'notes') await notes(rest[0]);
-else fail('usage: release-ci.mjs pending <version> <commit> | preflight <version> <commit> | notes <version>');
+else {
+  fail(
+    'usage: release-ci.mjs pending <version> <commit> | preflight <version> <commit> | tag <tag> <commit> | ' +
+      'notes <version>',
+  );
+}

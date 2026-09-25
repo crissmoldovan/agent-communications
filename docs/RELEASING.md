@@ -18,8 +18,9 @@ A control that is always waved through is worse than no control: it reports a ch
 documentation ends up describing a human in a loop they are not in.
 
 What guards the release instead is stated rather than implied: the environment accepts `v*` tags and nothing else,
-the tag must match the declared version, six platform legs must pass before the publish job starts, and every
-version carries provenance naming the commit and the workflow run that built it. If a bad version ever went out,
+the tag must match the declared version and still name the commit the run started from, six platform legs must pass
+before the publish job starts, and every version carries provenance naming the commit and the workflow run that
+built it. If a bad version ever went out,
 that attestation is what makes it traceable.
 
 Restoring the reviewer is one API call, and worth doing the day this repository has more than one maintainer or the
@@ -86,9 +87,21 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
 **The tag now comes before the publish, because it is what starts it** — the reverse of the local flow, where the
-tag recorded something already done. A tag whose run published nothing names a release that did not happen; move it
-to the fix, or delete it, rather than leave it implying otherwise. That is not hypothetical: v0.1.2 was tagged,
-failed on Windows, published nothing, and the tag had to move.
+tag recorded something already done. A tag whose run has finished without publishing anything names a release that
+did not happen; move it to the fix, or delete it, rather than leave it implying otherwise. That is not hypothetical:
+v0.1.2 was tagged, failed on Windows, published nothing, and the tag had to move.
+
+**Never move or delete a tag while its run is in progress.** Cancel the run first, or let it finish. A run builds the
+commit its tag named when it started, however long ago that was, and a run still in its verify legs has published
+nothing either — so a tag moved to a fix then used to leave that run to publish every package from the old commit and
+make its GitHub release on the new one, green, while the run for the fix was refused afterwards. Now the run asks
+origin whether the tag still names the commit it started from three times: just before the OIDC preflight, again just
+before the first publish, and before making the GitHub release. At whichever finds the tag moved or gone, it stops,
+naming both commits. The run the move started waits for it to end, because the workflow runs one release per tag at a
+time. So a move while the verify legs run costs the first run and nothing else. A move after the last check before
+the first publish is too late: the packages go out from the old commit, the run fails at the release page rather than
+hang it on the new one, and the moved tag's own run refuses the version. The way out then is to put the tag back and
+re-run the failed job.
 
 **Once any package is out, the tag must not move.** What went out was built from the commit the tag names, and a
 run on any other commit refuses to finish that version — see
@@ -132,7 +145,9 @@ behind the publish at 0.4.0 and the old five-minute budget was nearly spent on r
 trusting the publish command's exit code. `pnpm --filter`
 exits 0 when it matches nothing — "No projects matched the filters" is not an error — so a renamed package or a
 changed scope would publish fewer packages than the hardcoded list claims and still finish green. The first person
-to find out would be a consumer whose install of `gmail-mcp` cannot resolve the `gmail` it pins.
+to find out would be a consumer whose install of `gmail-mcp` cannot resolve the `gmail` it pins. It asks for the
+commit each version records, not only the version, because the GitHub release waits for it: a package at the right
+version from any other commit fails the run there, at once, and gets no release page.
 
 ## If a publish fails part way through
 
