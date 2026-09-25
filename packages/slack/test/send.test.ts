@@ -134,6 +134,44 @@ test('an @here raises the ceremony as @channel does, however small the room', as
   }
 });
 
+test('a mention nobody can count — a user group, an unknown special — needs a person at a terminal, and waits for one', async () => {
+  /*
+   * The composer cannot write one: every mention it writes is checked, and typed text is escaped. So this is a draft
+   * that did not come from it — a file edited by hand, or an older version's `--broadcast subteam^S0123`, which the
+   * preview counted as nobody and let go on a yes in the chat. A group's size is not something this can read.
+   */
+  for (const [mention, shown] of [
+    ['<!subteam^S0123>', '@S0123 (a user group)'],
+    ['<!subteam^S0123|@oncall>', '@S0123 (a user group)'],
+    ['<!group>', '@group (a special mention)'],
+  ] as const) {
+    const { deps, drafts, draft, book } = await setUp({ members: 4 });
+    const text = `${mention} standup moved`;
+    const edited = await drafts.update(
+      draft.draftId,
+      {
+        text,
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }],
+        channel: 'C1',
+        unfurl_links: false,
+        unfurl_media: false,
+      },
+      'standup moved',
+    );
+    const prepared = await preparePost(deps, edited, book);
+    assert.equal(prepared.requiredPolicy, 'confirm', mention);
+    assert.deepEqual(prepared.preview.notifies.users, [shown], `${mention} is named in the preview`);
+    assert.match(prepared.preview.notifies.unknown ?? '', /nothing here can count/, `${mention}: reach not known`);
+    assert.equal(prepared.preview.notifies.estimated, 0, 'and no number is invented for it');
+    assert.ok(prepared.riskFlags.includes('reach-unknown'), mention);
+    await assert.rejects(
+      postPrepared(deps, edited, prepared.approvalId, 'C1', book),
+      (error: unknown) => (error as { code?: string }).code === 'APPROVAL_PENDING',
+      `${mention} under \`chat\` waits for a person`,
+    );
+  }
+});
+
 test('a room whose size cannot be read says so rather than reporting a small one', async () => {
   const state = temp();
   const drafts = openDraftStore(state, NOW);

@@ -37,6 +37,32 @@ test('the author’s text cannot smuggle a mention, and a deliberate one is writ
   assert.equal(renderMention({ kind: 'channel', id: 'C1' }), '<#C1>', 'a link, which notifies nobody');
 });
 
+test('a mention is only ever one the preview can count: an id that is not one, or a broadcast outside three, is refused', () => {
+  /*
+   * The text is escaped, so the ids and the broadcast were the only way to put a span in a payload — and they were
+   * written out as given. `--broadcast subteam^S0123` composed a user-group mention the preview counted as nobody; a
+   * "user id" of `U1> <!subteam^S0123` did the same beside a real mention. Refused here, every surface refuses them.
+   */
+  for (const mention of [
+    { kind: 'broadcast', who: 'subteam^S0123' },
+    { kind: 'broadcast', who: 'group' },
+    { kind: 'user', id: 'U1> <!subteam^S0123' },
+    { kind: 'user', id: 'S0123' },
+    { kind: 'user', id: '' },
+    { kind: 'channel', id: 'C1> <!channel' },
+  ] as const) {
+    assert.throws(
+      () => compose({ channel: 'C1', text: 'hi', mentions: [mention as never] }),
+      { code: 'USAGE' },
+      JSON.stringify(mention),
+    );
+  }
+  for (const who of ['here', 'channel', 'everyone'] as const) {
+    assert.equal(renderMention({ kind: 'broadcast', who }), `<!${who}>`);
+  }
+  assert.equal(renderMention({ kind: 'user', id: 'W024BE7LH' }), '<@W024BE7LH>', 'an Enterprise Grid id is an id');
+});
+
 test('text and blocks come from one source, so they cannot disagree', () => {
   const payload = compose({ channel: 'C1', text: 'Lunch at one?' });
   const block = payload.blocks[0] as { text: { text: string } };

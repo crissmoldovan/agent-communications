@@ -231,9 +231,13 @@ export async function preparePost(deps: PrepareDeps, draft: SlackDraft, book: Na
    * is not an ordinary message, and the person who would be interrupted is not in the conversation to object.
    * `@here` is a broadcast too: it reaches whoever is online, which nothing here can count, and leaving it out let one
    * to a small room go on a yes in the chat.
+   *
+   * So does a reach nobody could count. A user group, or any mention the preview cannot put a number on, used to go on
+   * a yes in the chat with its reach shown as zero; a person approving it at a terminal is told it is not known.
    */
   const broadcast = preview.notifies.channel || preview.notifies.here;
-  const requiredPolicy: SendPolicy = broadcast || preview.notifies.estimated >= 50 ? 'confirm' : 'chat';
+  const requiredPolicy: SendPolicy =
+    broadcast || preview.notifies.estimated >= 50 || preview.notifies.unknown !== undefined ? 'confirm' : 'chat';
 
   const record = await deps.approvals.create({
     inboxId: deps.accountId,

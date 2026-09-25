@@ -53,9 +53,27 @@ export function notifiesOf(
   const channel = references.some(
     (reference) => reference.kind === 'special' && (reference.id === 'channel' || reference.id === 'everyone'),
   );
-  const users = references
+  const people = references
     .filter((reference) => reference.kind === 'user')
     .map((reference) => book.person(reference.id)?.displayName?.text ?? reference.id);
+  /*
+   * A mention nothing here can count: a user group (`<!subteam^S0123>`), or any `<!…>` other than the three room-wide
+   * ones.
+   *
+   * The composer cannot write one — every mention it writes is checked, and the author's text is escaped — so this is
+   * the gate's own backstop, for a draft that did not come from it. It used to count such a mention as nobody, which is
+   * the one wrong answer: a group of four hundred approved under `chat` as a message to no one. So it is named, and its
+   * reach is said to be unknown rather than given a number, which is what makes the post need a person at a terminal.
+   */
+  const uncounted = references
+    .filter(
+      (reference) =>
+        reference.kind === 'usergroup' ||
+        (reference.kind === 'special' && !['here', 'channel', 'everyone'].includes(reference.id)),
+    )
+    .map((reference) =>
+      reference.kind === 'usergroup' ? `@${reference.id} (a user group)` : `@${reference.id} (a special mention)`,
+    );
 
   /*
    * A broadcast reaches the room; individual mentions reach the people named.
@@ -65,15 +83,17 @@ export function notifiesOf(
    * safe direction for a number somebody is about to approve.
    */
   const broadcast = here || channel;
-  const estimated = broadcast ? (memberCount ?? 0) : users.length;
+  const estimated = broadcast ? (memberCount ?? 0) : people.length;
+  const unknown = [
+    ...(broadcast && memberCount === undefined ? [countUnknown ?? 'the channel’s member count could not be read'] : []),
+    ...(uncounted.length > 0 ? [`${uncounted.join(', ')} reaches people nothing here can count`] : []),
+  ];
   return {
     here,
     channel,
-    users,
+    users: [...people, ...uncounted],
     estimated,
-    ...(broadcast && memberCount === undefined
-      ? { unknown: countUnknown ?? 'the channel’s member count could not be read' }
-      : {}),
+    ...(unknown.length > 0 ? { unknown: unknown.join('; ') } : {}),
   };
 }
 

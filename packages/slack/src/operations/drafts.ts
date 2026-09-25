@@ -1,5 +1,46 @@
 import { CommsError } from '@agentcomms/core';
-import { type DraftStore, isUnreadableDraft, type SlackDraft } from '../compose/drafts.ts';
+import { type Broadcast, type ComposedPayload, compose, type Mention } from '../compose/blocks.ts';
+import { type DraftStore, isUnreadableDraft, openDraftStore, type SlackDraft } from '../compose/drafts.ts';
+import type { SlackContext } from '../context.ts';
+import { requireWorkspace } from './workspaces.ts';
+
+/** A message to write as a draft: what `draft create` takes, and `slack_post_prepare` when it is given no draft. */
+export interface DraftInput {
+  readonly channel: string;
+  readonly text: string;
+  readonly threadTs?: string | undefined;
+  /** People to mention, by user id. Each is checked to be one: see `renderMention`. */
+  readonly mentionUsers?: readonly string[] | undefined;
+  /**
+   * `here`, `channel` or `everyone`, and nothing else.
+   *
+   * `unknown` rather than `Broadcast`, because this is where it is checked: the CLI's `--broadcast` took any word until
+   * it had choices, and `--broadcast subteam^S0123` wrote a user-group mention that the preview counted as nobody. Each
+   * surface's own parser refuses what it can; this refuses it for all of them.
+   */
+  readonly broadcast?: unknown;
+}
+
+/**
+ * The payload a draft input composes to, or the refusal — the same for every surface, before anything is written.
+ *
+ * Every mention is written by `renderMention`, which checks it. Nothing else can put a span in the text: the author's
+ * words are escaped, so a `<!here>` typed into them is shown as those characters and notifies nobody.
+ */
+export function draftPayload(input: DraftInput): ComposedPayload {
+  const mentions: Mention[] = [
+    ...(input.mentionUsers ?? []).map((id) => ({ kind: 'user' as const, id })),
+    ...(input.broadcast === undefined ? [] : [{ kind: 'broadcast' as const, who: input.broadcast as Broadcast }]),
+  ];
+  return compose({ channel: input.channel, text: input.text, threadTs: input.threadTs, mentions });
+}
+
+/** Writes a draft for this workspace: `agent-slack draft create`. Nothing reaches Slack. */
+export async function createDraft(context: SlackContext, alias: string, input: DraftInput): Promise<SlackDraft> {
+  const { account } = requireWorkspace(await context.config(), alias);
+  const payload = draftPayload(input);
+  return openDraftStore(context.core.paths.stateDir, context.now).create(account.id, payload, input.text);
+}
 
 /**
  * A draft, if it belongs to the workspace being asked about.

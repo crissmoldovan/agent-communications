@@ -325,7 +325,7 @@ agent-slack draft create [options]
 | `--text <text>` | what to say. Markup in it is shown, not interpreted | — |
 | `--thread <ts>` | reply inside this thread | — |
 | `--mention <userId...>` | mention someone, by id — a name is ambiguous | — |
-| `--broadcast <who>` | `here`, `channel` or `everyone`; always needs a person to approve | — |
+| `--broadcast <who>` | interrupt the room; always needs a person to approve (choices: "here", "channel", "everyone") | — |
 
 ### `agent-slack draft list`
 

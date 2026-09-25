@@ -1,3 +1,5 @@
+import { CommsError } from '@agentcomms/core';
+
 /**
  * The payload, generated from the author's text — never accepted from a caller.
  *
@@ -58,15 +60,53 @@ export type Mention =
    * that notifies nobody, and `<!channel>`, which notifies everybody. A caller asking for the first and getting
    * the second would have interrupted a room by accident, and the types could not tell them apart.
    */
-  | { readonly kind: 'broadcast'; readonly who: 'here' | 'channel' | 'everyone' };
+  | { readonly kind: 'broadcast'; readonly who: Broadcast };
 
+/** The room-wide mentions, and the only ones a caller may ask for: each is one the preview can count. */
+export const BROADCASTS = ['here', 'channel', 'everyone'] as const;
+export type Broadcast = (typeof BROADCASTS)[number];
+
+/*
+ * What an id has to look like before it is written between angle brackets.
+ *
+ * The text is escaped, so a mention cannot be smuggled through it — but an id was written out as given, and an id is
+ * the caller's string too. `U1> <!subteam^S0123` as a "user id" composed a user-group mention the preview counted as
+ * one person, with nobody's approval beyond the chat's. Slack's ids are a letter and then capitals and digits, so
+ * anything else is refused rather than escaped: an escaped id would mention nobody, which is not what was asked for
+ * either.
+ */
+const USER_ID = /^[UW][A-Z0-9]+$/;
+const CHANNEL_ID = /^[CGD][A-Z0-9]+$/;
+
+/**
+ * One mention, as Slack's own syntax — checked first, whatever the caller's own parser let through.
+ *
+ * Every surface reaches here: the CLI's `--broadcast` has its choices and the tool's schema its enum, but a check
+ * that lives only in two parsers is a check the third caller skips. A broadcast outside the three is exactly that
+ * case — `--broadcast subteam^S0123` composed a user-group mention that the preview counted as nobody, under `chat`.
+ */
 export function renderMention(mention: Mention): string {
   switch (mention.kind) {
     case 'user':
+      if (!USER_ID.test(mention.id)) {
+        throw new CommsError('USAGE', `"${mention.id}" is not a Slack user id`, {
+          hint: 'A user id is U or W and then capitals and digits, such as U024BE7LH. Mention people by id, never by name.',
+        });
+      }
       return `<@${mention.id}>`;
     case 'channel':
+      if (!CHANNEL_ID.test(mention.id)) {
+        throw new CommsError('USAGE', `"${mention.id}" is not a Slack channel id`, {
+          hint: 'A channel id is C, G or D and then capitals and digits, such as C024BE7LR.',
+        });
+      }
       return `<#${mention.id}>`;
     default:
+      if (!(BROADCASTS as readonly unknown[]).includes(mention.who)) {
+        throw new CommsError('USAGE', `"${String(mention.who)}" is not a broadcast`, {
+          hint: `One of: ${BROADCASTS.join(', ')}. A user group is not offered: nothing here can count who it reaches.`,
+        });
+      }
       return `<!${mention.who}>`;
   }
 }

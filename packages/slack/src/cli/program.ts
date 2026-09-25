@@ -22,7 +22,7 @@ import {
 import { Command, CommanderError, Option } from 'commander';
 import type { FetchLike } from '../api/guard.ts';
 import { exitAfterRefreshes, type SignalHost, settleBeforeExit } from '../auth/exit.ts';
-import { compose, type Mention } from '../compose/blocks.ts';
+import { BROADCASTS } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
 import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
@@ -40,7 +40,7 @@ import {
   signInStarted,
 } from '../operations/changes.ts';
 import { runDoctor } from '../operations/doctor.ts';
-import { deleteOwnDraft, ownDraft } from '../operations/drafts.ts';
+import { createDraft, deleteOwnDraft, ownDraft } from '../operations/drafts.ts';
 import { gateDepsFor } from '../operations/gate.ts';
 import type { ProbeFetch } from '../operations/identity.ts';
 import { checkedPort, manifestFor } from '../operations/manifest.ts';
@@ -787,27 +787,23 @@ configuration problem.`,
     .requiredOption('--text <text>', 'what to say. Markup in it is shown, not interpreted')
     .option('--thread <ts>', 'reply inside this thread')
     .option('--mention <userId...>', 'mention someone, by id — a name is ambiguous')
-    .option('--broadcast <who>', '`here`, `channel` or `everyone`; always needs a person to approve')
+    .addOption(
+      /*
+       * The three the preview can count, and no other word. This took any word, and `--broadcast subteam^S0123` wrote a
+       * user-group mention the preview counted as nobody, under `chat`. `createDraft` refuses it too, for any caller.
+       */
+      new Option('--broadcast <who>', 'interrupt the room; always needs a person to approve').choices([...BROADCASTS]),
+    )
     .action(
       act(async (context, options, flags: Options) => {
-        const { account } = requireWorkspace(await context.config(), String(flags.workspace));
-        const mentions: Mention[] = [
-          ...((flags.mention as string[] | undefined) ?? []).map((id) => ({ kind: 'user' as const, id })),
-          ...(flags.broadcast
-            ? [{ kind: 'broadcast' as const, who: String(flags.broadcast) as 'here' | 'channel' | 'everyone' }]
-            : []),
-        ];
-        const store = openDraftStore(context.core.paths.stateDir, context.now);
-        const created = await store.create(
-          account.id,
-          compose({
-            channel: String(flags.channel),
-            text: String(flags.text),
-            threadTs: flags.thread as string | undefined,
-            mentions,
-          }),
-          String(flags.text),
-        );
+        // The same operation `slack_post_prepare` writes a draft with, mentions checked and all: see `draftPayload`.
+        const created = await createDraft(context, String(flags.workspace), {
+          channel: String(flags.channel),
+          text: String(flags.text),
+          threadTs: flags.thread as string | undefined,
+          mentionUsers: flags.mention as string[] | undefined,
+          broadcast: flags.broadcast,
+        });
         writeResult(
           created,
           output(),
