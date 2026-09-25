@@ -1088,6 +1088,33 @@ test('comms_secrets_migrate: moving real credentials is approved first, in eithe
   }
 });
 
+test('comms_secrets_migrate: originals left behind are an error, as they are at the CLI', async () => {
+  // The CLI exits with CONFIG when the switch worked but an original would not go; the tool said `applied: true` with
+  // the leftovers tucked into the result, which an agent reads as a clean move. A credential the person believes is
+  // gone is still sitting in a backend nothing reads from.
+  const m = machine({ secrets: { store: 'file' }, accounts: { 'acme/slack': account() } });
+  const file = memoryStore('file');
+  const keychain = memoryStore('keychain');
+  file.values.set(`slack/token/${ACME}`, 'fake-token-1');
+  file.store.delete = async () => {
+    throw new Error('file is locked');
+  };
+  const { ok, call, close } = await connect(m, { secretStores: { source: file.store, target: keychain.store } });
+  try {
+    const first = await ok('comms_secrets_migrate', { to: 'keychain' });
+    const done = await call('comms_secrets_migrate', { to: 'keychain', approvalId: first.approvalId });
+    assert.equal(done.isError, true, JSON.stringify(done.structuredContent));
+    const error = (done.structuredContent as { error: { code: string; message: string; hint: string } }).error;
+    assert.equal(error.code, 'CONFIG');
+    assert.match(error.message, /moved 1 secrets from file to keychain, but 1 original\(s\) could not be removed/);
+    assert.match(error.hint, new RegExp(`Delete these references from file: slack/token/${ACME}`));
+    assert.equal(keychain.values.get(`slack/token/${ACME}`), 'fake-token-1', 'the switch itself happened');
+    assert.ok(!JSON.stringify(done).includes('fake-token-1'), 'no credential is ever returned');
+  } finally {
+    await close();
+  }
+});
+
 test('comms_secrets_migrate on a configuration that holds no credential chooses the backend at once', async () => {
   // Setup, not a loosening: nothing is stored to move, and `ConfigStore.update` judges it the same way.
   const m = machine();

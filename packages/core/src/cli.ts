@@ -22,7 +22,7 @@ import {
 } from './operations/change-policy.ts';
 import { auditTail, corePaths, doctor, listApprovals, revokeApproval } from './operations/maintenance.ts';
 import { namesDryRun, namesMigration } from './operations/names-migrate.ts';
-import { secretsMigration } from './operations/secrets-migrate.ts';
+import { migrationLeftoversError, secretsMigration } from './operations/secrets-migrate.ts';
 import {
   type ChannelsReport,
   channelsAvailable,
@@ -377,16 +377,8 @@ export async function main(
          * success result, not after it: `--json` promises exactly one envelope on stdout, and printing a result and
          * then throwing puts two there.
          */
-        if (result.leftovers.length > 0) {
-          throw new CommsError(
-            'CONFIG',
-            `moved ${result.moved} secrets from ${result.from} to ${result.to}, but ${result.leftovers.length} original(s) could not be removed from ${result.from}`,
-            {
-              hint: `The new backend is in use. Delete these references from ${result.from}: ${result.leftovers.map((l) => l.ref).join(', ')}.`,
-              details: { ...result },
-            },
-          );
-        }
+        const leftovers = migrationLeftoversError(result);
+        if (leftovers) throw leftovers;
         writeResult(result, output, (r) =>
           r.moved === 0 && r.from === r.to
             ? `secrets already use ${r.to}`

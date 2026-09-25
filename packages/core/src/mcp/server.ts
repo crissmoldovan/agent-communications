@@ -13,7 +13,7 @@ import {
 } from '../operations/change-policy.ts';
 import { auditTail, corePaths, doctor, listApprovals, revokeApproval } from '../operations/maintenance.ts';
 import { namesDryRun, namesMigration } from '../operations/names-migrate.ts';
-import { secretsMigration } from '../operations/secrets-migrate.ts';
+import { migrationLeftoversError, secretsMigration } from '../operations/secrets-migrate.ts';
 import {
   CLIENTS,
   channelsAvailable,
@@ -379,15 +379,20 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
-    async (args) =>
-      change(
-        () =>
-          secretsMigration(core, args.to, {
-            surface: 'mcp',
-            ...(options.secretStores ? { stores: options.secretStores } : {}),
-          }),
-        args.approvalId,
-      ),
+    async (args) => {
+      try {
+        const migration = secretsMigration(core, args.to, {
+          surface: 'mcp',
+          ...(options.secretStores ? { stores: options.secretStores } : {}),
+        });
+        const outcome = await gatedChange(core, migration, { surface: 'mcp', approvalId: args.approvalId });
+        // Switched but not tidy is the CLI's error too, in the same words: see `migrationLeftoversError`.
+        const leftovers = outcome.status === 'applied' ? migrationLeftoversError(outcome.result) : null;
+        return leftovers ? fail(leftovers) : reply(changeToolResult(outcome));
+      } catch (error) {
+        return fail(error);
+      }
+    },
   );
 
   return {

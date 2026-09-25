@@ -52,6 +52,26 @@ export interface MigrationResult {
 }
 
 /**
+ * A migration that switched backends but left originals behind, as the error both surfaces report it; `null` when it
+ * left nothing.
+ *
+ * Switched but not tidy is an error, not a success with a footnote: a credential still sitting in a backend nothing
+ * reads from is one the person believes is gone. The CLI exits with it and the tool returns it, so an agent does not
+ * read `applied: true` and tell the person their credentials were moved cleanly.
+ */
+export function migrationLeftoversError(result: MigrationResult): CommsError | null {
+  if (result.leftovers.length === 0) return null;
+  return new CommsError(
+    'CONFIG',
+    `moved ${result.moved} secrets from ${result.from} to ${result.to}, but ${result.leftovers.length} original(s) could not be removed from ${result.from}`,
+    {
+      hint: `The new backend is in use. Delete these references from ${result.from}: ${result.leftovers.map((l) => l.ref).join(', ')}.`,
+      details: { ...result },
+    },
+  );
+}
+
+/**
  * Deletes each reference from `store`, once more on failure, and returns the ones that would not go.
  *
  * A `false` from `delete` means nothing was there, which is the outcome wanted.
