@@ -7,8 +7,9 @@ cannot send an email or post a message without your approval.**
 That last part is the whole design. Every Gmail permission that lets an agent write a draft also
 lets it send one, so "may draft, may not send" cannot be enforced by the permission you grant. It is
 enforced here instead: there is exactly one code path to Gmail's send endpoints, it runs the
-approval checks, and a test fails the build if a second one ever appears. Slack is stricter still:
-no MCP tool posts at all, and a workspace connected read-only holds a token Slack will not let post.
+approval checks, and a test fails the build if a second one ever appears. Slack has the same gate:
+one path to each way of posting, from the CLI and the MCP server alike, and a workspace connected
+read-only holds a token Slack itself will not let post.
 
 [![npm](https://img.shields.io/npm/v/@agentcomms/gmail?color=1f883d&label=%40agentcomms%2Fgmail)](https://www.npmjs.com/package/@agentcomms/gmail)
 [![npm](https://img.shields.io/npm/v/@agentcomms/slack?color=1f883d&label=%40agentcomms%2Fslack)](https://www.npmjs.com/package/@agentcomms/slack)
@@ -26,8 +27,9 @@ Four packages and fifteen skills.
 - **`@agentcomms/gmail-mcp`** — the MCP server (`agent-gmail-mcp`), for Claude Code, Codex, Cursor,
   Claude Desktop, Gemini CLI and anything else that speaks MCP.
 - **`@agentcomms/slack`** — the Slack CLI (`agent-slack`), its MCP server (`agent-slack mcp`) and the
-  library. Reads channels, threads, search, people and files, and prepares posts that a person
-  approves at a terminal.
+  library. Reads channels, threads, search, people and files, and posts and reacts only with a
+  person's approval of that exact content — in the conversation or at their terminal, as the
+  workspace's policy says.
 - **`@agentcomms/core`** — the shared core: config, secrets, the approval engine, the
   sanitiser. Provider-neutral, so Gmail and Slack share it.
 - **Fifteen skills** — twelve for Gmail, three for Slack — that teach an agent how to use all of it
@@ -146,9 +148,11 @@ npx -y @agentcomms/slack mcp install --client claude-code  # connect it to your 
 
 You bring your own Slack app, made from the manifest this prints, so the scopes are visible before anything is
 granted; no client secret is stored anywhere. A workspace connected in the default `read` mode holds a token Slack
-itself will not let post. In `send` mode an agent still only prepares: `slack_post_prepare` returns a preview with
-how many people it would interrupt, and a person posts it. 14 tools over stdio, none of which posts, reacts or
-connects a workspace. [Slack CLI reference](docs/reference/slack-cli.md) ·
+itself will not let post. In `send` mode nothing posts without a person's approval of that exact content:
+`slack_post_prepare` returns a preview with how many people it would interrupt, and `slack_post_send` posts it after
+the person says yes in the conversation under the `chat` policy, or after they approve it at their own terminal under
+`confirm` — which any broadcast needs. 20 tools over stdio, none of which approves or connects a workspace.
+[Slack CLI reference](docs/reference/slack-cli.md) ·
 [Slack MCP tool reference](docs/reference/slack-mcp-tools.md) · [the package](packages/slack/README.md).
 
 ### Skills, so an agent uses it well

@@ -229,8 +229,11 @@ export async function preparePost(deps: PrepareDeps, draft: SlackDraft, book: Na
    *
    * Under `chat` policy an ordinary message is agreed to in the conversation. `@channel` to four hundred people
    * is not an ordinary message, and the person who would be interrupted is not in the conversation to object.
+   * `@here` is a broadcast too: it reaches whoever is online, which nothing here can count, and leaving it out let one
+   * to a small room go on a yes in the chat.
    */
-  const requiredPolicy: SendPolicy = preview.notifies.channel || preview.notifies.estimated >= 50 ? 'confirm' : 'chat';
+  const broadcast = preview.notifies.channel || preview.notifies.here;
+  const requiredPolicy: SendPolicy = broadcast || preview.notifies.estimated >= 50 ? 'confirm' : 'chat';
 
   const record = await deps.approvals.create({
     inboxId: deps.accountId,
@@ -306,6 +309,58 @@ export interface PostedMessage {
   readonly ts: string;
 }
 
+/** The command a person runs to approve at their own terminal. The same whichever surface asked. */
+export function approveCommand(approvalId: string): string {
+  return `agent-slack approve ${approvalId}`;
+}
+
+/**
+ * What the caller is told while an approval waits for a person, in the words of the surface it is using.
+ *
+ * The person's step is the same from either surface: `agent-slack approve` is a terminal command, and under
+ * `confirm` that is the point of it. The agent's next step is not. A CLI caller runs its command again, and an MCP
+ * caller calls its tool — telling an agent in a chat to run `agent-slack post send` would send it looking for a shell
+ * it may not have, to take a step its own tool takes. No input is echoed: the emoji and the channel are the caller's
+ * own, and this may be printed at a terminal.
+ */
+function waitingHint(kind: 'post' | 'reaction', surface: 'cli' | 'mcp' | undefined, approvalId: string): string {
+  const show =
+    kind === 'post' ? 'Show the user the preview, then' : 'Tell the user which emoji and which message, then';
+  const again =
+    surface === 'mcp'
+      ? kind === 'post'
+        ? 'call `slack_post_send` again with the same arguments'
+        : `call \`slack_react_send\` with approvalId ${approvalId} and the same channel, ts and emoji`
+      : kind === 'post'
+        ? 'run the same `agent-slack post send` again'
+        : `run the same \`agent-slack react\` command again with \`--approval ${approvalId}\` added`;
+  return `${show} ask them to run \`${approveCommand(approvalId)}\` in their own terminal. When they have, ${again}. You cannot approve this yourself.`;
+}
+
+/**
+ * Claims an approval, and when it is waiting for a person, says so with the command they run as data.
+ *
+ * The hint is prose for whoever reads it. An agent relaying the step to a person should not have to dig a command out
+ * of a sentence, so the wait carries it in `details.command` too — from both surfaces, because both come through here.
+ * Everything else the claim throws goes out exactly as the store threw it.
+ */
+async function claimOrHandOver(
+  deps: PostDeps,
+  approvalId: string,
+  live: Parameters<PostDeps['approvals']['claimForSend']>[1],
+  pendingHint: string,
+): Promise<void> {
+  try {
+    await deps.approvals.claimForSend(approvalId, live, { pendingHint });
+  } catch (error) {
+    if (!(error instanceof CommsError) || error.code !== 'APPROVAL_PENDING') throw error;
+    throw new CommsError(error.code, error.message, {
+      ...(error.hint === undefined ? {} : { hint: error.hint }),
+      details: { ...error.details, command: approveCommand(approvalId) },
+    });
+  }
+}
+
 /**
  * Posts one prepared message, once.
  *
@@ -342,7 +397,8 @@ export async function postPrepared(
   }
   const { preview, digest } = await viewPost(deps, draft, book);
 
-  await deps.approvals.claimForSend(
+  await claimOrHandOver(
+    deps,
     approvalId,
     {
       draftMessageId: draft.revision,
@@ -353,9 +409,7 @@ export async function postPrepared(
       // Built from the live values, the same way `preparePost` built the stored one — one source, so they agree.
       expect: expectationFor(payload, preview.notifies),
     },
-    {
-      pendingHint: `Show the user the preview, then ask them to run \`agent-slack approve ${approvalId}\` in their own terminal. When they have, run the same \`agent-slack post send\` again. You cannot approve this yourself.`,
-    },
+    waitingHint('post', deps.surface, approvalId),
   );
 
   try {
@@ -523,7 +577,8 @@ export async function reactPrepared(
   options: ReactionOptions,
 ): Promise<{ approvalId: string }> {
   const digest = reactionDigest(deps, options);
-  await deps.approvals.claimForSend(
+  await claimOrHandOver(
+    deps,
     approvalId,
     {
       draftMessageId: digest,
@@ -533,10 +588,7 @@ export async function reactPrepared(
       policy: deps.policy,
       expect: reactionExpectation(options),
     },
-    {
-      // No input is echoed here: the emoji and the channel are the caller's own, and this is printed at a terminal.
-      pendingHint: `Tell the user which emoji and which message, then ask them to run \`agent-slack approve ${approvalId}\` in their own terminal. When they have, run the same \`agent-slack react\` command again with \`--approval ${approvalId}\` added. You cannot approve this yourself.`,
-    },
+    waitingHint('reaction', deps.surface, approvalId),
   );
   const method = options.remove ? 'reactions.remove' : 'reactions.add';
   try {

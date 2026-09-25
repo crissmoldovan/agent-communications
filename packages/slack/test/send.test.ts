@@ -109,6 +109,31 @@ test('a broadcast raises the ceremony by itself, whatever the workspace policy s
   assert.equal(prepared.preview.notifies.estimated, 412, 'and the number is on the page');
 });
 
+test('an @here raises the ceremony as @channel does, however small the room', async () => {
+  /*
+   * `@here` reaches whoever is online, which nothing here can count, so it is counted as the room — and the people it
+   * interrupts are no more in the conversation to object than `@channel`'s. Only `@channel` and `@everyone` raised the
+   * ceremony, so under `chat` an `@here` to a small room went out on a yes in the chat, while the posting skill told
+   * agents every broadcast needs a person at a terminal. With posting reachable from MCP, the skill is what agents act
+   * on; the code now says the same.
+   */
+  for (const who of ['here', 'channel', 'everyone'] as const) {
+    const { deps, drafts, draft, book } = await setUp({ text: 'deploy now', members: 4 });
+    const broadcast = await drafts.update(
+      draft.draftId,
+      compose({ channel: 'C1', text: 'deploy now', mentions: [{ kind: 'broadcast', who }] }),
+      'deploy now',
+    );
+    const prepared = await preparePost(deps, broadcast, book);
+    assert.equal(prepared.requiredPolicy, 'confirm', `@${who} to four people still needs a person at a terminal`);
+    await assert.rejects(
+      postPrepared(deps, broadcast, prepared.approvalId, 'C1', book),
+      (error: unknown) => (error as { code?: string }).code === 'APPROVAL_PENDING',
+      `@${who} under \`chat\` waits for a person`,
+    );
+  }
+});
+
 test('a room whose size cannot be read says so rather than reporting a small one', async () => {
   const state = temp();
   const drafts = openDraftStore(state, NOW);

@@ -11,10 +11,10 @@ import { type Harness, newHarness } from './support/harness.ts';
  * The agent-facing surface.
  *
  * Two things are being checked, and the second is the one that matters. That the tools work — and that the ones
- * which could put a message in front of people, or widen what this software may do, cannot be made to by an
- * agent calling them. The owner's rule is that an agent may report a mode, may narrow it, and may *request* a
- * widening that parks for a person; it never widens. These tests are where that rule is enforced rather than
- * described.
+ * which put a message in front of people do so only through the gate the CLI uses, and that none of them approves
+ * or widens what this software may do. An agent may report a mode, may narrow it, and may *request* a widening that
+ * parks for a person; it never widens, and it never approves its own post. These tests, with `mcp-send.test.ts`, are
+ * where those rules are enforced rather than described.
  */
 
 interface ToolResult {
@@ -67,14 +67,25 @@ test('the tool list is the same whatever is connected, so a workspace added late
   assert.ok(before.includes('slack_read'));
 });
 
-test('no tool posts, and the one that prepares says so in its own description', async () => {
+test('the tools that reach people say what approval they need, and the one that prepares says it posts nothing', async () => {
+  /*
+   * Posting and reacting are tools since the owner's rule of 2026-09-25, through the gate the CLI uses. The
+   * description is what a model reads before calling one, so each says that a person's yes comes first, and that
+   * under `confirm` the approval is a command a person runs — not something the tool can do.
+   */
   const harness = await newHarness();
   const { client, close } = await connect(harness);
   try {
     const tools = (await client.listTools()).tools;
     const names = tools.map((tool) => tool.name);
-    for (const posting of ['slack_post', 'slack_send', 'slack_react', 'slack_reaction_add']) {
-      assert.ok(!names.includes(posting), `${posting} must not exist: posting is not something an agent does`);
+    for (const posting of ['slack_post', 'slack_send', 'slack_reaction_add']) {
+      assert.ok(!names.includes(posting), `${posting} is a way round the prepared post`);
+    }
+    for (const outward of ['slack_post_send', 'slack_react', 'slack_react_send']) {
+      const tool = tools.find((candidate) => candidate.name === outward);
+      assert.ok(tool, `${outward} is part of the agent's surface`);
+      assert.match(String(tool.description), /agent-slack approve/, `${outward} names the command a person runs`);
+      assert.match(String(tool.description), /cannot approve/i, `${outward} says the agent cannot approve`);
     }
     const prepare = tools.find((tool) => tool.name === 'slack_post_prepare');
     assert.match(String(prepare?.description), /Nothing is posted/i);
@@ -99,6 +110,24 @@ test('the greeting a model reads is scoped to the pinned workspace', async () =>
 
   assert.match(greeting, /acme/);
   assert.doesNotMatch(greeting, /zeta/, 'a pinned server does not mention the workspaces it cannot reach');
+});
+
+test('the greeting says how a post is approved under each policy, and that the agent cannot approve one', async () => {
+  // The first thing a model reads. It said no tool posts; that stopped being true, and a greeting that is wrong about
+  // posting is wrong about the one thing it most needs to get right.
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'send' });
+  const { server } = await createSlackMcpServer({ core: harness.core, env: harness.env, fetch: slackReplies() });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'test', version: '0' });
+  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+  const greeting = client.getInstructions() ?? '';
+  await Promise.all([client.close(), server.close()]);
+
+  assert.doesNotMatch(greeting, /no tool here posts/i);
+  for (const said of [/slack_post_send/, /`chat`/, /`confirm`/, /`never`/, /agent-slack approve/, /cannot approve/i]) {
+    assert.match(greeting, said);
+  }
 });
 
 test('a pinned server refuses another workspace by name rather than quietly using its own', async () => {
@@ -259,23 +288,35 @@ test('preparing a post writes a draft, returns a preview, audits it, and posts n
 
 // ── Parity with the CLI, and the tools that are absent on purpose ──────────────────────────────────────────────
 
-test('the tools that post, react, approve or change a workspace’s connection do not exist', async () => {
+test('no tool approves, and none changes a workspace’s connection', async () => {
   /*
-   * Each of these is either a message in front of people or a change to what this software may do, and both are a
-   * person's to make at a terminal. A tool added for any of them — however well gated — is an agent doing it.
+   * Approving is the one act that stays at a terminal whatever else moves to chat: under `confirm` it is what the
+   * policy means, and a tool that approved would make it mean nothing. The posting tools are the named few that
+   * claim a prepared post or reaction through the gate; any other name for putting words in a room is a way round it.
+   * Changing a workspace's connection waits on the change approvals that gate it, and is not in this server yet.
    */
   const harness = await newHarness();
   const { client, close } = await connect(harness);
   try {
     const names = (await client.listTools()).tools.map((tool) => tool.name);
-    // `slack_post_prepare` is the one `post` tool, and it posts nothing; any other is a way to put words in a room.
     const forbidden = names.filter((name) =>
-      /^slack_(post_(?!prepare$)|send|approve|react|reaction|workspace_(add|reauth|remove|finish)|mode_(send|widen|set))/.test(
+      /approv|^slack_(post_(?!prepare$|send$)|send|react_(?!send$)|reaction|workspace_(add|reauth|remove|finish)|mode_(send|widen|set))/.test(
         name,
       ),
     );
-    assert.deepEqual(forbidden, [], 'posting, reacting, approving and connecting stay off the MCP surface');
-    for (const expected of ['slack_draft_list', 'slack_draft_get', 'slack_draft_delete', 'slack_post_prepare']) {
+    assert.deepEqual(forbidden, [], 'approving and connecting stay off the MCP surface');
+    for (const expected of [
+      'slack_draft_list',
+      'slack_draft_get',
+      'slack_draft_delete',
+      'slack_post_prepare',
+      'slack_post_send',
+      'slack_react',
+      'slack_react_send',
+      'slack_doctor',
+      'slack_manifest',
+      'slack_workspace_show',
+    ]) {
       assert.ok(names.includes(expected), `${expected} is part of the agent's surface`);
     }
   } finally {
@@ -293,9 +334,19 @@ test('every tool says whether it writes and whether it reaches Slack', async () 
       assert.equal(typeof tool.annotations?.openWorldHint, 'boolean', `${tool.name} declares openWorldHint`);
     }
     const writers = tools.filter((tool) => tool.annotations?.readOnlyHint === false).map((tool) => tool.name);
-    assert.deepEqual(writers.sort(), ['slack_draft_delete', 'slack_post_prepare']);
-    const deleting = tools.find((tool) => tool.name === 'slack_draft_delete');
-    assert.equal(deleting?.annotations?.destructiveHint, true);
+    assert.deepEqual(writers.sort(), [
+      'slack_draft_delete',
+      'slack_post_prepare',
+      'slack_post_send',
+      'slack_react',
+      'slack_react_send',
+    ]);
+    // A post cannot be taken back once people have read it, and a client that asks before such a call must know.
+    for (const irreversible of ['slack_draft_delete', 'slack_post_send', 'slack_react', 'slack_react_send']) {
+      const tool = tools.find((candidate) => candidate.name === irreversible);
+      assert.equal(tool?.annotations?.destructiveHint, true, `${irreversible} is marked destructive`);
+      assert.equal(tool?.annotations?.idempotentHint ?? false, false, `${irreversible} is not safe to repeat`);
+    }
   } finally {
     await close();
   }
@@ -439,6 +490,9 @@ test('a pinned server refuses another workspace on every tool that takes one', a
     query: 'x',
     text: 'x',
     draftId: 'dft_AAAAAAAAAAAAAAAAAAAAAA',
+    approvalId: 'ap_AAAAAAAAAAAAAAAAAAAAAA',
+    expectChannel: 'C1',
+    emoji: 'eyes',
   };
   try {
     const tools = (await client.listTools()).tools;

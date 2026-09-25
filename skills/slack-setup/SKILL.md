@@ -45,6 +45,12 @@ the app and matches them exactly, so the port in the manifest and the port in `w
 number. This is the one place the package deliberately diverges from Gmail, which takes whatever port it is
 handed.
 
+For a workspace already connected, name it: `agent-slack manifest --workspace acme/slack --mode send` (over MCP,
+`slack_manifest` with `workspace`) uses the port it signed in with and returns the direct link to its own app's
+manifest page, `https://api.slack.com/apps/<appId>/app-manifest`. Pasting the JSON there and saving is still the
+person's to do — hand them the link and the JSON. A workspace connected before its app id was recorded gets no
+link, and the person finds the app at https://api.slack.com/apps instead.
+
 Two fields in that manifest are load-bearing: `oauth_config.pkce_enabled` and `token_rotation_enabled`. Without
 PKCE, Slack treats a loopback redirect like a server redirect and no sign-in can complete. Both were verified
 against a real workspace on 2026-09-22.
@@ -98,35 +104,44 @@ printed as an entry to paste, and not running — and nothing at all when one of
 does not read a workspace's own `.vscode/mcp.json` or `.cursor/mcp.json`, so run `--dry-run` first and tell the
 user what it lists. Without the server the skills still work, through `agent-slack … --json`.
 
-What the agent gets is reading, drafting and preparing — never posting:
+What the agent gets is everything the CLI does except approving and changing a workspace's connection. Posting
+and reacting go through the same approval gate as the CLI: under `chat` the person's yes in the conversation is
+the approval, under `confirm` they approve at their own terminal with `agent-slack approve`, and under `never`
+nothing posts — see `slack-posting`.
 
 | MCP tool | CLI |
 |---|---|
-| `slack_workspaces_list` | `agent-slack workspace list` |
+| `slack_workspaces_list`, `slack_workspace_show` | `agent-slack workspace list`, `agent-slack workspace show <name>` |
+| `slack_doctor` | `agent-slack doctor` |
+| `slack_manifest` | `agent-slack manifest` |
 | `slack_mode`, `slack_mode_request_send`, `slack_mode_narrow` | `agent-slack workspace mode <name> [send\|read]` |
 | `slack_channels`, `slack_read`, `slack_thread`, `slack_search`, `slack_people`, `slack_files` | the commands of the same name — see `slack-reading` |
 | `slack_post_prepare`, `slack_draft_list`, `slack_draft_get`, `slack_draft_delete` | `agent-slack draft …` and `agent-slack post prepare` — see `slack-posting` |
+| `slack_post_send`, `slack_react`, `slack_react_send` | `agent-slack post send`, `agent-slack react` — see `slack-posting` |
 
-`slack_mode_request_send` and `slack_mode_narrow` return steps for a person and change nothing.
+`slack_mode_request_send` and `slack_mode_narrow` return steps for a person and change nothing, and so does
+`slack_manifest`. Connecting, re-authorising and removing a workspace, and approving a post, stay at a terminal.
 
 ## Moving a workspace to `send`
 
 This is a **widening**, and an agent never does it. It takes two steps, in this order:
 
 1. Update the existing app's manifest at api.slack.com to the `send` one:
-   `agent-slack manifest --mode send --port <port>`. Edit the app you already have — do not create another, which
-   changes no installation. With an app configuration token, a person can do this step from a terminal instead:
-   `agent-slack app update <name> --mode send --port <port>` edits the app the workspace recorded when it signed in.
+   `agent-slack manifest --workspace <name> --mode send`, which prints the link to that app's own manifest page.
+   Edit the app you already have — do not create another, which changes no installation. You may hand the person
+   this step: `slack_manifest` returns the same JSON and link. With an app configuration token, a person can do it
+   from a terminal instead: `agent-slack app update <name> --mode send --port <port>` edits the app the workspace
+   recorded when it signed in.
 2. `agent-slack workspace reauth <name> --mode send --port <port>`, which asks a person to type a challenge.
 
 Step 1 alone changes nothing a token can do: the app may *ask* for posting, and the workspace still cannot post until
 step 2. `app update` says so, and prints step 2 with the port filled in.
 
 `agent-slack workspace mode <name>` reports where a workspace stands and prints these steps. A workspace signed in
-with 0.4.1 or later remembers its port, so `--port` can be left out of `workspace reauth` and `workspace mode`,
-which use the recorded one. `agent-slack manifest` names no workspace, so it has no recorded port to use and still
-needs `--port` given: take the number from the steps `workspace mode <name>` prints. An older workspace prints
-`<port>` there until it is given one.
+with 0.4.1 or later remembers its port, so `--port` can be left out of `workspace reauth`, `workspace mode` and
+`manifest --workspace`, which use the recorded one. `agent-slack manifest` without `--workspace` names no workspace,
+so it has no recorded port to use and needs `--port` given. An older workspace has none recorded either, so give
+`--port` there too: its steps print `<port>` until it is given one.
 
 ## Going back to `read`
 
@@ -153,7 +168,8 @@ back is a person's procedure, not a command:
   not the same as "none": open the client's MCP server list and look for another Slack entry yourself.
 
 `--offline` skips the one network call, so a person diagnosing a machine with no network still gets everything
-the files can say.
+the files can say, and `--workspace <name>` checks one workspace. `slack_doctor` runs the same checks and returns
+the same JSON, with `offline` and `workspace`; on a server pinned to one workspace it reports that workspace only.
 
 ## Pitfalls
 

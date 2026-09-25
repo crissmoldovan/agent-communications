@@ -1,7 +1,7 @@
 # @agentcomms/slack
 
 Slack for coding agents. Read channels, threads, search, people and files across one or more workspaces — and
-draft messages that **nothing posts without a person**.
+draft messages that **nothing posts without a person's approval of exactly what goes out**.
 
 ```sh
 npm install -g @agentcomms/slack    # or run it with npx @agentcomms/slack <command>
@@ -17,9 +17,11 @@ Be exact about what that buys. It is **"this package cannot post"**, not "nothin
 second Slack server holding a write token for the same workspace posts without going near this one. Look in your
 agent's MCP server list for another Slack entry, and remove it if you want the guarantee to mean anything.
 
-**Nothing is posted without a person.** Even in `send` mode, an agent prepares; a person approves at a terminal.
-The preview shows what the recipient will read and **how many people it interrupts** — `@channel` is eight
-characters whether the room holds three people or four hundred.
+**Nothing is posted without a person.** Even in `send` mode, an agent prepares and a person approves that exact
+content — by saying yes in the conversation under the workspace's `chat` policy, or by typing a code at their own
+terminal under `confirm`; under `never` nothing posts. A broadcast or a large room needs the terminal whatever the
+policy says. The preview shows what the recipient will read and **how many people it interrupts** — `@channel` is
+eight characters whether the room holds three people or four hundred.
 
 **You bring your own Slack app.** There is no shared app to install. `agent-slack manifest` prints one to create
 in your own workspace, so the scopes are visible before anything is granted and your admins keep control. No
@@ -87,6 +89,8 @@ reported as the name it wore, never as identity.
 ```sh
 agent-slack draft create --workspace acme/slack --channel C024BE7LR --text 'ready when you are'
 agent-slack post prepare --workspace acme/slack --draft <draftId>   # prints the preview, posts nothing
+agent-slack approve <approvalId>                                    # under `confirm`: you, at your terminal
+agent-slack post send --workspace acme/slack --draft <draftId> --approval <approvalId> --expect-channel C024BE7LR
 ```
 
 A draft is a local file, because Slack has no server-side draft. That is better in one way — nothing exists in
@@ -110,13 +114,17 @@ The entry pins the exact version, so a newer release reaches the agent only when
 
 | Tools | What they do |
 |---|---|
-| `slack_workspaces_list`, `slack_mode` | which workspaces are connected, and what each may do |
+| `slack_workspaces_list`, `slack_workspace_show`, `slack_mode` | which workspaces are connected, and what each may do |
+| `slack_doctor` | what `agent-slack doctor` checks, as the same JSON |
+| `slack_manifest` | the app manifest, and for a connected workspace the link to its own app's manifest page — changes nothing |
 | `slack_channels`, `slack_read`, `slack_thread`, `slack_search`, `slack_people`, `slack_files` | read, bounded |
 | `slack_post_prepare` | compose a draft and return the preview a person must approve — posts nothing |
+| `slack_post_send` | post a prepared draft once its approval allows it — the operation `agent-slack post send` runs |
+| `slack_react`, `slack_react_send` | add or remove a reaction through the same gate — `agent-slack react` |
 | `slack_draft_list`, `slack_draft_get`, `slack_draft_delete` | the drafts prepares leave behind |
 | `slack_mode_request_send`, `slack_mode_narrow` | the steps a person takes to change a workspace's mode — changes nothing |
 
-Every one takes `workspace`. The full list, with arguments, is `docs/reference/slack-mcp-tools.md` in
+Every one that acts on a workspace takes `workspace`. The full list, with arguments, is `docs/reference/slack-mcp-tools.md` in
 [the repository](https://github.com/crissmoldovan/agent-communications).
 
 Or embed it:
@@ -128,10 +136,11 @@ const server = await createSlackMcpServer({ workspace: 'acme/slack' });
 await server.connectStdio();
 ```
 
-No tool posts, reacts, approves, or connects a workspace. `slack_post_prepare` writes a draft and returns the
-preview; posting is yours. An agent may report
-a workspace's mode and may ask to widen it — and gets back the steps you would have to take, with nothing
-changed.
+No tool approves, and none connects a workspace. `slack_post_send` and the reaction tools claim an approval through
+the gate the CLI uses: under `chat` your yes in the conversation is the approval; under `confirm` they return
+`APPROVAL_PENDING` with the `agent-slack approve <approvalId>` command for you to run, and post only after you have;
+under `never` they refuse. An agent may report a workspace's mode and may ask to widen it — and gets back the steps
+you would have to take, with nothing changed.
 
 ## Modes
 

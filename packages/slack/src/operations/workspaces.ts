@@ -70,6 +70,12 @@ export function listWorkspaces(config: Config): WorkspaceView[] {
     .sort((a, b) => a.alias.localeCompare(b.alias));
 }
 
+/** Everything known about one workspace — `workspace show` and `slack_workspace_show`. */
+export function showWorkspace(config: Config, alias: string): WorkspaceView {
+  const found = requireWorkspace(config, alias);
+  return viewOf(found.alias, found.account);
+}
+
 export function requireWorkspace(config: Config, alias: string): { alias: string; account: AccountConfig } {
   const notFound = () =>
     new CommsError('NOT_FOUND', `no Slack workspace called "${alias}"`, {

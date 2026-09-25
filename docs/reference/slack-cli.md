@@ -62,6 +62,7 @@ agent-slack manifest [options]
 |---|---|---|
 | `--mode <mode>` | how much access to ask Slack for (choices: "read", "send", default: "read") | — |
 | `--port <port>` | the loopback port its redirect will use | — |
+| `--workspace <name>` | for a workspace already connected: its port, and the link to its own app | — |
 
 ### `agent-slack app`
 
@@ -191,6 +192,7 @@ agent-slack doctor [options]
 | Option | What it does | Default |
 |---|---|---|
 | `--offline` | do not ask Slack anything; report only what the files say | `false` |
+| `--workspace <name>` | check only this workspace | — |
 
 ### `agent-slack channels`
 

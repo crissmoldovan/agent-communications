@@ -1,11 +1,24 @@
-import { type Config, isProductServer, pinnedVersion, type RegisteredServer } from '@agentcomms/core';
+import {
+  type Config,
+  isProductServer,
+  listRegisteredServers,
+  lookupName,
+  missingEntryFile,
+  pinnedVersion,
+  type RegisteredServer,
+  type SecretStore,
+  toCommsError,
+} from '@agentcomms/core';
 import { scopeMismatch } from '../auth/authorize.ts';
-import { REFRESH_EXPIRY_WARNING_MS, type TokenBundle } from '../auth/bundle.ts';
+import { isDue, isExpired, parseBundle, REFRESH_EXPIRY_WARNING_MS, type TokenBundle } from '../auth/bundle.ts';
+import type { SlackContext } from '../context.ts';
 import type { InstallMode } from '../manifest.ts';
 import { SLACK_MCP } from '../mcp/install.ts';
 import { VERSION } from '../version.ts';
+import { type ProbeFetch, probeIdentity } from './identity.ts';
 import { describeOtherSlackServer, findOtherSlackServers, removalFor } from './other-servers.ts';
-import { listWorkspaces } from './workspaces.ts';
+import { openWorkspace } from './session.ts';
+import { listWorkspaces, requireWorkspace } from './workspaces.ts';
 
 /**
  * What has to be true for this to work, and the one command that fixes each thing that is not.
@@ -89,6 +102,11 @@ export interface DoctorInput {
    * "a credential is stored" and "the credential works, and belongs to who this says it does".
    */
   readonly identities?: ReadonlyMap<string, IdentityProbe> | undefined;
+  /**
+   * Check only this workspace, by its current name. The checks about the machine — the rate limit, the MCP entries —
+   * are reported either way, as Gmail's doctor reports them for one mailbox.
+   */
+  readonly workspace?: string | undefined;
 }
 
 /**
@@ -108,7 +126,9 @@ export const IMPLICIT_USER_SCOPES: readonly string[] = ['identify'];
 
 export function doctor(input: DoctorInput): DoctorResult {
   const checks: Check[] = [];
-  const workspaces = listWorkspaces(input.config);
+  const workspaces = listWorkspaces(input.config).filter(
+    (view) => input.workspace === undefined || view.alias === input.workspace,
+  );
 
   if (workspaces.length === 0) {
     checks.push({
@@ -414,6 +434,143 @@ export function doctor(input: DoctorInput): DoctorResult {
     fail: checks.filter((check) => check.status === 'fail').length,
   };
   return { healthy: summary.fail === 0, summary, checks };
+}
+
+export interface DoctorRun {
+  /** Ask Slack nothing; report only what the files say. */
+  readonly offline?: boolean | undefined;
+  /** Check only this workspace. A name that is not connected is refused, not reported as a clean install. */
+  readonly workspace?: string | undefined;
+  /** The fetch `auth.test` goes through. Injected so a test never reaches the real Slack. */
+  readonly probe?: ProbeFetch | undefined;
+}
+
+/**
+ * Reads everything `doctor` judges, and judges it — for `agent-slack doctor` and `slack_doctor` alike.
+ *
+ * The reading used to live in the CLI command, and `doctor` above only judged what it was handed. A tool that
+ * gathered its own inputs would have been a second reading of the same files, free to disagree with the first about
+ * a locked keychain or a token that is due; so the command and the tool both call this, and get one answer.
+ */
+export async function runDoctor(context: SlackContext, options: DoctorRun = {}): Promise<DoctorResult> {
+  const config = await context.config();
+  // Resolved first, so a name that is not connected is an error and not an empty, healthy report.
+  const only = options.workspace === undefined ? undefined : requireWorkspace(config, options.workspace).alias;
+  const bundles = new Map<string, TokenBundle | null | 'unreadable' | StoreUnavailable>();
+  /*
+   * A store that will not open is one finding per workspace, not a crash: a keychain module missing, or a keychain
+   * that is locked, says nothing about any credential inside it.
+   */
+  let secrets: SecretStore | null = null;
+  let storeProblem: string | null = null;
+  try {
+    secrets = await context.secrets();
+  } catch (error) {
+    storeProblem = toCommsError(error).message;
+  }
+  for (const view of listWorkspaces(config)) {
+    if (only !== undefined && view.alias !== only) continue;
+    const account = lookupName(config, 'account', view.alias);
+    if (!account) continue;
+    if (secrets === null) {
+      bundles.set(view.alias, { storeUnavailable: storeProblem ?? 'the secret store could not be opened' });
+      continue;
+    }
+    let raw: string | null;
+    try {
+      raw = await secrets.get(account.secretRef);
+    } catch (error) {
+      /*
+       * The store refusing is not the credential being corrupt.
+       *
+       * Both were reported as unreadable, whose fix is `reauth` — which, for a keychain that only wanted unlocking
+       * or a prompt approving, throws away a refresh token that was fine all along.
+       */
+      bundles.set(view.alias, { storeUnavailable: toCommsError(error).message });
+      continue;
+    }
+    try {
+      bundles.set(view.alias, parseBundle(raw));
+    } catch {
+      /*
+       * An unreadable credential is a finding, not a crash — `doctor` is what somebody runs *because* something is
+       * wrong, so it has to survive the thing being wrong.
+       *
+       * Reported as unreadable rather than as absent, which is a different problem with a different fix. Collapsing
+       * the two said "no stored token" for a credential that is very much stored, and sent people to
+       * `workspace add` — which then refuses it as already connected.
+       */
+      bundles.set(view.alias, 'unreadable');
+    }
+  }
+  /*
+   * One call per workspace, and only for a credential that could possibly work.
+   *
+   * `offline` exists because this is the only thing here that needs a network, and somebody diagnosing a machine
+   * with no network still deserves everything the files can tell them. Without it a failure to reach Slack is
+   * reported as not having asked, never as a problem with the install.
+   */
+  const identities = new Map<string, IdentityProbe>();
+  if (options.offline !== true && secrets !== null) {
+    for (const [alias, bundle] of bundles) {
+      if (bundle === null || typeof bundle !== 'object' || 'storeUnavailable' in bundle) continue;
+      /*
+       * Renewed first when it is due, then asked about.
+       *
+       * This used to skip any token past its expiry, on the reasoning that Slack would refuse it and the refusal
+       * would read as a credential problem. True, and it meant the ordinary state of a workspace nobody had used
+       * today — expired, and perfectly refreshable — was never checked at all. A refresh is what the next read would
+       * do anyway, through exactly the same locks, so `doctor` does it and then checks the token that results.
+       *
+       * Only a `ready` credential is renewed. One that is `refresh-uncertain` must not be, and the credential-state
+       * check already says what is wrong with it.
+       */
+      let token = bundle.accessToken;
+      if (isExpired(bundle, context.now()) || (bundle.state === 'ready' && isDue(bundle, context.now()))) {
+        if (bundle.state !== 'ready') continue;
+        try {
+          token = (await openWorkspace(context, alias)).call.token;
+        } catch (error) {
+          const failure = toCommsError(error);
+          identities.set(alias, { kind: 'unreachable', why: `the token could not be renewed: ${failure.message}` });
+        }
+        // Whatever the refresh left behind is what the state check should describe.
+        try {
+          const account = lookupName(config, 'account', alias);
+          if (account) {
+            secrets.invalidate(account.secretRef);
+            bundles.set(alias, parseBundle(await secrets.get(account.secretRef)));
+          }
+        } catch {
+          // The earlier read stands; the identity check below says whether the token works.
+        }
+        if (identities.has(alias)) continue;
+      }
+      identities.set(
+        alias,
+        await probeIdentity({ ...bundle, accessToken: token }, options.probe ? { fetch: options.probe } : {}),
+      );
+    }
+  }
+  /*
+   * What the MCP clients have registered: other Slack servers, and whether our own entries run this release and
+   * still start. Read from their config files, so it needs no network and is done offline too.
+   */
+  const registeredServers = await listRegisteredServers(context.env);
+  const missingFiles = new Map<RegisteredServer, string>();
+  for (const server of registeredServers.filter((entry) => isProductServer(entry, SLACK_MCP))) {
+    const missing = await missingEntryFile(server);
+    if (missing) missingFiles.set(server, missing);
+  }
+  return doctor({
+    config,
+    now: context.now(),
+    bundles,
+    identities,
+    registeredServers,
+    missingFiles,
+    ...(only === undefined ? {} : { workspace: only }),
+  });
 }
 
 /**

@@ -201,21 +201,42 @@ export function renderSteps(title: string, steps: readonly string[], color: bool
   return [paint(color, 'bold', title), ...steps.map((step, i) => `  ${i + 1}. ${step}`)].join('\n');
 }
 
-export function renderManifestHelp(mode: string, port: number, color: boolean): string {
+export function renderManifestHelp(
+  mode: string,
+  port: number,
+  color: boolean,
+  target: { workspace: string | null; manifestUrl: string | null } = { workspace: null, manifestUrl: null },
+): string {
+  /*
+   * For a workspace already connected, the app to change is the one it signed in through — so the steps are to edit
+   * that app, never to create one. A new app is a new installation, and the workspace would go on behaving exactly as
+   * before under the old one.
+   */
+  const steps =
+    target.workspace === null
+      ? [
+          '1. Open https://api.slack.com/apps and choose "Create New App" → "From a manifest".',
+          '   (Changing the mode of a workspace already connected? Open its existing app → "App Manifest" instead,',
+          '   replace the manifest with the JSON below and save — the same app, not a new one.)',
+          '2. Pick your workspace, then paste the JSON below.',
+          '3. Create the app. On "Basic Information", copy the Client ID.',
+          '',
+          paint(color, 'dim', 'The Client ID is the only thing you need from that page. It is not a secret, and there'),
+          paint(color, 'dim', 'is no client secret to copy: this signs in with PKCE, which replaces one.'),
+          '',
+          'Then connect it:',
+          `  agent-slack workspace add <name> --client-id <the Client ID> --port ${port}`,
+        ]
+      : [
+          target.manifestUrl === null
+            ? `1. Open https://api.slack.com/apps and the app "${target.workspace}" was connected through → "App Manifest". (It signed in before its app was recorded, so there is no direct link.)`
+            : `1. Open ${target.manifestUrl} — the manifest of the app "${target.workspace}" was connected through.`,
+          '2. Replace the manifest there with the JSON below, and save — the same app, not a new one.',
+        ];
   return [
     paint(color, 'bold', `A Slack app for "${mode}" access`),
     '',
-    '1. Open https://api.slack.com/apps and choose "Create New App" → "From a manifest".',
-    '   (Changing the mode of a workspace already connected? Open its existing app → "App Manifest" instead,',
-    '   replace the manifest with the JSON below and save — the same app, not a new one.)',
-    '2. Pick your workspace, then paste the JSON below.',
-    '3. Create the app. On "Basic Information", copy the Client ID.',
-    '',
-    paint(color, 'dim', 'The Client ID is the only thing you need from that page. It is not a secret, and there'),
-    paint(color, 'dim', 'is no client secret to copy: this signs in with PKCE, which replaces one.'),
-    '',
-    'Then connect it:',
-    `  agent-slack workspace add <name> --client-id <the Client ID> --port ${port}`,
+    ...steps,
     '',
     paint(color, 'dim', `Keep --port ${port}: Slack matches the redirect URL in this manifest exactly.`),
     '',
@@ -228,7 +249,7 @@ export function renderManifestHelp(mode: string, port: number, color: boolean): 
       : paint(
           color,
           'dim',
-          `This app can post, upload and react, each only after your approval. \`agent-slack manifest --mode read --port ${port}\` prints one that cannot post at all. To move an existing workspace from read, update its app with this manifest first, then run \`agent-slack workspace mode <name> send --port ${port}\`.`,
+          `This app can post, upload and react, each only after your approval. \`agent-slack manifest --mode read --port ${port}\` prints one that cannot post at all. To move an existing workspace from read, update its app with this manifest first, then run \`agent-slack workspace mode ${target.workspace ?? '<name>'} send --port ${port}\`.`,
         ),
   ].join('\n');
 }

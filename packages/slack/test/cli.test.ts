@@ -176,16 +176,20 @@ test('a manifest with no port is refused rather than guessed', async () => {
   assert.equal(envelope.error?.code, 'USAGE');
 });
 
-test('the setup skill never says `--port` may be left off `manifest`, which has no recorded port to use', async () => {
+test('the setup skill says `--port` may be left off `manifest` only when it names a workspace', async () => {
   /*
-   * A recorded port is a workspace's, and `manifest` names no workspace — so it has nothing to fall back on and
-   * still needs the number given. The skill listed it and `workspace reauth` as two steps and then said `--port`
-   * could be left out of "both", which sent a reader to a refusal on the first of them.
+   * A recorded port is a workspace's. `manifest` alone names none, so it has nothing to fall back on and still needs
+   * the number given; `manifest --workspace` names one, and uses the port it signed in with. The skill listed
+   * `manifest` and `workspace reauth` as two steps and then said `--port` could be left out of "both", which sent a
+   * reader to a refusal on the first of them — so each claim is checked against what the command does.
    */
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'acme', mode: 'read', redirectPort: 50123 });
   const bare = await cli(harness, ['--json', 'manifest', '--mode', 'send']);
-  assert.equal(bare.code, EXIT_CODES.USAGE, 'a recorded port does not reach `manifest`');
+  assert.equal(bare.code, EXIT_CODES.USAGE, 'a recorded port does not reach a `manifest` that names no workspace');
+  const named = await cli(harness, ['--json', 'manifest', '--mode', 'send', '--workspace', 'acme']);
+  assert.equal(named.code, EXIT_CODES.OK, named.stdout);
+  assert.equal(named.json<Envelope<{ port: number }>>().data?.port, 50123, 'and does reach one that names it');
 
   const skill = await readFile(new URL('../../../skills/slack-setup/SKILL.md', import.meta.url), 'utf8');
   const claims = skill
@@ -194,7 +198,11 @@ test('the setup skill never says `--port` may be left off `manifest`, which has 
     .filter((sentence) => /--port`? can be left out/.test(sentence));
   assert.ok(claims.length > 0, 'the skill still says where the port can be left out');
   for (const claim of claims) {
-    assert.doesNotMatch(claim, /\bboth\b|\ball\b|\bmanifest\b/, `names only commands that fill it in: ${claim}`);
+    assert.doesNotMatch(
+      claim,
+      /\bboth\b|\ball\b|\bmanifest\b(?! --workspace)/,
+      `names only commands that fill it in: ${claim}`,
+    );
   }
   assert.match(skill.replace(/\s+/g, ' '), /`agent-slack manifest` [^.]*needs `--port`/, 'and says manifest needs it');
 });

@@ -5,27 +5,19 @@ import {
   colorEnabled,
   EXIT_CODES,
   installExitStatus,
-  isProductServer,
   type LooseningConsent,
-  listRegisteredServers,
-  lookupName,
-  missingEntryFile,
   type OutputOptions,
   paint,
-  type RegisteredServer,
   renderChannelPreview,
   renderPrune,
   requirePerson,
   runCommand,
-  type SecretStore,
   type Streams,
-  toCommsError,
   withCredentialsLock,
   writeResult,
 } from '@agentcomms/core';
 import { Command, CommanderError, Option } from 'commander';
 import type { FetchLike } from '../api/guard.ts';
-import { isDue, isExpired, parseBundle, type TokenBundle } from '../auth/bundle.ts';
 import { exitAfterRefreshes, type SignalHost, settleBeforeExit } from '../auth/exit.ts';
 import { compose, type Mention } from '../compose/blocks.ts';
 import { openDraftStore } from '../compose/drafts.ts';
@@ -34,14 +26,16 @@ import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
 import { mcpInstall, mcpPrune, SLACK_MCP } from '../mcp/install.ts';
 import { createApp, updateApp } from '../operations/app.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
-import { doctor, type IdentityProbe, type StoreUnavailable } from '../operations/doctor.ts';
+import { runDoctor } from '../operations/doctor.ts';
 import { deleteOwnDraft, ownDraft } from '../operations/drafts.ts';
 import { gateDepsFor } from '../operations/gate.ts';
-import { type ProbeFetch, probeIdentity } from '../operations/identity.ts';
+import type { ProbeFetch } from '../operations/identity.ts';
+import { checkedPort, manifestFor } from '../operations/manifest.ts';
 import { modeReport, narrowingSteps, wideningSteps } from '../operations/mode.ts';
 import { NameBook } from '../operations/people.ts';
+import { react, sendPost } from '../operations/post.ts';
 import { listChannels, listFiles, listPeople, readChannel, readThread, searchMessages } from '../operations/read.ts';
-import { postPrepared, preparePost, prepareReaction, reactPrepared } from '../operations/send.ts';
+import { preparePost } from '../operations/send.ts';
 import { openWorkspace } from '../operations/session.ts';
 import {
   finishSignIn,
@@ -50,7 +44,14 @@ import {
   type StartedSignIn,
   startSignIn,
 } from '../operations/signin.ts';
-import { checkAliasFree, listWorkspaces, removeWorkspace, requireWorkspace, viewOf } from '../operations/workspaces.ts';
+import {
+  checkAliasFree,
+  listWorkspaces,
+  removeWorkspace,
+  requireWorkspace,
+  showWorkspace,
+  viewOf,
+} from '../operations/workspaces.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
 import { readConfigurationToken } from './config-token.ts';
@@ -221,19 +222,7 @@ configuration problem.`,
     new Option('--mode <mode>', 'how much access to ask Slack for').choices(['read', 'send']).default('read');
 
   /** `--port`, else the port the workspace last signed in with, which is the one its app's redirect names. */
-  const portOf = (flags: Options, recorded?: number): number => {
-    const raw = flags.port ?? recorded;
-    if (raw === undefined) {
-      throw new CommsError('USAGE', 'the loopback port is needed, and must match the one in the manifest', {
-        hint: 'Slack matches redirect URLs exactly. Pass the same `--port` you built the manifest with.',
-      });
-    }
-    const port = Number(raw);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      throw new CommsError('USAGE', `"${String(raw)}" is not a port`, { hint: 'A whole number from 1 to 65535.' });
-    }
-    return port;
-  };
+  const portOf = (flags: Options, recorded?: number): number => checkedPort(flags.port, recorded);
 
   /**
    * How long `--finish` waits for the browser, checked rather than coerced.
@@ -280,24 +269,20 @@ configuration problem.`,
     .description('the Slack app to create, as a manifest you can paste')
     .addOption(modeOption())
     .option('--port <port>', 'the loopback port its redirect will use')
+    .option('--workspace <name>', 'for a workspace already connected: its port, and the link to its own app')
     .action(
-      act(async (_context, options, flags: Options) => {
-        const mode = String(flags.mode) as InstallMode;
-        /*
-         * The port is decided here, before any sign-in exists.
-         *
-         * Slack stores redirect URLs on the app and matches them exactly, so it cannot be whichever port the OS
-         * hands out at sign-in time — which is what the Gmail side does, and why the two differ. Asking for it
-         * now, and refusing to guess one, is what makes `workspace add --port` the same number by construction
-         * rather than by luck.
-         */
-        const port = portOf(flags);
-        const redirectUrl = `http://localhost:${port}/slack/callback`;
-        const manifest = renderManifest(mode, redirectUrl);
+      act(async (context, options, flags: Options) => {
+        // The same operation as `slack_manifest`, port check and all: see `manifestFor`.
+        const result = await manifestFor(context, {
+          mode: String(flags.mode) as InstallMode,
+          port: flags.port,
+          workspace: flags.workspace === undefined ? undefined : String(flags.workspace),
+        });
         writeResult(
-          { mode, port, redirectUrl, manifest: JSON.parse(manifest) as unknown },
+          result,
           output(),
-          () => `${renderManifestHelp(mode, port, options.color)}\n\n${manifest}`,
+          (data) =>
+            `${renderManifestHelp(data.mode, data.port, options.color, data)}\n\n${renderManifest(data.mode, data.redirectUrl)}`,
           streams,
         );
       }),
@@ -469,8 +454,7 @@ configuration problem.`,
     .description('everything known about one workspace')
     .action(
       act(async (context, options, alias: string) => {
-        const found = requireWorkspace(await context.config(), alias);
-        const view = viewOf(found.alias, found.account);
+        const view = showWorkspace(await context.config(), alias);
         writeResult(view, output(), () => renderWorkspace(view, options.color), streams);
       }),
     );
@@ -644,119 +628,15 @@ configuration problem.`,
     .command('doctor')
     .description('check everything that has to work, and say how to fix what does not')
     .option('--offline', 'do not ask Slack anything; report only what the files say', false)
+    .option('--workspace <name>', 'check only this workspace')
     .action(
       act(async (context, options, flags: Options) => {
-        const config = await context.config();
-        const bundles = new Map<string, TokenBundle | null | 'unreadable' | StoreUnavailable>();
-        /*
-         * A store that will not open is one finding per workspace, not a crash: a keychain module missing, or a
-         * keychain that is locked, says nothing about any credential inside it.
-         */
-        let secrets: SecretStore | null = null;
-        let storeProblem: string | null = null;
-        try {
-          secrets = await context.secrets();
-        } catch (error) {
-          storeProblem = toCommsError(error).message;
-        }
-        for (const view of listWorkspaces(config)) {
-          const account = lookupName(config, 'account', view.alias);
-          if (!account) continue;
-          if (secrets === null) {
-            bundles.set(view.alias, { storeUnavailable: storeProblem ?? 'the secret store could not be opened' });
-            continue;
-          }
-          let raw: string | null;
-          try {
-            raw = await secrets.get(account.secretRef);
-          } catch (error) {
-            /*
-             * The store refusing is not the credential being corrupt.
-             *
-             * Both were reported as unreadable, whose fix is `reauth` — which, for a keychain that only wanted
-             * unlocking or a prompt approving, throws away a refresh token that was fine all along.
-             */
-            bundles.set(view.alias, { storeUnavailable: toCommsError(error).message });
-            continue;
-          }
-          try {
-            bundles.set(view.alias, parseBundle(raw));
-          } catch {
-            /*
-             * An unreadable credential is a finding, not a crash — `doctor` is what somebody runs *because*
-             * something is wrong, so it has to survive the thing being wrong.
-             *
-             * Reported as unreadable rather than as absent, which is a different problem with a different fix.
-             * Collapsing the two said "no stored token" for a credential that is very much stored, and sent
-             * people to `workspace add` — which then refuses it as already connected.
-             */
-            bundles.set(view.alias, 'unreadable');
-          }
-        }
-        /*
-         * One call per workspace, and only for a credential that could possibly work.
-         *
-         * `--offline` exists because this is the only thing here that needs a network, and somebody diagnosing a
-         * machine with no network still deserves everything the files can tell them. Without the flag a failure
-         * to reach Slack is reported as not having asked, never as a problem with the install.
-         */
-        const identities = new Map<string, IdentityProbe>();
-        if (flags.offline !== true && secrets !== null) {
-          for (const [alias, bundle] of bundles) {
-            if (bundle === null || typeof bundle !== 'object' || 'storeUnavailable' in bundle) continue;
-            /*
-             * Renewed first when it is due, then asked about.
-             *
-             * This used to skip any token past its expiry, on the reasoning that Slack would refuse it and the
-             * refusal would read as a credential problem. True, and it meant the ordinary state of a workspace
-             * nobody had used today — expired, and perfectly refreshable — was never checked at all. A refresh is
-             * what the next read would do anyway, through exactly the same locks, so `doctor` does it and then
-             * checks the token that results.
-             *
-             * Only a `ready` credential is renewed. One that is `refresh-uncertain` must not be, and the
-             * credential-state check already says what is wrong with it.
-             */
-            let token = bundle.accessToken;
-            if (isExpired(bundle, context.now()) || (bundle.state === 'ready' && isDue(bundle, context.now()))) {
-              if (bundle.state !== 'ready') continue;
-              try {
-                token = (await openWorkspace(context, alias)).call.token;
-              } catch (error) {
-                const failure = toCommsError(error);
-                identities.set(alias, {
-                  kind: 'unreachable',
-                  why: `the token could not be renewed: ${failure.message}`,
-                });
-              }
-              // Whatever the refresh left behind is what the state check should describe.
-              try {
-                const account = lookupName(config, 'account', alias);
-                if (account) {
-                  secrets.invalidate(account.secretRef);
-                  bundles.set(alias, parseBundle(await secrets.get(account.secretRef)));
-                }
-              } catch {
-                // The earlier read stands; the identity check below says whether the token works.
-              }
-              if (identities.has(alias)) continue;
-            }
-            identities.set(
-              alias,
-              await probeIdentity({ ...bundle, accessToken: token }, deps.probe ? { fetch: deps.probe } : {}),
-            );
-          }
-        }
-        /*
-         * What the MCP clients have registered: other Slack servers, and whether our own entries run this release
-         * and still start. Read from their config files, so it needs no network and is done offline too.
-         */
-        const registeredServers = await listRegisteredServers(context.env);
-        const missingFiles = new Map<RegisteredServer, string>();
-        for (const server of registeredServers.filter((entry) => isProductServer(entry, SLACK_MCP))) {
-          const missing = await missingEntryFile(server);
-          if (missing) missingFiles.set(server, missing);
-        }
-        const result = doctor({ config, now: context.now(), bundles, identities, registeredServers, missingFiles });
+        // The same reading and the same verdict as `slack_doctor`: see `runDoctor`.
+        const result = await runDoctor(context, {
+          offline: flags.offline === true,
+          workspace: flags.workspace === undefined ? undefined : String(flags.workspace),
+          probe: deps.probe,
+        });
         if (!result.healthy) softExit = 78;
         writeResult(result, output(), () => renderDoctor(result, options.color), streams);
       }),
@@ -982,15 +862,16 @@ configuration problem.`,
     .requiredOption('--expect-channel <id>', 'the channel you believe this goes to')
     .action(
       act(async (context, options, flags: Options) => {
-        const gate = await gateDeps(context, String(flags.workspace));
-        const store = openDraftStore(context.core.paths.stateDir, context.now);
-        const target = await ownDraft(store, gate.accountId, String(flags.draft));
-        const posted = await postPrepared(
-          gate,
-          target,
-          String(flags.approval),
-          String(flags.expectChannel),
-          new NameBook(),
+        // The same operation as `slack_post_send`: see `sendPost`.
+        const posted = await sendPost(
+          context,
+          String(flags.workspace),
+          {
+            draftId: String(flags.draft),
+            approvalId: String(flags.approval),
+            expectChannel: String(flags.expectChannel),
+          },
+          { fetch: deps.read, baseUrl: deps.slackBaseUrl },
         );
         writeResult(posted, output(), (data) => `Posted to ${data.channel} at ${data.ts}.`, streams);
       }),
@@ -1005,7 +886,6 @@ configuration problem.`,
     .option('--approval <approvalId>', 'the approval a person gave with `agent-slack approve`, under `confirm`')
     .action(
       act(async (context, options, flags: Options) => {
-        const gate = await gateDeps(context, String(flags.workspace));
         const wanted = {
           channel: String(flags.channel),
           ts: String(flags.ts),
@@ -1013,15 +893,18 @@ configuration problem.`,
           remove: flags.remove === true,
         };
         /*
-         * One step under `chat`, two under `confirm` — the shape a post has.
+         * One step under `chat`, two under `confirm`, through the operation `slack_react` and `slack_react_send` use.
          *
-         * Without `--approval` this makes an approval and tries it at once: under `chat` that is the yes the
-         * conversation already gave, and under `confirm` the claim waits, naming the approval a person has to give.
-         * With it, this claims that approval and makes none. There was no such option, so a rerun after a person
-         * approved made a new approval nobody had seen, and a reaction under `confirm` could never be made.
+         * There was no `--approval`, so a rerun after a person approved made a new approval nobody had seen, and a
+         * reaction under `confirm` could never be made. `react` in the operations says what each form does.
          */
-        const approvalId = flags.approval ? String(flags.approval) : (await prepareReaction(gate, wanted)).approvalId;
-        const done = await reactPrepared(gate, approvalId, wanted);
+        const done = await react(
+          context,
+          String(flags.workspace),
+          wanted,
+          flags.approval ? String(flags.approval) : undefined,
+          { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+        );
         writeResult(done, output(), () => `:${wanted.name}: on ${wanted.ts}.`, streams);
       }),
     );

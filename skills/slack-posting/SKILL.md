@@ -10,32 +10,51 @@ metadata:
 
 # Posting to Slack
 
-**Nothing you do here posts anything.** Preparing writes a local draft and returns a preview with an approval id.
-A person posts it. That is not a formality to route around — it is the whole design, and on a `read` workspace it
-is enforced by Slack rather than by this code: the token cannot post at all.
+**Nothing reaches Slack unless a person approved that exact content.** Preparing writes a local draft and returns
+a preview with an approval id; nothing is posted at that point. What counts as the person's approval is the
+workspace's send policy, and it is not yours to choose or to give. On a `read` workspace none of this applies: the
+token cannot post at all, and Slack enforces that rather than this code.
 
 ```sh
 agent-slack draft create --workspace acme/slack --channel C024BE7LR --text 'ready when you are'
 agent-slack post prepare --workspace acme/slack --draft <draftId>   # prints the preview, posts nothing
+agent-slack post send --workspace acme/slack --draft <draftId> --approval <approvalId> --expect-channel C024BE7LR
 ```
 
-With the MCP server connected, `slack_post_prepare` does both steps in one call and returns the same preview. Every
-prepare leaves a draft behind, so clear up the ones that will not be posted:
+With the MCP server connected, `slack_post_prepare` does the first two steps in one call and returns the same
+preview, and `slack_post_send` is the third. Both surfaces run one operation, so they refuse the same things.
 
 | MCP tool | CLI |
 |---|---|
 | `slack_post_prepare` | `agent-slack draft create`, then `agent-slack post prepare` |
+| `slack_post_send` | `agent-slack post send` |
+| `slack_react` | `agent-slack react` |
+| `slack_react_send` | `agent-slack react --approval <approvalId>` |
 | `slack_draft_list` | `agent-slack draft list` |
 | `slack_draft_get` | `agent-slack draft show <draftId>` |
 | `slack_draft_delete` | `agent-slack draft delete <draftId>` |
 
-There is no tool that posts, reacts or approves, and there will not be one: those are `agent-slack post send`,
-`agent-slack react` and `agent-slack approve`, at a terminal, under the rules below.
+Every prepare leaves a draft behind, so clear up the ones that will not be posted.
 
-## Show the whole preview, and stop
+There is no tool that approves, and there will not be one. Under `confirm`, `agent-slack approve` is a person's
+command at their own terminal: that is what the policy means, and it is refused to an agent.
+
+## Which approval counts
+
+| Policy | What the person does | What you do then |
+|---|---|---|
+| `chat` | Says yes, in this conversation, to the whole preview you showed | `slack_post_send` (or `post send`), once |
+| `confirm` | Runs `agent-slack approve <approvalId>` in their own terminal and types the code it shows | Call the same `slack_post_send` again once they say they have |
+| `never` | Nothing: posting is off for this workspace | Offer the text to paste; do not ask for a policy change |
+
+An `@here`, `@channel` or `@everyone`, or any post reaching fifty people or more, is held as `confirm` whatever the
+workspace says: the people it interrupts are not in the conversation to object. The preview's last line says
+which applies.
+
+## Show the whole preview, and wait for a yes
 
 The preview is what the person is agreeing to. Show it in full, then wait. Do not summarise it, do not prepare a
-second one "to be safe", and do not retry a refusal.
+second one "to be safe", do not post before they answer, and do not retry a refusal.
 
 It carries something a mail preview does not: **how many people this interrupts.**
 
@@ -55,9 +74,16 @@ four-hundred case is agreeing to something quite different. If the count could n
 channel and count; if either has changed since the preview it refuses, and the post has to be prepared again. If
 the room cannot be read at that moment it says so and approves nothing, and the approval is still there to retry.
 
-Under `confirm`, `agent-slack post send` stops with `APPROVAL_PENDING` until the person has run
-`agent-slack approve <approvalId>`. That is waiting, not failure: the approval is still alive. Run the same
-`post send` again once they have.
+When you post, pass the channel you believe it goes to (`expectChannel`, `--expect-channel`), from the preview. If
+it is not the draft's channel, nothing is posted.
+
+## Waiting for a person
+
+Under `confirm` — or for a broadcast or a large room under any policy — `slack_post_send` and `agent-slack post
+send` stop with `APPROVAL_PENDING`. That is waiting, not failure: the approval is still alive. The error's
+`details.command` is the one command the person runs, `agent-slack approve <approvalId>`, and its hint says what you
+do next on the surface you are using. Tell the person, and stop. Once they have approved, call the same
+`slack_post_send` (or run the same `post send`) again; it posts once.
 
 ## What the gate refuses, and why
 
@@ -65,6 +91,7 @@ Under `confirm`, `agent-slack post send` stops with `APPROVAL_PENDING` until the
 |---|---|
 | the draft was edited after the preview | The approved bytes are the posted bytes, or nothing is |
 | the room grew after the preview | The words did not change; who reads them did |
+| the channel given is not the draft's | You were about to post somewhere other than where you think |
 | already claimed | An approval is single-use, across processes |
 | refused at `agent-slack approve` | The draft or the room changed since the preview; the screen is only shown when it is still what the approval binds |
 | prepared for a different account | Two accounts in one workspace are two different people speaking |
@@ -93,24 +120,30 @@ Widening a workspace to `send` is a person's job and needs their own Slack app's
 ## Reactions
 
 A reaction notifies somebody and is attributed to them, so it goes through the same permit. It is not a message,
-though, so under `chat` policy it takes one line — which emoji, on which message — and a yes, and then
-`agent-slack react --workspace <name> --channel <id> --ts <ts> --emoji <name>` adds it.
+though, so there is no preview: say which emoji on which message, in one line, and wait for a yes.
+
+Under `chat`, `slack_react` (or `agent-slack react --workspace <name> --channel <id> --ts <ts> --emoji <name>`) then
+adds it, once.
 
 Under `confirm` it takes the same typed approval as a message, in the same two steps:
 
-1. `agent-slack react …` adds nothing. It makes an approval and stops with `APPROVAL_PENDING`, naming the
-   approval id. Tell the person which emoji and which message, and stop.
+1. `slack_react` (or `agent-slack react …`) adds nothing. It makes an approval and stops with `APPROVAL_PENDING`,
+   naming the approval id and, in `details.command`, the command the person runs. Tell them which emoji and which
+   message, and stop.
 2. The person runs `agent-slack approve <approvalId>` in their own terminal. It shows one line — the workspace,
    the channel, the message and the emoji — and they type the code.
-3. Run the same `agent-slack react` command again with `--approval <approvalId>` added. It adds the reaction once.
+3. `slack_react_send` with that approval id and the same channel, message and emoji (or the same
+   `agent-slack react` command with `--approval <approvalId>` added) adds the reaction once.
 
 The approval is bound to that channel, that message and that emoji, and to adding rather than removing: change
-any of them and it is void. It is single-use, so a second run with the same id is refused. Running `react` again
-*without* `--approval` does not help — it makes a second approval nobody has seen.
+any of them and it is void. It is single-use, so a second call with the same id is refused. Calling `slack_react`
+again instead does not help — it makes a second approval nobody has seen.
 
 ## Pitfalls
 
 - **Summarising the preview.** The count and the channel are the parts people get wrong.
+- **Posting before the answer.** Under `chat` the person's yes is the approval; a post sent before it had none.
+- **Treating `APPROVAL_PENDING` as yours to clear.** Only the person, at their terminal, can approve it.
 - **Treating a refusal as retryable.** Every refusal above means nothing was sent; preparing again makes two
   live approvals, not one better one.
 - **Posting to a channel id you read from a message.** Ids belong to one workspace.

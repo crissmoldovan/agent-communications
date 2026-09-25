@@ -7,7 +7,7 @@ and ignore the rest.
                        ┌──────────────────────────────────┬───────────────────────────────────┐
   people, scripts ───► │  agent-gmail        (the CLI)    │  agent-slack        (the CLI)     │
                        ├──────────────────────────────────┼───────────────────────────────────┤
-  agents ────────────► │  MCP server         (38 tools)   │  MCP server         (14 tools)    │
+  agents ────────────► │  MCP server         (38 tools)   │  MCP server         (20 tools)    │
                        ├──────────────────────────────────┼───────────────────────────────────┤
                        │  @agentcomms/gmail  (library)    │  @agentcomms/slack  (library)     │
                        ├──────────────────────────────────┴───────────────────────────────────┤
@@ -22,7 +22,7 @@ and ignore the rest.
 | **MCP server** | The same operations over stdio, for agents. | `@agentcomms/gmail` (`agent-gmail mcp`) or `@agentcomms/gmail-mcp` | nothing else |
 | **Library** | The TypeScript API both surfaces are built on. | `@agentcomms/gmail` | nothing else |
 | **`agent-slack`** | The Slack CLI: connect a workspace, read it, draft, and post with a person's approval. | `@agentcomms/slack` | nothing else |
-| **Slack MCP server** | Reading, drafting and preparing over stdio. No tool posts. | `@agentcomms/slack` (`agent-slack mcp`) | nothing else |
+| **Slack MCP server** | The same operations over stdio. Posts only through the approval gate; no tool approves. | `@agentcomms/slack` (`agent-slack mcp`) | nothing else |
 | **Skills** | Markdown instructions telling an agent how to use the above, and where to stop. | `npx skills add` | neither package |
 
 ## The CLI does not need the MCP server
@@ -97,5 +97,6 @@ Slack's read and write scopes are disjoint, so the default `read` mode is a toke
 no bug here can change that. In `send` mode the gate is the same shape as Gmail's, with two differences that come
 from Slack: every way of putting something in front of people (`chat.postMessage`, a file share's comment, a
 reaction) is behind the one permit, and the approval covers how many people the post reaches, so a room that grew
-after the preview voids it. No MCP tool posts: `slack_post_prepare` returns the preview, and a person posts from a
-terminal.
+after the preview voids it. Both surfaces post through that one gate: `slack_post_prepare` returns the preview, and
+`slack_post_send` (or `agent-slack post send`) posts it once the approval allows — a yes in the conversation under
+`chat`, `agent-slack approve` at the person's own terminal under `confirm`, which no tool can run.

@@ -143,21 +143,32 @@ try {
   const names = tools.result.tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, [
     'slack_channels',
+    'slack_doctor',
     // Local drafts only: none of the three reaches Slack.
     'slack_draft_delete',
     'slack_draft_get',
     'slack_draft_list',
     'slack_files',
+    'slack_manifest',
     'slack_mode',
     'slack_mode_narrow',
     'slack_mode_request_send',
     'slack_people',
     'slack_post_prepare',
+    // The three that reach people, each through the approval gate the CLI uses. None of them approves.
+    'slack_post_send',
+    'slack_react',
+    'slack_react_send',
     'slack_read',
     'slack_search',
     'slack_thread',
+    'slack_workspace_show',
     'slack_workspaces_list',
   ]);
+  assert.ok(
+    names.every((name) => !/approv/.test(name)),
+    'no tool approves: under `confirm` that is a person at a terminal',
+  );
 } finally {
   child.stdin.end();
   child.kill();

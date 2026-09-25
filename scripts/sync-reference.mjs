@@ -166,8 +166,10 @@ const SERVERS = [
       'The server is the same code as the CLI, over stdio. Start it with `agent-slack mcp`, or install it into a client',
       'with `agent-slack mcp install --client claude-code`.',
       '',
-      '**Every call takes `workspace`.** There is no default workspace. **No tool posts**: `slack_post_prepare` returns',
-      'a preview, and posting, reacting, approving and connecting a workspace are CLI commands a person runs.',
+      '**Every call that acts on a workspace takes `workspace`.** There is no default workspace. **Nothing posts without',
+      "a person's approval of that exact content**: `slack_post_prepare` returns a preview, and `slack_post_send` and the",
+      'reaction tools claim it through the gate `agent-slack post send` uses — a yes in the conversation under `chat`,',
+      '`agent-slack approve` at the person’s own terminal under `confirm`. No tool approves or connects a workspace.',
     ],
   },
 ];
