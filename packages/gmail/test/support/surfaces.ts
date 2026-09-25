@@ -59,11 +59,20 @@ export interface CliRun {
  * Runs the CLI in-process. With `answer`, a person at the terminal answers the first question it asks: `yes` under
  * the `chat` change policy, and the code the approval store issued under `confirm` — read back off the prompt, since
  * it is invented per run.
+ *
+ * With `replies`, each reply is typed once its prompt has appeared, in order. A plain prompt reads whatever is waiting
+ * on standard input, so answers written up front are all swallowed by the first question.
  */
 export async function cli(
   harness: Harness,
   argv: string[],
-  options: { tty?: boolean; answer?: boolean; stdin?: string; env?: NodeJS.ProcessEnv } = {},
+  options: {
+    tty?: boolean;
+    answer?: boolean;
+    stdin?: string;
+    env?: NodeJS.ProcessEnv;
+    replies?: ReadonlyArray<readonly [RegExp, string]>;
+  } = {},
 ): Promise<CliRun> {
   let stdout = '';
   let stderr = '';
@@ -75,8 +84,18 @@ export async function cli(
     stdout += String(chunk);
   });
   let answered = false;
+  let replied = 0;
+  let seen = 0;
   err.on('data', (chunk) => {
     stderr += String(chunk);
+    for (const replies = options.replies ?? []; replied < replies.length; ) {
+      const [prompt, reply] = replies[replied] as readonly [RegExp, string];
+      const found = prompt.exec(stderr.slice(seen));
+      if (!found) break;
+      seen += found.index + found[0].length;
+      replied += 1;
+      input.write(`${reply}\n`);
+    }
     if (options.answer && !answered) {
       const asked = /Type (\S+) to (?:apply this change|approve this change|confirm)/.exec(stderr);
       if (asked) {

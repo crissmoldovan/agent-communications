@@ -115,6 +115,13 @@ export async function gatedChangeAtTerminal<T>(
     approvalFlag?: string | undefined;
     /** The command that approves a change beside this CLI — see `ChangeOptions.approveCommand`. */
     approveCommand?: string | undefined;
+    /**
+     * The person at this terminal has already said yes to this change, in this command, a moment ago — `agent-gmail
+     * setup`'s "Connect this to an agent?". Under `chat` that answer is the approval: asking again for what they have
+     * just asked for teaches people to agree without reading. Under `confirm` the code is still asked, because a
+     * typed code is what that policy means. It counts only for a person; an agent still gets the approval id.
+     */
+    answered?: boolean | undefined;
     streams?: Streams | undefined;
   },
 ): Promise<T> {
@@ -150,7 +157,7 @@ export async function gatedChangeAtTerminal<T>(
   if (prepared.policy === 'confirm') {
     const outcome = await approveChangeAtTerminal(core, prepared.approvalId, options.env, options.output, streams);
     if (outcome.state !== 'approved') throw cancelled();
-  } else {
+  } else if (options.answered !== true) {
     streams.stdout.write(`${prepared.preview}\n\n`);
     const answer = await askLine(streams, `Type ${paint(options.output.color, 'bold', 'yes')} to apply this change: `);
     if (answer.trim().toLowerCase() !== 'yes') {

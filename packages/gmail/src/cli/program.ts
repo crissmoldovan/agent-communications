@@ -1838,34 +1838,28 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
                 initial: 'claude-code',
               }));
             /*
-             * Two ways to get here, and they are asked differently.
+             * Two ways to get here, and they are asked differently — through the same gate as `mcp install`.
              *
              * Answered: the person at this terminal has just said yes to "Connect this to an agent?" and picked the
-             * client, in this command, a moment ago. That answer is the approval, from the one who gives it, so the
-             * registration is made as it always was. Showing a preview and asking again for what they have just
-             * asked for teaches people to agree without reading, which is what an approval exists to prevent.
+             * client, in this command, a moment ago. Under the `chat` change policy that answer is the approval, from
+             * the one who gives it: showing a preview and asking again for what they have just asked for teaches
+             * people to agree without reading. Under `confirm` they still type the code, as for any registration.
              *
              * Named: `--mcp-client` skips both questions, so nobody has been asked anything — and an interactive run
-             * proves a terminal, not a person: an agent can hold one. So a named client goes through the gate as
-             * `mcp install` does. A person here reads the preview and says yes; anything with an agent's marker
-             * gets the preview and the approval id, to run this again with `--mcp-approval` once the person agrees.
+             * proves a terminal, not a person: an agent can hold one. A person here reads the preview and says yes;
+             * anything with an agent's marker gets the preview and the approval id, to run this again with
+             * `--mcp-approval` once the person agrees.
              */
-            const result = named
-              ? await gatedChangeAtTerminal(context.core, await registration(which), {
-                  approvalId: mcpApproval,
-                  env,
-                  output: { json: globalOptions.json || globalOptions.noInput, color: globalOptions.color },
-                  command: againForMcp(),
-                  approvalFlag: '--mcp-approval',
-                  approveCommand: 'agent-gmail approve',
-                  streams,
-                })
-              : await (await import('../mcp/install.ts')).mcpInstall(context, {
-                  client: which as SupportedClient,
-                  apply: true,
-                  force: options.replaceServer === true,
-                  ...(options.launcher ? { launcher: String(options.launcher) as Launcher } : {}),
-                });
+            const result = await gatedChangeAtTerminal(context.core, await registration(which), {
+              approvalId: mcpApproval,
+              env,
+              output: { json: globalOptions.json || globalOptions.noInput, color: globalOptions.color },
+              command: againForMcp(),
+              approvalFlag: '--mcp-approval',
+              approveCommand: 'agent-gmail approve',
+              answered: named === '',
+              streams,
+            });
             out.write(`\n${renderInstall(result, globalOptions.color)}\n`);
           }
         }

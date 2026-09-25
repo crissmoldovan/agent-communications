@@ -319,6 +319,45 @@ test('an interactive setup given `--mcp-client` asks as `mcp install` does: nobo
   assert.ok(existsSync(join(person.home, '.cursor', 'mcp.json')));
 });
 
+test('an interactive setup that asked "Connect this to an agent?" takes the yes under chat, and the code under confirm', async () => {
+  const argv = ['setup', '--launcher', 'local', '--no-browser', '--no-tui'];
+  // Continue where it left off, yes to connecting an agent, then the fourth client in the list: Cursor.
+  const answers = [
+    [/which one\?/, '1'],
+    [/Connect this to an agent\?/, 'y'],
+    [/which one\?/, '4'],
+  ] as const;
+
+  // Under `chat` the answer a moment ago is the approval: nothing more is asked, and the server is registered.
+  const chat = await machine();
+  const said = await cli(chat.harness, argv, { env: chat.env, tty: true, replies: answers });
+  assert.equal(said.code, 0, `${said.stdout}${said.stderr}`);
+  assert.doesNotMatch(said.stderr, /Type yes to apply this change/, 'it asked again for what was just asked for');
+  assert.ok(existsSync(join(chat.home, '.cursor', 'mcp.json')));
+
+  // Under `confirm` a registration is approved with the code, whoever asked for it — a yes typed into a question is
+  // what an agent holding a terminal could give. Enter instead of the code: nothing registered.
+  const confirm = async () => {
+    const m = await machine();
+    await m.harness.core.config.update((c) => ({ ...c, defaults: { ...c.defaults, changePolicy: 'confirm' } }));
+    return m;
+  };
+  const unanswered = await confirm();
+  const refused = await cli(unanswered.harness, argv, {
+    env: unanswered.env,
+    tty: true,
+    replies: [...answers, [/to approve this change/, '']],
+  });
+  assert.match(refused.stdout, /CHANGE PREVIEW[\s\S]*registers the Gmail MCP server with cursor/);
+  assert.equal(existsSync(join(unanswered.home, '.cursor', 'mcp.json')), false, 'registered without the code');
+
+  // And the code, typed back, registers it.
+  const confirmed = await confirm();
+  const typed = await cli(confirmed.harness, argv, { env: confirmed.env, tty: true, replies: answers, answer: true });
+  assert.equal(typed.code, 0, `${typed.stdout}${typed.stderr}`);
+  assert.ok(existsSync(join(confirmed.home, '.cursor', 'mcp.json')));
+});
+
 test(
   '`mcp prune`: a dry run is free; removing needs an approval, and removes only what it showed',
   process.platform === 'win32'
