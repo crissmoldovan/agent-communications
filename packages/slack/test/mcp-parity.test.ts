@@ -653,3 +653,75 @@ test('a word that is not one is refused with USAGE by the operation, and the sch
     await close();
   }
 });
+
+// ── A pinned server and another workspace's approvals (P2-8) ─────────────────────────────────────────────────────
+
+test('a pinned server refuses another workspace’s approval before touching it, for every tool that takes one', async () => {
+  const harness = await newHarness();
+  // acme can only read and may not post: each tool below would have a change or a post of its own to claim.
+  await harness.addWorkspace({ alias: 'acme', sendPolicy: 'never', redirectPort: await freePort() });
+  await harness.addWorkspace({ alias: 'zeta', mode: 'send', sendPolicy: 'confirm', workspaceId: 'T0002' });
+  const unpinned = await connect(harness);
+  const pinned = await connect(harness, { workspace: 'acme' });
+  const state = async (approvalId: string) => (await harness.core.approvals.get(approvalId))?.state;
+  try {
+    // zeta's person is asked to loosen zeta's policy; the approval waits for their yes.
+    const zetaChange = ok<{ approvalId: string }>(
+      await unpinned.call('slack_workspace_policy', { workspace: 'zeta', sendPolicy: 'chat' }),
+    ).approvalId;
+
+    // Changes to acme, on a server pinned to it, each handed zeta's approval. Claimed, it would be voided on the
+    // digest mismatch — so it is refused before it is claimed.
+    for (const [tool, args] of [
+      ['slack_workspace_policy', { sendPolicy: 'chat', approvalId: zetaChange }],
+      ['slack_workspace_reauth', { mode: 'send', approvalId: zetaChange }],
+      ['slack_mode_set', { mode: 'send', appUpdated: true, approvalId: zetaChange }],
+    ] as [string, Record<string, unknown>][]) {
+      const refused = failed(await pinned.call(tool, args));
+      assert.equal(refused.code, 'NOT_FOUND', tool);
+      assert.equal(refused.message, `no approval "${zetaChange}" for the "acme" workspace`, tool);
+      assert.equal(refused.hint, 'This server only serves "acme".', tool);
+      assert.equal(await state(zetaChange), 'pending', `${tool} left it alone`);
+    }
+
+    // zeta's approval is still zeta's to use, and acme was never touched.
+    const applied = ok<{ applied: boolean }>(
+      await unpinned.call('slack_workspace_policy', { workspace: 'zeta', sendPolicy: 'chat', approvalId: zetaChange }),
+    );
+    assert.equal(applied.applied, true);
+    const acme = (await harness.core.config.load()).accounts.acme;
+    assert.deepEqual([acme?.sendPolicy, acme?.mode], ['never', 'read']);
+
+    // A post's approval, the same way: refused by the tools that claim posts and reactions, and left standing.
+    const zetaPost = ok<{ approvalId: string }>(
+      await unpinned.call('slack_post_prepare', { workspace: 'zeta', channel: 'C1', text: 'theirs' }),
+    ).approvalId;
+    const ours = await cliData<{ draftId: string }>(harness, [
+      'draft',
+      'create',
+      '--workspace',
+      'acme',
+      '--channel',
+      'C1',
+      '--text',
+      'ours',
+    ]);
+    for (const [tool, args] of [
+      ['slack_post_send', { draftId: ours.draftId, approvalId: zetaPost, expectChannel: 'C1' }],
+      ['slack_react_send', { channel: 'C1', ts: '1700000000.000100', emoji: 'eyes', approvalId: zetaPost }],
+    ] as [string, Record<string, unknown>][]) {
+      const refused = failed(await pinned.call(tool, args));
+      assert.equal(refused.code, 'NOT_FOUND', tool);
+      assert.equal(await state(zetaPost), 'pending', `${tool} left it alone`);
+    }
+
+    // Its own approvals it still claims: nothing here narrows what a pinned server may do with its own workspace.
+    const own = ok<{ approvalId: string }>(await pinned.call('slack_workspace_policy', { sendPolicy: 'confirm' }));
+    const claimed = ok<{ applied: boolean }>(
+      await pinned.call('slack_workspace_policy', { sendPolicy: 'confirm', approvalId: own.approvalId }),
+    );
+    assert.equal(claimed.applied, true);
+  } finally {
+    await Promise.all([unpinned.close(), pinned.close()]);
+  }
+});
