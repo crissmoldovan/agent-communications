@@ -8,6 +8,7 @@ import {
   findUngatedGmailServers,
   formerNameRefusal,
   homeDirectory,
+  type InboxConfig,
   isGroupOrWorldAccessible,
   isProductServer,
   listRegisteredServers,
@@ -93,20 +94,17 @@ export async function doctor(
   checks.push(await secretStoreCheck(context));
 
   const config = await context.config();
-  const clients = Object.entries(config.clients);
-  checks.push({
-    id: 'oauth-client',
-    title: 'OAuth client',
-    status: clients.length > 0 ? 'ok' : 'fail',
-    detail:
-      clients.length > 0
-        ? `${clients.length} registered: ${clients.map(([name]) => name).join(', ')}`
-        : 'none registered',
-    // `setup`, not `client add <a file you do not have>`. This check is the first thing a new install reports,
-    // and it used to answer with a command naming a downloaded JSON that only exists after five screens of Google
-    // Cloud nobody had mentioned — repair advice handed to somebody who had not built the thing yet.
-    fix: clients.length > 0 ? undefined : 'agent-gmail setup',
-  });
+  /*
+   * One mailbox asked about — `--inbox`, or a server pinned to one — scopes every check that would otherwise describe
+   * the others: the OAuth client is the one it signs in through, the tokens left behind are its own, and an MCP
+   * registration pinned to another mailbox is that mailbox's business. Pinned, this listed every client on the
+   * machine by name, and repair commands for registrations pinned elsewhere, which name those mailboxes.
+   */
+  const scope: Scope | undefined =
+    options.inbox === undefined
+      ? undefined
+      : { name: options.inbox, inbox: lookupName(config, 'inbox', options.inbox) };
+  checks.push(clientCheck(config, scope));
 
   const aliases = options.inbox ? [options.inbox] : Object.keys(config.inboxes);
   if (aliases.length === 0) {
@@ -122,12 +120,11 @@ export async function doctor(
     checks.push(...(await inboxChecks(context, alias)));
   }
 
-  checks.push(await orphanedSecretsCheck(context));
+  checks.push(await orphanedSecretsCheck(context, scope));
   // Scoped like everything else here: `--inbox`, and a pinned server, report their own mailbox's folders only.
-  const scope = options.inbox ? (lookupName(config, 'inbox', options.inbox)?.id ?? null) : undefined;
-  const folders = scope === null ? null : await formerFoldersCheck(context, config, scope);
+  const folders = scope && !scope.inbox ? null : await formerFoldersCheck(context, config, scope?.inbox?.id);
   if (folders) checks.push(folders);
-  checks.push(...(await mcpChecks(context)));
+  checks.push(...(await mcpChecks(context, scope)));
 
   const summary = {
     ok: checks.filter((check) => check.status === 'ok').length,
@@ -136,6 +133,47 @@ export async function doctor(
     skipped: checks.filter((check) => check.status === 'skipped').length,
   };
   return { checks, summary, healthy: summary.fail === 0 };
+}
+
+/** The one mailbox a doctor was asked about, by the name it was given and the mailbox that name holds now. */
+interface Scope {
+  name: string;
+  /** Undefined when the name is no mailbox's; `inbox-known` says so, and nothing else is reported for it. */
+  inbox: InboxConfig | undefined;
+}
+
+/**
+ * Whether an OAuth client is registered — every client, or only the one a scoped mailbox signs in through.
+ *
+ * `setup`, not `client add <a file you do not have>`, when there is none at all. This check is the first thing a new
+ * install reports, and it used to answer with a command naming a downloaded JSON that only exists after five screens
+ * of Google Cloud nobody had mentioned — repair advice handed to somebody who had not built the thing yet.
+ */
+function clientCheck(config: Config, scope: Scope | undefined): Check {
+  const clients = Object.keys(config.clients);
+  const base = { id: 'oauth-client', title: 'OAuth client' };
+  if (scope?.inbox) {
+    const name = scope.inbox.client;
+    const registered = Object.hasOwn(config.clients, name);
+    return {
+      ...base,
+      status: registered ? 'ok' : 'fail',
+      detail: `"${name}", which ${scope.name} signs in through${registered ? '' : ', is not registered'}`,
+      fix: registered ? undefined : 'agent-gmail client add <client_secret.json>',
+    };
+  }
+  return {
+    ...base,
+    status: clients.length > 0 ? 'ok' : 'fail',
+    detail:
+      clients.length === 0
+        ? 'none registered'
+        : // Scoped to a name that is no mailbox's: how many, but not whose.
+          scope
+          ? `${clients.length} registered`
+          : `${clients.length} registered: ${clients.join(', ')}`,
+    fix: clients.length > 0 ? undefined : 'agent-gmail setup',
+  };
 }
 
 /** Compares dotted version numbers left to right: the first difference decides. */
@@ -333,20 +371,27 @@ async function inboxChecks(context: GmailContext, alias: string): Promise<Check[
  * keeps the token and records it as unconfirmed — and advising the person to delete that would delete a live
  * credential. A reference something configured still holds is reported as in use, and left out of the advice.
  */
-async function orphanedSecretsCheck(context: GmailContext): Promise<Check> {
+async function orphanedSecretsCheck(context: GmailContext, scope: Scope | undefined): Promise<Check> {
   let lines: string[] = [];
   try {
     lines = (await readFile(orphanedSecretsPath(context), 'utf8')).split('\n').filter((line) => line.trim());
   } catch {
     // Nothing recorded: nothing was ever left behind.
   }
-  const refs = lines.map((line) => {
+  const entries = lines.map((line): { secretRef?: unknown; inboxId?: unknown } => {
     try {
-      return (JSON.parse(line) as { secretRef?: unknown }).secretRef;
+      const parsed: unknown = JSON.parse(line);
+      return parsed !== null && typeof parsed === 'object' ? parsed : {};
     } catch {
-      return undefined;
+      return {};
     }
   });
+  // Scoped to one mailbox: only what was recorded against it. A line that cannot be read belongs to no mailbox
+  // that can be named, so it is left to the unscoped doctor.
+  const mine = scope
+    ? entries.filter((entry) => scope.inbox !== undefined && entry.inboxId === scope.inbox.id)
+    : entries;
+  const refs = mine.map((entry) => entry.secretRef);
   let held: Set<string> | null = null;
   try {
     held = referencedSecrets(await context.config());
@@ -436,9 +481,10 @@ function referencedSecrets(config: Config): Set<string> {
   ]);
 }
 
-async function mcpChecks(context: GmailContext): Promise<Check[]> {
+async function mcpChecks(context: GmailContext, scope: Scope | undefined): Promise<Check[]> {
   const servers = await listRegisteredServers(context.env);
   const checks: Check[] = [];
+  // Every other product's Gmail server, whatever the scope: an ungated send path undoes this mailbox's safety too.
   const ungated = findUngatedGmailServers(servers);
   checks.push({
     id: 'other-gmail-servers',
@@ -460,7 +506,17 @@ async function mcpChecks(context: GmailContext): Promise<Check[]> {
    * said so. A release once sat unused on a machine through two versions because the only symptom was a fixed bug
    * that was still happening.
    */
-  const stale = servers
+  /*
+   * Our own registrations, scoped: one serving every mailbox serves this one too, and one pinned to it is its own; one
+   * pinned to another mailbox is not, and its name and repair command name that mailbox.
+   */
+  const ours = servers.filter((server) => {
+    if (!scope) return true;
+    const at = server.args.indexOf('--inbox');
+    return at === -1 || server.args[at + 1] === undefined || server.args[at + 1] === scope.name;
+  });
+
+  const stale = ours
     .map((server) => {
       const pin = server.args.map((arg) => pinnedVersion(arg, GMAIL_MCP)).find((version) => version !== null);
       return pin ? { server, version: pin } : null;
@@ -489,7 +545,7 @@ async function mcpChecks(context: GmailContext): Promise<Check[]> {
    * `agent-gmail` in the command line, which neither a managed nor an npx entry contains, so the check skipped
    * every real registration and could only ever pass.
    */
-  for (const server of servers.filter((entry) => isProductServer(entry, GMAIL_MCP))) {
+  for (const server of ours.filter((entry) => isProductServer(entry, GMAIL_MCP))) {
     const missing = await missingEntryFile(server);
     checks.push({
       id: 'mcp-command',

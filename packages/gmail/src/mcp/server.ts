@@ -486,7 +486,9 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     },
     async ({ inbox }) => {
       try {
-        const result = await doctor(context, { inbox: pinned ?? inbox });
+        // Pinned, it answers for its own mailbox and refuses another, as every pinned tool does — it used to answer
+        // `{inbox: 'home'}` with work's checks. Scoped to that mailbox, the operation names nothing about the others.
+        const result = await doctor(context, { inbox: pinned ? targetInbox(inbox) : inbox });
         return reply({
           healthy: result.healthy,
           summary: result.summary,

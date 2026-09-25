@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { dirname, join } from 'node:path';
 import { afterEach, test } from 'node:test';
+import { managedRuntimeEntry } from '@agentcomms/core';
 import { GmailContext } from '../src/context.ts';
 import { createDraft, getDraft } from '../src/operations/drafts.ts';
-import { inboxPolicy } from '../src/operations/inboxes.ts';
+import { inboxPolicy, orphanedSecretsPath } from '../src/operations/inboxes.ts';
 import { type Harness, newHarness } from './support/harness.ts';
 import { applied, approvalAsked, cli, connect, toolError, wire } from './support/surfaces.ts';
 
@@ -488,4 +491,68 @@ test('a pinned server refuses another mailbox’s send approval rather than void
   } finally {
     await pinned.close();
   }
+});
+
+// ── a pinned doctor ─────────────────────────────────────────────────────────────────────────────────────────
+
+test('a pinned gmail_doctor answers for its own mailbox only, and refuses another, as `doctor --inbox` scopes', async () => {
+  /*
+   * Pinned, it listed every OAuth client on the machine by name, and `{inbox: 'home'}` was answered with work's
+   * checks instead of being refused — the one read tool that neither forced the pin nor refused a mismatch.
+   */
+  const harness = await workAndHome();
+  // Two old registrations: one serving every mailbox, which concerns work too, and one pinned to home, which does not.
+  const stale = managedRuntimeEntry(harness.core.paths.dataDir, '@agentcomms/gmail', '0.0.1');
+  await writeFile(
+    join(harness.configDir, '.claude.json'),
+    JSON.stringify({
+      mcpServers: {
+        gmail: { command: 'node', args: [stale, 'mcp'] },
+        'gmail-home': { command: 'node', args: [stale, 'mcp', '--inbox', 'home'] },
+      },
+    }),
+  );
+  // And a token some other mailbox left behind when it was removed: the machine's to clear up, not work's.
+  const context = new GmailContext({ core: harness.core, env: harness.env });
+  await mkdir(dirname(orphanedSecretsPath(context)), { recursive: true });
+  await writeFile(
+    orphanedSecretsPath(context),
+    `${JSON.stringify({ secretRef: 'gmail/refresh/ibx_GONEGONEGONEGONE', inboxId: 'ibx_GONEGONEGONEGONE', alias: 'gone' })}\n`,
+  );
+
+  const pinned = await connect({ core: harness.core, env: harness.env, inbox: 'work' });
+  try {
+    const refused = toolError(await pinned.call('gmail_doctor', { inbox: 'home' }));
+    assert.equal(refused.code, 'USAGE');
+    assert.match(refused.message, /only serves the "work" mailbox/);
+
+    const report = wire(await pinned.call('gmail_doctor', {})) as {
+      checks: Array<{ id: string; detail: string; fix: string | null; inbox: string | null }>;
+    };
+    const byId = (id: string) => report.checks.find((check) => check.id === id);
+    assert.match(byId('oauth-client')?.detail ?? '', /"default"/);
+    assert.deepEqual([...new Set(report.checks.map((check) => check.inbox).filter(Boolean))], ['work']);
+    // The registration serving every mailbox is still reported; the one pinned to home is not this server's to name.
+    assert.match(byId('registered-server-version')?.detail ?? '', /runs 0\.0\.1 as "gmail"/);
+    const said = JSON.stringify(report.checks);
+    assert.equal(byId('orphaned-secrets')?.detail, 'none');
+    for (const other of ['"other"', 'gmail-home', '--inbox home', 'sam@example.test', 'ibx_GONE']) {
+      assert.ok(!said.includes(other), `a doctor pinned to work named ${other}`);
+    }
+
+    // The same scoping at a terminal, from the same operation: `doctor --inbox work`.
+    const scoped = await cli(harness, ['doctor', '--inbox', 'work', '--json']);
+    const printed = scoped.envelope<{ checks: Array<{ id: string; detail: string }> }>().data;
+    assert.equal(printed?.checks.find((check) => check.id === 'oauth-client')?.detail, byId('oauth-client')?.detail);
+    assert.ok(!JSON.stringify(printed?.checks).includes('gmail-home'));
+  } finally {
+    await pinned.close();
+  }
+
+  // Unscoped, the machine's doctor still names both.
+  const whole = await cli(harness, ['doctor', '--json']);
+  const all = JSON.stringify(whole.envelope().data);
+  assert.match(all, /default, other/);
+  assert.match(all, /gmail-home/);
+  assert.match(all, /ibx_GONE/);
 });
