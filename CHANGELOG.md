@@ -9,8 +9,9 @@ together under one version.
 does not take, and an argument of the wrong kind, as `USAGE`, before it does anything. The message names the
 argument and what the tool takes. An unknown argument used to be dropped without a word, so a call could quietly do
 something other than what was asked. And a wrong type, a fraction or an unknown word came back as the MCP library's
-plain-text error, with no code an agent could act on. `tools/list` now publishes `additionalProperties: false` for
-every tool, so a client can see the rule before it calls.
+plain-text error, with no code an agent could act on. A problem inside an object argument is named by its path —
+`expect.to is required`, `undo[0].messageId` — rather than blamed on the whole argument. `tools/list` now publishes
+`additionalProperties: false` for every tool, so a client can see the rule before it calls.
 
 Why: the design has always said an unknown argument is refused. The MCP library dropped it instead. That is how
 `gmail_inbox_add`, before 0.5.0 declared `client`, signed a mailbox in with the default OAuth client when an agent
@@ -36,7 +37,10 @@ character escaped (`<U+200B>`), as the post preview does; they used to drop it s
 every expiry said `agent-gmail inbox add <alias> --start`.
 
 **`agent-gmail contacts --sources` and `gmail_contacts_search` refuse a source they do not know.** An unknown word
-used to be dropped, and the search reported itself complete with fewer results or none.
+used to be dropped, and the search reported itself complete with fewer results or none. An empty list is refused the
+same way. So is an empty `inboxes` for `gmail_search`, `gmail_attachments_find`, `gmail_contacts_search` and
+`gmail_followups`, and an empty `messageIds` for `gmail_attachment_download`. Each used to search nothing, or save
+nothing, and report the work done.
 
 **`slack_draft_create` writes a draft without preparing it**, as `agent-slack draft create` does, with the same
 mention and broadcast checks and no approval until `slack_post_prepare` is called with its id. Until now the command
