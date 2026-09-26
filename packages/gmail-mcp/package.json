@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/gmail-mcp",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "The Gmail MCP server for coding agents: search, read, analyse and draft across inboxes, with sending gated by approval.",
   "type": "module",
   "license": "MIT",

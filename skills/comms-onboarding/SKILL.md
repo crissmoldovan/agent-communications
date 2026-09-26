@@ -2,7 +2,7 @@
 name: comms-onboarding
 description: "Set a person up with agent-communications from chat: which channels and accounts, which mode each account should have, the servers registered, every sign-in started, and the steps only they can take named. Symptoms: 'set up my email and Slack', 'install agent-communications', 'connect Gmail and Slack to Claude', 'onboard me', 'set this up on my other computer'. Not for one account's settings once it works — gmail-setup and slack-setup do those."
 license: MIT
-compatibility: "@agentcomms/core@0.5.1"
+compatibility: "@agentcomms/core@0.6.0"
 metadata:
   group: communications
   lifecycle: release

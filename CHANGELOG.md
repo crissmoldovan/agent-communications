@@ -3,6 +3,35 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.6.0
+
+**`agentcomms update` and `comms_update` bring a computer up to the latest release, from a terminal or from a chat.**
+It asks npm for the latest release, then lists what on this computer is behind: each registered server, the
+runtime it runs from, and any command installed globally. It moves all of them in one step you approve. Each server
+is registered again at the new version under the same name, for the same client, with the same pins; one whose pins
+could not be kept exactly is left for you, not widened. Then restart your client and prune the old runtimes.
+`--check` (`check: true` in chat) only reports. The new `comms-update` skill runs the whole thing when you say
+"update my comms".
+
+Why: until now, a chat could register servers only at the core server's own version, so an upgrade always meant a
+terminal and a list of commands on every computer.
+
+What it means for you: a minor release. It adds a command, a tool and a skill, and nothing that worked before
+behaves differently. The update needs core 0.6.0, so on each computer the first time is one command in a terminal,
+then a restart. After that, "update my comms" in chat does it.
+
+```sh
+npx -y @agentcomms/core@latest update
+```
+
+Some registrations are listed with the command to run instead: one registered for a single project, one written by
+hand, one pinned to an account that has since been renamed, and one whose client command is not installed.
+`comms_channels_available` also marks each registration older than the running core (`behindCore`), without
+asking the network.
+
+**For contributors: no CI runs on pushes or pull requests.** `pnpm install` sets up a pre-push hook that runs
+`pnpm verify`. The release workflow still runs it on Linux, macOS and Windows before it publishes anything.
+
 ## 0.5.1
 
 **Tools refuse what they used to ignore.** Every MCP tool, in core, Gmail and Slack, now refuses an argument it
