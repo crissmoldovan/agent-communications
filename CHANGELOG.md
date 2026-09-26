@@ -49,7 +49,8 @@ now has 27 tools.
 
 **For contributors: the parity check proves each row is one operation.** Each row in `capabilities.json` names the
 operation its command and its tool both run, and `pnpm verify` drives both sides against stand-ins to prove that each
-reaches that operation first. Before, it checked only that the two named sides existed, so swapping two rows passed —
+reaches that operation first. Rows that share an operation — the Slack mode rows, a reaction and its approval —
+also say which arguments tell them apart (`expect`), and both sides must pass them. Before, it checked only that the two named sides existed, so swapping two rows passed —
 and so did the channel CLIs' `mcp install` in 0.5.0 without the approval its tool asked for, until a review found it.
 
 ## 0.5.0
