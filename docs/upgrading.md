@@ -16,6 +16,36 @@ Why the order matters:
 - **Each registration pins an exact version.** A new release reaches a client only when it is registered again,
   which is what `mcp install --force` does.
 
+## The short way: `agentcomms update`
+
+From the release that adds `agentcomms update`, a computer whose accounts already have organisation/platform names is
+brought to the latest release by one command — or from a chat, by the core server's `comms_update`:
+
+```bash
+npx -y @agentcomms/core@latest update --check   # what is behind the latest release; changes nothing
+npx -y @agentcomms/core@latest update           # one change for every step, approved before any of it happens
+```
+
+`--check` (`check: true` from a chat) reads the npm registry and this computer and asks nobody. It lists every client
+registration of the core, Gmail and Slack servers pinned to an older release, the managed runtimes those will need,
+and the `@agentcomms` packages installed globally, each with the version it has and the latest.
+
+Without `--check` it prepares one change and shows every step of it: each registration registered again at the latest
+release under the name, client, scope, launcher and pins it has now; each runtime it installs; each
+`npm install -g <package>@<version>`. Nothing happens until you approve it, as for any other change: at a terminal you
+type `yes` (or, under the `confirm` change policy, the code it shows); an agent gets the preview and an approval id,
+and calls again with it — `--approval <id>`, or `approvalId` — once you have agreed. The approval is for those steps at
+those versions: a release published in between is a different change, and is refused. With nothing behind, it says
+so and prepares nothing.
+
+It never widens an entry. The pins it keeps are exactly the ones the entry has; an entry whose pins it cannot carry
+over as they are — one registered for a single project, one written by hand, one pinned to an account since renamed,
+one whose client's own command is not on `PATH` — is left as it was and listed with what to run instead. It reports
+each step as it went, then says which clients to restart. Restart them, then prune the old runtimes from the restarted
+server, as in step 7.
+
+Everything below is the long way round — and the only way across the rename, which `update` does not do.
+
 ## Before you start
 
 - **Node 22.12 or newer**, first on `PATH` in the terminal you use: `node --version`. The registration records the

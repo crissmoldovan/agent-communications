@@ -102,6 +102,7 @@ refuse the same things.
 | `comms_channels_available` | `channels` | which channel servers exist (core, Gmail, Slack), which are installed and at which version, registered with which clients; read-only |
 | `comms_server_install` | `mcp install`, and each channel's `mcp install` | register a channel's MCP server — core, Gmail or Slack — with a client (change approval; `print` asks nobody; returns "restart the client") |
 | `comms_server_prune` | `mcp prune`, and each channel's `mcp prune` | remove unused runtimes (dry run free; removal needs a change approval and removes only the runtimes it showed) |
+| `comms_update` | `update` | added after 0.5.1: `check` reads the npm registry and lists what is behind the latest release; otherwise one change approval for every step — each registration registered again at the latest release with its own name, client, scope, launcher and pins, the runtimes that needs, and the global packages installed |
 | `comms_names_migrate` | `names migrate` | dry run free; applying it needs a change approval, bound to the mapping shown |
 | `comms_secrets_migrate` | `secrets migrate` | change approval |
 | `comms_change_policy` | `policy` | report the change policy of the defaults, a mailbox or a workspace; set it — tightening at once, loosening `confirm → chat` by a change approval, which the policy in force (`confirm`) makes a terminal code |

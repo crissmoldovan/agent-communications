@@ -19,13 +19,14 @@ npx @agentcomms/core approve <id>  # approve a settings change an agent prepared
 npx @agentcomms/core policy        # the change policy: how a loosening is approved — chat or confirm
 npx @agentcomms/core channels      # which servers exist, which are installed, and where each is registered
 npx @agentcomms/core mcp install --client claude-code   # register the core MCP server
+npx @agentcomms/core update --check  # what is behind the latest release; `update` brings it there, as one change
 ```
 
 Every command takes `--json` and prints `{ "ok": true, "schemaVersion": 1, "data": … }` or
 `{ "ok": false, "schemaVersion": 1, "error": { "code", "message", "hint" } }`.
 
-A command that loosens something or cannot be undone — `policy chat`, `mcp install`, `mcp prune`, `secrets migrate`,
-`names migrate` — shows the change first (`policy confirm` tightens, so it applies at once). At a terminal you
+A command that loosens something or cannot be undone — `policy chat`, `mcp install`, `mcp prune`, `update`,
+`secrets migrate`, `names migrate` — shows the change first (`policy confirm` tightens, so it applies at once). At a terminal you
 approve it there; anything else gets the preview and an
 approval id and exits `10`, and runs the same command again with `--approval <id>` once the person has agreed.
 `agent-gmail` and `agent-slack` register and prune their own servers through the same change, so an approval
@@ -42,6 +43,7 @@ is the one registration that cannot come from chat. After a restart of the clien
 | `comms_channels_available` | which servers exist — core, Gmail, Slack — which are installed and at which version, and which clients start each |
 | `comms_server_install` | register the Gmail, Slack or core server with a client; the server appears once the client restarts |
 | `comms_server_prune` | remove the managed runtimes old releases left behind; `dryRun` lists them |
+| `comms_update` | what is behind the latest release (`check`), and bringing every registration, runtime and global package there as one change |
 | `comms_change_policy` | report or set the change policy of the defaults, a mailbox or a workspace |
 | `comms_names_migrate` | rename every account to `organisation/platform`; `dryRun` shows the mapping |
 | `comms_secrets_migrate` | move every credential between the keychain and files |

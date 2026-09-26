@@ -79,9 +79,10 @@ npx -y @agentcomms/core mcp install --client claude-code   # or codex, cursor, g
 
 At a terminal it shows what it will register and asks you to type `yes`. Restart the client, and ask your agent to
 set things up: it can see which servers exist and where each is registered (`comms_channels_available`), register
-the Gmail and Slack servers (`comms_server_install`), remove old runtimes (`comms_server_prune`), migrate names or
-secrets, and show or change the change policy (`comms_change_policy`). Connecting a mailbox or a workspace still
-needs you in a browser for the consent screen, and a server it registers appears only once the client is restarted.
+the Gmail and Slack servers (`comms_server_install`), bring every server to the latest release (`comms_update`),
+remove old runtimes (`comms_server_prune`), migrate names or secrets, and show or change the change policy
+(`comms_change_policy`). Connecting a mailbox or a workspace still needs you in a browser for the consent screen, and
+a server it registers appears only once the client is restarted.
 
 **Every change is shown to you before it happens.** The tool returns a preview and an approval id. Under the default
 `chat` change policy your yes in the conversation approves it; under `confirm` you run `agentcomms approve <id>` in
