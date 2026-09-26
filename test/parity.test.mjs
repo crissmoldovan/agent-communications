@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { before, test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { DRIVERS, driveOperations, resolveOperation } from '../scripts/operations.mjs';
 import { PACKAGES } from '../scripts/packages.mjs';
@@ -203,6 +204,63 @@ test('the reviewer’s swap — gmail.search ↔ gmail.trash, slack.post.send �
     'reaches sendPost — the operation of row "slack.post.send" — before readChannel',
   );
   assert.equal(problems.length, 4, listed(problems));
+});
+
+test('the sealed drive refuses every way out it knows, and answers the home directory with its own', async () => {
+  // The drive's own seal, in a process of its own: each attempt is made after it, as a stand-in that failed would.
+  const home = await tempDir('agentcomms-parity-seal-');
+  const source = `
+    import { seal } from ${JSON.stringify(pathToFileURL(join(ROOT, 'scripts', 'operations.mjs')).href)};
+    import { createRequire } from 'node:module';
+    await seal();
+    const require = createRequire(import.meta.url);
+    const outcomes = {};
+    const attempt = async (name, body) => {
+      try { await body(); outcomes[name] = 'open'; } catch (error) { outcomes[name] = String(error?.message ?? error); }
+    };
+    await attempt('fetch', () => fetch('http://127.0.0.1:9'));
+    await attempt('net.connect', async () => (await import('node:net')).connect(9, '127.0.0.1'));
+    await attempt('Socket.connect', async () => new (await import('node:net')).Socket().connect(9, '127.0.0.1'));
+    await attempt('tls.connect', async () => (await import('node:tls')).connect(9, '127.0.0.1'));
+    await attempt('http.request', async () => (await import('node:http')).request('http://127.0.0.1:9'));
+    await attempt('https.get', async () => (await import('node:https')).get('https://127.0.0.1:9'));
+    await attempt('listen', async () => (await import('node:http')).createServer().listen(0));
+    await attempt('execFile', async () => (await import('node:child_process')).execFile('/usr/bin/true'));
+    await attempt('spawnSync by require', async () => require('node:child_process').spawnSync('/usr/bin/true'));
+    await attempt('dgram.createSocket', async () => (await import('node:dgram')).createSocket('udp4'));
+    await attempt('dgram by require', async () => require('node:dgram').createSocket('udp4'));
+    await attempt('dns.lookup', async () => {
+      const { lookup } = await import('node:dns');
+      await new Promise((settle, fail) => lookup('localhost', (error) => (error ? fail(error) : settle())));
+    });
+    await attempt('dns.promises.resolve4', async () => (await import('node:dns/promises')).resolve4('localhost'));
+    await attempt('Resolver.resolve', async () => new (await import('node:dns')).Resolver().resolve('localhost', () => {}));
+    await attempt('promises Resolver.resolve', async () => new (await import('node:dns')).promises.Resolver().resolve('localhost'));
+    await attempt('Worker', async () => new (await import('node:worker_threads')).Worker('0', { eval: true }));
+    const os = await import('node:os');
+    outcomes.homedir = os.homedir();
+    outcomes.userInfoHomedir = os.userInfo().homedir;
+    outcomes.userInfoBuffer = os.userInfo({ encoding: 'buffer' }).homedir.toString();
+    process.stdout.write(JSON.stringify(outcomes));
+    process.exit(0);
+  `;
+  const { stdout } = await exec(process.execPath, ['--input-type=module', '--eval', source], {
+    encoding: 'utf8',
+    env: {
+      HOME: home,
+      USERPROFILE: home,
+      PATH: process.env.PATH ?? '',
+      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+    },
+  });
+  const { homedir, userInfoHomedir, userInfoBuffer, ...attempts } = JSON.parse(stdout);
+  assert.ok(Object.keys(attempts).length >= 16, 'every attempt reported');
+  for (const [name, outcome] of Object.entries(attempts)) {
+    assert.match(outcome, /^the parity drive does not /, `${name} was not refused: ${outcome}`);
+  }
+  assert.equal(homedir, home);
+  assert.equal(userInfoHomedir, home, 'os.userInfo() reads the account database, so it would name the real home');
+  assert.equal(userInfoBuffer, home);
 });
 
 test('a wrong operation, one that does not exist, a new row pairing two operations, none, and a helper named as one all fail', async () => {

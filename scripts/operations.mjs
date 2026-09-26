@@ -23,8 +23,9 @@
  *   other row that reaches it first fail too. A command that really does pass through another row's operation on its
  *   way — `setup` reads the state (`gmail.setup`'s `setupState`) before it starts a sign-in — says so in `via`.
  * - **The process is sealed** besides: a temp HOME and `AGENT_COMMS_*` directories with the file secret store pinned,
- *   no network (`fetch`, sockets, requests), no child processes, and `@napi-rs/keyring` refused — so a stand-in that
- *   failed to stand in still could not reach a keychain, Gmail or Slack.
+ *   no network (`fetch`, sockets, requests, datagrams, name lookups), no child processes or worker threads, the
+ *   account's home directory answered with the temp HOME, and `@napi-rs/keyring` refused — so a stand-in that failed
+ *   to stand in still could not reach a keychain, Gmail or Slack.
  *
  * `driveOperations()` runs the drive in a child process (the import hooks have to be in place before any surface is
  * loaded) and returns what each row's two sides reached; `checkOperations()` in `parity.mjs` judges it.
@@ -194,20 +195,61 @@ class Reached extends Error {
   }
 }
 
-/** No network, no child process, no listening socket: whatever a stand-in missed has nowhere to go. */
-async function seal() {
-  const [net, tls, http, https, childProcess, { syncBuiltinESMExports }] = await Promise.all([
+/**
+ * No network, no child process, no listening socket, no worker thread, no real home: whatever a stand-in missed has
+ * nowhere to go.
+ *
+ * A worker thread is refused because it starts with Node's own modules as they were, before any of this. The account's
+ * home directory is answered with the temp HOME wherever Node reports it — `os.userInfo()` reads the account database,
+ * not HOME, so it would otherwise name the real one. Exported so `test/parity.test.mjs` can seal a process of its own
+ * and try each way out.
+ */
+export async function seal() {
+  const [net, tls, http, https, dgram, dns, childProcess, workers, os, { syncBuiltinESMExports }] = await Promise.all([
     import('node:net'),
     import('node:tls'),
     import('node:http'),
     import('node:https'),
+    import('node:dgram'),
+    import('node:dns'),
     import('node:child_process'),
+    import('node:worker_threads'),
+    import('node:os'),
     import('node:module'),
   ]);
   const refuse = (what) =>
     function refused() {
       throw new Error(`the parity drive does not ${what}`);
     };
+  dgram.default.createSocket = refuse('send datagrams');
+  dgram.default.Socket.prototype.bind = refuse('send datagrams');
+  dgram.default.Socket.prototype.send = refuse('send datagrams');
+  dgram.default.Socket.prototype.connect = refuse('send datagrams');
+  // Every lookup and resolve, by callback, by promise, and through a Resolver of either kind.
+  for (const target of [
+    dns.default,
+    dns.default.promises,
+    dns.default.Resolver.prototype,
+    dns.default.promises.Resolver.prototype,
+  ]) {
+    for (const name of Object.getOwnPropertyNames(target)) {
+      if (/^(lookup|lookupService|resolve\w*|reverse)$/.test(name) && typeof target[name] === 'function') {
+        target[name] = refuse('look names up');
+      }
+    }
+  }
+  workers.default.Worker = refuse('start worker threads');
+  const userInfo = os.default.userInfo;
+  os.default.userInfo = function sealedUserInfo(options) {
+    let info = {};
+    try {
+      info = userInfo.call(this, options);
+    } catch {
+      // An account with no entry in the database (some containers): nothing to answer but the home, which is ours.
+    }
+    const home = os.default.homedir();
+    return { ...info, homedir: options?.encoding === 'buffer' ? Buffer.from(home) : home };
+  };
   globalThis.fetch = async () => {
     throw new Error('the parity drive does not reach the network');
   };
