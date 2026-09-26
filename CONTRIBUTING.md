@@ -7,7 +7,7 @@ Thanks for helping make email safe to hand to an agent.
 - **Never commit real mail.** No real addresses, message bodies, subjects, attachment names, tokens, client secrets
   or `client_secret_*.json` files — not in code, fixtures, docs, issues or screenshots. Fixtures are synthetic and use
   `example.com`, `example.org` or `*.test` addresses. `scripts/verify-skills.mjs` scans the whole tree for likely
-  secrets and machine-specific paths, and CI fails on either.
+  secrets and machine-specific paths, and `pnpm verify` fails on either.
 - **Sending is gated in one place.** Only `send.execute` in `packages/gmail` may call Gmail's `drafts.send` or
   `messages.send`, and a test enforces it. A change that adds another path, or weakens the approval checks, needs a
   design discussion in an issue first.
@@ -37,8 +37,11 @@ pnpm install
 pnpm verify
 ```
 
-`pnpm verify` runs Biome, the type checks, every test suite, the builds and the skill verifier. CI runs the same
-command on Linux, macOS and Windows. It must pass before you open a pull request.
+`pnpm verify` runs Biome, the type checks, every test suite, the builds and the skill verifier. It must pass before you
+push: nothing runs it for you on GitHub, because this repository has no CI for pushes or pull requests. `pnpm install`
+sets up a pre-push hook (`.githooks/pre-push`) that runs it. The one workflow is the release: a `v*` tag runs
+`pnpm verify` on Linux, macOS and Windows and publishes only if all pass, so a failure only Windows shows turns up
+there — see [Releasing](docs/RELEASING.md).
 
 ## Skill contract
 

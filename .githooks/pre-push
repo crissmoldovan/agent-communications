@@ -1,0 +1,6 @@
+#!/bin/sh
+# Nothing checks a push on GitHub: this repository runs no CI for pushes or pull requests, only the release workflow
+# a `v*` tag starts. So the whole of `pnpm verify` runs here, before anything leaves this machine. `git push
+# --no-verify` skips it, for the rare push that must go out broken; the release workflow still verifies on Linux,
+# macOS and Windows before it publishes anything.
+exec pnpm verify
