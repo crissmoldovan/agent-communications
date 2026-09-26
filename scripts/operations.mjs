@@ -22,6 +22,10 @@
  *   row's operation, and naming a helper every command calls (`requireWorkspace`) as a row's operation makes every
  *   other row that reaches it first fail too. A command that really does pass through another row's operation on its
  *   way — `setup` reads the state (`gmail.setup`'s `setupState`) before it starts a sign-in — says so in `via`.
+ * - **What the row's operation receives is recorded**, by the names of its own parameters: `planModeSet`'s `wanted`,
+ *   `serverInstallChange`'s `request.channel`. Several rows can share one operation — four Slack rows run
+ *   `planModeSet`, one per mode — and reaching it cannot tell them apart; only what it was asked can. Swapping the
+ *   tools of `slack.mode.report` and `slack.mode.narrow` passed until a row said, in `expect`, which mode it asks for.
  * - **The process is sealed** besides: a temp HOME and `AGENT_COMMS_*` directories with the file secret store pinned,
  *   no network (`fetch`, sockets, requests, datagrams, name lookups), no child processes or worker threads, the
  *   account's home directory answered with the temp HOME, and `@napi-rs/keyring` refused — so a stand-in that failed
@@ -108,6 +112,95 @@ export function resolveOperation(operations, pkg, name) {
   return { problem: `no module in ${where} exports a function called "${name}"` };
 }
 
+/**
+ * The names of a function's parameters, read from its source, in order: what a row's `expect` names an argument by.
+ *
+ * The operations are TypeScript loaded with its types stripped to whitespace, so their source is the parameter list as
+ * written. A parameter that is a destructuring pattern has no name, and is `null` here.
+ */
+export function parameterNames(fn) {
+  const source = Function.prototype.toString.call(fn);
+  const open = source.indexOf('(');
+  const arrow = source.indexOf('=>');
+  // `x => …`, with no parentheses to read.
+  if (arrow !== -1 && (open === -1 || arrow < open)) {
+    const single = /^(?:async\s+)?([A-Za-z_$][\w$]*)\s*=>/.exec(source.trim());
+    return single ? [single[1]] : [];
+  }
+  if (open === -1) return [];
+  const pieces = [];
+  let depth = 0;
+  let start = open + 1;
+  for (let at = open + 1; at < source.length; at += 1) {
+    const char = source[at];
+    if (char === '"' || char === "'" || char === '`') {
+      // A default value's string: skipped whole, so a bracket or a comma inside it counts for nothing.
+      for (at += 1; at < source.length && source[at] !== char; at += 1) if (source[at] === '\\') at += 1;
+    } else if (char === '/' && source[at + 1] === '/') {
+      at = source.indexOf('\n', at);
+      if (at === -1) break;
+    } else if (char === '/' && source[at + 1] === '*') {
+      at = source.indexOf('*/', at + 2) + 1;
+      if (at === 0) break;
+    } else if ('([{'.includes(char)) depth += 1;
+    else if (')]}'.includes(char)) {
+      if (depth === 0) {
+        pieces.push(source.slice(start, at));
+        break;
+      }
+      depth -= 1;
+    } else if (char === ',' && depth === 0) {
+      pieces.push(source.slice(start, at));
+      start = at + 1;
+    }
+  }
+  return pieces
+    .map((piece) => piece.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, ''))
+    .filter((piece) => piece.trim() !== '') // the empty piece after a trailing comma
+    .map((piece) => /^\s*(?:\.\.\.\s*)?([A-Za-z_$][\w$]*)/.exec(piece)?.[1] ?? null);
+}
+
+/** How deep into an argument its values are recorded: the parameter, and two keys into an object it is. */
+const RECORD_DEPTH = 3;
+
+/**
+ * What an operation was called with, as `{ path: value }`: `wanted`, `request.channel`, `options.onlyMode`.
+ *
+ * Only what a table can name and compare is kept — strings, finite numbers, booleans, `null`, lists of those — found
+ * in the arguments themselves and in plain objects within `RECORD_DEPTH`. A value that is not given is absent. A
+ * context, a class instance, a function and a stand-in's inert value are left out: none of them is what tells one
+ * row's call from another's.
+ */
+export function recordArguments(args, names) {
+  const recorded = {};
+  const leaf = (value) =>
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value));
+  const visit = (value, path, depth) => {
+    if (leaf(value)) {
+      recorded[path] = value;
+      return;
+    }
+    if (typeof value !== 'object' || value === null || depth >= RECORD_DEPTH) return;
+    if (Array.isArray(value)) {
+      if (value.every(leaf)) recorded[path] = [...value];
+      return;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return;
+    // Data properties only: a getter is code, and running it here could do work — or call a stand-in mid-drive.
+    for (const [key, property] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
+      if (property.enumerable && 'value' in property) visit(property.value, `${path}.${key}`, depth + 1);
+    }
+  };
+  args.forEach((value, index) => {
+    visit(value, names[index] ?? String(index), 1);
+  });
+  return recorded;
+}
+
 /** Every operation some row of `rows` names, resolved: what a drive stops at when it is not the row's own. */
 export function namedOperations(rows, operations) {
   const named = new Map();
@@ -129,9 +222,10 @@ export function namedOperations(rows, operations) {
  * Drives every `both` row of `table` in a sealed child process working in `dir`: toward the operation it names, or —
  * a row that names none yet — to the end, so the check can say what its two sides share.
  *
- * Returns `{ operations, reports, fatal }`: every operation by package, and per row `{ cli, mcp }` — what each side
- * was run with, every operation it called in order, and how it ended. `fatal` is set when a drive hung, after which
- * nothing else is driven.
+ * Returns `{ operations, parameters, reports, fatal }`: every operation by package; the parameter names of each one a
+ * row names; and per row `{ cli, mcp }` — what each side was run with, every operation it called in order, what the
+ * row's own operation received (`received`, by operation, as `recordArguments` keeps it), and how it ended. `fatal` is
+ * set when a drive hung, after which nothing else is driven.
  */
 export async function driveOperations(table, { dir }) {
   const home = join(dir, 'home');
@@ -269,10 +363,14 @@ export async function seal() {
   syncBuiltinESMExports();
 }
 
-/** Every function each package's operations modules export: `{ package: { name: [module] } }`, and by module. */
+/**
+ * Every function each package's operations modules export: `{ package: { name: [module] } }`, by module, and each
+ * function itself by `<package>:<name>` (the first module's, when two export one name — which a row cannot name).
+ */
 async function indexOperations() {
   const operations = {};
   const modules = new Map();
+  const functions = new Map();
   for (const pkg of Object.keys(DRIVERS)) {
     operations[pkg] = {};
     const dir = operationsDir(pkg);
@@ -280,13 +378,16 @@ async function indexOperations() {
     for (const file of files) {
       const url = pathToFileURL(join(dir, file)).href;
       const namespace = await import(url);
-      const functions = Object.keys(namespace).filter((name) => typeof namespace[name] === 'function');
+      const exported = Object.keys(namespace).filter((name) => typeof namespace[name] === 'function');
       const module = `operations/${file}`;
-      modules.set(url, { pkg, functions });
-      for (const name of functions) operations[pkg][name] = [...(operations[pkg][name] ?? []), module];
+      modules.set(url, { pkg, functions: exported });
+      for (const name of exported) {
+        operations[pkg][name] = [...(operations[pkg][name] ?? []), module];
+        if (!functions.has(`${pkg}:${name}`)) functions.set(`${pkg}:${name}`, namespace[name]);
+      }
     }
   }
-  return { operations, modules };
+  return { operations, modules, functions };
 }
 
 /**
@@ -394,12 +495,18 @@ let current = null;
 function standIn(pkg, name, fn) {
   if (typeof fn !== 'function') return fn;
   const id = `${pkg}:${name}`;
-  const call = () => {
+  let names;
+  const call = (args) => {
     const drive = current;
     // Outside a drive — building a server, listing its tools — nothing is being judged, and nothing runs either.
     if (!drive) return inert();
     if (drive.stopped) throw new Reached(drive.stopped);
     drive.calls.push(id);
+    // What the row's own operation was asked, the first time: what tells one row's call from another's that shares it.
+    if (drive.wanted.has(id) && !Object.hasOwn(drive.received, id)) {
+      names ??= parameterNames(fn);
+      drive.received[id] = recordArguments(args, names);
+    }
     const stop =
       drive.foreign.has(id) ||
       (drive.wanted.has(id) && drive.wanted.size === new Set(drive.calls.filter((c) => drive.wanted.has(c))).size) ||
@@ -410,7 +517,7 @@ function standIn(pkg, name, fn) {
     }
     return inert();
   };
-  return new Proxy(fn, { apply: call, construct: call });
+  return new Proxy(fn, { apply: (_target, _this, args) => call(args), construct: (_target, args) => call(args) });
 }
 
 /** The first line of what a surface refused with, when it did not reach its operation — the author's clue. */
@@ -438,7 +545,7 @@ function refusalOf(text) {
 
 /** Runs `body` as one drive toward `wanted`, stopping at anything in `foreign`. */
 async function traced({ wanted, foreign }, body) {
-  const drive = { wanted, foreign, calls: [], stopped: null };
+  const drive = { wanted, foreign, calls: [], received: {}, stopped: null };
   current = drive;
   let timer;
   let text = '';
@@ -463,6 +570,7 @@ async function traced({ wanted, foreign }, body) {
   current = null;
   return {
     calls: drive.calls,
+    received: drive.received,
     stopped: drive.stopped,
     timedOut: failure?.startsWith('did not finish') ?? false,
     refusal: failure ?? (drive.stopped ? null : refusalOf(text)),
@@ -546,7 +654,7 @@ async function drive(inputPath, outputPath) {
   await writeFile(join(configDir, 'config.json'), `${JSON.stringify({ version: 2, secrets: { store: 'file' } })}\n`);
 
   const { rows } = JSON.parse(await readFile(inputPath, 'utf8'));
-  const { operations, modules } = await indexOperations();
+  const { operations, modules, functions } = await indexOperations();
   const reexports = await coreReexports(modules);
   globalThis[Symbol.for('agentcomms.parity.stand-in')] = standIn;
   await installHooks(modules, reexports);
@@ -606,6 +714,8 @@ async function drive(inputPath, outputPath) {
     });
 
   const named = namedOperations(rows, operations);
+  // What every operation a row names takes, so the check can say when an `expect` names an argument it does not.
+  const parameters = Object.fromEntries([...named.keys()].map((id) => [id, parameterNames(functions.get(id))]));
   const reports = {};
   for (const row of rows) {
     if (row?.status !== 'both' || row.unchecked !== undefined || typeof row.cli !== 'string') continue;
@@ -654,11 +764,14 @@ async function drive(inputPath, outputPath) {
     reports[row.id] = report;
     if (report.cli?.timedOut || report.mcp?.timedOut) {
       // Whatever is still running may call a stand-in during the next drive; nothing after this can be trusted.
-      await writeFile(outputPath, JSON.stringify({ operations, reports, fatal: `row "${row.id}" did not finish` }));
+      await writeFile(
+        outputPath,
+        JSON.stringify({ operations, parameters, reports, fatal: `row "${row.id}" did not finish` }),
+      );
       process.exit(0);
     }
   }
-  await writeFile(outputPath, JSON.stringify({ operations, reports }));
+  await writeFile(outputPath, JSON.stringify({ operations, parameters, reports }));
   // The servers and their clients hold the event loop open; everything they were for is written.
   process.exit(0);
 }

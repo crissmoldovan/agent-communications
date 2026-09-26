@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { before, test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { DRIVERS, driveOperations, resolveOperation } from '../scripts/operations.mjs';
+import { DRIVERS, driveOperations, parameterNames, recordArguments, resolveOperation } from '../scripts/operations.mjs';
 import { PACKAGES } from '../scripts/packages.mjs';
 import { checkOperations, checkParity, readTable, uncheckedRows, verifyParity } from '../scripts/parity.mjs';
 import { deriveRegistries, ROOT, SURFACES, scratchEnv, WRAPPERS } from '../scripts/registries.mjs';
@@ -30,6 +30,12 @@ import { tempDir } from './helpers/temp-dir.mjs';
  * row now names the operation its command and its tool run, and `scripts/operations.mjs` runs both — every operation
  * replaced by a stand-in that records the call and does nothing, in a sealed process — to see that each reaches it
  * before any operation another row names. The swap is the first thing tested below, against the table as committed.
+ *
+ * **Rows that share an operation.** Reaching an operation cannot tell apart rows that run the same one: four Slack rows
+ * run `planModeSet`, and a second review swapped the tools of `slack.mode.report` and `slack.mode.narrow`, of
+ * `slack.mode.request-send` and `slack.mode.narrow`, and of `slack.react` and `slack.react.send`, and strict mode still
+ * passed. So the drive records what the row's operation receives, and such rows say in `expect` which arguments tell
+ * them apart; those swaps are tested below too.
  */
 
 const STRICT = process.env.PARITY_STRICT === '1';
@@ -204,6 +210,82 @@ test('the reviewer’s swap — gmail.search ↔ gmail.trash, slack.post.send �
     'reaches sendPost — the operation of row "slack.post.send" — before readChannel',
   );
   assert.equal(problems.length, 4, listed(problems));
+});
+
+test('the second review’s swaps — between rows that share an operation — each fail strict mode', {
+  concurrency: true,
+}, async (t) => {
+  /**
+   * Each swap reaches the right operation on every side, so everything above passed it. Only what the operation
+   * receives tells these rows apart — the mode asked for, whether an approval is claimed, the channel installed — and
+   * each fails on both rows, naming the value the moved side brought with it. Run side by side: each is a drive.
+   */
+  const probe = (name, mutate, ...fragments) =>
+    t.test(name, async () => {
+      const mutated = mutate(structuredClone(table));
+      assert.deepEqual(checkParity(mutated, registries, { strict: true }), [], 'every name still exists');
+      const problems = await verifyParity({
+        table: mutated,
+        registries,
+        strict: true,
+        dir: await tempDir('agentcomms-parity-shared-'),
+      });
+      assertNamed(problems, ...fragments);
+      assert.equal(problems.length, 2, listed(problems));
+    });
+  const argsSwapped = (source, a, b) => {
+    const [first, second] = [a, b].map((id) => source.capabilities.find((row) => row.id === id));
+    [first.args, second.args] = [second.args, first.args];
+    return source;
+  };
+  await Promise.all([
+    probe(
+      'slack.mode.report ↔ slack.mode.narrow',
+      (source) => swapTools(source, 'slack.mode.report', 'slack.mode.narrow'),
+      'row "slack.mode.report": slack_mode_narrow {"workspace":"parity/slack"} reaches planModeSet with wanted "read", where the row expects not given',
+      'row "slack.mode.narrow": slack_mode {"workspace":"parity/slack"} reaches planModeSet with wanted not given, where the row expects "read"',
+    ),
+    probe(
+      'slack.mode.request-send ↔ slack.mode.narrow',
+      (source) => swapTools(source, 'slack.mode.request-send', 'slack.mode.narrow'),
+      'row "slack.mode.request-send": slack_mode_narrow {"workspace":"parity/slack"} reaches planModeSet with wanted "read", where the row expects "send"',
+      'row "slack.mode.narrow": slack_mode_request_send {"workspace":"parity/slack"} reaches planModeSet with wanted "send", where the row expects "read"',
+    ),
+    probe(
+      'slack.react ↔ slack.react.send',
+      (source) => swapTools(source, 'slack.react', 'slack.react.send'),
+      'row "slack.react": slack_react_send',
+      'reaches react with approvalId "ap_00000000000000000000000000", where the row expects not given',
+      'row "slack.react.send": slack_react',
+      'reaches react with approvalId not given, where the row expects "ap_00000000000000000000000000"',
+    ),
+    // One tool behind three commands: what the tool is given decides which, so it is the arguments that move.
+    probe(
+      'core.mcp.install ↔ slack.mcp.install, by their arguments',
+      (source) => argsSwapped(source, 'core.mcp.install', 'slack.mcp.install'),
+      'row "core.mcp.install": comms_server_install',
+      'reaches serverInstallChange with request.channel "slack", where the row expects "core"',
+      'row "slack.mcp.install": comms_server_install',
+      'reaches serverInstallChange with request.channel "core", where the row expects "slack"',
+    ),
+  ]);
+});
+
+test('each mode row’s command asks for its mode, as its tool does', () => {
+  // Their `argv` once omitted the workspace, so Commander read `send` and `read` as its name and every one of them
+  // ran the report. Nothing looked at what `planModeSet` was asked, so nothing noticed.
+  for (const [id, mode] of [
+    ['slack.mode.report', undefined],
+    ['slack.mode.request-send', 'send'],
+    ['slack.mode.narrow', 'read'],
+    ['slack.mode.set', 'send'],
+  ]) {
+    for (const side of ['cli', 'mcp']) {
+      const received = driven.reports[id][side].received['slack:planModeSet'];
+      assert.equal(received.wanted, mode, `row "${id}": the ${side} side asks for ${received.wanted}`);
+      assert.equal(received.alias, 'parity/slack', `row "${id}": the ${side} side names the workspace`);
+    }
+  }
 });
 
 test('the sealed drive refuses every way out it knows, and answers the home directory with its own', async () => {
@@ -700,10 +782,10 @@ test('an operation is a name or a list of distinct names; argv is words, args an
 });
 
 test('only a "both" row carries what its two sides run', () => {
-  for (const key of ['operation', 'via', 'argv', 'args', 'unchecked']) {
+  for (const key of ['operation', 'via', 'argv', 'args', 'expect', 'unchecked']) {
     assertNamed(
       breaking(({ row }) => {
-        row('gmail.approve')[key] = key === 'argv' ? ['x'] : key === 'args' ? {} : 'x';
+        row('gmail.approve')[key] = key === 'argv' ? ['x'] : key === 'args' || key === 'expect' ? {} : 'x';
       }),
       `row "gmail.approve" is "exception" but carries "${key}"`,
     );
@@ -923,4 +1005,292 @@ test('an unchecked row is not judged, and a row naming no operation is told what
     }),
     'row "gmail.search": its command and its tool reach no operation in common — the command reaches search; the tool, readMessage',
   );
+});
+
+// ── Rows that share an operation, each rule mutation-tested on the fixture ──────────────────────────────────────
+
+test('an "expect" is an object of argument values, by parameter name, on a row with one operation', () => {
+  assert.deepEqual(
+    breaking(({ row }) => {
+      row('gmail.search').expect = { query: 'x', 'options.limit': 3, 'options.all': false, since: null, ids: ['a'] };
+    }),
+    [],
+    'names, paths into a parameter, and every kind of value the drive records',
+  );
+  for (const expect of [{}, [], 'x', null, 3]) {
+    assertNamed(
+      breaking(({ row }) => {
+        row('gmail.search').expect = expect;
+      }),
+      'row "gmail.search": "expect" must be an object of what its operation receives, by parameter name',
+    );
+  }
+  assertNamed(
+    breaking(({ row }) => {
+      row('gmail.search').expect = { 'options..limit': 3 };
+    }),
+    'row "gmail.search": "expect" names "options..limit", which is not a parameter\'s name or a path into one',
+  );
+  for (const value of [{ nested: true }, [{}], Number.NaN]) {
+    assertNamed(
+      breaking(({ row }) => {
+        row('gmail.search').expect = { query: value };
+      }),
+      'row "gmail.search": "expect" gives "query" a value that is not a string, a number, true or false, a list of those, or null',
+    );
+  }
+  assertNamed(
+    breaking(({ row }) => {
+      row('gmail.search').operation = ['search', 'readMessage'];
+      row('gmail.search').expect = { query: 'x' };
+    }),
+    'row "gmail.search" names several operations and has "expect"; "expect" is what one operation receives, so it needs one',
+  );
+  assertNamed(
+    breaking(({ row }) => {
+      delete row('gmail.search').operation;
+      row('gmail.search').unchecked = 'why';
+      row('gmail.search').expect = { query: 'x' };
+    }),
+    'row "gmail.search" has "expect" but no "operation"',
+  );
+});
+
+/**
+ * The operation fixture with a second row running `startSignIn`, through another command and another tool — as four
+ * Slack rows run `planModeSet` — and what each side of both rows passed it. `expect` is left to each test.
+ */
+function sharingFixture() {
+  const f = { ...fixture(), driven: drivenFixture() };
+  f.registries.gmail.commands.push('inbox reauth');
+  f.registries.gmail.tools.push('gmail_inbox_reauth');
+  f.table.capabilities.push({
+    id: 'gmail.inbox.reauth',
+    package: 'gmail',
+    cli: 'inbox reauth',
+    mcp: 'gmail_inbox_reauth',
+    status: 'both',
+    operation: 'startSignIn',
+    argv: ['work'],
+    args: { inbox: 'work' },
+  });
+  const side = (received, extra) => ({
+    calls: ['gmail:startSignIn'],
+    received: { 'gmail:startSignIn': received },
+    ...extra,
+  });
+  // Every command waits for the browser and no tool does: that is how the surfaces differ, not how the rows do.
+  f.driven.reports['gmail.inbox.add'] = {
+    cli: side(
+      { 'options.mode': 'add', 'options.alias': 'work', 'options.detached': false },
+      { argv: ['inbox', 'add', 'work'] },
+    ),
+    mcp: side(
+      { 'options.mode': 'add', 'options.alias': 'work', 'options.detached': true },
+      { args: { alias: 'work' } },
+    ),
+  };
+  f.driven.reports['gmail.inbox.reauth'] = {
+    cli: side(
+      { 'options.mode': 'reauth', 'options.alias': 'work', 'options.detached': false },
+      { argv: ['inbox', 'reauth', 'work'] },
+    ),
+    mcp: side(
+      { 'options.mode': 'reauth', 'options.alias': 'work', 'options.detached': true },
+      { args: { inbox: 'work' } },
+    ),
+  };
+  f.driven.parameters = { 'gmail:startSignIn': ['context', 'options'] };
+  return f;
+}
+
+/** The sharing fixture with one change, checked for operations. */
+function sharing(change) {
+  const f = sharingFixture();
+  const row = (id) => f.table.capabilities.find((r) => r.id === id);
+  change({ ...f, row });
+  return checkOperations(f.table, f.registries, f.driven);
+}
+
+/** Both sharing rows saying what tells them apart. */
+const toldApart = ({ row }) => {
+  row('gmail.inbox.add').expect = { 'options.mode': 'add' };
+  row('gmail.inbox.reauth').expect = { 'options.mode': 'reauth' };
+};
+
+test('rows sharing an operation through another command and another tool each say in "expect" what tells them apart', () => {
+  assert.deepEqual(sharing(toldApart), []);
+  const problems = sharing(() => {});
+  assert.deepEqual(
+    problems,
+    [
+      'row "gmail.inbox.add" runs startSignIn, as row "gmail.inbox.reauth" does, through another command and another tool, and has no "expect" to say which it is: both of its sides pass options.mode "add", and theirs do not — "expect": {"options.mode":"add"}',
+      'row "gmail.inbox.reauth" runs startSignIn, as row "gmail.inbox.add" does, through another command and another tool, and has no "expect" to say which it is: both of its sides pass options.mode "reauth", and theirs do not — "expect": {"options.mode":"reauth"}',
+    ],
+    'each is told what to write, from what its two sides were seen to pass',
+  );
+  // One row saying it is not enough: the other could still be swapped for anything that runs startSignIn.
+  assertNamed(
+    sharing(({ row }) => {
+      row('gmail.inbox.add').expect = { 'options.mode': 'add' };
+    }),
+    'row "gmail.inbox.reauth" runs startSignIn, as row "gmail.inbox.add" does',
+  );
+});
+
+test('expecting the same of two rows that share an operation does not tell them apart', () => {
+  assertNamed(
+    sharing(({ row, driven }) => {
+      row('gmail.inbox.add').expect = { 'options.alias': 'work' };
+      row('gmail.inbox.reauth').expect = { 'options.alias': 'work', 'options.detached': null };
+      // Made true of the tool as well, so the only problem left is the one this test is about.
+      driven.reports['gmail.inbox.reauth'].cli.received['gmail:startSignIn']['options.detached'] = null;
+      delete driven.reports['gmail.inbox.reauth'].mcp.received['gmail:startSignIn']['options.detached'];
+    }),
+    'rows "gmail.inbox.add" and "gmail.inbox.reauth" both run startSignIn, through another command and another tool, and their "expect" does not tell them apart',
+  );
+});
+
+test('a side whose operation receives other than the row expects fails, saying what it received; null is not given', () => {
+  assert.deepEqual(
+    sharing(({ row, driven }) => {
+      toldApart({ row });
+      row('gmail.inbox.add').expect['options.email'] = null;
+      driven.reports['gmail.inbox.add'].mcp.received['gmail:startSignIn']['options.email'] = null;
+    }),
+    [],
+    'null expects an argument not given, whether it is absent or null',
+  );
+  // The reviewer's swap, in the fixture: each tool brings its own mode to the other row.
+  assert.deepEqual(
+    sharing((f) => {
+      toldApart(f);
+      [f.row('gmail.inbox.add').mcp, f.row('gmail.inbox.reauth').mcp] = ['gmail_inbox_reauth', 'gmail_inbox_add'];
+      const [add, reauth] = [f.driven.reports['gmail.inbox.add'], f.driven.reports['gmail.inbox.reauth']];
+      [add.mcp, reauth.mcp] = [reauth.mcp, add.mcp];
+    }),
+    [
+      'row "gmail.inbox.add": gmail_inbox_reauth {"inbox":"work"} reaches startSignIn with options.mode "reauth", where the row expects "add"',
+      'row "gmail.inbox.reauth": gmail_inbox_add {"alias":"work"} reaches startSignIn with options.mode "add", where the row expects "reauth"',
+    ],
+  );
+  assertNamed(
+    sharing(({ row, driven }) => {
+      toldApart({ row });
+      delete driven.reports['gmail.inbox.add'].cli.received['gmail:startSignIn']['options.mode'];
+    }),
+    'row "gmail.inbox.add": `agent-gmail inbox add work` reaches startSignIn with options.mode not given, where the row expects "add"',
+  );
+});
+
+test('an "expect" naming a parameter the operation does not have fails, naming the ones it does', () => {
+  assertNamed(
+    sharing(({ row }) => {
+      toldApart({ row });
+      row('gmail.inbox.add').expect = { 'opts.mode': 'add' };
+    }),
+    'row "gmail.inbox.add" expects "opts.mode", but startSignIn has no parameter "opts"; it takes context, options',
+  );
+});
+
+test('rows sharing a whole side — the same tool with the same arguments — need no "expect" between them', () => {
+  // `gmail_inbox_finish` finishes both kinds of sign-in; `inbox add --finish` and `inbox reauth --finish` one each.
+  // Exchanging their commands files each pairing under the other id, and pairs nothing new.
+  assert.deepEqual(
+    sharing(({ row, driven }) => {
+      row('gmail.inbox.reauth').mcp = 'gmail_inbox_add';
+      delete row('gmail.inbox.reauth').args;
+      driven.reports['gmail.inbox.reauth'].mcp = structuredClone(driven.reports['gmail.inbox.add'].mcp);
+    }),
+    [],
+  );
+  // …and the same command with the same words, as `workspace mode <name> send` is behind two Slack rows.
+  assert.deepEqual(
+    sharing(({ row, driven }) => {
+      Object.assign(row('gmail.inbox.reauth'), { cli: 'inbox add' });
+      driven.reports['gmail.inbox.reauth'].cli = structuredClone(driven.reports['gmail.inbox.add'].cli);
+    }),
+    [],
+  );
+  // An `expect` a row does give is still checked on both sides, shared or not.
+  assertNamed(
+    sharing(({ row, driven }) => {
+      row('gmail.inbox.reauth').mcp = 'gmail_inbox_add';
+      delete row('gmail.inbox.reauth').args;
+      driven.reports['gmail.inbox.reauth'].mcp = structuredClone(driven.reports['gmail.inbox.add'].mcp);
+      row('gmail.inbox.reauth').expect = { 'options.mode': 'reauth' };
+    }),
+    'row "gmail.inbox.reauth": gmail_inbox_add {"alias":"work"} reaches startSignIn with options.mode "add", where the row expects "reauth"',
+  );
+});
+
+test('where nothing both sides of a row pass tells it apart, the check says where its command and its tool differ', () => {
+  // A command that finishes one kind of sign-in and a tool that finishes either: a real difference, reported as one.
+  assertNamed(
+    sharing(({ driven }) => {
+      delete driven.reports['gmail.inbox.reauth'].mcp.received['gmail:startSignIn']['options.mode'];
+    }),
+    'row "gmail.inbox.reauth" runs startSignIn, as row "gmail.inbox.add" does, through another command and another tool, and has no "expect" to say which it is, and nothing both of its sides pass tells it apart: they differ on options.mode ("reauth" from the command, not given from the tool)',
+  );
+});
+
+test('parameter names are read from an operation’s source, as it is loaded with its types stripped', () => {
+  // What `--experimental-strip-types` leaves of `planModeSet(context: SlackContext, alias: string, …)`.
+  const stripped = new Function(
+    'return async function planModeSet(\n  context              ,\n  alias        ,\n  wanted         ,\n  options                ,\n)                       { return [context, alias, wanted, options]; }',
+  )();
+  assert.deepEqual(parameterNames(stripped), ['context', 'alias', 'wanted', 'options']);
+  function defaults(a = '(,', /* b, */ b = { c: [1, 2] }, ...rest) {
+    return [a, b, rest];
+  }
+  assert.deepEqual(parameterNames(defaults), ['a', 'b', 'rest']);
+  assert.deepEqual(
+    parameterNames(({ a }, [b], c) => [a, b, c]),
+    [null, null, 'c'],
+    'a pattern has no name to expect by',
+  );
+  assert.deepEqual(
+    parameterNames((x) => x),
+    ['x'],
+  );
+  assert.deepEqual(
+    parameterNames(async (x) => x),
+    ['x'],
+  );
+  assert.deepEqual(
+    parameterNames(() => 1),
+    [],
+  );
+});
+
+test('what an operation receives is recorded by parameter name, leaves only, and without running a getter', () => {
+  class Context {
+    surface = 'cli';
+  }
+  let ran = false;
+  const options = {
+    mode: 'add',
+    port: 51234,
+    detached: false,
+    email: undefined,
+    missing: null,
+    scopes: ['a', 'b'],
+    nested: { deeper: { deepest: 'too far' }, kept: true },
+    listener: () => {},
+    get secret() {
+      ran = true;
+      return 'x';
+    },
+  };
+  assert.deepEqual(recordArguments([new Context(), 'work', options, 'extra'], ['context', 'alias', 'options']), {
+    alias: 'work',
+    'options.mode': 'add',
+    'options.port': 51234,
+    'options.detached': false,
+    'options.missing': null,
+    'options.scopes': ['a', 'b'],
+    'options.nested.kept': true,
+    3: 'extra',
+  });
+  assert.equal(ran, false, 'a getter is code, and recording runs none');
 });

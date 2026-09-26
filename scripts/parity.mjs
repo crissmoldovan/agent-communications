@@ -53,6 +53,9 @@ export const PHASES = Object.freeze(['P2', 'P3', 'P4', 'P5', 'P6']);
  *   fails the row.
  * - `argv`, `args`: what the check runs the command and the tool with, when the smallest call they accept does not
  *   reach the operation — `--finish <flowId>` for the half of `inbox add` that finishes a sign-in.
+ * - `expect`: argument values the operation must receive from both sides, by the name of its parameter, or a path into
+ *   one — `{ "wanted": "read" }`, `{ "request.channel": "gmail" }`; `null` is "not given". What tells apart rows that
+ *   run one operation: see `checkOperations`.
  * - `unchecked`: instead of `operation`, why this row's two sides are not checked — where a reviewer reads it.
  */
 const FIELDS = new Set([
@@ -67,11 +70,28 @@ const FIELDS = new Set([
   'via',
   'argv',
   'args',
+  'expect',
   'unchecked',
 ]);
 
 /** The fields that describe what a row's two sides run, which only a row with two sides can have. */
-const OPERATION_FIELDS = Object.freeze(['operation', 'via', 'argv', 'args', 'unchecked']);
+const OPERATION_FIELDS = Object.freeze(['operation', 'via', 'argv', 'args', 'expect', 'unchecked']);
+
+/** An `expect` key: a parameter's name, or a path of keys into it. */
+const EXPECT_KEY = /^[A-Za-z_$][\w$]*(\.[\w$]+)*$/;
+
+/** A value `expect` can hold: what the drive records (`recordArguments` in operations.mjs), and `null` for not given. */
+const expectable = (value) =>
+  value === null ||
+  typeof value === 'string' ||
+  typeof value === 'boolean' ||
+  (typeof value === 'number' && Number.isFinite(value));
+
+/** An argument's value as a sentence shows it. */
+const shown = (value) => (value === undefined || value === null ? 'not given' : JSON.stringify(value));
+
+/** Whether two recorded or expected values are the same; not given and `null` are one. */
+const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
 /**
  * Every way `table` and `registries` disagree, as sentences naming what is missing; empty when they agree.
@@ -201,6 +221,32 @@ export function checkParity(table, registries, { strict = false } = {}) {
     if (row.args !== undefined && (row.args === null || typeof row.args !== 'object' || Array.isArray(row.args))) {
       problems.push(`${at}: "args" must be an object of arguments for the tool`);
     }
+    if (row.expect !== undefined) {
+      const entries =
+        row.expect !== null && typeof row.expect === 'object' && !Array.isArray(row.expect)
+          ? Object.entries(row.expect)
+          : [];
+      if (entries.length === 0) {
+        problems.push(
+          `${at}: "expect" must be an object of what its operation receives, by parameter name — {"wanted": "read"}`,
+        );
+      }
+      for (const [key, value] of entries) {
+        if (!EXPECT_KEY.test(key)) {
+          problems.push(`${at}: "expect" names "${key}", which is not a parameter's name or a path into one`);
+        }
+        if (!expectable(value) && !(Array.isArray(value) && value.every(expectable))) {
+          problems.push(
+            `${at}: "expect" gives "${key}" a value that is not a string, a number, true or false, a list of those, or null for not given`,
+          );
+        }
+      }
+      if (Array.isArray(row.operation)) {
+        problems.push(
+          `${at} names several operations and has "expect"; "expect" is what one operation receives, so it needs one`,
+        );
+      }
+    }
     if (row.status === 'both') {
       if (row.operation === undefined && row.unchecked === undefined) {
         problems.push(
@@ -212,6 +258,9 @@ export function checkParity(table, registries, { strict = false } = {}) {
       }
       if (row.via !== undefined && row.operation === undefined) {
         problems.push(`${at} has "via" but no "operation"; "via" is what a side passes through on its way to it`);
+      }
+      if (row.expect !== undefined && row.operation === undefined) {
+        problems.push(`${at} has "expect" but no "operation"; "expect" is what that operation receives`);
       }
     } else if (STATUSES.includes(row.status)) {
       for (const key of OPERATION_FIELDS) {
@@ -272,14 +321,24 @@ export function checkParity(table, registries, { strict = false } = {}) {
  * Every way a row's command and tool fail to run the operation it names, from what `driveOperations()` saw them call.
  *
  * Each side of a `both` row was run — the command in-process, the tool through an MCP client — with every operation
- * replaced by a stand-in that records the call and does nothing. A side passes when it reaches every operation the
- * row names before it reaches any operation another row names. So:
+ * replaced by a stand-in that records the call, and what the row's own operation received, and does nothing. A side
+ * passes when it reaches every operation the row names before it reaches any operation another row names, and that
+ * operation received what the row's `expect` says. So:
  *
  * - a row whose command and tool are different operations fails on the side that runs the other one — the reviewer's
  *   swap of `gmail.search` and `gmail.trash` fails on both rows, each naming the tool that reached the other's;
  * - a row naming the wrong operation fails on both sides, saying what each one reached instead;
  * - naming a helper that every command calls on its way (`requireWorkspace`) makes it another row's operation, so
  *   every row that reaches it first fails — a table cannot pass by naming what everything calls.
+ *
+ * Reaching the operation cannot tell apart rows that share one. Four Slack rows run `planModeSet`, one per mode, and
+ * swapping the tools of `slack.mode.report` and `slack.mode.narrow` passed everything above. So when two rows run one
+ * operation through another command *and* another tool, each has to say in `expect` what that operation receives from
+ * both of its sides, and the two have to expect a different value of some argument: then a side moved from one row
+ * to the other brings the other's value with it, and fails. Two rows that share a whole side — the same command with
+ * the same words, or the same tool with the same arguments — need nothing: exchanging their other sides exchanges
+ * which id each pairing is filed under, and pairs nothing new (`gmail_inbox_finish` finishes both kinds of sign-in
+ * that `inbox add --finish` and `inbox reauth --finish` each finish one of).
  *
  * A row with `unchecked` is skipped, and says why in the table. Sides the name check already reports as missing are
  * left to it. `registries` is `deriveRegistries()`'s shape, for the commands' binaries; `driven` is
@@ -293,6 +352,10 @@ export function checkOperations(table, registries, driven) {
   const named = namedOperations(rows, operations);
   const toolExists = (tool) => Object.values(registries).some((registry) => registry.tools.includes(tool));
   const nameOf = (id) => id.slice(id.indexOf(':') + 1);
+  /** Every operation some checked row names, with the rows that name it: who has to be told apart from whom. */
+  const sharing = new Map();
+  /** Each row's `expect`, as entries, where it is well formed (`checkParity` reports it where it is not). */
+  const expectations = new Map();
 
   rows.forEach((row, index) => {
     if (row?.status !== 'both' || row.unchecked !== undefined) return;
@@ -318,6 +381,7 @@ export function checkOperations(table, registries, driven) {
     }
     if (resolved.some((entry) => !entry.id)) return;
     const wanted = new Set(resolved.map((entry) => entry.id));
+    for (const id of wanted) sharing.set(id, [...(sharing.get(id) ?? []), row]);
     // What the row says a side passes through first. Each has to be another row's operation — otherwise it stops
     // nothing, and is only a name for a reader to wonder about.
     const via = new Set();
@@ -327,6 +391,21 @@ export function checkOperations(table, registries, driven) {
       else if (!named.has(entry.id) || wanted.has(entry.id)) {
         problems.push(`${at} lists "${name}" under "via", but no other row names it; take it out`);
       } else via.add(entry.id);
+    }
+    // What the operation has to receive, by the names its own source gives its parameters. A name it does not have
+    // would expect nothing of anything, so it is refused rather than compared.
+    const expected = [];
+    const one = resolved.length === 1 ? resolved[0] : null;
+    if (one && isEntries(row.expect)) {
+      const parameters = driven?.parameters?.[one.id];
+      for (const [key, value] of Object.entries(row.expect)) {
+        const parameter = key.split('.')[0];
+        if (Array.isArray(parameters) && !parameters.includes(parameter)) {
+          const takes = parameters.filter(Boolean).join(', ') || 'no named parameters';
+          problems.push(`${at} expects "${key}", but ${one.name} has no parameter "${parameter}"; it takes ${takes}`);
+        } else expected.push([key, value]);
+      }
+      if (expected.length === Object.keys(row.expect).length) expectations.set(row, expected);
     }
     const registry = registries[row.package];
 
@@ -347,7 +426,16 @@ export function checkOperations(table, registries, driven) {
       const foreign = calls.findIndex((id) => named.has(id) && !wanted.has(id) && !via.has(id));
       const before = foreign === -1 ? calls : calls.slice(0, foreign);
       const missing = resolved.filter((entry) => !before.includes(entry.id));
-      if (missing.length === 0) continue;
+      if (missing.length === 0) {
+        const received = outcome.received?.[one?.id] ?? {};
+        for (const [key, value] of expected) {
+          if (same(received[key], value)) continue;
+          problems.push(
+            `${at}: ${surface} reaches ${one.name} with ${key} ${shown(received[key])}, where the row expects ${shown(value)}`,
+          );
+        }
+        continue;
+      }
       const want = missing.map((entry) => `${entry.name} (${entry.module})`).join(' and ');
       if (foreign !== -1) {
         const other = calls[foreign];
@@ -364,7 +452,103 @@ export function checkOperations(table, registries, driven) {
       problems.push(`${at}: ${surface} never reaches ${want}; ${reached}${ended}`);
     }
   });
+
+  // ── Rows that run one operation are told apart by what it receives ──
+  const report = (row, side) => driven?.reports?.[row.id]?.[side];
+  const commandOf = (row) => JSON.stringify([row.package, row.cli, report(row, 'cli')?.argv ?? row.argv ?? []]);
+  const toolOf = (row) => JSON.stringify([row.mcp, sorted(report(row, 'mcp')?.args ?? row.args ?? {})]);
+  for (const [id, group] of sharing) {
+    const unlike = new Map(group.map((row) => [row, []]));
+    group.forEach((first, index) => {
+      for (const second of group.slice(index + 1)) {
+        if (commandOf(first) === commandOf(second) || toolOf(first) === toolOf(second)) continue;
+        unlike.get(first).push(second);
+        unlike.get(second).push(first);
+        const [a, b] = [expectations.get(first), expectations.get(second)];
+        if (a && b && !a.some(([key, value]) => b.some(([other, theirs]) => other === key && !same(value, theirs)))) {
+          problems.push(
+            `rows "${first.id}" and "${second.id}" both run ${nameOf(id)}, through another command and another tool, and their "expect" does not tell them apart: name an argument each expects a different value of`,
+          );
+        }
+      }
+    });
+    for (const [row, others] of unlike) {
+      if (others.length > 0 && !expectations.has(row) && row.expect === undefined) {
+        problems.push(tellApart(row, others, id, report, nameOf));
+      }
+    }
+  }
   return problems;
+}
+
+/** Whether `expect` is a well-formed object of entries — the only kind `checkOperations` compares. */
+function isEntries(expect) {
+  return (
+    expect !== null &&
+    typeof expect === 'object' &&
+    !Array.isArray(expect) &&
+    Object.keys(expect).length > 0 &&
+    Object.entries(expect).every(
+      ([key, value]) =>
+        EXPECT_KEY.test(key) && (expectable(value) || (Array.isArray(value) && value.every(expectable))),
+    )
+  );
+}
+
+/** A plain object with its keys in order, so two tools' arguments compare as the same call however they were written. */
+function sorted(value) {
+  if (Array.isArray(value)) return value.map(sorted);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, sorted(value[key])]),
+  );
+}
+
+/**
+ * The problem for a row that shares its operation, through another command and another tool, with `others`, and says
+ * nothing in `expect`: with the arguments that would tell it apart — ones both of its sides pass alike, and each of
+ * the others' pass otherwise — or, where there are none, the arguments that differ from row to row on which its own
+ * two sides disagree: a real difference between its command and its tool, or `argv` or `args` that miss the argument.
+ */
+function tellApart(row, others, id, report, nameOf) {
+  const received = (of, side) => report(of, side)?.received?.[id];
+  const whom = `${others.length === 1 ? 'row' : 'rows'} ${others.map((other) => `"${other.id}"`).join(', ')}`;
+  const head = `row "${row.id}" runs ${nameOf(id)}, as ${whom} ${others.length === 1 ? 'does' : 'do'}, through another command and another tool, and has no "expect" to say which it is`;
+  const [cli, mcp] = [received(row, 'cli'), received(row, 'mcp')];
+  if (!cli || !mcp) return `${head}; name an argument its operation receives from both of its sides`;
+  const keys = new Set(
+    [cli, mcp, ...others.flatMap((other) => [received(other, 'cli'), received(other, 'mcp')])].flatMap((recorded) =>
+      Object.keys(recorded ?? {}),
+    ),
+  );
+  const telling = [...keys].sort().filter(
+    (key) =>
+      same(cli[key], mcp[key]) &&
+      others.every((other) => {
+        const [theirs, alsoTheirs] = [received(other, 'cli'), received(other, 'mcp')];
+        return theirs && alsoTheirs && same(theirs[key], alsoTheirs[key]) && !same(theirs[key], cli[key]);
+      }),
+  );
+  if (telling.length > 0) {
+    const suggestion = Object.fromEntries(telling.slice(0, 2).map((key) => [key, cli[key] ?? null]));
+    return `${head}: both of its sides pass ${telling
+      .slice(0, 3)
+      .map((key) => `${key} ${shown(cli[key])}`)
+      .join(', ')}, and theirs do not — "expect": ${JSON.stringify(suggestion)}`;
+  }
+  // What every command passes alike, and every tool alike, is how surfaces differ (`detached`), not how rows do.
+  const varies = (key) =>
+    others.some(
+      (other) => !same(received(other, 'cli')?.[key], cli[key]) || !same(received(other, 'mcp')?.[key], mcp[key]),
+    );
+  const split = [...keys]
+    .sort()
+    .filter((key) => !same(cli[key], mcp[key]) && varies(key))
+    .slice(0, 3)
+    .map((key) => `${key} (${shown(cli[key])} from the command, ${shown(mcp[key])} from the tool)`);
+  return `${head}, and nothing both of its sides pass tells it apart${split.length > 0 ? `: they differ on ${split.join(', ')}` : ''}`;
 }
 
 /**

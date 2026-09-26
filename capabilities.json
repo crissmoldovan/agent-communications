@@ -1,5 +1,5 @@
 {
-  "about": "Every capability: the CLI command and the MCP tool that provide it, and the operation both of them run. `cli` is the command path without the binary; `mcp` is a tool name; `operation` is the function exported from packages/<package>/src/operations (or the core's) that both reach — a list when the command is several. `argv` and `args` are what the check adds to the command and the tool to get there, `via` another row's operation a side passes through first, and `unchecked` says why a row is not checked, instead of `operation`. Checked by test/parity.test.mjs in `pnpm verify` against both registries, read from the running product, and by running each row's command and tool with every operation replaced by a stand-in that records the call; `pnpm verify:parity --strict`, also part of `pnpm verify`, refuses any pending row. How to add one: CONTRIBUTING.md, \"Adding a capability\". Design: docs/superpowers/specs/2026-09-25-cli-mcp-parity-design.md.",
+  "about": "Every capability: the CLI command and the MCP tool that provide it, and the operation both of them run. `cli` is the command path without the binary; `mcp` is a tool name; `operation` is the function exported from packages/<package>/src/operations (or the core's) that both reach — a list when the command is several. `argv` and `args` are what the check adds to the command and the tool to get there, `via` another row's operation a side passes through first, `expect` what the operation must receive from both sides, by parameter name (`null` for not given) — needed where another row runs the same operation through another command and another tool, so the two cannot be swapped unnoticed — and `unchecked` says why a row is not checked, instead of `operation`. Checked by test/parity.test.mjs in `pnpm verify` against both registries, read from the running product, and by running each row's command and tool with every operation replaced by a stand-in that records the call and its arguments; `pnpm verify:parity --strict`, also part of `pnpm verify`, refuses any pending row. How to add one: CONTRIBUTING.md, \"Adding a capability\". Design: docs/superpowers/specs/2026-09-25-cli-mcp-parity-design.md.",
   "capabilities": [
     {
       "id": "core.paths",
@@ -101,6 +101,7 @@
       "operation": "serverInstallChange",
       "argv": ["--client", "claude-code"],
       "args": { "channel": "core", "client": "claude-code" },
+      "expect": { "request.channel": "core" },
       "reason": "`agentcomms mcp install` registers the core server; comms_server_install registers any channel's, and with `channel: \"core\"` is this command."
     },
     {
@@ -111,6 +112,7 @@
       "status": "both",
       "operation": "serverPruneChange",
       "args": { "channel": "core" },
+      "expect": { "request.channel": "core" },
       "reason": "`agentcomms mcp prune` prunes the core's own runtimes; comms_server_prune takes the channel, and with `channel: \"core\"` is this command."
     },
 
@@ -496,6 +498,7 @@
       "operation": "serverInstallChange",
       "argv": ["--client", "claude-code"],
       "args": { "channel": "gmail", "client": "claude-code" },
+      "expect": { "request.channel": "gmail" },
       "reason": "From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"gmail\"` is this command — the same change, `serverInstallChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     {
@@ -506,6 +509,7 @@
       "status": "both",
       "operation": "serverPruneChange",
       "args": { "channel": "gmail" },
+      "expect": { "request.channel": "gmail" },
       "reason": "From chat this is the core server's comms_server_prune, which prunes any channel's runtimes: `channel: \"gmail\"` is this command — the same change, `serverPruneChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     {
@@ -547,6 +551,7 @@
       "via": "setupState",
       "argv": ["--mcp-client", "claude-code"],
       "args": { "channel": "gmail", "client": "claude-code" },
+      "expect": { "request.channel": "gmail" },
       "reason": "`setup --mcp-client <client>` registers the server as `mcp install` does; from chat that step is the core server's comms_server_install with `channel: \"gmail\"` (design §5)."
     },
     {
@@ -608,7 +613,8 @@
       "cli": "workspace mode",
       "mcp": "slack_mode",
       "status": "both",
-      "operation": "planModeSet"
+      "operation": "planModeSet",
+      "expect": { "wanted": null }
     },
     {
       "id": "slack.mode.request-send",
@@ -618,6 +624,7 @@
       "status": "both",
       "operation": "planModeSet",
       "argv": ["parity/slack", "send"],
+      "expect": { "wanted": "send" },
       "reason": "The steps as text: `workspace mode <name> send` returns the same steps, with the manifest, while the app has not been updated."
     },
     {
@@ -628,6 +635,7 @@
       "status": "both",
       "operation": "planModeSet",
       "argv": ["parity/slack", "read"],
+      "expect": { "wanted": "read" },
       "reason": "`workspace mode <name> read` returns the same steps back to read-only."
     },
     {
@@ -639,6 +647,7 @@
       "operation": "planModeSet",
       "argv": ["parity/slack", "send"],
       "args": { "mode": "send" },
+      "expect": { "wanted": "send" },
       "reason": "The move itself, `workspace mode <name> send|read`: the app step first while nothing shows the app was widened, then a change approval before the sign-in starts; `read` returns the procedure (design §6.2)."
     },
     {
@@ -790,7 +799,8 @@
       "cli": "react",
       "mcp": "slack_react",
       "status": "both",
-      "operation": "react"
+      "operation": "react",
+      "expect": { "approvalId": null }
     },
     {
       "id": "slack.react.send",
@@ -800,6 +810,7 @@
       "status": "both",
       "operation": "react",
       "argv": ["--approval", "ap_00000000000000000000000000"],
+      "expect": { "approvalId": "ap_00000000000000000000000000" },
       "reason": "The CLI claims a reaction's approval as `react --approval <id>`. Over MCP that is a call of its own, as posting is."
     },
     {
@@ -827,6 +838,7 @@
       "operation": "serverInstallChange",
       "argv": ["--client", "claude-code"],
       "args": { "channel": "slack", "client": "claude-code" },
+      "expect": { "request.channel": "slack" },
       "reason": "From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"slack\"` is this command — the same change, `serverInstallChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     {
@@ -837,6 +849,7 @@
       "status": "both",
       "operation": "serverPruneChange",
       "args": { "channel": "slack" },
+      "expect": { "request.channel": "slack" },
       "reason": "From chat this is the core server's comms_server_prune, which prunes any channel's runtimes: `channel: \"slack\"` is this command — the same change, `serverPruneChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     {

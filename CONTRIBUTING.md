@@ -70,9 +70,10 @@ every tool from a running server, and fails — naming what is missing — when 
 something that does not exist, or when a row's status and its sides disagree.
 
 It also runs both sides of every `both` row, and fails unless each reaches the row's `operation` before any operation
-another row names. Nothing real happens: in a process of its own (`scripts/operations.mjs`), with a temporary home,
-the file secret store and no network, keychain or child processes, every function a command or a server imports from
-an `operations/` module is a stand-in that records the call and does nothing. So a row whose command and tool run
+another row names, with the arguments the row's `expect` gives. Nothing real happens: in a process of its own
+(`scripts/operations.mjs`), with a temporary home, the file secret store and no network, keychain, child processes or
+worker threads, every function a command or a server imports from an `operations/` module is a stand-in that records
+the call and what it was given, and does nothing. So a row whose command and tool run
 different operations fails, and so does a row that names a helper everything calls; the message says what each side
 reached instead. A row may add:
 
@@ -85,6 +86,15 @@ reached instead. A row may add:
   `["--client", "claude-code"]` for `mcp install`.
 - `via`, naming another row's operation that a side passes through on its way, when the command really does that:
   `setup` reads the state (`setupState`) before it starts a sign-in.
+- `expect`, when another row runs the same operation through another command and another tool: the four Slack mode
+  rows all run `planModeSet`, and reaching it cannot tell them apart. `expect` says what the operation receives from
+  both sides, by the name of its parameter or a path into one — `{ "wanted": "read" }`,
+  `{ "request.channel": "gmail" }` — with `null` for an argument not given. The check records what each side passed
+  and fails a side that passed anything else. It also fails two such rows unless their `expect` gives some argument a
+  different value in each, so a tool moved from one row to the other brings its own value along and is caught. Rows
+  that share a whole side need none: `gmail_inbox_finish` is behind both `inbox add --finish` and
+  `inbox reauth --finish`, and exchanging their commands pairs nothing new. Leave `expect` out and the check says which
+  arguments both of the row's sides pass that the other rows' do not.
 - `unchecked` instead of `operation`, saying why, when the check cannot reach the operation cheaply or the two sides
   are knowingly not one operation yet. `pnpm verify:parity` lists every such row on every run; each is a debt, not a
   pass.
