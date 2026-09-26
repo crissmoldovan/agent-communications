@@ -52,10 +52,11 @@ They are separate things that are easy to confuse because both are "for agents".
 them, and when they are not they fall back to the CLI. You can install skills with no server, a server with no
 skills, or both.
 
-There are sixteen, one per job. Twelve for Gmail — searching, triage, composing, sending, organising, attachments,
+There are seventeen, one per job. Twelve for Gmail — searching, triage, composing, sending, organising, attachments,
 contacts, thread analysis, follow-ups, export, security, setup — three for Slack: setup, reading and posting — and
-one, `comms-onboarding`, that sets both up through the core server. Each is a `SKILL.md` plus reference pages,
-including the contract its platform's skills share; `comms-onboarding` has its own, for the core's tools.
+two through the core server: `comms-onboarding`, which sets both up, and `comms-update`, which brings them to the
+latest release. Each is a `SKILL.md` plus reference pages, including the contract its platform's skills share; the
+two `comms-` skills share their own, for the core's tools.
 See [the skills index](skills.md).
 
 The platform skills are named `gmail-*` and `slack-*` because a skill states one platform's truth and has no other

@@ -20,7 +20,7 @@ verifies the tarball you installed was built from this repository by the workflo
 
 ## What you get
 
-Four packages and sixteen skills.
+Four packages and seventeen skills.
 
 - **`@agentcomms/gmail`** — the CLI (`agent-gmail`) and the library. Everything works from a
   terminal, with `--json` for anything that consumes it.
@@ -33,7 +33,7 @@ Four packages and sixteen skills.
 - **`@agentcomms/core`** — the shared core: config, secrets, the approval engine, the
   sanitiser. Provider-neutral, so Gmail and Slack share it. Its `agentcomms` command and MCP
   server (`agentcomms mcp`) install and manage the others, from a terminal or from a chat.
-- **Sixteen skills** — twelve for Gmail, three for Slack, and one that sets it all up — that teach an agent how to use all of it
+- **Seventeen skills** — twelve for Gmail, three for Slack, one that sets it all up and one that updates it — that teach an agent how to use all of it
   well, and where to stop.
 
 ## How the send gate works
@@ -205,7 +205,7 @@ the person approves that change — in the conversation under the `chat` change 
 npx skills add crissmoldovan/agent-communications --skill '*'
 ```
 
-Sixteen skills, twelve for Gmail, three for Slack and one for setting it all up: which tool to reach for, what a result means, and when to
+Seventeen skills, twelve for Gmail, three for Slack, one for setting it all up and one for updating it: which tool to reach for, what a result means, and when to
 stop and ask. They work with the MCP server and without it, falling back to the CLI. [The skills](docs/skills.md).
 
 ### Already running another Gmail MCP server?
@@ -278,6 +278,7 @@ cannot drift from what the software does.
 | Skill | What it is for |
 |---|---|
 | [`comms-onboarding`](skills/comms-onboarding/SKILL.md) | Set a person up with agent-communications from chat: which channels and accounts, which mode each account should have, the servers registered, every sign-in started, and the steps only they can take named. Symptoms: 'set up my email and Slack', 'install agent-communications', 'connect Gmail and Slack to Claude', 'onboard me', 'set this up on my other computer'. Not for one account's settings once it works — gmail-setup and slack-setup do those. |
+| [`comms-update`](skills/comms-update/SKILL.md) | Bring agent-communications on this computer up to the latest release from chat: see what is behind, update the servers, their runtimes and any global commands in one approved step, then restart and clear out the old versions. Symptoms: 'update my comms', 'update agentcomms', 'upgrade Gmail and Slack', 'is there a new version', 'my Gmail tools are out of date'. Not for first-time setup — comms-onboarding does that — nor for one account's settings. |
 | [`gmail-attachments`](skills/gmail-attachments/SKILL.md) | Find files people sent, save them to disk with a manifest of what came from where, and attach a local file to a draft. Symptoms: 'find the invoice Sam sent', 'download the attachments from that thread', 'save those PDFs', 'attach the contract to that draft', 'why won't it attach that file'. Not for writing or sending the message — gmail-compose writes drafts and gmail-send sends them. |
 | [`gmail-compose`](skills/gmail-compose/SKILL.md) | Write a message into Gmail Drafts — new, reply, reply-all or forward — and hand the draft id to gmail-send. Symptoms: 'draft a reply to Sam', 'write back to that email', 'forward this to accounts', 'make that draft shorter'. Not for sending — gmail-send does that. |
 | [`gmail-contacts`](skills/gmail-contacts/SKILL.md) | Find somebody's address and who they are, across saved contacts, people written to before, and past mail — showing every candidate with where it came from so the user chooses. Symptoms: 'what's X's email', 'do we have an address for her', 'which of these two Sams is it', 'when did I last hear from him'. Not for writing to them — gmail-compose does that. |

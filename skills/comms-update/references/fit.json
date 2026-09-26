@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "Bring agent-communications on this computer up to the latest release from chat: see what is behind, update the servers, their runtimes and any global commands in one approved step, then restart and clear out the old versions."
+}

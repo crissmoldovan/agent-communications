@@ -93,6 +93,8 @@ result's `warning`, and tighten each one it lists if that is what they meant.
   instead of restarting there. Then tell them to restart once, now, and what they will be able to ask
   for.
 - List every step that was theirs and whether it is done.
+- Tell them how to keep it current: "update my comms" in a chat later brings every server to the latest
+  release (the `comms-update` skill).
 
 ## Without the MCP tools
 

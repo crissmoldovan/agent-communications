@@ -20,6 +20,7 @@
       "strict": false,
       "skills": [
         "./skills/comms-onboarding",
+        "./skills/comms-update",
         "./skills/gmail-setup",
         "./skills/gmail-search",
         "./skills/gmail-thread-analysis",
