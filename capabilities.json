@@ -617,7 +617,7 @@
       "mcp": "slack_mode_request_send",
       "status": "both",
       "operation": "planModeSet",
-      "argv": ["send"],
+      "argv": ["parity/slack", "send"],
       "reason": "The steps as text: `workspace mode <name> send` returns the same steps, with the manifest, while the app has not been updated."
     },
     {
@@ -627,7 +627,7 @@
       "mcp": "slack_mode_narrow",
       "status": "both",
       "operation": "planModeSet",
-      "argv": ["read"],
+      "argv": ["parity/slack", "read"],
       "reason": "`workspace mode <name> read` returns the same steps back to read-only."
     },
     {
@@ -637,7 +637,7 @@
       "mcp": "slack_mode_set",
       "status": "both",
       "operation": "planModeSet",
-      "argv": ["send"],
+      "argv": ["parity/slack", "send"],
       "args": { "mode": "send" },
       "reason": "The move itself, `workspace mode <name> send|read`: the app step first while nothing shows the app was widened, then a change approval before the sign-in starts; `read` returns the procedure (design §6.2)."
     },
