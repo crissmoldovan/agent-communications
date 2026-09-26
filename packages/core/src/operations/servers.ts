@@ -30,6 +30,7 @@ import {
   whichExecutable,
 } from '../mcp-install.ts';
 import { resolveName } from '../names.ts';
+import { isBehind } from '../npm.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -117,11 +118,22 @@ async function localModuleUrl(channel: Channel): Promise<string> {
   );
 }
 
-/** The product the shared installer registers, for one channel at this core's version. */
-export async function channelProduct(channel: Channel, launcher: Launcher | undefined): Promise<McpProduct> {
+/**
+ * The product the shared installer registers, for one channel: at this core's version unless another is named.
+ *
+ * The version is what reaches the launcher. The managed launcher installs exactly `<package>@<version>` into
+ * `runtime/<version>-<name>` and the npx launcher pins `<npx package>@<version>`, both from the product; so naming a
+ * newer release here is all it takes to register one this core is older than — which is what `agentcomms update` does.
+ * `comms_server_install` and every `mcp install` name none, and register their own release as they always have.
+ */
+export async function channelProduct(
+  channel: Channel,
+  launcher: Launcher | undefined,
+  version: string = VERSION,
+): Promise<McpProduct> {
   return {
     ...CHANNEL_SERVERS[channel],
-    version: VERSION,
+    version,
     // Only the `local` launcher reads `moduleUrl`, and only it needs a checkout beside this one; the others must not
     // be refused for the lack of one.
     moduleUrl: launcher === 'local' ? await localModuleUrl(channel) : '',
@@ -421,6 +433,11 @@ export interface ChannelRegistration {
   narrowing: string[];
   /** A file the entry starts that is no longer there — a runtime deleted by hand, a Node a version manager removed. */
   missing: string | null;
+  /**
+   * The entry pins a release older than the core answering: drift an agent can see without asking the registry. Not
+   * whether a newer release exists — `comms_update` with `check` asks npm that — and false for an entry that pins none.
+   */
+  behindCore: boolean;
 }
 
 export interface ChannelAvailability {
@@ -473,7 +490,8 @@ async function versionBehind(binPath: string, packageName: string): Promise<stri
   return null;
 }
 
-function launcherOf(server: RegisteredServer, facts: (typeof CHANNEL_SERVERS)[Channel]): Launcher | 'other' {
+/** How a registered entry starts its server: the launcher `mcp install` wrote it with, or `other` for one it did not. */
+export function launcherOf(server: RegisteredServer, facts: (typeof CHANNEL_SERVERS)[Channel]): Launcher | 'other' {
   const parts = [server.command, ...server.args];
   if (parts.some((part) => managedRuntimeVersion(part, facts.packageName) !== null)) return 'managed';
   if (server.args.some((arg) => arg.startsWith(`${facts.npxPackage}@`))) return 'npx';
@@ -499,15 +517,17 @@ export async function channelsAvailable(core: Core, env: NodeJS.ProcessEnv): Pro
     const registered: ChannelRegistration[] = [];
     for (const server of scan.servers.filter((entry) => isProductServer(entry, facts))) {
       const narrowing = facts.serverArgs({ client: 'json', ...facts.narrowingOf(server.args) });
+      const version = server.args.map((arg) => pinnedVersion(arg, facts)).find((found) => found !== null) ?? null;
       registered.push({
         client: server.client,
         name: server.name,
         scope: server.scope ?? 'user',
         path: server.path,
         launcher: launcherOf(server, facts),
-        version: server.args.map((arg) => pinnedVersion(arg, facts)).find((found) => found !== null) ?? null,
+        version,
         narrowing,
         missing: await missingEntryFile(server),
+        behindCore: version !== null && isBehind(version, VERSION),
       });
     }
     channels.push({

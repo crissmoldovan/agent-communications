@@ -354,8 +354,16 @@ export async function reusableRuntime(dataDir: string, packageName: string, vers
   }
 }
 
-/** Installs the exact running version into its own directory, so an upgrade elsewhere cannot change what clients run. */
-async function installManagedRuntime(context: InstallContext, product: McpProduct, version: string): Promise<string> {
+/**
+ * Installs one exact version into its own directory, so an upgrade elsewhere cannot change what clients run; a runtime
+ * already there for exactly that version is reused. Exported for `agentcomms update`, which installs each runtime a
+ * registration will need as a step of its own before it registers anything.
+ */
+export async function installManagedRuntime(
+  context: InstallContext,
+  product: McpProduct,
+  version: string,
+): Promise<string> {
   const { dataDir } = context.core.paths;
   const ready = await reusableRuntime(dataDir, product.packageName, version);
   if (ready) return ready;
@@ -387,7 +395,7 @@ async function installManagedRuntime(context: InstallContext, product: McpProduc
 }
 
 /** npm's own JS entry, run through this Node: spawning `npm.cmd` without a shell throws on current Node on Windows. */
-async function findNpmCli(): Promise<string> {
+export async function findNpmCli(): Promise<string> {
   const candidates = [
     join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
     join(dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),

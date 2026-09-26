@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { approveChangeAtTerminal, gatedChangeAtTerminal } from './change-flow.ts';
+import { CHANNEL_LABELS } from './channel-servers.ts';
 import {
   colorEnabled,
   defaultStreams,
   type OutputOptions,
+  paint,
   runCommand,
   writeError,
   writeResult,
@@ -30,6 +32,13 @@ import {
   serverInstallChange,
   serverPruneChange,
 } from './operations/servers.ts';
+import {
+  type UpdateItem,
+  type UpdateReport,
+  type UpdateResult,
+  updateChange,
+  updateCheck,
+} from './operations/update.ts';
 import { renderInstall, renderPrune } from './render.ts';
 import { VERSION } from './version.ts';
 
@@ -65,11 +74,14 @@ Usage:
                                            register the core MCP server with a client, and prove it starts
   agentcomms mcp prune [--dry-run] [--include-printed] [--approval <id>]
                                            remove the core's managed runtimes that nothing uses
+  agentcomms update [--check] [--no-verify] [--approval <id>]
+                                           bring every registration, runtime and global package to the latest
+                                           release; --check only says what is behind
   agentcomms secrets migrate --to keychain|file [--approval <id>]
   agentcomms names migrate [--rename <old>=<new>] [--dry-run] [--approval <id>]
 
-A change that loosens something or cannot be taken back — policy chat, mcp install and prune, secrets and names
-migrate — is shown before it happens. At a terminal you approve it there; anything else gets the preview and an
+A change that loosens something or cannot be taken back — policy chat, mcp install and prune, update, secrets and
+names migrate — is shown before it happens. At a terminal you approve it there; anything else gets the preview and an
 approval id (exit 10), and runs the command again with --approval <id> once the person has agreed: in the chat under
 the \`chat\` change policy, with \`agentcomms approve\` under \`confirm\`. A tightening — policy confirm — applies at
 once and asks nobody, and a --dry-run changes nothing.
@@ -121,6 +133,7 @@ function parse(argv: string[]) {
       print: { type: 'boolean', default: false },
       'no-verify': { type: 'boolean', default: false },
       'include-printed': { type: 'boolean', default: false },
+      check: { type: 'boolean', default: false },
     },
   });
 }
@@ -306,6 +319,26 @@ export async function main(
         }
         throw usage('usage: agentcomms mcp [install|prune]');
       }
+      case 'update': {
+        if (sub !== undefined) throw usage('usage: agentcomms update [--check] [--no-verify] [--approval <id>]');
+        if (values.check) {
+          if (values.approval !== undefined) {
+            throw usage('--check only reads, so it takes no --approval; leave out --check to update');
+          }
+          writeResult(await updateCheck(core, env), output, renderUpdateCheck);
+          return;
+        }
+        const words = ['agentcomms', 'update'];
+        if (values['no-verify']) words.push('--no-verify');
+        const result = await gatedChangeAtTerminal(core, updateChange(core, env, { noVerify: values['no-verify'] }), {
+          ...approval,
+          command: shellCommand(words),
+        });
+        // Printed either way, but a step that did not work is not a success to a script, as for `mcp install`.
+        softExit = result.ok ? EXIT_CODES.OK : EXIT_CODES.UNAVAILABLE;
+        writeResult(result, output, (r) => renderUpdate(r, output.color));
+        return;
+      }
       case 'names': {
         if (sub !== 'migrate') {
           throw usage('usage: agentcomms names migrate [--rename <old>=<new>] [--dry-run] [--approval <id>]');
@@ -427,11 +460,106 @@ function renderChannels(report: ChannelsReport): string {
     );
     for (const entry of channel.registered) {
       lines.push(
-        `  registered with ${entry.client} as "${entry.name}" (${entry.launcher}${entry.version ? ` ${entry.version}` : ''})${entry.missing ? ` — ${entry.missing} is missing` : ''}`,
+        `  registered with ${entry.client} as "${entry.name}" (${entry.launcher}${entry.version ? ` ${entry.version}` : ''}${entry.behindCore ? `, older than this core's ${report.core}` : ''})${entry.missing ? ` — ${entry.missing} is missing` : ''}`,
       );
     }
   }
   for (const file of report.unreadable) lines.push(`Could not read ${file.path}: ${file.reason}.`);
+  return lines.join('\n');
+}
+
+/** One item of an update check, as a line. */
+function describeItem(item: UpdateItem): string {
+  if (item.kind === 'global') {
+    return `global ${item.package} ${item.version}${item.version === item.latest ? '' : ` → ${item.latest}`}`;
+  }
+  if (item.kind === 'runtime') {
+    return item.version === item.latest
+      ? `${item.package} runtime ${item.latest} in ${item.path}`
+      : `${item.package} runtime ${item.version ?? '(none yet)'} → ${item.latest}, to install into ${item.path}`;
+  }
+  const where = item.scope === 'project' ? `for a project, in ${item.path}` : `in ${item.path}`;
+  const pins = item.narrowing.length > 0 ? `, ${item.narrowing.join(' ')}` : '';
+  const version =
+    item.version === null
+      ? 'pins no release'
+      : `${item.version}${item.version === item.latest ? '' : ` → ${item.latest}`}`;
+  return `${CHANNEL_LABELS[item.channel]} with ${item.client} as "${item.name}" ${where} (${item.launcher}, ${version}${pins})`;
+}
+
+function renderUpdateCheck(report: UpdateReport): string {
+  const latest = Object.entries(report.latest)
+    .map(([name, version]) => `${name} ${version}`)
+    .join(', ');
+  const lines = [`Latest: ${latest}. This core is ${report.core}.`];
+  const section = (title: string, items: readonly UpdateItem[]) => {
+    if (items.length === 0) return;
+    lines.push('', `${title}:`);
+    for (const item of items) {
+      lines.push(`  ${describeItem(item)}`);
+      if (item.kind === 'registration' && item.reason) lines.push(`    ${item.reason}`);
+    }
+  };
+  section('Behind', report.behind);
+  section('Up to date', report.upToDate);
+  section('Pinned to no release', report.unpinned);
+  for (const file of report.unreadable) lines.push('', `Could not read ${file.path}: ${file.reason}.`);
+  const updatable = report.behind.some((item) => item.kind !== 'registration' || item.updatable === true);
+  lines.push(
+    '',
+    report.behind.length === 0
+      ? 'Everything here is at the latest release.'
+      : updatable
+        ? 'Run `agentcomms update` to bring what is behind to the latest release.'
+        : 'Nothing behind can be updated from here; each says why above.',
+  );
+  return lines.join('\n');
+}
+
+function renderUpdate(result: UpdateResult, color: boolean): string {
+  const lines: string[] = [];
+  for (const step of result.steps) {
+    if (step.kind === 'runtime') {
+      lines.push(
+        step.outcome === 'installed'
+          ? paint(color, 'green', `Installed ${step.package}@${step.version} into ${step.path}.`)
+          : paint(
+              color,
+              'red',
+              `Could not install ${step.package}@${step.version}: ${step.detail ?? 'no reason given'}`,
+            ),
+      );
+    } else if (step.kind === 'registration') {
+      const what = `"${step.name}" with ${step.client} at ${step.to}`;
+      if (step.outcome === 'registered') {
+        lines.push(paint(color, 'green', `Registered ${what}, in place of ${step.from}.`));
+        if (step.verification === 'passed') lines.push(`  Checked: ${step.detail}`);
+        else if (step.verification === 'failed') lines.push(paint(color, 'red', `  Failed to start: ${step.detail}`));
+        else lines.push(paint(color, 'yellow', `  Not checked: ${step.detail ?? 'skipped'}`));
+        for (const warning of step.warnings ?? []) lines.push(`  ${warning}`);
+      } else {
+        lines.push(
+          paint(
+            color,
+            'red',
+            `${step.outcome === 'skipped' ? 'Skipped' : 'Could not register'} ${what}: ${step.detail}`,
+          ),
+        );
+      }
+    } else {
+      lines.push(
+        step.outcome === 'updated'
+          ? paint(color, 'green', `Updated the global ${step.package} from ${step.from} to ${step.to}.`)
+          : paint(color, 'red', `Could not update the global ${step.package}: ${step.detail ?? 'no reason given'}`),
+      );
+    }
+  }
+  if (result.status === 'up-to-date') lines.push('Everything here is at the latest release. Nothing was changed.');
+  if (result.status === 'manual') lines.push('Nothing was changed: what is behind is left for you.');
+  for (const item of result.manual) {
+    lines.push(paint(color, 'yellow', `Left for you: ${describeItem(item)}`), `  ${item.reason ?? ''}`);
+  }
+  if (result.next) lines.push('', result.next);
   return lines.join('\n');
 }
 

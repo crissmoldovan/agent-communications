@@ -77,6 +77,15 @@
       "operation": "channelsAvailable"
     },
     {
+      "id": "core.update",
+      "package": "core",
+      "cli": "update",
+      "mcp": "comms_update",
+      "status": "both",
+      "operation": "updateChange",
+      "reason": "One change for every step: each registration registered again at the latest release with its own name, client, scope, launcher and pins, the runtimes that needs, and the global packages. `update --check` and `check: true` are `updateCheck`, the read both sides run instead, which asks nobody."
+    },
+    {
       "id": "core.approve",
       "package": "core",
       "cli": "approve",

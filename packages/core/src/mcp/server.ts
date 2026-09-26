@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { changeToolResult, type GatedChange, gatedChange } from '../change-flow.ts';
 import { CHANNELS } from '../channel-servers.ts';
 import { type Core, openCore } from '../core.ts';
-import { type CommsError, toCommsError } from '../errors.ts';
+import { CommsError, toCommsError } from '../errors.ts';
 import { SERVER_NAME_MESSAGE, SERVER_NAME_PATTERN } from '../mcp-install.ts';
 import {
   CHANGE_POLICIES,
@@ -21,6 +21,7 @@ import {
   serverInstallChange,
   serverPruneChange,
 } from '../operations/servers.ts';
+import { type UpdateDeps, updateChange, updateCheck } from '../operations/update.ts';
 import type { KeyringModule, SecretStore } from '../secrets.ts';
 import { strictToolArguments } from '../tool-arguments.ts';
 import { VERSION } from '../version.ts';
@@ -53,6 +54,8 @@ export interface CoreMcpOptions {
   secretStores?: { source?: SecretStore; target?: SecretStore } | undefined;
   /** For a test: the running processes prune checks, or null when they cannot be listed. */
   processes?: (() => Promise<readonly string[] | null>) | undefined;
+  /** For a test: the registry, the global packages and the installers an update uses, so none of them is real. */
+  update?: UpdateDeps | undefined;
 }
 
 export interface CoreMcpServer {
@@ -71,10 +74,10 @@ async function buildInstructions(core: Core): Promise<string> {
     'agent-communications core: install and manage the Gmail and Slack servers, and look after this machine.',
     '',
     'Reading needs nobody: comms_paths, comms_doctor, comms_audit_tail, comms_approvals_list,',
-    'comms_channels_available, and comms_change_policy without `set`.',
+    'comms_channels_available, comms_change_policy without `set`, and comms_update with `check`.',
     '',
-    'Every change — registering or pruning a server, migrating names or secrets, loosening the change policy — is',
-    'shown to the person before it happens. The first call returns `approvalRequired` with a `preview` and an',
+    'Every change — registering, updating or pruning a server, migrating names or secrets, loosening the change',
+    'policy — is shown to the person before it happens. The first call returns `approvalRequired` with a `preview` and an',
     '`approvalId`: show the preview in full and ask. Then call the same tool again, with the same arguments and the',
     '`approvalId`. Under the `chat` change policy the person’s yes in this conversation is the approval; under',
     '`confirm` they run `agentcomms approve <approvalId>` in their own terminal first — you cannot approve it for them,',
@@ -347,6 +350,34 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
           }),
         args.approvalId,
       ),
+  );
+
+  server.registerTool(
+    'comms_update',
+    {
+      title: 'Update to the latest release',
+      description:
+        'Bring this machine to the latest published release. `check: true` reads the npm registry and this machine and returns what is behind — `{ latest, behind, upToDate, unpinned, unreadable }` — asking nobody. Without it, a change: the first call returns a preview listing every step and an approvalId — each client registration of core, Gmail or Slack registered again at the latest version with exactly its name, client, scope, launcher and pins; each managed runtime that needs installing; each global @agentcomms package updated — and the call again with the approvalId, once the person agrees, applies it and reports each step. Nothing behind: it says so and prepares nothing. The new servers load only after each client is restarted: tell the person, then prune the old runtimes with comms_server_prune.',
+      inputSchema: {
+        check: z.boolean().optional().describe('only report what is behind and what is up to date; change nothing'),
+        noVerify: z.boolean().optional().describe('do not start each registered server to check that it answers'),
+        ...approvalArg,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async (args) => {
+      if (args.check === true) {
+        return read(() => {
+          if (args.approvalId !== undefined) {
+            throw new CommsError('USAGE', '`check` only reads, so it takes no approvalId', {
+              hint: 'Leave out `check` to update; the first call returns the preview and the approvalId to call with.',
+            });
+          }
+          return updateCheck(core, env, options.update);
+        });
+      }
+      return change(() => updateChange(core, env, { noVerify: args.noVerify }, options.update), args.approvalId);
+    },
   );
 
   server.registerTool(

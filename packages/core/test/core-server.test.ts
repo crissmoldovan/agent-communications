@@ -197,6 +197,7 @@ const CHANGING = [
   'comms_server_prune',
   'comms_names_migrate',
   'comms_secrets_migrate',
+  'comms_update',
 ];
 
 test('the server offers the core tools, and no tool that approves or claims a change it did not plan', async () => {
@@ -247,6 +248,7 @@ test('the greeting says how a change is approved, names the policy in force, and
       assert.match(greeting, /you cannot approve it for them/);
       assert.match(greeting, new RegExp(`The default change policy here is ${changePolicy}\\.`));
       assert.match(greeting, /restarted/, 'the last line survives too');
+      assert.match(greeting, /comms_update with `check`/, 'an agent learns it can see what is behind');
     } finally {
       await close();
     }
@@ -1182,6 +1184,8 @@ test('comms_channels_available says what is installed and where each server is r
         version: '0.0.9',
         narrowing: ['--inbox', 'acme/gmail'],
         missing: gmailEntry,
+        // Older than this core: seen without asking the registry.
+        behindCore: true,
       },
     ]);
     if (process.platform !== 'win32') {
