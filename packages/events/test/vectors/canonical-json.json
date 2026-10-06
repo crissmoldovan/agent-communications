@@ -1,0 +1,151 @@
+{
+  "family": "canonical-json",
+  "description": "canonicalJson, which must equal @agentcomms/core's canonicalJson byte for byte on every JSON value (events phase A plan, decision 11). `undefinedMembers` lists the key paths set to undefined before the value is written, since JSON cannot hold undefined.",
+  "vectors": [
+    {
+      "name": "nested objects: keys sorted at every level, arrays kept in order",
+      "input": {
+        "b": {
+          "d": 1,
+          "c": [
+            {
+              "z": true,
+              "a": null
+            }
+          ]
+        },
+        "a": "x"
+      },
+      "canonical": "{\"a\":\"x\",\"b\":{\"c\":[{\"a\":null,\"z\":true}],\"d\":1}}"
+    },
+    {
+      "name": "key order is by UTF-16 code units, not UTF-8: U+1F600 (a surrogate pair, D83D) sorts before U+FF61",
+      "input": {
+        "｡": 1,
+        "😀": 2
+      },
+      "canonical": "{\"😀\":2,\"｡\":1}"
+    },
+    {
+      "name": "key order at the U+E000 boundary against an astral key, and plain ASCII",
+      "input": {
+        "": 1,
+        "𐀀": 2,
+        "z": 3,
+        "A": 4
+      },
+      "canonical": "{\"A\":4,\"z\":3,\"𐀀\":2,\"\":1}"
+    },
+    {
+      "name": "integer-like keys sort as strings, not as numbers",
+      "input": {
+        "10": 1,
+        "9": 2,
+        "a": 3,
+        "": 4
+      },
+      "canonical": "{\"\":4,\"10\":1,\"9\":2,\"a\":3}"
+    },
+    {
+      "name": "undefined members are dropped, at the top and nested",
+      "input": {
+        "a": 1,
+        "b": {
+          "c": 2
+        }
+      },
+      "undefinedMembers": [["u"], ["b", "v"]],
+      "canonical": "{\"a\":1,\"b\":{\"c\":2}}"
+    },
+    {
+      "name": "an object whose every member is undefined is empty",
+      "input": {
+        "x": {}
+      },
+      "undefinedMembers": [["x", "only"]],
+      "canonical": "{\"x\":{}}"
+    },
+    {
+      "name": "escapes are JSON.stringify's: quote, backslash and C0 controls escaped; slash, DEL and U+2028 kept",
+      "input": {
+        "s": "\"\\/\b\f\n\r\t\u0000\u001f  "
+      },
+      "canonical": "{\"s\":\"\\\"\\\\/\\b\\f\\n\\r\\t\\u0000\\u001f  \"}"
+    },
+    {
+      "name": "keys are escaped like values",
+      "input": {
+        "a\"b": 1,
+        "c\nd": 2
+      },
+      "canonical": "{\"a\\\"b\":1,\"c\\nd\":2}"
+    },
+    {
+      "name": "negative zero is written 0",
+      "input": {
+        "z": -0.0,
+        "list": [-0.0, 0]
+      },
+      "canonical": "{\"list\":[0,0],\"z\":0}"
+    },
+    {
+      "name": "large and small numbers are JSON.stringify's",
+      "input": [9007199254740993, 1e21, 1e-7, 123456789012345680000, -1.5, 0.1],
+      "canonical": "[9007199254740992,1e+21,1e-7,123456789012345680000,-1.5,0.1]"
+    },
+    {
+      "name": "lone surrogates are written as escapes, a pair as its character",
+      "input": ["\ud800", "a\udc00b", "😀", "\udc00\ud800"],
+      "canonical": "[\"\\ud800\",\"a\\udc00b\",\"😀\",\"\\udc00\\ud800\"]"
+    },
+    {
+      "name": "empty arrays and objects",
+      "input": {
+        "a": [],
+        "b": {},
+        "c": [[], {}]
+      },
+      "canonical": "{\"a\":[],\"b\":{},\"c\":[[],{}]}"
+    },
+    {
+      "name": "an empty array at the root",
+      "input": [],
+      "canonical": "[]"
+    },
+    {
+      "name": "an empty object at the root",
+      "input": {},
+      "canonical": "{}"
+    },
+    {
+      "name": "prototype-looking keys are data",
+      "input": {
+        "__proto__": 1,
+        "constructor": {
+          "prototype": 2
+        }
+      },
+      "canonical": "{\"__proto__\":1,\"constructor\":{\"prototype\":2}}"
+    },
+    {
+      "name": "scalars at the root: a string",
+      "input": "text é",
+      "canonical": "\"text é\""
+    },
+    {
+      "name": "scalars at the root: true",
+      "input": true,
+      "canonical": "true"
+    },
+    {
+      "name": "scalars at the root: null",
+      "input": null,
+      "canonical": "null"
+    },
+    {
+      "name": "scalars at the root: a fraction",
+      "input": 1.5,
+      "canonical": "1.5"
+    }
+  ]
+}

@@ -336,8 +336,10 @@ test('D14-a: a declared library is discovered in the same walk, and is publishab
     extra: { dependencies: { '@agentcomms/whatsapp': 'workspace:*', zod: '^4.0.0' } },
   });
   const registry = loadRegistry(root);
+  // The checkout's own libraries are there too; the fixture is the one added.
+  const own = (entries) => entries.filter((entry) => !REGISTRY.libraries.some((l) => l.directory === entry.directory));
   assert.deepEqual(
-    registry.libraries.map(({ directory, packageName, declaration }) => ({ directory, packageName, declaration })),
+    own(registry.libraries).map(({ directory, packageName, declaration }) => ({ directory, packageName, declaration })),
     [{ directory: 'shelf', packageName: '@agentcomms/shelf', declaration: { kind: 'library' } }],
   );
   assert.ok(registry.packages.includes('shelf'), 'a library is published');
@@ -345,7 +347,7 @@ test('D14-a: a declared library is discovered in the same walk, and is publishab
     registry.packages.indexOf('shelf') > registry.packages.indexOf('whatsapp'),
     `it comes after what it depends on: ${registry.packages.join(' ')}`,
   );
-  assert.deepEqual(registry.held, []);
+  assert.deepEqual(registry.held, REGISTRY.held, 'not held: only the checkout’s own holds');
   assert.deepEqual(registry.undeclared, []);
 
   // Nothing that needs a surface: it has no CLI, no server, no reference, no skills and no accounts.
@@ -384,7 +386,7 @@ test('D14-b: a library dropped into the tree is published in order, synced, cons
 
   // Exempt from parity: the parity check's list of declared libraries names it, and it is read as no surface.
   const registries = await import(pathToFileURL(join(root, 'scripts', 'registries.mjs')).href);
-  assert.deepEqual(registries.LIBRARIES, ['shelf']);
+  assert.deepEqual(registries.LIBRARIES, [...REGISTRY.libraries.map((library) => library.directory), 'shelf'].sort());
   assert.ok(!registries.SURFACES.some((surface) => surface.package === 'shelf'));
   assert.ok(!Object.hasOwn(registries.WRAPPERS, 'shelf'));
 
@@ -435,10 +437,7 @@ test('D14-a: a malformed library declaration is refused, naming the package', as
 
   // As declared in the first place, accepted.
   await writeFile(path, JSON.stringify(library));
-  assert.deepEqual(
-    loadRegistry(root).libraries.map((entry) => entry.directory),
-    ['shelf'],
-  );
+  assert.ok(loadRegistry(root).libraries.some((entry) => entry.directory === 'shelf'));
 });
 
 test('PKG-c: "agentcomms" means a channel; one carrying a kind is refused, naming agentcommsPackage', async () => {
@@ -480,9 +479,11 @@ test('D14-a: a non-private package that declares nothing is listed as undeclared
 test('REL-c: a hold is read from the package, and refused where it cannot apply', async () => {
   const { root, version } = await treeWithLibrary({ held: true });
   const registry = loadRegistry(root);
-  assert.deepEqual(registry.held, [
-    { directory: 'shelf', packageName: '@agentcomms/shelf', reason: 'Held until something depends on it.' },
-  ]);
+  assert.deepEqual(
+    registry.held.filter((entry) => entry.directory === 'shelf'),
+    [{ directory: 'shelf', packageName: '@agentcomms/shelf', reason: 'Held until something depends on it.' }],
+  );
+  assert.equal(registry.held.length, REGISTRY.held.length + 1, 'the checkout’s own holds, and the fixture’s');
   assert.ok(registry.packages.includes('shelf'), 'held is still publishable: every check walks it');
 
   const write = (directory, manifest) =>
@@ -541,7 +542,9 @@ test('REL-c: a hold is read from the package, and refused where it cannot apply'
   const slack = JSON.parse(await readFile(join(root, 'packages', 'slack', 'package.json'), 'utf8'));
   await write('slack', { ...slack, ...hold });
   assert.deepEqual(
-    loadRegistry(root).held.map((entry) => entry.directory),
+    loadRegistry(root)
+      .held.map((entry) => entry.directory)
+      .filter((directory) => !REGISTRY.held.some((entry) => entry.directory === directory)),
     ['shelf', 'slack'],
   );
 });
@@ -852,14 +855,20 @@ test('the hand-written-list guard reads its words from the registry, so a channe
   assert.doesNotMatch('const ALSO_FOREIGN = { newcomer: [/\\bmailbox(es)?\\b/i] };', guard);
 });
 
-test('this checkout’s registry is the five channels and six packages it ships', () => {
+test('this checkout’s registry is the five channels, one held library and seven packages it ships', () => {
   assert.deepEqual(
     REGISTRY.channels.map((channel) => channel.directory),
     ['core', 'gmail', 'resend', 'slack', 'whatsapp'],
   );
-  assert.deepEqual(REGISTRY.packages, ['core', 'gmail', 'gmail-mcp', 'resend', 'slack', 'whatsapp']);
+  assert.deepEqual(REGISTRY.packages, ['core', 'events', 'gmail', 'gmail-mcp', 'resend', 'slack', 'whatsapp']);
   assert.deepEqual(REGISTRY.platforms, ['gmail', 'resend', 'slack', 'whatsapp']);
-  assert.deepEqual(REGISTRY.libraries, []);
-  assert.deepEqual(REGISTRY.held, []);
+  assert.deepEqual(
+    REGISTRY.libraries.map((library) => library.directory),
+    ['events'],
+  );
+  assert.deepEqual(
+    REGISTRY.held.map((entry) => entry.directory),
+    ['events'],
+  );
   assert.deepEqual(REGISTRY.undeclared, []);
 });

@@ -161,7 +161,8 @@ test('PKG-b: only a declared library is a surface-free published package', async
   const check = (overrides = {}) =>
     unreadPackages({
       root,
-      publishable: [...PUBLISHABLE, 'shelf'],
+      // Every surface and wrapper of this checkout, and the fixture: the checkout's own libraries are not in `root`.
+      publishable: [...SURFACES.map((surface) => surface.package), ...Object.keys(WRAPPERS), 'shelf'],
       surfaces: SURFACES,
       wrappers: WRAPPERS,
       libraries: ['shelf'],

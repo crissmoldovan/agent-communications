@@ -6,6 +6,8 @@
   `docs/superpowers/specs/2026-09-25-cli-mcp-parity-design.md` too; where the two differ, it is the later word. Before
   adding or changing a channel, read `docs/superpowers/specs/2026-09-26-channel-plugins-design.md`: a channel is
   declared by the `"agentcomms"` field of its `package.json`, and the core and the tooling derive it from there.
+- Before changing `packages/events`, read `docs/superpowers/specs/2026-10-05-local-event-emission-design.md`; its
+  Appendix A is normative.
 - Run `pnpm verify` before claiming anything works, and report its result.
 - **Never send email while developing.** Tests use the fake transport in `packages/gmail/test`. Nothing in this
   repository's tests talks to Gmail.

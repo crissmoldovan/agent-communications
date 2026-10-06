@@ -20,6 +20,8 @@ Thanks for helping make email safe to hand to an agent.
 ```text
 packages/core         @agentcomms/core         provider-neutral core (config, secrets, approvals, envelopes), the
                                                agentcomms CLI and the core MCP server
+packages/events       @agentcomms/events       the event catalogue, conditions and mapping: an isomorphic library,
+                                               held back from release until something depends on it
 packages/gmail        @agentcomms/gmail        Gmail channel: CLI (agent-gmail) and MCP server factory
 packages/gmail-mcp    @agentcomms/gmail-mcp    the Gmail MCP server as its own package (agent-gmail-mcp)
 packages/resend       @agentcomms/resend       Resend channel: CLI (agent-resend) and MCP server
