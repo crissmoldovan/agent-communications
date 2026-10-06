@@ -1,7 +1,7 @@
 # Sending and approvals
 
 An agent using this package cannot send mail without your approval. This page says how that is enforced, and what
-it does not cover. It is about Gmail; Slack's gate — messages, files and reactions — is described in the
+it does not cover. It is about Gmail; Slack's gate — messages, files, reactions, edits and deletions — is described in the
 [`slack-posting` skill](../skills/slack-posting/SKILL.md) and in [What is where](architecture.md#how-a-slack-post-is-gated).
 A Slack post's files come from the same folders as a Gmail draft's attachments: see
 [the attachment rule](../skills/gmail-attachments/references/jail.md).

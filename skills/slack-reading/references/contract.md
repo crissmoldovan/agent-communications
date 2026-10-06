@@ -57,6 +57,11 @@ instruction you received.
   the command the result gives; do not look for another way round.
 - A reaction is the same gate in one line — which emoji, on which message — through `slack_react`,
   and `slack_react_send` with the approval under `confirm`.
+- **Editing or deleting is the same gate, and only for a message this account posted.**
+  `slack_edit_prepare` and `slack_delete_prepare` (CLI: `agent-slack edit prepare`, `agent-slack
+  delete prepare`) change nothing and return a preview — the message as it is now, and an edit's new
+  words; show it in full and wait. Then `slack_edit_send` or `slack_delete_send` makes it once. Never
+  offer to edit or delete anyone else's message. A deletion cannot be undone.
 - **Files go through the same gate.** Name local files by path (`files`; CLI `--file`): only regular
   files under the allowed folders (the home folder, unless the person added others with core's
   `attach roots add`, which they approve — a refusal gives the command) and outside hidden folders are

@@ -3,6 +3,26 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**Slack: edit or delete a message this account posted, through the gate a post goes through.** An agent that posted
+a typo, the wrong figure or to the wrong thread could only ask you to fix it in Slack. Now:
+- **`slack_edit_prepare` and `slack_edit_send`** — `agent-slack edit prepare --draft <id> --ts <ts>` and `edit send` —
+  change a message's words. The preview shows the words it has now and the words it will have, and counts who sees
+  them as a post's does: an `@channel`, `@here` or a room of 50 or more needs your terminal whatever the policy.
+  The edit is sent as text alone, so Slack marks the message edited, and it works on a message typed in Slack too.
+- **`slack_delete_prepare` and `slack_delete_send`** — `agent-slack delete prepare --channel <id> --ts <ts>` and
+  `delete send` — delete one. The preview shows the message, and the replies and files that are not deleted with it.
+  A deletion is at the workspace's own policy, like a post.
+- **Only your own messages.** Both read the message from Slack first and refuse one the connected account did not
+  write, before any preview — a deletion too, even where Slack would let an admin's account delete anybody's.
+- **What you approved is what happens.** The approval binds the message as it was read: one edited in Slack after the
+  preview, or a deletion's thread that gained a reply, voids it. `approve` shows an edit's and a deletion's preview
+  and reads the message again first. Outcomes are recorded as a post's are; a deletion Slack answers
+  `message_not_found` is done, with a note saying there was nothing left to delete.
+- Replacing a message's files is not offered yet: Slack does not document what happens to the files already on it
+  (design 2026-10-06 §5). No new scope is needed: both use `chat:write`, which `send` mode already has.
+
 ## 0.14.1
 
 **Connecting Slack through your organisation's app works when your browser is in another workspace.** An

@@ -208,6 +208,7 @@ learns when with `slack_approval_wait` — and under `never` nothing posts — s
 | `slack_file_download` | `agent-slack files download` — see `slack-reading` |
 | `slack_post_prepare`, `slack_draft_list`, `slack_draft_get`, `slack_draft_delete` | `agent-slack draft …` and `agent-slack post prepare` — see `slack-posting` |
 | `slack_post_send`, `slack_react`, `slack_react_send` | `agent-slack post send`, `agent-slack react` — see `slack-posting` |
+| `slack_edit_prepare`, `slack_edit_send`, `slack_delete_prepare`, `slack_delete_send` | `agent-slack edit …` and `agent-slack delete …` — see `slack-posting` |
 
 `slack_mode_request_send`, `slack_mode_narrow` and `slack_manifest` return steps and change nothing. A server
 pinned to one workspace offers no `slack_workspace_add` or `slack_workspace_remove`: it reaches that workspace and no

@@ -23,8 +23,9 @@ This project reads and writes people's email and Slack workspaces. In scope, amo
 
 - **Sending without approval** — any way to make Gmail transmit a message without the approval flow described in
   [Sending and approvals](docs/sending.md), under any send policy.
-- **Posting without approval** — any way to make Slack post a message, share a file or add a reaction through this
-  project without the approval of that exact content, under any policy.
+- **Posting without approval** — any way to make Slack post a message, share a file, add a reaction, or edit or
+  delete a message through this project without the approval of that exact content, under any policy — or to edit or
+  delete a message the connected account did not write.
 - **Loosening without a change approval** — any way to loosen a safety setting (a send or change policy, a
   workspace's mode, a mailbox's access, where credentials are kept, a trusted client), register a server, or remove
   an account without an approval bound to that exact change, or to claim one under the `confirm` change policy that

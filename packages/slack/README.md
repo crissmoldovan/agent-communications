@@ -263,6 +263,31 @@ and a warning says to post the link as a message of its own if it should not unf
 Sending a file needs the workspace in `send` mode with `files:write` granted; without it the prepare is refused with
 the command that fixes it.
 
+### Editing and deleting
+
+A message this account posted can be edited or deleted through the same gate: a preview first, then the act, once,
+after the same approval a post needs.
+
+```sh
+agent-slack draft create --workspace acme/slack --channel C024BE7LR --text 'ready at noon'
+agent-slack edit prepare --workspace acme/slack --draft <draftId> --ts 1700000000.000100      # changes nothing
+agent-slack edit send --workspace acme/slack --draft <draftId> --approval <approvalId> --expect-channel C024BE7LR --ts 1700000000.000100
+
+agent-slack delete prepare --workspace acme/slack --channel C024BE7LR --ts 1700000000.000100  # deletes nothing
+agent-slack delete send --workspace acme/slack --channel C024BE7LR --ts 1700000000.000100 --approval <approvalId>
+```
+
+Both read the message from Slack first, and refuse one this account did not write — a deletion too, even for an admin
+whose account Slack would let delete anybody's. The preview shows the message as it is now: an edit's shows its words
+now and after, and counts who sees them as a post's does; a deletion's shows the words, and the replies and files that
+are not deleted with it. The approval binds the message as it was read, so one edited in Slack after the preview, or
+a deletion's thread that gained a reply, voids it.
+
+An edit changes only a message's words, where it is — a draft written as a reply in a thread, or with files, is
+refused — and sends them as text, so Slack marks the message edited. Nobody who read the old words is told what
+changed. Mentions in an edit are counted as if Slack notified them, and a link in one may unfurl: an edit has no switch
+to stop it. Replacing a message's files is not offered yet. A deletion cannot be undone.
+
 ## As an MCP server
 
 Register it with your agent's client, which also starts it once to prove the entry works:
@@ -298,6 +323,8 @@ on stdio directly.
 | `slack_post_prepare` | compose a draft, with local files if given, and return the preview a person must approve — posts nothing |
 | `slack_post_send` | post a prepared draft once its approval allows it, reading every file again first — the operation `agent-slack post send` runs |
 | `slack_react`, `slack_react_send` | add or remove a reaction through the same gate — `agent-slack react` |
+| `slack_edit_prepare`, `slack_edit_send` | change the words of a message this account posted, through the same gate — `agent-slack edit prepare` and `edit send` |
+| `slack_delete_prepare`, `slack_delete_send` | delete a message this account posted, through the same gate — `agent-slack delete prepare` and `delete send` |
 | `slack_approval_wait` | where an approval stands, now or once a person approves it — only looks; `agent-slack approval wait` |
 | `slack_draft_create`, `slack_draft_update` | write a draft, or change one — words, channel, thread, mentions or files — without preparing it |
 | `slack_draft_list`, `slack_draft_get`, `slack_draft_delete` | the drafts prepares leave behind |
@@ -315,9 +342,9 @@ const server = await createSlackMcpServer({ workspace: 'acme/slack' });
 await server.connectStdio();
 ```
 
-No tool approves. `slack_post_send` and the reaction tools claim an approval through the gate the CLI uses: under
-`chat` your yes in the conversation is the approval; under `confirm` they return `APPROVAL_PENDING` with the approve
-command for you to run — this installation's own, its folders pinned — and `slack_approval_wait`, with which the agent
+No tool approves. `slack_post_send`, the reaction tools and the edit and delete sends claim an approval through the
+gate the CLI uses: under `chat` your yes in the conversation is the approval; under `confirm` they return
+`APPROVAL_PENDING` with the approve command for you to run — this installation's own, its folders pinned — and `slack_approval_wait`, with which the agent
 learns that you have; they post only after you have, within 24 hours; under `never` they refuse. A post whose outcome
 Slack never answered is `SEND_OUTCOME_UNKNOWN`: it may have posted, and is checked in the channel, never repeated. The tools that change a workspace return a preview and an approval id first, whenever the change loosens
 it or removes it, and apply it only when called again with that id — after your yes under the `chat` change policy,
