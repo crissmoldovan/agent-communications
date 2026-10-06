@@ -34,12 +34,14 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc -p tsconfig.json && tsc -p test/tsconfig.json",
-    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\""
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\"",
+    "verify:browser": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/verify-browser.mjs"
   },
   "dependencies": {
     "zod": "catalog:"
   },
   "devDependencies": {
+    "playwright": "1.61.1",
     "tsdown": "catalog:",
     "typescript": "catalog:"
   },

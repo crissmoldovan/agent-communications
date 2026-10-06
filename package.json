@@ -30,6 +30,7 @@
     "release": "node scripts/release.mjs",
     "release:publish": "node scripts/release.mjs --publish",
     "verify:packages": "node scripts/verify-package.mjs --all",
+    "verify:browser": "pnpm --filter @agentcomms/events run verify:browser",
     "sync:skills": "node scripts/sync-skills.mjs",
     "sync:versions": "node scripts/sync-versions.mjs",
     "verify:versions": "node scripts/sync-versions.mjs --check",

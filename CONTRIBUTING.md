@@ -50,6 +50,12 @@ sets up a pre-push hook (`.githooks/pre-push`) that runs it. The one workflow is
 `pnpm verify` on Linux, macOS and Windows and publishes only if all pass, so a failure only Windows shows turns up
 there — see [Releasing](docs/RELEASING.md).
 
+**A change to `packages/events` runs `pnpm verify:browser` too.** It runs the event library's vectors in real Chromium
+and WebKit, the engines of the desktop app's webviews, under the app's production CSP. `pnpm verify` does not run it,
+because it needs those two browsers: install them once with
+`pnpm --filter @agentcomms/events exec playwright install chromium webkit` (add `--with-deps` on Linux). The release
+runs it on macOS before anything is published.
+
 ## Skill contract
 
 A skill lives at exactly `skills/<name>/SKILL.md` (no root `SKILL.md`). The directory name equals the frontmatter

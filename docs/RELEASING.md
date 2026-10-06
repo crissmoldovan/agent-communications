@@ -20,7 +20,8 @@ documentation ends up describing a human in a loop they are not in.
 What guards the release instead is stated rather than implied: the environment accepts `v*` tags and nothing else,
 the tag must match the declared version and still name the commit the run started from, six platform legs must pass
 before the publish job starts — and so must one more on exactly Node 22.12.0, the oldest the packages claim, which
-runs the printed commands a source checkout's registration needs there — and every version carries provenance naming
+runs the printed commands a source checkout's registration needs there, and one on macOS that runs the event
+library's vectors in Chromium and WebKit (`pnpm verify:browser`) — and every version carries provenance naming
 the commit and the workflow run that built it. If a bad version ever went out,
 that attestation is what makes it traceable.
 

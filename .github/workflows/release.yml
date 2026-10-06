@@ -94,9 +94,34 @@ jobs:
       - run: node --version
       - run: node --test packages/core/test/cli-command-old-node.test.mjs
 
+  # **The event library's vectors in real browsers.** The `verify:browser` script runs every vector family of
+  # `@agentcomms/events` in Playwright's Chromium and WebKit, under the desktop app's production CSP, and requires the
+  # same results as Node and the bare realm every verify leg runs. WebKit is JavaScriptCore, the engine of the macOS
+  # webview the desktop app uses; Chromium is the engine of Windows' WebView2. Kept out of the six verify legs because
+  # it downloads two browsers. `test/release-packages.test.mjs` holds the job to this shape (events phase A plan,
+  # decision 3).
+  browser:
+    name: event vectors in chromium and webkit
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @agentcomms/events exec playwright install chromium webkit
+      - run: pnpm build
+      - run: pnpm verify:browser
+
   publish:
     name: publish to npm
-    needs: [verify, old-node]
+    needs: [verify, old-node, browser]
     if: ${{ inputs.dry-run != true }}
     # Accepts `v*` tags only. It is also one of the claims each package's trusted publisher names, so renaming it
     # fails the OIDC preflight below for every package.

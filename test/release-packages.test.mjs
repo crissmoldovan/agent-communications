@@ -1550,10 +1550,81 @@ test('the publish waits for the Node 22.12.0 leg, which builds on the tooling No
       .exec(publish)?.[1]
       .split(',')
       .map((need) => need.trim()) ?? [];
-  assert.deepEqual(needs.sort(), ['old-node', 'verify']);
+  assert.deepEqual(needs.sort(), ['browser', 'old-node', 'verify']);
   assert.match(jobBlock(workflow, 'verify'), /node: \[22\.18\.0, 24\]/, 'the matrix keeps its own Node versions');
   // The test is there, and the repository's own tooling floor stays where it is.
   await readFile(join(ROOT, 'packages', 'core', 'test', 'cli-command-old-node.test.mjs'), 'utf8');
   const root = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
   assert.equal(root.engines.node, '>=22.18.0');
+});
+
+test('BRW-b: the release cannot publish without the event vectors run in Chromium and WebKit', async () => {
+  /*
+   * Events phase A plan, decision 3, layer 4: `pnpm verify:browser` runs the event library's vector families in real
+   * Chromium and WebKit, the engines of the desktop app's webviews. It is kept out of `pnpm verify` and the six verify
+   * legs, because it downloads two browsers, so the release has a job of its own for it, and the publish needs it as
+   * it needs the Node 22.12.0 leg.
+   */
+  const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  const publish = jobBlock(workflow, 'publish');
+  const needs = /\n {4}needs: \[([^\]]*)\]\n/
+    .exec(publish)?.[1]
+    .split(',')
+    .map((need) => need.trim());
+  assert.deepEqual(needs?.sort(), ['browser', 'old-node', 'verify']);
+
+  const job = jobBlock(workflow, 'browser');
+  assert.ok(job, 'there is a browser job');
+  assert.match(job, /\n {4}runs-on: macos-latest\n/);
+  assert.match(job, /\n {4}permissions:\n {6}contents: read\n {4}steps:\n/, 'contents: read, and nothing else');
+  const steps = [...job.matchAll(/\n {6}- (?:uses|run|name): .*/g)].map((match) => match[0].trim());
+  const at = (marker) => {
+    const index = steps.findIndex((step) => step.includes(marker));
+    assert.ok(index >= 0, `the browser job has ${marker}`);
+    return index;
+  };
+  const checkout = at('uses: actions/checkout@');
+  assert.match(job, /- uses: actions\/checkout@v\d+\n {8}with:\n {10}persist-credentials: false\n/);
+  const pnpm = at('uses: pnpm/action-setup@');
+  const node = at('uses: actions/setup-node@');
+  assert.match(job, /node-version: 22\.18\.0\n/);
+  const install = at('run: pnpm install --frozen-lockfile');
+  const browsers = at('run: pnpm --filter @agentcomms/events exec playwright install chromium webkit');
+  const build = at('run: pnpm build');
+  const run = at('run: pnpm verify:browser');
+  assert.deepEqual(
+    [checkout, pnpm, node, install, browsers, build, run],
+    [0, 1, 2, 3, 4, 5, 6],
+    `the steps, in order: ${steps.join(' | ')}`,
+  );
+  assert.equal(steps.length, 7, `nothing else runs: ${steps.join(' | ')}`);
+  // Chromium and WebKit, and nothing else: no Firefox, no bare install of every browser, no system packages.
+  const installs = [...job.matchAll(/playwright install[^\n]*/g)].map((match) => match[0]);
+  assert.deepEqual(installs, ['playwright install chromium webkit']);
+  assert.doesNotMatch(job, /--with-deps|firefox|msedge|chrome\b/);
+  assert.equal([...job.matchAll(/node --test|pnpm (?:test|verify)(?![:\w-])/g)].length, 0, 'no other test or verify');
+
+  // The rest stays as it is: the six verify legs install no browser, and `pnpm verify` does not run this.
+  assert.doesNotMatch(jobBlock(workflow, 'verify'), /playwright|verify:browser/);
+  const root = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
+  assert.doesNotMatch(root.scripts.verify, /verify:browser/);
+  assert.equal(root.scripts['verify:browser'], 'pnpm --filter @agentcomms/events run verify:browser');
+});
+
+test('BRW-c: without the browsers, the browser run says how to get them, launches nothing and downloads nothing', async () => {
+  const empty = await tempDir('no-browsers-');
+  const script = join(ROOT, 'packages', 'events', 'scripts', 'verify-browser.mjs');
+  // Run as its package script runs it, with the flags that let it import the library's TypeScript.
+  const result = await runScript('--experimental-strip-types', ['--disable-warning=ExperimentalWarning', script], {
+    cwd: join(ROOT, 'packages', 'events'),
+    env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: empty },
+    timeout: 60_000,
+  });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  const said = result.stdout + result.stderr;
+  assert.ok(said.includes('pnpm --filter @agentcomms/events exec playwright install chromium webkit'), said);
+  assert.match(said, /On Linux add --with-deps/);
+  assert.match(said, /pnpm verify does not run this/);
+  assert.doesNotMatch(said, /✓|in chromium:|in webkit:/, 'nothing was run');
+  assert.deepEqual(await readdir(empty), [], 'nothing was downloaded');
 });
