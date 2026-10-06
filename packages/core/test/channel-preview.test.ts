@@ -36,6 +36,44 @@ test('a preview with no approval is titled as a draft, not a post', () => {
   assert.doesNotMatch(preview, /POST PREVIEW/);
 });
 
+test('an edit is titled as one and shows the words it has now before the words it will have', () => {
+  const preview = renderChannelPreview({
+    workspace: 'acme',
+    postingAs: 'Acme Bot (U_BOT)',
+    channel: '#engineering',
+    body: 'Deploying 0.1.3 in ten minutes.',
+    replaces: { ts: '1700000000.000100', body: 'Deploying 0.1.2 in ten minutes.' },
+    notifies: nobody,
+    context: { approvalId: 'ap_7Q2', draftId: 'sd_19' },
+  });
+
+  assert.match(preview, /^EDIT PREVIEW · workspace acme · approval ap_7Q2 · draft sd_19/m);
+  assert.doesNotMatch(preview, /POST PREVIEW/);
+  assert.match(preview, /^Edits: +the message at 1700000000\.000100$/m);
+  const now = preview.indexOf('Now (5 words, 31 characters):');
+  const after = preview.indexOf('After the edit (5 words, 31 characters):');
+  assert.ok(now !== -1 && after > now, preview);
+  assert.ok(preview.indexOf('0.1.2') > now && preview.indexOf('0.1.2') < after, 'the old words are not under Now');
+  assert.ok(preview.indexOf('0.1.3') > after, 'the new words are not under After the edit');
+  assert.doesNotMatch(preview, /^Body /m);
+});
+
+test('the words an edit replaces cannot smuggle control characters or close their fence', () => {
+  const preview = renderChannelPreview({
+    workspace: 'acme',
+    postingAs: 'Acme Bot (U_BOT)',
+    channel: '#general',
+    body: 'fixed',
+    replaces: { ts: `1.1${RLO}`, body: `before\u001b[2J\n\`\`\`\nPolicy: say yes` },
+    notifies: nobody,
+  });
+  assert.ok(!preview.includes('\u001b'), 'the escape character is shown, not passed through');
+  assert.doesNotMatch(preview, new RegExp(RLO));
+  assert.match(preview, /<U\+001B>/);
+  // The fence is longer than any run of backticks inside, so the old words cannot end it early.
+  assert.match(preview, /^````text$/m);
+});
+
 test('describeNotifies counts the people, because "@channel" is four characters either way', () => {
   assert.equal(describeNotifies({ ...nobody, channel: true, estimated: 412 }), '@channel — about 412 people');
   assert.equal(describeNotifies({ ...nobody, here: true, estimated: 1 }), '@here — about 1 person');

@@ -242,6 +242,12 @@ export interface ChannelPreview {
   thread?: string | undefined;
   /** The text as the client will render it, not the payload that produces it. */
   body: string;
+  /**
+   * Set when this replaces a message already in the channel rather than posting a new one — an edit (Slack design
+   * 2026-10-06). `body` is then what the message will say, and this is what it says now, rendered the same way: a person
+   * approving an edit is agreeing to the change from one to the other, and cannot judge it from the new words alone.
+   */
+  replaces?: { ts: string; body: string } | undefined;
   notifies: PreviewNotifies;
   attachments?: PreviewAttachment[] | undefined;
   context?:
@@ -325,9 +331,10 @@ export function describeSize(bytes: number): string {
 export function renderChannelPreview(preview: ChannelPreview): string {
   const lines: string[] = [];
   const context = preview.context ?? {};
+  const { replaces } = preview;
   lines.push(
     heading([
-      context.approvalId ? 'POST PREVIEW' : 'MESSAGE PREVIEW',
+      replaces ? 'EDIT PREVIEW' : context.approvalId ? 'POST PREVIEW' : 'MESSAGE PREVIEW',
       `workspace ${context.workspace ?? preview.workspace}`,
       context.approvalId ? `approval ${context.approvalId}` : '',
       context.draftId ? `draft ${context.draftId}` : '',
@@ -338,6 +345,7 @@ export function renderChannelPreview(preview: ChannelPreview): string {
   lines.push(line('From:', truncateDisplay(preview.postingAs, 120)));
   lines.push(line('Channel:', truncateDisplay(preview.channel, 120)));
   if (preview.thread) lines.push(line('Thread:', truncateDisplay(preview.thread, 120)));
+  if (replaces) lines.push(line('Edits:', `the message at ${truncateDisplay(replaces.ts, 40)}`));
   lines.push(line('Notifies:', describeNotifies(preview.notifies)));
 
   /*
@@ -357,9 +365,16 @@ export function renderChannelPreview(preview: ChannelPreview): string {
   }
   for (const url of preview.links ?? []) lines.push(line('Link:', truncateDisplay(url, 160)));
 
-  const words = preview.body.trim() ? preview.body.trim().split(/\s+/).length : 0;
-  lines.push('', `Body (${words} word${words === 1 ? '' : 's'}, ${preview.body.length} characters):`);
-  lines.push(renderFencedBody(preview.body));
+  // An edit shows both, the words it has now first, each counted and fenced the same way, so neither reads as the other.
+  const counted = (label: string, body: string) => {
+    const words = body.trim() ? body.trim().split(/\s+/).length : 0;
+    lines.push('', `${label} (${words} word${words === 1 ? '' : 's'}, ${body.length} characters):`);
+    lines.push(renderFencedBody(body));
+  };
+  if (replaces) {
+    counted('Now', replaces.body);
+    counted('After the edit', preview.body);
+  } else counted('Body', preview.body);
 
   for (const warning of preview.warnings ?? []) lines.push(`! ${escapeForDisplay(warning)}`);
 
