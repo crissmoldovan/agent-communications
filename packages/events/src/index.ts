@@ -4,5 +4,7 @@
  */
 export * from './identity/event-id.ts';
 export * from './json.ts';
+export { expandPattern, matchesPattern, type PointerPattern, type PointerPatternToken } from './pattern.ts';
+export { formatPointer, getPointer, parsePointer, relatePointers } from './pointer.ts';
 export * from './result.ts';
 export * from './text.ts';

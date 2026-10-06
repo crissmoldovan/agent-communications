@@ -1,0 +1,562 @@
+{
+  "family": "pointers",
+  "description": "RFC 6901 pointers and D3's pointer patterns (events phase A plan, Task 9). parse: the text's reference tokens, unescaped, or the issue code that refuses it. format: tokens written as a pointer. get: the value a pointer names in a document, by own properties only, where an array takes only an RFC 6901 index (no leading zero, no '-'); found false for an absent key, an index past the end, or a step through null or a scalar. relate: how pointer a stands to pointer b. expand: every concrete pointer a pattern names in a document, in document order, where an absent property or a null contributes nothing (A.1). match: whether a concrete pointer is one the pattern names. Documents holding __proto__, constructor and prototype as keys are parsed by JSON.parse, so those are own properties, as they are in an event.",
+  "vectors": [
+    { "kind": "parse", "name": "the empty pointer is the root", "pointer": "", "tokens": [] },
+    { "kind": "parse", "name": "/ names the empty key", "pointer": "/", "tokens": [""] },
+    { "kind": "parse", "name": "// names the empty key under the empty key", "pointer": "//", "tokens": ["", ""] },
+    { "kind": "parse", "name": "~1 is / and ~0 is ~", "pointer": "/a~1b/~0c", "tokens": ["a/b", "~c"] },
+    { "kind": "parse", "name": "~01 is ~ then 1, never /", "pointer": "/~01", "tokens": ["~1"] },
+    { "kind": "parse", "name": "~10 is / then 0", "pointer": "/~10", "tokens": ["/0"] },
+    { "kind": "parse", "name": "* is a literal key", "pointer": "/*", "tokens": ["*"] },
+    {
+      "kind": "parse",
+      "name": "an index is a token like any other until it meets an array",
+      "pointer": "/0/01/-",
+      "tokens": ["0", "01", "-"]
+    },
+    {
+      "kind": "parse",
+      "name": "spaces, é and astral characters are themselves",
+      "pointer": "/ é/😀",
+      "tokens": [" é", "😀"]
+    },
+    {
+      "kind": "parse",
+      "name": "a pointer other than the root starts with /",
+      "pointer": "a",
+      "refused": "POINTER_MALFORMED"
+    },
+    { "kind": "parse", "name": "a URI fragment is not a pointer", "pointer": "#/a", "refused": "POINTER_MALFORMED" },
+    { "kind": "parse", "name": "~2 is no escape", "pointer": "/~2", "refused": "POINTER_MALFORMED" },
+    { "kind": "parse", "name": "~a is no escape", "pointer": "/x/~a", "refused": "POINTER_MALFORMED" },
+    { "kind": "parse", "name": "a trailing ~ is refused", "pointer": "/a~", "refused": "POINTER_MALFORMED" },
+    { "kind": "parse", "name": "a lone ~ is refused", "pointer": "/~", "refused": "POINTER_MALFORMED" },
+    {
+      "kind": "parse",
+      "name": "an escape before the first / is still not a pointer",
+      "pointer": "~0",
+      "refused": "POINTER_MALFORMED"
+    },
+
+    { "kind": "format", "name": "no tokens is the root", "tokens": [], "pointer": "" },
+    { "kind": "format", "name": "the empty key is /", "tokens": [""], "pointer": "/" },
+    {
+      "kind": "format",
+      "name": "/ and ~ are escaped, ~ first",
+      "tokens": ["a/b", "~c", "~/"],
+      "pointer": "/a~1b/~0c/~0~1"
+    },
+    { "kind": "format", "name": "~1 as a key is ~01", "tokens": ["~1"], "pointer": "/~01" },
+    { "kind": "format", "name": "an index is its decimal digits", "tokens": [0, "x", 12], "pointer": "/0/x/12" },
+    { "kind": "format", "name": "* and - are written as they are", "tokens": ["*", "-"], "pointer": "/*/-" },
+    { "kind": "format", "name": "a negative index is refused", "tokens": [-1], "refused": "POINTER_MALFORMED" },
+    { "kind": "format", "name": "a fractional index is refused", "tokens": [1.5], "refused": "POINTER_MALFORMED" },
+
+    {
+      "kind": "get",
+      "name": "the root is the whole document",
+      "document": { "a": [1] },
+      "pointer": "",
+      "found": true,
+      "value": { "a": [1] }
+    },
+    {
+      "kind": "get",
+      "name": "/ is the value of the empty key",
+      "document": { "": "empty key", "a": 1 },
+      "pointer": "/",
+      "found": true,
+      "value": "empty key"
+    },
+    {
+      "kind": "get",
+      "name": "escaped keys",
+      "document": { "a/b": { "~c": 1 } },
+      "pointer": "/a~1b/~0c",
+      "found": true,
+      "value": 1
+    },
+    {
+      "kind": "get",
+      "name": "/0 is index zero",
+      "document": [10, 20, 30],
+      "pointer": "/0",
+      "found": true,
+      "value": 10
+    },
+    {
+      "kind": "get",
+      "name": "/2 is the last index",
+      "document": [10, 20, 30],
+      "pointer": "/2",
+      "found": true,
+      "value": 30
+    },
+    {
+      "kind": "get",
+      "name": "an index past the end is absent",
+      "document": [10, 20, 30],
+      "pointer": "/3",
+      "found": false
+    },
+    {
+      "kind": "get",
+      "name": "a leading zero is refused on an array",
+      "document": [10, 20, 30],
+      "pointer": "/01",
+      "refused": "POINTER_NOT_IN_SCHEMA"
+    },
+    {
+      "kind": "get",
+      "name": "00 is refused on an array",
+      "document": [10],
+      "pointer": "/00",
+      "refused": "POINTER_NOT_IN_SCHEMA"
+    },
+    {
+      "kind": "get",
+      "name": "- is refused on an array",
+      "document": [10, 20, 30],
+      "pointer": "/-",
+      "refused": "POINTER_NOT_IN_SCHEMA"
+    },
+    {
+      "kind": "get",
+      "name": "* is not an index",
+      "document": [10],
+      "pointer": "/*",
+      "refused": "POINTER_NOT_IN_SCHEMA"
+    },
+    {
+      "kind": "get",
+      "name": "an array's length is not an element",
+      "document": [10],
+      "pointer": "/length",
+      "refused": "POINTER_NOT_IN_SCHEMA"
+    },
+    {
+      "kind": "get",
+      "name": "0, 01 and - are ordinary keys on an object",
+      "document": { "0": "zero", "01": "zero-one", "-": "dash" },
+      "pointer": "/01",
+      "found": true,
+      "value": "zero-one"
+    },
+    {
+      "kind": "get",
+      "name": "0 as an object key",
+      "document": { "0": "zero" },
+      "pointer": "/0",
+      "found": true,
+      "value": "zero"
+    },
+    {
+      "kind": "get",
+      "name": "- as an object key",
+      "document": { "-": "dash" },
+      "pointer": "/-",
+      "found": true,
+      "value": "dash"
+    },
+    {
+      "kind": "get",
+      "name": "* is a literal key",
+      "document": { "*": "star", "x": "x" },
+      "pointer": "/*",
+      "found": true,
+      "value": "star"
+    },
+    {
+      "kind": "get",
+      "name": "a present null is found",
+      "document": { "n": null },
+      "pointer": "/n",
+      "found": true,
+      "value": null
+    },
+    {
+      "kind": "get",
+      "name": "nothing is found through a null parent",
+      "document": { "n": null },
+      "pointer": "/n/x",
+      "found": false
+    },
+    {
+      "kind": "get",
+      "name": "nothing is found below a scalar",
+      "document": { "s": "text" },
+      "pointer": "/s/0",
+      "found": false
+    },
+    { "kind": "get", "name": "an absent key is absent", "document": { "a": 1 }, "pointer": "/b", "found": false },
+    {
+      "kind": "get",
+      "name": "nothing is found below an absent key",
+      "document": { "a": 1 },
+      "pointer": "/b/c",
+      "found": false
+    },
+    {
+      "kind": "get",
+      "name": "deep: an object in an array in an object",
+      "document": { "nested": { "x": [{ "y": true }] } },
+      "pointer": "/nested/x/0/y",
+      "found": true,
+      "value": true
+    },
+    {
+      "kind": "get",
+      "name": "an own __proto__ key is data",
+      "document": { "__proto__": { "polluted": true }, "constructor": "c", "prototype": "p" },
+      "pointer": "/__proto__",
+      "found": true,
+      "value": { "polluted": true }
+    },
+    {
+      "kind": "get",
+      "name": "below an own __proto__ key",
+      "document": { "__proto__": { "polluted": true } },
+      "pointer": "/__proto__/polluted",
+      "found": true,
+      "value": true
+    },
+    {
+      "kind": "get",
+      "name": "an own constructor key is data",
+      "document": { "__proto__": { "polluted": true }, "constructor": "c", "prototype": "p" },
+      "pointer": "/constructor",
+      "found": true,
+      "value": "c"
+    },
+    {
+      "kind": "get",
+      "name": "an own prototype key is data",
+      "document": { "__proto__": { "polluted": true }, "constructor": "c", "prototype": "p" },
+      "pointer": "/prototype",
+      "found": true,
+      "value": "p"
+    },
+    {
+      "kind": "get",
+      "name": "an inherited __proto__ is not found",
+      "document": {},
+      "pointer": "/__proto__",
+      "found": false
+    },
+    {
+      "kind": "get",
+      "name": "an inherited constructor is not found",
+      "document": {},
+      "pointer": "/constructor",
+      "found": false
+    },
+    {
+      "kind": "get",
+      "name": "nothing is found below an inherited constructor",
+      "document": {},
+      "pointer": "/constructor/name",
+      "found": false
+    },
+    {
+      "kind": "get",
+      "name": "an inherited toString is not found",
+      "document": { "a": 1 },
+      "pointer": "/toString",
+      "found": false
+    },
+    {
+      "kind": "get",
+      "name": "an inherited hasOwnProperty is not found",
+      "document": {},
+      "pointer": "/hasOwnProperty",
+      "found": false
+    },
+    {
+      "kind": "get",
+      "name": "a malformed pointer is refused",
+      "document": { "a": 1 },
+      "pointer": "/~2",
+      "refused": "POINTER_MALFORMED"
+    },
+
+    { "kind": "relate", "name": "the root is itself", "a": "", "b": "", "relation": "equal" },
+    { "kind": "relate", "name": "the root is every pointer's ancestor", "a": "", "b": "/a", "relation": "ancestor" },
+    {
+      "kind": "relate",
+      "name": "every pointer is the root's descendant",
+      "a": "/a/b",
+      "b": "",
+      "relation": "descendant"
+    },
+    { "kind": "relate", "name": "the empty key is a child of the root", "a": "/", "b": "", "relation": "descendant" },
+    { "kind": "relate", "name": "the empty key under the empty key", "a": "/", "b": "//", "relation": "ancestor" },
+    { "kind": "relate", "name": "the same pointer is equal", "a": "/a/b", "b": "/a/b", "relation": "equal" },
+    { "kind": "relate", "name": "a parent is an ancestor", "a": "/a", "b": "/a/b", "relation": "ancestor" },
+    { "kind": "relate", "name": "a child is a descendant", "a": "/a/b", "b": "/a", "relation": "descendant" },
+    {
+      "kind": "relate",
+      "name": "siblings sharing a prefix are disjoint",
+      "a": "/a/b",
+      "b": "/a/bc",
+      "relation": "disjoint"
+    },
+    {
+      "kind": "relate",
+      "name": "siblings sharing a prefix, the other way",
+      "a": "/a/bc",
+      "b": "/a/b",
+      "relation": "disjoint"
+    },
+    { "kind": "relate", "name": "an escaped / is one key, not two", "a": "/a~1b", "b": "/a/b", "relation": "disjoint" },
+    { "kind": "relate", "name": "below an escaped key", "a": "/a~1b", "b": "/a~1b/c", "relation": "ancestor" },
+    { "kind": "relate", "name": "~0 and ~1 differ", "a": "/~0", "b": "/~1", "relation": "disjoint" },
+    {
+      "kind": "relate",
+      "name": "an element is an ancestor of its fields",
+      "a": "/to/0",
+      "b": "/to/0/name",
+      "relation": "ancestor"
+    },
+    { "kind": "relate", "name": "two elements are disjoint", "a": "/to/0", "b": "/to/1", "relation": "disjoint" },
+    {
+      "kind": "relate",
+      "name": "index 1 is not an ancestor of index 10",
+      "a": "/to/1",
+      "b": "/to/10",
+      "relation": "disjoint"
+    },
+    { "kind": "relate", "name": "a malformed pointer is refused", "a": "/~2", "b": "", "refused": "POINTER_MALFORMED" },
+
+    {
+      "kind": "expand",
+      "name": "a field of a present parent",
+      "pattern": ["from", "name"],
+      "document": { "from": { "address": "a@example.com", "name": "A" } },
+      "pointers": ["/from/name"]
+    },
+    {
+      "kind": "expand",
+      "name": "a null parent contributes nothing",
+      "pattern": ["from", "name"],
+      "document": { "from": null },
+      "pointers": []
+    },
+    {
+      "kind": "expand",
+      "name": "a null value contributes nothing",
+      "pattern": ["from", "name"],
+      "document": { "from": { "address": "a@example.com", "name": null } },
+      "pointers": []
+    },
+    {
+      "kind": "expand",
+      "name": "an absent optional contributes nothing",
+      "pattern": ["body"],
+      "document": { "subject": "" },
+      "pointers": []
+    },
+    {
+      "kind": "expand",
+      "name": "an absent optional under a present parent contributes nothing",
+      "pattern": ["author", "userId"],
+      "document": { "author": { "name": null } },
+      "pointers": []
+    },
+    {
+      "kind": "expand",
+      "name": "any expands to every present index, skipping a null",
+      "pattern": ["to", { "any": true }, "name"],
+      "document": { "to": [{ "name": "x" }, { "name": null }, { "name": "z" }] },
+      "pointers": ["/to/0/name", "/to/2/name"]
+    },
+    {
+      "kind": "expand",
+      "name": "an empty array contributes nothing",
+      "pattern": ["to", { "any": true }],
+      "document": { "to": [] },
+      "pointers": []
+    },
+    {
+      "kind": "expand",
+      "name": "nested any tokens expand in index order",
+      "pattern": ["a", { "any": true }, "b", { "any": true }],
+      "document": { "a": [{ "b": ["x", "y"] }, { "b": [] }, { "b": ["z"] }] },
+      "pointers": ["/a/0/b/0", "/a/0/b/1", "/a/2/b/0"]
+    },
+    {
+      "kind": "expand",
+      "name": "index order is numeric, not textual",
+      "pattern": ["l", { "any": true }],
+      "document": { "l": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] },
+      "pointers": ["/l/0", "/l/1", "/l/2", "/l/3", "/l/4", "/l/5", "/l/6", "/l/7", "/l/8", "/l/9", "/l/10", "/l/11"]
+    },
+    {
+      "kind": "expand",
+      "name": "keys are escaped",
+      "pattern": ["a/b", "~c"],
+      "document": { "a/b": { "~c": "v" } },
+      "pointers": ["/a~1b/~0c"]
+    },
+    {
+      "kind": "expand",
+      "name": "* is a literal key",
+      "pattern": ["*"],
+      "document": { "*": 1, "x": 2 },
+      "pointers": ["/*"]
+    },
+    {
+      "kind": "expand",
+      "name": "the empty pattern is the root",
+      "pattern": [],
+      "document": { "a": 1 },
+      "pointers": [""]
+    },
+    {
+      "kind": "expand",
+      "name": "own properties only: an inherited constructor contributes nothing",
+      "pattern": ["constructor"],
+      "document": { "a": 1 },
+      "pointers": []
+    },
+    {
+      "kind": "expand",
+      "name": "an own __proto__ key is expanded as data",
+      "pattern": ["__proto__", "x"],
+      "document": { "__proto__": { "x": 1 } },
+      "pointers": ["/__proto__/x"]
+    },
+    {
+      "kind": "expand",
+      "name": "a key token on an array is refused",
+      "pattern": ["to", "name"],
+      "document": { "to": [{ "name": "x" }] },
+      "refused": "POINTER_NOT_IN_SCHEMA"
+    },
+    {
+      "kind": "expand",
+      "name": "an any token on an object is refused",
+      "pattern": [{ "any": true }],
+      "document": { "a": 1 },
+      "refused": "POINTER_NOT_IN_SCHEMA"
+    },
+    {
+      "kind": "expand",
+      "name": "a step below a scalar is refused",
+      "pattern": ["subject", "x"],
+      "document": { "subject": "s" },
+      "refused": "POINTER_NOT_IN_SCHEMA"
+    },
+    {
+      "kind": "expand",
+      "name": "any: false is not a pattern token",
+      "pattern": [{ "any": false }],
+      "document": [1],
+      "refused": "POINTER_MALFORMED"
+    },
+    {
+      "kind": "expand",
+      "name": "a number is not a pattern token",
+      "pattern": [0],
+      "document": [1],
+      "refused": "POINTER_MALFORMED"
+    },
+
+    {
+      "kind": "match",
+      "name": "any matches index 0",
+      "pattern": ["to", { "any": true }, "name"],
+      "pointer": "/to/0/name",
+      "matches": true
+    },
+    {
+      "kind": "match",
+      "name": "any matches index 12",
+      "pattern": ["to", { "any": true }, "name"],
+      "pointer": "/to/12/name",
+      "matches": true
+    },
+    {
+      "kind": "match",
+      "name": "any does not match a leading zero",
+      "pattern": ["to", { "any": true }, "name"],
+      "pointer": "/to/01/name",
+      "matches": false
+    },
+    {
+      "kind": "match",
+      "name": "any does not match -",
+      "pattern": ["to", { "any": true }, "name"],
+      "pointer": "/to/-/name",
+      "matches": false
+    },
+    {
+      "kind": "match",
+      "name": "any does not match a key",
+      "pattern": ["to", { "any": true }, "name"],
+      "pointer": "/to/x/name",
+      "matches": false
+    },
+    {
+      "kind": "match",
+      "name": "an ancestor is no match",
+      "pattern": ["to", { "any": true }, "name"],
+      "pointer": "/to/0",
+      "matches": false
+    },
+    {
+      "kind": "match",
+      "name": "a descendant is no match",
+      "pattern": ["to", { "any": true }, "name"],
+      "pointer": "/to/0/name/x",
+      "matches": false
+    },
+    { "kind": "match", "name": "* matches only the key *", "pattern": ["*"], "pointer": "/*", "matches": true },
+    { "kind": "match", "name": "* is no wildcard", "pattern": ["*"], "pointer": "/x", "matches": false },
+    {
+      "kind": "match",
+      "name": "any does not match the key *",
+      "pattern": [{ "any": true }],
+      "pointer": "/*",
+      "matches": false
+    },
+    {
+      "kind": "match",
+      "name": "a key holding / matches its escape",
+      "pattern": ["a/b"],
+      "pointer": "/a~1b",
+      "matches": true
+    },
+    {
+      "kind": "match",
+      "name": "a key holding / is not two keys",
+      "pattern": ["a/b"],
+      "pointer": "/a/b",
+      "matches": false
+    },
+    { "kind": "match", "name": "the empty pattern matches the root", "pattern": [], "pointer": "", "matches": true },
+    {
+      "kind": "match",
+      "name": "the empty pattern does not match the empty key",
+      "pattern": [],
+      "pointer": "/",
+      "matches": false
+    },
+    { "kind": "match", "name": "the empty key matches /", "pattern": [""], "pointer": "/", "matches": true },
+    { "kind": "match", "name": "the key 0 matches /0", "pattern": ["0"], "pointer": "/0", "matches": true },
+    {
+      "kind": "match",
+      "name": "a malformed pointer is refused",
+      "pattern": ["a"],
+      "pointer": "/~2",
+      "refused": "POINTER_MALFORMED"
+    },
+    {
+      "kind": "match",
+      "name": "a malformed pattern is refused",
+      "pattern": [{ "any": true, "also": 1 }],
+      "pointer": "/0",
+      "refused": "POINTER_MALFORMED"
+    }
+  ]
+}
