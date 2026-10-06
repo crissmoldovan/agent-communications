@@ -44,6 +44,14 @@ that does not exist. `@agentcomms/resend` and `@agentcomms/whatsapp` were first 
 The preflight catches it: it says the package was never published, prints the exact command, and publishes nothing
 (step 6).
 
+**A package can be held back from a release** with `"agentcommsRelease": { "hold": "<why>" }` in its own
+`package.json`, as a new library is until something depends on it. It is still built, version-synced,
+licence-checked and consumer-checked by every `pnpm verify`, and is left out of the release: `node scripts/packages.mjs`
+does not print it, so nothing in the procedure below reads, proves, sends or confirms it. `pnpm verify` fails while a
+package the release publishes depends on a held one, so the hold is lifted in the version commit of the first release
+that ships such a package: delete `agentcommsRelease` there, and its first version then goes out by hand, as "A new
+package's first version" in `docs/RELEASING.md` describes (and "A package held back from release", step by step).
+
 ## Procedure
 
 1. **Check nothing is already published at this version.** `scripts/release.mjs` does it, but knowing early is

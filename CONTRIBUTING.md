@@ -313,6 +313,29 @@ Everything else reads the channel registry (`scripts/channels.mjs`), so the rele
 check, the reference pages and the skill and name tests pick the channel up from its manifest.
 `test/channel-registry.test.mjs` fails if one of them stops doing so.
 
+## Adding a library
+
+A library is a package with no command, no server and no skills: code the other packages, the daemon or the app
+import ([design](docs/superpowers/specs/2026-10-05-local-event-emission-design.md), D14). Like a channel, it says what
+it is in its own `package.json`, and the tooling derives the rest.
+
+1. **The package**, `packages/<name>`, named `@agentcomms/<name>`, at the same version as the rest (the version sync
+   keeps it there), and not private.
+2. **Its declaration**, exactly `"agentcommsPackage": { "kind": "library" }` — never the `"agentcomms"` field, which
+   means a channel. `scripts/channels.mjs` refuses any other kind or key. It has no `bin` and no row in
+   `capabilities.json`: `test/parity.test.mjs` exempts a declared library, and only one, from having a surface, and
+   refuses one with a command, a `src/cli.ts`, a `src/mcp/` or a row.
+3. **What every published package has**: a README, a `LICENSE`, `THIRD_PARTY_LICENSES` in its `"files"`
+   (`pnpm build && pnpm licenses` writes it), and a **`test/consumer-check.mjs`**, which `pnpm verify:packages` runs in
+   a throwaway project with the packed tarball installed, ending with a `<name> consumer check: … OK` line.
+4. **Held until its first release.** Add `"agentcommsRelease": { "hold": "<why, one sentence>" }` beside the
+   declaration, so the next tag does not stop for a hand publish of a package nothing uses yet. It is checked by every
+   `pnpm verify` all the same, and its hold is lifted in the version commit of the first release that ships something
+   depending on it — see [a package held back from release](docs/RELEASING.md#a-package-held-back-from-release).
+
+Then `pnpm verify`. The release, the version sync, the package checks, the licence notices and the parity exemption
+pick the library up from its declaration; `test/channel-registry.test.mjs` fails if one of them stops doing so.
+
 ## Pull requests
 
 - Keep each pull request focused, and say what changes for the person using it.

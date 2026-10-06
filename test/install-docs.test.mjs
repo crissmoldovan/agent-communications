@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { REGISTRY } from '../scripts/channels.mjs';
-import { PACKAGES } from '../scripts/packages.mjs';
+import { PUBLISHABLE } from '../scripts/packages.mjs';
 
 /**
  * What the documents tell a person to run to register, re-register and tidy up the MCP server, against what the
@@ -41,8 +41,9 @@ async function documents() {
     ...(await markdownUnder('docs')).filter((path) => !/[/\\](?:reference|superpowers)[/\\]/.test(path)),
     ...(await markdownUnder('skills')),
     join(ROOT, 'README.md'),
-    // Every published package's README, from the channel registry: a new channel's is checked from its first commit.
-    ...PACKAGES.map((name) => join(ROOT, 'packages', name, 'README.md')),
+    // Every publishable package's README, from the registry, held ones too: a new package's is checked from its first
+    // commit, not from the release that lifts its hold.
+    ...PUBLISHABLE.map((name) => join(ROOT, 'packages', name, 'README.md')),
     join(ROOT, '.claude-plugin', 'marketplace.json'),
     join(ROOT, 'gemini-extension.json'),
   ];

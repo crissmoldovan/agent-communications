@@ -59,6 +59,14 @@ export const SURFACES = Object.freeze(REGISTRY.surfaces.map((surface) => Object.
  */
 export const WRAPPERS = Object.freeze({ ...REGISTRY.wrappers });
 
+/**
+ * Published packages with no surface at all, by declaration: each package whose `"agentcommsPackage"` says it is a
+ * library (design 2026-10-05, D14). `test/parity.test.mjs` exempts these, and only these, from being read — and
+ * refuses one that has a command, a CLI module, a server or a row after all. Derived from the registry, so a library
+ * is exempt the moment its package declares itself.
+ */
+export const LIBRARIES = Object.freeze(REGISTRY.libraries.map((library) => library.directory));
+
 export const surfaceOf = (name) => {
   const found = SURFACES.find((surface) => surface.package === name);
   if (!found) throw new Error(`no surface for package "${name}"`);

@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { before, test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { DRIVERS, driveOperations, parameterNames, recordArguments, resolveOperation } from '../scripts/operations.mjs';
-import { PACKAGES } from '../scripts/packages.mjs';
+import { PUBLISHABLE } from '../scripts/packages.mjs';
 import { checkOperations, checkParity, readTable, uncheckedRows, verifyParity } from '../scripts/parity.mjs';
-import { deriveRegistries, ROOT, SURFACES, scratchEnv, WRAPPERS } from '../scripts/registries.mjs';
+import { deriveRegistries, LIBRARIES, ROOT, SURFACES, scratchEnv, WRAPPERS } from '../scripts/registries.mjs';
 import { tempDir } from './helpers/temp-dir.mjs';
 
 /**
@@ -96,20 +96,97 @@ test('groups are told from commands the way the derivation documents', () => {
   assert.ok(!registries.slack.commands.includes('sign-in-listen'));
 });
 
-test('every published package is read, directly or as the package it wraps', async () => {
-  const read = new Set(SURFACES.map((surface) => surface.package));
-  for (const name of PACKAGES) {
-    assert.ok(
-      read.has(name) || name in WRAPPERS,
-      `@agentcomms/${name} is published, but scripts/registries.mjs neither reads it nor names it as a wrapper — its commands and tools would escape the parity check`,
-    );
+/**
+ * What would let a published package's commands and tools escape this check, as sentences.
+ *
+ * Every package `publishable` names is read as a surface, or wraps one, or is a declared library (design 2026-10-05,
+ * D14) — the only kind with no surface. Being declared is not enough: a library with a command, a CLI module, a
+ * server or a row in the table has a surface after all, which nothing here would read, so each is refused.
+ */
+async function unreadPackages({ root, publishable, surfaces, wrappers, libraries, table: rows }) {
+  const read = new Set(surfaces.map((surface) => surface.package));
+  const problems = [];
+  for (const name of publishable) {
+    if (read.has(name) || name in wrappers) continue;
+    if (!libraries.includes(name)) {
+      problems.push(
+        `@agentcomms/${name} is published, but scripts/registries.mjs neither reads it, names it as a wrapper nor knows it as a declared library — its commands and tools would escape the parity check`,
+      );
+      continue;
+    }
+    const manifest = JSON.parse(await readFile(join(root, 'packages', name, 'package.json'), 'utf8'));
+    if (manifest.bin !== undefined) problems.push(`library @agentcomms/${name} has a "bin", which no check reads`);
+    for (const path of ['src/cli.ts', 'src/mcp']) {
+      const found = await stat(join(root, 'packages', name, path)).then(
+        () => true,
+        () => false,
+      );
+      if (found) problems.push(`library @agentcomms/${name} has ${path}, a surface no check reads`);
+    }
+    for (const row of rows.capabilities ?? []) {
+      if (row.package === name) problems.push(`library @agentcomms/${name} has a capabilities.json row, ${row.id}`);
+    }
   }
+  return problems;
+}
+
+test('every published package is read, directly or as the package it wraps, or is a library with no surface', async () => {
+  const problems = await unreadPackages({
+    root: ROOT,
+    publishable: PUBLISHABLE,
+    surfaces: SURFACES,
+    wrappers: WRAPPERS,
+    libraries: LIBRARIES,
+    table,
+  });
+  assert.deepEqual(problems, [], listed(problems));
   for (const [wrapper, wrapped] of Object.entries(WRAPPERS)) {
-    assert.ok(read.has(wrapped), `${wrapper} wraps ${wrapped}, which is not read`);
+    assert.ok(
+      SURFACES.some((surface) => surface.package === wrapped),
+      `${wrapper} wraps ${wrapped}, which is not read`,
+    );
     // A wrapper is only exempt while it has nothing of its own. A tool registered here would be on no list.
     const source = await readFile(join(ROOT, 'packages', wrapper, 'src', 'server.ts'), 'utf8');
     assert.doesNotMatch(source, /registerTool\(/, `${wrapper} registers a tool of its own; read it as a surface`);
   }
+});
+
+test('PKG-b: only a declared library is a surface-free published package', async () => {
+  const root = await tempDir('agentcomms-parity-library-');
+  const directory = join(root, 'packages', 'shelf');
+  await mkdir(directory, { recursive: true });
+  const manifest = { name: '@agentcomms/shelf', version: '1.0.0', agentcommsPackage: { kind: 'library' } };
+  const declare = (fields) => writeFile(join(directory, 'package.json'), JSON.stringify({ ...manifest, ...fields }));
+  await declare({});
+  const check = (overrides = {}) =>
+    unreadPackages({
+      root,
+      publishable: [...PUBLISHABLE, 'shelf'],
+      surfaces: SURFACES,
+      wrappers: WRAPPERS,
+      libraries: ['shelf'],
+      table,
+      ...overrides,
+    });
+
+  // Declared, with nothing of a surface: exempt, and nothing else is.
+  assert.deepEqual(await check(), []);
+  assertNamed(await check({ libraries: [] }), '@agentcomms/shelf is published, but');
+
+  // Declared, but with a surface after all: each is refused, naming it.
+  await declare({ bin: { 'agent-shelf': './dist/cli.mjs' } });
+  assertNamed(await check(), 'library @agentcomms/shelf has a "bin"');
+  await declare({});
+  await mkdir(join(directory, 'src', 'mcp'), { recursive: true });
+  await writeFile(join(directory, 'src', 'cli.ts'), 'export {};\n');
+  assertNamed(await check(), 'library @agentcomms/shelf has src/cli.ts', 'library @agentcomms/shelf has src/mcp');
+  await rm(join(directory, 'src'), { recursive: true });
+  const row = { id: 'shelf.read', package: 'shelf', cli: 'read', mcp: 'shelf_read', status: 'both', operation: 'read' };
+  assertNamed(
+    await check({ table: { ...table, capabilities: [...table.capabilities, row] } }),
+    'library @agentcomms/shelf has a capabilities.json row, shelf.read',
+  );
+  assert.deepEqual(await check(), [], 'back to a bare library, exempt again');
 });
 
 // ── The table, against the product ──────────────────────────────────────────────────────────────────────────────

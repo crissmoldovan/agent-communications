@@ -6,14 +6,15 @@
  * Gemini extension, a launcher script with a pinned `npx` target, and a `compatibility` line in every skill. Every
  * one of those is a place a user copies a command from, and a stale one sends them to a version that does not exist
  * or, worse, an older one that still does. So the root `package.json` version is the source and this writes it into
- * the rest. The package manifests are the ones in `scripts/packages.mjs`.
+ * the rest. The package manifests are every publishable one in `scripts/packages.mjs` (`PUBLISHABLE`): a package held
+ * back from release still moves with the rest, so the release that lifts its hold finds it at the version it ships.
  *
  * `--check` verifies without writing, which is what CI runs.
  */
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PACKAGES, SCOPE } from './packages.mjs';
+import { PUBLISHABLE, SCOPE } from './packages.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const check = process.argv.includes('--check');
@@ -36,7 +37,7 @@ async function put(path, content, what) {
  * A pinned `@agentcomms/<package>@<version>`, for any published package. Longest names first, so `gmail-mcp` is not
  * read as `gmail` followed by something else.
  */
-const PINNED = new RegExp(`${SCOPE}/(${[...PACKAGES].sort((a, b) => b.length - a.length).join('|')})@[\\w.-]+`, 'g');
+const PINNED = new RegExp(`${SCOPE}/(${[...PUBLISHABLE].sort((a, b) => b.length - a.length).join('|')})@[\\w.-]+`, 'g');
 
 const root = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
 const version = root.version;
@@ -46,7 +47,7 @@ if (!/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version)) {
 }
 
 // The published packages, in lockstep. They depend on each other by exact version, so a mismatch is a broken install.
-for (const name of PACKAGES) {
+for (const name of PUBLISHABLE) {
   const path = join(ROOT, 'packages', name, 'package.json');
   const manifest = JSON.parse(await readFile(path, 'utf8'));
   manifest.version = version;

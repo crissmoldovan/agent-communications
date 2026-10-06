@@ -7,7 +7,7 @@
  * broken bins — none of which the source tests can see.
  *
  *   node scripts/verify-package.mjs packages/core
- *   node scripts/verify-package.mjs --all     # every package in scripts/packages.mjs, in order
+ *   node scripts/verify-package.mjs --all     # every publishable package in scripts/packages.mjs, in order
  */
 import { execFile, execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, realpathSync } from 'node:fs';
@@ -18,7 +18,7 @@ import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { gunzipSync } from 'node:zlib';
-import { PACKAGES, SCOPE } from './packages.mjs';
+import { PUBLISHABLE, SCOPE } from './packages.mjs';
 
 const readManifest = (directory) => JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'));
 
@@ -68,11 +68,11 @@ if (invoked === realpathSync(fileURLToPath(import.meta.url))) await main();
 
 async function main() {
   // `--all` walks the shared list rather than a chain of commands in package.json, which was one more hand-written
-  // copy of it. Each package runs in its own process, as it did before, so one package's temp tree and environment
-  // cannot leak into the next.
+  // copy of it — the wide one, so a package held back from release is consumer-checked like the rest. Each package
+  // runs in its own process, as it did before, so one package's temp tree and environment cannot leak into the next.
   if (process.argv[2] === '--all') {
     const root = fileURLToPath(new URL('..', import.meta.url));
-    for (const name of PACKAGES) {
+    for (const name of PUBLISHABLE) {
       execFileSync(process.execPath, [fileURLToPath(import.meta.url), join(root, 'packages', name)], {
         stdio: 'inherit',
       });

@@ -104,13 +104,16 @@ its core's is on the registry, a first version included: published by hand from 
 
 ## The packages
 
-**One list, in `scripts/packages.mjs`:** `core`, `gmail`, `gmail-mcp`, `resend`, `slack`, `whatsapp`, in that
-order. It is derived from the channels' manifests (`scripts/channels.mjs`), in an order computed from their
-dependencies, so a new channel is on it by being a package that declares itself. The workflow's publish and confirm
-loops, `scripts/release.mjs`, `scripts/sync-versions.mjs`, `pnpm verify:packages` and the licence notices all read
-it, and `test/release-packages.test.mjs` fails if a publishable package is missing from it, if the order puts a
-package before one it depends on, or if any of those stops reading it. There used to be a copy in each; 0.4.0 shipped
-without Slack because one of them said three.
+**One list, in `scripts/packages.mjs`, in two widths.** `PACKAGES` is what a tag publishes: `core`, `gmail`,
+`gmail-mcp`, `resend`, `slack`, `whatsapp`, in that order, and what `node scripts/packages.mjs` prints. `PUBLISHABLE`
+is every package this repository publishes, in the same order — `PACKAGES` and any package
+[held back from release](#a-package-held-back-from-release). Both are derived from the packages' own manifests
+(`scripts/channels.mjs`), in an order computed from their dependencies, so a new channel or library is on them by
+being a package that declares itself. The workflow's publish and confirm loops, the OIDC preflight and
+`scripts/release.mjs` read `PACKAGES`; `scripts/sync-versions.mjs`, `pnpm verify:packages` and the licence notices
+walk `PUBLISHABLE`, so a held package is still proven publishable. `test/release-packages.test.mjs` fails if a
+publishable package is missing, if the order puts a package before one it depends on, or if any of those stops
+reading its list. There used to be a copy in each; 0.4.0 shipped without Slack because one of them said three.
 
 ## The order, and why it is that order
 
@@ -202,6 +205,40 @@ changed scope would publish fewer packages than the hardcoded list claims and st
 to find out would be a consumer whose install of `gmail-mcp` cannot resolve the `gmail` it pins. It asks for the
 commit each version records, not only the version, because the GitHub release waits for it: a package at the right
 version from any other commit fails the run there, at once, and gets no release page.
+
+## A package held back from release
+
+A package this repository publishes can be left out of the releases before its first one: it says so in its own
+`package.json`, as `"agentcommsRelease": { "hold": "<why, one sentence>" }`. A new library arrives that way — the
+event library of the [event-emission design](superpowers/specs/2026-10-05-local-event-emission-design.md) does —
+because the first version of a package cannot come from the workflow: the next tag after it landed, perhaps an
+unrelated patch, would stop for the owner to publish by hand a public API nothing yet uses.
+
+**What still checks it.** A held package is still built, version-synced, licence-checked and consumer-checked by every
+`pnpm verify`, on every release leg: it is in `PUBLISHABLE`, which those checks walk. It is left out of the release:
+`PACKAGES`, which the workflow's publish and confirm loops, the OIDC preflight and `scripts/release.mjs` read, does not
+name it, so a release never reads it from the registry, proves it, sends it or confirms it. The registry
+(`scripts/channels.mjs`) refuses a hold on core, on a private package and on one that declares nothing, and
+`test/release-packages.test.mjs` fails `pnpm verify` while a package a tag publishes depends at runtime on a held one.
+So the release of the first package that does cannot go out with the hold still in place.
+
+**Lifting the hold**, in the version commit of the first release that ships a package depending on it at runtime — or
+earlier, if the owner decides to publish it on its own:
+
+1. In that release's version commit, delete `agentcommsRelease` from the package's `package.json`, and say in the
+   changelog entry what the package is.
+2. Tag and push as usual. After every verify leg passes, the OIDC preflight stops with
+   `✗ @agentcomms/<name>: never published`, prints the hand publish for the tagged commit, and sends nothing.
+3. The owner runs it in a terminal, in a checkout of the tag after `pnpm install --frozen-lockfile && pnpm build`
+   (npm asks for a one-time password to create a package):
+   `pnpm --config.pnpmfile=scripts/record-git-head.cjs --filter @agentcomms/<name> publish --access public --no-git-checks --tag latest`.
+4. The owner adds its trusted publisher on npmjs.com → the package → Settings → Trusted publishing: this repository,
+   `release.yml`, environment `release`.
+5. Re-run the failed job. It finds the package at that version from the tagged commit, skips it, publishes the rest,
+   confirms all of them and makes the release page.
+
+Steps 3 and 4 need the owner's npm account; an agent cannot do them. They are
+[a new package's first version](#a-new-packages-first-version), reached by lifting the hold.
 
 ## If a publish fails part way through
 

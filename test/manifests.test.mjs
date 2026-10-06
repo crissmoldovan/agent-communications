@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { PACKAGES } from '../scripts/packages.mjs';
+import { PUBLISHABLE } from '../scripts/packages.mjs';
 
 /**
  * The manifests are the only part of this project nobody runs during development: a plugin manifest is read by a
@@ -216,7 +216,8 @@ test('a version bump reaches the Slack pin in the Gemini extension', async () =>
       'gemini-extension.json',
       'bin/agent-gmail-launch',
       'skills',
-      ...PACKAGES.map((name) => `packages/${name}/package.json`),
+      // Every manifest the sync rewrites: each publishable package, held back from a release or not.
+      ...PUBLISHABLE.map((name) => `packages/${name}/package.json`),
     ]) {
       await cp(join(ROOT, path), join(scratch, path), { recursive: true });
     }

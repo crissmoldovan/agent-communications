@@ -366,6 +366,36 @@ test('D14-a: a declared library is discovered in the same walk, and is publishab
   assert.ok((await run(root, 'packages.mjs')).trim().split(' ').includes('shelf'), 'on the publish list');
 });
 
+test('D14-b: a library dropped into the tree is published in order, synced, consumer-checked, licensed and exempt from parity, with no list edited', async () => {
+  // Held, as a new library is until something depends on it: every check below still has to reach it.
+  const { root } = await treeWithLibrary({ held: true, extra: { dependencies: { zod: '^4.0.0' } } });
+
+  // Published in order: the wide list names it after what it depends on, the release's narrow list leaves it out.
+  const lists = await import(pathToFileURL(join(root, 'scripts', 'packages.mjs')).href);
+  assert.ok(lists.PUBLISHABLE.includes('shelf'), `not publishable: ${lists.PUBLISHABLE.join(' ')}`);
+  assert.ok(!lists.PACKAGES.includes('shelf'), 'a held library is in what a tag publishes');
+  assert.equal(lists.HELD.shelf, 'Held until something depends on it.');
+
+  // Synced: the version sync moves it with every other package.
+  const rootManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  await writeFile(join(root, 'package.json'), `${JSON.stringify({ ...rootManifest, version: '9.9.9' }, null, 2)}\n`);
+  await run(root, 'sync-versions.mjs');
+  assert.equal(JSON.parse(await readFile(join(root, 'packages', 'shelf', 'package.json'), 'utf8')).version, '9.9.9');
+
+  // Exempt from parity: the parity check's list of declared libraries names it, and it is read as no surface.
+  const registries = await import(pathToFileURL(join(root, 'scripts', 'registries.mjs')).href);
+  assert.deepEqual(registries.LIBRARIES, ['shelf']);
+  assert.ok(!registries.SURFACES.some((surface) => surface.package === 'shelf'));
+  assert.ok(!Object.hasOwn(registries.WRAPPERS, 'shelf'));
+
+  // Consumer-checked and licensed: both walk the wide list. Running them would need a build, so they are held to it
+  // by text, as `test/release-packages.test.mjs` holds them too.
+  for (const script of ['verify-package.mjs', 'third-party-licenses.mjs']) {
+    const source = await readFile(join(root, 'scripts', script), 'utf8');
+    assert.match(source, /for \(const name of PUBLISHABLE\)/, `scripts/${script} does not walk PUBLISHABLE`);
+  }
+});
+
 test('D14-a: a malformed library declaration is refused, naming the package', async () => {
   const { root, version } = await treeWithLibrary();
   const path = join(root, 'packages', 'shelf', 'package.json');
@@ -712,9 +742,9 @@ test('the instructions a new channel follows, the designs and every channel’s 
  */
 const CONSUMERS = {
   'scripts/packages.mjs': [/from '\.\/channels\.mjs'/, /REGISTRY\.packages/],
-  'scripts/third-party-licenses.mjs': [/import \{ PACKAGES \} from '\.\/packages\.mjs'/],
-  'scripts/sync-versions.mjs': [/from '\.\/packages\.mjs'/, /of PACKAGES\b/, /PINNED = new RegExp/],
-  'scripts/registries.mjs': [/REGISTRY\.surfaces/, /REGISTRY\.wrappers/],
+  'scripts/third-party-licenses.mjs': [/import \{ PUBLISHABLE \} from '\.\/packages\.mjs'/],
+  'scripts/sync-versions.mjs': [/from '\.\/packages\.mjs'/, /of PUBLISHABLE\b/, /PINNED = new RegExp/],
+  'scripts/registries.mjs': [/REGISTRY\.surfaces/, /REGISTRY\.wrappers/, /REGISTRY\.libraries/],
   'scripts/operations.mjs': [/REGISTRY\.drivers/, /REGISTRY\.platforms/],
   'scripts/sync-reference.mjs': [
     /const CLIS = REGISTRY\.surfaces/,
@@ -726,13 +756,13 @@ const CONSUMERS = {
   'scripts/sync-channels.mjs': [/readChannels\(root\)/],
   'test/tool-drift.test.mjs': [/const PRODUCTS = REGISTRY\.products/],
   'test/skill-commands.test.mjs': [/const CLIS = REGISTRY\.surfaces/, /REGISTRY\.skillFamilies/],
-  'test/install-docs.test.mjs': [/REGISTRY\.channels/, /PACKAGES\.map/],
+  'test/install-docs.test.mjs': [/REGISTRY\.channels/, /PUBLISHABLE\.map/],
   'test/skill-contracts.test.mjs': [
     /const FOREIGN = Object\.fromEntries\(REGISTRY\.skillFamilies/,
     /skillFamilyOf\(REGISTRY/,
   ],
   'test/manifests.test.mjs': [/from '\.\.\/scripts\/packages\.mjs'/, /'scripts\/channels\.mjs'/],
-  'test/parity.test.mjs': [/SURFACES/, /WRAPPERS/, /PACKAGES/],
+  'test/parity.test.mjs': [/SURFACES/, /WRAPPERS/, /PUBLISHABLE/, /LIBRARIES/],
   'test/release-packages.test.mjs': [/'third-party-licenses\.mjs'/],
 };
 

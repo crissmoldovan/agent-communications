@@ -12,7 +12,9 @@
  * `"agentcommsRelease": { "hold": "<why>" }` in its own `package.json` (`scripts/channels.mjs` reads it):
  *
  * - `PUBLISHABLE` — every package the registry publishes, held or not: what is proven publishable, by being built,
- *   version-synced, licence-checked and consumer-checked on every `pnpm verify`.
+ *   version-synced, licence-checked and consumer-checked on every `pnpm verify`. `scripts/sync-versions.mjs`,
+ *   `scripts/verify-package.mjs --all` and `scripts/third-party-licenses.mjs` walk it, and so do the tests that read
+ *   every package's manifest or README.
  * - `HELD` — the held packages, each with why.
  * - `PACKAGES` — `PUBLISHABLE` less `HELD`, in the same order: what a `v*` tag publishes. Running this file prints it,
  *   and the release path reads it and nothing wider — the workflow's publish and confirm loops (by running this file),

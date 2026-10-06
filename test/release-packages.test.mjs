@@ -64,11 +64,15 @@ async function manifests(root = ROOT) {
 /**
  * A copy of the release's scripts and every package manifest — what the release path reads, and nothing else — with
  * a library, `packages/shelf`, dropped in: held back from release unless `held` is false, and depended on at runtime
- * by each package in `dependents`.
+ * by each package in `dependents`. `full` adds what the version sync reads besides: the root manifest, the skills,
+ * the plugin files and the launcher.
  */
-async function treeWithShelf({ held = true, dependents = [], extra = {} } = {}) {
+async function treeWithShelf({ held = true, dependents = [], extra = {}, full = false } = {}) {
   const root = await tempDir('release-held-');
   await cp(join(ROOT, 'scripts'), join(root, 'scripts'), { recursive: true });
+  // What the version sync reads besides the manifests, when the test runs it.
+  const besides = full ? ['package.json', 'skills', '.claude-plugin', 'gemini-extension.json', 'bin'] : [];
+  for (const path of besides) await cp(join(ROOT, path), join(root, path), { recursive: true });
   for (const entry of await readdir(join(ROOT, 'packages'), { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     await mkdir(join(root, 'packages', entry.name), { recursive: true });
@@ -238,9 +242,10 @@ test('running the list prints it, which is how the workflow reads it', async () 
  * asserted is the property that failed twice — a literal list of package names — together with the line that proves
  * the file reads the shared one instead.
  */
-// Any two of the published packages side by side, quoted or as shell words. The names come from the shared list
-// itself: a pattern that knew only `core` and `gmail` let `'core', 'resend'` through.
-const PACKAGE_WORD = `(?:${[...PACKAGES].sort((a, b) => b.length - a.length).join('|')})`;
+// Any two of the publishable packages side by side, quoted or as shell words. The names come from the shared list
+// itself — the wide one, so a held package's name counts too: a pattern that knew only `core` and `gmail` let
+// `'core', 'resend'` through.
+const PACKAGE_WORD = `(?:${[...PUBLISHABLE].sort((a, b) => b.length - a.length).join('|')})`;
 const LITERAL_LIST = new RegExp(
   String.raw`['"]${PACKAGE_WORD}['"]\s*,\s*['"]${PACKAGE_WORD}['"]|\b${PACKAGE_WORD}[ \t]+${PACKAGE_WORD}\b`,
 );
@@ -272,23 +277,44 @@ test('the release workflow reads the shared list in every loop', async () => {
   );
 });
 
-test('the local release script, sync-versions, the package verifier and the licence notices read the shared list', async () => {
-  // `third-party-licenses.mjs` kept a hand-written copy of its own that nothing checked; it is on this list now.
-  for (const script of [
-    'release.mjs',
-    'sync-versions.mjs',
-    'verify-package.mjs',
-    'release-ci.mjs',
-    'third-party-licenses.mjs',
-  ]) {
+test('REL-b: the version sync, the package verifier and the licence notices walk PUBLISHABLE; the release script and release-ci.mjs walk PACKAGES', async () => {
+  /*
+   * Two widths of one list (events phase A plan, decision 1). What proves a package publishable walks every package,
+   * held or not, so a held one is still built, synced, licensed and consumer-checked; what publishes walks only what a
+   * tag sends, so a held one is never read from the registry, proven or sent. A walker reading the wrong width either
+   * stops checking the held package or starts publishing it.
+   */
+  const walkers = {
+    'sync-versions.mjs': /for \(const name of PUBLISHABLE\)/,
+    'verify-package.mjs': /for \(const name of PUBLISHABLE\)/,
+    'third-party-licenses.mjs': /for \(const name of PUBLISHABLE\)/,
+  };
+  for (const [script, loop] of Object.entries(walkers)) {
     const source = await readFile(join(ROOT, 'scripts', script), 'utf8');
-    assert.match(source, /from '\.\/packages\.mjs'/, `scripts/${script} does not read scripts/packages.mjs`);
+    assert.match(
+      source,
+      /import \{[^}]*\bPUBLISHABLE\b[^}]*\} from '\.\/packages\.mjs'/,
+      `scripts/${script} does not import PUBLISHABLE`,
+    );
+    assert.match(source, loop, `scripts/${script} does not walk PUBLISHABLE`);
+    assert.doesNotMatch(source, /\bPACKAGES\b/, `scripts/${script} reads the release's narrower list`);
+    assert.doesNotMatch(source, LITERAL_LIST, `scripts/${script} carries its own package list`);
+  }
+  for (const script of ['release.mjs', 'release-ci.mjs']) {
+    const source = await readFile(join(ROOT, 'scripts', script), 'utf8');
+    assert.match(
+      source,
+      /import \{[^}]*\bPACKAGES\b[^}]*\} from '\.\/packages\.mjs'/,
+      `scripts/${script} does not import PACKAGES`,
+    );
+    assert.match(source, /for \(const name of PACKAGES\)/, `scripts/${script} does not walk PACKAGES`);
+    assert.doesNotMatch(source, /\bPUBLISHABLE\b/, `scripts/${script} reads the wide list, held packages and all`);
     assert.doesNotMatch(source, LITERAL_LIST, `scripts/${script} carries its own package list`);
   }
   // The shapes the copies took, with the last package published as well as the first two. Built from the list, since
   // this file is itself held to not writing one out (`test/channel-registry.test.mjs`).
-  const [first, second] = PACKAGES;
-  const last = PACKAGES.at(-1);
+  const [first, second] = PUBLISHABLE;
+  const last = PUBLISHABLE.at(-1);
   for (const copy of [
     `const PACKAGES = ['${first}', '${second}'];`,
     `['${first}', '${last}']`,
@@ -298,6 +324,28 @@ test('the local release script, sync-versions, the package verifier and the lice
   }
   const root = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
   assert.equal(root.scripts['verify:packages'], 'node scripts/verify-package.mjs --all');
+});
+
+test('REL-b: a held library is version-synced, and --check fails when it is left behind', async () => {
+  const root = await treeWithShelf({ full: true });
+  const sync = join(root, 'scripts', 'sync-versions.mjs');
+  const shelfPath = join(root, 'packages', 'shelf', 'package.json');
+  const old = JSON.parse(await readFile(shelfPath, 'utf8')).version;
+  const rootManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  await writeFile(join(root, 'package.json'), `${JSON.stringify({ ...rootManifest, version: '9.9.9' }, null, 2)}\n`);
+
+  const written = await runScript(sync, []);
+  assert.equal(written.status, 0, written.stderr);
+  const shelf = JSON.parse(await readFile(shelfPath, 'utf8'));
+  assert.equal(shelf.version, '9.9.9', 'the held library moves with the rest');
+  assert.deepEqual(shelf.agentcommsRelease, { hold: 'Held until the first package that depends on it ships.' });
+  assert.equal((await runScript(sync, ['--check'])).status, 0);
+
+  // Left behind, as a sync that walked only what a tag publishes would leave it.
+  await writeFile(shelfPath, `${JSON.stringify({ ...shelf, version: old }, null, 2)}\n`);
+  const check = await runScript(sync, ['--check']);
+  assert.equal(check.status, 1);
+  assert.match(check.stderr, /packages\/shelf\/package\.json: version is out of date/);
 });
 
 // ── The package verifier's dependency closure ──────────────────────────────────────────────────────────────────────
@@ -361,8 +409,10 @@ test('the package verifier refuses a workspace circle, and an edge whose directo
 });
 
 test('verifying any package of this checkout packs core first, and a server-only package its channel too', () => {
-  const position = (name) => PACKAGES.indexOf(name.slice('@agentcomms/'.length));
-  for (const name of PACKAGES) {
+  // Every publishable package, held or not: a held one is consumer-checked like the rest.
+  const position = (name) => PUBLISHABLE.indexOf(name.slice('@agentcomms/'.length));
+  const libraries = new Set(REGISTRY.libraries.map((library) => library.directory));
+  for (const name of PUBLISHABLE) {
     const closure = closureNames(join(ROOT, 'packages', name));
     assert.equal(new Set(closure).size, closure.length, `${name}: a package packed twice`);
     assert.deepEqual(
@@ -371,7 +421,14 @@ test('verifying any package of this checkout packs core first, and a server-only
       `${name}: not in publish order`,
     );
     if (name === 'core') assert.deepEqual(closure, []);
-    else assert.equal(closure[0], '@agentcomms/core', `${name}: core is not packed for it, or not first`);
+    else if (libraries.has(name)) {
+      // A library needs no core: its closure is exactly the workspace packages it declares at runtime.
+      const manifest = REGISTRY.libraries.find((library) => library.directory === name).packageJson;
+      const declared = Object.entries({ ...manifest.dependencies, ...manifest.optionalDependencies })
+        .filter(([, range]) => String(range).startsWith('workspace:'))
+        .map(([dependency]) => dependency);
+      assert.deepEqual([...closure].sort(), declared.sort(), `${name}: packs other than what it declares`);
+    } else assert.equal(closure[0], '@agentcomms/core', `${name}: core is not packed for it, or not first`);
   }
   const wrappers = Object.entries(REGISTRY.wrappers);
   assert.ok(wrappers.length > 0, 'no server-only package found — the discovery is wrong');
@@ -839,6 +896,51 @@ test('the release documents say what moving a tag does to a run still going', as
       `${path} does not say what the run checks`,
     );
   }
+});
+
+test('REL-d: the release documents say what a hold is, and how it is lifted', async () => {
+  /*
+   * A held package is checked on every verify and left out of every tag's publish until its hold is lifted, in the
+   * version commit of the first release that ships something depending on it. Whoever releases then is sent from both
+   * documents to the hand publish every package's first version needs. Neither may say a tag "does not publish": the
+   * test above refuses that phrase in both.
+   */
+  const releasing = (await readFile(join(ROOT, 'docs', 'RELEASING.md'), 'utf8')).replace(/\s+/g, ' ');
+  const at = releasing.indexOf('## A package held back from release ');
+  assert.notEqual(at, -1, 'RELEASING.md has no "A package held back from release" section');
+  const next = releasing.indexOf(' ## ', at + 1);
+  const section = releasing.slice(at, next === -1 ? undefined : next);
+  assert.match(section, /"agentcommsRelease": \{ "hold": /, 'it does not say where a hold is declared');
+  assert.match(section, /every `pnpm verify`/, 'it does not say what still checks a held package');
+  assert.match(section, /is left out of the release/, 'it does not say a tag leaves the held package out');
+  assert.match(section, /\(#a-new-packages-first-version\)/, 'it does not send the first release to the hand publish');
+  // Decision 1's five steps, in order: lift the hold in the version commit, tag, publish by hand, trust, re-run.
+  const steps = [
+    /delete `agentcommsRelease`/,
+    /Tag and push as usual/,
+    /--filter @agentcomms\/<name> publish --access public --no-git-checks --tag latest/,
+    /Trusted publishing/,
+    /Re-run the failed job/,
+  ].map((step) => {
+    const found = step.exec(section);
+    assert.ok(found, `the section has no step matching ${step}`);
+    return found.index;
+  });
+  assert.deepEqual(
+    steps,
+    [...steps].sort((a, b) => a - b),
+    'the steps are out of order',
+  );
+  // "The packages" names both widths of the list.
+  const packages = releasing.slice(releasing.indexOf('## The packages '), releasing.indexOf('## The order, and why'));
+  assert.match(packages, /`PACKAGES`/);
+  assert.match(packages, /`PUBLISHABLE`/);
+
+  const skill = (await readFile(join(ROOT, '.claude', 'skills', 'release', 'SKILL.md'), 'utf8')).replace(/\s+/g, ' ');
+  assert.match(skill, /`agentcommsRelease`/, 'the release skill does not name the hold');
+  assert.match(skill, /is left out of the release/, 'the release skill does not say a held package is left out');
+  assert.match(skill, /every `pnpm verify`/, 'the release skill does not say what still checks it');
+  assert.match(skill, /A new package's first version/, 'the release skill does not send its first release by hand');
 });
 
 // ── The OIDC preflight and the commit check, against a fake GitHub and a fake registry ───────────────────────────
@@ -1364,7 +1466,8 @@ test('sync-versions bumps every skill, Slack included, and --check catches one l
   for (const path of ['package.json', 'skills', '.claude-plugin', 'gemini-extension.json', 'bin', 'scripts']) {
     await cp(join(ROOT, path), join(dir, path), { recursive: true });
   }
-  for (const name of PACKAGES) {
+  // Every manifest the sync rewrites: each publishable package, held or not.
+  for (const name of PUBLISHABLE) {
     await mkdir(join(dir, 'packages', name), { recursive: true });
     await cp(join(ROOT, 'packages', name, 'package.json'), join(dir, 'packages', name, 'package.json'));
   }

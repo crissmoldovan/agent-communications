@@ -29,8 +29,9 @@ import { realpathSync } from 'node:fs';
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-// The one list of packages, read rather than copied: this script kept a copy of its own, which nothing checked.
-import { PACKAGES } from './packages.mjs';
+// The one list of packages, read rather than copied: this script kept a copy of its own, which nothing checked. The
+// wide one: a package held back from release still ships its notices in the tarball every verify packs.
+import { PUBLISHABLE } from './packages.mjs';
 
 const ROOT = realpathSync(fileURLToPath(new URL('..', import.meta.url)));
 
@@ -365,14 +366,14 @@ async function main() {
   const problems = [];
   const contents = new Map();
   const everything = new Map();
-  for (const name of PACKAGES) {
+  for (const name of PUBLISHABLE) {
     const inlined = await inlinedInto(name, problems);
     contents.set(name, inlined);
     for (const [key, entry] of inlined) if (!everything.has(key)) everything.set(key, entry);
   }
 
   const counts = [];
-  for (const name of PACKAGES) {
+  for (const name of PUBLISHABLE) {
     const inlined = contents.get(name);
     counts.push(`${name} ${inlined.size}`);
     // Some licence files are written with CRLF. The repository stores every text file with LF (`.gitattributes`), so
@@ -403,7 +404,7 @@ async function main() {
     process.exit(1);
   }
   console.log(
-    `third-party licences ${check ? 'match' : 'written for'} what ${PACKAGES.length} bundles inline (${counts.join(', ')}).`,
+    `third-party licences ${check ? 'match' : 'written for'} what ${PUBLISHABLE.length} bundles inline (${counts.join(', ')}).`,
   );
 }
 
