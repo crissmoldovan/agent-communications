@@ -5,6 +5,7 @@
 
 export { UNICODE_VERSION } from '../vendor/unicode-15.1.0/generated/version.ts';
 export * from './identity/event-id.ts';
+export * from './idna/domain.ts';
 export * from './json.ts';
 export * from './result.ts';
 export * from './text.ts';

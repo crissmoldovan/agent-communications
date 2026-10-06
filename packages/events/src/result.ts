@@ -11,7 +11,9 @@ export type IssueCode =
   /** Text that has to be UTF-8 holds a surrogate without its partner, which UTF-8 cannot encode. */
   | 'NOT_WELL_FORMED'
   /** An event identity's tuple is not D3's: an id that is not a string, a type version that is not an integer. */
-  | 'IDENTITY_INVALID';
+  | 'IDENTITY_INVALID'
+  /** A domain is not one UTS #46 ToASCII accepts under D5's flags, or it ends in a root dot (decision 13). */
+  | 'DOMAIN_INVALID';
 
 /** One thing wrong, where it is (an RFC 6901 pointer into the value checked), and any detail a caller can show. */
 export interface Issue {

@@ -162,7 +162,9 @@ try {
         } else if (result !== family.expected) {
           problems.push(`${family.label} in ${name}: the results differ from Node's and the realm's`);
         } else {
-          say(`  ✓ ${family.label} in ${name}: ${family.vectors} vectors, identical to Node and the realm`);
+          say(
+            `  ✓ ${family.label} in ${name}: ${family.vectors} ${family.vectors === 1 ? 'vector' : 'vectors'}, identical to Node and the realm`,
+          );
         }
       }
       const wanted = ['/', '/boot.js', '/realm.js'].map((path) => `${origin}${path}`);

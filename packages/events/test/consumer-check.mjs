@@ -68,3 +68,17 @@ assert.equal(events.caseFold('Ɤ'), 'Ɤ');
 assert.equal(events.foldForComparison('STRASSE'), events.foldForComparison('straße'));
 console.log('events consumer check: Unicode 15.1 NFC and case folding OK');
 // --- end Unicode 15.1 ---
+
+// --- UTS #46 revision 31: the canonical domain (events phase A, task 6) ---
+// Bundled and pinned: nontransitional, so ß is kept; a trailing root dot is refused (decision 13).
+assert.deepEqual(events.toAsciiDomain('Bücher.Example'), { ok: true, value: 'xn--bcher-kva.example' });
+assert.deepEqual(events.toAsciiDomain('faß.de'), { ok: true, value: 'xn--fa-hia.de' });
+const rootDot = events.toAsciiDomain('example.com.');
+assert.equal(rootDot.ok, false);
+assert.deepEqual(
+  rootDot.issues.map((issue) => [issue.code, issue.detail]),
+  [['DOMAIN_INVALID', ['ROOT_LABEL']]],
+);
+assert.deepEqual(events.toAsciiDomain('a_b.example').issues?.[0]?.detail, ['V6']);
+console.log('events consumer check: UTS #46 domains OK');
+// --- end UTS #46 ---
