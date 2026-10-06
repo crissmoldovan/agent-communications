@@ -116,7 +116,7 @@ test('send handoff commands use the selected shell platform, located from this i
   for (const text of [approve, refile, changed]) assertNoBareCommand(text);
 });
 
-test('a post or a reaction waiting for a person names its approve and the wait — slack_approval_wait over MCP, the located `approval wait` at the command line — quoted for each shell (D7-a)', () => {
+test('a post, a reaction, an edit or a deletion waiting for a person names its approve and the wait — slack_approval_wait over MCP, the located `approval wait` at the command line — quoted for each shell (D7-a)', () => {
   for (const platform of ['darwin', 'win32'] as const) {
     const handoffs = slackHandoffs(TEST_PATHS, platform);
     const approve = slackInline(TEST_PATHS, ['approve', '7'], platform);
@@ -144,6 +144,22 @@ test('a post or a reaction waiting for a person names its approve and the wait �
         `${platform} ${surface}`,
       );
       assertNoBareCommand(waitingHint('post', surface, '7', handoffs));
+      // An edit and a deletion are sent as a post is: shown first, then the same call made again (design 2026-10-06).
+      for (const [kind, tool, command] of [
+        ['edit', 'slack_edit_send', 'edit send'],
+        ['delete', 'slack_delete_send', 'delete send'],
+      ] as const) {
+        const next =
+          surface === 'mcp'
+            ? `call \`${tool}\` again with the same arguments`
+            : `run the same ${command} command again`;
+        assert.equal(
+          waitingHint(kind, surface, '7', handoffs),
+          `Show the user the preview, then ask them to run ${approve} in their own terminal; learn when they have with ${wait}, then ${next}. You cannot approve this yourself.`,
+          `${platform} ${surface} ${kind}`,
+        );
+        assertNoBareCommand(waitingHint(kind, surface, '7', handoffs));
+      }
     }
   }
 });

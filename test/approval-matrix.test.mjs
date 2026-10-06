@@ -11,12 +11,12 @@ import { tempDir } from './helpers/temp-dir.mjs';
  * The D2 outcome matrix, every row on every surface (CUE-404 Task 24; design 2026-10-05 §D2 and §5 D2-a).
  *
  * D2 is one locked classification of every approval record into an outcome, which every surface reports as it is:
- * Gmail's tools, command and terminal approval, Slack's posts, posts with files and reactions, Resend's sends, core's
- * changes, the download questions, and every status, wait and list. Each package's driver (`test/support/matrix.ts`,
- * listed below) prepares a real approval through its own surface on a fresh home with its fake provider, puts it into
- * each row's state through `test/helpers/approval-matrix.mjs` — the one place states are made — acts on it through each
- * of its surfaces, and writes down what each said, one JSON line each. This file holds what D2 says each must be, and
- * holds every line to it.
+ * Gmail's tools, command and terminal approval, Slack's posts, posts with files, reactions, edits and deletions,
+ * Resend's sends, core's changes, the download questions, and every status, wait and list. Each package's driver
+ * (`test/support/matrix.ts`, listed below) prepares a real approval through its own surface on a fresh home with its
+ * fake provider, puts it into each row's state through `test/helpers/approval-matrix.mjs` — the one place states are
+ * made — acts on it through each of its surfaces, and writes down what each said, one JSON line each. This file holds
+ * what D2 says each must be, and holds every line to it.
  *
  * What a row is, here:
  *
@@ -71,12 +71,22 @@ const SURFACES = {
         'slack_approval_wait (a post)',
         'slack_approval_wait (a post with a file)',
         'slack_approval_wait (a reaction)',
+        'slack_approval_wait (an edit)',
+        'slack_approval_wait (a deletion)',
       ],
-      claim: ['slack_post_send', 'slack_post_send (a post with a file)', 'slack_react_send'],
+      claim: [
+        'slack_post_send',
+        'slack_post_send (a post with a file)',
+        'slack_react_send',
+        'slack_edit_send',
+        'slack_delete_send',
+      ],
       approve: [
         'approve (terminal, a post)',
         'approve (terminal, a post with a file)',
         'approve (terminal, a reaction)',
+        'approve (terminal, an edit)',
+        'approve (terminal, a deletion)',
       ],
     },
     download: {

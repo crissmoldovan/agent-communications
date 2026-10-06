@@ -415,10 +415,10 @@ test('a post’s claimant suspended right after its fence said go still makes th
   }
 });
 
-test('the fence table is complete: every step a post, a two-file post or a reaction asks of Slack is a listed site, each after its own fence', async (t) => {
+test('the fence table is complete: every step a post, a two-file post, a reaction, an edit or a deletion asks of Slack is a listed site, each after its own fence', async (t) => {
   assert.deepEqual(
     SLACK_FENCE_SITES.map((site) => site.site),
-    [1, 2, 3, 4, 5],
+    [1, 2, 3, 4, 5, 6, 7],
   );
   for (const flow of Object.keys(FLOWS) as Flow[]) {
     const w = await fenceWorld(t);

@@ -42,7 +42,15 @@ import { createDraft, deleteOwnDraft, listDrafts, showDraft, updateDraft } from 
 import { downloadFiles, downloadSelection, type FileDownloader } from '../operations/files.ts';
 import type { ProbeFetch } from '../operations/identity.ts';
 import { manifestFor } from '../operations/manifest.ts';
-import { prepareDraftPost, react, sendPost } from '../operations/post.ts';
+import {
+  prepareDelete,
+  prepareDraftPost,
+  prepareEdit,
+  react,
+  sendDelete,
+  sendEdit,
+  sendPost,
+} from '../operations/post.ts';
 import {
   filesPaging,
   listChannels,
@@ -67,7 +75,8 @@ import { VERSION } from '../version.ts';
  *
  * **Nothing reaches Slack unless a person approved that exact content.** `slack_post_prepare` composes, stores a
  * draft and returns the preview with an approval id; `slack_post_send` claims that approval through the operation
- * `agent-slack post send` uses, and `slack_react` with `slack_react_send` do the same for a reaction. Which approval
+ * `agent-slack post send` uses, and `slack_react` with `slack_react_send` do the same for a reaction — as do the
+ * edit and delete tools for a message this account posted (design 2026-10-06). Which approval
  * counts is the workspace's send policy, read at the claim: under `chat` the person's yes in the conversation, under
  * `confirm` a code typed at their own terminal (`agent-slack approve`), under `never` none at all. Posting became a
  * tool with the owner's rule of 2026-09-25 — every capability reachable from both surfaces — and the gate did not
@@ -1004,6 +1013,153 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         const name = await resolve(args.workspace);
         await ownApproval(args.approvalId, 'send');
         return reply(await react(context, name, reactionOf(args), args.approvalId, slackDeps));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  /*
+   * Editing and deleting a message this account posted (design 2026-10-06): each a prepare that shows the act on the
+   * message as Slack has it now, and a send that makes it once — `edit prepare`/`edit send` and `delete prepare`/
+   * `delete send`, the operations those commands run. A deletion is two steps where a reaction is one, because a
+   * person must see what is about to disappear.
+   */
+  server.registerTool(
+    'slack_edit_prepare',
+    {
+      title: 'Prepare an edit',
+      description:
+        'Return the preview a person must approve to change the words of a message this account posted, with its approval id. **Nothing is changed.** Pass the message’s `ts`, and either the new words — `channel` (the message’s) with `text`, stored as a local draft — or `draftId` alone for a draft already written. Not both. A message anyone else wrote is refused before anything is shown. The preview shows the words it has now and the words it will have, and how many people see it; an edit changes words only — no thread, no files. Show it in full and wait. The same as the command line’s `draft create` then `edit prepare`.',
+      inputSchema: {
+        ...workspaceArg,
+        ts: z.string().describe('the message to edit, by its ts as a read returned it'),
+        draftId: z
+          .string()
+          .optional()
+          .describe('a draft already written, holding the new words; leave out to compose them'),
+        channel: z
+          .string()
+          .optional()
+          .describe('the conversation the message is in, for new words: a channel’s C… or G…, or a DM’s D…'),
+        text: z.string().optional().describe('the new words. Markup in it is shown, not interpreted'),
+        mentionUsers: z.array(z.string()).optional().describe('user ids to mention, by id — never by name'),
+        broadcast: oneOfWords(BROADCASTS).optional().describe('interrupts the room; needs a person'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async (args) => {
+      try {
+        return reply(
+          await prepareEdit(
+            context,
+            await resolve(args.workspace),
+            {
+              ts: args.ts,
+              draftId: args.draftId,
+              channel: args.channel,
+              text: args.text,
+              mentionUsers: args.mentionUsers,
+              broadcast: args.broadcast,
+            },
+            slackDeps,
+          ),
+        );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'slack_edit_send',
+    {
+      title: 'Make a prepared edit',
+      description:
+        'Make an edit slack_edit_prepare prepared — only after the person has seen that whole preview and said yes to it in this conversation. Pass the channel and the ts the preview showed; if they are not the approval’s, nothing is changed. Under the workspace’s `chat` policy this edits the message. Under `confirm`, and for any @channel, @here or room of 50 or more, it returns APPROVAL_PENDING with the approve command the person runs at their own terminal: you cannot approve it yourself — tell them, and call this again once they have. Under `never` it refuses. Single use; a change to the draft, to the message in Slack, or a room that grew voids the approval. Everyone who can read the channel sees the new words.',
+      inputSchema: {
+        ...workspaceArg,
+        draftId: z.string().describe('from slack_edit_prepare'),
+        approvalId: z.string().describe('from slack_edit_prepare'),
+        expectChannel: z.string().describe('the channel id you believe the message is in, as the preview showed it'),
+        ts: z.string().describe('the message you believe this edits, as the preview showed it'),
+      },
+      annotations: outward,
+    },
+    async (args, ctx) => {
+      try {
+        const name = await resolve(args.workspace);
+        await ownApproval(args.approvalId, 'send');
+        // The request's signal, so a cancelled call stops before Slack has the edit: see `editPrepared` for how far.
+        const edited = await sendEdit(
+          context,
+          name,
+          {
+            draftId: args.draftId,
+            approvalId: args.approvalId,
+            expectChannel: args.expectChannel,
+            ts: args.ts,
+            signal: ctx.mcpReq.signal,
+          },
+          slackDeps,
+        );
+        return reply(edited);
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  const messageArgs = {
+    channel: z.string().describe('the conversation the message is in: a channel’s C… or G…, or a DM’s D…'),
+    ts: z.string().describe('the message, by its ts as a read returned it'),
+  };
+
+  server.registerTool(
+    'slack_delete_prepare',
+    {
+      title: 'Prepare a deletion',
+      description:
+        'Return the preview a person must approve to delete a message this account posted, with its approval id. **Nothing is deleted.** A message anyone else wrote is refused, whatever the account may do in Slack. The preview shows the message as it is now, the replies and files that are not deleted with it, and that a deletion cannot be undone. Show it in full and wait. The same as the command line’s `delete prepare`.',
+      inputSchema: { ...workspaceArg, ...messageArgs },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async (args) => {
+      try {
+        return reply(
+          await prepareDelete(
+            context,
+            await resolve(args.workspace),
+            { channel: args.channel, ts: args.ts },
+            slackDeps,
+          ),
+        );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'slack_delete_send',
+    {
+      title: 'Delete a prepared message',
+      description:
+        'Delete a message slack_delete_prepare prepared — only after the person has seen that whole preview and said yes to it in this conversation. Pass the channel and the ts the preview showed; if they are not the approval’s, nothing is deleted. Under the workspace’s `chat` policy this deletes it. Under `confirm` it returns APPROVAL_PENDING with the approve command the person runs at their own terminal: you cannot approve it yourself — tell them, and call this again once they have. Under `never` it refuses. Single use; a message edited in Slack since the preview, or whose thread gained a reply, voids the approval. A deletion cannot be undone.',
+      inputSchema: { ...workspaceArg, ...messageArgs, approvalId: z.string().describe('from slack_delete_prepare') },
+      annotations: outward,
+    },
+    async (args, ctx) => {
+      try {
+        const name = await resolve(args.workspace);
+        await ownApproval(args.approvalId, 'send');
+        const deleted = await sendDelete(
+          context,
+          name,
+          { channel: args.channel, ts: args.ts, approvalId: args.approvalId, signal: ctx.mcpReq.signal },
+          slackDeps,
+        );
+        return reply(deleted);
       } catch (error) {
         return fail(error);
       }

@@ -1284,6 +1284,38 @@
       "reason": "The CLI claims a reaction's approval as `react --approval <id>`. Over MCP that is a call of its own, as posting is."
     },
     {
+      "id": "slack.edit.prepare",
+      "package": "slack",
+      "cli": "edit prepare",
+      "mcp": "slack_edit_prepare",
+      "status": "both",
+      "operation": "prepareEdit"
+    },
+    {
+      "id": "slack.edit.send",
+      "package": "slack",
+      "cli": "edit send",
+      "mcp": "slack_edit_send",
+      "status": "both",
+      "operation": "sendEdit"
+    },
+    {
+      "id": "slack.delete.prepare",
+      "package": "slack",
+      "cli": "delete prepare",
+      "mcp": "slack_delete_prepare",
+      "status": "both",
+      "operation": "prepareDelete"
+    },
+    {
+      "id": "slack.delete.send",
+      "package": "slack",
+      "cli": "delete send",
+      "mcp": "slack_delete_send",
+      "status": "both",
+      "operation": "sendDelete"
+    },
+    {
       "id": "slack.approve",
       "package": "slack",
       "cli": "approve",

@@ -145,6 +145,9 @@ try {
     // Where an approval stands, now or once it changes: it only looks.
     'slack_approval_wait',
     'slack_channels',
+    // Deleting a message this account posted: a preview, then the deletion through the approval gate.
+    'slack_delete_prepare',
+    'slack_delete_send',
     'slack_doctor',
     // Local drafts only: none of the five reaches Slack.
     'slack_draft_create',
@@ -152,6 +155,9 @@ try {
     'slack_draft_get',
     'slack_draft_list',
     'slack_draft_update',
+    // Editing a message this account posted, the same way.
+    'slack_edit_prepare',
+    'slack_edit_send',
     // Saves files on this machine, under the downloads folder only: a read as far as Slack is concerned.
     'slack_file_download',
     'slack_files',

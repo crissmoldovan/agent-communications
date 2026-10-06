@@ -55,6 +55,7 @@ import { SlackContext, type SlackContextOptions } from '../context.ts';
 import { handoffsSentence } from '../handoffs.ts';
 import { type InstallMode, parseMode, renderManifest } from '../manifest.ts';
 import { SLACK_MCP, type SupportedClient } from '../mcp/install.ts';
+import { renderDeletionPreview } from '../operations/amend.ts';
 import { createApp, updateApp } from '../operations/app.ts';
 import { beginApproval, finishApproval, revokeApproval, workspaceForApproval } from '../operations/approve.ts';
 import {
@@ -79,7 +80,15 @@ import {
 } from '../operations/files.ts';
 import type { ProbeFetch } from '../operations/identity.ts';
 import { checkedPort, manifestFor } from '../operations/manifest.ts';
-import { prepareDraftPost, react, sendPost } from '../operations/post.ts';
+import {
+  prepareDelete,
+  prepareDraftPost,
+  prepareEdit,
+  react,
+  sendDelete,
+  sendEdit,
+  sendPost,
+} from '../operations/post.ts';
 import {
   filesPaging,
   listChannels,
@@ -101,6 +110,7 @@ import {
   renderAppCreated,
   renderAppUpdated,
   renderAppUpdateNeeded,
+  renderChanged,
   renderChannels,
   renderConnected,
   renderCreatedDraft,
@@ -1322,6 +1332,95 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
       }),
     );
 
+  /*
+   * Editing and deleting a message this account posted (design 2026-10-06), through the gate a post goes through: a
+   * preview of the act on the message as Slack has it now, an approval bound to both, and a second command that makes
+   * it once. `edit` takes its new words from a draft, as `post` does; `delete` takes only the message.
+   */
+  const edit = program
+    .command('edit')
+    .description('change the words of a message this account posted, through the gate');
+
+  workspaceOption(edit.command('prepare'))
+    .description('show the message as it is and as it would be, and how many people see it. Changes nothing')
+    .requiredOption('--draft <draftId>', 'the draft holding the new words, in the message’s channel')
+    .requiredOption('--ts <ts>', 'the message to edit')
+    .action(
+      act(async (context, options, flags: Options) => {
+        // The same operation as `slack_edit_prepare` given a `draftId`: see `prepareEdit`.
+        const prepared = await prepareEdit(
+          context,
+          String(flags.workspace),
+          { draftId: String(flags.draft), ts: String(flags.ts) },
+          { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+        );
+        writeResult(prepared, output(), (data) => renderChannelPreview(data.preview), streams);
+      }),
+    );
+
+  workspaceOption(edit.command('send'))
+    .description(
+      'make a prepared edit. Refuses unless the approval, the draft, the message and the room are what they were',
+    )
+    .requiredOption('--draft <draftId>', 'the draft')
+    .requiredOption('--approval <approvalId>', 'the approval `edit prepare` returned')
+    .requiredOption('--expect-channel <id>', 'the channel you believe the message is in')
+    .requiredOption('--ts <ts>', 'the message you believe this edits')
+    .action(
+      act(async (context, options, flags: Options) => {
+        // The same operation as `slack_edit_send`: see `sendEdit`.
+        const edited = await sendEdit(
+          context,
+          String(flags.workspace),
+          {
+            draftId: String(flags.draft),
+            approvalId: String(flags.approval),
+            expectChannel: String(flags.expectChannel),
+            ts: String(flags.ts),
+          },
+          { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+        );
+        writeResult(edited, output(), (data) => renderChanged(data, 'edit'), streams);
+      }),
+    );
+
+  const remove = program.command('delete').description('delete a message this account posted, through the gate');
+
+  workspaceOption(remove.command('prepare'))
+    .description('show the message that would be deleted, and what stays behind. Deletes nothing')
+    .requiredOption('--channel <id>', 'the conversation the message is in')
+    .requiredOption('--ts <ts>', 'the message to delete')
+    .action(
+      act(async (context, options, flags: Options) => {
+        // The same operation as `slack_delete_prepare`: see `prepareDelete`.
+        const prepared = await prepareDelete(
+          context,
+          String(flags.workspace),
+          { channel: String(flags.channel), ts: String(flags.ts) },
+          { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+        );
+        writeResult(prepared, output(), (data) => renderDeletionPreview(data.preview), streams);
+      }),
+    );
+
+  workspaceOption(remove.command('send'))
+    .description('delete a message as prepared. Refuses unless the approval and the message are what they were')
+    .requiredOption('--channel <id>', 'the conversation the message is in')
+    .requiredOption('--ts <ts>', 'the message')
+    .requiredOption('--approval <approvalId>', 'the approval `delete prepare` returned')
+    .action(
+      act(async (context, options, flags: Options) => {
+        // The same operation as `slack_delete_send`: see `sendDelete`.
+        const deleted = await sendDelete(
+          context,
+          String(flags.workspace),
+          { channel: String(flags.channel), ts: String(flags.ts), approvalId: String(flags.approval) },
+          { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+        );
+        writeResult(deleted, output(), (data) => renderChanged(data, 'delete'), streams);
+      }),
+    );
+
   // Where an approval stands, waited for: the one look an agent makes to learn that a person approved (§D3).
   const approval = program.command('approval').description('where an approval stands');
   approval
@@ -1346,7 +1445,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
   program
     .command('approve <approvalId>')
     .description(
-      'approve a post, a reaction or a change at this terminal: read it, then type the code back — or answer where a download is saved',
+      'approve a post, a reaction, an edit, a deletion or a change at this terminal: read it, then type the code back — or answer where a download is saved',
     )
     .action(
       act(async (context, globalOptions, approvalId: string) => {
@@ -1362,7 +1461,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
         if (marker) {
           throw new CommsError(
             'APPROVAL_REQUIRED',
-            'only a person can approve a post, a reaction or a change, not an agent',
+            'only a person can approve a post, a reaction, an edit, a deletion or a change, not an agent',
             {
               // Terminal-only: with no command here, the sentence saying why, and no other way to approve it. With
               // one, the wait that learns when they have (design 2026-10-05 §D7).
@@ -1374,7 +1473,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
         if (!canPrompt(env, streams, { json: globalOptions.json })) {
           throw new CommsError(
             'APPROVAL_REQUIRED',
-            'approving a post, a reaction or a change needs an interactive terminal',
+            'approving a post, a reaction, an edit, a deletion or a change needs an interactive terminal',
             {
               hint: handoffSentence(
                 context.handoffs.own(['approve', approvalId]),
@@ -1431,18 +1530,24 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
         void (await workspaceForApproval(context, approvalId));
         const slack = { fetch: deps.read, baseUrl: deps.slackBaseUrl };
         const prompt = await beginApproval(context, approvalId, slack);
-        const verb = prompt.kind === 'reaction' ? 'react' : 'post';
+        // What it does, and what nothing was, in the words of what is being approved.
+        const words = {
+          post: { verb: 'post', done: 'posted' },
+          reaction: { verb: 'react', done: 'added' },
+          edit: { verb: 'edit', done: 'changed' },
+          delete: { verb: 'delete', done: 'deleted' },
+        }[prompt.kind];
         streams.stdout.write(`${prompt.preview}\n\n`);
         const answer = await askFor(streams, {
           question: `Type ${paint(globalOptions.color, 'bold', prompt.challenge)} to approve this, or press Enter to cancel: `,
         });
         if (!answer.trim()) {
           await revokeApproval(context, approvalId);
-          streams.stdout.write(`Cancelled. Nothing was ${verb === 'react' ? 'added' : 'posted'}.\n`);
+          streams.stdout.write(`Cancelled. Nothing was ${words.done}.\n`);
           return;
         }
         await finishApproval(context, approvalId, answer, slack);
-        streams.stdout.write(`Approved. This command approves; it does not ${verb}.\n`);
+        streams.stdout.write(`Approved. This command approves; it does not ${words.verb}.\n`);
       }),
     );
 

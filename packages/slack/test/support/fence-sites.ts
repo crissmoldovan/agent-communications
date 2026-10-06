@@ -13,13 +13,22 @@ import {
 } from '@agentcomms/core';
 import { SlackContext } from '../../src/context.ts';
 import { gateDepsFor } from '../../src/operations/gate.ts';
-import { prepareDraftPost, react, sendPost } from '../../src/operations/post.ts';
+import {
+  prepareDelete,
+  prepareDraftPost,
+  prepareEdit,
+  react,
+  sendDelete,
+  sendEdit,
+  sendPost,
+} from '../../src/operations/post.ts';
 import { prepareReaction } from '../../src/operations/send.ts';
 import { type FakeSlack, type FakeUploads, type SlackRequest, startFakeSlack } from './fake-slack.ts';
 import { type Harness, newHarness } from './harness.ts';
 
 /**
- * Every provider step a Slack post, file post or reaction makes, each of which starts only after a fence (CUE-404
+ * Every provider step a Slack post, file post, reaction, edit or deletion makes, each of which starts only after a
+ * fence (CUE-404
  * Task 16; design 2026-10-05 §D1): the claimant asks the approval store whether it still holds the send, and starts
  * no step once another caller has found its lease run out and recorded the outcome as `unknown`.
  *
@@ -31,11 +40,11 @@ import { type Harness, newHarness } from './harness.ts';
 
 export interface FenceSite {
   /** Its number in the plan's table. */
-  readonly site: 1 | 2 | 3 | 4 | 5;
+  readonly site: 1 | 2 | 3 | 4 | 5 | 6 | 7;
   /** The step, as Slack is asked it. */
   readonly method: string;
   /** Where in `operations/send.ts` its fence is. */
-  readonly code: 'postPrepared' | 'postFiles' | 'reactPrepared';
+  readonly code: 'postPrepared' | 'postFiles' | 'reactPrepared' | 'editPrepared' | 'deletePrepared';
   /** Whether a request the loopback fake recorded is this step. */
   readonly matches: (request: SlackRequest) => boolean;
 }
@@ -63,13 +72,22 @@ export const SLACK_FENCE_SITES: readonly FenceSite[] = [
     code: 'reactPrepared',
     matches: (request) => api('reactions.add')(request) || api('reactions.remove')(request),
   },
+  // An edit and a deletion (design 2026-10-06): one step each, in `operations/amend.ts`.
+  { site: 6, method: 'chat.update', code: 'editPrepared', matches: api('chat.update') },
+  { site: 7, method: 'chat.delete', code: 'deletePrepared', matches: api('chat.delete') },
 ];
 
 /**
  * What a post reads of Slack and never changes: the room, before the claim, and where shared files landed, after the
- * post. Nothing else is a read: every other request a post makes is a step, and must be a site above.
+ * post — and, for an edit or a deletion, the message itself, before the claim. Nothing else is a read: every other
+ * request a flow makes is a step, and must be a site above.
  */
-export const SLACK_READS: readonly string[] = ['conversations.info', 'files.info'];
+export const SLACK_READS: readonly string[] = [
+  'conversations.info',
+  'files.info',
+  'conversations.history',
+  'conversations.replies',
+];
 
 /** Which site a request is, `read` for one of {@link SLACK_READS}, or `unlisted` — a step no fence row names. */
 export function siteOf(request: SlackRequest): FenceSite['site'] | 'read' | 'unlisted' {
@@ -82,8 +100,8 @@ export function stepsOf(requests: readonly SlackRequest[]): SlackRequest[] {
   return requests.filter((request) => siteOf(request) !== 'read');
 }
 
-/** A post of words, a post of two files, a reaction added and one removed. */
-export type Flow = 'message' | 'files' | 'reaction' | 'removal';
+/** A post of words, a post of two files, a reaction added and one removed, an edit and a deletion. */
+export type Flow = 'message' | 'files' | 'reaction' | 'removal' | 'edit' | 'delete';
 
 /** What each flow asks of Slack once claimed, site by site; two files, so the second upload is fenced too. */
 export const FLOWS: Readonly<Record<Flow, readonly FenceSite['site'][]>> = {
@@ -91,6 +109,18 @@ export const FLOWS: Readonly<Record<Flow, readonly FenceSite['site'][]>> = {
   files: [2, 3, 2, 3, 4],
   reaction: [5],
   removal: [5],
+  edit: [6],
+  delete: [7],
+};
+
+/** How each flow is named in a case's label. */
+const FLOW_NAMES: Readonly<Record<Flow, string>> = {
+  message: 'a message',
+  files: 'a two-file post',
+  reaction: 'a reaction',
+  removal: 'a removal',
+  edit: 'an edit',
+  delete: 'a deletion',
 };
 
 export interface FenceCase {
@@ -111,7 +141,7 @@ export const FENCE_CASES: readonly FenceCase[] = (Object.keys(FLOWS) as Flow[]).
       flow,
       step,
       site,
-      label: `site ${number}, ${site.method} — the ${ORDINAL[step]} step of a ${flow === 'files' ? 'two-file post' : flow}`,
+      label: `site ${number}, ${site.method} — the ${ORDINAL[step]} step of ${FLOW_NAMES[flow]}`,
     };
   }),
 );
@@ -137,7 +167,10 @@ export interface FenceWorld {
   record(approvalId: string): Promise<{ state: string | undefined; reason: string | undefined }>;
 }
 
-/** A workspace that can post under `chat`, a loopback Slack that takes posts, files and reactions, and two files. */
+/**
+ * A workspace that can post under `chat`, a loopback Slack that takes posts, files, reactions, edits and deletions —
+ * with a message of this account's to edit and delete — and two files.
+ */
 export async function fenceWorld(t: TestContext): Promise<FenceWorld> {
   const harness = await newHarness();
   await harness.addWorkspace({ alias: 'acme', mode: 'send' });
@@ -146,6 +179,12 @@ export async function fenceWorld(t: TestContext): Promise<FenceWorld> {
     'chat.postMessage': () => ({ ok: true, ts: '1700000000.000100' }),
     'reactions.add': () => ({ ok: true }),
     'reactions.remove': () => ({ ok: true }),
+    'conversations.history': () => ({
+      ok: true,
+      messages: [{ type: 'message', user: 'U0001', text: 'the reprot', ts: '1700000000.000100' }],
+    }),
+    'chat.update': () => ({ ok: true, channel: 'C1', ts: '1700000000.000100' }),
+    'chat.delete': () => ({ ok: true, channel: 'C1', ts: '1700000000.000100' }),
   });
   t.after(() => fake.close());
   const uploads = fake.acceptUploads({ ts: '1700000000.000200' });
@@ -173,6 +212,17 @@ export async function fenceWorld(t: TestContext): Promise<FenceWorld> {
         const wanted = { channel: 'C1', ts: '1700000000.000100', name: 'tada', remove: flow === 'removal' };
         const { approvalId } = await prepareReaction(await gateDepsFor(context, 'acme', slack), wanted);
         return settle(approvalId, react(context, 'acme', wanted, approvalId, slack));
+      }
+      const message = { channel: 'C1', ts: '1700000000.000100' };
+      if (flow === 'edit') {
+        const edit = await prepareEdit(context, 'acme', { ...message, text: 'the report' }, slack);
+        const input = { draftId: edit.draftId, approvalId: edit.approvalId, expectChannel: 'C1', ts: message.ts };
+        return settle(edit.approvalId, sendEdit(context, 'acme', input, slack));
+      }
+      if (flow === 'delete') {
+        const deletion = await prepareDelete(context, 'acme', message, slack);
+        const input = { ...message, approvalId: deletion.approvalId };
+        return settle(deletion.approvalId, sendDelete(context, 'acme', input, slack));
       }
       const draft = await prepareDraftPost(
         context,

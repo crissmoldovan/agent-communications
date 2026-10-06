@@ -51,9 +51,9 @@ export interface SlackResponse {
 /*
  * What each of Slack's errors is, to somebody who asked for something.
  *
- * Only the ones a read can actually meet. Anything not listed becomes PROVIDER_UNAVAILABLE carrying Slack's own
- * string, which is honest — an unmapped error is one nobody has thought about, and guessing a friendlier code for
- * it would hide that.
+ * Only the ones a read can actually meet, and the few an edit or a deletion is refused with. Anything not listed becomes
+ * PROVIDER_UNAVAILABLE carrying Slack's own string, which is honest — an unmapped error is one nobody has thought
+ * about, and guessing a friendlier code for it would hide that.
  */
 const ERRORS: Readonly<Record<string, { code: string; message: string; hint?: string }>> = {
   ratelimited: { code: 'TRANSIENT', message: 'Slack is rate-limiting this workspace', hint: 'Try again shortly.' },
@@ -88,6 +88,27 @@ const ERRORS: Readonly<Record<string, { code: string; message: string; hint?: st
     hint: 'Join the channel in Slack, then try again.',
   },
   is_archived: { code: 'NOT_FOUND', message: 'that channel is archived' },
+  /*
+   * What an edit or a deletion is refused with, in words that say what to do (design 2026-10-06 §E8). Not reads, but
+   * not left to the unmapped `Slack refused the request: …` either: that reads as an outage, and each of these is a
+   * plain answer about this one message.
+   */
+  is_inactive: { code: 'NOT_FOUND', message: 'that conversation is frozen, archived or deleted' },
+  cant_update_message: {
+    code: 'SCOPE_MISSING',
+    message: 'Slack does not let this account edit that message',
+    hint: 'Only a message this account posted can be edited, and not every kind of message can be.',
+  },
+  edit_window_closed: {
+    code: 'SCOPE_MISSING',
+    message: 'this workspace no longer lets that message be edited',
+    hint: 'Its message-editing setting has closed the window for it. Post a correction instead.',
+  },
+  cant_delete_message: {
+    code: 'SCOPE_MISSING',
+    message: 'Slack does not let this account delete that message',
+    hint: 'A workspace can keep people from deleting their own messages; if this one does, it is done in Slack by someone allowed to.',
+  },
 
   invalid_cursor: { code: 'BAD_DATA', message: 'Slack refused the pagination cursor' },
   invalid_ts_latest: { code: 'BAD_DATA', message: 'the `latest` timestamp is not one Slack accepts' },
@@ -148,8 +169,16 @@ function body(params: Record<string, string | number | boolean | undefined>): st
 /** What Slack says about a token that no longer works — the rejections a renewed token can fix. */
 const RENEWABLE: ReadonlySet<string> = new Set(['invalid_auth', 'token_expired', 'token_revoked']);
 
-/** The methods that post or react, and so the ones a failure can leave not knowing whether Slack acted. */
-export type PostingMethod = 'chat.postMessage' | 'files.completeUploadExternal' | 'reactions.add' | 'reactions.remove';
+/**
+ * The methods that post, react, edit or delete, and so the ones a failure can leave not knowing whether Slack acted.
+ */
+export type PostingMethod =
+  | 'chat.postMessage'
+  | 'files.completeUploadExternal'
+  | 'reactions.add'
+  | 'reactions.remove'
+  | 'chat.update'
+  | 'chat.delete';
 
 /*
  * The errors each posting method answers before it has acted: an allowlist, method by method, and nothing else.
@@ -170,6 +199,14 @@ export type PostingMethod = 'chat.postMessage' | 'files.completeUploadExternal' 
  * processing." A refusal recorded as failed when Slack had acted is the record that invites the post again, so an
  * error this does not know — new, undocumented, or listed for the other method only — is one whose outcome is not known.
  * Adding to a list is a decision about one error, made by reading what Slack says it means.
+ *
+ * `chat.update` and `chat.delete` (design 2026-10-06) were read the same way, on 2026-10-06. An edit is sent `text`
+ * alone, so the errors of what it never sends — blocks, attachments, `file_ids`, metadata, `reply_broadcast`,
+ * `markdown_text`, `as_user` — are left out, as a post's metadata errors are; `update_failed` ("Internal update
+ * failure") and `unable_to_share_files` are failures during the work, and `external_channel_migrating` describes
+ * Slack's state. `msg_too_long` is in, because `chat.update`'s page still lists it as a limit it refuses. And
+ * `message_not_found` from `chat.delete` is not in: the message the deletion asked to be gone is gone, which is the
+ * state the approval asked for, not a refusal of it (see `deletePrepared`).
  */
 const REFUSED_BEFORE_ACTING: Readonly<Record<PostingMethod, ReadonlySet<string>>> = {
   'chat.postMessage': new Set([
@@ -338,6 +375,83 @@ const REFUSED_BEFORE_ACTING: Readonly<Record<PostingMethod, ReadonlySet<string>>
     'invalid_name',
     'bad_timestamp',
     'no_item_specified',
+    'invalid_arguments',
+    'invalid_arg_name',
+    'invalid_array_arg',
+    'invalid_charset',
+    'invalid_form_data',
+    'invalid_post_type',
+    'missing_post_type',
+    // A rate limit, and a method that is gone.
+    'ratelimited',
+    'deprecated_endpoint',
+    'method_deprecated',
+  ]),
+  'chat.update': new Set([
+    // The token, its scopes, and its access.
+    'not_authed',
+    'invalid_auth',
+    'account_inactive',
+    'token_revoked',
+    'token_expired',
+    'not_allowed_token_type',
+    'missing_scope',
+    'no_permission',
+    'team_access_not_granted',
+    'access_denied',
+    'accesslimited',
+    'enterprise_is_restricted',
+    'two_factor_setup_required',
+    // The message, and whether this account may change it.
+    'channel_not_found',
+    'invalid_channel_id',
+    'message_not_found',
+    'cant_update_message',
+    'edit_window_closed',
+    'is_inactive',
+    'streaming_state_conflict',
+    'team_not_found',
+    // A workspace or admin policy that forbids the words.
+    'ekm_access_denied',
+    'slack_connect_file_link_sharing_blocked',
+    'slack_connect_canvas_sharing_blocked',
+    // The arguments and the text.
+    'no_text',
+    'msg_too_long',
+    'invalid_arguments',
+    'invalid_arg_name',
+    'invalid_array_arg',
+    'invalid_charset',
+    'invalid_form_data',
+    'invalid_post_type',
+    'missing_post_type',
+    // A rate limit, and a method that is gone.
+    'ratelimited',
+    'message_limit_exceeded',
+    'deprecated_endpoint',
+    'method_deprecated',
+  ]),
+  'chat.delete': new Set([
+    // The token, its scopes, and its access.
+    'not_authed',
+    'invalid_auth',
+    'account_inactive',
+    'token_revoked',
+    'token_expired',
+    'not_allowed_token_type',
+    'missing_scope',
+    'no_permission',
+    'team_access_not_granted',
+    'access_denied',
+    'accesslimited',
+    'enterprise_is_restricted',
+    'two_factor_setup_required',
+    // The message, and whether this account may delete it.
+    'channel_not_found',
+    'invalid_channel_id',
+    'cant_delete_message',
+    'ekm_access_denied',
+    // The arguments.
     'invalid_arguments',
     'invalid_arg_name',
     'invalid_array_arg',
