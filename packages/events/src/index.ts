@@ -8,3 +8,5 @@ export * from './identity/event-id.ts';
 export * from './json.ts';
 export * from './result.ts';
 export * from './text.ts';
+export * from './unicode/fold.ts';
+export * from './unicode/nfc.ts';

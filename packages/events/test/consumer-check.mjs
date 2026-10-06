@@ -57,3 +57,14 @@ assert.deepEqual(manifest.agentcommsPackage, { kind: 'library' });
 console.log(
   `events consumer check: imports, canonical JSON, an event id through WebCrypto, no node: or require( in ${shipped.length} dist files, no bin OK`,
 );
+
+// --- Unicode 15.1: NFC and full case folding (events phase A, task 5) ---
+// From the bundled tables alone: U+A7CB, assigned in Unicode 16, is its own folding under 15.1, whatever Node's is.
+assert.equal(events.UNICODE_VERSION, '15.1.0');
+assert.equal(events.nfc('é'), 'é');
+assert.equal(events.nfc('क़'), 'क़');
+assert.equal(events.caseFold('İ'), 'i̇');
+assert.equal(events.caseFold('Ɤ'), 'Ɤ');
+assert.equal(events.foldForComparison('STRASSE'), events.foldForComparison('straße'));
+console.log('events consumer check: Unicode 15.1 NFC and case folding OK');
+// --- end Unicode 15.1 ---
