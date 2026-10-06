@@ -82,3 +82,17 @@ assert.deepEqual(
 assert.deepEqual(events.toAsciiDomain('a_b.example').issues?.[0]?.detail, ['V6']);
 console.log('events consumer check: UTS #46 domains OK');
 // --- end UTS #46 ---
+
+// --- The semantic formats and exact instants (events phase A, task 7) ---
+// Never through Date: a Slack ts's microseconds survive, and .1 is .100000.
+assert.equal(events.compareInstants('2024-05-01T12:00:00.000999Z', '2024-05-01T12:00:00.001Z'), -1);
+assert.equal(events.compareInstants('2024-05-01T14:00:00+02:00', '2024-05-01T12:00:00.100000Z'), -1);
+assert.equal(events.compareInstants('2024-05-01T12:00:00.1Z', '2024-05-01T12:00:00.100000Z'), 0);
+assert.equal(events.isInstant('2024-05-01T12:00:00'), false);
+assert.equal(events.isFormat('uuid', '123E4567-E89B-12D3-A456-426614174000'), true);
+assert.equal(events.isFormat('uri', '/relative'), false);
+assert.equal(events.isFormat('domain', 'example.com.'), false);
+assert.equal(events.isFormat('email', 'Someone@example.com'), true);
+assert.deepEqual(events.canonicalEmail('Someone@Bücher.Example'), { ok: true, value: 'Someone@xn--bcher-kva.example' });
+console.log('events consumer check: the five semantic formats and exact instants OK');
+// --- end semantic formats ---

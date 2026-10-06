@@ -1,0 +1,924 @@
+{
+  "family": "formats",
+  "description": "The catalogue's five semantic formats (design D3 and Appendix A.1; events phase A plan, decisions 10, 12, 13 and 14), each with accepted and refused values, and exact RFC 3339 instant comparison, never through Date.",
+  "vectors": [
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, UTC",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00Z",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a positive offset",
+      "format": "date-time",
+      "value": "2024-05-01T14:00:00+02:00",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a negative offset",
+      "format": "date-time",
+      "value": "2024-05-01T07:30:00-04:30",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, -00:00 (offset unknown)",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00-00:00",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, t and z in lower case",
+      "format": "date-time",
+      "value": "2024-05-01t12:00:00z",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a fraction of 1 digit",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00.1Z",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a fraction of 2 digits",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00.12Z",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a fraction of 3 digits",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00.123Z",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a fraction of 4 digits",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00.1234Z",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a fraction of 5 digits",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00.12345Z",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a fraction of 6 digits",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00.123456Z",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a fraction of 7 digits",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00.1234567Z",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a fraction of 8 digits",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00.12345678Z",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a fraction of 9 digits",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00.123456789Z",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a fraction of 12 digits (any number is allowed)",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00.123456789012Z",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, February 29 in a leap year",
+      "format": "date-time",
+      "value": "2024-02-29T00:00:00Z",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, February 29 in a year divisible by 400",
+      "format": "date-time",
+      "value": "2000-02-29T00:00:00Z",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, February 29 in a common year",
+      "format": "date-time",
+      "value": "2023-02-29T00:00:00Z",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, February 29 in a century year not divisible by 400",
+      "format": "date-time",
+      "value": "1900-02-29T00:00:00Z",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, April 31",
+      "format": "date-time",
+      "value": "2024-04-31T00:00:00Z",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a leap second at 23:59:60Z",
+      "format": "date-time",
+      "value": "1998-12-31T23:59:60Z",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a leap second whose UTC equivalent is 23:59:60 (15:59:60-08:00)",
+      "format": "date-time",
+      "value": "1998-12-31T15:59:60.123-08:00",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a leap second across midnight (00:59:60+01:00 is 23:59:60Z)",
+      "format": "date-time",
+      "value": "1999-01-01T00:59:60+01:00",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, 23:59:60+01:00 is 22:59:60 UTC, no leap second",
+      "format": "date-time",
+      "value": "1998-12-31T23:59:60+01:00",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, 12:00:60Z is no leap second",
+      "format": "date-time",
+      "value": "1998-12-31T12:00:60Z",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, second 61",
+      "format": "date-time",
+      "value": "1998-12-31T23:59:61Z",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a missing offset",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a missing offset after a fraction",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00.5",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, month 13",
+      "format": "date-time",
+      "value": "2024-13-01T00:00:00Z",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, month 00",
+      "format": "date-time",
+      "value": "2024-00-01T00:00:00Z",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, day 00",
+      "format": "date-time",
+      "value": "2024-05-00T00:00:00Z",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, hour 24",
+      "format": "date-time",
+      "value": "2024-05-01T24:00:00Z",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, minute 60",
+      "format": "date-time",
+      "value": "2024-05-01T12:60:00Z",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, an empty fraction",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00.Z",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, an offset without its colon",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00+0200",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, an offset hour of 24",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00+24:00",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, an offset minute of 60",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00+01:60",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a space for T",
+      "format": "date-time",
+      "value": "2024-05-01 12:00:00Z",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, no seconds",
+      "format": "date-time",
+      "value": "2024-05-01T12:00Z",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a one-digit month",
+      "format": "date-time",
+      "value": "2024-5-01T12:00:00Z",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a date alone",
+      "format": "date-time",
+      "value": "2024-05-01",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, fullwidth digits",
+      "format": "date-time",
+      "value": "\uff12\uff10\uff12\uff14-05-01T12:00:00Z",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, trailing text",
+      "format": "date-time",
+      "value": "2024-05-01T12:00:00Zx",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: date-time, a number is not a date-time",
+      "format": "date-time",
+      "value": 1714564800,
+      "valid": false
+    },
+    {
+      "kind": "compare",
+      "name": "D5-v: instants compare across offsets",
+      "a": "2024-05-01T12:00:00Z",
+      "b": "2024-05-01T14:00:00+02:00",
+      "order": 0
+    },
+    {
+      "kind": "compare",
+      "name": "D5-v: instants compare across offsets and days",
+      "a": "2024-01-01T00:30:00+01:00",
+      "b": "2023-12-31T23:30:00Z",
+      "order": 0
+    },
+    {
+      "kind": "compare",
+      "name": "D5-v: -00:00 is UTC",
+      "a": "2024-05-01T12:00:00-00:00",
+      "b": "2024-05-01T12:00:00Z",
+      "order": 0
+    },
+    {
+      "kind": "compare",
+      "name": "D5-v: t and z in lower case",
+      "a": "2024-05-01t12:00:00z",
+      "b": "2024-05-01T12:00:00Z",
+      "order": 0
+    },
+    {
+      "kind": "compare",
+      "name": "D5-v: across fraction lengths: .1 equals .100000",
+      "a": "2024-05-01T12:00:00.1Z",
+      "b": "2024-05-01T12:00:00.100000Z",
+      "order": 0
+    },
+    {
+      "kind": "compare",
+      "name": "D5-v: no fraction equals .000",
+      "a": "2024-05-01T12:00:00Z",
+      "b": "2024-05-01T12:00:00.000Z",
+      "order": 0
+    },
+    {
+      "kind": "compare",
+      "name": "D5-v: a Slack-precision pair one microsecond apart",
+      "a": "2024-05-01T12:00:00.123456Z",
+      "b": "2024-05-01T12:00:00.123457Z",
+      "order": -1
+    },
+    {
+      "kind": "compare",
+      "name": "D5-v: one microsecond apart across fraction lengths: .000999 before .001",
+      "a": "2024-05-01T12:00:00.000999Z",
+      "b": "2024-05-01T12:00:00.001Z",
+      "order": -1
+    },
+    {
+      "kind": "compare",
+      "name": "D5-v: a nanosecond apart",
+      "a": "2024-05-01T12:00:00.000000001Z",
+      "b": "2024-05-01T12:00:00Z",
+      "order": 1
+    },
+    {
+      "kind": "compare",
+      "name": "D5-v: an earlier day",
+      "a": "2024-04-30T23:59:59.999Z",
+      "b": "2024-05-01T00:00:00Z",
+      "order": -1
+    },
+    {
+      "kind": "compare",
+      "name": "D5-v: a leap second sorts after 23:59:59.999\u2026",
+      "a": "1998-12-31T23:59:59.999999999Z",
+      "b": "1998-12-31T23:59:60Z",
+      "order": -1
+    },
+    {
+      "kind": "compare",
+      "name": "D5-v: and before the next midnight",
+      "a": "1998-12-31T23:59:60.999Z",
+      "b": "1999-01-01T00:00:00Z",
+      "order": -1
+    },
+    {
+      "kind": "compare",
+      "name": "D5-v: the same leap second at two offsets",
+      "a": "1998-12-31T15:59:60-08:00",
+      "b": "1999-01-01T00:59:60+01:00",
+      "order": 0
+    },
+    {
+      "kind": "compare",
+      "name": "D5-v: years far apart",
+      "a": "0001-01-01T00:00:00Z",
+      "b": "9999-12-31T23:59:59Z",
+      "order": -1
+    },
+    {
+      "kind": "throws",
+      "name": "D5-v: compareInstants refuses a value that is not a date-time",
+      "a": "2024-05-01T12:00:00",
+      "b": "2024-05-01T12:00:00Z",
+      "code": "FORMAT_INVALID"
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uuid, lower case",
+      "format": "uuid",
+      "value": "123e4567-e89b-12d3-a456-426614174000",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uuid, upper case",
+      "format": "uuid",
+      "value": "123E4567-E89B-12D3-A456-426614174000",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uuid, mixed case",
+      "format": "uuid",
+      "value": "123e4567-E89B-12d3-A456-426614174000",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uuid, the nil UUID",
+      "format": "uuid",
+      "value": "00000000-0000-0000-0000-000000000000",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uuid, any version or variant",
+      "format": "uuid",
+      "value": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uuid, a group of 7",
+      "format": "uuid",
+      "value": "123e456-e89b-12d3-a456-426614174000",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uuid, a group of 9",
+      "format": "uuid",
+      "value": "123e45678-e89b-12d3-a456-42661417400",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uuid, a last group of 11",
+      "format": "uuid",
+      "value": "123e4567-e89b-12d3-a456-42661417400",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uuid, a last group of 13",
+      "format": "uuid",
+      "value": "123e4567-e89b-12d3-a456-4266141740000",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uuid, no hyphens",
+      "format": "uuid",
+      "value": "123e4567e89b12d3a456426614174000",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uuid, a hyphen misplaced",
+      "format": "uuid",
+      "value": "123e4567e-89b-12d3-a456-426614174000",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uuid, a letter past f",
+      "format": "uuid",
+      "value": "123e4567-e89b-12d3-a456-42661417400g",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uuid, braces",
+      "format": "uuid",
+      "value": "{123e4567-e89b-12d3-a456-426614174000}",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uuid, a URN",
+      "format": "uuid",
+      "value": "urn:uuid:123e4567-e89b-12d3-a456-426614174000",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, https with path, query and fragment",
+      "format": "uri",
+      "value": "https://example.com/path/to?q=1&r=two#frag",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, mailto",
+      "format": "uri",
+      "value": "mailto:someone@example.com",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, a URN",
+      "format": "uri",
+      "value": "urn:isbn:0451450523",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, an IPv6 host and a port",
+      "format": "uri",
+      "value": "https://[2001:db8::1]:8443/x",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, an IPv4 host",
+      "format": "uri",
+      "value": "http://192.0.2.1/",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, userinfo",
+      "format": "uri",
+      "value": "ftp://user:pa%20ss@example.com/",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, an empty authority",
+      "format": "uri",
+      "value": "file:///etc/hosts",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, percent-encoded UTF-8",
+      "format": "uri",
+      "value": "https://example.com/%E2%82%AC",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, a scheme and an empty path",
+      "format": "uri",
+      "value": "about:",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, an IPvFuture literal",
+      "format": "uri",
+      "value": "http://[v1.fe80::a+en1]/",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, a relative reference is refused",
+      "format": "uri",
+      "value": "/relative/path",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, a network-path reference is refused",
+      "format": "uri",
+      "value": "//example.com/x",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, a bare name is refused",
+      "format": "uri",
+      "value": "example.com",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, a truncated percent-encoding",
+      "format": "uri",
+      "value": "https://example.com/%E2%8",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, a percent sign before non-hex",
+      "format": "uri",
+      "value": "https://example.com/%zz",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, non-ASCII in the host",
+      "format": "uri",
+      "value": "https://ex\u00e4mple.com/",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, non-ASCII in the path",
+      "format": "uri",
+      "value": "https://example.com/caf\u00e9",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, a space",
+      "format": "uri",
+      "value": "https://example.com/a b",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, a scheme starting with a digit",
+      "format": "uri",
+      "value": "1http://example.com/",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, an unclosed IP literal",
+      "format": "uri",
+      "value": "https://[::1/",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, nine IPv6 groups",
+      "format": "uri",
+      "value": "https://[1:2:3:4:5:6:7:8:9]/",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, a port that is not a number",
+      "format": "uri",
+      "value": "http://example.com:80a/",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: uri, two fragments",
+      "format": "uri",
+      "value": "https://example.com/#a#b",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, a dot-string",
+      "format": "email",
+      "value": "someone@example.com",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, dots between atoms",
+      "format": "email",
+      "value": "first.last@example.com",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, atext marks",
+      "format": "email",
+      "value": "a!#$%&'*+-/=?^_`{|}~b@example.com",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, a quoted string",
+      "format": "email",
+      "value": "\"quoted string\"@example.com",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, a quoted pair",
+      "format": "email",
+      "value": "\"a\\\"b\"@example.com",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, a quoted @",
+      "format": "email",
+      "value": "\"a@b\"@example.com",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, an upper-case local part is kept",
+      "format": "email",
+      "value": "Someone.Else@example.com",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, an xn-- domain",
+      "format": "email",
+      "value": "someone@xn--bcher-kva.example",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, an upper-case domain is not canonical",
+      "format": "email",
+      "value": "someone@EXAMPLE.com",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, a domain toAsciiDomain changes",
+      "format": "email",
+      "value": "someone@b\u00fccher.example",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, an address literal",
+      "format": "email",
+      "value": "someone@[192.0.2.1]",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, an IPv6 address literal",
+      "format": "email",
+      "value": "someone@[IPv6:2001:db8::1]",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, a non-ASCII local part",
+      "format": "email",
+      "value": "s\u00f6meone@example.com",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, a leading dot",
+      "format": "email",
+      "value": ".someone@example.com",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, two dots",
+      "format": "email",
+      "value": "some..one@example.com",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, a trailing dot",
+      "format": "email",
+      "value": "someone.@example.com",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, a space in a dot-string",
+      "format": "email",
+      "value": "some one@example.com",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, an unterminated quoted string",
+      "format": "email",
+      "value": "\"someone@example.com",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, an empty local part",
+      "format": "email",
+      "value": "@example.com",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, an empty domain",
+      "format": "email",
+      "value": "someone@",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, no @",
+      "format": "email",
+      "value": "someone",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, a root dot",
+      "format": "email",
+      "value": "someone@example.com.",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: email, an invalid domain",
+      "format": "email",
+      "value": "someone@a_b.example",
+      "valid": false
+    },
+    {
+      "kind": "canonicalEmail",
+      "name": "D5-v: canonicalEmail lower-cases the domain and keeps the local part",
+      "input": "Someone@EXAMPLE.com",
+      "expected": "Someone@example.com"
+    },
+    {
+      "kind": "canonicalEmail",
+      "name": "D5-v: canonicalEmail maps the domain through UTS #46",
+      "input": "someone@B\u00fccher.Example",
+      "expected": "someone@xn--bcher-kva.example"
+    },
+    {
+      "kind": "canonicalEmail",
+      "name": "D5-v: canonicalEmail keeps a quoted local part",
+      "input": "\"Some One\"@Example.COM",
+      "expected": "\"Some One\"@example.com"
+    },
+    {
+      "kind": "canonicalEmail",
+      "name": "D5-v: canonicalEmail refuses an address literal",
+      "input": "someone@[192.0.2.1]",
+      "refused": "FORMAT_INVALID"
+    },
+    {
+      "kind": "canonicalEmail",
+      "name": "D5-v: canonicalEmail refuses a non-ASCII local part",
+      "input": "s\u00f6meone@example.com",
+      "refused": "FORMAT_INVALID"
+    },
+    {
+      "kind": "canonicalEmail",
+      "name": "D5-v: canonicalEmail refuses a domain toAsciiDomain refuses",
+      "input": "someone@a_b.example",
+      "refused": "DOMAIN_INVALID"
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: domain, canonical",
+      "format": "domain",
+      "value": "example.com",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: domain, canonical IDNA-ASCII",
+      "format": "domain",
+      "value": "xn--bcher-kva.example",
+      "valid": true
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: domain, upper case is not canonical",
+      "format": "domain",
+      "value": "Example.com",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: domain, a U-label is not the canonical spelling",
+      "format": "domain",
+      "value": "b\u00fccher.example",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: domain, a root dot (decision 13)",
+      "format": "domain",
+      "value": "example.com.",
+      "valid": false
+    },
+    {
+      "kind": "format",
+      "name": "D5-v: domain, refused by UTS #46",
+      "format": "domain",
+      "value": "a_b.example",
+      "valid": false
+    },
+    {
+      "kind": "throws",
+      "name": "D5-v: isFormat refuses a name that is not a format",
+      "format": "hostname",
+      "value": "example.com",
+      "code": "FORMAT_UNKNOWN"
+    }
+  ]
+}

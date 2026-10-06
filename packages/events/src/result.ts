@@ -13,7 +13,11 @@ export type IssueCode =
   /** An event identity's tuple is not D3's: an id that is not a string, a type version that is not an integer. */
   | 'IDENTITY_INVALID'
   /** A domain is not one UTS #46 ToASCII accepts under D5's flags, or it ends in a root dot (decision 13). */
-  | 'DOMAIN_INVALID';
+  | 'DOMAIN_INVALID'
+  /** A value is not in its semantic format: an address's local part, an instant given to `compareInstants`. */
+  | 'FORMAT_INVALID'
+  /** A name is not one of the five semantic formats. */
+  | 'FORMAT_UNKNOWN';
 
 /** One thing wrong, where it is (an RFC 6901 pointer into the value checked), and any detail a caller can show. */
 export interface Issue {
