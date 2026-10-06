@@ -58,6 +58,34 @@ test('an edit is titled as one and shows the words it has now before the words i
   assert.doesNotMatch(preview, /^Body /m);
 });
 
+test('an edit of files says which it keeps, which it takes off and which it attaches, and that the words stay', () => {
+  const preview = renderChannelPreview({
+    workspace: 'acme',
+    postingAs: 'Acme Bot (U_BOT)',
+    channel: '#engineering',
+    body: 'the Q3 numbers',
+    replaces: {
+      ts: '1700000000.000100',
+      body: 'the Q3 numbers',
+      wordsUnchanged: true,
+      files: { keeps: ['notes.txt'], removes: [`chart-v1.png${RLO}`] },
+    },
+    notifies: nobody,
+    attachments: [{ filename: 'chart-v2.png', size: 2048, mimeType: 'image/png', sha256: 'a'.repeat(64) }],
+    context: { approvalId: 'ap_7Q2' },
+  });
+  const order = ['Edits:', 'Keeps:', 'Removes:', 'Attach:', 'Words, unchanged'].map((label) => preview.indexOf(label));
+  assert.ok(
+    order.every((at, index) => at !== -1 && (index === 0 || at > (order[index - 1] ?? -1))),
+    preview,
+  );
+  assert.match(preview, /^Keeps: +notes\.txt$/m);
+  assert.match(preview, /^Removes: +chart-v1\.png<U\+202E>$/m);
+  assert.match(preview, /^Attach: +chart-v2\.png · 2\.0 KB \(2,048 bytes\) · image\/png$/m);
+  assert.match(preview, /^Words, unchanged \(3 words, 14 characters\):$/m);
+  assert.doesNotMatch(preview, /^(Now|After the edit) /m, 'unchanged words are shown once, not as a change');
+});
+
 test('the words an edit replaces cannot smuggle control characters or close their fence', () => {
   const preview = renderChannelPreview({
     workspace: 'acme',

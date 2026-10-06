@@ -246,8 +246,19 @@ export interface ChannelPreview {
    * Set when this replaces a message already in the channel rather than posting a new one — an edit (Slack design
    * 2026-10-06). `body` is then what the message will say, and this is what it says now, rendered the same way: a person
    * approving an edit is agreeing to the change from one to the other, and cannot judge it from the new words alone.
+   *
+   * `wordsUnchanged` is an edit that keeps the message's words and changes only its files: one body is shown, said to
+   * be unchanged. `files` is set when an edit changes the files: the ones the message keeps and the ones taken off, by
+   * the names Slack shows; the files it adds are the preview's `attachments`, as a post's are.
    */
-  replaces?: { ts: string; body: string } | undefined;
+  replaces?:
+    | {
+        ts: string;
+        body: string;
+        wordsUnchanged?: boolean | undefined;
+        files?: { keeps: readonly string[]; removes: readonly string[] } | undefined;
+      }
+    | undefined;
   notifies: PreviewNotifies;
   attachments?: PreviewAttachment[] | undefined;
   context?:
@@ -346,6 +357,10 @@ export function renderChannelPreview(preview: ChannelPreview): string {
   lines.push(line('Channel:', truncateDisplay(preview.channel, 120)));
   if (preview.thread) lines.push(line('Thread:', truncateDisplay(preview.thread, 120)));
   if (replaces) lines.push(line('Edits:', `the message at ${truncateDisplay(replaces.ts, 40)}`));
+  // What an edit does to the files already on the message, before the files it adds (`Attach:`, below).
+  const names = (list: readonly string[]) => list.map((name) => truncateDisplay(name, 60)).join(', ');
+  if (replaces?.files && replaces.files.keeps.length > 0) lines.push(line('Keeps:', names(replaces.files.keeps)));
+  if (replaces?.files && replaces.files.removes.length > 0) lines.push(line('Removes:', names(replaces.files.removes)));
   lines.push(line('Notifies:', describeNotifies(preview.notifies)));
 
   /*
@@ -371,7 +386,8 @@ export function renderChannelPreview(preview: ChannelPreview): string {
     lines.push('', `${label} (${words} word${words === 1 ? '' : 's'}, ${body.length} characters):`);
     lines.push(renderFencedBody(body));
   };
-  if (replaces) {
+  if (replaces?.wordsUnchanged) counted('Words, unchanged', replaces.body);
+  else if (replaces) {
     counted('Now', replaces.body);
     counted('After the edit', preview.body);
   } else counted('Body', preview.body);

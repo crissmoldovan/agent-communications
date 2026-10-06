@@ -43,7 +43,10 @@ export interface FenceSite {
   readonly site: 1 | 2 | 3 | 4 | 5 | 6 | 7;
   /** The step, as Slack is asked it. */
   readonly method: string;
-  /** Where in `operations/send.ts` its fence is. */
+  /**
+   * Where its fence is: in `operations/send.ts`, or `operations/amend.ts` for an edit and a deletion. Sites 2 to 4 are
+   * fenced in both: an edit with files puts them up as a post with files does, in `uploadForEdit`.
+   */
   readonly code: 'postPrepared' | 'postFiles' | 'reactPrepared' | 'editPrepared' | 'deletePrepared';
   /** Whether a request the loopback fake recorded is this step. */
   readonly matches: (request: SlackRequest) => boolean;
@@ -100,8 +103,8 @@ export function stepsOf(requests: readonly SlackRequest[]): SlackRequest[] {
   return requests.filter((request) => siteOf(request) !== 'read');
 }
 
-/** A post of words, a post of two files, a reaction added and one removed, an edit and a deletion. */
-export type Flow = 'message' | 'files' | 'reaction' | 'removal' | 'edit' | 'delete';
+/** A post of words, a post of two files, a reaction added and one removed, an edit, one with two files, a deletion. */
+export type Flow = 'message' | 'files' | 'reaction' | 'removal' | 'edit' | 'edit-files' | 'delete';
 
 /** What each flow asks of Slack once claimed, site by site; two files, so the second upload is fenced too. */
 export const FLOWS: Readonly<Record<Flow, readonly FenceSite['site'][]>> = {
@@ -110,6 +113,8 @@ export const FLOWS: Readonly<Record<Flow, readonly FenceSite['site'][]>> = {
   reaction: [5],
   removal: [5],
   edit: [6],
+  // Two files up, shared nowhere, then the edit that attaches them.
+  'edit-files': [2, 3, 2, 3, 4, 6],
   delete: [7],
 };
 
@@ -120,6 +125,7 @@ const FLOW_NAMES: Readonly<Record<Flow, string>> = {
   reaction: 'a reaction',
   removal: 'a removal',
   edit: 'an edit',
+  'edit-files': 'an edit with two files',
   delete: 'a deletion',
 };
 
@@ -131,7 +137,7 @@ export interface FenceCase {
   readonly label: string;
 }
 
-const ORDINAL = ['first', 'second', 'third', 'fourth', 'fifth'];
+const ORDINAL = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth'];
 
 /** Every step of every flow, as a case: each site at least once, and an upload with an earlier upload behind it. */
 export const FENCE_CASES: readonly FenceCase[] = (Object.keys(FLOWS) as Flow[]).flatMap((flow) =>
@@ -214,8 +220,9 @@ export async function fenceWorld(t: TestContext): Promise<FenceWorld> {
         return settle(approvalId, react(context, 'acme', wanted, approvalId, slack));
       }
       const message = { channel: 'C1', ts: '1700000000.000100' };
-      if (flow === 'edit') {
-        const edit = await prepareEdit(context, 'acme', { ...message, text: 'the report' }, slack);
+      if (flow === 'edit' || flow === 'edit-files') {
+        const words = flow === 'edit' ? { text: 'the report' } : { files };
+        const edit = await prepareEdit(context, 'acme', { ...message, ...words }, slack);
         const input = { draftId: edit.draftId, approvalId: edit.approvalId, expectChannel: 'C1', ts: message.ts };
         return settle(edit.approvalId, sendEdit(context, 'acme', input, slack));
       }
@@ -299,6 +306,43 @@ export function watchFences(world: FenceWorld): FenceLog {
 /** What a file post says when its lease ran out after earlier steps: nothing was shared, so nothing was posted. */
 export const LEASE_RAN_OUT = 'nothing was posted: the sending lease ran out before the files were shared';
 
+/** What an edit with files says when its lease ran out after earlier steps: the message was not changed. */
+export const EDIT_LEASE_RAN_OUT = 'nothing was changed: the sending lease ran out before the message was edited';
+
+/**
+ * What an edit with files says of its files when its lease ran out: once finished — every step up to the call
+ * finishing the uploads — Slack keeps them, private to this account; before, it discards them, as a post's.
+ */
+export function editLeaseRanOutHint(uploaded: readonly { name: string }[], finished: boolean): string {
+  const names = uploaded.map((file) => file.name).join(', ');
+  const one = uploaded.length === 1;
+  const said =
+    uploaded.length === 0
+      ? []
+      : finished
+        ? [
+            `${names} ${one ? 'was' : 'were'} uploaded for this edit and never attached: Slack keeps ${one ? 'it' : 'them'}, private to this account. Delete ${one ? 'it' : 'them'} in Slack if ${one ? 'it is' : 'they are'} not wanted.`,
+          ]
+        : [`${names} ${one ? 'was' : 'were'} uploaded and never shared; Slack discards ${one ? 'it' : 'them'}.`];
+  return [
+    ...said,
+    'No step started once its lease had run out, and the message was not changed. Prepare the edit again and show the new preview to the user.',
+  ].join(' ');
+}
+
+/** The refusal a flow gives when its lease ran out once `steps` steps had reached Slack, after the first. */
+function leaseWords(
+  flow: Flow,
+  steps: number,
+  uploaded: readonly { name: string }[],
+): { message: string; hint: string } {
+  if (flow === 'edit-files') {
+    // Steps 0 to 4 put the files up and finish them; once all five have reached Slack, they are kept.
+    return { message: EDIT_LEASE_RAN_OUT, hint: editLeaseRanOutHint(uploaded, steps >= 5) };
+  }
+  return { message: LEASE_RAN_OUT, hint: leaseRanOutHint(uploaded) };
+}
+
 /** What it says of the files, exactly: those that went up, which Slack discards, and what to do next. */
 export function leaseRanOutHint(uploaded: readonly { name: string }[]): string {
   const names = uploaded.map((file) => file.name).join(', ');
@@ -364,11 +408,12 @@ export async function assertStoppedBefore(
     return;
   }
   const uploaded = uploadedAfter(world.uploads, c.step);
-  assert.equal(error.message, LEASE_RAN_OUT, what);
-  assert.equal(error.hint, leaseRanOutHint(uploaded), what);
+  const words = leaseWords(c.flow, c.step, uploaded);
+  assert.equal(error.message, words.message, what);
+  assert.equal(error.hint, words.hint, what);
   assert.deepEqual(error.details?.uploaded, uploaded, what);
   assert.equal('possiblyUploaded' in (error.details ?? {}), false, `${what}: a file was said to be possibly up`);
-  assert.equal(record.reason, LEASE_RAN_OUT, what);
+  assert.equal(record.reason, words.message, what);
   assert.deepEqual(
     audit?.ids?.files ?? [],
     uploaded.map((file) => file.id),
@@ -402,8 +447,9 @@ export async function assertStartedOnlyThatStep(
   const { error } = outcome;
   assert.ok(error instanceof CommsError, `${what}: ${error === undefined ? 'it was posted' : String(error)}`);
   const uploaded = uploadedAfter(world.uploads, c.step + 1);
-  assert.equal(error.message, LEASE_RAN_OUT, what);
-  assert.equal(error.hint, leaseRanOutHint(uploaded), what);
+  const words = leaseWords(c.flow, c.step + 1, uploaded);
+  assert.equal(error.message, words.message, what);
+  assert.equal(error.hint, words.hint, what);
   assert.deepEqual(error.details?.uploaded, uploaded, what);
   assert.equal(record.state, 'failed', what);
 }

@@ -20,7 +20,14 @@ import {
 } from './amend.ts';
 import { gateDepsFor } from './gate.ts';
 import { NameBook } from './people.ts';
-import { type PostView, REACH_UNKNOWN, type ReactionOptions, reactionOfApproval, viewPost } from './send.ts';
+import {
+  filesAsRecorded,
+  type PostView,
+  REACH_UNKNOWN,
+  type ReactionOptions,
+  reactionOfApproval,
+  viewPost,
+} from './send.ts';
 import type { SessionDeps } from './session.ts';
 import { requireWorkspace } from './workspaces.ts';
 
@@ -246,13 +253,15 @@ async function currentEdit(
   context: SlackContext,
   record: ApprovalRecord,
   workspace: string,
-  ts: string,
+  edit: { ts: string; removeFiles: readonly string[] },
   deps: SessionDeps,
 ): Promise<{ draft: SlackDraft; view: EditView }> {
   const drafts = openDraftStore(context.core.paths.stateDir, context.now, context.handoffs);
   const draft = await drafts.get(record.draftId);
   const gate = await gateDepsFor(context, workspace, deps);
-  const view = await viewEdit(gate, draft, ts, new NameBook());
+  // An edit that adds files reads each one again first, as `prepareMessageEdit` did: a changed file is refused here.
+  await filesAsRecorded(gate, draft);
+  const view = await viewEdit(gate, draft, edit.ts, edit.removeFiles, new NameBook());
   const edited = draft.revision !== record.draftMessageId;
   const notifiesRoom = view.preview.notifies.channel || view.preview.notifies.here;
   if (!edited && view.roomUnread && (notifiesRoom || view.digest !== record.contentDigest)) {
@@ -308,7 +317,7 @@ export async function beginApproval(
   }
   const edit = editOfApproval(record);
   if (edit) {
-    const { view } = await currentEdit(context, record, name, edit.ts, deps);
+    const { view } = await currentEdit(context, record, name, edit, deps);
     const preview = renderChannelPreview({
       ...view.preview,
       context: { ...view.preview.context, approvalId, note: 'nothing has been changed — approving does not change it' },
@@ -374,7 +383,7 @@ export async function finishApproval(
   const { draft, view } =
     edit === undefined
       ? await currentPost(context, record, name, deps)
-      : await currentEdit(context, record, name, edit.ts, deps);
+      : await currentEdit(context, record, name, edit, deps);
   await context.core.approvals.approve(
     approvalId,
     'terminal',

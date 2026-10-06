@@ -200,12 +200,13 @@ export type PostingMethod =
  * error this does not know — new, undocumented, or listed for the other method only — is one whose outcome is not known.
  * Adding to a list is a decision about one error, made by reading what Slack says it means.
  *
- * `chat.update` and `chat.delete` (design 2026-10-06) were read the same way, on 2026-10-06. An edit is sent `text`
- * alone, so the errors of what it never sends — blocks, attachments, `file_ids`, metadata, `reply_broadcast`,
- * `markdown_text`, `as_user` — are left out, as a post's metadata errors are; `update_failed` ("Internal update
- * failure") and `unable_to_share_files` are failures during the work, and `external_channel_migrating` describes
- * Slack's state. `msg_too_long` is in, because `chat.update`'s page still lists it as a limit it refuses. And
- * `message_not_found` from `chat.delete` is not in: the message the deletion asked to be gone is gone, which is the
+ * `chat.update` and `chat.delete` (design 2026-10-06) were read the same way, on 2026-10-06. An edit is sent its
+ * words and, when it changes them, `file_ids`, so the errors of what it never sends — blocks, attachments, metadata,
+ * `reply_broadcast`, `markdown_text`, `as_user` — are left out, as a post's metadata errors are, and the errors about
+ * the files it names, or a policy that forbids sharing them, are in. `update_failed` ("Internal update failure") and
+ * `unable_to_share_files` ("Sharing the files failed") are failures during the work, and `external_channel_migrating`
+ * describes Slack's state. `msg_too_long` is in, because `chat.update`'s page still lists it as a limit it refuses.
+ * And `message_not_found` from `chat.delete` is not in: the message the deletion asked to be gone is gone, which is the
  * state the approval asked for, not a refusal of it (see `deletePrepared`).
  */
 const REFUSED_BEFORE_ACTING: Readonly<Record<PostingMethod, ReadonlySet<string>>> = {
@@ -411,10 +412,21 @@ const REFUSED_BEFORE_ACTING: Readonly<Record<PostingMethod, ReadonlySet<string>>
     'is_inactive',
     'streaming_state_conflict',
     'team_not_found',
-    // A workspace or admin policy that forbids the words.
+    // A workspace or admin policy that forbids the words or the files.
     'ekm_access_denied',
     'slack_connect_file_link_sharing_blocked',
     'slack_connect_canvas_sharing_blocked',
+    'slack_connect_blocked_file_type',
+    'slack_connect_clip_sharing_blocked',
+    'slack_connect_file_upload_sharing_blocked',
+    'blocked_file_type',
+    'posting_to_channel_denied',
+    // The files it names.
+    'file_not_found',
+    'file_deleted',
+    'file_is_deleted',
+    'file_share_limit_reached',
+    'max_file_sharing_exceeded',
     // The arguments and the text.
     'no_text',
     'msg_too_long',

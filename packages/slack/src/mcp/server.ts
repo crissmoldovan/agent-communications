@@ -1030,7 +1030,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     {
       title: 'Prepare an edit',
       description:
-        'Return the preview a person must approve to change the words of a message this account posted, with its approval id. **Nothing is changed.** Pass the message’s `ts`, and either the new words — `channel` (the message’s) with `text`, stored as a local draft — or `draftId` alone for a draft already written. Not both. A message anyone else wrote is refused before anything is shown. The preview shows the words it has now and the words it will have, and how many people see it; an edit changes words only — no thread, no files. Show it in full and wait. The same as the command line’s `draft create` then `edit prepare`.',
+        'Return the preview a person must approve to edit a message this account posted — its words, its files, or both — with its approval id. **Nothing is changed.** Pass the message’s `ts`, and either `channel` (the message’s) with any of `text` (the new words), `files` (local files to add, by path) and `removeFiles` (ids of the message’s own files to take off, as a read lists them), or `draftId` for a draft already written (with `removeFiles` if any go). Leave `text` out to keep the message’s words exactly as they are: never retype them to change only its files. To replace a file, add the new one and take the old one off in the same edit. A message anyone else wrote is refused before anything is shown. The preview shows the words now and after, the files it keeps, takes off and adds — each new one by name, size, type, SHA-256 and path — and how many people see it; files taken off stay in Slack, shared nowhere. Show it in full and wait. The same as the command line’s `draft create` then `edit prepare`.',
       inputSchema: {
         ...workspaceArg,
         ts: z.string().describe('the message to edit, by its ts as a read returned it'),
@@ -1042,9 +1042,17 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
           .string()
           .optional()
           .describe('the conversation the message is in, for new words: a channel’s C… or G…, or a DM’s D…'),
-        text: z.string().optional().describe('the new words. Markup in it is shown, not interpreted'),
+        text: z
+          .string()
+          .optional()
+          .describe('the new words — leave out to keep the message’s own. Markup in it is shown, not interpreted'),
         mentionUsers: z.array(z.string()).optional().describe('user ids to mention, by id — never by name'),
         broadcast: oneOfWords(BROADCASTS).optional().describe('interrupts the room; needs a person'),
+        files: filesArg().describe(`${FILES_HELP}, added after the files the message keeps`),
+        removeFiles: z
+          .array(z.string())
+          .optional()
+          .describe('ids of the message’s own files to take off (F…), as a read lists them'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -1061,6 +1069,8 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
               text: args.text,
               mentionUsers: args.mentionUsers,
               broadcast: args.broadcast,
+              files: args.files,
+              removeFiles: args.removeFiles,
             },
             slackDeps,
           ),
@@ -1076,7 +1086,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     {
       title: 'Make a prepared edit',
       description:
-        'Make an edit slack_edit_prepare prepared — only after the person has seen that whole preview and said yes to it in this conversation. Pass the channel and the ts the preview showed; if they are not the approval’s, nothing is changed. Under the workspace’s `chat` policy this edits the message. Under `confirm`, and for any @channel, @here or room of 50 or more, it returns APPROVAL_PENDING with the approve command the person runs at their own terminal: you cannot approve it yourself — tell them, and call this again once they have. Under `never` it refuses. Single use; a change to the draft, to the message in Slack, or a room that grew voids the approval. Everyone who can read the channel sees the new words.',
+        'Make an edit slack_edit_prepare prepared — only after the person has seen that whole preview and said yes to it in this conversation. Pass the channel and the ts the preview showed; if they are not the approval’s, nothing is changed. Every new file is read again first, and nothing is sent unless each still has the SHA-256 the preview showed; it returns the message’s files after the edit. Under the workspace’s `chat` policy this edits the message. Under `confirm`, and for any @channel, @here or room of 50 or more, it returns APPROVAL_PENDING with the approve command the person runs at their own terminal: you cannot approve it yourself — tell them, and call this again once they have. Under `never` it refuses. Single use; a change to the draft, to the message in Slack, or a room that grew voids the approval. Everyone who can read the channel sees the new words and files.',
       inputSchema: {
         ...workspaceArg,
         draftId: z.string().describe('from slack_edit_prepare'),

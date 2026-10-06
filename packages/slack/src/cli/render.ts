@@ -324,7 +324,12 @@ export function renderChanged(done: EditedMessage | DeletedMessage, act: 'edit' 
     done.note === undefined
       ? ''
       : ` ${done.note.charAt(0).toUpperCase()}${done.note.slice(1)}${/[.!?]$/.test(done.note) ? '' : '.'}`;
-  return `${act === 'edit' ? 'Edited' : 'Deleted'} the message at ${done.ts} in ${done.channel}.${after}`;
+  const head = `${act === 'edit' ? 'Edited' : 'Deleted'} the message at ${done.ts} in ${done.channel}.${after}`;
+  // An edit that changed the files says which the message has now, by id and name, as `post send` lists a post's.
+  const files = 'files' in done ? done.files : undefined;
+  if (files === undefined) return head;
+  if (files.length === 0) return `${head}\n  It has no files now.`;
+  return [head, ...files.map((file) => `  ${file.id}  ${truncateDisplay(file.name, 80)}`)].join('\n');
 }
 
 /** What `draft delete` removed — and, for a draft nobody could read, that what it said is gone unseen. */

@@ -12,7 +12,6 @@ import {
   amendWorld,
   audited,
   DROP,
-  homeFile,
   mine,
   PARENT_TS,
   refusal,
@@ -186,7 +185,7 @@ test('a draft and new words together, or neither, is refused rather than guessed
   assert.match(neither.message, /nothing to prepare/);
 });
 
-test('a draft written as a reply in a thread, or with files, is not an edit', async () => {
+test('a draft written as a reply in a thread is not an edit: an edit leaves a message where it is', async () => {
   const w = await amendWorld();
   const threaded = await createDraft(w.context, 'acme', { channel: 'C1', text: FIXED, threadTs: PARENT_TS });
   const inThread = await refusal(
@@ -195,18 +194,6 @@ test('a draft written as a reply in a thread, or with files, is not an edit', as
   );
   assert.equal(inThread.code, 'USAGE');
   assert.equal(inThread.details?.reason, 'edit-in-thread');
-
-  const withFiles = await createDraft(w.context, 'acme', {
-    channel: 'C1',
-    text: FIXED,
-    files: [homeFile(w.harness, 'chart.txt', 'the chart')],
-  });
-  const filed = await refusal(
-    prepareEdit(w.context, 'acme', { ts: TS, draftId: withFiles.draftId }, w.slack),
-    'a draft with files',
-  );
-  assert.equal(filed.code, 'USAGE');
-  assert.equal(filed.details?.reason, 'edit-with-files');
   assert.equal(w.fake.count('chat.update'), 0);
 });
 
@@ -363,12 +350,17 @@ test('the documented refusals of chat.update and chat.delete are certain, and Sl
     'access_denied',
     'accesslimited',
     'account_inactive',
+    'blocked_file_type',
     'cant_update_message',
     'channel_not_found',
     'deprecated_endpoint',
     'edit_window_closed',
     'ekm_access_denied',
     'enterprise_is_restricted',
+    'file_deleted',
+    'file_is_deleted',
+    'file_not_found',
+    'file_share_limit_reached',
     'invalid_arg_name',
     'invalid_arguments',
     'invalid_array_arg',
@@ -378,6 +370,7 @@ test('the documented refusals of chat.update and chat.delete are certain, and Sl
     'invalid_form_data',
     'invalid_post_type',
     'is_inactive',
+    'max_file_sharing_exceeded',
     'message_limit_exceeded',
     'message_not_found',
     'method_deprecated',
@@ -388,9 +381,13 @@ test('the documented refusals of chat.update and chat.delete are certain, and Sl
     'no_text',
     'not_allowed_token_type',
     'not_authed',
+    'posting_to_channel_denied',
     'ratelimited',
+    'slack_connect_blocked_file_type',
     'slack_connect_canvas_sharing_blocked',
+    'slack_connect_clip_sharing_blocked',
     'slack_connect_file_link_sharing_blocked',
+    'slack_connect_file_upload_sharing_blocked',
     'streaming_state_conflict',
     'team_access_not_granted',
     'team_not_found',

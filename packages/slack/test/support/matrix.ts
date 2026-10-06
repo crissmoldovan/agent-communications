@@ -39,7 +39,7 @@ import { type Harness, newHarness, tempDir } from './harness.ts';
  * and of a reaction (`approve`: its begin, then its finish), and `slack_approval_wait`.
  */
 
-type What = 'post' | 'files' | 'reaction' | 'edit' | 'delete';
+type What = 'post' | 'files' | 'reaction' | 'edit' | 'edit-files' | 'delete';
 
 interface ToolResult {
   isError?: boolean;
@@ -73,6 +73,7 @@ const ACT: Record<What, string> = {
   files: 'files.completeUploadExternal',
   reaction: 'reactions.add',
   edit: 'chat.update',
+  'edit-files': 'chat.update',
   delete: 'chat.delete',
 };
 
@@ -84,8 +85,9 @@ async function prepare(context: SlackContext, fake: FakeSlack, what: What, alias
     const prepared = await prepareReaction(gate, { channel: REACTION.channel, ts: REACTION.ts, name: REACTION.emoji });
     return { draftId: '', approvalId: prepared.approvalId };
   }
-  if (what === 'edit') {
-    const prepared = await prepareEdit(context, alias, { ...MESSAGE, text: 'shipping at noon' }, { fetch: fake.fetch });
+  if (what === 'edit' || what === 'edit-files') {
+    const words = what === 'edit' ? { text: 'shipping at noon' } : { files: [file] };
+    const prepared = await prepareEdit(context, alias, { ...MESSAGE, ...words }, { fetch: fake.fetch });
     return { draftId: prepared.draftId, approvalId: prepared.approvalId };
   }
   if (what === 'delete') {
@@ -253,7 +255,7 @@ async function claim(w: World, approvalId: string, pinned?: string): Promise<Obs
     const result =
       w.what === 'reaction'
         ? await client.call('slack_react_send', { ...where, ...REACTION, approvalId })
-        : w.what === 'edit'
+        : w.what === 'edit' || w.what === 'edit-files'
           ? await client.call('slack_edit_send', {
               ...where,
               draftId: w.draftId,
@@ -328,6 +330,11 @@ const NAMES: Record<What, { claim: string; approve: string; look: string }> = {
     look: 'slack_approval_wait (a reaction)',
   },
   edit: { claim: 'slack_edit_send', approve: 'approve (terminal, an edit)', look: 'slack_approval_wait (an edit)' },
+  'edit-files': {
+    claim: 'slack_edit_send (an edit with a file)',
+    approve: 'approve (terminal, an edit with a file)',
+    look: 'slack_approval_wait (an edit with a file)',
+  },
   delete: {
     claim: 'slack_delete_send',
     approve: 'approve (terminal, a deletion)',
@@ -335,7 +342,7 @@ const NAMES: Record<What, { claim: string; approve: string; look: string }> = {
   },
 };
 
-for (const what of ['post', 'files', 'reaction', 'edit', 'delete'] as const) {
+for (const what of ['post', 'files', 'reaction', 'edit', 'edit-files', 'delete'] as const) {
   const surfaces: ReadonlyArray<MatrixSurface<World>> = [
     { name: NAMES[what].look, action: 'look', act: (w, id) => look(w, id) },
     { name: NAMES[what].claim, action: 'claim', act: (w, id) => claim(w, id) },

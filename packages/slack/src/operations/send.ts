@@ -393,7 +393,7 @@ export function requireFileSending(
 }
 
 /** The jail's folders, which every file post needs — and which only a caller that built its deps by hand could lack. */
-function attachPolicyFor(deps: Pick<PrepareDeps, 'attachPolicy'>): AttachPolicy {
+export function attachPolicyFor(deps: Pick<PrepareDeps, 'attachPolicy'>): AttachPolicy {
   if (deps.attachPolicy === undefined) {
     throw new CommsError('SEND_REFUSED', 'a post with files was prepared without the folders files may come from', {
       hint: 'This is a bug — please report it.',
@@ -418,7 +418,7 @@ export function refileCommand(workspace: string, draftId: string, handoffs: CliH
  * bytes other than the ones listed. The draft's record is what the digest binds, so a file that changed since is
  * refused here rather than shown as its old self.
  */
-async function filesAsRecorded(
+export async function filesAsRecorded(
   deps: Pick<PrepareDeps, 'attachPolicy' | 'workspaceName' | 'handoffs'>,
   draft: SlackDraft,
 ): Promise<void> {
@@ -1154,7 +1154,7 @@ const PUBLISH_FILES = 'files.completeUploadExternal';
 const SHARE_WAITS_MS: readonly number[] = [0, 250, 750, 2000];
 
 /** Who uploaded what, in words: for a failure after some files had gone up and before any was shared. */
-function discarded(uploaded: readonly { name: string }[]): string {
+export function discarded(uploaded: readonly { name: string }[]): string {
   if (uploaded.length === 0) return '';
   const names = uploaded.map((file) => truncateDisplay(file.name, 60));
   return uploaded.length === 1
@@ -1166,7 +1166,7 @@ function discarded(uploaded: readonly { name: string }[]): string {
  * A file whose bytes went out and whose answer did not come back as success, in words: a 500 after the body was read,
  * or a connection dropped. Whether Slack kept them is not known, so it is said to be possible, never either way.
  */
-function perhapsDiscarded(possible: readonly { name: string }[]): string {
+export function perhapsDiscarded(possible: readonly { name: string }[]): string {
   if (possible.length === 0) return '';
   const names = possible.map((file) => truncateDisplay(file.name, 60)).join(', ');
   return `${names} may have been uploaded before the failure; nothing shared it, so if Slack has it, Slack discards it.`;

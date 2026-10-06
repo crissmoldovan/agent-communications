@@ -6,7 +6,8 @@ import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { run } from '../src/cli/program.ts';
 import { createSlackMcpServer } from '../src/mcp/server.ts';
-import { audited, mine, type Script, scriptedSlack, TS, WORDS } from './support/amend.ts';
+import { audited, homeFile, mine, type Script, scriptedSlack, TS, WORDS } from './support/amend.ts';
+import { startFakeSlack } from './support/fake-slack.ts';
 import { slackCommand } from './support/handoffs.ts';
 import { type Harness, newHarness } from './support/harness.ts';
 
@@ -359,4 +360,71 @@ test('cancelling an edit or a deletion at the approve prompt says what was not d
     assert.match(cancelled.stdout, new RegExp(`Cancelled\\. ${nothing.replace('.', '\\.')}`), kind);
     assert.equal(asV2(await harness.core.approvals.get(approvalId))?.state, 'revoked', kind);
   }
+});
+
+test('a file is replaced over MCP in two calls, and taken off at the command line with --remove-file', async (t) => {
+  const harness = await newHarness();
+  await harness.addWorkspace({ alias: 'acme', mode: 'send', sendPolicy: 'chat' });
+  const old = { id: 'F0OLD00001', name: 'chart-v1.png' };
+  const fake = await startFakeSlack({
+    'conversations.history': () => ({ ok: true, messages: [mine({ files: [old] })] }),
+    'conversations.info': () => ({ ok: true, channel: { id: 'C1', name: 'eng', num_members: 4, is_member: true } }),
+    'chat.update': () => ({ ok: true, channel: 'C1', ts: TS }),
+  });
+  t.after(() => fake.close());
+  const uploads = fake.acceptUploads({ ts: TS });
+  const chart = homeFile(harness, 'chart-v2.png', 'the second chart');
+  const { call, close } = await connect(harness, fake.fetch);
+  try {
+    const prepared = await call('slack_edit_prepare', {
+      workspace: 'acme',
+      ts: TS,
+      channel: 'C1',
+      files: [chart],
+      removeFiles: [old.id],
+    });
+    assert.notEqual(prepared.isError, true, JSON.stringify(prepared.structuredContent));
+    const { draftId, approvalId, preview } = prepared.structuredContent as {
+      draftId: string;
+      approvalId: string;
+      preview: { replaces: { files: unknown; wordsUnchanged: boolean } };
+    };
+    assert.deepEqual(preview.replaces.files, { keeps: [], removes: ['chart-v1.png'] });
+    assert.equal(preview.replaces.wordsUnchanged, true);
+
+    const edited = await call('slack_edit_send', {
+      workspace: 'acme',
+      draftId,
+      approvalId,
+      expectChannel: 'C1',
+      ts: TS,
+    });
+    assert.notEqual(edited.isError, true, JSON.stringify(edited.structuredContent));
+    assert.deepEqual((edited.structuredContent as { files: unknown }).files, [
+      { id: 'F0UP0001', name: 'chart-v2.png' },
+    ]);
+    const update = fake.requests.find((request) => request.method === 'chat.update');
+    assert.equal(update?.params.get('file_ids'), JSON.stringify(['F0UP0001']));
+    assert.equal(update?.params.get('text'), WORDS, 'the words kept, exactly as Slack holds them');
+    assert.equal(uploads.completed[0]?.channelId, null, 'the new file was shared nowhere before the edit');
+  } finally {
+    await close();
+  }
+
+  // At the command line: a draft with no words keeps the message's, and --remove-file takes the file off.
+  const created = await cli(
+    harness,
+    ['--json', 'draft', 'create', '--workspace', 'acme', '--channel', 'C1', '--file', chart],
+    fake.fetch,
+  );
+  const fresh = created.json<{ data: { draftId: string } }>().data.draftId;
+  const shown = await cli(
+    harness,
+    ['edit', 'prepare', '--workspace', 'acme', '--draft', fresh, '--ts', TS, '--remove-file', old.id],
+    fake.fetch,
+  );
+  assert.equal(shown.code, EXIT_CODES.OK, shown.stderr);
+  assert.match(shown.stdout, /^Removes: +chart-v1\.png$/m);
+  assert.match(shown.stdout, /^Attach: +chart-v2\.png · /m);
+  assert.match(shown.stdout, /^Words, unchanged \(/m);
 });

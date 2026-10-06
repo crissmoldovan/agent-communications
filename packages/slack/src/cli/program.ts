@@ -1343,15 +1343,26 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
 
   workspaceOption(edit.command('prepare'))
     .description('show the message as it is and as it would be, and how many people see it. Changes nothing')
-    .requiredOption('--draft <draftId>', 'the draft holding the new words, in the message’s channel')
+    .requiredOption(
+      '--draft <draftId>',
+      'the draft holding the new words and files to add, in the message’s channel — with no words, the message keeps its own',
+    )
     .requiredOption('--ts <ts>', 'the message to edit')
+    .option(
+      '--remove-file <fileId...>',
+      'take this file of the message off it, by id; it stays in Slack, shared nowhere',
+    )
     .action(
-      act(async (context, options, flags: Options) => {
+      act(async (context, _options, flags: Options) => {
         // The same operation as `slack_edit_prepare` given a `draftId`: see `prepareEdit`.
         const prepared = await prepareEdit(
           context,
           String(flags.workspace),
-          { draftId: String(flags.draft), ts: String(flags.ts) },
+          {
+            draftId: String(flags.draft),
+            ts: String(flags.ts),
+            removeFiles: flags.removeFile as string[] | undefined,
+          },
           { fetch: deps.read, baseUrl: deps.slackBaseUrl },
         );
         writeResult(prepared, output(), (data) => renderChannelPreview(data.preview), streams);
@@ -1367,7 +1378,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .requiredOption('--expect-channel <id>', 'the channel you believe the message is in')
     .requiredOption('--ts <ts>', 'the message you believe this edits')
     .action(
-      act(async (context, options, flags: Options) => {
+      act(async (context, _options, flags: Options) => {
         // The same operation as `slack_edit_send`: see `sendEdit`.
         const edited = await sendEdit(
           context,
@@ -1391,7 +1402,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .requiredOption('--channel <id>', 'the conversation the message is in')
     .requiredOption('--ts <ts>', 'the message to delete')
     .action(
-      act(async (context, options, flags: Options) => {
+      act(async (context, _options, flags: Options) => {
         // The same operation as `slack_delete_prepare`: see `prepareDelete`.
         const prepared = await prepareDelete(
           context,
@@ -1409,7 +1420,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .requiredOption('--ts <ts>', 'the message')
     .requiredOption('--approval <approvalId>', 'the approval `delete prepare` returned')
     .action(
-      act(async (context, options, flags: Options) => {
+      act(async (context, _options, flags: Options) => {
         // The same operation as `slack_delete_send`: see `sendDelete`.
         const deleted = await sendDelete(
           context,

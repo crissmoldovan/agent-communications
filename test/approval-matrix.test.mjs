@@ -72,6 +72,7 @@ const SURFACES = {
         'slack_approval_wait (a post with a file)',
         'slack_approval_wait (a reaction)',
         'slack_approval_wait (an edit)',
+        'slack_approval_wait (an edit with a file)',
         'slack_approval_wait (a deletion)',
       ],
       claim: [
@@ -79,6 +80,7 @@ const SURFACES = {
         'slack_post_send (a post with a file)',
         'slack_react_send',
         'slack_edit_send',
+        'slack_edit_send (an edit with a file)',
         'slack_delete_send',
       ],
       approve: [
@@ -86,6 +88,7 @@ const SURFACES = {
         'approve (terminal, a post with a file)',
         'approve (terminal, a reaction)',
         'approve (terminal, an edit)',
+        'approve (terminal, an edit with a file)',
         'approve (terminal, a deletion)',
       ],
     },
