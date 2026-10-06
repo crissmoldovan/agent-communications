@@ -1,8 +1,8 @@
 # Local event emission, phase A — `@agentcomms/events` implementation plan
 
-Spec: [2026-10-05-local-event-emission-design.md](../specs/2026-10-05-local-event-emission-design.md), at `225d7855`
-(revised for review round 21, awaiting round 22). Phase A is §4's row A (spec line 2821). The sections that define
-it are §2, D1, D3, D5, D6, D14, the Phase A rows of §5 and Appendix A, which is normative. Read the channel-plugins
+Spec: [2026-10-05-local-event-emission-design.md](../specs/2026-10-05-local-event-emission-design.md), at `225d7855`,
+which passed review round 22 (ready to plan) unchanged. Phase A is §4's row A (spec line 2821). The sections that
+define it are §2, D1, D3, D5, D6, D14, the Phase A rows of §5 and Appendix A, which is normative. Read the channel-plugins
 design ([2026-09-26-channel-plugins-design.md](../specs/2026-09-26-channel-plugins-design.md)) as well: §2 and §4
 there are what the `agentcommsPackage` declaration has to stay consistent with.
 
@@ -11,20 +11,22 @@ once below and the tasks refer to it by number. Base: `feat/events-a` at `225d78
 release. Phase A merges to `main` with `@agentcomms/events` **held back from publication** (decision 1), so the next
 `v*` tag publishes exactly the six packages it publishes today.
 
-**The spec is not final.** It awaits review round 22. If that round changes Appendix A, Task 10's inventory test fails
-on the first field or pattern that moved, by design; re-transcribe and continue. If it changes D5, D6 or D14, re-read
-the decisions below before starting the task that implements that section.
+**If the spec changes later**, Task 10's extraction test fails on the first Appendix A constraint that moved, by
+design: re-extract, re-transcribe and continue. A change to D5, D6 or D14 means re-reading the decisions below before
+starting the task that implements that section.
 
 **How to use this plan.** Each numbered task is one reviewable commit, or the short named series its heading gives.
 Every task writes its tests first and watches them fail for the right reason, then writes the code. Every guard is
 mutation-tested: break the guarded condition, watch the named test fail, restore it, and record the mutation and the
 failing test in the commit body. Every task leaves the full `pnpm verify` green before its commit, and every batch
-ends with the full `pnpm verify` run again on `feat/events-a` after its merges (AGENTS.md). No task pushes, tags or
-publishes; `feat/events-a` reaches `main` when the owner says so.
+ends with the full `pnpm verify` run again on `feat/events-a` after its merges (AGENTS.md). From Task 3c on, every
+task that adds or changes a vector family also runs `pnpm verify:browser` before its commit, and every batch ends with
+it too (decision 3). It is not part of `pnpm verify`, because it needs Playwright's Chromium and WebKit on the
+machine. No task pushes, tags or publishes; `feat/events-a` reaches `main` when the owner says so.
 
 Test titles carry the label of the §5 row or plan obligation they cover (`CND-h: omitted caseSensitive …`), so the
 ownership table at the end can be audited with
-`grep -rhoE "\b(CAT|CND|MAP|TNT|PKG|REL|D14|A8|D3|D5|UNI|ISO|CJ)-[a-z0-9]+\b" test packages/events/test | sort -u`.
+`grep -rhoE "\b(CAT|CND|MAP|TNT|PKG|REL|D14|A8|D3|D5|UNI|ISO|BRW|CJ)-[a-z0-9]+\b" test packages/events/test packages/events/scripts | sort -u`.
 
 **Parallel work.** Batches run in order. Inside a batch, tracks marked parallel run in separate worktrees, each on
 its own branch from the batch's starting point:
@@ -42,7 +44,7 @@ each at the end of `packages/events/test/consumer-check.mjs`. Resolve those conf
 | Batch | Tasks | Parallel tracks |
 |---|---|---|
 | 1 — release safety | 1 → 2 | none |
-| 2 — the package | 3 | none |
+| 2 — the package | 3a → 3b → 3c | none |
 | 3 — foundations | U: 4 → 5 → 6 → 7; S: 8 → 9; T: 10 | U, S and T in three worktrees |
 | 4 — the catalogue | 11 | none |
 | 5 — conditions, mapping, wire | C: 12; M: 13 → 14 | C and M in two worktrees |
@@ -51,8 +53,10 @@ each at the end of `packages/events/test/consumer-check.mjs`. Resolve those conf
 **AGENTS.md, as it applies here.**
 
 - **Phase A makes no provider request of any kind.** Nothing in it talks to Gmail, Slack, Resend or WhatsApp; no
-  fake transport is needed because no task reaches a transport. The only network access in the whole phase is Task 4's
-  one-time `--fetch` of the pinned Unicode files from unicode.org, run by hand, never by a test.
+  fake transport is needed because no task reaches a transport. The only network access in the whole phase is
+  Task 4's one-time `--fetch` of the pinned Unicode files from unicode.org, run by hand, and Playwright's one-time
+  download of Chromium and WebKit (Task 3c). No test fetches anything: `pnpm verify:browser` serves its page from a
+  loopback listener and the page's CSP allows nothing else.
 - **Fixtures are synthetic.** Addresses use `example.com`, `example.org` or `*.test`; Slack ids are obviously fake
   (`T00000000`, `C00000000`, `U00000000`); WhatsApp numbers are in the UK's drama range (`447700900000`–`447700900999`).
   No vector file has a key named `token`, `secret`, `password` or `api_key` with an eight-character value, because
@@ -64,7 +68,8 @@ each at the end of `packages/events/test/consumer-check.mjs`. Resolve those conf
   the parity test say so.
 
 **The risky tasks are marked Risky.** Tasks 1 and 2 change what a `v*` tag publishes and which checks see which
-package: review every list a release step reads. Task 4 carries a licence obligation. Task 6 decides what `domainIs`
+package: review every list a release step reads. Task 3c adds a job the release's publish depends on. Task 3b defines
+event identity. Task 4 carries a licence obligation. Task 6 decides what `domainIs`
 matches, which is a disclosure filter. Tasks 11, 13 and 14 define the normative contract, what is marked untrusted and
 the exact bytes a target receives.
 
@@ -198,13 +203,14 @@ correctness is the generator check's job, and the isomorphism guard (decision 3)
    match the pins.
 2. A generator unit test on small synthetic UCD fragments, with hand-computed expected tables, so a generator bug
    cannot hide by being reproduced in both generation and check.
-3. Conformance against Unicode's own test files, in Node and in the bare realm (decision 3): every line of
-   `NormalizationTest.txt` (its NFC invariants, and identity for every assigned code point not in Part 1), every line
-   of `IdnaTestV2.txt` (the `toAsciiN` value and status set), and every `C` and `F` line of `CaseFolding.txt`. A
+3. Conformance against Unicode's own test files, in Node, in the bare realm and in Chromium and WebKit (decision 3):
+   every line of `NormalizationTest.txt` (its NFC invariants, and identity for every assigned code point not in
+   Part 1), every line of `IdnaTestV2.txt` (the `toAsciiN` value and status set), and every `C` and `F` line of
+   `CaseFolding.txt`. A
    host-divergence vector proves no host conversion is used: U+A7CB, assigned in Unicode 16, folds to itself under
-   15.1, while this machine's `"Ɤ".toLowerCase()` gives U+0264.
+   15.1, while this machine's `"\uA7CB".toLowerCase()` gives U+0264.
 
-### 3. "Isomorphic, no I/O and no `node:` imports": four layers, and a bare realm instead of a browser
+### 3. "Isomorphic, no I/O and no `node:` imports": five layers, ending in real Chromium and WebKit
 
 **Enforcement**, each layer catching what the one before cannot:
 
@@ -231,28 +237,55 @@ correctness is the generator check's job, and the isomorphism guard (decision 3)
    - `/// <reference types="node" />` or an `import("node:…")` type in the declarations, so a browser project needs no
      `@types/node` to use it.
 
-   Fixtures under `packages/events/test/fixtures/isomorphic/` hold one refused and one accepted example per rule.
+   There is one exemption: `src/identity/sha256.ts` may reach exactly `globalThis.crypto.subtle.digest`, the WebCrypto
+   SHA-256 that Node 22 and every browser's secure context provide (decision 23). The same chain anywhere else, and any
+   other use of `globalThis` or `crypto` in that file, are still refused. Fixtures under
+   `packages/events/test/fixtures/isomorphic/` hold one refused and one accepted example per rule, the exemption
+   included.
 3. **A bare ECMAScript realm.** The shared conformance vectors run twice: in Node against `src/`, and in a `node:vm`
    context created with no globals but ECMAScript's own and with
    `codeGeneration: { strings: false, wasm: false }`. Into it goes a browser-platform IIFE bundle of the library,
    zod included, built in memory by tsdown's `build({ write: false })` — the way `scripts/third-party-licenses.mjs`
    builds its graphs — from `test/realm/entry.ts`. The realm has ECMAScript's built-ins (including `Intl`, which the
    guard keeps the source from using) and nothing of Node's or the web's: no `process`, `require`, `Buffer`, timers,
-   `fetch`, `URL`, `TextEncoder` or `console`. Both runs must return byte-identical results and no failures.
-4. **The consumer check**, in the installed tarball, imports the package and scans every `dist` file for `node:`
+   `fetch`, `URL`, `TextEncoder` or `console`. It is given exactly one host capability: a `crypto` whose only member
+   is `subtle.digest`, bound to Node's WebCrypto, so the event-identity family runs there too. Both runs must return
+   byte-identical results and no failures.
+4. **Real Chromium and WebKit.** `pnpm verify:browser` (Task 3c) drives the same vector files, through the same
+   runners, in Playwright's Chromium and WebKit:
+   - WebKit is JavaScriptCore, the engine of the macOS webview (WKWebView) the desktop app will use, and of WebKitGTK;
+     Chromium is the engine of Windows' WebView2.
+   - The page is served from a loopback listener with D13's exact production CSP (`default-src 'self'; script-src
+     'self'; … connect-src ipc: http://ipc.localhost; …`, spec line 2631), and loads the browser-platform IIFE
+     bundle as a same-origin script. So the run also proves the library works where `eval` is refused and nothing can
+     be fetched.
+   - `http://127.0.0.1` is a secure context, so `crypto.subtle` is there, as it is in the app's own origin.
+   - Every family must return zero failures, with results byte-identical to Node's and the realm's.
+5. **The consumer check**, in the installed tarball, imports the package and scans every `dist` file for `node:`
    specifiers and `require(`.
 
-**Why a bare realm and not a browser.** Playwright or Puppeteer would add a browser download of 100 MB or more and an
-install step to every `pnpm verify` on six CI legs and every contributor's machine, and jsdom or happy-dom would prove
-nothing: they run inside Node, with `process` and `require` still present. The bare realm adds no dependency, is
-deterministic on Linux, macOS and Windows, and is **stricter than a browser**: it has no Web APIs at all, so code that
-leans on `URL` or `TextEncoder` — fine in Node and Chrome, absent in some embedded webviews — fails here first. Its
-`codeGeneration` setting reproduces the desktop app's CSP, which has no `'unsafe-eval'` (D13), so it also proves zod's
-eval-free path. What it cannot see is a difference between JavaScript engines. The library is built not to depend on
-one: it uses no `Intl`, no host case mapping or normalisation, no regex Unicode properties and no `Date`. The real
-engines are JavaScriptCore (WKWebView, WebKitGTK) and Chromium (WebView2), and phase C's desktop workflow already runs
-on all three platforms. **The plan recommends phase C run these same vector files in the app's own webviews**, which
-answers §5's "in a browser" (line 2857) where the browsers actually are. See ambiguity G below.
+**Where each layer runs.**
+
+- **Layers 1, 2, 3 and 5** run in every `pnpm verify`, locally and on all six release legs.
+- **Layer 4** needs a few hundred MB of browsers, so it stays out of the `pnpm verify` every developer runs before
+  every push. It is `pnpm verify:browser`.
+  - **In the release workflow**, a job named `browser`, on `macos-latest`, installs only Chromium and WebKit and runs
+    it. The `publish` job needs it as it needs `old-node`, and Task 3c's release test holds the workflow to that shape.
+  - **Locally**, without the browsers, `pnpm verify:browser` stops with one message: install them once with
+    `pnpm --filter @agentcomms/events exec playwright install chromium webkit` (adding `--with-deps` on Linux), then
+    run it again; `pnpm verify` does not run it.
+  - Every phase A task that adds or changes a vector family runs it before its commit, and every batch ends with it,
+    so the held package never reaches B1's release without a browser run.
+- **Phase C** can still run the same vector files in the app's own webviews. It is no longer the first browser run.
+
+**Why both a realm and browsers.** The bare realm is the fast layer every push gets. It needs nothing, is
+deterministic on Linux, macOS and Windows, and is stricter than a browser: it has no Web APIs at all, and its
+`codeGeneration` setting reproduces the app's CSP, which has no `'unsafe-eval'` (D13), so it proves zod's eval-free
+path. What it cannot see is a difference between JavaScript engines, and §4 row A and §5 ("in Node and a browser",
+line 2857) require that the vectors run in one. The browsers are what see it.
+
+jsdom or happy-dom would prove neither, because they run inside Node, with `process` and `require` still present.
+Firefox is not installed: no webview the app targets uses its engine.
 
 ### 4. The package: build, exports, typed API surface and its declaration
 
@@ -265,14 +298,15 @@ answers §5's "in a browser" (line 2857) where the browsers actually are. See am
 `"engines": { "node": ">=22.12.0" }` like core, `"sideEffects": false`, `repository.directory` `packages/events`,
 `publishConfig.access: public`, `files: ["dist", "README.md", "LICENSE", "THIRD_PARTY_LICENSES"]`.
 `dependencies: { "zod": "catalog:" }` — external, not inlined, because `EventDefinition.schema` is a `z.ZodType`
-(D3) and a consumer must share one zod with it. `devDependencies`: `ajv` (exact, Task 8), `tsdown` and `typescript`
-(`catalog:`), so the tests do not rely on hoisting.
+(D3) and a consumer must share one zod with it. `devDependencies`: `ajv` (exact, Task 8), `playwright` (exact,
+Task 3c; its browsers are never installed by `pnpm install`, and `allowBuilds` stays empty), and `tsdown` and
+`typescript` (`catalog:`), so the tests do not rely on hoisting.
 
 **Build.** `tsdown.config.ts`: `entry: { index: 'src/index.ts' }`, `format: 'esm'`, `platform: 'neutral'` (no Node
 resolution or shims), `target: 'es2023'`, `dts: true`, `clean: true`, no `noExternal`. One output,
-`dist/index.mjs` with `dist/index.d.mts`, used by Node and by browser bundlers alike. The browser bundle exists only in
-the tests (decision 3) and is never published, so `THIRD_PARTY_LICENSES` lists only what the published build inlines:
-the Unicode tables.
+`dist/index.mjs` with `dist/index.d.mts`, used by Node and by browser bundlers alike. The browser bundle exists only for
+the realm and `pnpm verify:browser` (decision 3), built in memory and never published, so `THIRD_PARTY_LICENSES` lists
+only what the published build inlines: the Unicode tables.
 
 **Exports.** `".": { "types": "./dist/index.d.mts", "import": "./dist/index.mjs" }`, as core does, plus `main` and
 `types`. One barrel; internal modules are not reachable. Task 15 freezes the export list in `test/api-surface.json`.
@@ -285,8 +319,9 @@ core (core's envelope and digest import `node:crypto`, §2 line 61); the daemon 
 
 | Area | Exports |
 |---|---|
-| JSON and text | `JsonValue`, `JsonObject`, `isJsonValue`, `canonicalJson`, `compareUtf8`, `utf8ByteLength`, `codePointLength`, `isWellFormed`, `percentEncodeComponent` |
+| JSON and text | `JsonValue`, `JsonObject`, `isJsonValue`, `canonicalJson`, `compareUtf8`, `utf8Encode`, `utf8ByteLength`, `codePointLength`, `isWellFormed`, `percentEncodeComponent` |
 | Errors | `Result`, `Issue`, `IssueCode`, `EventsError` |
+| Event identity | `EventIdentityInput`, `eventIdPreimage`, `eventId`, `EventIdentity`, `compareEventIdentities` |
 | Unicode | `UNICODE_VERSION` (`'15.1.0'`), `nfc`, `caseFold`, `foldForComparison` |
 | Domains and formats | `toAsciiDomain`, `canonicalEmail`, `SemanticFormat`, `isFormat`, `isInstant`, `compareInstants` |
 | Pointers | `parsePointer`, `formatPointer`, `getPointer`, `relatePointers`, `PointerPattern`, `PointerPatternToken`, `expandPattern`, `matchesPattern` |
@@ -336,7 +371,9 @@ bytes. Task 10 transcribes and Task 11 generates by these rules, and no others:
 Appendix A states rules no 2020-12 keyword expresses: canonical sort order, same instant, identity, at least one
 non-empty, disjointness, a length equal to a count, inequality. Each becomes a **named invariant** in the definition
 and in the transcription fixture, enforced by `validateEvent` after zod and refused by ajv's oracle only where a
-keyword exists. The closed vocabulary:
+keyword exists. Each invariant is tied to the spec sentence or comment that states it, quoted verbatim, by Task 10's
+prose-rule file. No invariant exists without a quote, and no constraint-bearing sentence goes unaccounted for. The
+closed vocabulary:
 
 | Rule | Meaning |
 |---|---|
@@ -357,14 +394,17 @@ and `removed`, `non-empty-either`, `disjoint`, and `identical` on `/occurredAt` 
 and `/current`, and `identical` on `/at` and `/occurredAt` and on `/occurredAt` and `/observedAt`. WhatsApp —
 `same-instant` on `/at` and `/occurredAt`, and `identical` on `/workspaceId` and `/account/id`.
 
-### 8. Every string in an event is well-formed Unicode (a deliberate tightening)
+### 8. Unpaired surrogates are refused only where Appendix A says so
 
-A.5 forbids an unpaired surrogate in the Resend body only (lines 3828-3831). The library refuses one in **every**
-string of every event. Core hashes strings as UTF-8, which turns an unpaired surrogate into U+FFFD
-(`packages/core/src/digest.ts:99-100`), so two different dedupe keys could produce one event id, and
-`percentEncodeComponent` cannot encode one at all. This narrows and never widens, which Appendix A's preamble permits
-(lines 3504-3507). Phase D's normalisers should replace an unpaired surrogate with U+FFFD everywhere except the Resend
-body, which keeps its own rule. It is recorded in the fixture as library-wide, not per type.
+A.5 forbids an unpaired surrogate in the Resend body (lines 3828-3831), and that is the only place the catalogue
+refuses one. A library-wide rule would be a contract Appendix A does not state, so it is raised with the owner instead
+(see "Spec amendments to raise with the owner").
+
+Event identity does not need it. Canonical JSON writes an unpaired surrogate as an escape sequence (`JSON.stringify`'s
+well-formed output), so the bytes an event id hashes are always well-formed UTF-8 (decision 23).
+`percentEncodeComponent` does refuse one, because RFC 3986 encodes UTF-8 bytes and an unpaired surrogate has none. That
+is an encoding impossibility rather than a contract rule, and it reaches only a component the library is asked to
+encode.
 
 ### 9. `dedupeKey` takes the staging identity Appendix A needs
 
@@ -432,16 +472,17 @@ fraction digits keeps its microseconds. A leap second sorts after 23:59:59.999�
 - **The prefilter rule** (D5, line 1051) is met by a leaf whose concrete path matches one of the type's `content`
   patterns exactly — not an ancestor — anywhere in the tree, under `not` included.
 - **Limits** (line 1041): a lone leaf has depth 1 and the maximum is 8; at most 64 nodes counting combinators;
-  "scalar value 1 KB" is a string operand of at most 1024 UTF-8 bytes; `in` takes 1 to 256 values, with no
-  duplicates and in the given order. Canonicalisation adds `caseSensitive: false` where it was omitted, and nothing
-  else.
+  "scalar value 1 KB" is a string operand of at most 1024 UTF-8 bytes; `in` takes 1 to 256 values, kept in the given
+  order with any duplicates as given, because D5 says nothing more. Canonicalisation adds `caseSensitive: false` where
+  it was omitted, and nothing else.
 
 ### 16. Mapping details D6 leaves open (lines 1105-1130)
 
-- A template is JSON. An object with a `$path` key is a reference, whose only other permitted key is `missing`; any
-  other key beginning with `$` is refused, so future operators cannot collide with output keys. Every scalar
-  constant, every reference and every empty object or array counts as one of the 200 leaves. "4 KB per constant" is
-  4096 UTF-8 bytes of the constant's canonical JSON.
+- A template is JSON. An object with a `$path` key is a reference, and may carry only `missing` beside it. An object
+  with `$path` and any other key is refused, because under D6's grammar it is neither a reference nor an object
+  template. Every other key, `$`-prefixed or not, is an output key: reserving `$` keys is raised with the owner
+  instead. Every scalar constant, every reference and every empty object or array counts as one of the 200 leaves.
+  "4 KB per constant" is 4096 UTF-8 bytes of the constant's canonical JSON.
 - "256 KB per mapped event" is 262 144 UTF-8 bytes of the canonical JSON of `data`. `evaluateMapping` checks the plain
   value, and `checkMappedSize` lets the daemon check again after the envelope is applied.
 - A missing `reject` path is the runtime issue `MAPPING_PATH_MISSING`, naming the output and source pointers. What
@@ -476,19 +517,28 @@ Row A (line 2821) does not name it. But D1 puts "wire-format types" in the libra
 exact full-envelope byte vector for every catalogue type" (line 1158), and §5 owes those vectors with the catalogue
 (lines 2926-2929). `buildCloudEvent` therefore takes the definition and the validated event and derives `subject` and
 `time` itself, so neither can be passed in or overridden (D6). `source` uses the event's account **id**, which is
-stable, rather than its name — D6's `<account>` does not say which (ambiguity S). `validateCloudEventType` accepts a
-non-empty string of 1 to 256 printable ASCII characters (`!`–`~`) and refuses the `io.agentcomms.` prefix, which belongs
-to the control and test events; D6 says only "non-empty" (line 1140). The installation-reset notice is phase B2's,
+stable, rather than its name — D6's `<account>` does not say which (ambiguity S).
+
+`validateCloudEventType` checks exactly what D6 says (lines 1139-1142): the value is a string, it is not empty, and it
+is used exactly as given, with no prefix, suffix, trimming or normalisation. Nothing else is refused. Possible safety
+rules — a reserved `io.agentcomms.` prefix, a character set, a length bound, well-formed Unicode — are raised with
+the owner, not implemented (see "Spec amendments to raise with the owner"). The installation-reset notice is phase B2's,
 not here.
 
 ### 20. The agentic condition's static form is in phase A; its execution is phase E's
 
 The canonical rule document (B1) embeds the agentic condition, and its save-time checks are pure and need the
 catalogue's `content` patterns. `canonicaliseAgenticCondition` checks `{ judgeId, judgeVersion, question, inputs,
-threshold, onUncertain }`: a non-empty id, a positive integer version, a non-empty question, at least one unique
-concrete input pointer valid for the schema, a threshold that is a finite number in `[0, 1]`, and `onUncertain` of
-`no-match` (the default, added on canonicalisation) or `hold`. It also checks the prefilter rule (decision 15). The
-uncertain band, provider outputs, budgets and every judge kind are phase E's.
+threshold, onUncertain }` against what D5 and D2 state and nothing more:
+- `judgeId` is a string and `judgeVersion` a positive integer, as every object version is;
+- `question` is a string;
+- `inputs` is an array of concrete JSON Pointers, each valid for the selected event schema;
+- `threshold` is a finite number in `[0, 1]`;
+- `onUncertain` is `no-match` (the default, added on canonicalisation) or `hold`;
+- and the prefilter rule holds (decision 15).
+
+Non-empty `question` or `inputs`, and unique `inputs`, are raised with the owner, not enforced. The uncertain band,
+provider outputs, budgets and every judge kind are phase E's.
 
 ### 21. Resend body and risk-flag helpers live in the catalogue; the real `readBody` path is phase D's
 
@@ -516,6 +566,49 @@ Phase D unwraps the envelope, runs the real `readBody` and calls these.
   pairs only Resend's body fields (line 3578), and A.5 alone gives the keyword (lines 3803-3820). The transcription
   follows the text (ambiguity D).
 
+### 23. Event identity is phase A's, through WebCrypto; only the daemon's reaction to a collision is B1's
+
+§5's catalogue paragraph owes the event-id vectors (lines 2842-2843), and D3 defines the id exactly (lines 571-578).
+B1's row lists "deterministic event ids" (line 2822) because the daemon computes them at ingest, but the function is
+pure, so it is phase A's:
+
+- `eventIdPreimage({ installationId, accountId, eventType, typeVersion, dedupeKey })` returns the canonical JSON
+  (decision 11) of `["agentcomms-event-v1", installationId, accountId, eventType, typeVersion, dedupeKey]`, with
+  `typeVersion` a JSON integer.
+- `eventId(input, { digest? })` resolves to the first 32 lowercase hexadecimal characters of SHA-256 over that
+  preimage's UTF-8 bytes. The UTF-8 encoding is the library's own (`utf8Encode`).
+  - SHA-256 comes from `globalThis.crypto.subtle.digest('SHA-256', …)`, which Node 22 and every browser's secure
+    context provide, so the library still has no `node:` import. That is why the function is asynchronous.
+  - `digest` is injectable, for tests only.
+- `compareEventIdentities(stored, incoming)` takes two `{ eventId, preimage }` and returns:
+  - `same-occurrence` when the preimages are equal;
+  - `distinct` when the ids differ;
+  - `collision` when the ids are equal and the preimages are not.
+
+  That last outcome is the pure half of "D8 detects and stops on the theoretical truncated-hash collision" (line 577).
+  Stopping without advancing the cursor is B1's.
+
+## Spec amendments to raise with the owner
+
+Phase A implements exactly what the spec states. These restrictions might be worth having for safety or clarity, but
+they would be contracts the spec does not state, so none is implemented. Each is the owner's to add to the spec, or
+to decline:
+
+1. **`cloudEventType`** (D6, lines 1139-1142):
+   - **Refuse the `io.agentcomms.` prefix**, so a rule cannot emit a CloudEvent typed like the installation-reset
+     notice or the test event, which consumers may treat specially.
+   - **Require well-formed Unicode.** The daemon encodes the envelope as UTF-8, and an unpaired surrogate there would
+     be sent as U+FFFD, so the bytes would not be the approved value.
+   - **A length bound and a character set** (CloudEvents recommends a reverse-DNS form).
+2. **Every catalogue string well-formed Unicode**, not only the Resend body (A.5, lines 3828-3831). Phase D's adapters
+   would replace an unpaired surrogate with U+FFFD.
+3. **Reserve `$`-prefixed keys in mapping templates** (D6, lines 1105-1126), so a future operator cannot collide with
+   an output key.
+4. **Duplicate values in `in`, an empty `question`, and empty or repeated judge `inputs`** (D5, lines 1012,
+   1048-1067), all currently allowed.
+5. **Confirm the readings** of decision 12 (canonical email keeps the local part), decision 13 (no trailing root dot),
+   and decision 15 (an operand validates against its field's enum, pattern and format, as "the schema's exact type").
+
 ## Where the spec is ambiguous or contradicts itself, for phase A
 
 Each is resolved by the decision named. Line numbers are the spec's at `225d7855`.
@@ -528,7 +621,7 @@ Each is resolved by the decision named. Line numbers are the spec's at `225d7855
 | D | 3577-3582 against 3803-3820 | Gmail's lazy attachment fields read like a pair, but only Resend's are given `dependentRequired` | decision 22 |
 | E | 3541 | "canonical address" is undefined; core lower-cases a whole address | decision 12 |
 | F | 1032 against 90 | NFC is not said to be bundled, though host NFC varies and UTS #46 needs it | decision 2 |
-| G | 1043-1044 against 2856-2857 | "a real browser build" against "run … in a browser" | decision 3 |
+| G | 1043-1044 against 2856-2857 | "a real browser build" against "run … in a browser" | decision 3: both — the browser-platform build, run in real Chromium and WebKit |
 | H | 1008-1023, 1032-1035 | `Scalar` is undefined; null operands, case-sensitive normalisation, `equals` on dates, `exists` on null and a wrongly typed runtime value are not said | decision 15 |
 | I | 1041, 1125-1126 | "1 KB", "4 KB", "256 KB" and "depth 8" have no unit or counting rule | decisions 15 and 16 |
 | J | 681-686 | the delivery schema must describe envelope strings, but not how | decision 17 |
@@ -537,13 +630,14 @@ Each is resolved by the decision named. Line numbers are the spec's at `225d7855
 | M | 2733-2737, 2745-2748 against §2 line 60 | B1 is given the declaration-aware parity work, but a publishable library fails `test/parity.test.mjs:99-113` in phase A | Task 2 takes the library half |
 | N | 2821 against 130, 1158-1161, 2926-2929 | row A omits the CloudEvents builder whose per-type vectors D6 and §5 put with the catalogue | decision 19 |
 | O | 1152-1155 | `agentcommsuntrusted` sorts "by raw UTF-8 bytes" and percent-encodes, without saying which first | decision 16 |
-| P | 2836-2843 against 2822 | event-id vectors sit in the paragraph that opens "Phase A generates…", but event ids are B1's and need SHA-256 | not phase A's |
+| P | 2836-2843 against 2822 | event-id vectors sit in phase A's catalogue paragraph, while B1's row lists "deterministic event ids" | decision 23: the function and its vectors are phase A's; the cursor stop on a collision is B1's |
 | Q | 3571-3575 | whether "Slack `ts` must decode to the same instant" is checked by the catalogue or only by the adapter | decision 7 |
 | R | 1050-1051 | "reference a catalogue `content` field": exactly, or also through an ancestor | decision 15 |
 | S | 1137-1138 | `source`'s `<account>`: the name or the id | decision 19 |
-| T | 259 against 1139-1142 | D2 binds "D6 validation" of `cloudEventType`; D6 says only non-empty | decision 19 |
-| U | 3828-3831 | unpaired surrogates are refused in the Resend body only | decision 8 |
-| V | 1024-1027 | canonicalisation names only `caseSensitive`; `in` order and duplicates, and `onUncertain`'s default form, are unsaid | decisions 15 and 20 |
+| T | 259 against 1139-1142 | D2 binds "D6 validation" of `cloudEventType`; D6 says only an exact non-empty value | decision 19: exactly that; anything more is amendment 1 |
+| U | 3828-3831 | unpaired surrogates are refused in the Resend body only | decision 8: only there; amendment 2 |
+| V | 1024-1027 | canonicalisation names only `caseSensitive`; `in` order and duplicates, and `onUncertain`'s default form, are unsaid | decisions 15 and 20; amendment 4 |
+| W | 3504-3507, 3511-3525 | Appendix A is normative, but several of its constraints are stated in comments and prose, not in the notation A.1 maps | Task 10's extraction and prose-rule file |
 
 ## Batch 1 — release safety
 
@@ -590,7 +684,7 @@ Each is resolved by the decision named. Line numbers are the spec's at `225d7855
      - "running the list prints it" (121-125) and "the workflow reads the shared list in every loop" (141-166) stay as
        they are: `PACKAGES` is still what `node scripts/packages.mjs` prints.
    - "this checkout's registry is the five channels and six packages it ships" (604-611) gains
-     `libraries: []`, `held: []` and `undeclared: []`. Task 3 changes it again when `events` arrives.
+     `libraries: []`, `held: []` and `undeclared: []`. Task 3a changes it again when `events` arrives.
 
    **Then the code.**
 
@@ -700,7 +794,14 @@ print the six packages.
 
 ## Batch 2 — the package
 
-3. **`packages/events`: manifest, build, canonical JSON, the isomorphism guard, the bare realm and the consumer
+3. **The package, in a series of three commits:**
+   - **3a** — the package and its first isomorphism layers;
+   - **3b** — event identity;
+   - **3c** — real Chromium and WebKit, and the release job.
+
+   They run in order in one worktree.
+
+   **3a — `packages/events`: manifest, build, canonical JSON, the isomorphism guard, the bare realm and the consumer
    check.**
 
    **Files.**
@@ -727,7 +828,7 @@ print the six packages.
    **Tests first.** Cover PKG-d, ISO-a, ISO-b and CJ-a.
 
    - **"CJ-a: canonical JSON is core's, byte for byte"** (root test, both built dists). The vectors cover nested
-     objects, key order by UTF-16 code units (the vector `{"｡": 1, "\u{1F600}": 2}`, whose order differs from
+     objects, key order by UTF-16 code units (the vector `{"\uFF61": 1, "\u{1F600}": 2}`, whose order differs from
      UTF-8's), `undefined` members dropped, escapes, `-0`, large integers, lone-surrogate escaping, and empty arrays
      and objects. In `test/json.test.ts`, refusals: `undefined` in an array, `NaN`, `Infinity`, a `Map`, and an object
      with a prototype. Also `compareUtf8` against byte comparison of UTF-8 encodings over a generated corpus, and
@@ -778,12 +879,144 @@ print the six packages.
    the six packages, without `events`.
 
    **Commit.** `feat(events): the @agentcomms/events package, held back from release: canonical JSON, a guard against
-   anything but ECMAScript, and a realm with no host to run its vectors in (events phase A, task 3)`.
+   anything but ECMAScript, and a realm with no host to run its vectors in (events phase A, task 3a)`.
 
    **Done when.** The library exists, is fully verified and is consumer-checked, is not in the release list, and has the
-   three isomorphism layers that every later task's code passes through.
+   isomorphism layers every later task's code passes through.
 
-**Batch 2 ends** with `pnpm verify`. This is the first run with a real held package, and it proves Batch 1 end to end.
+   **3b — Risky — Event identity: the preimage, the id through WebCrypto, and collision classification
+   (decision 23).**
+
+   **Files.**
+
+   - Create `packages/events/src/identity/{event-id,sha256}.ts`, `packages/events/test/identity.test.ts`,
+     `packages/events/test/vectors/event-id.json` and `packages/events/test/realm/runners/event-id.ts`.
+   - Create `test/events-identity.test.mjs` at the root.
+   - Change `src/text.ts` (`utf8Encode`), `src/index.ts`, `runners/index.ts`, `test/consumer-check.mjs`,
+     `test/support/realm.ts` (the injected `crypto`) and `test/isomorphic.test.ts`, with the exemption's fixtures.
+
+   **Tests first.** Cover CAT-j, CAT-k and ISO-d.
+
+   - **"CAT-j: event ids are D3's, stable, and change with every tuple component"**, in `event-id.json`:
+     - each vector's exact preimage bytes, the full SHA-256 and the 32-character id;
+     - the same input twice gives the same id;
+     - the same `dedupeKey` under two accounts gives two ids;
+     - changing each of `installationId`, `accountId`, `eventType`, `typeVersion` and `dedupeKey` alone changes the
+       id;
+     - a dedupe key holding an unpaired surrogate, `"`, `\`, `é` and an astral character hashes its escaped canonical
+       JSON;
+     - `typeVersion` is written as the JSON integer `1`, never the string `"1"`, and `eventIdPreimage` refuses a
+       non-integer `typeVersion` (D3 types it as the event's integer `version`);
+     - the real Gmail, Slack, Resend and WhatsApp dedupe-key shapes of A.2–A.7 appear as inputs, written as literal
+       strings here, because Task 11 computes them.
+   - **The root test is the independent oracle.** It checks each vector's committed preimage and id against **core's**
+     `canonicalJson` and `sha256Hex` from core's built dist (`node:crypto`), and the library's `eventId` against the
+     same values.
+   - **"CAT-k: an injected SHA-256 collision is data, and is classified as a collision"**. A vector names two different
+     tuples and one 64-character digest. Through the injected `digest`, both yield the same 32-character id, and
+     `compareEventIdentities` returns `collision`. The same tuple twice is `same-occurrence`; two different ids are
+     `distinct`. The vector says, in its description, that stopping the cursor is B1's.
+   - **"ISO-d: only `src/identity/sha256.ts` reaches WebCrypto"**: the exemption's accepted fixture, plus refused
+     fixtures for `globalThis.crypto.subtle.digest` in any other file, and for `globalThis.crypto.getRandomValues` and
+     `crypto.subtle.encrypt` in that file.
+   - The realm runs the family through its one injected capability. ISO-d also asserts that the realm's `crypto` has no
+     member but `subtle`, and that `subtle` has no member but `digest`.
+
+   **Then the code.** `utf8Encode`, the preimage, the digest call, hex, the truncation and the classification.
+   Runners may now be asynchronous: `run(family, vectorsJson)` returns a promise of the result string, in Node, in
+   the realm and, from 3c, in the browsers.
+
+   **Mutations.**
+
+   - Hash the JSON text with UTF-16 code units: CAT-j must fail.
+   - Truncate to 31 characters: CAT-j must fail.
+   - Make `compareEventIdentities` compare ids only: CAT-k must fail.
+
+   **Run.** `pnpm --filter @agentcomms/events test` and `node --test test/events-identity.test.mjs` should both end
+   with `# fail 0`; `pnpm verify` must exit 0.
+
+   **Commit.** `feat(events): event ids exactly as D3 defines them, through WebCrypto, with a collision told apart from
+   a repeat (events phase A, task 3b)`.
+
+   **Done when.** Event ids are portable, proven against core's hashing, and a collision is data the daemon can act on.
+
+   **3c — Risky — Real Chromium and WebKit: `pnpm verify:browser`, and a release job the publish depends on.**
+
+   **Files.**
+
+   - Create `packages/events/scripts/verify-browser.mjs` and `packages/events/test/browser/{index.html,boot.js}`.
+   - Change `packages/events/package.json` (`playwright`, exact, as a devDependency; the script `verify:browser`) and
+     `pnpm-lock.yaml`.
+   - Change the root `package.json`: `"verify:browser": "pnpm --filter @agentcomms/events run verify:browser"`,
+     deliberately absent from `verify`.
+   - Change `.github/workflows/release.yml`: a `browser` job, and `publish`'s `needs`.
+   - Change `test/release-packages.test.mjs`, `docs/RELEASING.md` and `CONTRIBUTING.md`.
+
+   **Tests first.** Cover BRW-a, BRW-b and BRW-c.
+
+   - **"BRW-a: every vector family runs in Chromium and WebKit, byte-identical to Node and the realm"**. This is the
+     script's own assertion, run by `pnpm verify:browser`, and it prints one line per family and browser. It:
+     - builds the same browser-platform IIFE bundle in memory as the realm does;
+     - serves it from a `node:http` loopback listener on `127.0.0.1` with `index.html`, whose response carries D13's
+       production CSP exactly (spec line 2631);
+     - opens the page in Chromium, then in WebKit;
+     - for each `test/vectors/*.json` family, and the derived `NormalizationTest` and `IdnaTestV2` cases read from
+       their `.gz` sources, calls `AgentcommsEventsRealm.run` in the page.
+
+     It requires zero failures, and result JSON byte-identical to the same family's Node and realm results, computed in
+     the same process. It also asserts that the page made no request but the page, `boot.js` and the bundle, and that
+     the CSP held: the page's own same-origin `boot.js` tries `new Function('')` and records that it threw. That is
+     checked by the page's code rather than by injected code, because Playwright's `evaluate` is not the page's script.
+   - **"BRW-b: the release cannot publish without the browser run"**. In `test/release-packages.test.mjs`, the test at
+     1243-1284 now expects `publish`'s `needs` to be exactly `['browser', 'old-node', 'verify']`. A new test holds
+     the `browser` job to its shape:
+     - `runs-on: macos-latest`, with `contents: read` only;
+     - checkout without persisted credentials, then pnpm, Node 22.18.0 and `pnpm install --frozen-lockfile`;
+     - exactly `pnpm --filter @agentcomms/events exec playwright install chromium webkit`, with no other browser, no
+       bare `playwright install` and no `--with-deps`;
+     - `pnpm build`, then `pnpm verify:browser`, with no other test or verify.
+
+     It also holds the rest: the `verify` matrix installs no browser, and the root `verify` script does not contain
+     `verify:browser`.
+   - **"BRW-c: without the browsers, the script says how to get them"**. Run against an empty `PLAYWRIGHT_BROWSERS_PATH`
+     (a temporary directory), `verify-browser.mjs` exits 1. Its output names the install command, `--with-deps` for
+     Linux, and that `pnpm verify` does not run it. No browser is launched and nothing is downloaded.
+
+   **Then the code.**
+
+   - **The script.** Launch with `chromium.launch()` and `webkit.launch()`, headless. Hand each family's vectors to the
+     page as a string argument of `page.evaluate`, which Playwright injects outside the page's CSP. Record every
+     request through `page.on('request')`. Before launching, check `executablePath()` for both browsers, which is
+     BRW-c's message.
+   - **The workflow job**, as BRW-b describes, with a comment that WebKit is the engine of the macOS webview the
+     desktop app uses and Chromium that of Windows' WebView2, and that it is kept out of the six verify legs for its
+     download.
+   - **RELEASING.md**: what the release verifies before the publish gains "and the event library's vectors in Chromium
+     and WebKit".
+   - **CONTRIBUTING.md**: a change to `packages/events` runs `pnpm verify:browser` too, with the one-time install.
+
+   **Mutations.**
+
+   - Drop `browser` from `publish`'s `needs`: BRW-b must fail.
+   - Add `pnpm verify:browser` to the root `verify`: BRW-b must fail.
+   - Return a different result for one vector in the page only (a `globalThis` flag the runner checks, set only by
+     `index.html`, in a temporary copy): BRW-a must fail, naming the family and the browser.
+
+   **Run.**
+
+   - Once: `pnpm --filter @agentcomms/events exec playwright install chromium webkit`.
+   - `pnpm verify:browser` should print a pass line for `canonical-json` and `event-id` in both browsers.
+   - `node --test test/release-packages.test.mjs` should end with `# fail 0`.
+   - `pnpm verify` must exit 0, without launching a browser.
+
+   **Commit.** `feat(events): the event vectors in real Chromium and WebKit, and a release job the publish waits for
+   (events phase A, task 3c)`.
+
+   **Done when.** Every later vector family is proven in two real engines before each commit and each batch end, and no
+   tag can publish without that run.
+
+**Batch 2 ends** with `pnpm verify` and `pnpm verify:browser`. This is the first run with a real held package, and it
+proves Batch 1 end to end.
 
 ## Batch 3 — foundations (tracks U, S and T in parallel)
 
@@ -860,7 +1093,7 @@ print the six packages.
 
    - **"UNI-b: NFC meets NormalizationTest 15.1"**: every Part 0–3 line satisfies `c2 == nfc(c1) == nfc(c2) ==
      nfc(c3)` and `c4 == nfc(c4) == nfc(c5)`, and every assigned code point outside Part 1 is its own NFC. It runs in
-     Node and in the realm, with the parsed lines handed in as JSON.
+     Node, the realm, Chromium and WebKit, with the parsed lines handed in as JSON.
    - **"CND-e: full case folding is CaseFolding 15.1's C and F, never T"**: every `C` and `F` line maps exactly; `T`
      lines and `S`-only lines leave their code point to `C`/`F` or to itself; an unlisted code point folds to itself.
      Hand vectors in `unicode-folding.json`:
@@ -874,8 +1107,8 @@ print the six packages.
      - Cherokee small `ꭰ` → `Ꭰ` (folding goes to upper case there);
      - `ﬁ` → `fi`;
      - and `foldForComparison` equalities that need NFC first (`e` + U+0301 against `é`).
-   - **"UNI-e: no host case mapping"**: `caseFold('Ɤ') === 'Ɤ'`. Where the host's Unicode is 16 or later, the
-     test also asserts `'Ɤ'.toLowerCase() !== 'Ɤ'`, so the vector is known to discriminate; on an older host
+   - **"UNI-e: no host case mapping"**: `caseFold('\uA7CB') === '\uA7CB'`. Where the host's Unicode is 16 or later, the
+     test also asserts `'\uA7CB'.toLowerCase() !== '\uA7CB'`, so the vector is known to discriminate; on an older host
      it says why it skips that half.
 
    **Then the code.** Canonical decomposition, canonical ordering, canonical composition with exclusions, and
@@ -885,13 +1118,13 @@ print the six packages.
    **Mutations.** Include the `T` mappings: `İ` and `I` must fail. Skip the exclusions: NormalizationTest must fail.
 
    **Run.** `pnpm --filter @agentcomms/events test` should end with `# fail 0`, the conformance test reporting the
-   `unicode` family in both runs. `pnpm verify` must exit 0.
+   `unicode` family in both in-process runs. `pnpm verify` must exit 0, and `pnpm verify:browser` must pass.
 
-   **Commit.** `feat(events): NFC and full case folding from Unicode 15.1, the same in Node and in a realm with no host
-   (events phase A, task 5)`.
+   **Commit.** `feat(events): NFC and full case folding from Unicode 15.1, the same in Node, a realm with no host and real
+   browsers (events phase A, task 5)`.
 
-   **Done when.** Normalisation and folding are proven against Unicode's own tests on both runs, and no host API is
-   reached.
+   **Done when.** Normalisation and folding are proven against Unicode's own tests in Node, the realm and both
+   browsers, and no host API is reached.
 
 6. **Risky — UTS #46 revision 31 ToASCII, and the canonical domain.**
 
@@ -905,7 +1138,7 @@ print the six packages.
    - **"UNI-c: ToASCII meets IdnaTestV2 15.1"**: every line, read by the file's own column rules (a blank `toAsciiN`
      means the `toUnicode` value; a blank status means the `toUnicodeStatus`). The non-transitional `toAsciiN` value
      and its status set match exactly, `U1` included because STD3 rules are on. Transitional columns are not tested,
-     because D5 is non-transitional. It runs in Node and in the realm.
+     because D5 is non-transitional. It runs in Node, the realm, Chromium and WebKit.
    - **"CND-f: the profile D5 names, case by case"**, in `idna.json`:
      - mapping (`EXAMPLE.com` → `example.com`, fullwidth forms);
      - deviation characters kept under non-transitional processing (`faß.de` → `xn--fa-hia.de`; final sigma; ZWJ and
@@ -933,10 +1166,11 @@ print the six packages.
 
    **Run.** `pnpm --filter @agentcomms/events test` should end with `# fail 0`; `pnpm verify` must exit 0.
 
-   **Commit.** `feat(events): UTS #46 revision 31 ToASCII, bundled and pinned, proven against IdnaTestV2 15.1 in Node
-   and a hostless realm (events phase A, task 6)`.
+   **Commit.** `feat(events): UTS #46 revision 31 ToASCII, bundled and pinned, proven against IdnaTestV2 15.1 in Node,
+   a hostless realm and real browsers (events phase A, task 6)`.
 
-   **Done when.** Every IdnaTestV2 line passes on both runs, and a domain has exactly one canonical spelling.
+   **Done when.** Every IdnaTestV2 line passes in Node, the realm and both browsers, and a domain has exactly one
+   canonical spelling.
 
 7. **The semantic formats and exact instants.**
 
@@ -971,7 +1205,7 @@ print the six packages.
    **Commit.** `feat(events): the catalogue's five semantic formats and exact RFC 3339 instants (events phase A,
    task 7)`.
 
-   **Done when.** Every format has accepted and refused vectors that pass on both runs.
+   **Done when.** Every format has accepted and refused vectors that pass in Node, the realm and both browsers.
 
 ### Track S — the schema description and pointers
 
@@ -1048,54 +1282,168 @@ print the six packages.
    **Commit.** `feat(events): RFC 6901 pointers and the catalogue's pointer patterns, own properties only (events
    phase A, task 9)`.
 
-   **Done when.** Every pointer and pattern vector passes in Node and in the realm.
+   **Done when.** Every pointer and pattern vector passes in Node, the realm, Chromium and WebKit.
 
 ### Track T — the transcription
 
-10. **Appendix A's transcription fixture, and its inventory check against the spec.**
+10. **Appendix A, read twice: every normative constraint extracted from the spec's text by machine, and a hand
+    transcription that must equal it.**
 
-    **Files.** Create `packages/events/test/fixtures/catalogue-v1.json` and `packages/events/test/appendix.test.ts`.
+    The point is that no single reading can bless an invented contract. The extraction reads the spec, the
+    transcription is a person's reading, and the implementation (Task 11) is a third. Each is compared with the
+    extraction, constraint by constraint, so a fixture and a definition that are wrong the same way still fail.
 
-    **Tests first.** Cover A8-a and A8-b. The fixture itself is the work: transcribe A.1–A.7 by hand from the spec,
-    never by running code. For each of the seven types it holds:
+    **Files.** Create:
+    - `packages/events/test/appendix/extract.ts` — the extractor: test code, written from A.1's rules and independent of
+      `src/schema`;
+    - `packages/events/test/appendix/records.ts` — the constraint record, and a reader that turns a decision-6 JSON
+      Schema into records;
+    - `packages/events/test/fixtures/catalogue-v1.json` — the transcription;
+    - `packages/events/test/fixtures/appendix-prose-rules.json` — the prose rules;
+    - `packages/events/test/appendix.test.ts`.
+
+    **The constraint record.** One per field position, for each of the seven types, the path written with `*` for "any
+    array item":
+
+    - `optional` and `nullable`;
+    - the kind (`string`, `number`, `boolean`, `object`, `array`, `const`, `enum`, `anyOf`);
+    - `const`, and `enum` members in order;
+    - `pattern` and `format`;
+    - `minLength` and `maxLength`, in code points;
+    - `minimum` and `multipleOf`;
+    - for an array, its item record, `uniqueItems` and `sorted-utf8`;
+    - for an object, `additionalProperties: false` and `dependentRequired`.
+
+    Per type, the record set also carries the five metadata lists, the named invariants (decision 7), and `subject` and
+    `dedupeKey` as descriptors.
+
+    **What the extractor reads, and how.** It finds `## Appendix A` and `### A.1`–`### A.7` by prefix.
+
+    - **A.1's notation rules** (lines 3511-3525) are the extractor's grammar:
+      - objects are strict;
+      - a property is required unless it ends in `?`;
+      - `T | null` is the only nullable form;
+      - `integer(minimum: 0)` is `number`, `multipleOf: 1`, `minimum: 0`;
+      - the named formats, and the custom `domain`;
+      - lengths count code points;
+      - `NonEmptyString` is `minLength: 1`.
+
+      The extractor quotes each rule's sentence and asserts it still appears verbatim, so a change to A.1 fails the
+      test rather than silently changing the grammar.
+    - **A.1's aliases.** `type X = string; // pattern …` gives a pattern, `// format …` a format, a union of string
+      literals an enum in its order, and `AddressV1` an object. `CommonEventV1<TType, TChannel, TAccountId>` gives
+      `type` and `account.channel` as constants of the instantiating type, `version` as `const 1`, and `account.id`
+      with the alias's pattern.
+    - **The type blocks of A.2–A.7.** Every property, with:
+      - `?`;
+      - alias names, `string`, `boolean` and `integer(minimum: 0)`;
+      - string-literal unions;
+      - `T | null`, `T[]`, inline `{ … }`, `{ … }[]` and `{ … } | null`;
+      - intersections with `CommonEventV1<…>`;
+      - `GmailMessageEventV1<T>` instantiated for received and sent.
+    - **Trailing comments**, against a closed vocabulary that maps mechanically:
+      - "duplicate-free" → `uniqueItems`;
+      - "raw-UTF-8 sorted" and "canonical-sorted" → `sorted-utf8`;
+      - "format uuid" → `format: "uuid"`;
+      - "schema maxLength: 20000 Unicode code points" → `maxLength: 20000`;
+      - "JSON integer const 1" and "JSON boolean const false" → `const`;
+      - "[] is allowed" → no `minItems`;
+      - `pattern …` → a pattern.
+
+      **Any other comment text must be accounted for by an entry in the prose-rule file**, or the test fails with
+      "unaccounted constraint comment", naming the type, the field and the text.
+    - **A.5's fenced JSON fragment** (lines 3806-3816): `dependentRequired` and the body's `maxLength`.
+    - **The WhatsApp kind**: the `WhatsAppMessageKindV1` union plus the `UnknownWhatsAppMessageKindV1` pattern alias give
+      `anyOf: [enum of 19, pattern]`. The prose sentence that says so (lines 3957-3958) is a prose-rule entry
+      confirming that shape.
+    - **The metadata lists**, fenced or inline in backticks as A.3 writes them, read as JSON once the notation is
+      quoted. Also A.1's rule that every type's `formats` starts with `occurredAt` and `observedAt`.
+
+    **The rules no machine can extract**, and how they are transcribed and reviewed. Cross-field and prose
+    constraints are not mechanical:
+    - "the same instant used for `occurredAt`";
+    - "At least one of `added` or `removed` is non-empty, and the same label id may not occur in both";
+    - "When `attachments` is present its length equals `attachmentCount`";
+    - "`previous !== current`";
+    - "exactly `account.id`";
+    - "Slack `ts` must decode to the same instant";
+    - the `subject` and `dedupeKey` definitions.
+
+    Each is an entry in `appendix-prose-rules.json`: `{ "types": […], "quote": "<verbatim text of Appendix A>",
+    "becomes": … }`. `becomes` is one of:
+    - a named invariant of decision 7;
+    - a schema keyword at a path, when the prose states one, as the WhatsApp `anyOf` sentence does;
+    - a `subject` or `dedupeKey` descriptor;
+    - `{ "informational": "<why this is not a catalogue constraint>" }`, for sentences about adapter behaviour (phase D's
+      normalisation, skipped rows, lazy fetching) or B1's identity handling.
+
+    The test enforces the file in three ways:
+    1. **Verbatim quotes.** Every `quote` appears verbatim in Appendix A, whitespace-normalised, so a spec edit fails
+       the entry rather than leaving it stale.
+    2. **A coverage sweep.** Every sentence of A.1–A.7's prose and every unrecognised comment that contains a word from
+       a closed list is covered by some entry's quote. The list: `must`, `may not`, `only`, `exactly`, `at least`,
+       `non-empty`, `equals`, `same`, `!==`, `duplicate`, `sorted`, `present`, `absent`, `required`, `never`,
+       `skipped`, `identical`, `length`. So no constraint-bearing sentence is silently dropped.
+    3. **One to one.** Every invariant the fixture names has exactly one entry, and every `invariant` entry is in the
+       fixture.
+
+    **Review.** Because entries are a person's reading, the task's reviewer reads every entry against its quote, and
+    especially every `informational` one, which is where a real constraint could be waved away. The commit body
+    lists the counts by kind, and every `informational` entry with its reason, so the review is of a short list.
+
+    **Tests first.** Cover A8-a, A8-b, A8-c and A8-d.
+
+    - **"A8-b: every normative constraint of Appendix A is extracted"**. The extractor's records for all seven types are
+      checked against hand-picked expectations for one field of every kind:
+      - `/id`'s pattern;
+      - `/account/id`'s per-channel pattern;
+      - `/labels` (`uniqueItems`, `sorted-utf8`, items `minLength: 1`);
+      - `/authentication/ignoredHeaders` (`number`, `multipleOf: 1`, `minimum: 0`);
+      - `/from` (`AddressV1 | null`);
+      - `/body` in Resend (`maxLength: 20000`, `dependentRequired`);
+      - `/fromMe` (`const false`);
+      - `/kind` in WhatsApp (`anyOf`);
+      - `/emailId` (`format: "uuid"`).
+
+      Also: the extractor finds exactly seven types, and no comment or sentence is left unaccounted for.
+    - **"A8-a: the fixture follows decision 6"**:
+      - inline nodes only;
+      - every object `additionalProperties: false` with a sorted `required`;
+      - integers as `number` plus `multipleOf: 1`;
+      - nullables as `anyOf`;
+      - the `$id` pattern.
+    - **"A8-c: the transcription equals the extraction"**. The fixture's schemas, read into records by `records.ts`,
+      equal the extractor's records field for field and constraint for constraint, with nothing extra and nothing
+      missing; its metadata lists equal the extracted lists. A difference names the type, the path and the constraint.
+    - **"A8-d: every prose rule is quoted verbatim, every constraint-bearing sentence is covered, and invariants match
+      one to one"**, as above.
+
+    **Then the code.** The extractor, the record reader and the two fixtures. The transcription is written by hand
+    from the spec, **never by running code**. For each type it holds:
     - `schema`, by decision 6's rules;
-    - `metadata`: `untrusted`, `content`, `addresses`, `handles` and `formats`, exactly as written and in Appendix A's
-      order;
-    - `invariants`, from decision 7's per-type list;
-    - `subject` and `dedupeKey` as descriptors: `{ "pointer": "/messageId" }`,
+    - `metadata` in Appendix A's order;
+    - `invariants`;
+    - `subject` and `dedupeKey` descriptors: `{ "pointer": "/messageId" }`,
       `{ "join": "/", "pointers": ["/channel/id", "/ts"] }`, or
       `{ "canonicalJson": [ { "staging": "historyRecordId" }, { "pointer": "/messageId" }, "received" ] }`.
 
-    A top-level `library` entry records `well-formed-strings` (decision 8).
-    - **"A8-b: the fixture's inventory is Appendix A's"**. The test reads the spec, finds `## Appendix A` and the
-      `### A.1`–`### A.7` sections by prefix, and checks:
-      - **fields**: in each section's fenced `ts` blocks, every `name:` and `name?:` property, with its nesting
-        (expanding `CommonEventV1`, `AddressV1` and the inline object types), equals the fixture schema's property tree
-        and optionality, for the types of the section: A.2 → received and sent, A.3 → labelled, A.4 → Slack,
-        A.5 → Resend received, A.6 → Resend status, A.7 → WhatsApp;
-      - **metadata**: every `untrusted`, `content`, `addresses`, `handles` and `formats` list — fenced or inline in
-        backticks, as A.3 writes them — read as JSON once the notation is quoted (`'x'` → `"x"`, `{any:true}`, bare
-        keys) equals the fixture's list;
-      - **enums**: every enum's values, and the 19-value WhatsApp kind list, equal the fixture's;
-      - **the A.1 rule** that every type's first two `formats` entries are `occurredAt` and `observedAt`;
-      - **A.5's `dependentRequired`** and `maxLength: 20000`.
-    - **"A8-a: the fixture follows decision 6"**: inline nodes only; every object `additionalProperties: false` with a
-      sorted `required`; integers as `number` plus `multipleOf: 1`; nullables as `anyOf`; the `$id` pattern.
-
-    **Then the code.** Only the parser the inventory test needs, in the test file.
-
-    **Mutations.** Rename one field in a copy of the spec text that the test is pointed at, and drop one handle
-    pattern: A8-b must fail on each, naming the type and the field.
+    **Mutations**, each run on a copy of the spec text the test is pointed at, or on a copy of a fixture:
+    - rename a field, drop a `?`, change a pattern, delete "duplicate-free" from a comment, reorder an enum: A8-b and
+      A8-c must each fail;
+    - add an invented `maxLength` to the transcription: A8-c must fail, naming it;
+    - delete one prose-rule entry: A8-d's coverage sweep must fail;
+    - edit one word inside a quoted sentence of the spec copy: A8-d's verbatim check must fail.
 
     **Run.** `pnpm --filter @agentcomms/events test` should end with `# fail 0`; `pnpm verify` must exit 0.
 
-    **Commit.** `test(events): Appendix A transcribed by hand, and held to the spec's own text (events phase A,
-    task 10)`.
+    **Commit.** `test(events): every constraint of Appendix A extracted from the spec's text, and a hand transcription
+    held to it (events phase A, task 10)`, with the prose-rule counts and the `informational` list in the body.
 
-    **Done when.** The fixture exists, matches the appendix inventory, and is ready for Task 11 to compare against.
+    **Done when.** Every normative constraint of Appendix A exists as a machine-extracted record or a reviewed,
+    verbatim-quoted prose rule; the transcription equals them exactly; and Task 11 has both to compare against.
 
 **Batch 3 ends** when tracks U, S and T are merged into `feat/events-a`, the append-only conflicts resolved, and
-`pnpm verify` exits 0.
+`pnpm verify` and `pnpm verify:browser` both pass.
 
 ## Batch 4 — the catalogue
 
@@ -1113,11 +1461,33 @@ print the six packages.
       `packages/events/test/vectors/{catalogue,resend-body}.json` and `test/realm/runners/catalogue.ts`.
     - Change the usual three.
 
-    **Tests first.** Cover CAT-a, CAT-b, CAT-c, CAT-h, CAT-i, CAT-r1–CAT-r8 and D3-a.
+    **Tests first.** Cover CAT-a, CAT-a2, CAT-b, CAT-c, CAT-h, CAT-i, CAT-r1–CAT-r8 and D3-a.
 
     - **"CAT-a: the generated source schemas and metadata are the transcription, byte for byte"**: for each
       definition, `canonicalJson({ schema: sourceSchema(def), metadata, invariants })` equals the fixture's entry. A
       difference names the type and the first differing pointer.
+    - **"CAT-a2: the generated JSON Schema and zod schema state every extracted constraint, and no other"**, against
+      Task 10's extraction rather than the fixture, so that a fixture and a definition wrong in the same way still
+      fail:
+      - **The JSON Schema.** `sourceSchema(def)`, read into records by Task 10's reader, equals the extractor's records
+        exactly.
+      - **The zod schema, by strict probes.** For every extracted constraint, a value that breaks exactly that
+        constraint, built from a valid example, must be refused by `validateEvent` and by ajv. Probes cover: a
+        required property removed; an extra property at each object; `null` where not nullable; the wrong kind; a
+        value outside `const` or `enum`; one code point past `maxLength` and short of `minLength`; a pattern or
+        format broken; below `minimum`; a non-integer where `multipleOf: 1`; a duplicate where `uniqueItems`; an
+        unsorted array where `sorted-utf8`; and an orphan under `dependentRequired`.
+      - **The zod schema, by permissive probes**, which catch an invented constraint. For every position, each thing
+        the extraction does not forbid must be accepted by `validateEvent` and by ajv:
+        - an optional property absent, and `null` where nullable;
+        - a 100 000-code-point string where no `maxLength` is extracted;
+        - an empty string where no `minLength`;
+        - any string where no pattern, format, `const` or `enum`;
+        - a large integer where no maximum;
+        - an empty array, and duplicates where not `uniqueItems`;
+        - any order where not `sorted-utf8`.
+      - **The invariants**: the definition's named invariants equal the `invariant` entries of the prose-rule file for
+        that type, one to one.
     - **"CAT-b: every example is valid"**: every example passes `validateEvent` and ajv on `sourceSchema` (formats now
       Task 7's). The mutation corpus of Task 8, generated over each example, is refused by both. The invariant-only
       mutations — each `sorted-utf8` reversed, `date` one microsecond off, `added` and `removed` both empty or
@@ -1139,7 +1509,7 @@ print the six packages.
     - **The Resend fixtures (decision 21)**, as `resend-body.json` and `resend-fixtures.test.ts`, each also run
       through `validateEvent` and ajv:
       - **"CAT-r1"**: an attachment `safe.svg` with `riskFlags: ["html-or-svg"]` is accepted.
-      - **"CAT-r2"**: `safe​.svg` with `["hidden-characters-in-name", "html-or-svg"]` is accepted, the reverse
+      - **"CAT-r2"**: `safe\u200B.svg` with `["hidden-characters-in-name", "html-or-svg"]` is accepted, the reverse
         order is refused, and `canonicalRiskFlags` turns the reverse into exactly that order.
       - **"CAT-r3"**: the generated schema has `maxLength: 20000`, and both validators count code points.
       - **"CAT-r4"**: `normaliseResendBody` given a 20 000-unit BMP slice of a 25 000-character text, with
@@ -1148,32 +1518,41 @@ print the six packages.
       - **"CAT-r6"**: 10 000 astral characters (20 000 code units) are 10 000 schema characters, and an astral body of
         20 000 code points (40 000 units) still validates.
       - **"CAT-r7"**: a 20 000-unit slice that ends in a lone high surrogate drops it, keeps `bodyTruncated: true`,
-        has at most 20 000 code points and no unpaired surrogate; an unpaired surrogate anywhere else is refused.
+        has at most 20 000 code points and no unpaired surrogate; an unpaired surrogate anywhere else in the body is
+        refused (A.5, lines 3828-3831).
       - **"CAT-r8"**: an absent body has an absent flag; `body` without `bodyTruncated`, and the reverse, are refused
         by the generated schema (`dependentRequired`) and by zod.
-    - **Decision 8**: an unpaired surrogate in any string of any type is refused.
+    - **Decision 8, the other way round**: an unpaired surrogate in any string other than the Resend body is accepted,
+      as the permissive probes require, because Appendix A states no such rule.
 
     **Then the code.**
 
-    - The seven definitions, written from the spec, never from the fixture. Shared nodes for `CommonEventV1`,
-      `AddressV1` and `RiskFlagV1`. At least two examples per type (decision 22), synthetic, using `example.com`
-      addresses, `ibx_`/`acc_` ids of 16 upper-case characters, the fake Slack ids and the drama-range WhatsApp JIDs.
-    - `validateEvent` is zod, then the invariants, then decision 8.
+    - The seven definitions, written from the spec, never from the fixture or the extraction. Shared nodes for
+      `CommonEventV1`, `AddressV1` and `RiskFlagV1`. At least two examples per type (decision 22), synthetic, using
+      `example.com` addresses, `ibx_`/`acc_` ids of 16 upper-case characters, the fake Slack ids and the drama-range
+      WhatsApp JIDs.
+    - `validateEvent` is zod, then the invariants.
     - `describeFields` lists every pattern position with its kind, nullability, optionality, format and its
       untrusted, content, address and handle flags, for the app's builder and the daemon's `catalogue show`.
 
-    **Mutations.** Make one required field optional: CAT-a must fail at that pointer. Remove `sorted-utf8` from labels:
-    the invariant mutation must pass where it must not. Drop `historyRecordId` from the Gmail key: D3-a must fail.
+    **Mutations.**
+
+    - Make one required field optional, in the definition and the fixture together: CAT-a passes, and CAT-a2 must fail
+      at that pointer. That is the case CAT-a2 exists for.
+    - Add a `maxLength` to an unlimited string in the definition: CAT-a2's permissive probe must fail.
+    - Remove `sorted-utf8` from labels: the invariant mutation must pass where it must not.
+    - Drop `historyRecordId` from the Gmail key: D3-a must fail.
 
     **Run.** `pnpm --filter @agentcomms/events test` should end with `# fail 0`; `pnpm verify` must exit 0.
 
     **Commit.** `feat(events): the version-1 catalogue — seven event types, exactly Appendix A, held to a hand
     transcription (events phase A, task 11)`.
 
-    **Done when.** The generated contract equals the transcription byte for byte, and every example, declaration and
-    fixture passes in Node and in the realm.
+    **Done when.** The generated contract equals the transcription byte for byte. Both the generated JSON Schema and
+    the zod schema state exactly the constraints extracted from the spec. Every example, declaration and fixture
+    passes in Node, the realm, Chromium and WebKit.
 
-**Batch 4 ends** with `pnpm verify`.
+**Batch 4 ends** with `pnpm verify` and `pnpm verify:browser`.
 
 ## Batch 5 — conditions, mapping and wire (tracks C and M in parallel)
 
@@ -1200,8 +1579,9 @@ print the six packages.
       - an operand outside its enum;
       - `null` on a non-nullable field;
       - an undeclared key, and an index token on an object.
-    - **"CND-c: empty `all`, `any` and `in` are refused"**, and so are `in` with 257 values or a duplicate, depth 9,
-      65 nodes, and a 1025-byte string operand. Each limit is also accepted at its exact bound.
+    - **"CND-c: empty `all`, `any` and `in` are refused"**, and so are `in` with 257 values, depth 9, 65 nodes, and a
+      1025-byte string operand. Each limit is also accepted at its exact bound. An `in` with a repeated value is
+      accepted and kept as given (decision 15; amendment 4).
     - **"CND-d: a missing leaf is false, `not` is plain negation, `exists` is presence"**:
       - every operator on an absent optional field, and through a null parent, is false;
       - `not(equals(missing, x))` is true;
@@ -1215,16 +1595,19 @@ print the six packages.
         `a.b.example.com` but never `badexample.com` or `example.com.evil.test`;
       - on an email field, it compares the domain part.
     - **"CND-h: omitted `caseSensitive` is explicit `false`"**: golden canonical JSON bytes for an authoring tree that
-      omits it equal those for an explicit `false`, byte for byte, and differ from `true`. They run in Node and in the
-      realm.
+      omits it equal those for an explicit `false`, byte for byte, and differ from `true`. They run in Node, the realm,
+      Chromium and WebKit.
     - Folding: an equality with `caseSensitive: false` compares `foldForComparison` (`STRASSE` equals `straße`); with
       `true` it is exact, without NFC (decision 15).
     - `describeCondition` sentences are golden for every operator. Operand text is rendered as canonical JSON, so a
       hostile operand cannot break the sentence.
-    - `canonicaliseAgenticCondition` (decision 20) refuses each of: a threshold that is a string, `NaN`, ±∞, `-0.01`
-      or `1.01`; no inputs; an invalid or duplicate input pointer; an empty question; and a prefilter whose only leaves
-      are account or type checks. It accepts a `contains` leaf on `/subject`, adds `onUncertain: "no-match"`, and
-      accepts thresholds 0 and 1.
+    - `canonicaliseAgenticCondition` (decision 20):
+      - It refuses a threshold that is a string, `NaN`, ±∞, `-0.01` or `1.01`; an input that is not a valid concrete
+        pointer for the schema; a non-integer or non-positive `judgeVersion`; an `onUncertain` other than its two
+        values; and a prefilter whose only leaves are account or type checks.
+      - It accepts a `contains` leaf on `/subject`, adds `onUncertain: "no-match"`, and accepts thresholds 0 and 1.
+      - As D5 states nothing more, it also accepts an empty `question`, an empty `inputs` and a repeated input
+        (amendment 4).
 
     **Then the code.** The types, the canonicaliser (schema-aware through Task 9, formats through Task 7, folding
     through Task 5, domains through Task 6), the evaluator, the sentence and the agentic checks.
@@ -1237,7 +1620,8 @@ print the six packages.
     **Commit.** `feat(events): deterministic conditions over the catalogue — pinned folding, exact instants, canonical
     domains — and the agentic condition's static checks (events phase A, task 12)`.
 
-    **Done when.** The whole operator matrix, every refusal and every golden byte vector pass in Node and in the realm.
+    **Done when.** The whole operator matrix, every refusal and every golden byte vector pass in Node, the realm,
+    Chromium and WebKit.
 
 ### Track M
 
@@ -1254,11 +1638,12 @@ print the six packages.
       - a reference at the root, at an object property and at an array element;
       - each of `reject`, `null` and `omit` against present, absent-optional and null-parent paths;
       - a copied whole object and a copied array, with no aliasing (a mutation of the output never reaches the input);
-      - refusals: `omit` at the root and at an array element; a `$path` object with an extra key; an unknown
-        `missing`; a key starting with `$`; an unresolvable pointer;
+      - refusals: `omit` at the root and at an array element; a `$path` object with a key other than `missing`; an
+        unknown `missing`; an unresolvable pointer. Acceptance: an output key such as `$type`, which is an ordinary key
+        (decision 16; amendment 3);
       - every limit at its bound and one past it: 200 leaves, a 4096-byte constant, a 262 144-byte result.
     - **"MAP-d: `omit` removes an object property and is refused at an array element and at the root; `reject` and
-      `null` behave the same at all three"**, as golden Node and realm vectors.
+      `null` behave the same at all three"**, as golden vectors run in Node, the realm, Chromium and WebKit.
     - **"MAP-e: provenance through parent, object and array copies"**: copying `/from`, `/to`, `/to/0` and the root
       records the exact source pointer of each copy root, and expands to every descendant output pointer. Constants
       are `constant`; `missing: null` is `missing-null`.
@@ -1293,8 +1678,8 @@ print the six packages.
     **Commit.** `feat(events): mapping templates with exact provenance, untrusted and address classification,
     both representations and delivery schemas (events phase A, task 13)`.
 
-    **Done when.** Every copy's taint lands at its exact output pointer, and every vector passes in Node and in the
-    realm.
+    **Done when.** Every copy's taint lands at its exact output pointer, and every vector passes in Node, the realm,
+    Chromium and WebKit.
 
 14. **Risky — The CloudEvents envelope, byte for byte, and the fixed test event.**
 
@@ -1313,11 +1698,17 @@ print the six packages.
       `agentcommsrule`; `agentcommsuntrusted` or its omission — and its exact canonical string.
       - The root test checks the string equals **core's** `canonicalJson` of the hand-written object, an independent
         oracle.
-      - The package test checks `cloudEventBytes(buildCloudEvent(…))` equals the string, in Node and in the realm.
+      - The package test checks `cloudEventBytes(buildCloudEvent(…))` equals the string, in Node, the realm,
+        Chromium and WebKit.
       - A second string holds the UTF-8 hex, to catch an encoding slip.
     - **"MAP-i: a rule-defined type"**: `cloudEventType: "com.example.invoice.received"` replaces `type` exactly, with
-      no prefix or suffix. `validateCloudEventType` refuses `""`, a space, a non-ASCII character, 257 characters and
-      `io.agentcomms.x`.
+      no prefix or suffix.
+      - `validateCloudEventType` checks only what D6 says (decision 19). It refuses `""` and a non-string, and nothing
+        else.
+      - These values are accepted and each lands in `type` byte for byte: a single space, `é`, an astral character,
+        1000 characters, `io.agentcomms.control.installation-reset.v1`, and a value with leading and trailing spaces,
+        which is not trimmed.
+      - Whatever amendment 1 might later add is not here.
     - **"MAP-f: `agentcommsuntrusted` is canonical"**:
       - several pointers are sorted by raw UTF-8 bytes, then percent-encoded and joined by commas;
       - a pointer holding `,`, `/`, `~1`, `é` or an astral character is encoded;
@@ -1343,6 +1734,7 @@ print the six packages.
       vectors must include both cases.
     - Sort after encoding: MAP-f must fail.
     - Use `encodeURIComponent`: MAP-g must fail on `!'()*`.
+    - Trim `cloudEventType`, or refuse the `io.agentcomms.` value: MAP-i must fail.
 
     **Run.** `pnpm --filter @agentcomms/events test` and `node --test test/events-envelopes.test.mjs` should both end
     with `# fail 0`; `pnpm verify` must exit 0.
@@ -1350,32 +1742,37 @@ print the six packages.
     **Commit.** `feat(events): the CloudEvents structured envelope, one exact byte vector per catalogue type, and the
     fixed test event (events phase A, task 14)`.
 
-    **Done when.** The seven byte vectors pass against two independent canonicalisers, in Node and in the realm.
+    **Done when.** The seven byte vectors pass against two independent canonicalisers, in Node, the realm, Chromium
+    and WebKit.
 
-**Batch 5 ends** when tracks C and M are merged and `pnpm verify` exits 0.
+**Batch 5 ends** when tracks C and M are merged and `pnpm verify` and `pnpm verify:browser` both pass.
 
 ## Batch 6 — integration
 
 15. **The vector index, the API surface, the README and the last verify.**
 
     **Files.** Create `packages/events/test/api-surface.json` and `packages/events/test/api-surface.test.ts`. Change
-    `packages/events/README.md`, `packages/events/test/consumer-check.mjs` and `packages/events/test/conformance.test.ts`.
+    `packages/events/README.md`, `packages/events/test/consumer-check.mjs`, `packages/events/test/conformance.test.ts`
+    and `packages/events/scripts/verify-browser.mjs`.
 
-    **Tests first.** Cover ISO-c.
+    **Tests first.** Cover ISO-c and BRW-d.
 
-    - **"ISO-c: every family runs on both sides"**: the conformance test lists the families it ran — `canonical-json`,
-      `unicode`, `idna`, `formats`, `pointers`, `catalogue`, `resend-body`, `conditions`, `mapping` and `envelopes` —
-      and fails if a vector file or a runner is unpaired.
+    - **"ISO-c: every family runs in Node and the realm"**: the conformance test lists the families it ran —
+      `canonical-json`, `event-id`, `unicode`, `idna`, `formats`, `pointers`, `catalogue`, `resend-body`, `conditions`,
+      `mapping` and `envelopes` — and fails if a vector file or a runner is unpaired.
+    - **"BRW-d: every family runs in Chromium and WebKit"**: `verify-browser.mjs` checks the same eleven families, and
+      the two Unicode conformance files, against that list, so a family added later cannot skip the browsers.
     - **"the export list is frozen"**: the sorted export names of `src/index.ts`, and of `dist/index.d.mts` after a
       build, equal `api-surface.json`, which is decision 4's table, flattened. A new export is a deliberate edit of that
       file.
     - The consumer check gains one assertion per area, in the installed tarball:
-      - `caseFold('Ɤ')`;
+      - `caseFold('\uA7CB')`;
       - `toAsciiDomain('Bücher.example')`;
       - `CATALOGUE.length === 7`;
       - a canonicalised condition's bytes;
       - a mapping's untrusted pointers;
       - one envelope's bytes;
+      - one event id, through the installed package's WebCrypto call;
       - `THIRD_PARTY_LICENSES` naming the Unicode licence.
 
     **Then the code.** The README: what the package is and is not (no I/O, no `node:`); the areas of the API with one
@@ -1385,11 +1782,12 @@ print the six packages.
     **Run.**
 
     - `pnpm verify` must exit 0, with `package verification OK: @agentcomms/events (…)` in its last stage.
+    - `pnpm verify:browser` must print a pass line for every family in both browsers.
     - `node scripts/packages.mjs` must still print `core gmail gmail-mcp resend slack whatsapp`.
     - The grep from "How to use this plan" must list exactly the labels in the table below.
 
-    **Commit.** `test(events): every vector family on both sides, the export list frozen, and the README (events phase
-    A, task 15)`.
+    **Commit.** `test(events): every vector family in Node, the realm, Chromium and WebKit, the export list frozen, and
+    the README (events phase A, task 15)`.
 
     **Done when.**
 
@@ -1398,7 +1796,7 @@ print the six packages.
     - Nothing was published or pushed.
     - The coordinator has the branch ready for review.
 
-**Batch 6 ends** with the final `pnpm verify`.
+**Batch 6 ends** with the final `pnpm verify` and `pnpm verify:browser`.
 
 ## §5 coverage ownership
 
@@ -1421,12 +1819,13 @@ The second table holds the obligations phase A owns outside §5:
 | `A8` | Appendix A.8 |
 | `REL` | decision 1 |
 | `UNI` | decision 2 |
-| `ISO` | decision 3 |
+| `ISO`, `BRW` | decision 3 (and 23 for the WebCrypto exemption) |
 | `CJ` | decision 11 |
 
 | §5 item | Case owned | Task |
 |---|---|---:|
-| CAT-a | Generated JSON Schema for all seven definitions, canonical and key-sorted, equals Appendix A field for field: required lists, null unions, enums, formats, `additionalProperties: false`, every metadata pattern | 11 |
+| CAT-a | Generated JSON Schema for all seven definitions, canonical and key-sorted, equals the hand transcription of Appendix A byte for byte: required lists, null unions, enums, formats, `additionalProperties: false`, every metadata pattern | 11 |
+| CAT-a2 | The generated JSON Schema and the zod schema state exactly the constraints extracted from the spec's text — strict probes for each, permissive probes against any invented one — so no fixture or implementation can bless an invented contract | 11 |
 | CAT-b | Every example checked | 11 |
 | CAT-c | Every semantic-format, address and handle declaration checked: legal for the schema, expanding only to the declared type | 11 |
 | CAT-d | Pattern validation and expansion | 9 |
@@ -1435,8 +1834,10 @@ The second table holds the obligations phase A owns outside §5:
 | CAT-g | Own-property handling of `__proto__`, `constructor` and `prototype` | 9 |
 | CAT-h | Every known and unknown `agentcomms.*` type refused — at the library's catalogue lookup | 11 |
 | CAT-i | The reset notice and `io.agentcomms.test.v1` are nonselectable control inputs — at the library's lookup | 11 |
+| CAT-j | Event-id vectors: stable repeats, the same dedupe key in different accounts, every tuple component, exact preimages and ids, proven against core's hashing | 3b |
+| CAT-k | The injected SHA-256 collision, as data, classified `collision` by the pure comparison (the daemon's cursor stop is B1's) | 3b |
 | CAT-r1 | `safe.svg` accepts exactly `riskFlags: ["html-or-svg"]` | 11 |
-| CAT-r2 | `safe​.svg` keeps `hidden-characters-in-name` and canonicalises to `["hidden-characters-in-name", "html-or-svg"]` | 11 |
+| CAT-r2 | `safe\u200B.svg` keeps `hidden-characters-in-name` and canonicalises to `["hidden-characters-in-name", "html-or-svg"]` | 11 |
 | CAT-r3 | `maxLength: 20000` asserted in Unicode code points | 11 |
 | CAT-r4 | An over-20 000-code-point BMP body is capped with `bodyTruncated: true` | 11 |
 | CAT-r5 | An exactly-20 000-code-point body has `bodyTruncated: false` | 11 |
@@ -1447,14 +1848,14 @@ The second table holds the obligations phase A owns outside §5:
 | CND-b | Every refused format and type pairing | 12 |
 | CND-c | Empty `all`, `any` and `in` | 12 |
 | CND-d | Every missing leaf false, plain `not`, and `exists` | 12 |
-| CND-e | Unicode 15.1 folding vectors run in Node and the browser-platform build | 5 |
-| CND-f | UTS #46 vectors run in Node and the browser-platform build | 6 |
+| CND-e | Unicode 15.1 folding vectors run in Node, the bare realm, Chromium and WebKit | 5 |
+| CND-f | UTS #46 vectors run in Node, the bare realm, Chromium and WebKit | 6 |
 | CND-g | Invalid dates and subdomains | 12 |
-| CND-h | Golden Node/browser vectors: omitted `caseSensitive` canonicalises to explicit `false`, equals it byte for byte, and differs from `true` | 12 |
+| CND-h | Golden vectors, run in Node, the bare realm, Chromium and WebKit: omitted `caseSensitive` canonicalises to explicit `false`, equals it byte for byte, and differs from `true` | 12 |
 | MAP-a | Constants, objects and arrays, and every missing policy | 13 |
 | MAP-b | Both representations | 13 |
 | MAP-c | Generated delivery schemas | 13 |
-| MAP-d | Golden Node/browser vectors: `omit` removes an object property and is refused at an array element and at the root; `reject` and `null` behave the same at all three | 13 |
+| MAP-d | Golden vectors, run in Node, the bare realm, Chromium and WebKit: `omit` removes an object property and is refused at an array element and at the root; `reject` and `null` behave the same at all three | 13 |
 | MAP-e | Provenance through parent, object and array copies | 13 |
 | MAP-f | Canonical `agentcommsuntrusted`, including root | 14 |
 | MAP-g | URI-escaped source components | 14 |
@@ -1464,12 +1865,14 @@ The second table holds the obligations phase A owns outside §5:
 | PKG-a | Libraries publish in dependency order (the library half of "both kinds"; the service half is B1's) | 1 |
 | PKG-b | An explicit library is the only surface-free published kind | 2 |
 | PKG-c | No `"agentcomms"` non-channel kind | 1 |
-| PKG-d | Browser import has no `node:` edge | 3 |
+| PKG-d | Browser import has no `node:` edge | 3a |
 
 | Other obligation | Case owned | Task |
 |---|---|---:|
-| A8-a | The canonical machine-readable transcription of A.1–A.7 (A.8, line 4068) | 10 |
-| A8-b | The fixture's field and pointer inventory checked against the appendix (A.8, line 4070) | 10 |
+| A8-a | The canonical machine-readable transcription of A.1–A.7 (A.8, line 4068), in decision 6's shape | 10 |
+| A8-b | Every normative constraint of A.1–A.7 extracted by machine from the spec's text, with every comment and constraint-bearing sentence accounted for (A.8, line 4070) | 10 |
+| A8-c | The transcription equals the extraction, constraint for constraint, with nothing extra and nothing missing | 10 |
+| A8-d | The prose rules: every quote verbatim in the spec, every constraint-bearing sentence covered, invariants one to one, `informational` entries reviewed | 10 |
 | D3-a | `subject` and `dedupeKey` per type, as Appendix A gives them, with Gmail's staging identity (decision 9) | 11 |
 | D3-b | The exact `io.agentcomms.test.v1` bytes and the judge test input (D3, lines 620-623) | 14 |
 | D3-c | The delivery schema `$id`, with percent-encoded ids (D3, lines 681-686) | 13 |
@@ -1482,20 +1885,25 @@ The second table holds the obligations phase A owns outside §5:
 | REL-c | No released package depends at runtime on a held one; core is never held; malformed holds refused | 1 |
 | REL-d | RELEASING.md and the release skill say what a hold is and how it is lifted | 2 |
 | UNI-a | The generated tables are byte-identical to what pinned, size- and SHA-256-checked sources generate; drift refused | 4 |
-| UNI-b | NormalizationTest 15.1, in Node and the realm | 5 |
-| UNI-c | IdnaTestV2 15.1 `toAsciiN`, in Node and the realm | 6 |
+| UNI-b | NormalizationTest 15.1, in Node, the realm, Chromium and WebKit | 5 |
+| UNI-c | IdnaTestV2 15.1 `toAsciiN`, in Node, the realm, Chromium and WebKit | 6 |
 | UNI-d | The Unicode licence in `THIRD_PARTY_LICENSES`, derived from the bundle graph | 4 |
 | UNI-e | The host-divergence vector (U+A7CB) | 5 |
-| ISO-a | No Node or DOM types; the syntax-tree guard over source, generated tables and `dist` | 3 |
-| ISO-b | The bare realm (no host globals, no code generation) runs each vector family present identically to Node, and refuses an unpaired vector file | 3 |
-| ISO-c | The final audit: the ten families of phase A are each run on both sides | 15 |
-| CJ-a | Canonical JSON byte-identical to core's | 3 |
+| ISO-a | No Node or DOM types; the syntax-tree guard over source, generated tables and `dist` | 3a |
+| ISO-b | The bare realm (no host globals, no code generation) runs each vector family present identically to Node, and refuses an unpaired vector file | 3a |
+| ISO-c | The final audit: the eleven families of phase A each run in Node and the realm | 15 |
+| ISO-d | Only `src/identity/sha256.ts` reaches WebCrypto, and only `crypto.subtle.digest`; the realm is given nothing more | 3b |
+| BRW-a | `pnpm verify:browser` runs every vector family in real Chromium and WebKit, under D13's production CSP from a loopback origin, with zero failures and results byte-identical to Node and the realm | 3c |
+| BRW-b | The release's `publish` needs the `browser` job (`macos-latest`, Chromium and WebKit only, `pnpm verify:browser` only); the root `verify` does not run it | 3c |
+| BRW-c | Without the browsers, `pnpm verify:browser` says how to install them once, and downloads nothing | 3c |
+| BRW-d | The final audit: the eleven families and both Unicode conformance files each run in both browsers | 15 |
+| CJ-a | Canonical JSON byte-identical to core's | 3a |
 
 **§5 items next to phase A that it does not own.** Listed so the boundary can be audited:
 
 | Item | Owner | Why |
 |---|---|---|
-| Event-id vectors, and the injected SHA collision that stops the cursor | B1 | event ids are SHA-256, "deterministic event ids" is in B1's row (2822), and the library has no hashing |
+| On a detected event-id collision, stopping without advancing the cursor | B1 | the function, its vectors and the collision's classification are phase A's (CAT-j, CAT-k, decision 23); what the daemon then does with its cursor is B1's |
 | Rule `create`, `update` and `test` refusing `agentcomms.*` types | B1, B3 | they are operations; CAT-h is the library half |
 | Operational records visible in doctor and the app, but creating nothing | B1 | |
 | `rule test`, `rule test-retained`, `judge test`, `target test` | B3, E, B2 | |
@@ -1504,5 +1912,5 @@ The second table holds the obligations phase A owns outside §5:
 | Judge-input provenance | E | it reuses `classifyMapped` |
 | Resend normalisation through the real `readBody` | D | it reuses Task 11's helpers |
 | `kind: "service"`, `SURFACES`/`DRIVERS`, generated references, the fixture service | B1 | |
-| The root verify's desktop and vector side, and the real-webview vector runs | C | decision 3 |
+| The root verify's desktop side, and runs of the vectors inside the app's own webviews | C | phase A already runs them in Chromium and WebKit (BRW-a); C may add the app's webviews themselves |
 | Retention defaults, digests, approvals, activation | B1 | |
