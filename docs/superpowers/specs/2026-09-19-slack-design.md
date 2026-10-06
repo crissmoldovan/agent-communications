@@ -474,6 +474,11 @@ The same list as Gmail's, plus:
   when it was read. The timestamp we cite is the handle to check against.
 - **Retraction is not a gate.** `chat.update` and `chat.delete` exist, but the edit window is a workspace setting
   an owner controls and deletion may be restricted to admins. The notification has already fired regardless.
+
+> **Edits and deletions, proposed 2026-10-06.** Both are reachable through the gate, for a message this account posted
+> and nobody else's — see [the design](2026-10-06-slack-edit-delete-design.md). Retraction is still not a gate: an
+> edit or a deletion changes what Slack shows from then on, and the people who read the words, or were notified of
+> them, already have.
 - **Unfurled content** is written by whoever controls the URL, not by the message author.
 
 ## 10. What the Gmail release taught, and where it lands here
