@@ -639,6 +639,19 @@ Each is resolved by the decision named. Line numbers are the spec's at `225d7855
 | V | 1024-1027 | canonicalisation names only `caseSensitive`; `in` order and duplicates, and `onUncertain`'s default form, are unsaid | decisions 15 and 20; amendment 4 |
 | W | 3504-3507, 3511-3525 | Appendix A is normative, but several of its constraints are stated in comments and prose, not in the notation A.1 maps | Task 10's extraction and prose-rule file |
 
+## Decisions made during the build (committee)
+
+Points the plan and spec left open that came up while building. Each was argued by a three-member committee (the spec's
+literal words; safety and downstream consumers; a devil's advocate for the other reading), then decided.
+
+| # | Raised in | Question | Decision | Why |
+|---|---|---|---|---|
+| K1 | Task 9 (track S) | A metadata pointer pattern reaching a `null` at the END of its path: does it contribute a concrete pointer? | **No.** A `null` at any position, terminal included, contributes no pointer (as `pattern.ts` implements). | A.1 (spec 3589-3590) says an optional property "contributes no concrete pointer when absent or null" and that every terminal a pattern names has "the declared non-null scalar type", so a pointer to `null` would break that guarantee. No requirement needs the other reading: conditions and mappings use concrete paths, not metadata patterns (1017, 1122); a `null` carries no sender content (670-679); formats apply only to non-null scalars. The other reading would make every later consumer filter `null` itself. Unanimous. |
+
+Follow-up owed by Task 11: assert that no metadata pattern in any of the seven definitions ends on a `T | null` field (the
+guarantee in A.1 must hold, not be assumed), and record as an erratum candidate for the spec's next revision that 3589
+should read "absent or null at any position, terminal included".
+
 ## Batch 1 — release safety
 
 1. **Risky — The registry reads library declarations and release holds; `PACKAGES` becomes "what a tag publishes".**
