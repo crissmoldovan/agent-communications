@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { cp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -52,9 +52,24 @@ function newcomerManifest(version) {
   };
 }
 
-/** A copy of the repository's tooling, manifests and skills — no source, no dependencies — with a newcomer in it. */
-async function treeWithNewcomer() {
-  const root = await tempDir('channel-registry-');
+/**
+ * A library as a new one would declare itself (design 2026-10-05, D14): published, so not private, and nothing but the
+ * declaration — no channel manifest, no command, no server. `extra` adds or replaces fields.
+ */
+function libraryManifest(version, extra = {}) {
+  return {
+    name: '@agentcomms/shelf',
+    version,
+    type: 'module',
+    license: 'MIT',
+    agentcommsPackage: { kind: 'library' },
+    ...extra,
+  };
+}
+
+/** A copy of the repository's tooling, manifests and skills — no source, no dependencies. */
+async function repositoryCopy(prefix) {
+  const root = await tempDir(prefix);
   for (const path of [
     'package.json',
     'README.md',
@@ -72,6 +87,24 @@ async function treeWithNewcomer() {
     await cp(join(ROOT, 'packages', entry.name, 'package.json'), join(root, 'packages', entry.name, 'package.json'));
   }
   const version = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8')).version;
+  return { root, version };
+}
+
+/** The repository copy with a library, `packages/shelf`, dropped into it — held back from release when `held`. */
+async function treeWithLibrary({ held = false, extra = {} } = {}) {
+  const { root, version } = await repositoryCopy('library-registry-');
+  const hold = held ? { agentcommsRelease: { hold: 'Held until something depends on it.' } } : {};
+  await mkdir(join(root, 'packages', 'shelf'), { recursive: true });
+  await writeFile(
+    join(root, 'packages', 'shelf', 'package.json'),
+    `${JSON.stringify(libraryManifest(version, { ...hold, ...extra }), null, 2)}\n`,
+  );
+  return { root, version };
+}
+
+/** The repository copy with a newcomer channel in it. */
+async function treeWithNewcomer() {
+  const { root, version } = await repositoryCopy('channel-registry-');
   await mkdir(join(root, 'packages', 'newcomer'), { recursive: true });
   await writeFile(
     join(root, 'packages', 'newcomer', 'package.json'),
@@ -293,6 +326,194 @@ test('a new channel chooses how the unsent report groups its approvals in its ow
   assert.doesNotMatch(entryOf(await snapshotSource(root)), /approvalGrouping/, 'none declared, none snapshotted');
   await declare({ ...manifest.agentcomms, approvalGrouping: 'per-thread' });
   await assert.rejects(snapshotSource(root), /@agentcomms\/newcomer: agentcomms\.approvalGrouping: /);
+});
+
+// ── Libraries and release holds (design 2026-10-05, D14; events phase A plan, decision 1) ───────────────────────
+
+test('D14-a: a declared library is discovered in the same walk, and is publishable but surface-free', async () => {
+  // It depends on the channel last in name order, so its place among the packages is computed, not alphabetical.
+  const { root } = await treeWithLibrary({
+    extra: { dependencies: { '@agentcomms/whatsapp': 'workspace:*', zod: '^4.0.0' } },
+  });
+  const registry = loadRegistry(root);
+  assert.deepEqual(
+    registry.libraries.map(({ directory, packageName, declaration }) => ({ directory, packageName, declaration })),
+    [{ directory: 'shelf', packageName: '@agentcomms/shelf', declaration: { kind: 'library' } }],
+  );
+  assert.ok(registry.packages.includes('shelf'), 'a library is published');
+  assert.ok(
+    registry.packages.indexOf('shelf') > registry.packages.indexOf('whatsapp'),
+    `it comes after what it depends on: ${registry.packages.join(' ')}`,
+  );
+  assert.deepEqual(registry.held, []);
+  assert.deepEqual(registry.undeclared, []);
+
+  // Nothing that needs a surface: it has no CLI, no server, no reference, no skills and no accounts.
+  assert.ok(!registry.channels.some((channel) => channel.directory === 'shelf'), 'not a channel');
+  assert.ok(!registry.surfaces.some((surface) => surface.package === 'shelf'), 'no surface');
+  assert.ok(!Object.hasOwn(registry.drivers, 'shelf'), 'no driver');
+  assert.ok(!registry.products.some((product) => product.channel === 'shelf'), 'no product');
+  assert.ok(!Object.hasOwn(registry.reference, 'shelf'), 'no reference pages');
+  assert.ok(!registry.skillFamilies.some((family) => family.channel === 'shelf'), 'no skill family');
+  assert.ok(!registry.platforms.includes('shelf'), 'no account platform');
+  assert.ok(!Object.hasOwn(registry.wrappers, 'shelf'), 'not a wrapper');
+
+  // Run directly, the registry still prints only the channel words; the publish list names the library.
+  assert.equal(
+    (await run(root, 'channels.mjs')).trim(),
+    REGISTRY.channels.map((channel) => channel.directory).join(' '),
+  );
+  assert.ok((await run(root, 'packages.mjs')).trim().split(' ').includes('shelf'), 'on the publish list');
+});
+
+test('D14-a: a malformed library declaration is refused, naming the package', async () => {
+  const { root, version } = await treeWithLibrary();
+  const path = join(root, 'packages', 'shelf', 'package.json');
+  const library = libraryManifest(version);
+  const refused = async (manifest, message) => {
+    await writeFile(path, JSON.stringify(manifest));
+    assert.throws(
+      () => loadRegistry(root),
+      (error) => {
+        assert.match(error.message, /^packages\/shelf\/package\.json: /);
+        assert.match(error.message, message);
+        return true;
+      },
+      JSON.stringify(manifest),
+    );
+  };
+
+  await refused({ ...library, agentcommsPackage: {} }, /"agentcommsPackage" has no "kind"/);
+  // A service is the other kind D14 names; this registry does not read it until the daemon's phase.
+  await refused(
+    { ...library, agentcommsPackage: { kind: 'service' } },
+    /this registry reads "library"; "service" arrives with phase B1/,
+  );
+  await refused({ ...library, agentcommsPackage: { kind: 'plugin' } }, /kind "plugin" is unknown/);
+  await refused({ ...library, agentcommsPackage: { kind: 'library', binary: 'agent-shelf' } }, /unknown key "binary"/);
+  for (const shape of ['library', null, ['library'], 1]) {
+    await refused({ ...library, agentcommsPackage: shape }, /"agentcommsPackage" must be an object/);
+  }
+  await refused(
+    { ...library, agentcomms: { contract: 1, channel: 'shelf' } },
+    /declares both "agentcomms" and "agentcommsPackage"/,
+  );
+  await refused({ ...library, private: true }, /a library is published, so it cannot be "private": true/);
+  await refused({ ...library, bin: { 'agent-shelf': './dist/cli.mjs' } }, /a library has no "bin"/);
+  await refused({ ...library, name: '@agentcomms/other' }, /a library's package is @agentcomms\/shelf/);
+  await refused({ ...library, name: '@someone/shelf' }, /a library's package is @agentcomms\/shelf/);
+
+  // As declared in the first place, accepted.
+  await writeFile(path, JSON.stringify(library));
+  assert.deepEqual(
+    loadRegistry(root).libraries.map((entry) => entry.directory),
+    ['shelf'],
+  );
+});
+
+test('PKG-c: "agentcomms" means a channel; one carrying a kind is refused, naming agentcommsPackage', async () => {
+  const { root, version } = await treeWithLibrary();
+  const path = join(root, 'packages', 'shelf', 'package.json');
+  const { agentcommsPackage: _declaration, ...undeclared } = libraryManifest(version);
+  for (const agentcomms of [{ kind: 'library' }, { channel: 'shelf', kind: 'service' }]) {
+    await writeFile(path, JSON.stringify({ ...undeclared, agentcomms }));
+    assert.throws(
+      () => loadRegistry(root),
+      /^Error: packages\/shelf\/package\.json: "agentcomms" declares a channel and has no "kind"; a library declares "agentcommsPackage": \{ "kind": "library" \} instead$/,
+      JSON.stringify(agentcomms),
+    );
+  }
+});
+
+test('D14-a: a non-private package that declares nothing is listed as undeclared', async () => {
+  const { root, version } = await treeWithLibrary();
+  for (const [directory, fields] of [
+    ['loose', {}],
+    // Private: never published, so nothing to declare.
+    ['quiet', { private: true }],
+  ]) {
+    await mkdir(join(root, 'packages', directory), { recursive: true });
+    await writeFile(
+      join(root, 'packages', directory, 'package.json'),
+      JSON.stringify({ name: `@agentcomms/${directory}`, version, type: 'module', ...fields }),
+    );
+  }
+  const registry = loadRegistry(root);
+  assert.deepEqual(registry.undeclared, [{ directory: 'loose', packageName: '@agentcomms/loose' }]);
+  assert.ok(!registry.packages.includes('loose'), 'the registry does not publish what it cannot name');
+  // The server-only wrapper declares nothing of its own, and is a channel's: never undeclared.
+  assert.equal(registry.wrappers['gmail-mcp'], 'gmail');
+  assert.ok(!registry.undeclared.some((entry) => entry.directory === 'gmail-mcp'));
+  assert.deepEqual(REGISTRY.undeclared, [], 'this checkout has none');
+});
+
+test('REL-c: a hold is read from the package, and refused where it cannot apply', async () => {
+  const { root, version } = await treeWithLibrary({ held: true });
+  const registry = loadRegistry(root);
+  assert.deepEqual(registry.held, [
+    { directory: 'shelf', packageName: '@agentcomms/shelf', reason: 'Held until something depends on it.' },
+  ]);
+  assert.ok(registry.packages.includes('shelf'), 'held is still publishable: every check walks it');
+
+  const write = (directory, manifest) =>
+    writeFile(join(root, 'packages', directory, 'package.json'), JSON.stringify(manifest));
+  const refused = async (directory, manifest, message) => {
+    const path = join(root, 'packages', directory, 'package.json');
+    const before = await readFile(path, 'utf8').catch(() => null);
+    await mkdir(join(root, 'packages', directory), { recursive: true });
+    await write(directory, manifest);
+    try {
+      assert.throws(
+        () => loadRegistry(root),
+        (error) => {
+          assert.match(error.message, new RegExp(`^packages/${directory}/package\\.json: `));
+          assert.match(error.message, message);
+          return true;
+        },
+        JSON.stringify(manifest),
+      );
+    } finally {
+      if (before === null) await rm(join(root, 'packages', directory), { recursive: true, force: true });
+      else await writeFile(path, before);
+    }
+  };
+  const hold = { agentcommsRelease: { hold: 'Not this release.' } };
+
+  // Core: every channel depends on it, so a release without it installs nothing.
+  const core = JSON.parse(await readFile(join(root, 'packages', 'core', 'package.json'), 'utf8'));
+  await refused('core', { ...core, ...hold }, /core cannot be held back/);
+  // Where no release would publish it anyway: a private package, and one that declares nothing.
+  await refused('quiet', { name: '@agentcomms/quiet', version, private: true, ...hold }, /a private package/);
+  await refused('loose', { name: '@agentcomms/loose', version, ...hold }, /declares neither "agentcomms" nor/);
+  // The reason is one line that says why, and the field holds nothing else.
+  for (const reason of ['', '   ', 'one\ntwo', 'one\r\ntwo', 42, null]) {
+    await refused(
+      'shelf',
+      libraryManifest(version, { agentcommsRelease: { hold: reason } }),
+      /"agentcommsRelease"\.hold says why, in one line/,
+    );
+  }
+  await refused('shelf', libraryManifest(version, { agentcommsRelease: {} }), /"agentcommsRelease"\.hold says why/);
+  await refused(
+    'shelf',
+    libraryManifest(version, { agentcommsRelease: { hold: 'Not yet.', until: '1.0.0' } }),
+    /"agentcommsRelease" has unknown key "until"/,
+  );
+  for (const shape of ['held', null, ['held'], true]) {
+    await refused(
+      'shelf',
+      libraryManifest(version, { agentcommsRelease: shape }),
+      /"agentcommsRelease" must be \{ "hold": "<why, one sentence>" \}/,
+    );
+  }
+
+  // A channel other than core may be held.
+  const slack = JSON.parse(await readFile(join(root, 'packages', 'slack', 'package.json'), 'utf8'));
+  await write('slack', { ...slack, ...hold });
+  assert.deepEqual(
+    loadRegistry(root).held.map((entry) => entry.directory),
+    ['shelf', 'slack'],
+  );
 });
 
 /**
@@ -608,4 +829,7 @@ test('this checkout’s registry is the five channels and six packages it ships'
   );
   assert.deepEqual(REGISTRY.packages, ['core', 'gmail', 'gmail-mcp', 'resend', 'slack', 'whatsapp']);
   assert.deepEqual(REGISTRY.platforms, ['gmail', 'resend', 'slack', 'whatsapp']);
+  assert.deepEqual(REGISTRY.libraries, []);
+  assert.deepEqual(REGISTRY.held, []);
+  assert.deepEqual(REGISTRY.undeclared, []);
 });

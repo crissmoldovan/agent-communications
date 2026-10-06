@@ -5,10 +5,10 @@ import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { REGISTRY } from '../scripts/channels.mjs';
-import { PACKAGES } from '../scripts/packages.mjs';
+import { HELD, PACKAGES, PUBLISHABLE } from '../scripts/packages.mjs';
 import { isVisible } from '../scripts/release-confirm.mjs';
 import { workspaceClosure } from '../scripts/verify-package.mjs';
 import { tempDir } from './helpers/temp-dir.mjs';
@@ -45,13 +45,14 @@ async function runScript(script, args, options = {}) {
   }
 }
 
-async function manifests() {
-  const dirs = (await readdir(join(ROOT, 'packages'), { withFileTypes: true }))
+/** Every non-private package under `root/packages`, by directory, each checked to be `@agentcomms/<directory>`. */
+async function manifests(root = ROOT) {
+  const dirs = (await readdir(join(root, 'packages'), { withFileTypes: true }))
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name);
   const found = new Map();
   for (const dir of dirs) {
-    const manifest = JSON.parse(await readFile(join(ROOT, 'packages', dir, 'package.json'), 'utf8'));
+    const manifest = JSON.parse(await readFile(join(root, 'packages', dir, 'package.json'), 'utf8'));
     if (manifest.private === true) continue;
     assert.ok(manifest.name?.startsWith('@agentcomms/'), `${dir} has an unexpected package name`);
     assert.equal(manifest.name, `@agentcomms/${dir}`, 'the list names directories, so each must match its package');
@@ -60,34 +61,140 @@ async function manifests() {
   return found;
 }
 
-test('the shared list names every publishable package, and nothing else', async () => {
-  const publishable = [...(await manifests()).keys()];
-  assert.ok(publishable.length > 0, 'no publishable packages found — the discovery is wrong');
-  for (const name of publishable) {
-    assert.ok(PACKAGES.includes(name), `@agentcomms/${name} is publishable but scripts/packages.mjs never names it`);
+/**
+ * A copy of the release's scripts and every package manifest — what the release path reads, and nothing else — with
+ * a library, `packages/shelf`, dropped in: held back from release unless `held` is false, and depended on at runtime
+ * by each package in `dependents`.
+ */
+async function treeWithShelf({ held = true, dependents = [], extra = {} } = {}) {
+  const root = await tempDir('release-held-');
+  await cp(join(ROOT, 'scripts'), join(root, 'scripts'), { recursive: true });
+  for (const entry of await readdir(join(ROOT, 'packages'), { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    await mkdir(join(root, 'packages', entry.name), { recursive: true });
+    await cp(join(ROOT, 'packages', entry.name, 'package.json'), join(root, 'packages', entry.name, 'package.json'));
   }
-  // Nothing in the list that is not a real package, which would make the confirm step hang on a 404.
-  for (const name of PACKAGES) {
-    assert.ok(
-      publishable.includes(name),
-      `scripts/packages.mjs names @agentcomms/${name}, which is not a package here`,
+  const { version } = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
+  const shelf = {
+    name: '@agentcomms/shelf',
+    version,
+    type: 'module',
+    license: 'MIT',
+    agentcommsPackage: { kind: 'library' },
+    ...(held ? { agentcommsRelease: { hold: 'Held until the first package that depends on it ships.' } } : {}),
+    ...extra,
+  };
+  await mkdir(join(root, 'packages', 'shelf'), { recursive: true });
+  await writeFile(join(root, 'packages', 'shelf', 'package.json'), `${JSON.stringify(shelf, null, 2)}\n`);
+  for (const dependent of dependents) {
+    const path = join(root, 'packages', dependent, 'package.json');
+    const manifest = JSON.parse(await readFile(path, 'utf8'));
+    manifest.dependencies = { ...manifest.dependencies, '@agentcomms/shelf': 'workspace:*' };
+    await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`);
+  }
+  return root;
+}
+
+/** The three lists of the tree at `root`, read through its own `scripts/packages.mjs`. */
+async function listsOf(root) {
+  if (root === ROOT) return { PUBLISHABLE, HELD, PACKAGES };
+  const {
+    PUBLISHABLE: publishable,
+    HELD: held,
+    PACKAGES: packages,
+  } = await import(pathToFileURL(join(root, 'scripts', 'packages.mjs')).href);
+  return { PUBLISHABLE: publishable, HELD: held, PACKAGES: packages };
+}
+
+test('D14-c: PUBLISHABLE names every non-private package, and nothing else; PACKAGES is it less the held ones, in the same order', async () => {
+  // This checkout, and a copy with a held library in it: the lists must be right for the package the registry learns
+  // about next, not only for the ones it already knows.
+  for (const root of [ROOT, await treeWithShelf()]) {
+    const lists = await listsOf(root);
+    const publishable = [...(await manifests(root)).keys()];
+    assert.ok(publishable.length > 0, 'no publishable packages found — the discovery is wrong');
+    for (const name of publishable) {
+      assert.ok(
+        lists.PUBLISHABLE.includes(name),
+        `@agentcomms/${name} is publishable but scripts/packages.mjs never names it`,
+      );
+    }
+    // Nothing in the list that is not a real package, which would make the confirm step hang on a 404.
+    for (const name of lists.PUBLISHABLE) {
+      assert.ok(
+        publishable.includes(name),
+        `scripts/packages.mjs names @agentcomms/${name}, which is not a package here`,
+      );
+    }
+    assert.equal(new Set(lists.PUBLISHABLE).size, lists.PUBLISHABLE.length, 'a package listed twice');
+    // What a tag publishes: the same order, less exactly the held packages.
+    for (const name of Object.keys(lists.HELD)) assert.ok(lists.PUBLISHABLE.includes(name), `held ${name} is unknown`);
+    assert.deepEqual(
+      lists.PACKAGES,
+      lists.PUBLISHABLE.filter((name) => !Object.hasOwn(lists.HELD, name)),
     );
   }
-  assert.equal(new Set(PACKAGES).size, PACKAGES.length, 'a package listed twice would be published twice');
+  // In the copy, the library is publishable and held, so a tag leaves it out.
+  const copy = await listsOf(await treeWithShelf());
+  assert.ok(copy.PUBLISHABLE.includes('shelf'));
+  assert.ok(Object.hasOwn(copy.HELD, 'shelf'));
+  assert.ok(!copy.PACKAGES.includes('shelf'));
+  assert.deepEqual(copy.PACKAGES, PACKAGES, 'the copy publishes exactly what this checkout does');
 });
 
-test('the shared list is in an order that installs: every package after what it depends on', async () => {
-  const found = await manifests();
-  for (const [index, name] of PACKAGES.entries()) {
-    const manifest = found.get(name);
-    for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies', 'devDependencies']) {
-      for (const dependency of Object.keys(manifest[field] ?? {})) {
-        if (!dependency.startsWith('@agentcomms/')) continue;
-        const at = PACKAGES.indexOf(dependency.slice('@agentcomms/'.length));
-        assert.ok(at !== -1 && at < index, `@agentcomms/${name} depends on ${dependency}, so it must come after it`);
+test('PKG-a: every publishable package comes after what it depends on, a library too', async () => {
+  // A library depending on the channel last in name order, so its place is computed rather than alphabetical.
+  const copy = await treeWithShelf({ extra: { dependencies: { '@agentcomms/whatsapp': 'workspace:*' } } });
+  for (const root of [ROOT, copy]) {
+    const found = await manifests(root);
+    const { PUBLISHABLE: order } = await listsOf(root);
+    for (const [index, name] of order.entries()) {
+      const manifest = found.get(name);
+      for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies', 'devDependencies']) {
+        for (const dependency of Object.keys(manifest[field] ?? {})) {
+          if (!dependency.startsWith('@agentcomms/')) continue;
+          const at = order.indexOf(dependency.slice('@agentcomms/'.length));
+          assert.ok(at !== -1 && at < index, `@agentcomms/${name} depends on ${dependency}, so it must come after it`);
+        }
       }
     }
   }
+  const { PUBLISHABLE: order } = await listsOf(copy);
+  assert.ok(order.indexOf('shelf') > order.indexOf('whatsapp'), order.join(' '));
+});
+
+/**
+ * What a tag would publish that cannot install: a package on its list depending at runtime on a held one, which the
+ * registry would never have — and core held, which every channel needs. As sentences, one per problem.
+ */
+async function heldEdgeProblems(root) {
+  const lists = await listsOf(root);
+  const problems = [];
+  if (Object.hasOwn(lists.HELD, 'core')) problems.push('@agentcomms/core is held, and every channel depends on it');
+  for (const name of lists.PACKAGES) {
+    const manifest = JSON.parse(await readFile(join(root, 'packages', name, 'package.json'), 'utf8'));
+    for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+      for (const dependency of Object.keys(manifest[field] ?? {})) {
+        const directory = dependency.startsWith('@agentcomms/') ? dependency.slice('@agentcomms/'.length) : null;
+        if (directory !== null && Object.hasOwn(lists.HELD, directory)) {
+          problems.push(`@agentcomms/${name} depends on ${dependency} in ${field}, and ${dependency} is held back`);
+        }
+      }
+    }
+  }
+  return problems;
+}
+
+test('REL-c: no package a tag publishes depends at runtime on a held one, and core is never held', async () => {
+  assert.deepEqual(await heldEdgeProblems(ROOT), []);
+  assert.ok(!Object.hasOwn(HELD, 'core'), 'core is held');
+  // A released channel that depends on the held library: its release would install nothing, so it fails here. This is
+  // what makes the release of the first package depending on a held one lift the hold in its own version commit.
+  assert.deepEqual(await heldEdgeProblems(await treeWithShelf({ dependents: ['whatsapp'] })), [
+    '@agentcomms/whatsapp depends on @agentcomms/shelf in dependencies, and @agentcomms/shelf is held back',
+  ]);
+  // Not held, the same edge is an ordinary one.
+  assert.deepEqual(await heldEdgeProblems(await treeWithShelf({ held: false, dependents: ['whatsapp'] })), []);
 });
 
 test('the release documents say every channel pins the same-version core, so core goes out before every channel', async () => {
@@ -993,6 +1100,71 @@ test('an empty package list fails the run, rather than reading as everything alr
   assert.equal(result.status, 1);
   assert.equal(result.stdout, '');
   assert.match(result.stderr, /lists no packages/);
+});
+
+test('REL-a: a held package is never read, proven, sent or confirmed by a release', async () => {
+  /*
+   * Decision 1 of the events phase A plan: a package can be held back from a tag's publish while every check still
+   * walks it. Held, `shelf` must be absent from what the workflow's loops read — the printed list (the confirm loop),
+   * `pending` (the publish loop) and the preflight — and the registry must never be asked about it.
+   */
+  const root = await treeWithShelf();
+  const scripts = join(root, 'scripts');
+  const printed = await runScript(join(scripts, 'packages.mjs'), []);
+  assert.equal(printed.status, 0, printed.stderr);
+  assert.equal(printed.stdout.trim(), PACKAGES.join(' '), 'the copy prints the same six packages');
+  assert.doesNotMatch(printed.stdout, /\bshelf\b/);
+
+  const fake = await fakeOidc({ published: allExist() });
+  try {
+    const pending = await runScript(join(scripts, 'release-ci.mjs'), ['pending', VERSION, COMMIT], { env: fake.env });
+    assert.equal(pending.status, 0, pending.stderr);
+    assert.equal(pending.stdout.trim(), PACKAGES.join(' '), 'the publish loop is given exactly the released packages');
+    const preflight = await runScript(join(scripts, 'release-ci.mjs'), ['preflight', VERSION, COMMIT], {
+      env: fake.env,
+    });
+    assert.equal(preflight.status, 0, preflight.stderr);
+    assert.doesNotMatch(preflight.stdout + preflight.stderr, /shelf/);
+    assert.ok(!fake.reads.includes('@agentcomms/shelf'), `its packument was read: ${fake.reads.join(', ')}`);
+    assert.ok(
+      !fake.exchanges.some((exchange) => exchange.name === '@agentcomms/shelf'),
+      'a token was exchanged for it',
+    );
+    // Not vacuous: every released package was asked about, by both.
+    for (const name of PACKAGES) {
+      assert.ok(fake.reads.includes(`@agentcomms/${name}`), `${name} was not read`);
+      assert.ok(
+        fake.exchanges.some((exchange) => exchange.name === `@agentcomms/${name}`),
+        `${name} was not proven`,
+      );
+    }
+  } finally {
+    await fake.close();
+  }
+
+  // The hold lifted, the same release reaches the library — and, never published, it stops for its first version by
+  // hand: the path decision 1 sends the owner down.
+  const path = join(root, 'packages', 'shelf', 'package.json');
+  const { agentcommsRelease: _hold, ...lifted } = JSON.parse(await readFile(path, 'utf8'));
+  await writeFile(path, `${JSON.stringify(lifted, null, 2)}\n`);
+  assert.match((await runScript(join(scripts, 'packages.mjs'), [])).stdout, /\bshelf\b/);
+  const unheld = await fakeOidc({ published: allExist() });
+  try {
+    const preflight = await runScript(join(scripts, 'release-ci.mjs'), ['preflight', VERSION, COMMIT], {
+      env: unheld.env,
+    });
+    assert.equal(preflight.status, 1);
+    assert.match(preflight.stdout, /✗ @agentcomms\/shelf: never published/);
+    assert.ok(
+      preflight.stdout.includes(
+        '  pnpm --config.pnpmfile=scripts/record-git-head.cjs --filter @agentcomms/shelf publish --access public --no-git-checks --tag latest\n',
+      ),
+      preflight.stdout,
+    );
+    assert.ok(unheld.reads.includes('@agentcomms/shelf'));
+  } finally {
+    await unheld.close();
+  }
 });
 
 test('a package already at the version from another commit stops the release before anything is sent', async () => {
