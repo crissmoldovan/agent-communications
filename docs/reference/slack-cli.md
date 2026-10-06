@@ -479,8 +479,9 @@ agent-slack edit prepare [options]
 | Option | What it does | Default |
 |---|---|---|
 | `--workspace <name>` | which workspace, as `organisation/slack` | — |
-| `--draft <draftId>` | the draft holding the new words, in the message’s channel | — |
+| `--draft <draftId>` | the draft holding the new words and files to add, in the message’s channel — with no words, the message keeps its own | — |
 | `--ts <ts>` | the message to edit | — |
+| `--remove-file <fileId...>` | take this file of the message off it, by id; it stays in Slack, shared nowhere | — |
 
 ### `agent-slack edit send`
 

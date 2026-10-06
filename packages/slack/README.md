@@ -265,13 +265,18 @@ the command that fixes it.
 
 ### Editing and deleting
 
-A message this account posted can be edited or deleted through the same gate: a preview first, then the act, once,
-after the same approval a post needs.
+A message this account posted can be edited — its words, its files, or both — or deleted, through the same gate: a
+preview first, then the act, once, after the same approval a post needs.
 
 ```sh
+# New words: a draft with them, then the edit.
 agent-slack draft create --workspace acme/slack --channel C024BE7LR --text 'ready at noon'
 agent-slack edit prepare --workspace acme/slack --draft <draftId> --ts 1700000000.000100      # changes nothing
 agent-slack edit send --workspace acme/slack --draft <draftId> --approval <approvalId> --expect-channel C024BE7LR --ts 1700000000.000100
+
+# Replace a file and keep the words: a draft with the new file and no words, and the old file's id to take off.
+agent-slack draft create --workspace acme/slack --channel C024BE7LR --file ~/reports/q3-chart-v2.png
+agent-slack edit prepare --workspace acme/slack --draft <draftId> --ts 1700000000.000100 --remove-file F0C739JK4LE
 
 agent-slack delete prepare --workspace acme/slack --channel C024BE7LR --ts 1700000000.000100  # deletes nothing
 agent-slack delete send --workspace acme/slack --channel C024BE7LR --ts 1700000000.000100 --approval <approvalId>
@@ -279,14 +284,18 @@ agent-slack delete send --workspace acme/slack --channel C024BE7LR --ts 17000000
 
 Both read the message from Slack first, and refuse one this account did not write — a deletion too, even for an admin
 whose account Slack would let delete anybody's. The preview shows the message as it is now: an edit's shows its words
-now and after, and counts who sees them as a post's does; a deletion's shows the words, and the replies and files that
-are not deleted with it. The approval binds the message as it was read, so one edited in Slack after the preview, or
-a deletion's thread that gained a reply, voids it.
+now and after, the files it keeps, takes off and attaches, and counts who sees them as a post's does; a deletion's
+shows the words, and the replies and files that are not deleted with it. The approval binds the message as it was
+read, so one edited in Slack after the preview, or a deletion's thread that gained a reply, voids it.
 
-An edit changes only a message's words, where it is — a draft written as a reply in a thread, or with files, is
-refused — and sends them as text, so Slack marks the message edited. Nobody who read the old words is told what
-changed. Mentions in an edit are counted as if Slack notified them, and a link in one may unfurl: an edit has no switch
-to stop it. Replacing a message's files is not offered yet. A deletion cannot be undone.
+An edit leaves a message where it is — a draft written as a reply in a thread is refused. Its words go as text, so
+Slack marks the message edited; nobody who read the old words is told what changed. A draft with no words keeps the
+message's exactly as they are, mentions included. New files are chosen, checked and bound by hash as a post's are, go
+up shared nowhere, and are attached by the edit itself; the edit sends every file the message should end with, which
+is how Slack's `chat.update` works (it replaces the message's files with the list it is given). A file taken off stays
+in Slack, shared nowhere — delete it there if it should go. Changing files needs `files:write`. Mentions in an edit
+are counted as if Slack notified them, and a link in one may unfurl: an edit has no switch to stop it. A deletion
+cannot be undone.
 
 ## As an MCP server
 
@@ -323,7 +332,7 @@ on stdio directly.
 | `slack_post_prepare` | compose a draft, with local files if given, and return the preview a person must approve — posts nothing |
 | `slack_post_send` | post a prepared draft once its approval allows it, reading every file again first — the operation `agent-slack post send` runs |
 | `slack_react`, `slack_react_send` | add or remove a reaction through the same gate — `agent-slack react` |
-| `slack_edit_prepare`, `slack_edit_send` | change the words of a message this account posted, through the same gate — `agent-slack edit prepare` and `edit send` |
+| `slack_edit_prepare`, `slack_edit_send` | change the words or files of a message this account posted, through the same gate — `agent-slack edit prepare` and `edit send` |
 | `slack_delete_prepare`, `slack_delete_send` | delete a message this account posted, through the same gate — `agent-slack delete prepare` and `delete send` |
 | `slack_approval_wait` | where an approval stands, now or once a person approves it — only looks; `agent-slack approval wait` |
 | `slack_draft_create`, `slack_draft_update` | write a draft, or change one — words, channel, thread, mentions or files — without preparing it |

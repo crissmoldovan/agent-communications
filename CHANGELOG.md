@@ -5,12 +5,16 @@ together under one version.
 
 ## Unreleased
 
-**Slack: edit or delete a message this account posted, through the gate a post goes through.** An agent that posted
-a typo, the wrong figure or to the wrong thread could only ask you to fix it in Slack. Now:
+**Slack: edit or delete a message this account posted — its words, its files, or the whole message — through the
+gate a post goes through.** An agent that posted a typo, the wrong figure, the wrong chart or to the wrong thread could
+only ask you to fix it in Slack. Now:
 - **`slack_edit_prepare` and `slack_edit_send`** — `agent-slack edit prepare --draft <id> --ts <ts>` and `edit send` —
-  change a message's words. The preview shows the words it has now and the words it will have, and counts who sees
-  them as a post's does: an `@channel`, `@here` or a room of 50 or more needs your terminal whatever the policy.
-  The edit is sent as text alone, so Slack marks the message edited, and it works on a message typed in Slack too.
+  change a message's words, add files, take files off (`removeFiles`, `--remove-file`), or replace one by doing both.
+  The preview shows the words now and after, the files it keeps, removes and attaches — each new one by name, size,
+  type and SHA-256 — and counts who sees it as a post's does. Leave the words out to keep them exactly, mentions and
+  all. New files are checked and bound by hash, go up shared nowhere, and are attached by the edit itself; a file taken
+  off stays in Slack, shared nowhere. The edit is sent as text, so Slack marks the message edited, and it works on a
+  message typed in Slack too.
 - **`slack_delete_prepare` and `slack_delete_send`** — `agent-slack delete prepare --channel <id> --ts <ts>` and
   `delete send` — delete one. The preview shows the message, and the replies and files that are not deleted with it.
   A deletion is at the workspace's own policy, like a post.
@@ -20,8 +24,9 @@ a typo, the wrong figure or to the wrong thread could only ask you to fix it in 
   preview, or a deletion's thread that gained a reply, voids it. `approve` shows an edit's and a deletion's preview
   and reads the message again first. Outcomes are recorded as a post's are; a deletion Slack answers
   `message_not_found` is done, with a note saying there was nothing left to delete.
-- Replacing a message's files is not offered yet: Slack does not document what happens to the files already on it
-  (design 2026-10-06 §5). No new scope is needed: both use `chat:write`, which `send` mode already has.
+- What `chat.update` does with files is not in Slack's reference, so it was observed against a real workspace first:
+  the list it is given replaces the message's files. Both acts use `chat:write`, which `send` mode already has;
+  changing files also needs `files:write`, which it has too.
 
 ## 0.14.1
 

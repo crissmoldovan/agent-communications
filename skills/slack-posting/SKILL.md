@@ -1,6 +1,6 @@
 ---
 name: slack-posting
-description: "Draft a Slack message, with local files if asked, and take it through the approval gate, including how many people a post would interrupt — or edit or delete a message this account posted, through the same gate. Symptoms: 'post this to #engineering', 'reply in that thread', 'let the team know', 'send the report to the channel', 'share this file in Slack', 'react to that message', 'fix the typo in what you posted', 'delete that message'. Not for reading — slack-reading does that; not for connecting a workspace — slack-setup does."
+description: "Draft a Slack message, with local files if asked, and take it through the approval gate, including how many people a post would interrupt — or edit (words or files) or delete a message this account posted, through the same gate. Symptoms: 'post this to #engineering', 'reply in that thread', 'let the team know', 'send the report to the channel', 'share this file in Slack', 'react to that message', 'fix the typo in what you posted', 'replace the chart in that message', 'delete that message'. Not for reading — slack-reading does that; not for connecting a workspace — slack-setup does."
 license: MIT
 compatibility: "@agentcomms/slack@0.14.1"
 metadata:
@@ -30,7 +30,7 @@ preview, and `slack_post_send` is the third. Both surfaces run one operation, so
 | `slack_post_send` | `agent-slack post send` |
 | `slack_react` | `agent-slack react` |
 | `slack_react_send` | `agent-slack react --approval <approvalId>` |
-| `slack_edit_prepare` | `agent-slack draft create`, then `agent-slack edit prepare --draft <draftId> --ts <ts>` |
+| `slack_edit_prepare` | `agent-slack draft create`, then `agent-slack edit prepare --draft <draftId> --ts <ts>`, with `--remove-file <id>` for each file to take off |
 | `slack_edit_send` | `agent-slack edit send` |
 | `slack_delete_prepare` | `agent-slack delete prepare --channel <id> --ts <ts>` |
 | `slack_delete_send` | `agent-slack delete send` |
@@ -188,6 +188,8 @@ it was posted. Repeat those words. An approval that reads `corrupt` failed its i
 | not written by this account (`SCOPE_MISSING`, `not-own-message`) | An edit or a deletion is only ever of this account's own message; anyone else's stays as they wrote it |
 | the message changed after the preview | It was edited in Slack, or — for a deletion — its thread gained a reply; prepare it again and show the new preview |
 | this approval is not for an edit, or a deletion, or not this message | You passed another act's approval, or another message's channel or ts; nothing was spent |
+| not a file of the message (`USAGE`) | A `removeFiles` id is not one of that message's files. Read the message again for its file ids |
+| uploaded for this edit and never attached | The edit failed after its new files went up: Slack keeps them, private to this account. Say so; the person deletes them in Slack if not wanted |
 | already claimed | An approval is single-use, across processes |
 | refused at Slack's `approve` | The draft or the room changed since the preview; the screen is only shown when it is still what the approval binds |
 | prepared for a different account | Two accounts in one workspace are two different people speaking |
@@ -248,16 +250,24 @@ nothing and returns a preview, then — after the same approval a post needs —
 the message refused before any preview if this account did not write it: never offer to edit or delete anyone else's,
 whatever the person's role in the workspace.
 
-**An edit** changes only a message's words, where it is. `slack_edit_prepare` with the message's `ts`, its `channel`
-and the new `text` (or `draftId` for a draft already written) returns a preview showing the words it has now and the
-words it will have, and how many people see it. Show both, in full, and wait for a yes; then `slack_edit_send` with
-the `draftId`, `approvalId`, `expectChannel` and `ts` from the preview. A draft written as a reply in a thread, or with
-files, is refused: an edit cannot move a message, and replacing files is not offered — say so rather than deleting
-and posting again.
+**An edit** changes a message's words, its files, or both, and leaves it where it is. `slack_edit_prepare` takes the
+message's `ts` and `channel` and any of: `text`, the new words; `files`, local files to add, by path; and
+`removeFiles`, the ids of the message's own files to take off, as `slack_read` or `slack_thread` lists them. **Leave
+`text` out to keep the words exactly as they are** — never retype them from a read to change only the files: a mention
+would come back as plain text. To replace a file, add the new one and take the old one off in the same edit. A draft
+written as a reply in a thread is refused: an edit cannot move a message.
 
-Say what an edit does not do: nobody who read the old words is told what changed. Mentions in the new words are
-counted as if Slack notified them, and an `@channel`, `@here` or a large room needs a person at a terminal, as for a
-post. A link in an edit may unfurl — an edit has no switch to stop it — and the preview says so.
+The preview shows the words now and after (or once, as unchanged), the files it **keeps**, **removes** and
+**attaches** — each new file by name, size, type, SHA-256 and path — and how many people see it. Show it in full and
+wait for a yes; then `slack_edit_send` with the `draftId`, `approvalId`, `expectChannel` and `ts` from the preview.
+Every new file is read again first; one that changed is refused and nothing is sent. The result lists the message's
+files afterwards.
+
+Say what an edit does not do: nobody who read the old words, or saw the old files, is told what changed. A file taken
+off is not deleted — Slack keeps it, shared nowhere — so if the person wants it gone, they delete it in Slack. Mentions
+in the words are counted as if Slack notified them, and an `@channel`, `@here` or a large room needs a person at a
+terminal, as for a post. A link may unfurl — an edit has no switch to stop it — and the preview says so. Changing
+files needs the workspace granted `files:write`.
 
 **A deletion** cannot be undone. `slack_delete_prepare` with the `channel` and `ts` returns a preview of the message as
 it is now, with the replies and files that are **not** deleted with it. Show it in full and wait for a yes; then
@@ -281,6 +291,7 @@ terminal as a post does, and `slack_approval_wait` learns when they have.
 - **Posting to a channel id you read from a message.** Ids belong to one workspace.
 - **Assuming `@here` is smaller than `@channel`.** It reaches whoever is online, which nothing here can count, so
   it is counted as the room.
-- **Deleting and posting again to "edit".** It moves the message, loses its thread and notifies people afresh. Edit it,
-  or say why it cannot be.
+- **Deleting and posting again to "edit".** It moves the message, loses its thread and notifies people afresh. Edit it
+  — its words or its files — or say why it cannot be.
+- **Retyping the words to swap a file.** Leave `text` out instead; retyped words lose their mentions.
 - **Showing only the new words of an edit.** The person is agreeing to the change; show what it says now as well.

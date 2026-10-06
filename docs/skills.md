@@ -51,7 +51,7 @@ Each family of skills shares one contract, copied into every skill as `reference
 | [`gmail-triage`](#gmail-triage) | Sort a window of mail across every connected mailbox into Reply needed, Review, FYI and Noise, and propose archive and label changes for the user to approve as one batch. |
 | [`resend-reading`](#resend-reading) | Read a Resend team — its domains, the sent emails and what happened to each, received email, delivery metrics and the suppression list — and report what was read without overstating it. |
 | [`resend-sending`](#resend-sending) | Send email through Resend: prepare it, show the person the whole preview, and send it once they approve — then check what happened, and see or cancel what is scheduled. |
-| [`slack-posting`](#slack-posting) | Draft a Slack message, with local files if asked, and take it through the approval gate, including how many people a post would interrupt — or edit or delete a message this account posted, through the same gate. |
+| [`slack-posting`](#slack-posting) | Draft a Slack message, with local files if asked, and take it through the approval gate, including how many people a post would interrupt — or edit (words or files) or delete a message this account posted, through the same gate. |
 | [`slack-reading`](#slack-reading) | Read a Slack workspace — channels, threads, search, people and files — save the files people shared where the person says, and report what was read without overstating it. |
 | [`slack-setup`](#slack-setup) | Connect a Slack workspace to agent-slack: the app manifest, the PKCE sign-in, read and send modes, and what doctor reports. |
 | [`whatsapp-reading`](#whatsapp-reading) | Read WhatsApp on this Mac, read-only: sync, list chats, read, search, and draft a reply as a link the person sends. |
@@ -218,9 +218,9 @@ Send email through Resend: prepare it, show the person the whole preview, and se
 
 ### `slack-posting`
 
-Draft a Slack message, with local files if asked, and take it through the approval gate, including how many people a post would interrupt — or edit or delete a message this account posted, through the same gate.
+Draft a Slack message, with local files if asked, and take it through the approval gate, including how many people a post would interrupt — or edit (words or files) or delete a message this account posted, through the same gate.
 
-**Reach for it when:** 'post this to #engineering', 'reply in that thread', 'let the team know', 'send the report to the channel', 'share this file in Slack', 'react to that message', 'fix the typo in what you posted', 'delete that message'
+**Reach for it when:** 'post this to #engineering', 'reply in that thread', 'let the team know', 'send the report to the channel', 'share this file in Slack', 'react to that message', 'fix the typo in what you posted', 'replace the chart in that message', 'delete that message'
 
 **Not for** reading — slack-reading does that; not for connecting a workspace — slack-setup does.
 

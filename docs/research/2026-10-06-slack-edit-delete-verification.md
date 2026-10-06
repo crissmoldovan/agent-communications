@@ -1,9 +1,10 @@
 # Slack edits and deletions: the live verification, and how to run it
 
-**Status: not run yet.** Written with [the design](../superpowers/specs/2026-10-06-slack-edit-delete-design.md), whose
-§4 lists what Slack's reference leaves unsaid and how the code behaves meanwhile — always the way that is safe if the
-pessimistic answer is true. This page is how to replace each unknown with an observation. §1 and §2 settle what this
-release does; §3 is the gate on building phase 2, replacing a message's files.
+**Status: §3 run 2026-10-06; §1 and §2 not run yet.** Written with
+[the design](../superpowers/specs/2026-10-06-slack-edit-delete-design.md), whose §4 lists what Slack's reference leaves
+unsaid and how the code behaves meanwhile — always the way that is safe if the pessimistic answer is true. This page is
+how to replace each unknown with an observation. §3 settled what `file_ids` does, and editing files was built on it
+(design §5); §1 and §2 would settle the rest.
 
 **This run posts, edits and deletes real messages**, so a person runs it, by hand, never an agent or a test: the
 repository's rule is that nothing in development talks to Slack. Use a workspace you may test in, and a channel made
@@ -56,21 +57,31 @@ agent-slack delete send --workspace $W --channel $C --ts <the parent's ts> --app
 | Are a deleted message's files deleted too? | Post with `--file`, delete it, then `agent-slack files --workspace $W` | Files kept / gone |
 | Is somebody else's message refused before any preview? | `delete prepare` with the second person's message's ts | `SCOPE_MISSING`, `not-own-message` |
 
-## §3 Phase 2: what `chat.update` does with `file_ids`
+## §3 What `chat.update` does with `file_ids` — run 2026-10-06
 
-Not reachable from this release: `chat.update` is only ever sent words. This needs a short script against the Web
-API with the workspace's token, run by a person, to answer the one question phase 2 cannot be designed around:
+Run once, by a one-off script the workspace's owner approved, in their own DM with themselves, with the workspace's own token
+read through this package and never printed. It posted a message of words alone (M1) and one with a file (M2, shared
+as a post with files is), uploaded `probe-a.txt` and `probe-b.txt` with no channel, edited each message as below
+reading it back every time, and then deleted both messages and all three files. Every call answered `ok`.
 
-1. Post a message with one file, `a.txt`.
-2. Upload `b.txt` without sharing it: `files.getUploadURLExternal`, the bytes, then `files.completeUploadExternal`
-   with no `channel_id`.
-3. `chat.update` the message with `file_ids` set to `b.txt`'s id.
+| Edit | `file_ids` sent | Files afterwards | Words afterwards |
+|---|---|---|---|
+| M1, words alone | `[A]` | A | the new words |
+| M1, with A | `[B]` | **B only** | the new words |
+| M1 | `[A, B]` | A, B — in that order | the new words |
+| M1 | none, words only | A, B — kept | the new words |
+| M1 | `[]` | none | the new words |
+| M1 | `[A]`, no `text` | A | **none** — `text` was `""` |
+| M2, posted with C | `[B]` | **B only** | the new words |
+| M2 | none, words only | B — kept | the new words |
 
-| Question | Record |
+| Question | Observed |
 |---|---|
-| Does the message now show `a.txt` and `b.txt`, or `b.txt` alone? | |
-| If `a.txt` is no longer on the message, is it still listed among the channel's files? | |
-| Does `chat.update` with `file_ids` and no `text` keep the message's words? | |
-| Is the message marked "(edited)"? | |
+| Does the message now show `a.txt` and `b.txt`, or `b.txt` alone? | **`b.txt` alone**: the list replaces the message's files |
+| If `a.txt` is no longer on the message, is it still listed among the channel's files? | **No**: `files.info` lists no share for it, and it is not deleted |
+| Does `chat.update` with `file_ids` and no `text` keep the message's words? | **No**: the words are removed |
+| Is the message marked "(edited)"? | Slack's answer carried `edited` on every edit; how a client draws it is §1's to confirm |
 
-Record what was seen here, with the date, and amend the design's §4 and §5 to say which unknowns are now known.
+A file uploaded and finished with no channel was shared nowhere until an edit attached it. Recorded so the next person
+reading Slack's reference — which still says only "new file ids that will be sent with this message" — does not have
+to find this out again; rerun it if Slack's behaviour is in doubt.

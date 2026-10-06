@@ -7,10 +7,13 @@ the Slack design ([2026-09-19](2026-09-19-slack-design.md)), the parity design
 
 ## 1. What was asked
 
-An agent that posted a message with a typo, to the wrong thread, or with the wrong figure, has no way to put it right:
-the person has to open Slack and do it by hand. The ask is that an agent can **edit** a message — change its words —
-and **delete** one, through the same gate a post goes through. Replacing a file on a message was asked for too; it is
-designed in §5 and deliberately not built here, for the reason given there.
+An agent that posted a message with a typo, to the wrong thread, or with the wrong figure or chart, has no way to put
+it right: the person has to open Slack and do it by hand. The ask is that an agent can **edit** a message — change its
+words, and add, remove or replace its files — and **delete** one, through the same gate a post goes through.
+
+Editing files was first left out: Slack's reference does not say what `chat.update`'s `file_ids` does to the files a
+message already has, and a preview cannot honestly describe an act nobody has seen. It was settled by observing it
+against a real workspace on 2026-10-06 (§5) and built on what was seen.
 
 The Slack design already names both methods. `chat.update` and `chat.delete` are classified `write` in
 `api/methods.ts`, so no path reaches them today, and §9 of that design lists "retraction is not a gate" among what it
@@ -96,13 +99,19 @@ Three other shapes were weighed:
 
 A draft written for an edit is still a draft: listed, editable, and preparable as a post — whose preview would say so.
 
-A draft written as a reply in a thread, or with files, is refused for an edit (`USAGE`): an edit leaves a message where
-it is, and replacing files is §5.
+A draft written as a reply in a thread is refused for an edit (`USAGE`): an edit leaves a message where it is. A draft's
+files are the files the edit adds (§5); which of the message's own files go is named apart, by id, and bound in the
+approval's expectation (`edits <ts>, reaches <n>, removes <id> …`), because it is part of the act, not of the words.
 
-### E5 — An edit sends its text alone, under `parse: none`
+**A draft with no words keeps the message's.** They are sent back exactly as Slack holds them — escaped, with mentions
+as spans — and previewed as unchanged. An edit that only swaps a file must not retype the words: typed again from a
+read, a mention would come back as plain text, and the preview could not show the difference.
 
-`chat.update` is sent `channel`, `ts`, `text` and `parse: none` — no `blocks`, no `link_names`. Three reasons, all from
-§2:
+### E5 — An edit sends its text, under `parse: none`, and `file_ids` only when it changes the files
+
+`chat.update` is sent `channel`, `ts`, `text` and `parse: none` — no `blocks`, no `link_names` — and `file_ids` when the
+edit adds or takes off files (§5). `text` is always sent: observed, `file_ids` without it leaves a message with no words.
+Three reasons for the rest, all from §2:
 
 1. **Slack marks it "(edited)".** With blocks it does not, and a correction that nobody can see is a correction is the
    wrong default for words an agent changed after people had read them.
@@ -155,7 +164,7 @@ Five Slack errors gain plain words in `callSlack`: `cant_update_message`, `cant_
 
 | Command | Tool | Operation |
 |---|---|---|
-| `edit prepare --draft <id> --ts <ts>` | `slack_edit_prepare` (`ts`, and `draftId` or `channel` with `text`) | `prepareEdit` |
+| `edit prepare --draft <id> --ts <ts> [--remove-file <id>…]` | `slack_edit_prepare` (`ts`; `draftId`, or `channel` with any of `text` and `files`; `removeFiles`) | `prepareEdit` |
 | `edit send --draft --approval --expect-channel --ts` | `slack_edit_send` | `sendEdit` |
 | `delete prepare --channel --ts` | `slack_delete_prepare` | `prepareDelete` |
 | `delete send --channel --ts --approval` | `slack_delete_send` | `sendDelete` |
@@ -179,7 +188,8 @@ Nothing an earlier release can run turns one into something else:
 ### E11 — What this does not do
 
 - **Other people's messages**, for either act (E2).
-- **Files** — §5.
+- **Deleting files.** A file taken off a message stays in Slack, shared nowhere; deleting it is a person's act in
+  Slack, and the preview says so. `files.delete` stays unreachable.
 - **Moving a message**, into or out of a thread, or between channels. Slack offers neither.
 - **Scheduled messages.** `chat.deleteScheduledMessage` stays unreachable.
 - **Many at once.** One approval, one message.
@@ -197,31 +207,57 @@ one against a real workspace.
 | Whether "(edited)" shows on a user token's edit sent as text alone | The preview never promises a silent correction or a visible one: it says nobody is told what changed |
 | What a deleted parent leaves in its thread | The preview says the replies are not deleted with it, which is what is asked of Slack |
 | What happens to a deleted message's files | The preview says the files are not deleted with it, which is what is asked of Slack |
+| ~~What `file_ids` does to a message's files~~ | Observed 2026-10-06: see §5 |
 | Whether `conversations.replies` finds a reply by its own ts | The message is looked for in `conversations.history` first, and a reply is found by identity among what `conversations.replies` returns; one that cannot be found is `NOT_FOUND`, never guessed at |
 
-## 5. Phase 2: replacing a file
+## 5. Editing a message's files
 
-Not built here. The flow Slack's reference allows is: upload the new file without sharing it
-(`files.getUploadURLExternal`, the bytes, `files.completeUploadExternal` with no channel), then `chat.update` with its
-`file_ids`. The reference says only that `file_ids` is an "array of new file ids that will be sent with this message".
-It does not say whether the files already on the message stay beside the new ones or are taken off, nor whether one
-taken off is still shared in the channel.
+### What Slack does, observed
 
-A preview for that act would have to say which, and the person approving it is deciding exactly that — "replace the
-chart" approved on a guess would be the defect D4 exists to prevent. So phase 2 starts with the checklist's §3 run
-against a real workspace, and builds on what it records:
+Slack's reference says only that `file_ids` is an "array of new file ids that will be sent with this message". So it was
+observed, on 2026-10-06, against a real workspace, in the account's DM with itself, by a one-off script the owner of the
+workspace approved (the checklist's §3): a message of words alone, then one posted with a file; files uploaded with no
+channel; edits sending different lists, each read back; everything deleted afterwards.
 
-- The new files are uploaded unshared inside the claimed lease, fenced like a post's uploads; one that goes up and is
-  never attached is reported as Slack discarding it, as a post's are.
-- The preview lists the files the message has now and the files it will have, each by name, size, type and SHA-256,
-  and the approval binds both lists.
-- If the old files stay shared after they are taken off, deleting them is a third act, `files.delete`, with its own
-  line in the preview — never an implied part of "replace".
+| Sent to `chat.update` | What the message had afterwards |
+|---|---|
+| `file_ids: [A]`, on a message of words alone | A — so a file can be added to a message that had none |
+| `file_ids: [B]`, on a message with A | **B alone**: the list replaces the message's files, it does not add to them |
+| `file_ids: [A, B]` | A and B, in that order |
+| `file_ids: []` | no files |
+| words, and no `file_ids` | the files it had — so an edit of words leaves them alone, as E5 assumed |
+| `file_ids`, and no `text` | its files, and **no words**: text has to be sent every time |
+| `file_ids: [B]`, on a message posted with C (as a post with files is) | B alone, as for any message |
+
+And of the files: one uploaded and finished with no channel is shared nowhere until an edit attaches it; one an edit
+leaves out is no longer shared anywhere (`files.info` lists no share) but is not deleted; and every edit was marked
+edited.
+
+### What an edit of files does, then
+
+- **It sends every id the message should end with.** The files it keeps, in the order the message has them, then the
+  ones it adds, in the order the draft names them. Adding one keeps the rest; taking one off sends the others;
+  replacing one is both, in one edit.
+- **New files are a draft's files**, chosen and recorded exactly as a post's (the attachment jail, at most ten, each
+  checked by size and hash). The preview lists each by name, size, type, SHA-256 and path, as a post's does, and the
+  approval binds those bytes: a file changed since is refused before anything leaves the machine.
+- **They go up unshared, after the claim.** Inside one permit for `files.completeUploadExternal`, as a post's: every
+  file read again and checked, then for each an upload URL and the bytes just read, then one call finishing them all —
+  naming no channel, so sharing them nowhere. Then a second permit, for `chat.update` with the ids. Each step starts
+  after its own fence (fence sites 2–4, then 6); the guard is unchanged.
+- **The preview says what the files will be:** `Keeps`, `Removes` and `Attach` lines, and the words as now and after —
+  or once, as unchanged. A file taken off is said to stay in Slack, shared nowhere, to delete there if it should go.
+- **What a failure leaves.** Before the files are finished, Slack discards any that went up, as for a post. Once
+  finished, a file never attached stays in Slack, private to this account, and the failure says so, by name. Either
+  way the message is unchanged, and the approval is failed — except an answer lost at the edit itself, which is
+  `SEND_OUTCOME_UNKNOWN` like any other.
+- **It needs `files:write`**, which `send` mode has, for any edit that adds or takes off files; and the errors
+  `chat.update` documents for the files it names join its allowlist (`file_not_found`, `blocked_file_type`, …).
 
 ## 6. Tests
 
 No test talks to Slack. Each act gets the post's and reaction's suites in its own shape: the gate (a refused,
 uncertain and accepted answer, bookkeeping failures that cannot rewrite an outcome, a cancellation either side of the
 claim), the allowlists against each method's documented errors, both surfaces through one operation, the terminal
-approval of each kind, the fence before each step (`fence-sites.ts` gains sites 6 and 7), and every D2 row
-(`support/matrix.ts`).
+approval of each kind, the fence before each step (`fence-sites.ts` gains sites 6 and 7, and an edit with two files
+over sites 2, 3, 4 and 6), and every D2 row (`support/matrix.ts`, an edit with a file among them).
