@@ -8,7 +8,8 @@
       "!**/coverage",
       "!**/node_modules",
       "!pnpm-lock.yaml",
-      "!**/test/fixtures/released-*"
+      "!**/test/fixtures/released-*",
+      "!packages/events/vendor/*/generated"
     ]
   },
   "formatter": {

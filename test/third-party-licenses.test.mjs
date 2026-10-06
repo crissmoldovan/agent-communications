@@ -1,9 +1,18 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { missingNotices, normaliseLicenceText, noticedIn, ownerOf } from '../scripts/third-party-licenses.mjs';
+import {
+  inlinedInto,
+  missingNotices,
+  normaliseLicenceText,
+  noticedIn,
+  noticeFor,
+  ownerOf,
+  vendoredEntry,
+} from '../scripts/third-party-licenses.mjs';
 
 /**
  * The licence notices are built from the bundler's module graph (`scripts/third-party-licenses.mjs`): every module
@@ -110,4 +119,69 @@ test('the packed-tarball check requires THIRD_PARTY_LICENSES in every tarball', 
   const list = /const mustShip = \[([^\]]*)\]/.exec(source)?.[1] ?? '';
   assert.match(list, /'package\/THIRD_PARTY_LICENSES'/);
   assert.match(source, /for \(const required of mustShip\) \{\n\s+if \(!entries\.has\(required\)\) throw/);
+});
+
+test('UNI-d: a module under a package’s vendor directory is that vendor’s, while the package’s own source is its own', () => {
+  const generated = `${root}/packages/events/vendor/unicode-15.1.0/generated/x.ts`;
+  assert.deepEqual(ownerOf(generated, at('events')), {
+    kind: 'vendored',
+    directory: `${root}/packages/events/vendor/unicode-15.1.0`,
+  });
+  // Bundled into another package it is still the vendor's, never that package's workspace code.
+  assert.deepEqual(ownerOf(generated, at('core')), {
+    kind: 'vendored',
+    directory: `${root}/packages/events/vendor/unicode-15.1.0`,
+  });
+  assert.deepEqual(ownerOf(`${root}/packages/events/src/x.ts`, at('events')), { kind: 'own' });
+  // A directory merely named vendor elsewhere in the package is not a vendored one.
+  assert.deepEqual(ownerOf(`${root}/packages/events/src/vendor/x.ts`, at('events')), { kind: 'own' });
+  assert.deepEqual(
+    ownerOf('C:\\work\\repo\\packages\\events\\vendor\\unicode-15.1.0\\generated\\x.ts', {
+      root: 'C:\\work\\repo',
+      self: 'events',
+    }),
+    { kind: 'vendored', directory: 'C:/work/repo/packages/events/vendor/unicode-15.1.0' },
+  );
+});
+
+test('UNI-d: a vendor directory is named by its NOTICE.json and licensed by its LICENSE, and one without is a problem', async () => {
+  const directory = join(ROOT, 'packages', 'events', 'vendor', 'unicode-15.1.0');
+  const problems = [];
+  const entry = await vendoredEntry(directory, problems);
+  assert.deepEqual(problems, []);
+  const key = `${entry.manifest.name}@${entry.manifest.version}`;
+  assert.equal(key, 'unicode-character-database@15.1.0');
+  const notice = await noticeFor(key, entry, new Map(), problems);
+  assert.deepEqual(problems, []);
+  assert.equal(notice.split('\n')[1], 'unicode-character-database@15.1.0 — Unicode-3.0');
+  assert.match(notice, /UNICODE LICENSE V3/);
+  assert.deepEqual([...noticedIn(notice)], ['unicode-character-database@15.1.0']);
+
+  const bare = await mkdtemp(join(tmpdir(), 'agentcomms-vendor-'));
+  try {
+    await writeFile(join(bare, 'LICENSE'), 'Some licence.\n');
+    const missing = [];
+    assert.equal(await vendoredEntry(bare, missing), null);
+    assert.equal(missing.length, 1);
+    assert.match(missing[0], /NOTICE\.json/);
+    assert.ok(missing[0].includes(bare.replaceAll('\\', '/')), missing[0]);
+  } finally {
+    await rm(bare, { recursive: true, force: true });
+  }
+});
+
+test('UNI-d: the events package’s notices carry the Unicode licence because its build inlines the tables', async () => {
+  const problems = [];
+  const inlined = await inlinedInto('events', problems);
+  assert.deepEqual(problems, []);
+  assert.ok(inlined.has('unicode-character-database@15.1.0'), `the events bundle inlines ${[...inlined.keys()]}`);
+  assert.ok(
+    [...inlined.get('unicode-character-database@15.1.0').in].includes('packages/events/dist/index.mjs'),
+    'the tables are in the published index',
+  );
+  const notices = await readFile(join(ROOT, 'packages', 'events', 'THIRD_PARTY_LICENSES'), 'utf8');
+  assert.deepEqual(missingNotices(inlined.keys(), notices), []);
+  // Deleted, the notice is owed again, which is what `pnpm verify:licenses` refuses.
+  const withoutIt = notices.replace(/^unicode-character-database@15\.1\.0 — /m, 'deleted — ');
+  assert.deepEqual(missingNotices(inlined.keys(), withoutIt), ['unicode-character-database@15.1.0']);
 });

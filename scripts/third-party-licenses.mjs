@@ -18,8 +18,15 @@
  * - a file of another workspace package's `dist`, which is followed into that package's own graph, so what core
  *   inlined is found in every bundle that inlines core;
  * - a file under a `node_modules/<name>`: that installed package, by the version actually on disk;
+ * - a file under a package's `vendor/<id>/`: data vendored into this repository under its own licence — the Unicode
+ *   tables `@agentcomms/events` generates — named by that directory's `NOTICE.json` (`name`, `version`, `license`,
+ *   `homepage`) and licensed by the `LICENSE` beside it;
  * - the bundler's runtime glue, which it generates for the build rather than copying from a package;
  * - anything else, which fails — a module nobody can name the licence of is a module that ships without one.
+ *
+ * Vendored data is noticed from the bundle graph, like everything else, rather than from a list: its licence asks for
+ * the notice with every copy, so the notice belongs in exactly the tarballs whose published files carry the data — no
+ * more, which would claim data that is not there, and no less, which would ship it in breach.
  *
  * `--check` verifies without writing, which is what CI runs. It fails, naming the package and the version, for every
  * package a bundle inlines that its `THIRD_PARTY_LICENSES` has no notice for — as well as when the file is merely out
@@ -55,7 +62,8 @@ const comparable = (path) => {
  * Where one module of a bundle comes from.
  *
  * `root` is the repository, `self` the package whose bundle it is. Returns `{ kind: 'bundler' }`, `{ kind: 'own' }`,
- * `{ kind: 'workspace', name, file }`, `{ kind: 'third-party', directory }` or `{ kind: 'unknown' }`.
+ * `{ kind: 'workspace', name, file }`, `{ kind: 'third-party', directory }`, `{ kind: 'vendored', directory }` or
+ * `{ kind: 'unknown' }`. Vendored data is the vendor's whichever package's bundle carries it.
  */
 export function ownerOf(id, { root, self }) {
   if (BUNDLER_MODULES.has(id)) return { kind: 'bundler' };
@@ -74,7 +82,10 @@ export function ownerOf(id, { root, self }) {
   const packages = `${comparable(root).replace(/\/$/, '')}/packages/`;
   const candidate = comparable(file);
   if (candidate.startsWith(packages)) {
-    const name = forward.slice(packages.length).split('/')[0];
+    const [name, top, vendor] = forward.slice(packages.length).split('/');
+    if (top === 'vendor' && vendor) {
+      return { kind: 'vendored', directory: forward.slice(0, packages.length + `${name}/vendor/${vendor}`.length) };
+    }
     return name === self ? { kind: 'own' } : { kind: 'workspace', name, file: forward };
   }
   return { kind: 'unknown' };
@@ -150,11 +161,35 @@ function graphOf(name) {
 }
 
 /**
+ * A vendor directory as the notices read it: `{ directory, manifest, in }`, `manifest` its `NOTICE.json`, or `null`
+ * with a problem pushed when it has none to read — vendored data whose licence cannot be named ships without one.
+ */
+export async function vendoredEntry(directory, problems) {
+  const shown = directory.replaceAll('\\', '/');
+  let manifest;
+  try {
+    manifest = JSON.parse(await readFile(join(directory, 'NOTICE.json'), 'utf8'));
+  } catch (error) {
+    problems.push(
+      `${shown}: vendored data is inlined from here, and its NOTICE.json cannot be read (${error?.code ?? error?.message ?? error}), so there is no licence to name for it`,
+    );
+    return null;
+  }
+  for (const field of ['name', 'version', 'license']) {
+    if (typeof manifest?.[field] !== 'string' || manifest[field] === '') {
+      problems.push(`${shown}/NOTICE.json names no ${field}`);
+      return null;
+    }
+  }
+  return { directory, manifest, in: new Set() };
+}
+
+/**
  * Every installed package inlined into one package's bundle: `name@version` → `{ name, version, directory, in }`,
  * where `in` lists the published files that carry it. Problems — a module no package owns, a workspace `dist` that
  * a fresh build would not produce — are pushed onto `problems`.
  */
-async function inlinedInto(name, problems) {
+export async function inlinedInto(name, problems) {
   const found = new Map();
   const where = (file) => relative(ROOT, file).replaceAll('\\', '/');
 
@@ -182,6 +217,14 @@ async function inlinedInto(name, problems) {
           continue;
         }
         await visit(from.name, from.file, theirs, via, seen);
+        continue;
+      }
+      if (from.kind === 'vendored') {
+        const entry = await vendoredEntry(from.directory, problems);
+        if (entry === null) continue;
+        const key = `${entry.manifest.name}@${entry.manifest.version}`;
+        if (!found.has(key)) found.set(key, entry);
+        found.get(key).in.add(via);
         continue;
       }
       const manifest = JSON.parse(await readFile(join(from.directory, 'package.json'), 'utf8'));
@@ -300,7 +343,8 @@ async function canonicalText(spdx, everything) {
   return null;
 }
 
-async function noticeFor(key, entry, everything, problems) {
+/** One package's notice: its `name@version — licence` header, its homepage, and its licence text in full. */
+export async function noticeFor(key, entry, everything, problems) {
   const licence = declaredLicence(entry.manifest);
   const text = (await shippedText(entry.directory)) ?? (await canonicalText(licence, everything));
   if (!text) {
