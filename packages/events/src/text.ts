@@ -4,6 +4,8 @@
  * without any host API, so Node, a webview and the bare realm agree.
  */
 
+import { EventsError } from './result.ts';
+
 const HIGH_FIRST = 0xd800;
 const HIGH_LAST = 0xdbff;
 const LOW_FIRST = 0xdc00;
@@ -62,6 +64,42 @@ export function codePointLength(text: string): number {
   let count = 0;
   for (let i = 0; i < text.length; count += 1) i += codePointAt(text, i) > 0xffff ? 2 : 1;
   return count;
+}
+
+/**
+ * The UTF-8 bytes of `text`, written here rather than by a host encoder so every host writes the same ones. Throws
+ * `EventsError` (`NOT_WELL_FORMED`) for a surrogate without its partner, which UTF-8 cannot encode: replacing it, as a
+ * host encoder would, could make two different strings the same bytes.
+ */
+export function utf8Encode(text: string): Uint8Array {
+  const bytes = new Uint8Array(utf8ByteLength(text));
+  let at = 0;
+  for (let i = 0; i < text.length; ) {
+    const point = codePointAt(text, i);
+    if (point >= HIGH_FIRST && point <= LOW_LAST) {
+      throw new EventsError(
+        'NOT_WELL_FORMED',
+        `the text has an unpaired surrogate at code unit ${i}, which UTF-8 cannot encode`,
+      );
+    }
+    if (point < 0x80) {
+      bytes[at++] = point;
+    } else if (point < 0x800) {
+      bytes[at++] = 0xc0 | (point >> 6);
+      bytes[at++] = 0x80 | (point & 0x3f);
+    } else if (point < 0x10000) {
+      bytes[at++] = 0xe0 | (point >> 12);
+      bytes[at++] = 0x80 | ((point >> 6) & 0x3f);
+      bytes[at++] = 0x80 | (point & 0x3f);
+    } else {
+      bytes[at++] = 0xf0 | (point >> 18);
+      bytes[at++] = 0x80 | ((point >> 12) & 0x3f);
+      bytes[at++] = 0x80 | ((point >> 6) & 0x3f);
+      bytes[at++] = 0x80 | (point & 0x3f);
+    }
+    i += point > 0xffff ? 2 : 1;
+  }
+  return bytes;
 }
 
 /** Whether `text` is well-formed Unicode: no surrogate without its partner. */

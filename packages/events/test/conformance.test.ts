@@ -33,22 +33,31 @@ test('ISO-b: the bare realm has no host: no Node, no web, and no code generation
   assert.equal(realm.evaluate('typeof AgentcommsEventsRealm.run'), 'function', 'the bundle is loaded');
 });
 
+test('ISO-d: the realm is given one host capability, crypto.subtle.digest, and nothing more of it', () => {
+  assert.equal(
+    realm.evaluate(
+      'JSON.stringify([Object.getOwnPropertyNames(crypto), Object.getOwnPropertyNames(crypto.subtle), typeof crypto.subtle.digest])',
+    ),
+    JSON.stringify([['subtle'], ['digest'], 'function']),
+  );
+});
+
 test('ISO-b: every vector family runs identically in Node and in the bare realm', async (t) => {
   const files = readdirSync(VECTORS)
     .filter((name) => name.endsWith('.json'))
     .sort();
   assert.ok(files.length > 0, 'no vector files found');
   for (const name of files) {
-    await t.test(name, () => {
+    await t.test(name, async () => {
       const text = readFileSync(join(VECTORS, name), 'utf8');
       const file = JSON.parse(text) as VectorFile;
       assert.equal(typeof file.family, 'string', `${name} declares no family`);
       const runner = RUNNERS[file.family];
       assert.ok(runner, `${name}: no runner for the family "${file.family}" in test/realm/runners/index.ts`);
-      const inNode = runner(library, file);
+      const inNode = await runner(library, file);
       assert.deepEqual(inNode.failures, [], `${name}, in Node`);
       assert.ok(inNode.results.length > 0, `${name}: no results`);
-      const inRealm = realm.run(file.family, text);
+      const inRealm = await realm.run(file.family, text);
       assert.deepEqual(JSON.parse(inRealm).failures, [], `${name}, in the realm`);
       assert.equal(inRealm, JSON.stringify(inNode), `${name}: the realm's results differ from Node's`);
     });

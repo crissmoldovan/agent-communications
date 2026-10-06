@@ -1,0 +1,284 @@
+{
+  "family": "event-id",
+  "description": "Event identity exactly as D3 defines it (events phase A plan, decision 23): eventIdPreimage is the canonical JSON of [\"agentcomms-event-v1\", installationId, accountId, eventType, typeVersion, dedupeKey] with typeVersion a JSON integer, and eventId the first 32 lowercase hexadecimal characters of SHA-256 over that preimage's UTF-8 bytes. The dedupe keys are Appendix A's shapes, written out literally. Synthetic: example installation ids, ibx_/acc_ ids, fake Slack ids and drama-range WhatsApp numbers.",
+  "vectors": [
+    {
+      "kind": "id",
+      "name": "gmail.message.received: canonical JSON of [historyRecordId, messageId, \"received\"] (A.2)",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "ibx_TESTINBOX0000001",
+        "eventType": "gmail.message.received",
+        "typeVersion": 1,
+        "dedupeKey": "[\"123456\",\"18f00000000000a1\",\"received\"]"
+      },
+      "preimage": "[\"agentcomms-event-v1\",\"00112233445566778899aabbccddeeff\",\"ibx_TESTINBOX0000001\",\"gmail.message.received\",1,\"[\\\"123456\\\",\\\"18f00000000000a1\\\",\\\"received\\\"]\"]",
+      "preimageUtf8Hex": "5b226167656e74636f6d6d732d6576656e742d7631222c223030313132323333343435353636373738383939616162626363646465656666222c226962785f54455354494e424f5830303030303031222c22676d61696c2e6d6573736167652e7265636569766564222c312c225b5c223132333435365c222c5c22313866303030303030303030303061315c222c5c2272656365697665645c225d225d",
+      "sha256": "9a9231c84c9ef1a5cde18246e5d09a2fddde70a48952ec8333cb323912d1192c",
+      "eventId": "9a9231c84c9ef1a5cde18246e5d09a2f"
+    },
+    {
+      "kind": "id",
+      "name": "the same input again gives the same id",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "ibx_TESTINBOX0000001",
+        "eventType": "gmail.message.received",
+        "typeVersion": 1,
+        "dedupeKey": "[\"123456\",\"18f00000000000a1\",\"received\"]"
+      },
+      "sameAs": "gmail.message.received: canonical JSON of [historyRecordId, messageId, \"received\"] (A.2)",
+      "preimage": "[\"agentcomms-event-v1\",\"00112233445566778899aabbccddeeff\",\"ibx_TESTINBOX0000001\",\"gmail.message.received\",1,\"[\\\"123456\\\",\\\"18f00000000000a1\\\",\\\"received\\\"]\"]",
+      "preimageUtf8Hex": "5b226167656e74636f6d6d732d6576656e742d7631222c223030313132323333343435353636373738383939616162626363646465656666222c226962785f54455354494e424f5830303030303031222c22676d61696c2e6d6573736167652e7265636569766564222c312c225b5c223132333435365c222c5c22313866303030303030303030303061315c222c5c2272656365697665645c225d225d",
+      "sha256": "9a9231c84c9ef1a5cde18246e5d09a2fddde70a48952ec8333cb323912d1192c",
+      "eventId": "9a9231c84c9ef1a5cde18246e5d09a2f"
+    },
+    {
+      "kind": "id",
+      "name": "the same dedupe key under another account gives another id",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "ibx_TESTINBOX0000002",
+        "eventType": "gmail.message.received",
+        "typeVersion": 1,
+        "dedupeKey": "[\"123456\",\"18f00000000000a1\",\"received\"]"
+      },
+      "differsFrom": "gmail.message.received: canonical JSON of [historyRecordId, messageId, \"received\"] (A.2)",
+      "preimage": "[\"agentcomms-event-v1\",\"00112233445566778899aabbccddeeff\",\"ibx_TESTINBOX0000002\",\"gmail.message.received\",1,\"[\\\"123456\\\",\\\"18f00000000000a1\\\",\\\"received\\\"]\"]",
+      "preimageUtf8Hex": "5b226167656e74636f6d6d732d6576656e742d7631222c223030313132323333343435353636373738383939616162626363646465656666222c226962785f54455354494e424f5830303030303032222c22676d61696c2e6d6573736167652e7265636569766564222c312c225b5c223132333435365c222c5c22313866303030303030303030303061315c222c5c2272656365697665645c225d225d",
+      "sha256": "a10ac20d4053e2fb5bc91713c4dd11312b2ca02a4451cf5a267b67a9a1af7d81",
+      "eventId": "a10ac20d4053e2fb5bc91713c4dd1131"
+    },
+    {
+      "kind": "id",
+      "name": "another installation alone changes the id",
+      "input": {
+        "installationId": "ffeeddccbbaa99887766554433221100",
+        "accountId": "ibx_TESTINBOX0000001",
+        "eventType": "gmail.message.received",
+        "typeVersion": 1,
+        "dedupeKey": "[\"123456\",\"18f00000000000a1\",\"received\"]"
+      },
+      "differsFrom": "gmail.message.received: canonical JSON of [historyRecordId, messageId, \"received\"] (A.2)",
+      "preimage": "[\"agentcomms-event-v1\",\"ffeeddccbbaa99887766554433221100\",\"ibx_TESTINBOX0000001\",\"gmail.message.received\",1,\"[\\\"123456\\\",\\\"18f00000000000a1\\\",\\\"received\\\"]\"]",
+      "preimageUtf8Hex": "5b226167656e74636f6d6d732d6576656e742d7631222c226666656564646363626261613939383837373636353534343333323231313030222c226962785f54455354494e424f5830303030303031222c22676d61696c2e6d6573736167652e7265636569766564222c312c225b5c223132333435365c222c5c22313866303030303030303030303061315c222c5c2272656365697665645c225d225d",
+      "sha256": "36c23e46ba658a7d207feff06604cc54573ff5a0ae26ec6cf74c005c2d2cd3fa",
+      "eventId": "36c23e46ba658a7d207feff06604cc54"
+    },
+    {
+      "kind": "id",
+      "name": "another event type alone changes the id",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "ibx_TESTINBOX0000001",
+        "eventType": "gmail.message.sent",
+        "typeVersion": 1,
+        "dedupeKey": "[\"123456\",\"18f00000000000a1\",\"received\"]"
+      },
+      "differsFrom": "gmail.message.received: canonical JSON of [historyRecordId, messageId, \"received\"] (A.2)",
+      "preimage": "[\"agentcomms-event-v1\",\"00112233445566778899aabbccddeeff\",\"ibx_TESTINBOX0000001\",\"gmail.message.sent\",1,\"[\\\"123456\\\",\\\"18f00000000000a1\\\",\\\"received\\\"]\"]",
+      "preimageUtf8Hex": "5b226167656e74636f6d6d732d6576656e742d7631222c223030313132323333343435353636373738383939616162626363646465656666222c226962785f54455354494e424f5830303030303031222c22676d61696c2e6d6573736167652e73656e74222c312c225b5c223132333435365c222c5c22313866303030303030303030303061315c222c5c2272656365697665645c225d225d",
+      "sha256": "3d94d09886fbd5210e9bc6aae1a473f70aadbba835f983fff55cd95156cd84de",
+      "eventId": "3d94d09886fbd5210e9bc6aae1a473f7"
+    },
+    {
+      "kind": "id",
+      "name": "another type version alone changes the id",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "ibx_TESTINBOX0000001",
+        "eventType": "gmail.message.received",
+        "typeVersion": 2,
+        "dedupeKey": "[\"123456\",\"18f00000000000a1\",\"received\"]"
+      },
+      "differsFrom": "gmail.message.received: canonical JSON of [historyRecordId, messageId, \"received\"] (A.2)",
+      "preimage": "[\"agentcomms-event-v1\",\"00112233445566778899aabbccddeeff\",\"ibx_TESTINBOX0000001\",\"gmail.message.received\",2,\"[\\\"123456\\\",\\\"18f00000000000a1\\\",\\\"received\\\"]\"]",
+      "preimageUtf8Hex": "5b226167656e74636f6d6d732d6576656e742d7631222c223030313132323333343435353636373738383939616162626363646465656666222c226962785f54455354494e424f5830303030303031222c22676d61696c2e6d6573736167652e7265636569766564222c322c225b5c223132333435365c222c5c22313866303030303030303030303061315c222c5c2272656365697665645c225d225d",
+      "sha256": "10db2302730d808b3db032d67dbb8b651150d6a09402df63b5c4403fc1a749fb",
+      "eventId": "10db2302730d808b3db032d67dbb8b65"
+    },
+    {
+      "kind": "id",
+      "name": "another dedupe key alone changes the id",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "ibx_TESTINBOX0000001",
+        "eventType": "gmail.message.received",
+        "typeVersion": 1,
+        "dedupeKey": "[\"123457\",\"18f00000000000a1\",\"received\"]"
+      },
+      "differsFrom": "gmail.message.received: canonical JSON of [historyRecordId, messageId, \"received\"] (A.2)",
+      "preimage": "[\"agentcomms-event-v1\",\"00112233445566778899aabbccddeeff\",\"ibx_TESTINBOX0000001\",\"gmail.message.received\",1,\"[\\\"123457\\\",\\\"18f00000000000a1\\\",\\\"received\\\"]\"]",
+      "preimageUtf8Hex": "5b226167656e74636f6d6d732d6576656e742d7631222c223030313132323333343435353636373738383939616162626363646465656666222c226962785f54455354494e424f5830303030303031222c22676d61696c2e6d6573736167652e7265636569766564222c312c225b5c223132333435375c222c5c22313866303030303030303030303061315c222c5c2272656365697665645c225d225d",
+      "sha256": "ccacb300bbe3bc0c08efaa4e20e50e66fb6f1424c365b5601a0a636688107098",
+      "eventId": "ccacb300bbe3bc0c08efaa4e20e50e66"
+    },
+    {
+      "kind": "id",
+      "name": "gmail.message.sent: [historyRecordId, messageId, \"sent\"] (A.2)",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "ibx_TESTINBOX0000001",
+        "eventType": "gmail.message.sent",
+        "typeVersion": 1,
+        "dedupeKey": "[\"123460\",\"18f00000000000b2\",\"sent\"]"
+      },
+      "preimage": "[\"agentcomms-event-v1\",\"00112233445566778899aabbccddeeff\",\"ibx_TESTINBOX0000001\",\"gmail.message.sent\",1,\"[\\\"123460\\\",\\\"18f00000000000b2\\\",\\\"sent\\\"]\"]",
+      "preimageUtf8Hex": "5b226167656e74636f6d6d732d6576656e742d7631222c223030313132323333343435353636373738383939616162626363646465656666222c226962785f54455354494e424f5830303030303031222c22676d61696c2e6d6573736167652e73656e74222c312c225b5c223132333436305c222c5c22313866303030303030303030303062325c222c5c2273656e745c225d225d",
+      "sha256": "99161c14007abf1f266a6d30bb80e0862ccd22e087cc559766d1908f95dec9be",
+      "eventId": "99161c14007abf1f266a6d30bb80e086"
+    },
+    {
+      "kind": "id",
+      "name": "gmail.message.labelled: [historyRecordId, messageId, \"labelled\"] (A.3)",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "ibx_TESTINBOX0000001",
+        "eventType": "gmail.message.labelled",
+        "typeVersion": 1,
+        "dedupeKey": "[\"123461\",\"18f00000000000a1\",\"labelled\"]"
+      },
+      "preimage": "[\"agentcomms-event-v1\",\"00112233445566778899aabbccddeeff\",\"ibx_TESTINBOX0000001\",\"gmail.message.labelled\",1,\"[\\\"123461\\\",\\\"18f00000000000a1\\\",\\\"labelled\\\"]\"]",
+      "preimageUtf8Hex": "5b226167656e74636f6d6d732d6576656e742d7631222c223030313132323333343435353636373738383939616162626363646465656666222c226962785f54455354494e424f5830303030303031222c22676d61696c2e6d6573736167652e6c6162656c6c6564222c312c225b5c223132333436315c222c5c22313866303030303030303030303061315c222c5c226c6162656c6c65645c225d225d",
+      "sha256": "2a8b2c2cb18f2c37c6f88a741cf91be4be30efdd13f4057a123a255951264eaf",
+      "eventId": "2a8b2c2cb18f2c37c6f88a741cf91be4"
+    },
+    {
+      "kind": "id",
+      "name": "slack.message.posted: channel id \"/\" ts (A.4)",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "acc_TESTSLACK0000001",
+        "eventType": "slack.message.posted",
+        "typeVersion": 1,
+        "dedupeKey": "C00000000/1700000000.000100"
+      },
+      "preimage": "[\"agentcomms-event-v1\",\"00112233445566778899aabbccddeeff\",\"acc_TESTSLACK0000001\",\"slack.message.posted\",1,\"C00000000/1700000000.000100\"]",
+      "preimageUtf8Hex": "5b226167656e74636f6d6d732d6576656e742d7631222c223030313132323333343435353636373738383939616162626363646465656666222c226163635f54455354534c41434b30303030303031222c22736c61636b2e6d6573736167652e706f73746564222c312c224330303030303030302f313730303030303030302e303030313030225d",
+      "sha256": "3814ff7946a50bdaa2956f09a08f70e4132a78dc1f5fda6c3f89a3736ec6fc0a",
+      "eventId": "3814ff7946a50bdaa2956f09a08f70e4"
+    },
+    {
+      "kind": "id",
+      "name": "resend.email.received: the email id (A.5)",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "acc_TESTRESEND000001",
+        "eventType": "resend.email.received",
+        "typeVersion": 1,
+        "dedupeKey": "4ef2bd5e-0000-4000-8000-000000000001"
+      },
+      "preimage": "[\"agentcomms-event-v1\",\"00112233445566778899aabbccddeeff\",\"acc_TESTRESEND000001\",\"resend.email.received\",1,\"4ef2bd5e-0000-4000-8000-000000000001\"]",
+      "preimageUtf8Hex": "5b226167656e74636f6d6d732d6576656e742d7631222c223030313132323333343435353636373738383939616162626363646465656666222c226163635f54455354524553454e44303030303031222c22726573656e642e656d61696c2e7265636569766564222c312c2234656632626435652d303030302d343030302d383030302d303030303030303030303031225d",
+      "sha256": "9903fb87e269335db2c1c358bba73fa652e9c63370b9b24fce9b606adf2e2758",
+      "eventId": "9903fb87e269335db2c1c358bba73fa6"
+    },
+    {
+      "kind": "id",
+      "name": "resend.email.status_changed: canonical JSON of [emailId, previous, current, at] (A.6)",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "acc_TESTRESEND000001",
+        "eventType": "resend.email.status_changed",
+        "typeVersion": 1,
+        "dedupeKey": "[\"4ef2bd5e-0000-4000-8000-000000000001\",\"sent\",\"delivered\",\"2026-10-06T12:00:00.000Z\"]"
+      },
+      "preimage": "[\"agentcomms-event-v1\",\"00112233445566778899aabbccddeeff\",\"acc_TESTRESEND000001\",\"resend.email.status_changed\",1,\"[\\\"4ef2bd5e-0000-4000-8000-000000000001\\\",\\\"sent\\\",\\\"delivered\\\",\\\"2026-10-06T12:00:00.000Z\\\"]\"]",
+      "preimageUtf8Hex": "5b226167656e74636f6d6d732d6576656e742d7631222c223030313132323333343435353636373738383939616162626363646465656666222c226163635f54455354524553454e44303030303031222c22726573656e642e656d61696c2e7374617475735f6368616e676564222c312c225b5c2234656632626435652d303030302d343030302d383030302d3030303030303030303030315c222c5c2273656e745c222c5c2264656c6976657265645c222c5c22323032362d31302d30365431323a30303a30302e3030305a5c225d225d",
+      "sha256": "634ea52ad190f6bf195c415854b23b03951cb246d8ec42228b75a08f3b0185fb",
+      "eventId": "634ea52ad190f6bf195c415854b23b03"
+    },
+    {
+      "kind": "id",
+      "name": "whatsapp.message.received: chat id \"/\" the protocol message key (A.7)",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "acc_TESTWHATSAPP0001",
+        "eventType": "whatsapp.message.received",
+        "typeVersion": 1,
+        "dedupeKey": "447700900001@s.whatsapp.net/[\"wa-msg\",\"447700900001@s.whatsapp.net\",\"447700900002@s.whatsapp.net\",\"3EB0C0FFEE0000000001\"]"
+      },
+      "preimage": "[\"agentcomms-event-v1\",\"00112233445566778899aabbccddeeff\",\"acc_TESTWHATSAPP0001\",\"whatsapp.message.received\",1,\"447700900001@s.whatsapp.net/[\\\"wa-msg\\\",\\\"447700900001@s.whatsapp.net\\\",\\\"447700900002@s.whatsapp.net\\\",\\\"3EB0C0FFEE0000000001\\\"]\"]",
+      "preimageUtf8Hex": "5b226167656e74636f6d6d732d6576656e742d7631222c223030313132323333343435353636373738383939616162626363646465656666222c226163635f54455354574841545341505030303031222c2277686174736170702e6d6573736167652e7265636569766564222c312c2234343737303039303030303140732e77686174736170702e6e65742f5b5c2277612d6d73675c222c5c2234343737303039303030303140732e77686174736170702e6e65745c222c5c2234343737303039303030303240732e77686174736170702e6e65745c222c5c2233454230433046464545303030303030303030315c225d225d",
+      "sha256": "7d09eb7826bbf14901ed0bd12f38763d96cf3961f951ba10cf26563b2c1a2b1f",
+      "eventId": "7d09eb7826bbf14901ed0bd12f38763d"
+    },
+    {
+      "kind": "id",
+      "name": "a dedupe key holding a quote, a backslash, é, an astral character and an unpaired surrogate hashes its escaped canonical JSON",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "ibx_TESTINBOX0000001",
+        "eventType": "gmail.message.received",
+        "typeVersion": 1,
+        "dedupeKey": "a\"b\\c é 😀 \ud800 end"
+      },
+      "preimage": "[\"agentcomms-event-v1\",\"00112233445566778899aabbccddeeff\",\"ibx_TESTINBOX0000001\",\"gmail.message.received\",1,\"a\\\"b\\\\c é 😀 \\ud800 end\"]",
+      "preimageUtf8Hex": "5b226167656e74636f6d6d732d6576656e742d7631222c223030313132323333343435353636373738383939616162626363646465656666222c226962785f54455354494e424f5830303030303031222c22676d61696c2e6d6573736167652e7265636569766564222c312c22615c22625c5c6320c3a920f09f9880205c756438303020656e64225d",
+      "sha256": "376e113dc1a8cd741d7508cd44ee595236a7e5b3499800136157ce5d986ab4a8",
+      "eventId": "376e113dc1a8cd741d7508cd44ee5952"
+    },
+    {
+      "kind": "refused",
+      "name": "typeVersion as the string \"1\" is refused: it is the event's JSON integer version",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "ibx_TESTINBOX0000001",
+        "eventType": "gmail.message.received",
+        "typeVersion": "1",
+        "dedupeKey": "[\"123456\",\"18f00000000000a1\",\"received\"]"
+      },
+      "code": "IDENTITY_INVALID"
+    },
+    {
+      "kind": "refused",
+      "name": "a fractional typeVersion is refused",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "ibx_TESTINBOX0000001",
+        "eventType": "gmail.message.received",
+        "typeVersion": 1.5,
+        "dedupeKey": "[\"123456\",\"18f00000000000a1\",\"received\"]"
+      },
+      "code": "IDENTITY_INVALID"
+    },
+    {
+      "kind": "refused",
+      "name": "an account id that is not a string is refused",
+      "input": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": 7,
+        "eventType": "gmail.message.received",
+        "typeVersion": 1,
+        "dedupeKey": "[\"123456\",\"18f00000000000a1\",\"received\"]"
+      },
+      "code": "IDENTITY_INVALID"
+    },
+    {
+      "kind": "collision",
+      "name": "an injected SHA-256 collision: two different tuples, one digest",
+      "description": "The digest is injected, as data, so both tuples get the same 32-character id while their preimages differ. compareEventIdentities classifies that as a collision; the same tuple twice is the same occurrence, and two different ids are distinct. Stopping without advancing the source cursor on a collision is the daemon's, in phase B1 (D8); the library only classifies.",
+      "digest": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "first": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "ibx_TESTINBOX0000001",
+        "eventType": "gmail.message.received",
+        "typeVersion": 1,
+        "dedupeKey": "[\"123456\",\"18f00000000000a1\",\"received\"]"
+      },
+      "second": {
+        "installationId": "00112233445566778899aabbccddeeff",
+        "accountId": "ibx_TESTINBOX0000002",
+        "eventType": "gmail.message.received",
+        "typeVersion": 1,
+        "dedupeKey": "[\"123456\",\"18f00000000000a1\",\"received\"]"
+      },
+      "eventId": "deadbeefdeadbeefdeadbeefdeadbeef",
+      "outcomes": {
+        "injected": "collision",
+        "sameTuple": "same-occurrence",
+        "differentIds": "distinct"
+      }
+    }
+  ]
+}

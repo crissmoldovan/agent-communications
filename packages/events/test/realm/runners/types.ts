@@ -21,4 +21,5 @@ export interface RunnerResult {
   readonly failures: readonly string[];
 }
 
-export type Runner = (library: EventsLibrary, file: VectorFile) => RunnerResult;
+/** A runner may be asynchronous, as event identity is: WebCrypto's digest answers with a promise. */
+export type Runner = (library: EventsLibrary, file: VectorFile) => RunnerResult | Promise<RunnerResult>;

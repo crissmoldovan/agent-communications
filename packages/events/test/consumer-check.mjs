@@ -25,6 +25,20 @@ for (const [input, canonical] of cases) assert.equal(events.canonicalJson(input)
 assert.throws(() => events.canonicalJson([undefined]), events.EventsError);
 assert.equal(events.compareUtf8('｡', '\u{1F600}'), -1);
 
+// Event identity, through the installed package's own WebCrypto call (test/vectors/event-id.json's first vector).
+const identity = {
+  installationId: '00112233445566778899aabbccddeeff',
+  accountId: 'ibx_TESTINBOX0000001',
+  eventType: 'gmail.message.received',
+  typeVersion: 1,
+  dedupeKey: '["123456","18f00000000000a1","received"]',
+};
+assert.equal(
+  events.eventIdPreimage(identity),
+  '["agentcomms-event-v1","00112233445566778899aabbccddeeff","ibx_TESTINBOX0000001","gmail.message.received",1,"[\\"123456\\",\\"18f00000000000a1\\",\\"received\\"]"]',
+);
+assert.equal(await events.eventId(identity), '9a9231c84c9ef1a5cde18246e5d09a2f');
+
 // Every file it ships under dist: no `node:` specifier and no `require(`.
 const dist = dirname(fileURLToPath(import.meta.resolve('@agentcomms/events')));
 const shipped = readdirSync(dist, { recursive: true }).map(String);
@@ -41,5 +55,5 @@ assert.equal(manifest.bin, undefined, 'a library has no bin');
 assert.deepEqual(manifest.agentcommsPackage, { kind: 'library' });
 
 console.log(
-  `events consumer check: imports, canonical JSON, no node: or require( in ${shipped.length} dist files, no bin OK`,
+  `events consumer check: imports, canonical JSON, an event id through WebCrypto, no node: or require( in ${shipped.length} dist files, no bin OK`,
 );

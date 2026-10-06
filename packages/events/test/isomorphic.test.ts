@@ -24,7 +24,13 @@ import { PACKAGE_ROOT } from './support/realm.ts';
  *   anything but literals — each depends on the engine's Unicode version or case tables;
  * - `node-types`: `/// <reference types="…" />`, or an `import("node:…")` type, in a declaration file.
  *
- * Fixtures in `test/fixtures/isomorphic/` hold one refused and one accepted example per rule.
+ * There is one exemption (decision 23): `src/identity/sha256.ts` may reach exactly `globalThis.crypto.subtle.digest`,
+ * the WebCrypto SHA-256 that Node 22 and every browser's secure context provide. The same chain anywhere else, and any
+ * other use of `globalThis` or `crypto` in that file, are refused as before. In the build, that file's code is the
+ * `//#region src/identity/sha256.ts` the bundler marks it with, and the exemption follows it there.
+ *
+ * Fixtures in `test/fixtures/isomorphic/` hold one refused and one accepted example per rule, and those in its
+ * `webcrypto/` directory the exemption's, each saying which path it is scanned as.
  */
 
 /** Rules by the name a finding carries. */
@@ -99,6 +105,9 @@ const HOST_MEMBERS = new Set([
 
 const ALLOWED_PACKAGES = new Set(['zod']);
 
+/** The one file that may reach WebCrypto, and only as `globalThis.crypto.subtle.digest(…)`. */
+const WEBCRYPTO_FILE = 'src/identity/sha256.ts';
+
 /** Parses `files` with the repository's own TypeScript, resolving nothing and writing nothing. */
 function syntaxTrees(files: readonly SourceFile[]) {
   const root = '/agentcomms-events-isomorphism-scan';
@@ -162,10 +171,58 @@ function isNamePosition(node: ts.Identifier): boolean {
   return parent.name === node || parent.propertyName === node || parent.label === node;
 }
 
+/** The expression a node is, once the parentheses and type assertions around it are taken off. */
+function outermost(node: ts.Node): ts.Node {
+  let at = node;
+  while (
+    at.parent !== undefined &&
+    (ts.isParenthesizedExpression(at.parent) ||
+      ts.isAsExpression(at.parent) ||
+      ts.isSatisfiesExpression(at.parent) ||
+      ts.isNonNullExpression?.(at.parent))
+  ) {
+    at = at.parent;
+  }
+  return at;
+}
+
+/** Whether this `globalThis` is exactly the callee chain `globalThis.crypto.subtle.digest(…)`. */
+function isWebCryptoDigest(node: ts.Identifier): boolean {
+  if (node.text !== 'globalThis') return false;
+  let at = outermost(node);
+  for (const member of ['crypto', 'subtle', 'digest']) {
+    const parent = at.parent;
+    if (parent === undefined || !ts.isPropertyAccessExpression(parent)) return false;
+    if (parent.expression !== at || parent.name.text !== member) return false;
+    at = outermost(parent);
+  }
+  const call = at.parent;
+  return call !== undefined && ts.isCallExpression(call) && call.expression === at;
+}
+
+/**
+ * Where in a file the WebCrypto exemption holds: the whole of `src/identity/sha256.ts`, and in a built file the
+ * regions the bundler marks as that file's code (`//#region src/identity/sha256.ts` … `//#endregion`).
+ */
+function webCryptoRegions(path: string, text: string): (position: number) => boolean {
+  if (path === WEBCRYPTO_FILE) return () => true;
+  const regions: [number, number][] = [];
+  let open: number | undefined;
+  for (const match of text.matchAll(/^\/\/#(region|endregion)(?:[ \t]+(\S+))?[ \t]*$/gm)) {
+    if (match[1] === 'region' && match[2] === WEBCRYPTO_FILE) open = match.index;
+    else if (match[1] === 'endregion' && open !== undefined) {
+      regions.push([open, match.index]);
+      open = undefined;
+    }
+  }
+  return (position) => regions.some(([start, end]) => position > start && position < end);
+}
+
 /** Every finding in `files`: what each rule refuses, by syntax. */
 function scan(files: readonly SourceFile[]): Finding[] {
   const findings: Finding[] = [];
   for (const { path, text, tree } of syntaxTrees(files)) {
+    const mayReachWebCrypto = webCryptoRegions(path, text);
     const add = (node: ts.Node, rule: Rule, said: string) => {
       const start = node.getStart ? node.getStart(tree) : node.pos;
       findings.push({ path, line: text.slice(0, start).split('\n').length, rule, text: said.slice(0, 160) });
@@ -242,7 +299,8 @@ function scan(files: readonly SourceFile[]): Finding[] {
       }
 
       if (ts.isIdentifier(node) && HOST_GLOBALS.has(node.text) && !isNamePosition(node)) {
-        add(node, 'host-global', node.text);
+        const exempt = isWebCryptoDigest(node) && mayReachWebCrypto(node.pos);
+        if (!exempt) add(node, 'host-global', node.text);
       }
       // Types say nothing about what runs; an import type was read above.
       if (ts.isTypeNode(node)) return;
@@ -295,7 +353,11 @@ test('ISO-a: the source, the generated tables and the built output reach nothing
 });
 
 test('ISO-a: each rule has a refused and an accepted fixture, and the scan tells them apart', () => {
-  const fixtures = filesUnder('test/fixtures/isomorphic', (name) => /\.(?:refused|accepted)\./.test(name));
+  // One per rule at the top; the exemption's own fixtures are in `webcrypto/`, below.
+  const fixtures = filesUnder(
+    'test/fixtures/isomorphic',
+    (name) => !/[\\/]/.test(name) && /\.(?:refused|accepted)\./.test(name),
+  );
   for (const rule of RULES) {
     for (const verdict of ['refused', 'accepted']) {
       assert.ok(
@@ -354,4 +416,38 @@ test('ISO-a: every name and shape the rules list is refused, and the near misses
   assert.deepEqual(rulesOf("export declare const s: import('zod').ZodString;\n", 'probe.d.mts'), []);
   assert.deepEqual(rulesOf("export declare const s: import('node:fs').Stats;\n", 'probe.d.mts'), ['node-types']);
   assert.deepEqual(rulesOf('/// <reference types="node" />\nexport {};\n', 'probe.d.mts'), ['node-types']);
+});
+
+test('ISO-d: only src/identity/sha256.ts reaches WebCrypto, and only crypto.subtle.digest', () => {
+  const fixtures = filesUnder('test/fixtures/isomorphic/webcrypto', (name) => name.endsWith('.ts'));
+  assert.deepEqual(
+    fixtures.map((fixture) => fixture.path.split('/').at(-1)),
+    ['digest-elsewhere.refused.ts', 'digest.accepted.ts', 'encrypt.refused.ts', 'random.refused.ts'],
+  );
+  for (const fixture of fixtures) {
+    const as = /^\/\/ Scanned as (\S+)\.$/m.exec(fixture.text)?.[1];
+    assert.ok(as, `${fixture.path} does not say which path it is scanned as`);
+    const findings = scan([{ path: as, text: fixture.text }]);
+    if (fixture.path.endsWith('.accepted.ts')) {
+      assert.deepEqual(findings, [], `${fixture.path}, as ${as}, is refused:${show(findings)}`);
+    } else {
+      assert.ok(findings.length > 0, `${fixture.path}, as ${as}, is accepted`);
+      assert.deepEqual([...new Set(findings.map((finding) => finding.rule))], ['host-global'], show(findings));
+    }
+  }
+  // The real file is accepted only where it is: anywhere else, its one call is refused.
+  const real = readFileSync(join(PACKAGE_ROOT, WEBCRYPTO_FILE), 'utf8');
+  assert.deepEqual(scan([{ path: WEBCRYPTO_FILE, text: real }]), []);
+  assert.deepEqual(
+    scan([{ path: 'src/identity/event-id.ts', text: real }]).map((finding) => finding.rule),
+    ['host-global'],
+  );
+  // In the build the exemption follows the file's region, and nowhere else.
+  const built = readFileSync(join(PACKAGE_ROOT, 'dist', 'index.mjs'), 'utf8');
+  assert.ok(built.includes(`//#region ${WEBCRYPTO_FILE}`), 'the build does not mark the file it came from');
+  const outside = `${built}\nexport const leaked = (bytes) => globalThis.crypto.subtle.digest('SHA-256', bytes);\n`;
+  assert.deepEqual(
+    scan([{ path: 'dist/index.mjs', text: outside }]).map((finding) => finding.rule),
+    ['host-global'],
+  );
 });

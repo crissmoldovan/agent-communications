@@ -8,8 +8,11 @@
  * timers, `fetch`, `URL`, `TextEncoder` or `console`. So a vector family that passes here and in Node passes without any
  * host, and the same bundle is what `pnpm verify:browser` hands to real browsers.
  *
- * Only strings cross the boundary: a family's name and a vector file's text go in, JSON text comes back.
+ * Only strings cross the boundary: a family's name and a vector file's text go in, JSON text comes back. The one
+ * exception is the realm's single host capability: a `crypto` whose only member is `subtle`, whose only member is
+ * `digest`, bound to Node's WebCrypto — what event identity needs (decision 23), and nothing more.
  */
+import { webcrypto } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
 import { build } from 'tsdown';
@@ -48,19 +51,25 @@ export async function realmBundle(): Promise<string> {
 
 /** A realm with the bundle loaded: `run` a vector family in it, or `evaluate` an expression there. */
 export interface Realm {
-  run(family: string, vectorsJson: string): string;
+  run(family: string, vectorsJson: string): Promise<string>;
   evaluate(source: string): unknown;
 }
 
 /** A fresh context with ECMAScript's globals and nothing else, code generation off, and the bundle evaluated in it. */
 export function createRealm(code: string): Realm {
-  const context = createContext({}, { codeGeneration: { strings: false, wasm: false } });
+  // WebCrypto's SHA-256 and nothing else of it: `crypto.subtle.digest`, as Node 22 and every browser's secure
+  // context have it.
+  const digest = (algorithm: string, data: Uint8Array) => webcrypto.subtle.digest(algorithm, data);
+  const context = createContext(
+    { crypto: { subtle: { digest } } },
+    { codeGeneration: { strings: false, wasm: false } },
+  );
   // V8 gives every context a `console` of its own. ECMAScript has none, and the library must not lean on one.
   runInContext('delete globalThis.console;', context);
   runInContext(code, context);
   return {
-    run(family, vectorsJson) {
-      const result = runInContext(
+    async run(family, vectorsJson) {
+      const result: unknown = await runInContext(
         `${REALM_GLOBAL}.run(${JSON.stringify(family)}, ${JSON.stringify(vectorsJson)})`,
         context,
       );
