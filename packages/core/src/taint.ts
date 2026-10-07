@@ -140,9 +140,14 @@ function dedupeBy<T>(items: readonly T[], key: (item: T) => string): T[] {
 
 export type TaintSource = 'header' | 'body';
 
+/** Why the content reached this process. This is separate from `TaintSource`, which remains the cap priority. */
+export type TaintOrigin = 'read' | 'event';
+
 export interface TaintObservation {
   address: string;
   source: TaintSource;
+  /** Old readers did not record this, so an omitted origin remains an ordinary read. */
+  origin?: TaintOrigin | undefined;
   inboxId: string;
   messageId?: string | undefined;
 }
@@ -151,6 +156,8 @@ export interface TaintObservation {
 export interface TaintHandleObservation {
   handle: TaintHandle;
   source: TaintSource;
+  /** Old readers did not record this, so an omitted origin remains an ordinary read. */
+  origin?: TaintOrigin | undefined;
   inboxId: string;
   messageId?: string | undefined;
 }
@@ -200,6 +207,22 @@ interface HandleFile {
   [unknown: string]: unknown;
 }
 
+interface OriginEntry {
+  at: string;
+  origins: TaintOrigin[];
+}
+
+/**
+ * Why a base taint entry exists. This cannot live inside the older base files: a released writer reconstructs their
+ * entries and would erase the event provenance it did not know about.
+ */
+interface OriginFile {
+  addresses: Record<string, OriginEntry>;
+  domains: Record<string, OriginEntry>;
+  handles: Record<string, OriginEntry>;
+  [unknown: string]: unknown;
+}
+
 /**
  * One stored aggregate, exactly as the store holds it (design 2026-10-05 §D4): the newest time anything matched it, the
  * strongest source ever seen — `header` is kept once seen — and every mailbox that recorded it. Three separate facts,
@@ -209,6 +232,8 @@ export interface TaintAggregate {
   readonly at: string;
   readonly source: TaintSource;
   readonly inboxIds: readonly string[];
+  /** Sorted, duplicate-free provenance. A base entry with no sidecar record is a legacy read. */
+  readonly origins: readonly TaintOrigin[];
 }
 
 export interface TaintCheck {
@@ -220,13 +245,42 @@ export interface TaintCheck {
   domainSeen?: TaintAggregate | undefined;
 }
 
+/** Testable interruption point for the crash-safe, two-lock sidecar protocol. */
+export interface TaintStoreHooks {
+  afterOriginsCommit?: (() => Promise<void>) | undefined;
+  onLockAcquired?: ((lock: 'origins' | 'taint' | 'handles') => void) | undefined;
+}
+
+const ORIGINS: readonly TaintOrigin[] = ['event', 'read'];
+
+function sortedOrigins(origins: Iterable<TaintOrigin>): TaintOrigin[] {
+  const known = new Set(origins);
+  return ORIGINS.filter((origin) => known.has(origin));
+}
+
+function originEntry(entry: OriginEntry | undefined): TaintOrigin[] {
+  if (entry === undefined) return ['read'];
+  const known = Array.isArray(entry.origins)
+    ? entry.origins.filter((origin): origin is TaintOrigin => origin === 'event' || origin === 'read')
+    : [];
+  return known.length === 0 ? ['read'] : sortedOrigins(known);
+}
+
+function isNewer(at: string, than: string): boolean {
+  const left = new Date(at).getTime();
+  const right = new Date(than).getTime();
+  return Number.isFinite(left) && Number.isFinite(right) && left > right;
+}
+
 export class TaintStore {
   readonly directory: string;
   readonly #now: () => Date;
+  readonly #hooks: TaintStoreHooks;
 
-  constructor(stateDir: string, now: () => Date = () => new Date()) {
+  constructor(stateDir: string, now: () => Date = () => new Date(), hooks: TaintStoreHooks = {}) {
     this.directory = join(stateDir, 'taint');
     this.#now = now;
+    this.#hooks = hooks;
   }
 
   get #path(): string {
@@ -235,6 +289,10 @@ export class TaintStore {
 
   get #handlesPath(): string {
     return join(this.directory, 'handles.json');
+  }
+
+  get #originsPath(): string {
+    return join(this.directory, 'origins.json');
   }
 
   async #readJson<T extends object>(path: string, empty: () => T): Promise<T> {
@@ -265,6 +323,10 @@ export class TaintStore {
     return this.#readJson<HandleFile>(this.#handlesPath, () => ({ handles: {} }));
   }
 
+  async #readOrigins(): Promise<OriginFile> {
+    return this.#readJson<OriginFile>(this.#originsPath, () => ({ addresses: {}, domains: {}, handles: {} }));
+  }
+
   #prune(file: TaintFile): TaintFile {
     const cutoff = this.#now().getTime() - TAINT_WINDOW_MS;
     const keep = (map: Record<string, TaintEntry>) => {
@@ -283,6 +345,49 @@ export class TaintStore {
     const fresh = Object.entries(file.handles).filter(([, entry]) => new Date(entry.at).getTime() >= cutoff);
     fresh.sort((a, b) => new Date(b[1].at).getTime() - new Date(a[1].at).getTime());
     return { ...file, handles: Object.fromEntries(fresh.slice(0, MAX_ENTRIES)) };
+  }
+
+  #mergeOrigins(
+    origins: OriginFile,
+    addresses: Record<string, TaintEntry>,
+    domains: Record<string, TaintEntry>,
+    handles: Record<string, TaintEntry>,
+    touched: Readonly<Record<'addresses' | 'domains' | 'handles', ReadonlyMap<string, ReadonlySet<TaintOrigin>>>>,
+    at: string,
+  ): OriginFile {
+    const merge = (
+      sidecar: Record<string, OriginEntry>,
+      base: Record<string, TaintEntry>,
+      observed: ReadonlyMap<string, ReadonlySet<TaintOrigin>>,
+    ): Record<string, OriginEntry> => {
+      const merged: Record<string, OriginEntry> = {};
+      for (const [key, entry] of Object.entries(sidecar)) {
+        const baseEntry = base[key];
+        if (baseEntry === undefined) continue;
+        const mergedOrigins = new Set(originEntry(entry));
+        // A released writer updates the base entry without opening this sidecar. Its later timestamp proves a read
+        // took place, while retaining an event origin it cannot know to preserve itself.
+        if (isNewer(baseEntry.at, entry.at)) mergedOrigins.add('read');
+        merged[key] = {
+          at: isNewer(baseEntry.at, entry.at) ? baseEntry.at : entry.at,
+          origins: sortedOrigins(mergedOrigins),
+        };
+      }
+      for (const [key, observedOrigins] of observed) {
+        const existing = merged[key];
+        merged[key] = {
+          at,
+          origins: sortedOrigins([...(existing?.origins ?? []), ...observedOrigins]),
+        };
+      }
+      return merged;
+    };
+    return {
+      ...origins,
+      addresses: merge(origins.addresses, addresses, touched.addresses),
+      domains: merge(origins.domains, domains, touched.domains),
+      handles: merge(origins.handles, handles, touched.handles),
+    };
   }
 
   /**
@@ -319,38 +424,85 @@ export class TaintStore {
     ).slice(0, MAX_PER_MESSAGE);
     if (kept.length === 0 && keptHandles.length === 0) return;
     const at = this.#now().toISOString();
-    const touch = (map: Record<string, TaintEntry>, key: string, o: { source: TaintSource; inboxId: string }) => {
+    const touched: Record<'addresses' | 'domains' | 'handles', Map<string, Set<TaintOrigin>>> = {
+      addresses: new Map(),
+      domains: new Map(),
+      handles: new Map(),
+    };
+    const rememberOrigin = (map: keyof typeof touched, key: string, origin: TaintOrigin | undefined) => {
+      const origins = touched[map].get(key) ?? new Set<TaintOrigin>();
+      origins.add(origin ?? 'read');
+      touched[map].set(key, origins);
+    };
+    const touch = (
+      map: Record<string, TaintEntry>,
+      key: string,
+      o: { source: TaintSource; inboxId: string; origin?: TaintOrigin | undefined },
+      originMap: keyof typeof touched,
+    ) => {
       const existing = map[key];
       const inboxIds = [...new Set([...(existing?.inboxIds ?? []), o.inboxId])];
       // A header sighting is kept once seen: it is the stronger signal.
       const source: TaintSource = existing?.source === 'header' ? 'header' : o.source;
       map[key] = { at, source, inboxIds };
+      rememberOrigin(originMap, key, o.origin);
     };
 
-    // Two files, each under its own lock — see `HandleFile`. Not one transaction across both: they are independent
-    // stores, and a crash between them loses at most one kind of tripwire rather than corrupting either.
-    if (kept.length > 0) {
-      const path = this.#path;
-      await withFileLock(`${path}.lock`, async () => {
-        const file = this.#prune(await this.#read());
+    const commit = async () => {
+      // Read every base map while holding every base lock. Otherwise an address-only writer could mistake a handle
+      // sidecar row for crash residue, or an old writer could update a base timestamp between this read and the
+      // sidecar commit.
+      const taint = this.#prune(await this.#read());
+      const handles = this.#pruneHandles(await this.#readHandles());
+      if (kept.length > 0) {
         for (const o of kept) {
-          touch(file.addresses, o.address, o);
+          touch(taint.addresses, o.address, o, 'addresses');
           const domain = domainOf(o.address);
-          if (domain && !PUBLIC_MAILBOX_DOMAINS.has(domain)) touch(file.domains, domain, o);
+          if (domain && !PUBLIC_MAILBOX_DOMAINS.has(domain)) touch(taint.domains, domain, o, 'domains');
         }
-        await writeFileAtomic(path, JSON.stringify(file));
-      });
-    }
-
-    if (keptHandles.length > 0) {
-      const path = this.#handlesPath;
-      await withFileLock(`${path}.lock`, async () => {
-        const file = this.#pruneHandles(await this.#readHandles());
+      }
+      if (keptHandles.length > 0) {
         // No domain counterpart: a handle has no part that generalises to others the way a domain does.
-        for (const o of keptHandles) touch(file.handles, o.key, o);
-        await writeFileAtomic(path, JSON.stringify(file));
+        for (const o of keptHandles) touch(handles.handles, o.key, o, 'handles');
+      }
+
+      // The normal pruning before a touch removes stale rows, but a full map can gain one new key afterwards. Prune
+      // again before either file or sidecar is committed so their caps always describe the same retained key set.
+      const finalTaint = this.#prune(taint);
+      const finalHandles = this.#pruneHandles(handles);
+
+      const origins = this.#mergeOrigins(
+        await this.#readOrigins(),
+        finalTaint.addresses,
+        finalTaint.domains,
+        finalHandles.handles,
+        touched,
+        at,
+      );
+      // A sidecar commit before a base commit can leave residue after a crash. Only a new writer holds all these
+      // locks, so only it may prune that residue on the next pass; an old writer never opens the sidecar at all.
+      await writeFileAtomic(this.#originsPath, JSON.stringify(origins));
+      await this.#hooks.afterOriginsCommit?.();
+      if (kept.length > 0) await writeFileAtomic(this.#path, JSON.stringify(finalTaint));
+      if (keptHandles.length > 0) await writeFileAtomic(this.#handlesPath, JSON.stringify(finalHandles));
+    };
+
+    const withBaseLocks = async (): Promise<void> => {
+      await withFileLock(`${this.#path}.lock`, async () => {
+        this.#hooks.onLockAcquired?.('taint');
+        await withFileLock(`${this.#handlesPath}.lock`, async () => {
+          this.#hooks.onLockAcquired?.('handles');
+          await commit();
+        });
       });
-    }
+    };
+
+    // Every new writer takes the sidecar lock first, then every base-file lock it needs, and holds them through all
+    // commits. Released writers take a base lock only, so this order cannot deadlock with them.
+    await withFileLock(`${this.#originsPath}.lock`, async () => {
+      this.#hooks.onLockAcquired?.('origins');
+      await withBaseLocks();
+    });
   }
 
   /**
@@ -359,6 +511,7 @@ export class TaintStore {
    */
   async check(address: string): Promise<TaintCheck> {
     const file = this.#prune(await this.#read());
+    const origins = await this.#readOrigins();
     const canonical = canonicalAddress(address);
     const domain = domainOf(canonical);
     const exact = Object.hasOwn(file.addresses, canonical) ? file.addresses[canonical] : undefined;
@@ -366,16 +519,20 @@ export class TaintStore {
       domain !== null && !PUBLIC_MAILBOX_DOMAINS.has(domain) && Object.hasOwn(file.domains, domain)
         ? file.domains[domain]
         : undefined;
-    const aggregate = (entry: TaintEntry): TaintAggregate => ({
+    const aggregate = (entry: TaintEntry, origin: OriginEntry | undefined): TaintAggregate => ({
       at: entry.at,
       source: entry.source,
       inboxIds: [...entry.inboxIds],
+      origins: sortedOrigins([
+        ...originEntry(origin),
+        ...(origin !== undefined && isNewer(entry.at, origin.at) ? (['read'] as TaintOrigin[]) : []),
+      ]),
     });
     return {
       address: exact !== undefined,
       domain: byDomain !== undefined,
-      ...(exact === undefined ? {} : { addressSeen: aggregate(exact) }),
-      ...(byDomain === undefined ? {} : { domainSeen: aggregate(byDomain) }),
+      ...(exact === undefined ? {} : { addressSeen: aggregate(exact, origins.addresses[canonical]) }),
+      ...(byDomain === undefined ? {} : { domainSeen: aggregate(byDomain, origins.domains[domain ?? '']) }),
     };
   }
 
@@ -388,6 +545,19 @@ export class TaintStore {
   async checkHandle(handle: TaintHandle): Promise<boolean> {
     const file = this.#pruneHandles(await this.#readHandles());
     return canonicalHandle(handle) in file.handles;
+  }
+
+  /** The merged provenance of a retained handle, or no origins when it is not in the taint window. */
+  async checkHandleOrigins(handle: TaintHandle): Promise<readonly TaintOrigin[]> {
+    const file = this.#pruneHandles(await this.#readHandles());
+    const key = canonicalHandle(handle);
+    const entry = file.handles[key];
+    if (entry === undefined) return [];
+    const sidecar = (await this.#readOrigins()).handles[key];
+    return sortedOrigins([
+      ...originEntry(sidecar),
+      ...(sidecar !== undefined && isNewer(entry.at, sidecar.at) ? (['read'] as TaintOrigin[]) : []),
+    ]);
   }
 }
 
@@ -407,20 +577,21 @@ export class TaintCollector {
   }
 
   /** Scans free text (bodies, subjects, snippets, attachment text) for addresses. */
-  observeText(text: string): void {
+  observeText(text: string, origin: TaintOrigin = 'read'): void {
     for (const address of extractAddresses(text)) {
-      this.#observations.push({ address, source: 'body', inboxId: this.#inboxId, messageId: this.#messageId });
+      this.#observations.push({ address, source: 'body', origin, inboxId: this.#inboxId, messageId: this.#messageId });
     }
   }
 
   /** Records parsed header addresses (From, Reply-To, Sender, To, Cc). */
-  observeHeaders(addresses: Iterable<string>): void {
+  observeHeaders(addresses: Iterable<string>, origin: TaintOrigin = 'read'): void {
     for (const address of addresses) {
       const canonical = canonicalAddress(address);
       if (canonical.includes('@')) {
         this.#observations.push({
           address: canonical,
           source: 'header',
+          origin,
           inboxId: this.#inboxId,
           messageId: this.#messageId,
         });
@@ -435,9 +606,9 @@ export class TaintCollector {
    * second place to keep it correct. What core insists on is that the caller hands over ids rather than the display
    * names beside them, which the account being named can change at any time.
    */
-  observeHandles(handles: Iterable<TaintHandle>, source: TaintSource = 'body'): void {
+  observeHandles(handles: Iterable<TaintHandle>, source: TaintSource = 'body', origin: TaintOrigin = 'read'): void {
     for (const handle of handles) {
-      this.#handles.push({ handle, source, inboxId: this.#inboxId, messageId: this.#messageId });
+      this.#handles.push({ handle, source, origin, inboxId: this.#inboxId, messageId: this.#messageId });
     }
   }
 

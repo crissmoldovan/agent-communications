@@ -206,14 +206,14 @@ test('taint: a check returns each stored aggregate as the store holds it — new
   const seen = await store.check('PAY@vendor.test');
   assert.equal(seen.address, true);
   // The aggregate: the newest time, `header` kept once seen, the union of mailboxes — not one coherent sighting.
-  assert.deepEqual(seen.addressSeen, { at: latest, source: 'header', inboxIds: [A, B] });
-  assert.deepEqual(seen.domainSeen, { at: latest, source: 'header', inboxIds: [A, B] });
+  assert.deepEqual(seen.addressSeen, { at: latest, source: 'header', inboxIds: [A, B], origins: ['read'] });
+  assert.deepEqual(seen.domainSeen, { at: latest, source: 'header', inboxIds: [A, B], origins: ['read'] });
   const domainOnly = await store.check('someone-else@vendor.test');
   assert.equal(domainOnly.address, false);
   assert.equal(domainOnly.addressSeen, undefined);
-  assert.deepEqual(domainOnly.domainSeen, { at: latest, source: 'header', inboxIds: [A, B] });
+  assert.deepEqual(domainOnly.domainSeen, { at: latest, source: 'header', inboxIds: [A, B], origins: ['read'] });
   const bodyOnly = await store.check('ops@vendor.test');
-  assert.deepEqual(bodyOnly.addressSeen, { at: latest, source: 'body', inboxIds: [B] });
+  assert.deepEqual(bodyOnly.addressSeen, { at: latest, source: 'body', inboxIds: [B], origins: ['read'] });
   assert.ok(first < latest);
   // Looking stores nothing.
   assert.equal(readFileSync(join(store.directory, 'taint.json'), 'utf8'), before);
