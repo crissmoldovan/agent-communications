@@ -1,0 +1,62 @@
+{
+  "description": "The Unicode Consortium's files the tables in generated/ are made from, pinned by the byte size and SHA-256 of each file exactly as unicode.org publishes it (events phase A plan, decision 2). A source is vendored gzip-compressed under sources/; its pin is on the decompressed bytes. packages/events/scripts/unicode.mjs checks every pin before it generates anything, and --fetch downloads them again and checks them before writing.",
+  "unicodeVersion": "15.1.0",
+  "files": [
+    {
+      "name": "CaseFolding.txt",
+      "url": "https://www.unicode.org/Public/15.1.0/ucd/CaseFolding.txt",
+      "bytes": 84870,
+      "sha256": "4e55acfdc32825a22e87670e9056a3bf94ad7c5400065778e9e10f8314372bcf",
+      "vendored": "sources/CaseFolding.txt.gz"
+    },
+    {
+      "name": "UnicodeData.txt",
+      "url": "https://www.unicode.org/Public/15.1.0/ucd/UnicodeData.txt",
+      "bytes": 1914200,
+      "sha256": "2fc713e6a31a87c4850a37fe2caffa4218180fadb5de86b43a143ddb4581fb86",
+      "vendored": "sources/UnicodeData.txt.gz"
+    },
+    {
+      "name": "CompositionExclusions.txt",
+      "url": "https://www.unicode.org/Public/15.1.0/ucd/CompositionExclusions.txt",
+      "bytes": 8888,
+      "sha256": "59d2d9e3dfdf0a999cf9dae11d594f053631222679a2f5710315ea07f7fe82af",
+      "vendored": "sources/CompositionExclusions.txt.gz"
+    },
+    {
+      "name": "DerivedJoiningType.txt",
+      "url": "https://www.unicode.org/Public/15.1.0/ucd/extracted/DerivedJoiningType.txt",
+      "bytes": 39057,
+      "sha256": "2e0ed3733272299007cf0b76e84a8a653192d99a4429d2232fffcabccfd2d462",
+      "vendored": "sources/DerivedJoiningType.txt.gz"
+    },
+    {
+      "name": "IdnaMappingTable.txt",
+      "url": "https://www.unicode.org/Public/idna/15.1.0/IdnaMappingTable.txt",
+      "bytes": 874566,
+      "sha256": "402cbd285f1f952fcd0834b63541d54f69d3d8f1b8f8599bf71a1a14935f82c4",
+      "vendored": "sources/IdnaMappingTable.txt.gz"
+    },
+    {
+      "name": "NormalizationTest.txt",
+      "url": "https://www.unicode.org/Public/15.1.0/ucd/NormalizationTest.txt",
+      "bytes": 2625136,
+      "sha256": "871238e37e3be0696ec2bd0891119a041b052da1a84485eda05a5438724b223e",
+      "vendored": "sources/NormalizationTest.txt.gz"
+    },
+    {
+      "name": "IdnaTestV2.txt",
+      "url": "https://www.unicode.org/Public/idna/15.1.0/IdnaTestV2.txt",
+      "bytes": 749716,
+      "sha256": "d668c4ea58d60fe04e6c011df98e0b317da6abaa1273d58f42b581eb0dd7adda",
+      "vendored": "sources/IdnaTestV2.txt.gz"
+    },
+    {
+      "name": "license.txt",
+      "url": "https://www.unicode.org/license.txt",
+      "bytes": 1995,
+      "sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
+      "vendored": "LICENSE"
+    }
+  ]
+}

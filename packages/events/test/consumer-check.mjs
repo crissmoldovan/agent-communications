@@ -81,3 +81,42 @@ console.log(
   assert.equal(events.matchesPattern(['to', { any: true }, 'name'], '/to/01/name'), false);
   console.log('events consumer check: RFC 6901 pointers and pointer patterns, own properties only, OK');
 }
+
+// --- Unicode 15.1: NFC and full case folding (events phase A, task 5) ---
+// From the bundled tables alone: U+A7CB, assigned in Unicode 16, is its own folding under 15.1, whatever Node's is.
+assert.equal(events.UNICODE_VERSION, '15.1.0');
+assert.equal(events.nfc('é'), 'é');
+assert.equal(events.nfc('क़'), 'क़');
+assert.equal(events.caseFold('İ'), 'i̇');
+assert.equal(events.caseFold('Ɤ'), 'Ɤ');
+assert.equal(events.foldForComparison('STRASSE'), events.foldForComparison('straße'));
+console.log('events consumer check: Unicode 15.1 NFC and case folding OK');
+// --- end Unicode 15.1 ---
+
+// --- UTS #46 revision 31: the canonical domain (events phase A, task 6) ---
+// Bundled and pinned: nontransitional, so ß is kept; a trailing root dot is refused (decision 13).
+assert.deepEqual(events.toAsciiDomain('Bücher.Example'), { ok: true, value: 'xn--bcher-kva.example' });
+assert.deepEqual(events.toAsciiDomain('faß.de'), { ok: true, value: 'xn--fa-hia.de' });
+const rootDot = events.toAsciiDomain('example.com.');
+assert.equal(rootDot.ok, false);
+assert.deepEqual(
+  rootDot.issues.map((issue) => [issue.code, issue.detail]),
+  [['DOMAIN_INVALID', ['ROOT_LABEL']]],
+);
+assert.deepEqual(events.toAsciiDomain('a_b.example').issues?.[0]?.detail, ['V6']);
+console.log('events consumer check: UTS #46 domains OK');
+// --- end UTS #46 ---
+
+// --- The semantic formats and exact instants (events phase A, task 7) ---
+// Never through Date: a Slack ts's microseconds survive, and .1 is .100000.
+assert.equal(events.compareInstants('2024-05-01T12:00:00.000999Z', '2024-05-01T12:00:00.001Z'), -1);
+assert.equal(events.compareInstants('2024-05-01T14:00:00+02:00', '2024-05-01T12:00:00.100000Z'), -1);
+assert.equal(events.compareInstants('2024-05-01T12:00:00.1Z', '2024-05-01T12:00:00.100000Z'), 0);
+assert.equal(events.isInstant('2024-05-01T12:00:00'), false);
+assert.equal(events.isFormat('uuid', '123E4567-E89B-12D3-A456-426614174000'), true);
+assert.equal(events.isFormat('uri', '/relative'), false);
+assert.equal(events.isFormat('domain', 'example.com.'), false);
+assert.equal(events.isFormat('email', 'Someone@example.com'), true);
+assert.deepEqual(events.canonicalEmail('Someone@Bücher.Example'), { ok: true, value: 'Someone@xn--bcher-kva.example' });
+console.log('events consumer check: the five semantic formats and exact instants OK');
+// --- end semantic formats ---

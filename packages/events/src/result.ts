@@ -17,7 +17,13 @@ export type IssueCode =
   /** A path the schema does not declare: an undeclared key, an index on an object, a key on an array, a step too far. */
   | 'POINTER_NOT_IN_SCHEMA'
   /** Not an RFC 6901 pointer (an escape other than `~0` or `~1`, no leading `/`), or not a D3 pointer pattern. */
-  | 'POINTER_MALFORMED';
+  | 'POINTER_MALFORMED'
+  /** A domain is not one UTS #46 ToASCII accepts under D5's flags, or it ends in a root dot (decision 13). */
+  | 'DOMAIN_INVALID'
+  /** A value is not in its semantic format: an address's local part, an instant given to `compareInstants`. */
+  | 'FORMAT_INVALID'
+  /** A name is not one of the five semantic formats. */
+  | 'FORMAT_UNKNOWN';
 
 /** One thing wrong, where it is (an RFC 6901 pointer into the value checked), and any detail a caller can show. */
 export interface Issue {

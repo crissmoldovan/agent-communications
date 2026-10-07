@@ -1,0 +1,128 @@
+{
+  "family": "unicode",
+  "description": "NFC and full case folding by Unicode 15.1 alone (events phase A plan, decision 2; design D5): CaseFolding's C and F mappings, never S or T, and foldForComparison as NFC then folding. The conformance files themselves are derived from their pinned sources by test/support/conformance-sources.ts.",
+  "vectors": [
+    { "kind": "version", "name": "UNICODE_VERSION is 15.1.0", "expected": "15.1.0" },
+    { "kind": "caseFold", "name": "CND-e: ß folds to ss (F)", "input": "ß", "expected": "ss" },
+    {
+      "kind": "caseFold",
+      "name": "CND-e: capital sharp s ẞ folds to ss (F, not S's ß)",
+      "input": "ẞ",
+      "expected": "ss"
+    },
+    {
+      "kind": "caseFold",
+      "name": "CND-e: İ folds to i + COMBINING DOT ABOVE (F), never the Turkic i (T)",
+      "input": "İ",
+      "expected": "i̇"
+    },
+    {
+      "kind": "caseFold",
+      "name": "CND-e: I folds to i (C), never the Turkic dotless ı (T)",
+      "input": "I",
+      "expected": "i"
+    },
+    { "kind": "caseFold", "name": "CND-e: capital sigma Σ folds to σ", "input": "Σ", "expected": "σ" },
+    { "kind": "caseFold", "name": "CND-e: small sigma σ is already folded", "input": "σ", "expected": "σ" },
+    { "kind": "caseFold", "name": "CND-e: final sigma ς folds to σ", "input": "ς", "expected": "σ" },
+    { "kind": "caseFold", "name": "CND-e: KELVIN SIGN folds to k", "input": "K", "expected": "k" },
+    { "kind": "caseFold", "name": "CND-e: ANGSTROM SIGN folds to å", "input": "Å", "expected": "å" },
+    {
+      "kind": "caseFold",
+      "name": "CND-e: Cherokee small ꭰ folds to capital Ꭰ (folding goes to upper case there)",
+      "input": "ꭰ",
+      "expected": "Ꭰ"
+    },
+    { "kind": "caseFold", "name": "CND-e: the ligature ﬁ folds to fi (F)", "input": "ﬁ", "expected": "fi" },
+    {
+      "kind": "caseFold",
+      "name": "CND-e: a whole string",
+      "input": "STRAẞE İstanbul ΣΣ",
+      "expected": "strasse i̇stanbul σσ"
+    },
+    { "kind": "caseFold", "name": "CND-e: an astral capital, DESERET 𐐀, folds to 𐐨", "input": "𐐀", "expected": "𐐨" },
+    {
+      "kind": "caseFold",
+      "name": "a surrogate without its partner passes through",
+      "input": "A\ud800B",
+      "expected": "a\ud800b"
+    },
+    {
+      "kind": "caseFold",
+      "name": "UNI-e: U+A7CB, assigned in Unicode 16, folds to itself under 15.1 (a 16 host lower-cases it to U+0264)",
+      "input": "Ɤ",
+      "expected": "Ɤ"
+    },
+    {
+      "kind": "caseFold",
+      "name": "folding alone does not normalise: e + COMBINING ACUTE stays two",
+      "input": "É",
+      "expected": "é"
+    },
+    {
+      "kind": "foldForComparison",
+      "name": "CND-e: foldForComparison normalises first: E + COMBINING ACUTE becomes é",
+      "input": "É",
+      "expected": "é"
+    },
+    {
+      "kind": "same",
+      "name": "CND-e: e + COMBINING ACUTE and é are the same for comparison",
+      "by": "foldForComparison",
+      "a": "é",
+      "b": "é",
+      "same": true
+    },
+    {
+      "kind": "same",
+      "name": "CND-e: but not under folding alone",
+      "by": "caseFold",
+      "a": "é",
+      "b": "é",
+      "same": false
+    },
+    {
+      "kind": "same",
+      "name": "CND-e: STRASSE and straße compare equal",
+      "by": "foldForComparison",
+      "a": "STRASSE",
+      "b": "straße",
+      "same": true
+    },
+    {
+      "kind": "same",
+      "name": "CND-e: ANGSTROM SIGN and A + COMBINING RING ABOVE compare equal",
+      "by": "foldForComparison",
+      "a": "Å",
+      "b": "Å",
+      "same": true
+    },
+    {
+      "kind": "same",
+      "name": "CND-e: İ and i do not compare equal",
+      "by": "foldForComparison",
+      "a": "İ",
+      "b": "i",
+      "same": false
+    },
+    { "kind": "nfc", "name": "NFC composes e + COMBINING ACUTE", "input": "é", "expected": "é" },
+    {
+      "kind": "nfc",
+      "name": "NFC orders marks canonically, then composes: a + dot below + circumflex is ậ",
+      "input": "ậ",
+      "expected": "ậ"
+    },
+    { "kind": "nfc", "name": "NFC composes Hangul arithmetically: ᄀ + ᅡ + ᆨ is 각", "input": "각", "expected": "각" },
+    { "kind": "nfc", "name": "NFC leaves a precomposed Hangul syllable", "input": "각", "expected": "각" },
+    { "kind": "nfc", "name": "NFC never composes an exclusion: क़ stays क + nukta", "input": "क़", "expected": "क़" },
+    { "kind": "nfc", "name": "NFC replaces a singleton: OHM SIGN is Ω", "input": "Ω", "expected": "Ω" },
+    { "kind": "nfc", "name": "NFC leaves ASCII as it is", "input": "example.com", "expected": "example.com" },
+    { "kind": "nfc", "name": "NFC of the empty string", "input": "", "expected": "" },
+    {
+      "kind": "nfc",
+      "name": "a surrogate without its partner passes through NFC",
+      "input": "é\udc00",
+      "expected": "é\udc00"
+    }
+  ]
+}

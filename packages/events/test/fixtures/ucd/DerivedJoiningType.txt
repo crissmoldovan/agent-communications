@@ -1,0 +1,11 @@
+# A synthetic fragment of DerivedJoiningType.txt, for the generator's unit test. Not Unicode's data.
+# @missing: 0000..10FFFF; Non_Joining
+
+0041          ; U # Lu       LATIN CAPITAL LETTER A (listed here only to show U is never kept)
+0640          ; C # Lm       ARABIC TATWEEL
+200D          ; C # Cf       ZERO WIDTH JOINER
+0628          ; D # Lo       ARABIC LETTER BEH
+0627          ; R # Lo       ARABIC LETTER ALEF
+A872          ; L # Lo       PHAGS-PA SUPERFIXED LETTER RA
+0300..0301    ; T # Mn   [2] COMBINING GRAVE ACCENT..COMBINING ACUTE ACCENT
+0302          ; T # Mn       COMBINING CIRCUMFLEX ACCENT

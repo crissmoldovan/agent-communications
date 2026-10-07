@@ -74,22 +74,34 @@ const { createRealm, realmBundle } = await import(new URL('../test/support/realm
 const bundle = await realmBundle();
 const realm = createRealm(bundle);
 
-/** Every vector family: its file's text, and its results in Node and in the realm, which must agree. */
+/**
+ * Every vector family, and every Unicode conformance file derived from its pinned source: the text the page is given,
+ * and its results in Node and in the realm, which must agree. `label` is what a line of output calls it.
+ */
 const families = [];
+async function addFamily(name, text, label) {
+  const file = JSON.parse(text);
+  const runner = RUNNERS[file.family];
+  if (runner === undefined) throw new Error(`${name}: no runner for the family "${file.family}"`);
+  const inNode = JSON.stringify(await runner(library, file));
+  const inRealm = await realm.run(file.family, text);
+  if (inRealm !== inNode) throw new Error(`${label}: the realm's results differ from Node's`);
+  if (JSON.parse(inNode).failures.length > 0) throw new Error(`${label}: fails in Node`);
+  families.push({ name, family: file.family, label, text, expected: inNode, vectors: file.vectors.length });
+}
 for (const name of readdirSync(at('test', 'vectors'))
   .filter((file) => file.endsWith('.json'))
   .sort()) {
   const text = readFileSync(at('test', 'vectors', name), 'utf8');
-  const file = JSON.parse(text);
-  const runner = RUNNERS[file.family];
-  if (runner === undefined) throw new Error(`test/vectors/${name}: no runner for the family "${file.family}"`);
-  const inNode = JSON.stringify(await runner(library, file));
-  const inRealm = await realm.run(file.family, text);
-  if (inRealm !== inNode) throw new Error(`${file.family}: the realm's results differ from Node's`);
-  if (JSON.parse(inNode).failures.length > 0) throw new Error(`${file.family}: fails in Node`);
-  families.push({ name, family: file.family, text, expected: inNode, vectors: file.vectors.length });
+  await addFamily(`test/vectors/${name}`, text, JSON.parse(text).family);
 }
 if (families.length === 0) throw new Error('no vector families under test/vectors');
+// Unicode's own conformance files — NormalizationTest.txt, CaseFolding.txt and IdnaTestV2.txt — derived from their
+// pinned sources exactly as the package's tests derive them (test/support/conformance-sources.ts).
+const { conformanceFiles } = await import(new URL('../test/support/conformance-sources.ts', import.meta.url).href);
+for (const derived of conformanceFiles()) {
+  await addFamily(derived.name, derived.text, `${derived.family} (${derived.name})`);
+}
 
 // The page, its boot script and the bundle, and nothing else, from a loopback listener.
 const pages = {
@@ -142,15 +154,17 @@ try {
             ([family, text]) => globalThis.AgentcommsEventsRealm.run(family, text),
             [family.family, family.text],
           ),
-          `${family.family} in ${name}`,
+          `${family.label} in ${name}`,
         );
         const failures = JSON.parse(result).failures;
         if (failures.length > 0) {
-          problems.push(`${family.family} in ${name}: ${failures.length} failing: ${failures.slice(0, 3).join('; ')}`);
+          problems.push(`${family.label} in ${name}: ${failures.length} failing: ${failures.slice(0, 3).join('; ')}`);
         } else if (result !== family.expected) {
-          problems.push(`${family.family} in ${name}: the results differ from Node's and the realm's`);
+          problems.push(`${family.label} in ${name}: the results differ from Node's and the realm's`);
         } else {
-          say(`  ✓ ${family.family} in ${name}: ${family.vectors} vectors, identical to Node and the realm`);
+          say(
+            `  ✓ ${family.label} in ${name}: ${family.vectors} ${family.vectors === 1 ? 'vector' : 'vectors'}, identical to Node and the realm`,
+          );
         }
       }
       const wanted = ['/', '/boot.js', '/realm.js'].map((path) => `${origin}${path}`);
@@ -174,6 +188,7 @@ if (problems.length > 0) {
   for (const problem of problems) process.stderr.write(`  ✗ ${problem}\n`);
   process.exit(1);
 }
+const derived = families.filter((family) => !family.name.startsWith('test/vectors/')).length;
 say(
-  `event vectors in real browsers OK: ${families.length} ${families.length === 1 ? 'family' : 'families'} in chromium and webkit, under the production CSP`,
+  `event vectors in real browsers OK: ${families.length - derived} vector ${families.length - derived === 1 ? 'file' : 'files'} and ${derived} Unicode conformance ${derived === 1 ? 'file' : 'files'} in chromium and webkit, under the production CSP`,
 );

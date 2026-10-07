@@ -4,5 +4,5 @@
     "types": [],
     "lib": ["ES2023"]
   },
-  "include": ["src"]
+  "include": ["src", "vendor/*/generated"]
 }

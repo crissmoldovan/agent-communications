@@ -1,0 +1,254 @@
+{
+  "family": "idna",
+  "description": "UTS #46 revision 31 ToASCII as design D5 names it (nontransitional; UseSTD3ASCIIRules, CheckHyphens, CheckBidi, CheckJoiners and VerifyDnsLength all true), then no trailing root dot (events phase A plan, decision 13), through toAsciiDomain. Accepted values were cross-checked against an independent ICU-based ToASCII; refusals name the exact UTS #46 status codes IdnaTestV2.txt would. Every line of IdnaTestV2.txt itself is derived from its pinned source by test/support/conformance-sources.ts.",
+  "vectors": [
+    {
+      "kind": "domain",
+      "name": "CND-f: mapping lower-cases ASCII",
+      "input": "EXAMPLE.com",
+      "expected": "example.com"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: mapping folds fullwidth forms, the fullwidth full stop included",
+      "input": "\uff25\uff38\uff21\uff2d\uff30\uff2c\uff25\uff0e\uff43\uff4f\uff4d",
+      "expected": "example.com"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: the ideographic full stop separates labels",
+      "input": "\u4f8b\u3048\u3002\u30c6\u30b9\u30c8",
+      "expected": "xn--r8jz45g.xn--zckzah"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: an ignored code point is removed (SOFT HYPHEN)",
+      "input": "ex\u00adample.com",
+      "expected": "example.com"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: mapping, then NFC: e + COMBINING ACUTE is one code point before Punycode",
+      "input": "Cafe\u0301.example",
+      "expected": "xn--caf-dma.example"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: a deviation character is kept under nontransitional processing: fa\u00df.de",
+      "input": "fa\u00df.de",
+      "expected": "xn--fa-hia.de"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: capital sharp s maps to \u00df, not ss, in 15.1",
+      "input": "FA\u1e9e.de",
+      "expected": "xn--fa-hia.de"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: final sigma is kept: \u03b2\u03cc\u03bb\u03bf\u03c2",
+      "input": "\u03b2\u03cc\u03bb\u03bf\u03c2.com",
+      "expected": "xn--nxasmm1c.com"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: final sigma and sigma stay distinct: \u03c3\u03c2",
+      "input": "\u03c3\u03c2.example",
+      "expected": "xn--3xab.example"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: ZWNJ after a virama (RFC 5892 A.1)",
+      "input": "a\u094d\u200cb",
+      "expected": "xn--ab-fsf604u"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: ZWJ after a virama (RFC 5892 A.2): \u0915\u094d\u200d\u0937",
+      "input": "\u0915\u094d\u200d\u0937.example",
+      "expected": "xn--11b2ezcw70k.example"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: ZWNJ between two dual-joining letters (RFC 5892 A.1, the Joining_Type context)",
+      "input": "\u0628\u200c\u0628",
+      "expected": "xn--ngba799q"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: a right-to-left label beside a left-to-right one",
+      "input": "\u05d0\u05d1.example",
+      "expected": "xn--4dbc.example"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: Punycode, encoded",
+      "input": "b\u00fccher.example",
+      "expected": "xn--bcher-kva.example"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: Punycode, decoded, validated and encoded again: a round trip",
+      "input": "xn--bcher-kva.example",
+      "expected": "xn--bcher-kva.example"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: an upper-case ACE prefix is mapped first",
+      "input": "XN--BCHER-KVA.example",
+      "expected": "xn--bcher-kva.example"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: B\u00fccher.Example has one canonical spelling",
+      "input": "B\u00fccher.Example",
+      "expected": "xn--bcher-kva.example"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: a 63-octet label is accepted",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: a 253-octet name is accepted",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: STD3: LOW LINE is refused",
+      "input": "a_b.example",
+      "refused": ["V6"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: STD3: a space is refused",
+      "input": "a b.example",
+      "refused": ["V6"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: STD3: a code point that maps only without STD3 rules is refused (\u2474)",
+      "input": "\u2474.example",
+      "refused": ["V6"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: -- in the third and fourth positions",
+      "input": "ab--cd.example",
+      "refused": ["V2"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: a leading hyphen",
+      "input": "-abc.example",
+      "refused": ["V3"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: a trailing hyphen",
+      "input": "abc-.example",
+      "refused": ["V3"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: a label starting with a combining mark",
+      "input": "\u0301abc.example",
+      "refused": ["V5"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: Bidi: a right-to-left label must not start with a number",
+      "input": "1\u05d0.example",
+      "refused": ["B1"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: Bidi: a left-to-right label holding a right-to-left character",
+      "input": "\u00e0\u05d0",
+      "refused": ["B5", "B6"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: Bidi: in a Bidi domain name, a left-to-right label must start with L",
+      "input": "0\u00e0.\u05d0",
+      "refused": ["B1"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: ZWNJ with no virama and no joining context (C1)",
+      "input": "a\u200cb.example",
+      "refused": ["C1"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: ZWJ with no virama (C2)",
+      "input": "a\u200db.example",
+      "refused": ["C2"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: an invalid xn-- label: not Punycode",
+      "input": "xn--0.pt",
+      "refused": ["P4"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: an invalid xn-- label: non-ASCII after the prefix",
+      "input": "xn--a-\u00e4.pt",
+      "refused": ["P4"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: Punycode is validated, not mapped: u + COMBINING DIAERESIS is not NFC",
+      "input": "xn--u-ccb.example",
+      "refused": ["V1"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: a 64-octet label is refused",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example",
+      "refused": ["A4_2"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: a 254-octet name is refused",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "refused": ["A4_1"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: an empty label is refused",
+      "input": "a..example",
+      "refused": ["A4_2"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: the empty string is refused",
+      "input": "",
+      "refused": ["A4_2"]
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: decision 13: a trailing root dot is refused, though UTS #46 lets it through",
+      "input": "example.com.",
+      "refused": [],
+      "rootLabel": true
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: decision 13: so is one the ideographic full stop maps to",
+      "input": "example.com\u3002",
+      "refused": [],
+      "rootLabel": true
+    },
+    {
+      "kind": "domain",
+      "name": "CND-f: U+A7CD, unassigned in 15.1 and assigned in Unicode 16, is refused",
+      "input": "a\ua7cdb.example",
+      "refused": ["V6"]
+    }
+  ]
+}

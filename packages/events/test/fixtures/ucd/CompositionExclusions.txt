@@ -1,0 +1,6 @@
+# A synthetic fragment of CompositionExclusions.txt, for the generator's unit test. Not Unicode's data.
+
+0958    #  DEVANAGARI LETTER QA
+
+# The derived sections are comments in the real file, and are derived by the generator instead:
+# 0340  COMBINING GRAVE TONE MARK

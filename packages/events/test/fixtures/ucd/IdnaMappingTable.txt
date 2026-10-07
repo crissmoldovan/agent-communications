@@ -1,0 +1,27 @@
+# A synthetic fragment of IdnaMappingTable.txt, for the generator's unit test. Not Unicode's data. It must still
+# cover every code point, in order, as the real table does.
+
+0000..002C    ; disallowed_STD3_valid                  # <control-0000>..COMMA
+002D..002E    ; valid                                  # HYPHEN-MINUS..FULL STOP
+002F          ; disallowed_STD3_valid                  # SOLIDUS
+0030..0039    ; valid                                  # DIGIT ZERO..DIGIT NINE
+003A..0040    ; disallowed_STD3_valid                  # COLON..COMMERCIAL AT
+0041          ; mapped                 ; 0061          # LATIN CAPITAL LETTER A
+0042          ; mapped                 ; 0062          # LATIN CAPITAL LETTER B
+0043..0060    ; disallowed                             # synthetic
+0061..007A    ; valid                                  # LATIN SMALL LETTER A..LATIN SMALL LETTER Z
+007B..00AC    ; disallowed                             # synthetic
+00AD          ; ignored                                # SOFT HYPHEN
+00AE..00DE    ; disallowed                             # synthetic
+00DF          ; deviation              ; 0073 0073     # LATIN SMALL LETTER SHARP S
+00E0..00FF    ; valid                  ;      ; NV8    # synthetic
+0100..0101    ; valid                                  # synthetic
+0102..0131    ; disallowed                             # synthetic
+0132..0133    ; mapped                 ; 0069 006A     # LATIN CAPITAL LIGATURE IJ..LATIN SMALL LIGATURE IJ
+0134..1E9D    ; disallowed                             # synthetic
+1E9E          ; mapped                 ; 0073 0073     # LATIN CAPITAL LETTER SHARP S
+1E9F..200B    ; disallowed                             # synthetic
+200C..200D    ; deviation              ;               # ZERO WIDTH NON-JOINER..ZERO WIDTH JOINER
+200E..2473    ; disallowed                             # synthetic
+2474          ; disallowed_STD3_mapped ; 0028 0031 0029 # PARENTHESIZED DIGIT ONE
+2475..10FFFF  ; disallowed                             # synthetic
