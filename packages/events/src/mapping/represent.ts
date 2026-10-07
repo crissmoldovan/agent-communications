@@ -1,4 +1,5 @@
 import type { JsonObject, JsonValue } from '../json.ts';
+import { setOwn } from '../own-property.ts';
 import { parsePointer } from '../pointer.ts';
 import { EventsError } from '../result.ts';
 import type { MappedClassification, Representation } from './types.ts';
@@ -7,7 +8,7 @@ function clone(value: JsonValue): JsonValue {
   if (value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) return value.map(clone);
   const result: Record<string, JsonValue> = {};
-  for (const [key, member] of Object.entries(value as JsonObject)) result[key] = clone(member as JsonValue);
+  for (const [key, member] of Object.entries(value as JsonObject)) setOwn(result, key, clone(member as JsonValue));
   return result;
 }
 

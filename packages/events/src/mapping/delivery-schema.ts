@@ -1,5 +1,6 @@
 import type { AnyEventDefinition } from '../catalogue/types.ts';
 import type { JsonValue } from '../json.ts';
+import { setOwn } from '../own-property.ts';
 import { isArrayIndex, parsePointer } from '../pointer.ts';
 import { EventsError } from '../result.ts';
 import type { SchemaNode } from '../schema/describe.ts';
@@ -85,11 +86,10 @@ function sourceSchema(
   if (node.kind === 'object') {
     const properties: Record<string, JsonValue> = {};
     for (const [key, property] of Object.entries(node.properties)) {
-      properties[key] = sourceSchema(
-        property.kind === 'optional' ? property.of : property,
-        [...at, key],
-        definition,
-        representation,
+      setOwn(
+        properties,
+        key,
+        sourceSchema(property.kind === 'optional' ? property.of : property, [...at, key], definition, representation),
       );
     }
     const required = Object.entries(node.properties)
@@ -139,7 +139,7 @@ function templateSchema(
       const properties: Record<string, JsonValue> = {};
       const required: string[] = [];
       for (const property of node.properties) {
-        properties[property.key] = templateSchema(property.node, definition, representation);
+        setOwn(properties, property.key, templateSchema(property.node, definition, representation));
         if (!(property.node.kind === 'reference' && property.node.missing === 'omit')) required.push(property.key);
       }
       return { type: 'object', properties, required, additionalProperties: false };

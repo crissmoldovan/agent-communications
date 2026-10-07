@@ -1,5 +1,6 @@
 import type { JsonObject, JsonValue } from '../json.ts';
 import { canonicalJson } from '../json.ts';
+import { setOwn } from '../own-property.ts';
 import { formatPointer, getPointer, parsePointer } from '../pointer.ts';
 import { EventsError } from '../result.ts';
 import { utf8ByteLength } from '../text.ts';
@@ -18,7 +19,7 @@ function clone(value: JsonValue): JsonValue {
   if (value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) return value.map(clone);
   const result: Record<string, JsonValue> = {};
-  for (const [key, member] of Object.entries(value as JsonObject)) result[key] = clone(member as JsonValue);
+  for (const [key, member] of Object.entries(value as JsonObject)) setOwn(result, key, clone(member as JsonValue));
   return result;
 }
 
@@ -80,7 +81,7 @@ export function evaluateMapping(mapping: CompiledMapping, event: unknown): Mappe
         const object: Record<string, JsonValue> = {};
         for (const property of node.properties) {
           const result = evaluate(property.node, append(output, property.key));
-          if (result !== OMIT) object[property.key] = result;
+          if (result !== OMIT) setOwn(object, property.key, result);
         }
         return object;
       }

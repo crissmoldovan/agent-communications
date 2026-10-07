@@ -6,72 +6,134 @@
       "name": "omit removes an object property",
       "type": "gmail.message.received",
       "example": 0,
-      "template": { "subject": { "$path": "/subject" }, "body": { "$path": "/body", "missing": "omit" } },
-      "data": { "subject": "Subject" }
+      "template": {
+        "subject": {
+          "$path": "/subject"
+        },
+        "body": {
+          "$path": "/body",
+          "missing": "omit"
+        }
+      },
+      "data": {
+        "subject": "Subject"
+      }
     },
     {
       "name": "null is a legal missing root",
       "type": "gmail.message.received",
       "example": 0,
-      "template": { "$path": "/body", "missing": "null" },
+      "template": {
+        "$path": "/body",
+        "missing": "null"
+      },
       "data": null
     },
     {
       "name": "null is a legal missing object property",
       "type": "gmail.message.received",
       "example": 0,
-      "template": { "body": { "$path": "/body", "missing": "null" } },
-      "data": { "body": null }
+      "template": {
+        "body": {
+          "$path": "/body",
+          "missing": "null"
+        }
+      },
+      "data": {
+        "body": null
+      }
     },
     {
       "name": "null is a legal missing array element",
       "type": "gmail.message.received",
       "example": 0,
-      "template": [{ "$path": "/body", "missing": "null" }],
+      "template": [
+        {
+          "$path": "/body",
+          "missing": "null"
+        }
+      ],
       "data": [null]
     },
     {
       "name": "reject refuses a missing root",
       "type": "gmail.message.received",
       "example": 0,
-      "template": { "$path": "/body" },
+      "template": {
+        "$path": "/body"
+      },
       "evaluationCode": "MAPPING_PATH_MISSING"
     },
     {
       "name": "reject refuses a missing object property",
       "type": "gmail.message.received",
       "example": 0,
-      "template": { "body": { "$path": "/body" } },
+      "template": {
+        "body": {
+          "$path": "/body"
+        }
+      },
       "evaluationCode": "MAPPING_PATH_MISSING"
     },
     {
       "name": "reject refuses a missing array element",
       "type": "gmail.message.received",
       "example": 0,
-      "template": [{ "$path": "/body" }],
+      "template": [
+        {
+          "$path": "/body"
+        }
+      ],
       "evaluationCode": "MAPPING_PATH_MISSING"
     },
     {
       "name": "omit is refused at the root",
       "type": "gmail.message.received",
       "example": 0,
-      "template": { "$path": "/body", "missing": "omit" },
+      "template": {
+        "$path": "/body",
+        "missing": "omit"
+      },
       "compileCode": "MAPPING_INVALID"
     },
     {
       "name": "omit is refused at an array element",
       "type": "gmail.message.received",
       "example": 0,
-      "template": [{ "$path": "/body", "missing": "omit" }],
+      "template": [
+        {
+          "$path": "/body",
+          "missing": "omit"
+        }
+      ],
       "compileCode": "MAPPING_INVALID"
     },
     {
       "name": "enveloped subject retains its exact output pointer",
       "type": "gmail.message.received",
       "example": 0,
-      "template": { "subject": { "$path": "/subject" } },
+      "template": {
+        "subject": {
+          "$path": "/subject"
+        }
+      },
       "representation": "enveloped",
-      "data": { "subject": "<test pointer=\"/subject\">Subject</test>" }
+      "data": {
+        "subject": "<test pointer=\"/subject\">Subject</test>"
+      }
+    },
+    {
+      "name": "an output key named __proto__ is an own property, not the prototype",
+      "type": "gmail.message.received",
+      "example": 0,
+      "template": {
+        "__proto__": {
+          "$path": "/subject"
+        }
+      },
+      "data": {
+        "__proto__": "Subject"
+      }
     }
   ]
 }

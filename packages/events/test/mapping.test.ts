@@ -205,3 +205,26 @@ test('MAP-c and D3-c: delivery schemas describe actual representations and deliv
     'urn:agentcomms:schema:delivery:rule%3A1%2F%C3%A9:v1:target%20%40%2C%F0%9F%98%80:v2',
   );
 });
+
+test('MAP-a: an output key named __proto__ is an own property in the mapped data and the delivery schema (code review r1)', () => {
+  const event = required(gmail.examples[0]);
+  // JSON.parse makes `__proto__` an own key, as a template read from JSON is.
+  const template = JSON.parse('{"__proto__":{"$path":"/warnings"},"subject":{"$path":"/subject"}}');
+  const mapping = compiled(gmail, template);
+  const mapped = evaluateMapping(mapping, event);
+  const data = mapped.data as Record<string, unknown>;
+  assert.equal(Object.getPrototypeOf(data), Object.prototype, 'the prototype is untouched');
+  assert.equal(Object.hasOwn(data, '__proto__'), true, 'an own property, not the prototype setter');
+  assert.deepEqual(Object.keys(data).sort(), ['__proto__', 'subject']);
+  assert.deepEqual(
+    Object.getOwnPropertyDescriptor(data, '__proto__')?.value,
+    (event as { warnings: unknown }).warnings,
+    'the copied value',
+  );
+  const schema = deliverySchema(gmail, mapping, { kind: 'plain' } as never, 'rul_1', 1, 'tgt_1', 1) as {
+    properties: Record<string, unknown>;
+    required: string[];
+  };
+  assert.equal(Object.hasOwn(schema.properties, '__proto__'), true, 'the schema names the key as a property');
+  assert.ok(schema.required.includes('__proto__'));
+});
