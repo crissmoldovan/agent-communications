@@ -175,15 +175,21 @@ export const sentAtWords: UsedSaid = (usedAt) => `sent at ${usedAt}`;
 /** The refusal prefix and detail key of each kind: a send sends nothing, a change changes nothing, a question saves nothing. */
 function refusalOf(kind: ApprovalKind) {
   const [prefix, idKey, hint] =
-    kind === 'change'
-      ? ['nothing was changed', 'approvalId', 'Prepare the change again and show the new preview to the user.']
-      : kind === 'download'
-        ? [
-            'nothing was saved',
-            'choiceId',
-            'Make the download again without an answer, and show the person the new question.',
-          ]
-        : ['nothing was sent', 'approvalId', 'Prepare the send again and show the new preview to the user.'];
+    kind === 'disclosure'
+      ? [
+          'nothing was disclosed',
+          'approvalId',
+          'Prepare a new standing disclosure authorisation and show its exact activation preview to the person.',
+        ]
+      : kind === 'change'
+        ? ['nothing was changed', 'approvalId', 'Prepare the change again and show the new preview to the user.']
+        : kind === 'download'
+          ? [
+              'nothing was saved',
+              'choiceId',
+              'Make the download again without an answer, and show the person the new question.',
+            ]
+          : ['nothing was sent', 'approvalId', 'Prepare the send again and show the new preview to the user.'];
   return (code: ErrorCode, reason: string, record: ApprovalRecord, approval: ApprovalObject, said = hint) =>
     new CommsError(code, `${prefix}: ${reason}`, {
       hint: said,
@@ -197,7 +203,13 @@ function refusalOf(kind: ApprovalKind) {
  */
 export function approvalNotFound(approvalId: string, kind: ApprovalKind | undefined): CommsError {
   const prefix =
-    kind === 'change' ? 'nothing was changed' : kind === 'download' ? 'nothing was saved' : 'nothing was sent';
+    kind === 'disclosure'
+      ? 'nothing was disclosed'
+      : kind === 'change'
+        ? 'nothing was changed'
+        : kind === 'download'
+          ? 'nothing was saved'
+          : 'nothing was sent';
   return new CommsError('NOT_FOUND', `${prefix}: no approval ${approvalId}`, {
     hint: 'Check the id: an approval is only found by the surface, the kind and the owner it was prepared for.',
     details: { approval: null },
@@ -239,6 +251,25 @@ function objectOf(
     ...optional('failedAt', record.failedAt),
     ...optional('revokedAt', record.revokedAt),
     ...optional('expiredAt', record.expiredAt),
+  };
+}
+
+/** Standing disclosure has no channel owner, draft, policy or sender-controlled field to classify. */
+function disclosureObjectOf(record: ApprovalRecord, claimable: boolean, reason?: string): ApprovalObject {
+  return {
+    id: record.approvalId,
+    kind: 'disclosure',
+    channel: null,
+    state: record.state,
+    claimable,
+    ...(reason === undefined ? {} : { reason }),
+    createdAt: record.createdAt,
+    expiresAt: record.expiresAt,
+    ...(record.approvedAt === undefined ? {} : { approvedAt: record.approvedAt }),
+    ...(record.usableUntil === undefined ? {} : { usableUntil: record.usableUntil }),
+    ...(record.usedAt === undefined ? {} : { usedAt: record.usedAt }),
+    ...(record.revokedAt === undefined ? {} : { revokedAt: record.revokedAt }),
+    ...(record.expiredAt === undefined ? {} : { expiredAt: record.expiredAt }),
   };
 }
 
@@ -347,7 +378,12 @@ function saidOf(
   if (approval.state === 'answered') return facts.answeredWords;
   if (approval.state === 'expired') {
     if (facts.kind === 'download') return downloadExpiredWords(facts.answered);
-    const nothing = `nothing was ${facts.kind === 'change' ? 'changed' : 'sent'} with it`;
+    const nothing =
+      facts.kind === 'change'
+        ? 'nothing was changed with it'
+        : facts.kind === 'disclosure'
+          ? 'nothing was disclosed with it'
+          : 'nothing was sent with it';
     return approval.reason === CLOCK_ANOMALY
       ? `the clock moved backwards; this approval was expired safely at ${approval.expiredAt}; ${nothing}`
       : `this approval expired; ${nothing}`;
@@ -381,7 +417,7 @@ export function publicApproval(
   const wrap: SenderFieldWrapper =
     options.wrap ?? ((text, field) => wrapUntrusted(text, { field, id: approval.id }, boundary));
   const source =
-    stored.form === 'v2'
+    stored.form === 'v2' && stored.record.kind !== 'disclosure'
       ? {
           inboxId: stored.record.inboxId,
           draftId: stored.record.draftId,
@@ -399,7 +435,7 @@ export function publicApproval(
             answered: stored.record.approvedVia !== undefined,
             answeredWords: undefined,
           }
-        : stored.form === 'corrupt' && stored.safe !== null
+        : stored.form === 'corrupt' && stored.safe !== null && stored.safe.kind !== 'disclosure'
           ? {
               inboxId: stored.safe.inboxId,
               draftId: stored.safe.draftId,
@@ -451,6 +487,7 @@ export function publicApproval(
  * nothing claimable. Pure: what decides is the store's locked classification, and this only says where it stands.
  */
 export function approvalObjectOf(record: ApprovalRecord, live: LiveGate | null, now: Date): ApprovalObject {
+  if (record.kind === 'disclosure') return classifyDisclosure(record).approval;
   return classifyV2(record, { action: 'inspect', live, now }).approval;
 }
 
@@ -525,7 +562,7 @@ export function approvalOutcome(stored: StoredApproval, context: OutcomeContext)
       approval: {
         id,
         kind: safe?.kind ?? null,
-        channel: safe?.channel ?? null,
+        channel: safe?.kind === 'disclosure' ? null : (safe?.channel ?? null),
         state: 'corrupt',
         claimable: false,
         reason,
@@ -537,6 +574,7 @@ export function approvalOutcome(stored: StoredApproval, context: OutcomeContext)
 }
 
 function classifyV2(read: ApprovalRecord, context: OutcomeContext): ApprovalOutcome {
+  if (read.kind === 'disclosure') return classifyDisclosure(read);
   const { live, action } = context;
   const at = context.now.toISOString();
   const ownerRemoved = read.ownerScope === 'owner' && live?.owner === 'removed';
@@ -591,6 +629,58 @@ function classifyV2(read: ApprovalRecord, context: OutcomeContext): ApprovalOutc
   };
 }
 
+/** The isolated disclosure state machine never follows a config policy or a channel-owner fence. */
+function classifyDisclosure(record: ApprovalRecord): ApprovalOutcome {
+  const claimable = record.state === 'approved';
+  const approval = disclosureObjectOf(record, claimable, record.reason);
+  let error: CommsError | undefined;
+  switch (record.state) {
+    case 'pending':
+    case 'approved':
+      break;
+    case 'used':
+      error = refusalOf('disclosure')(
+        'APPROVAL_VOID',
+        `the standing disclosure approval was used already at ${record.usedAt}`,
+        record,
+        approval,
+      );
+      break;
+    case 'expired':
+      error = refusalOf('disclosure')(
+        'APPROVAL_EXPIRED',
+        'the standing disclosure approval expired unused',
+        record,
+        approval,
+      );
+      break;
+    case 'revoked':
+      error = refusalOf('disclosure')(
+        'APPROVAL_VOID',
+        `the standing disclosure approval was voided (${record.reason ?? 'revoked'})`,
+        record,
+        approval,
+      );
+      break;
+    default:
+      error = refusalOf('disclosure')(
+        'APPROVAL_VOID',
+        'the standing disclosure approval is in an invalid state',
+        record,
+        approval,
+      );
+  }
+  return {
+    state: record.state,
+    claimable,
+    ...(record.reason === undefined ? {} : { reason: record.reason }),
+    record,
+    revokes: false,
+    approval,
+    ...(error === undefined ? {} : { error }),
+  };
+}
+
 /** Whether an active record can be claimed under `live` (D2, `claimable`). */
 function isClaimable(record: ApprovalRecord, live: LiveGate): boolean {
   switch (record.kind) {
@@ -600,6 +690,8 @@ function isClaimable(record: ApprovalRecord, live: LiveGate): boolean {
       return record.state === 'approved' || (record.route === 'chat' && live.changePolicy === 'chat');
     case 'download':
       return downloadClaimable(record, live.changePolicy);
+    case 'disclosure':
+      return record.state === 'approved';
   }
 }
 
@@ -681,6 +773,14 @@ function errorOf(
       });
     }
     case 'used':
+      if (record.kind === 'disclosure') {
+        return refuse(
+          'APPROVAL_VOID',
+          `the standing disclosure approval was used already at ${record.usedAt}`,
+          record,
+          approval,
+        );
+      }
       if (download) {
         return refuse(
           'APPROVAL_VOID',

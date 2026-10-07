@@ -5,10 +5,14 @@ import {
   APPROVAL_LIFETIMES,
   type ApprovalRoute,
   bindingDigestOf,
+  canonicalDisclosureBinding,
+  type DisclosureBinding,
+  type DisclosureBindingFields,
   type OwnerScope,
   pendingMsOf,
   requireKnownChannel,
   SENDING_LEASE_MS,
+  sameDisclosureBinding,
 } from './approval-binding.ts';
 import { changePendingHint } from './approval-handoffs.ts';
 import { registerStoreInternals } from './approval-internals.ts';
@@ -98,7 +102,13 @@ export type ApprovalChannel = 'elicitation' | 'terminal';
  * and a kind on every record, so that none can be spent as another. Without it, a person who approved a post at a
  * terminal would also have approved whatever change an agent claimed under the same id.
  */
-export type ApprovalKind = 'send' | 'change' | 'download';
+export type ApprovalKind = 'send' | 'change' | 'download' | 'disclosure';
+export type {
+  DisclosureActivationKind,
+  DisclosureBinding,
+  DisclosureVersion,
+  DisclosureVersionKind,
+} from './approval-binding.ts';
 
 /** The inbox or account a change is about. `id` is absent when the change connects it, and it does not exist yet. */
 export interface ChangeTarget {
@@ -423,6 +433,45 @@ export interface ApprovalRecord {
   change?: ChangeBinding | undefined;
   /** For a download's question: what it asked about, and the folders it offered. `contentDigest` is `downloadDigest`. */
   download?: DownloadBinding | undefined;
+  /** For a standing disclosure: the canonical, content-free event activation authority. */
+  disclosure?: DisclosureBinding | undefined;
+}
+
+/**
+ * The stored branch for standing disclosure. Its runtime decoder refuses every field belonging to send, change or
+ * download records; this type is what the three disclosure-only methods return.
+ */
+export interface DisclosureApprovalRecord
+  extends Omit<
+    ApprovalRecord,
+    | 'kind'
+    | 'disclosure'
+    | 'approvedVia'
+    | 'channel'
+    | 'ownerScope'
+    | 'route'
+    | 'inboxId'
+    | 'inboxSub'
+    | 'draftId'
+    | 'draftMessageId'
+    | 'contentDigest'
+    | 'sendEpoch'
+    | 'policy'
+    | 'requiredPolicy'
+    | 'riskFlags'
+    | 'expect'
+    | 'approvedBindingDigest'
+    | 'sendingAt'
+    | 'sendingHeartbeatAt'
+    | 'sentAt'
+    | 'sentMessageId'
+    | 'failedAt'
+    | 'change'
+    | 'download'
+  > {
+  kind: 'disclosure';
+  disclosure: DisclosureBinding;
+  approvedVia?: 'terminal' | 'app' | undefined;
 }
 
 export interface CreateApprovalInput {
@@ -564,10 +613,28 @@ function refuseDownload(code: ErrorCode, reason: string, record?: Refused, hint?
   });
 }
 
+/** The disclosure path has no send, draft or provider outcome: its refusal must never imply one. */
+function refuseDisclosure(code: ErrorCode, reason: string, record?: Refused, hint?: string): CommsError {
+  return new CommsError(code, `nothing was disclosed: ${reason}`, {
+    hint:
+      hint ?? 'Prepare a new standing disclosure authorisation and show its exact activation preview to the person.',
+    details: record ? { approvalId: record.approvalId, state: record.state } : {},
+  });
+}
+
 /** The refusal in the words of the record's own kind. */
 function refusalFor(record: { kind?: ApprovalKind | undefined }): typeof refuse {
   const kind = approvalKind(record);
-  return kind === 'change' ? refuseChange : kind === 'download' ? refuseDownload : refuse;
+  switch (kind) {
+    case 'send':
+      return refuse;
+    case 'change':
+      return refuseChange;
+    case 'download':
+      return refuseDownload;
+    case 'disclosure':
+      return refuseDisclosure;
+  }
 }
 
 /** Whether a record was prepared under this release's digest version: only such a record is ever claimed or approved. */
@@ -607,16 +674,28 @@ export type RevokeDisposition = 'person' | 'lifecycle' | 'integrity';
  */
 function cancelledClaim(record: ApprovalRecord): CommsError {
   const kind = approvalKind(record);
-  if (kind === 'download') {
-    return new CommsError('USAGE', 'cancelled: nothing was saved', {
-      hint: 'The question was not used: the same call, made again with the same answer, can still use it until it expires.',
-      details: { choiceId: record.approvalId, state: record.state, reason: 'cancelled' },
-    });
+  switch (kind) {
+    case 'send':
+      return new CommsError('USAGE', 'cancelled: nothing was sent', {
+        hint: 'The approval was not used: the same call, made again, can still use it until it expires.',
+        details: { approvalId: record.approvalId, state: record.state, reason: 'cancelled' },
+      });
+    case 'change':
+      return new CommsError('USAGE', 'cancelled: nothing was changed', {
+        hint: 'The approval was not used: the same call, made again, can still use it until it expires.',
+        details: { approvalId: record.approvalId, state: record.state, reason: 'cancelled' },
+      });
+    case 'download':
+      return new CommsError('USAGE', 'cancelled: nothing was saved', {
+        hint: 'The question was not used: the same call, made again with the same answer, can still use it until it expires.',
+        details: { choiceId: record.approvalId, state: record.state, reason: 'cancelled' },
+      });
+    case 'disclosure':
+      return new CommsError('USAGE', 'cancelled: nothing was disclosed', {
+        hint: 'The standing disclosure approval was not used: it can still be completed until it expires.',
+        details: { approvalId: record.approvalId, state: record.state, reason: 'cancelled' },
+      });
   }
-  return new CommsError('USAGE', `cancelled: ${kind === 'change' ? 'nothing was changed' : 'nothing was sent'}`, {
-    hint: 'The approval was not used: the same call, made again, can still use it until it expires.',
-    details: { approvalId: record.approvalId, state: record.state, reason: 'cancelled' },
-  });
 }
 
 /** The refusal of a renewal or an outcome from a call that does not hold the send's claim. It names no token. */
@@ -690,7 +769,16 @@ export interface ApprovalExpectation {
 function matchesExpectation(found: StoredApproval, expect: ApprovalExpectation): boolean {
   const kind = kindOf(found);
   const owner = ownerOf(found);
-  if (kind === null || owner === null) return expect.owner === undefined;
+  if (kind === null) return expect.owner === undefined;
+  // Disclosure has no channel or mailbox owner. It is still a real, typed record, never a send-shaped fallback.
+  if (kind === 'disclosure') {
+    return (
+      (expect.kind === undefined || expect.kind === 'disclosure') &&
+      expect.channel === undefined &&
+      expect.owner === undefined
+    );
+  }
+  if (owner === null) return expect.owner === undefined;
   if (expect.kind !== undefined && kind !== expect.kind) return false;
   if (expect.channel !== undefined && channelOf(found) !== expect.channel) return false;
   return expect.owner === undefined || owner === expect.owner;
@@ -837,6 +925,18 @@ export class ApprovalStore {
    * profile checked first, so nothing is written that names a channel this release does not know.
    */
   #bound(record: Omit<ApprovalRecord, 'bindingDigest'>): ApprovalRecord {
+    if (record.kind === 'disclosure') {
+      const disclosure = canonicalDisclosureBinding(record.disclosure as DisclosureBinding);
+      return {
+        ...record,
+        disclosure,
+        bindingDigest: bindingDigestOf({
+          approvalId: record.approvalId,
+          kind: 'disclosure',
+          disclosure,
+        } satisfies DisclosureBindingFields),
+      };
+    }
     requireKnownChannel(record.channel);
     return { ...record, bindingDigest: bindingDigestOf(record) };
   }
@@ -889,6 +989,29 @@ export class ApprovalStore {
       updatedAt: now.toISOString(),
     });
     await this.#write(record);
+    return record;
+  }
+
+  /** Creates only a pending standing disclosure approval from a daemon-derived canonical binding. */
+  async createDisclosure(binding: DisclosureBinding): Promise<DisclosureApprovalRecord> {
+    await this.ensurePruned();
+    const disclosure = canonicalDisclosureBinding(binding);
+    const now = this.#now();
+    const pendingMs = APPROVAL_LIFETIMES.confirm;
+    const record = this.#bound({
+      approvalId: newApprovalId(),
+      kind: 'disclosure',
+      digestVersion: DIGEST_VERSION,
+      pendingMs,
+      approvedMs: APPROVAL_LIFETIMES.approved,
+      disclosure,
+      challengeAttempts: 0,
+      state: 'pending',
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + pendingMs).toISOString(),
+      updatedAt: now.toISOString(),
+    } as Omit<ApprovalRecord, 'bindingDigest'>) as DisclosureApprovalRecord;
+    await this.#write(record as ApprovalRecord);
     return record;
   }
 
@@ -1035,14 +1158,29 @@ export class ApprovalStore {
    * approval can be used as it is.
    */
   #alreadyApproved(record: ApprovalRecord, outcome: ApprovalOutcome): CommsError {
-    return new CommsError(
-      'USAGE',
-      `${record.kind === 'change' ? 'nothing was changed' : 'nothing was sent'}: it is approved already, and a person approves it once`,
-      {
-        hint: 'Nothing more is needed from the person: try the same call again with the same approval.',
-        details: { approvalId: record.approvalId, state: record.state, approval: outcome.approval },
-      },
-    );
+    const detail = { approvalId: record.approvalId, state: record.state, approval: outcome.approval };
+    switch (record.kind) {
+      case 'send':
+        return new CommsError('USAGE', 'nothing was sent: it is approved already, and a person approves it once', {
+          hint: 'Nothing more is needed from the person: try the same call again with the same approval.',
+          details: detail,
+        });
+      case 'change':
+        return new CommsError('USAGE', 'nothing was changed: it is approved already, and a person approves it once', {
+          hint: 'Nothing more is needed from the person: try the same call again with the same approval.',
+          details: detail,
+        });
+      case 'download':
+        return new CommsError('USAGE', 'nothing was saved: it is approved already, and a person approves it once', {
+          hint: 'Nothing more is needed from the person: try the same call again with the same approval.',
+          details: detail,
+        });
+      case 'disclosure':
+        return new CommsError('USAGE', 'nothing was disclosed: it is approved already, and a person approves it once', {
+          hint: 'Nothing more is needed from the person: complete the same activation with the same approval.',
+          details: detail,
+        });
+    }
   }
 
   /** Issues a new challenge to show a human; only its hash is kept. */
@@ -1053,6 +1191,12 @@ export class ApprovalStore {
     _platform: NodeJS.Platform = process.platform,
     options: { usedSaid?: UsedSaid | undefined } = {},
   ): Promise<string> {
+    if (kind === 'disclosure') {
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        'nothing was disclosed: a standing disclosure challenge is only issued to the trusted terminal or app route',
+      );
+    }
     const challenge = newChallenge();
     await this.#transition(
       approvalId,
@@ -1066,6 +1210,122 @@ export class ApprovalStore {
       { usedSaid: options.usedSaid },
     );
     return challenge;
+  }
+
+  /** Issues the typed challenge that a terminal or the trusted desktop app must answer for disclosure. */
+  async issueDisclosureChallenge(approvalId: string): Promise<string> {
+    const challenge = newChallenge();
+    await this.#transition(approvalId, { kind: 'disclosure' }, 'approve', (current, outcome) => {
+      if (outcome.error) throw outcome.error;
+      if (current.state !== 'pending') throw this.#alreadyApproved(current, outcome);
+      return { ...current, challengeHash: hashChallenge(challenge) };
+    });
+    return challenge;
+  }
+
+  /**
+   * Approves one exact standing disclosure authority. MCP/chat forms are never an approval channel here: `app` means
+   * the desktop application's trusted typed-challenge bridge, not a client form.
+   */
+  async approveDisclosure(
+    approvalId: string,
+    liveBinding: DisclosureBinding,
+    answer: string,
+    via: 'terminal' | 'app',
+  ): Promise<DisclosureApprovalRecord> {
+    let failure: Failure | null = null;
+    const done = await this.#transition(approvalId, { kind: 'disclosure' }, 'approve', (current, outcome) => {
+      if (outcome.error) throw outcome.error;
+      if (current.state !== 'pending') throw this.#alreadyApproved(current, outcome);
+      if (via !== 'terminal' && via !== 'app') {
+        throw new CommsError(
+          'APPROVAL_REQUIRED',
+          'nothing was disclosed: approval is only at the terminal or the trusted app',
+          {
+            details: { approvalId: current.approvalId, state: current.state },
+          },
+        );
+      }
+      if (!current.challengeHash) {
+        throw new CommsError('APPROVAL_REQUIRED', 'nothing was disclosed: no challenge was issued for this approval', {
+          details: { approvalId: current.approvalId, state: current.state },
+        });
+      }
+      const at = this.#now();
+      const binding = current.disclosure as DisclosureBinding;
+      if (!sameDisclosureBinding(binding, liveBinding)) {
+        failure = { code: 'APPROVAL_VOID', reason: 'the disclosure binding changed after it was prepared' };
+        return {
+          ...current,
+          state: 'revoked',
+          reason: failure.reason,
+          revokedAt: at.toISOString(),
+          challengeHash: undefined,
+        };
+      }
+      if (!challengeMatches(answer, current.challengeHash)) {
+        const attempts = current.challengeAttempts + 1;
+        if (attempts >= MAX_CHALLENGE_ATTEMPTS) {
+          failure = { code: 'APPROVAL_VOID', reason: 'too many wrong answers to the challenge' };
+          return {
+            ...current,
+            challengeAttempts: attempts,
+            state: 'revoked',
+            reason: failure.reason,
+            revokedAt: at.toISOString(),
+          };
+        }
+        failure = { code: 'APPROVAL_REQUIRED', reason: 'the challenge did not match' };
+        return { ...current, challengeAttempts: attempts };
+      }
+      return {
+        ...current,
+        state: 'approved',
+        approvedVia: via,
+        approvedAt: at.toISOString(),
+        usableUntil: new Date(at.getTime() + APPROVAL_LIFETIMES.approved).toISOString(),
+        approvedDigest: binding.digest,
+        challengeHash: undefined,
+      } as ApprovalRecord;
+    });
+    const refused = failure as Failure | null;
+    if (refused !== null) {
+      throw refusedAfter(refusalFor(done.record)(refused.code, refused.reason, done.record), done);
+    }
+    return done.record as DisclosureApprovalRecord;
+  }
+
+  /** Claims an approved disclosure once, persisting the exact `usedAt` that recovery must subsequently reuse. */
+  async claimForDisclosure(approvalId: string, liveBinding: DisclosureBinding): Promise<DisclosureApprovalRecord> {
+    let failure: Failure | null = null;
+    const done = await this.#transition(approvalId, { kind: 'disclosure' }, 'claim', (current, outcome) => {
+      if (outcome.error) throw outcome.error;
+      const at = this.#now().toISOString();
+      const binding = current.disclosure as DisclosureBinding;
+      if (current.state === 'pending') {
+        throw new CommsError('APPROVAL_PENDING', 'nothing was disclosed: the standing disclosure approval is pending', {
+          details: { approvalId: current.approvalId, state: current.state },
+        });
+      }
+      if (current.state !== 'approved') {
+        throw new CommsError(
+          'APPROVAL_VOID',
+          'nothing was disclosed: the standing disclosure approval was used already',
+          {
+            details: { approvalId: current.approvalId, state: current.state },
+          },
+        );
+      }
+      if (!sameDisclosureBinding(binding, liveBinding) || current.approvedDigest !== binding.digest) {
+        failure = { code: 'APPROVAL_VOID', reason: 'the disclosure binding changed after it was approved' };
+        return { ...current, state: 'revoked', reason: failure.reason, revokedAt: at, challengeHash: undefined };
+      }
+      return { ...current, state: 'used', usedAt: at };
+    });
+    const refused = failure as Failure | null;
+    if (refused !== null) throw refusedAfter(refusalFor(done.record)(refused.code, refused.reason, done.record), done);
+    await this.#markClaimed(done);
+    return done.record as DisclosureApprovalRecord;
   }
 
   /**
@@ -1085,6 +1345,12 @@ export class ApprovalStore {
     _platform: NodeJS.Platform = process.platform,
     options: { usedSaid?: UsedSaid | undefined } = {},
   ): Promise<ApprovalRecord> {
+    if (kind === 'disclosure') {
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        'nothing was disclosed: a standing disclosure approval is only accepted on the trusted terminal or app route',
+      );
+    }
     let failure: Failure | null = null;
     const done = await this.#transition(
       approvalId,

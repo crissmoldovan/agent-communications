@@ -18,7 +18,7 @@ import {
  */
 
 /** Where an approval is asked from: a command line, or an MCP server's tool. */
-export type ApprovalSurface = 'cli' | 'mcp';
+export type ApprovalSurface = 'cli' | 'mcp' | 'app' | 'daemon';
 
 /** One surface's wait for an approval: its words after the program, the id going last, and its tool. */
 export interface ApprovalWaitNames {

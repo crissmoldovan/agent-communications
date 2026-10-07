@@ -27,7 +27,10 @@ export interface AuditRecord {
   recipients?: string[];
   approvalId?: string;
   reason?: string;
-  surface?: 'cli' | 'mcp';
+  /** The process that performed the work; daemon work keeps its caller separately in `origin`. */
+  surface?: 'cli' | 'mcp' | 'app' | 'daemon';
+  /** The requesting client surface; autonomous work is `daemon`/`daemon`. */
+  origin?: 'cli' | 'mcp' | 'app' | 'daemon';
   /**
    * The policy that decided how this was approved. Written by change approvals, where it is the whole question
    * afterwards: a loosening a person typed a code for and one an agent claimed after a yes in chat look the same in

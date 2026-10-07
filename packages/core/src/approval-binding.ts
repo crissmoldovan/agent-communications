@@ -24,6 +24,118 @@ import { CommsError } from './errors.ts';
  */
 export type ApprovalRoute = 'chat' | 'confirm';
 
+/** The four activation documents that may receive standing disclosure authority. */
+export type DisclosureActivationKind = 'rule' | 'judge-budget' | 'judge-kind' | 'enable-all';
+
+/** An immutable version named by a standing disclosure authorisation. */
+export type DisclosureVersionKind = 'rule' | 'target' | 'subscriber' | 'judge' | 'judge-budget' | 'judge-kind';
+
+export interface DisclosureVersion {
+  readonly kind: DisclosureVersionKind;
+  readonly id: string;
+  readonly version: number;
+}
+
+/**
+ * The content-free, canonical authority for a future disclosure (local-event design D2).
+ *
+ * The event daemon derives this from one canonical activation document. Core does not construct
+ * that document; it verifies the closed shape that makes an independently supplied version list
+ * impossible to smuggle into a disclosure record.
+ */
+export interface DisclosureBinding {
+  readonly digest: string;
+  readonly activationIntentId: string;
+  readonly activationKind: DisclosureActivationKind;
+  readonly versions: readonly DisclosureVersion[];
+}
+
+const DISCLOSURE_VERSION_KINDS: readonly DisclosureVersionKind[] = [
+  'rule',
+  'target',
+  'subscriber',
+  'judge',
+  'judge-budget',
+  'judge-kind',
+];
+const DISCLOSURE_ACTIVATION_KINDS: readonly DisclosureActivationKind[] = [
+  'rule',
+  'judge-budget',
+  'judge-kind',
+  'enable-all',
+];
+const HEX64 = /^[0-9a-f]{64}$/;
+
+function disclosureFailure(): never {
+  throw new CommsError('BAD_DATA', 'a disclosure binding is not in its canonical activation shape');
+}
+
+function compareDisclosureVersions(left: DisclosureVersion, right: DisclosureVersion): number {
+  const compareText = (one: string, two: string) => (one < two ? -1 : one > two ? 1 : 0);
+  return compareText(left.kind, right.kind) || compareText(left.id, right.id) || left.version - right.version;
+}
+
+/**
+ * Validates and copies a disclosure binding without reordering it. A caller must provide the
+ * daemon-derived canonical list, already sorted by (kind, id, version), so a different document
+ * cannot become authorised by a convenient normalisation here.
+ */
+export function canonicalDisclosureBinding(binding: DisclosureBinding): DisclosureBinding {
+  if (
+    !HEX64.test(binding.digest) ||
+    typeof binding.activationIntentId !== 'string' ||
+    binding.activationIntentId.length === 0 ||
+    !DISCLOSURE_ACTIVATION_KINDS.includes(binding.activationKind) ||
+    !Array.isArray(binding.versions)
+  ) {
+    return disclosureFailure();
+  }
+  const versions = binding.versions.map((entry) => {
+    if (
+      !DISCLOSURE_VERSION_KINDS.includes(entry.kind) ||
+      typeof entry.id !== 'string' ||
+      entry.id.length === 0 ||
+      !Number.isSafeInteger(entry.version) ||
+      entry.version < 1
+    ) {
+      return disclosureFailure();
+    }
+    return { kind: entry.kind, id: entry.id, version: entry.version };
+  });
+  for (let index = 1; index < versions.length; index += 1) {
+    if (
+      compareDisclosureVersions(versions[index - 1] as DisclosureVersion, versions[index] as DisclosureVersion) >= 0
+    ) {
+      return disclosureFailure();
+    }
+  }
+  const kinds = new Set(versions.map((entry) => entry.kind));
+  if (binding.activationKind === 'rule') {
+    if (!kinds.has('rule') || kinds.has('judge-budget') || kinds.has('judge-kind')) return disclosureFailure();
+  } else if (binding.activationKind === 'judge-budget') {
+    if (versions.length !== 1 || versions[0]?.kind !== 'judge-budget') return disclosureFailure();
+  } else if (binding.activationKind === 'judge-kind') {
+    if (versions.length !== 1 || versions[0]?.kind !== 'judge-kind') return disclosureFailure();
+  } else if (versions.some((entry) => entry.kind !== 'rule')) {
+    return disclosureFailure();
+  }
+  return {
+    digest: binding.digest,
+    activationIntentId: binding.activationIntentId,
+    activationKind: binding.activationKind,
+    versions,
+  };
+}
+
+/** Exact canonical equality for each re-check at approval and claim. */
+export function sameDisclosureBinding(left: DisclosureBinding, right: DisclosureBinding): boolean {
+  try {
+    return canonicalJson(canonicalDisclosureBinding(left)) === canonicalJson(canonicalDisclosureBinding(right));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * What a record's `inboxId` names. `owner` — a mailbox or account that existed when it was made (every send and
  * download, and a change to one). `prospective` — a change that creates its owner, which has no id yet. `global` — a
@@ -109,6 +221,13 @@ export interface BindingFields {
     | undefined;
 }
 
+/** The much smaller binding record for an isolated standing disclosure approval. */
+export interface DisclosureBindingFields {
+  approvalId: string;
+  kind: 'disclosure';
+  disclosure: DisclosureBinding;
+}
+
 /** A record's identity: the top-level operational fields that ownership and execution use, plus a send's epoch. */
 export interface ApprovalIdentity {
   approvalId: string;
@@ -162,18 +281,27 @@ function listedEntry(file: ListedFile): Record<string, unknown> {
  * 'download', contentDigest, profile: { pendingMs, policy, requiredPolicy }, identity, offered, listing? }` — the two
  * folders it offered, and the listing exactly as stored, left out when the record has none.
  */
-export function bindingObjectOf(record: BindingFields): Record<string, unknown> {
-  const identity = identityOf(record);
-  if (record.kind === 'download') {
-    const download = record.download;
+export function bindingObjectOf(record: BindingFields | DisclosureBindingFields): Record<string, unknown> {
+  if (record.kind === 'disclosure' && 'disclosure' in record && record.disclosure !== undefined) {
+    return {
+      v: 2,
+      kind: 'disclosure',
+      approvalId: record.approvalId,
+      disclosure: canonicalDisclosureBinding(record.disclosure),
+    };
+  }
+  const ordinary = record as BindingFields;
+  const identity = identityOf(ordinary);
+  if (ordinary.kind === 'download') {
+    const download = ordinary.download;
     if (download === undefined) {
       throw new CommsError('BAD_DATA', 'a download’s approval does not hold the question it was asked for');
     }
     return {
       v: 2,
       kind: 'download',
-      contentDigest: record.contentDigest,
-      profile: { pendingMs: record.pendingMs, policy: record.policy, requiredPolicy: record.requiredPolicy },
+      contentDigest: ordinary.contentDigest,
+      profile: { pendingMs: ordinary.pendingMs, policy: ordinary.policy, requiredPolicy: ordinary.requiredPolicy },
       identity,
       offered: { downloads: download.folders.downloads, current: download.folders.current },
       ...(download.listing === undefined ? {} : { listing: download.listing.map(listedEntry) }),
@@ -181,16 +309,16 @@ export function bindingObjectOf(record: BindingFields): Record<string, unknown> 
   }
   return {
     v: 2,
-    kind: record.kind,
-    contentDigest: record.contentDigest,
-    route: record.route,
-    pendingMs: record.pendingMs,
-    approvedMs: record.approvedMs,
+    kind: ordinary.kind,
+    contentDigest: ordinary.contentDigest,
+    route: ordinary.route,
+    pendingMs: ordinary.pendingMs,
+    approvedMs: ordinary.approvedMs,
     identity,
   };
 }
 
 /** The SHA-256 of the canonical JSON of `bindingObjectOf(record)`: the one binding digest. */
-export function bindingDigestOf(record: BindingFields): string {
+export function bindingDigestOf(record: BindingFields | DisclosureBindingFields): string {
   return sha256Hex(canonicalJson(bindingObjectOf(record)));
 }

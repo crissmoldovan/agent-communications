@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { AuditLog, recipientDomains } from '../src/audit.ts';
+import { AuditLog, type AuditRecord, recipientDomains } from '../src/audit.ts';
 import { tempDir } from './helpers/temp.ts';
 
 test('records land in a monthly owner-only JSONL file and read back newest last', async () => {
@@ -83,4 +83,53 @@ test('large id lists are condensed so lines stay small', async () => {
   assert.equal(condensed.first.length, 20);
   assert.match(condensed.sha256, /^[0-9a-f]{64}$/);
   assert.ok(JSON.stringify(written).length < 4096);
+});
+
+test('audit preserves a daemon execution surface separately from the client origin', async () => {
+  const state = tempDir();
+  const log = new AuditLog(state);
+  const rows: AuditRecord[] = [
+    {
+      at: '2026-10-07T10:00:00.000Z',
+      inboxId: '',
+      operation: 'event.activation',
+      outcome: 'ok',
+      surface: 'cli',
+      origin: 'cli',
+    },
+    {
+      at: '2026-10-07T10:00:01.000Z',
+      inboxId: '',
+      operation: 'event.activation',
+      outcome: 'ok',
+      surface: 'mcp',
+      origin: 'mcp',
+    },
+    {
+      at: '2026-10-07T10:00:02.000Z',
+      inboxId: '',
+      operation: 'event.activation',
+      outcome: 'ok',
+      surface: 'app',
+      origin: 'app',
+    },
+    {
+      at: '2026-10-07T10:00:03.000Z',
+      inboxId: '',
+      operation: 'event.activation',
+      outcome: 'ok',
+      surface: 'daemon',
+      origin: 'app',
+    },
+    {
+      at: '2026-10-07T10:00:04.000Z',
+      inboxId: '',
+      operation: 'event.dispatch',
+      outcome: 'ok',
+      surface: 'daemon',
+      origin: 'daemon',
+    },
+  ];
+  for (const row of rows) await log.append(row);
+  assert.deepEqual(await log.tail(), rows);
 });

@@ -1,4 +1,11 @@
-import { APPROVAL_LIFETIMES, bindingDigestOf, isKnownChannel, pendingMsOf } from './approval-binding.ts';
+import {
+  APPROVAL_LIFETIMES,
+  bindingDigestOf,
+  canonicalDisclosureBinding,
+  type DisclosureBinding,
+  isKnownChannel,
+  pendingMsOf,
+} from './approval-binding.ts';
 import { type ApprovalRecord, type ApprovalState, changeDigest, DIGEST_VERSION, downloadDigest } from './approvals.ts';
 import { canonicalJson, sha256Hex } from './digest.ts';
 
@@ -122,6 +129,7 @@ function fail(reason: IntegrityReason, attribution: Attribution = 'verified'): F
 function checkVerified(record: ApprovalRecord, raw: Record<string, unknown>): Fail | null {
   if (raw.digestVersion !== DIGEST_VERSION) return fail('digest-version');
   const kind = raw.kind;
+  if (kind === 'disclosure') return checkDisclosure(record, raw);
   if (kind !== 'send' && kind !== 'change' && kind !== 'download') return fail('wrong-shape');
   if (!STATES.includes(raw.state as ApprovalState)) return fail('state-impossible');
   const state = raw.state as ApprovalState;
@@ -153,6 +161,68 @@ function checkVerified(record: ApprovalRecord, raw: Record<string, unknown>): Fa
     if (at !== null) times[field] = at;
   }
   return checkTimestamps(raw, kind, state, times) ?? checkEvidence(record, raw, kind, state);
+}
+
+/** Validates the closed disclosure union member without borrowing a sender approval's shape. */
+function checkDisclosure(record: ApprovalRecord, raw: Record<string, unknown>): Fail | null {
+  if (!['pending', 'approved', 'used', 'expired', 'revoked'].includes(raw.state as string))
+    return fail('state-impossible');
+  const disclosure = record.disclosure;
+  if (disclosure === undefined) return fail('wrong-shape');
+  let binding: DisclosureBinding;
+  try {
+    binding = canonicalDisclosureBinding(disclosure);
+  } catch {
+    return fail('wrong-shape');
+  }
+  if (raw.pendingMs !== APPROVAL_LIFETIMES.confirm || raw.approvedMs !== APPROVAL_LIFETIMES.approved) {
+    return fail('lifetime-mismatch');
+  }
+  const times: Partial<Record<Stamp, number>> = {};
+  for (const field of TIMESTAMPS) {
+    const at = timeOf(raw[field]);
+    if (at === 'invalid') return fail('timestamp-invalid');
+    if (at !== null) times[field] = at;
+  }
+  const { createdAt, expiresAt, approvedAt, usableUntil, usedAt, revokedAt, expiredAt } = times;
+  if (createdAt === undefined || expiresAt === undefined) return fail('timestamp-missing');
+  if (expiresAt - createdAt !== APPROVAL_LIFETIMES.confirm) return fail('lifetime-mismatch');
+  const state = raw.state as ApprovalState;
+  const approved = approvedAt !== undefined || usableUntil !== undefined;
+  if ((approvedAt === undefined) !== (usableUntil === undefined)) return fail('timestamp-missing');
+  if (approvedAt !== undefined && usableUntil !== undefined) {
+    if (!(createdAt <= approvedAt && approvedAt < expiresAt)) return fail('timestamp-misordered');
+    if (usableUntil - approvedAt !== APPROVAL_LIFETIMES.approved) return fail('lifetime-mismatch');
+  }
+  if (state === 'approved' && !approved) return fail('timestamp-missing');
+  if (state === 'used' && usedAt === undefined) return fail('timestamp-missing');
+  if (state !== 'used' && usedAt !== undefined) return fail('timestamp-misplaced');
+  if (state === 'revoked' && revokedAt === undefined) return fail('timestamp-missing');
+  if (state !== 'revoked' && revokedAt !== undefined) return fail('timestamp-misplaced');
+  if (state === 'expired' && expiredAt === undefined) return fail('timestamp-missing');
+  if (state !== 'expired' && expiredAt !== undefined) return fail('timestamp-misplaced');
+  const deadline = usableUntil ?? expiresAt;
+  if (usedAt !== undefined && !(approvedAt !== undefined && approvedAt <= usedAt && usedAt < deadline)) {
+    return fail('timestamp-misordered');
+  }
+  if (revokedAt !== undefined && !(createdAt <= revokedAt && revokedAt < deadline)) return fail('timestamp-misordered');
+  if (expiredAt !== undefined && expiredAt < (approvedAt ?? createdAt)) return fail('timestamp-misordered');
+  if (
+    raw.challengeAttempts !== 0 &&
+    raw.challengeAttempts !== 1 &&
+    raw.challengeAttempts !== 2 &&
+    raw.challengeAttempts !== 3
+  ) {
+    return fail('evidence-invalid');
+  }
+  const via = raw.approvedVia;
+  const digest = raw.approvedDigest;
+  if (!approved) {
+    if (via !== undefined || digest !== undefined) return fail('evidence-contradictory');
+  } else {
+    if ((via !== 'terminal' && via !== 'app') || digest !== binding.digest) return fail('evidence-contradictory');
+  }
+  return null;
 }
 
 /** The identity the binding covers is also consistent with itself: who it belongs to, and what it is about. */
