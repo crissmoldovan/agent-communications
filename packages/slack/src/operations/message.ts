@@ -120,8 +120,13 @@ export async function messageAt(call: SlackCall, where: MessageAt): Promise<Targ
       const replies = await callSlack(call, 'conversations.replies', { ...window, ts: where.ts });
       found = withTs(replies.messages, where.ts);
     } catch (error) {
-      // No thread at that ts is no message at it: said once, below, in one set of words.
-      if (!(error instanceof CommsError) || error.code !== 'NOT_FOUND') throw error;
+      /*
+       * No thread at that ts is no message at it: said once, below, in one set of words. Only Slack's own
+       * `thread_not_found` — not every NOT_FOUND, which `callSlack` also gives a channel not found or archived since.
+       * Swallowed, those read as "no message", and a deletion's last look took a reply still there for one already
+       * deleted (review of #52).
+       */
+      if (!(error instanceof CommsError) || error.details?.slackError !== 'thread_not_found') throw error;
     }
   }
   if (found === undefined) {

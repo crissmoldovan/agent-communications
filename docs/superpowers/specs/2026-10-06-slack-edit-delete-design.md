@@ -86,7 +86,8 @@ to, and its approval is void.
 > its thread — an edit has nothing to change (`NOT_FOUND`), and a deletion has what it asked for (`used`, as
 > `message_not_found` from `chat.delete` is). Any other failed read refuses, with Slack's reason: a channel not found or
 > archived since also reads as `NOT_FOUND` from `callSlack`, and taking that for a missing message would let a deletion
-> report a success with the message still there (found in the same review).
+> report a success with the message still there (found in the same review). The same holds for the read of a reply's
+> thread: only Slack's `thread_not_found` there means no message, and anything else is passed up.
 
 The message's words are this account's own (E2), so they are treated as an outgoing post's are (D4): decoded, not
 neutralised, and escaped for the terminal by the renderer. Unfurled content and attachments added by Slack are not

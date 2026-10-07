@@ -276,6 +276,27 @@ test('a channel archived or gone after the claim is not taken for a deleted mess
   }
 });
 
+test('a reply whose channel is archived or gone at the last look is not taken for deleted either', async () => {
+  for (const slackError of ['is_archived', 'channel_not_found']) {
+    const w = await amendWorld();
+    // A reply that lives only in its thread: the history read finds nothing, and the replies read finds it.
+    w.setMessage(mine({ thread_ts: PARENT_TS }), true);
+    const { approvalId } = await prepared(w);
+    const store = w.harness.core.approvals;
+    const claim = store.claimForSend.bind(store);
+    store.claimForSend = async (...args: Parameters<typeof claim>) => {
+      const claimed = await claim(...args);
+      w.fake.script['conversations.replies'] = () => ({ ok: false, error: slackError });
+      return claimed;
+    };
+    const error = await refusal(send(w, approvalId), `${slackError} from the replies read at the last look`);
+    assert.equal(error.details?.reason, 'last-look-failed', slackError);
+    assert.equal(error.details?.slackError, slackError, slackError);
+    assert.equal(w.fake.count('chat.delete'), 0, slackError);
+    assert.equal(await stateOf(w.harness, approvalId), 'failed', `${slackError}: recorded as a success`);
+  }
+});
+
 test('delete send refuses a message that is not the approval’s, and spends nothing', async () => {
   const w = await amendWorld();
   const { approvalId } = await prepared(w);
