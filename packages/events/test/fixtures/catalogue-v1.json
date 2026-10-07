@@ -1,0 +1,1117 @@
+{
+  "description": "The canonical machine-readable transcription of Appendix A.1–A.7 (spec A.8; events phase A plan, Task 10): for each of the seven version-1 types, its source JSON Schema by decision 6's rules, its metadata in Appendix A's order, its named invariants (decision 7) and its subject and dedupeKey descriptors. Written by hand from the spec, never by running code. test/appendix.test.ts holds it to the extraction of the spec's own text; Task 11 holds the definitions to both.",
+  "types": [
+    {
+      "type": "gmail.message.received",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "urn:agentcomms:schema:source:gmail.message.received:v1",
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+          "type": { "const": "gmail.message.received" },
+          "version": { "const": 1 },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "observedAt": { "type": "string", "format": "date-time" },
+          "account": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "id": { "type": "string", "pattern": "^ibx_[A-Z0-9]{16}$" },
+              "channel": { "const": "gmail" }
+            },
+            "required": ["channel", "id", "name"],
+            "additionalProperties": false
+          },
+          "messageId": { "type": "string", "minLength": 1 },
+          "threadId": { "type": "string", "minLength": 1 },
+          "labels": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+          "from": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "address": { "type": "string", "format": "email" },
+                  "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+                },
+                "required": ["address", "name"],
+                "additionalProperties": false
+              },
+              { "type": "null" }
+            ]
+          },
+          "replyTo": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "address": { "type": "string", "format": "email" },
+                "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+              },
+              "required": ["address", "name"],
+              "additionalProperties": false
+            }
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "address": { "type": "string", "format": "email" },
+                "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+              },
+              "required": ["address", "name"],
+              "additionalProperties": false
+            }
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "address": { "type": "string", "format": "email" },
+                "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+              },
+              "required": ["address", "name"],
+              "additionalProperties": false
+            }
+          },
+          "subject": { "type": "string" },
+          "snippet": { "type": "string" },
+          "date": { "type": "string", "format": "date-time" },
+          "unread": { "type": "boolean" },
+          "authentication": {
+            "type": "object",
+            "properties": {
+              "evaluatedBy": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "spf": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "dkim": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "dkimDomain": { "anyOf": [{ "type": "string", "format": "domain" }, { "type": "null" }] },
+              "dmarc": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "aligned": { "anyOf": [{ "type": "boolean" }, { "type": "null" }] },
+              "ignoredHeaders": { "type": "number", "multipleOf": 1, "minimum": 0 }
+            },
+            "required": ["aligned", "dkim", "dkimDomain", "dmarc", "evaluatedBy", "ignoredHeaders", "spf"],
+            "additionalProperties": false
+          },
+          "warnings": {
+            "type": "object",
+            "properties": {
+              "replyToDiffers": { "type": "boolean" },
+              "replyToDomains": {
+                "type": "array",
+                "items": { "type": "string", "format": "domain" },
+                "uniqueItems": true
+              },
+              "displayNameContainsOtherAddress": { "type": "boolean" },
+              "fromDomain": { "anyOf": [{ "type": "string", "format": "domain" }, { "type": "null" }] }
+            },
+            "required": ["displayNameContainsOtherAddress", "fromDomain", "replyToDiffers", "replyToDomains"],
+            "additionalProperties": false
+          },
+          "hasAttachments": { "type": "boolean" },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "type": { "type": "string" },
+                "size": { "type": "number", "multipleOf": 1, "minimum": 0 },
+                "inline": { "type": "boolean" },
+                "riskFlags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "executable",
+                      "script",
+                      "macro-enabled",
+                      "macro-capable",
+                      "markup",
+                      "archive",
+                      "disk-image",
+                      "double-extension",
+                      "bidi-filename",
+                      "auto-read",
+                      "saved-as-download",
+                      "html-or-svg",
+                      "hidden-characters-in-name"
+                    ]
+                  },
+                  "uniqueItems": true
+                }
+              },
+              "required": ["inline", "name", "riskFlags", "size", "type"],
+              "additionalProperties": false
+            }
+          },
+          "body": { "type": "string" }
+        },
+        "required": [
+          "account",
+          "authentication",
+          "cc",
+          "date",
+          "from",
+          "id",
+          "labels",
+          "messageId",
+          "observedAt",
+          "occurredAt",
+          "replyTo",
+          "snippet",
+          "subject",
+          "threadId",
+          "to",
+          "type",
+          "unread",
+          "version",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "untrusted": [
+          ["from", "name"],
+          ["replyTo", { "any": true }, "name"],
+          ["to", { "any": true }, "name"],
+          ["cc", { "any": true }, "name"],
+          ["subject"],
+          ["snippet"],
+          ["attachments", { "any": true }, "name"],
+          ["attachments", { "any": true }, "type"],
+          ["body"]
+        ],
+        "content": [
+          ["from", "name"],
+          ["replyTo", { "any": true }, "name"],
+          ["subject"],
+          ["snippet"],
+          ["attachments", { "any": true }, "name"],
+          ["body"]
+        ],
+        "addresses": [
+          ["from", "address"],
+          ["replyTo", { "any": true }, "address"],
+          ["to", { "any": true }, "address"],
+          ["cc", { "any": true }, "address"]
+        ],
+        "handles": [],
+        "formats": [
+          { "pattern": ["occurredAt"], "format": "date-time" },
+          { "pattern": ["observedAt"], "format": "date-time" },
+          { "pattern": ["date"], "format": "date-time" },
+          { "pattern": ["from", "address"], "format": "email" },
+          { "pattern": ["replyTo", { "any": true }, "address"], "format": "email" },
+          { "pattern": ["to", { "any": true }, "address"], "format": "email" },
+          { "pattern": ["cc", { "any": true }, "address"], "format": "email" },
+          { "pattern": ["authentication", "dkimDomain"], "format": "domain" },
+          { "pattern": ["warnings", "replyToDomains", { "any": true }], "format": "domain" },
+          { "pattern": ["warnings", "fromDomain"], "format": "domain" }
+        ]
+      },
+      "invariants": [
+        { "rule": "sorted-utf8", "pattern": ["labels"] },
+        { "rule": "sorted-utf8", "pattern": ["attachments", { "any": true }, "riskFlags"] },
+        { "rule": "sorted-utf8", "pattern": ["warnings", "replyToDomains"] },
+        { "rule": "same-instant", "pointers": ["/date", "/occurredAt"] }
+      ],
+      "subject": { "pointer": "/messageId" },
+      "dedupeKey": { "canonicalJson": [{ "staging": "historyRecordId" }, { "pointer": "/messageId" }, "received"] }
+    },
+    {
+      "type": "gmail.message.sent",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "urn:agentcomms:schema:source:gmail.message.sent:v1",
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+          "type": { "const": "gmail.message.sent" },
+          "version": { "const": 1 },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "observedAt": { "type": "string", "format": "date-time" },
+          "account": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "id": { "type": "string", "pattern": "^ibx_[A-Z0-9]{16}$" },
+              "channel": { "const": "gmail" }
+            },
+            "required": ["channel", "id", "name"],
+            "additionalProperties": false
+          },
+          "messageId": { "type": "string", "minLength": 1 },
+          "threadId": { "type": "string", "minLength": 1 },
+          "labels": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+          "from": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "address": { "type": "string", "format": "email" },
+                  "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+                },
+                "required": ["address", "name"],
+                "additionalProperties": false
+              },
+              { "type": "null" }
+            ]
+          },
+          "replyTo": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "address": { "type": "string", "format": "email" },
+                "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+              },
+              "required": ["address", "name"],
+              "additionalProperties": false
+            }
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "address": { "type": "string", "format": "email" },
+                "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+              },
+              "required": ["address", "name"],
+              "additionalProperties": false
+            }
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "address": { "type": "string", "format": "email" },
+                "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+              },
+              "required": ["address", "name"],
+              "additionalProperties": false
+            }
+          },
+          "subject": { "type": "string" },
+          "snippet": { "type": "string" },
+          "date": { "type": "string", "format": "date-time" },
+          "unread": { "type": "boolean" },
+          "authentication": {
+            "type": "object",
+            "properties": {
+              "evaluatedBy": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "spf": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "dkim": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "dkimDomain": { "anyOf": [{ "type": "string", "format": "domain" }, { "type": "null" }] },
+              "dmarc": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "aligned": { "anyOf": [{ "type": "boolean" }, { "type": "null" }] },
+              "ignoredHeaders": { "type": "number", "multipleOf": 1, "minimum": 0 }
+            },
+            "required": ["aligned", "dkim", "dkimDomain", "dmarc", "evaluatedBy", "ignoredHeaders", "spf"],
+            "additionalProperties": false
+          },
+          "warnings": {
+            "type": "object",
+            "properties": {
+              "replyToDiffers": { "type": "boolean" },
+              "replyToDomains": {
+                "type": "array",
+                "items": { "type": "string", "format": "domain" },
+                "uniqueItems": true
+              },
+              "displayNameContainsOtherAddress": { "type": "boolean" },
+              "fromDomain": { "anyOf": [{ "type": "string", "format": "domain" }, { "type": "null" }] }
+            },
+            "required": ["displayNameContainsOtherAddress", "fromDomain", "replyToDiffers", "replyToDomains"],
+            "additionalProperties": false
+          },
+          "hasAttachments": { "type": "boolean" },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "type": { "type": "string" },
+                "size": { "type": "number", "multipleOf": 1, "minimum": 0 },
+                "inline": { "type": "boolean" },
+                "riskFlags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "executable",
+                      "script",
+                      "macro-enabled",
+                      "macro-capable",
+                      "markup",
+                      "archive",
+                      "disk-image",
+                      "double-extension",
+                      "bidi-filename",
+                      "auto-read",
+                      "saved-as-download",
+                      "html-or-svg",
+                      "hidden-characters-in-name"
+                    ]
+                  },
+                  "uniqueItems": true
+                }
+              },
+              "required": ["inline", "name", "riskFlags", "size", "type"],
+              "additionalProperties": false
+            }
+          },
+          "body": { "type": "string" }
+        },
+        "required": [
+          "account",
+          "authentication",
+          "cc",
+          "date",
+          "from",
+          "id",
+          "labels",
+          "messageId",
+          "observedAt",
+          "occurredAt",
+          "replyTo",
+          "snippet",
+          "subject",
+          "threadId",
+          "to",
+          "type",
+          "unread",
+          "version",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "untrusted": [
+          ["from", "name"],
+          ["replyTo", { "any": true }, "name"],
+          ["to", { "any": true }, "name"],
+          ["cc", { "any": true }, "name"],
+          ["subject"],
+          ["snippet"],
+          ["attachments", { "any": true }, "name"],
+          ["attachments", { "any": true }, "type"],
+          ["body"]
+        ],
+        "content": [
+          ["from", "name"],
+          ["replyTo", { "any": true }, "name"],
+          ["subject"],
+          ["snippet"],
+          ["attachments", { "any": true }, "name"],
+          ["body"]
+        ],
+        "addresses": [
+          ["from", "address"],
+          ["replyTo", { "any": true }, "address"],
+          ["to", { "any": true }, "address"],
+          ["cc", { "any": true }, "address"]
+        ],
+        "handles": [],
+        "formats": [
+          { "pattern": ["occurredAt"], "format": "date-time" },
+          { "pattern": ["observedAt"], "format": "date-time" },
+          { "pattern": ["date"], "format": "date-time" },
+          { "pattern": ["from", "address"], "format": "email" },
+          { "pattern": ["replyTo", { "any": true }, "address"], "format": "email" },
+          { "pattern": ["to", { "any": true }, "address"], "format": "email" },
+          { "pattern": ["cc", { "any": true }, "address"], "format": "email" },
+          { "pattern": ["authentication", "dkimDomain"], "format": "domain" },
+          { "pattern": ["warnings", "replyToDomains", { "any": true }], "format": "domain" },
+          { "pattern": ["warnings", "fromDomain"], "format": "domain" }
+        ]
+      },
+      "invariants": [
+        { "rule": "sorted-utf8", "pattern": ["labels"] },
+        { "rule": "sorted-utf8", "pattern": ["attachments", { "any": true }, "riskFlags"] },
+        { "rule": "sorted-utf8", "pattern": ["warnings", "replyToDomains"] },
+        { "rule": "same-instant", "pointers": ["/date", "/occurredAt"] }
+      ],
+      "subject": { "pointer": "/messageId" },
+      "dedupeKey": { "canonicalJson": [{ "staging": "historyRecordId" }, { "pointer": "/messageId" }, "sent"] }
+    },
+    {
+      "type": "gmail.message.labelled",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "urn:agentcomms:schema:source:gmail.message.labelled:v1",
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+          "type": { "const": "gmail.message.labelled" },
+          "version": { "const": 1 },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "observedAt": { "type": "string", "format": "date-time" },
+          "account": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "id": { "type": "string", "pattern": "^ibx_[A-Z0-9]{16}$" },
+              "channel": { "const": "gmail" }
+            },
+            "required": ["channel", "id", "name"],
+            "additionalProperties": false
+          },
+          "messageId": { "type": "string", "minLength": 1 },
+          "threadId": { "type": "string", "minLength": 1 },
+          "added": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+          "removed": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+        },
+        "required": [
+          "account",
+          "added",
+          "id",
+          "messageId",
+          "observedAt",
+          "occurredAt",
+          "removed",
+          "threadId",
+          "type",
+          "version"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "untrusted": [],
+        "content": [],
+        "addresses": [],
+        "handles": [],
+        "formats": [
+          { "pattern": ["occurredAt"], "format": "date-time" },
+          { "pattern": ["observedAt"], "format": "date-time" }
+        ]
+      },
+      "invariants": [
+        { "rule": "sorted-utf8", "pattern": ["added"] },
+        { "rule": "sorted-utf8", "pattern": ["removed"] },
+        { "rule": "non-empty-either", "pointers": ["/added", "/removed"] },
+        { "rule": "disjoint", "pointers": ["/added", "/removed"] },
+        { "rule": "identical", "pointers": ["/occurredAt", "/observedAt"] }
+      ],
+      "subject": { "pointer": "/messageId" },
+      "dedupeKey": { "canonicalJson": [{ "staging": "historyRecordId" }, { "pointer": "/messageId" }, "labelled"] }
+    },
+    {
+      "type": "slack.message.posted",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "urn:agentcomms:schema:source:slack.message.posted:v1",
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+          "type": { "const": "slack.message.posted" },
+          "version": { "const": 1 },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "observedAt": { "type": "string", "format": "date-time" },
+          "account": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "id": { "type": "string", "pattern": "^acc_[A-Z0-9]{16}$" },
+              "channel": { "const": "slack" }
+            },
+            "required": ["channel", "id", "name"],
+            "additionalProperties": false
+          },
+          "workspaceId": { "type": "string", "minLength": 1 },
+          "ts": { "type": "string", "pattern": "^[0-9]+\\.[0-9]{6}$" },
+          "threadTs": { "anyOf": [{ "type": "string", "pattern": "^[0-9]+\\.[0-9]{6}$" }, { "type": "null" }] },
+          "channel": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "kind": { "type": "string", "enum": ["public_channel", "private_channel", "im", "mpim"] }
+            },
+            "required": ["id", "kind", "name"],
+            "additionalProperties": false
+          },
+          "author": {
+            "type": "object",
+            "properties": {
+              "userId": { "type": "string", "minLength": 1 },
+              "botId": { "type": "string", "minLength": 1 },
+              "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "app": { "type": "boolean" },
+              "external": { "type": "boolean" }
+            },
+            "required": ["app", "external", "name"],
+            "additionalProperties": false
+          },
+          "text": { "type": "string" },
+          "truncated": { "type": "boolean" },
+          "mismatch": { "type": "boolean" },
+          "unrenderable": { "type": "boolean" },
+          "editedTs": { "anyOf": [{ "type": "string", "pattern": "^[0-9]+\\.[0-9]{6}$" }, { "type": "null" }] },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "enum": ["user", "channel", "usergroup"] },
+                "id": { "type": "string", "minLength": 1 },
+                "label": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+              },
+              "required": ["id", "kind", "label"],
+              "additionalProperties": false
+            },
+            "uniqueItems": true
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "minLength": 1 },
+                "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                "mimeType": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+              },
+              "required": ["id", "mimeType", "name"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "account",
+          "author",
+          "channel",
+          "editedTs",
+          "files",
+          "id",
+          "mentions",
+          "mismatch",
+          "observedAt",
+          "occurredAt",
+          "text",
+          "threadTs",
+          "truncated",
+          "ts",
+          "type",
+          "unrenderable",
+          "version",
+          "workspaceId"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "untrusted": [
+          ["channel", "name"],
+          ["author", "name"],
+          ["text"],
+          ["mentions", { "any": true }, "label"],
+          ["files", { "any": true }, "name"],
+          ["files", { "any": true }, "mimeType"]
+        ],
+        "content": [
+          ["channel", "name"],
+          ["author", "name"],
+          ["text"],
+          ["mentions", { "any": true }, "label"],
+          ["files", { "any": true }, "name"]
+        ],
+        "addresses": [],
+        "handles": [
+          { "pattern": ["channel", "id"], "workspace": ["workspaceId"] },
+          { "pattern": ["author", "userId"], "workspace": ["workspaceId"] },
+          { "pattern": ["author", "botId"], "workspace": ["workspaceId"] },
+          { "pattern": ["mentions", { "any": true }, "id"], "workspace": ["workspaceId"] },
+          { "pattern": ["files", { "any": true }, "id"], "workspace": ["workspaceId"] }
+        ],
+        "formats": [
+          { "pattern": ["occurredAt"], "format": "date-time" },
+          { "pattern": ["observedAt"], "format": "date-time" }
+        ]
+      },
+      "invariants": [{ "rule": "slack-ts-instant", "pointers": ["/ts", "/occurredAt"] }],
+      "subject": { "join": "/", "pointers": ["/channel/id", "/ts"] },
+      "dedupeKey": { "join": "/", "pointers": ["/channel/id", "/ts"] }
+    },
+    {
+      "type": "resend.email.received",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "urn:agentcomms:schema:source:resend.email.received:v1",
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+          "type": { "const": "resend.email.received" },
+          "version": { "const": 1 },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "observedAt": { "type": "string", "format": "date-time" },
+          "account": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "id": { "type": "string", "pattern": "^acc_[A-Z0-9]{16}$" },
+              "channel": { "const": "resend" }
+            },
+            "required": ["channel", "id", "name"],
+            "additionalProperties": false
+          },
+          "emailId": { "type": "string", "format": "uuid" },
+          "receivedAt": { "type": "string", "format": "date-time" },
+          "from": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "address": { "type": "string", "format": "email" },
+                  "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+                },
+                "required": ["address", "name"],
+                "additionalProperties": false
+              },
+              { "type": "null" }
+            ]
+          },
+          "replyTo": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "address": { "type": "string", "format": "email" },
+                "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+              },
+              "required": ["address", "name"],
+              "additionalProperties": false
+            }
+          },
+          "to": { "type": "array", "items": { "type": "string", "format": "email" } },
+          "cc": { "type": "array", "items": { "type": "string", "format": "email" } },
+          "receivedFor": { "type": "array", "items": { "type": "string", "format": "email" } },
+          "subject": { "type": "string" },
+          "messageId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+          "attachmentCount": { "type": "number", "multipleOf": 1, "minimum": 0 },
+          "authentication": {
+            "type": "object",
+            "properties": {
+              "spf": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "dkim": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "dmarc": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "evaluatedBy": { "anyOf": [{ "type": "string", "enum": ["resend"] }, { "type": "null" }] }
+            },
+            "required": ["dkim", "dmarc", "evaluatedBy", "spf"],
+            "additionalProperties": false
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "minLength": 1 },
+                "filename": { "type": "string" },
+                "contentType": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                "size": { "anyOf": [{ "type": "number", "multipleOf": 1, "minimum": 0 }, { "type": "null" }] },
+                "inline": { "type": "boolean" },
+                "riskFlags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "executable",
+                      "script",
+                      "macro-enabled",
+                      "macro-capable",
+                      "markup",
+                      "archive",
+                      "disk-image",
+                      "double-extension",
+                      "bidi-filename",
+                      "auto-read",
+                      "saved-as-download",
+                      "html-or-svg",
+                      "hidden-characters-in-name"
+                    ]
+                  },
+                  "uniqueItems": true
+                }
+              },
+              "required": ["contentType", "filename", "id", "inline", "riskFlags", "size"],
+              "additionalProperties": false
+            }
+          },
+          "body": { "type": "string", "maxLength": 20000 },
+          "bodyTruncated": { "type": "boolean" }
+        },
+        "required": [
+          "account",
+          "attachmentCount",
+          "authentication",
+          "cc",
+          "emailId",
+          "from",
+          "id",
+          "messageId",
+          "observedAt",
+          "occurredAt",
+          "receivedAt",
+          "receivedFor",
+          "replyTo",
+          "subject",
+          "to",
+          "type",
+          "version"
+        ],
+        "additionalProperties": false,
+        "dependentRequired": {
+          "body": ["bodyTruncated"],
+          "bodyTruncated": ["body"]
+        }
+      },
+      "metadata": {
+        "untrusted": [
+          ["from", "name"],
+          ["replyTo", { "any": true }, "name"],
+          ["subject"],
+          ["attachments", { "any": true }, "filename"],
+          ["attachments", { "any": true }, "contentType"],
+          ["body"]
+        ],
+        "content": [
+          ["from", "name"],
+          ["replyTo", { "any": true }, "name"],
+          ["subject"],
+          ["attachments", { "any": true }, "filename"],
+          ["body"]
+        ],
+        "addresses": [
+          ["from", "address"],
+          ["replyTo", { "any": true }, "address"],
+          ["to", { "any": true }],
+          ["cc", { "any": true }],
+          ["receivedFor", { "any": true }]
+        ],
+        "handles": [],
+        "formats": [
+          { "pattern": ["occurredAt"], "format": "date-time" },
+          { "pattern": ["observedAt"], "format": "date-time" },
+          { "pattern": ["receivedAt"], "format": "date-time" },
+          { "pattern": ["emailId"], "format": "uuid" },
+          { "pattern": ["from", "address"], "format": "email" },
+          { "pattern": ["replyTo", { "any": true }, "address"], "format": "email" },
+          { "pattern": ["to", { "any": true }], "format": "email" },
+          { "pattern": ["cc", { "any": true }], "format": "email" },
+          { "pattern": ["receivedFor", { "any": true }], "format": "email" }
+        ]
+      },
+      "invariants": [
+        { "rule": "sorted-utf8", "pattern": ["attachments", { "any": true }, "riskFlags"] },
+        { "rule": "same-instant", "pointers": ["/receivedAt", "/occurredAt"] },
+        { "rule": "length-equals", "pointers": ["/attachments", "/attachmentCount"] }
+      ],
+      "subject": { "pointer": "/emailId" },
+      "dedupeKey": { "pointer": "/emailId" }
+    },
+    {
+      "type": "resend.email.status_changed",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "urn:agentcomms:schema:source:resend.email.status_changed:v1",
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+          "type": { "const": "resend.email.status_changed" },
+          "version": { "const": 1 },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "observedAt": { "type": "string", "format": "date-time" },
+          "account": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "id": { "type": "string", "pattern": "^acc_[A-Z0-9]{16}$" },
+              "channel": { "const": "resend" }
+            },
+            "required": ["channel", "id", "name"],
+            "additionalProperties": false
+          },
+          "emailId": { "type": "string", "format": "uuid" },
+          "from": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "address": { "type": "string", "format": "email" },
+                  "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+                },
+                "required": ["address", "name"],
+                "additionalProperties": false
+              },
+              { "type": "null" }
+            ]
+          },
+          "to": { "type": "array", "items": { "type": "string", "format": "email" } },
+          "cc": { "type": "array", "items": { "type": "string", "format": "email" } },
+          "bcc": { "type": "array", "items": { "type": "string", "format": "email" } },
+          "subject": { "type": "string" },
+          "createdAt": { "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }] },
+          "scheduledAt": { "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }] },
+          "messageId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+          "previous": {
+            "type": "string",
+            "enum": [
+              "scheduled",
+              "sent",
+              "delivered",
+              "delivery_delayed",
+              "bounced",
+              "complained",
+              "opened",
+              "clicked",
+              "failed",
+              "suppressed",
+              "canceled",
+              "queued"
+            ]
+          },
+          "current": {
+            "type": "string",
+            "enum": [
+              "scheduled",
+              "sent",
+              "delivered",
+              "delivery_delayed",
+              "bounced",
+              "complained",
+              "opened",
+              "clicked",
+              "failed",
+              "suppressed",
+              "canceled",
+              "queued"
+            ]
+          },
+          "at": { "type": "string", "format": "date-time" }
+        },
+        "required": [
+          "account",
+          "at",
+          "bcc",
+          "cc",
+          "createdAt",
+          "current",
+          "emailId",
+          "from",
+          "id",
+          "messageId",
+          "observedAt",
+          "occurredAt",
+          "previous",
+          "scheduledAt",
+          "subject",
+          "to",
+          "type",
+          "version"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "untrusted": [["from", "name"], ["subject"]],
+        "content": [["from", "name"], ["subject"]],
+        "addresses": [["from", "address"], ["to", { "any": true }], ["cc", { "any": true }], ["bcc", { "any": true }]],
+        "handles": [],
+        "formats": [
+          { "pattern": ["occurredAt"], "format": "date-time" },
+          { "pattern": ["observedAt"], "format": "date-time" },
+          { "pattern": ["emailId"], "format": "uuid" },
+          { "pattern": ["from", "address"], "format": "email" },
+          { "pattern": ["to", { "any": true }], "format": "email" },
+          { "pattern": ["cc", { "any": true }], "format": "email" },
+          { "pattern": ["bcc", { "any": true }], "format": "email" },
+          { "pattern": ["createdAt"], "format": "date-time" },
+          { "pattern": ["scheduledAt"], "format": "date-time" },
+          { "pattern": ["at"], "format": "date-time" }
+        ]
+      },
+      "invariants": [
+        { "rule": "differs", "pointers": ["/previous", "/current"] },
+        { "rule": "identical", "pointers": ["/at", "/occurredAt"] },
+        { "rule": "identical", "pointers": ["/occurredAt", "/observedAt"] }
+      ],
+      "subject": { "pointer": "/emailId" },
+      "dedupeKey": {
+        "canonicalJson": [
+          { "pointer": "/emailId" },
+          { "pointer": "/previous" },
+          { "pointer": "/current" },
+          { "pointer": "/at" }
+        ]
+      }
+    },
+    {
+      "type": "whatsapp.message.received",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "urn:agentcomms:schema:source:whatsapp.message.received:v1",
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+          "type": { "const": "whatsapp.message.received" },
+          "version": { "const": 1 },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "observedAt": { "type": "string", "format": "date-time" },
+          "account": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "id": { "type": "string", "pattern": "^acc_[A-Z0-9]{16}$" },
+              "channel": { "const": "whatsapp" }
+            },
+            "required": ["channel", "id", "name"],
+            "additionalProperties": false
+          },
+          "workspaceId": { "type": "string", "pattern": "^acc_[A-Z0-9]{16}$" },
+          "messageId": { "type": "string", "minLength": 1 },
+          "chat": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+              "kind": {
+                "type": "string",
+                "enum": ["direct", "hidden-number", "group", "status", "broadcast", "channel", "unknown"]
+              }
+            },
+            "required": ["id", "kind", "name"],
+            "additionalProperties": false
+          },
+          "sender": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+            },
+            "required": ["id", "name"],
+            "additionalProperties": false
+          },
+          "text": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+          "at": { "type": "string", "format": "date-time" },
+          "fromMe": { "const": false },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "text",
+                  "image",
+                  "video",
+                  "audio",
+                  "contact",
+                  "location",
+                  "group-event",
+                  "link",
+                  "document",
+                  "system",
+                  "gif",
+                  "waiting",
+                  "deleted",
+                  "sticker",
+                  "poll",
+                  "video-note",
+                  "call",
+                  "album",
+                  "unknown"
+                ]
+              },
+              { "type": "string", "pattern": "^unknown:[0-9]+$" }
+            ]
+          },
+          "viewOnce": { "type": "boolean" },
+          "groupEvent": { "anyOf": [{ "type": "number", "multipleOf": 1, "minimum": 0 }, { "type": "null" }] },
+          "media": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "text",
+                          "image",
+                          "video",
+                          "audio",
+                          "contact",
+                          "location",
+                          "group-event",
+                          "link",
+                          "document",
+                          "system",
+                          "gif",
+                          "waiting",
+                          "deleted",
+                          "sticker",
+                          "poll",
+                          "video-note",
+                          "call",
+                          "album",
+                          "unknown"
+                        ]
+                      },
+                      { "type": "string", "pattern": "^unknown:[0-9]+$" }
+                    ]
+                  },
+                  "mime": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                  "size": { "anyOf": [{ "type": "number", "multipleOf": 1, "minimum": 0 }, { "type": "null" }] },
+                  "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+                },
+                "required": ["mime", "name", "size", "type"],
+                "additionalProperties": false
+              },
+              { "type": "null" }
+            ]
+          }
+        },
+        "required": [
+          "account",
+          "at",
+          "chat",
+          "fromMe",
+          "groupEvent",
+          "id",
+          "kind",
+          "media",
+          "messageId",
+          "observedAt",
+          "occurredAt",
+          "sender",
+          "text",
+          "type",
+          "version",
+          "viewOnce",
+          "workspaceId"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "untrusted": [["chat", "name"], ["sender", "name"], ["text"], ["media", "mime"], ["media", "name"]],
+        "content": [["chat", "name"], ["sender", "name"], ["text"], ["media", "name"]],
+        "addresses": [],
+        "handles": [
+          { "pattern": ["chat", "id"], "workspace": ["workspaceId"] },
+          { "pattern": ["sender", "id"], "workspace": ["workspaceId"] }
+        ],
+        "formats": [
+          { "pattern": ["occurredAt"], "format": "date-time" },
+          { "pattern": ["observedAt"], "format": "date-time" },
+          { "pattern": ["at"], "format": "date-time" }
+        ]
+      },
+      "invariants": [
+        { "rule": "same-instant", "pointers": ["/at", "/occurredAt"] },
+        { "rule": "identical", "pointers": ["/workspaceId", "/account/id"] }
+      ],
+      "subject": { "join": "/", "pointers": ["/chat/id", "/messageId"] },
+      "dedupeKey": { "join": "/", "pointers": ["/chat/id", "/messageId"] }
+    }
+  ]
+}

@@ -1,0 +1,568 @@
+{
+  "description": "Appendix A's prose rules (events phase A plan, Task 10): every sentence or comment of A.1–A.7 that the notation does not map, quoted verbatim (whitespace-normalised), and what it becomes — a named invariant of decision 7, a schema keyword the prose states at a path or an alias, a subject or dedupeKey descriptor, or informational, with the reason it is not a catalogue constraint. A sentence with several claims has one entry per claim, each quoting the whole sentence. Written by hand and reviewed entry by entry against the quote; test/appendix.test.ts holds it to the spec.",
+  "rules": [
+    {
+      "types": [
+        "gmail.message.received",
+        "gmail.message.sent",
+        "gmail.message.labelled",
+        "slack.message.posted",
+        "resend.email.received",
+        "resend.email.status_changed",
+        "whatsapp.message.received"
+      ],
+      "quote": "type DateTimeV1 = string; // format date-time: a valid RFC 3339 instant",
+      "becomes": { "keyword": { "alias": "DateTimeV1", "format": "date-time" } }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent", "resend.email.received", "resend.email.status_changed"],
+      "quote": "type EmailV1 = string; // format email: canonical address, lower-case IDNA-ASCII domain",
+      "becomes": { "keyword": { "alias": "EmailV1", "format": "email" } }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent"],
+      "quote": "type DomainV1 = string; // format domain: lower-case IDNA-ASCII",
+      "becomes": { "keyword": { "alias": "DomainV1", "format": "domain" } }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent", "resend.email.received"],
+      "quote": "| 'html-or-svg' | 'hidden-characters-in-name'; // emitted as-is by Resend's attachmentRisks // (packages/resend/src/compose/inbound.ts:253)",
+      "becomes": {
+        "informational": "Where the flag values come from: Resend's attachmentRisks, which phase D's adapter copies unchanged. The closed set itself is RiskFlagV1's enum, which the notation gives."
+      }
+    },
+    {
+      "types": [
+        "gmail.message.received",
+        "gmail.message.sent",
+        "gmail.message.labelled",
+        "slack.message.posted",
+        "resend.email.received",
+        "resend.email.status_changed",
+        "whatsapp.message.received"
+      ],
+      "quote": "type: TType; // exact literal for the definition",
+      "becomes": { "keyword": { "paths": ["/type"], "kind": "const" } }
+    },
+    {
+      "types": [
+        "gmail.message.received",
+        "gmail.message.sent",
+        "gmail.message.labelled",
+        "slack.message.posted",
+        "resend.email.received",
+        "resend.email.status_changed",
+        "whatsapp.message.received"
+      ],
+      "quote": "channel: TChannel; // exact channel literal for the definition",
+      "becomes": { "keyword": { "paths": ["/account/channel"], "kind": "const" } }
+    },
+    {
+      "types": ["gmail.message.labelled", "resend.email.status_changed"],
+      "quote": "For Gmail label and Resend status events `observedAt` and `occurredAt` are identical as D3 requires.",
+      "becomes": { "invariant": { "rule": "identical", "pointers": ["/occurredAt", "/observedAt"] } }
+    },
+    {
+      "types": ["slack.message.posted"],
+      "quote": "Gmail message, Resend received and WhatsApp events are accepted only when the source timestamp needed for `occurredAt` is present and decodes to a valid instant; Slack `ts` must decode to the same instant stored in `occurredAt`.",
+      "becomes": { "invariant": { "rule": "slack-ts-instant", "pointers": ["/ts", "/occurredAt"] } }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent", "resend.email.received", "whatsapp.message.received"],
+      "quote": "Gmail message, Resend received and WhatsApp events are accepted only when the source timestamp needed for `occurredAt` is present and decodes to a valid instant; Slack `ts` must decode to the same instant stored in `occurredAt`.",
+      "becomes": {
+        "informational": "Which source rows phase D's adapter accepts: one whose occurrence time is missing or does not decode never becomes an event. The catalogue's side, that occurredAt is a required, non-null date-time, is the notation's."
+      }
+    },
+    {
+      "types": [
+        "gmail.message.received",
+        "gmail.message.sent",
+        "slack.message.posted",
+        "resend.email.received",
+        "whatsapp.message.received"
+      ],
+      "quote": "A failure to establish those required values is a source-resolution failure, not a nullable catalogue field.",
+      "becomes": {
+        "informational": "What the adapter does when occurredAt cannot be established: a source-resolution failure (D4, phase D), never an event. The catalogue's side, that occurredAt is never null, is the notation's."
+      }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent", "resend.email.received"],
+      "quote": "Gmail `body?` and `hasAttachments?`/`attachments?`, Resend `body?`/`bodyTruncated?` and Resend `attachments?` are the only lazy catalogue fields.",
+      "becomes": {
+        "informational": "Which fields phase D's adapter and B1's projection fetch only on demand. The catalogue's side, that these and only these are optional, is the notation's `?`."
+      }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "The two Resend body fields are one lazy pair: a reference to either fetches and populates both.",
+      "becomes": {
+        "keyword": { "paths": [""], "dependentRequired": { "body": ["bodyTruncated"], "bodyTruncated": ["body"] } }
+      }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent", "resend.email.received"],
+      "quote": "Lazy fields are absent only when no active rule projection asks for them.",
+      "becomes": {
+        "informational": "When the adapter leaves a lazy field out, which depends on the active rules (B1's projection, phase D's fetch). An event cannot show which rules are active, so the catalogue allows the field present or absent."
+      }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent", "resend.email.received"],
+      "quote": "If a rule condition, judge input or mapping references one, the adapter must fetch and populate it before schema validation and projection; a real empty body is `\"\"` with `bodyTruncated: false`, an email with no attachments has `hasAttachments: false, attachments: []`, and a requested Resend attachment list may be `[]`.",
+      "becomes": {
+        "informational": "The adapter's obligation to fetch a referenced lazy field, and how it writes a fetched empty value (phase D). The schema's side is the notation's: body is a plain string and the arrays may be empty. No catalogue rule ties hasAttachments to attachments: decision 22 gives Gmail's pair no dependentRequired, and decision 7 no invariant."
+      }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent"],
+      "quote": "Thus “not fetched” is never represented as `null` and cannot be disclosed accidentally as provider data.",
+      "becomes": {
+        "keyword": { "paths": ["/body", "/hasAttachments", "/attachments"], "optional": true, "nullable": false }
+      }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "Thus “not fetched” is never represented as `null` and cannot be disclosed accidentally as provider data.",
+      "becomes": {
+        "keyword": { "paths": ["/body", "/bodyTruncated", "/attachments"], "optional": true, "nullable": false }
+      }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent", "resend.email.received"],
+      "quote": "A required Gmail or Resend lazy fetch returning 404 resolves only its affected projections as `vanished`; every other failure follows D3's persisted backoff for at most 24 hours and then resolves them `unresolvable` with one content-free source-gap record, or resolves them `retention-expired` with no gap record if D8's stage deadline comes first.",
+      "becomes": {
+        "informational": "B1's lazy-materialisation protocol (D3, D8): how projections resolve when a fetch fails. No event is emitted for them, so no event value is constrained."
+      }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent", "resend.email.received"],
+      "quote": "Any terminal outcome lets the source cursor advance once every other eligible projection is committed, skipped or terminally resolved; restart never resets either deadline.",
+      "becomes": {
+        "informational": "B1's cursor and deadline handling. No event value is involved."
+      }
+    },
+    {
+      "types": [
+        "gmail.message.received",
+        "gmail.message.sent",
+        "gmail.message.labelled",
+        "slack.message.posted",
+        "resend.email.received",
+        "resend.email.status_changed",
+        "whatsapp.message.received"
+      ],
+      "quote": "For metadata patterns, an optional property or nullable parent contributes no concrete pointer when absent or null; when present, the terminal values named by every pattern below have the declared non-null scalar type.",
+      "becomes": {
+        "informational": "How a metadata pattern expands on an event (Task 9's pattern expansion) and what checkDefinition holds each definition's metadata to (Task 11). It constrains the definitions' metadata, not an event's value; the extractor checks that every listed pattern names a declared position."
+      }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent"],
+      "quote": "The two types have the same strict body and differ only in their `type` literal and observation-time classification.",
+      "becomes": {
+        "informational": "Restates that both types instantiate the one generic GmailMessageEventV1<T>, which the extractor reads mechanically. Which of the two an observed message is, is the adapter's classification (phase D)."
+      }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent"],
+      "quote": "riskFlags: RiskFlagV1[]; // duplicate-free, canonical-sorted",
+      "becomes": { "invariant": { "rule": "sorted-utf8", "pattern": ["attachments", { "any": true }, "riskFlags"] } }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent"],
+      "quote": "labels: NonEmptyString[]; // duplicate-free, raw-UTF-8 sorted; [] is allowed",
+      "becomes": { "invariant": { "rule": "sorted-utf8", "pattern": ["labels"] } }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent"],
+      "quote": "date: DateTimeV1; // the same Gmail internalDate instant used for occurredAt",
+      "becomes": { "invariant": { "rule": "same-instant", "pointers": ["/date", "/occurredAt"] } }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent"],
+      "quote": "replyToDomains: DomainV1[]; // duplicate-free, raw-UTF-8 sorted",
+      "becomes": { "invariant": { "rule": "sorted-utf8", "pattern": ["warnings", "replyToDomains"] } }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent"],
+      "quote": "body?: string; // complete sanitised visible text, never an untrusted envelope",
+      "becomes": {
+        "informational": "What phase D's adapter puts in body: the complete sanitised text, before any envelope (D3). An envelope is applied only at delivery (B1). The schema's side is a plain optional string, with no length limit."
+      }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent"],
+      "quote": "`subject(event) = event.messageId`.",
+      "becomes": { "subject": { "pointer": "/messageId" } }
+    },
+    {
+      "types": ["gmail.message.received"],
+      "quote": "The received dedupe key is canonical JSON of `[historyRecordId,messageId,\"received\"]`; the sent key replaces the last literal with `\"sent\"`.",
+      "becomes": {
+        "dedupeKey": { "canonicalJson": [{ "staging": "historyRecordId" }, { "pointer": "/messageId" }, "received"] }
+      }
+    },
+    {
+      "types": ["gmail.message.sent"],
+      "quote": "The received dedupe key is canonical JSON of `[historyRecordId,messageId,\"received\"]`; the sent key replaces the last literal with `\"sent\"`.",
+      "becomes": {
+        "dedupeKey": { "canonicalJson": [{ "staging": "historyRecordId" }, { "pointer": "/messageId" }, "sent"] }
+      }
+    },
+    {
+      "types": ["gmail.message.received", "gmail.message.sent"],
+      "quote": "`historyRecordId` is source-staging identity and is deliberately not a disclosed field.",
+      "becomes": {
+        "informational": "Why the dedupe key's first part is a staging input rather than a pointer (decision 9: dedupeKey takes the staging identity). The extraction confirms no such field is declared."
+      }
+    },
+    {
+      "types": ["gmail.message.labelled"],
+      "quote": "added: NonEmptyString[]; // duplicate-free, raw-UTF-8 sorted",
+      "becomes": { "invariant": { "rule": "sorted-utf8", "pattern": ["added"] } }
+    },
+    {
+      "types": ["gmail.message.labelled"],
+      "quote": "removed: NonEmptyString[]; // duplicate-free, raw-UTF-8 sorted",
+      "becomes": { "invariant": { "rule": "sorted-utf8", "pattern": ["removed"] } }
+    },
+    {
+      "types": ["gmail.message.labelled"],
+      "quote": "At least one of `added` or `removed` is non-empty, and the same label id may not occur in both arrays for one history record.",
+      "becomes": { "invariant": { "rule": "non-empty-either", "pointers": ["/added", "/removed"] } }
+    },
+    {
+      "types": ["gmail.message.labelled"],
+      "quote": "At least one of `added` or `removed` is non-empty, and the same label id may not occur in both arrays for one history record.",
+      "becomes": { "invariant": { "rule": "disjoint", "pointers": ["/added", "/removed"] } }
+    },
+    {
+      "types": ["gmail.message.labelled"],
+      "quote": "`subject(event) = event.messageId`; `dedupeKey` is canonical JSON of `[historyRecordId,messageId,\"labelled\"]`.",
+      "becomes": { "subject": { "pointer": "/messageId" } }
+    },
+    {
+      "types": ["gmail.message.labelled"],
+      "quote": "`subject(event) = event.messageId`; `dedupeKey` is canonical JSON of `[historyRecordId,messageId,\"labelled\"]`.",
+      "becomes": {
+        "dedupeKey": { "canonicalJson": [{ "staging": "historyRecordId" }, { "pointer": "/messageId" }, "labelled"] }
+      }
+    },
+    {
+      "types": ["slack.message.posted"],
+      "quote": "workspaceId: NonEmptyString; // Slack's stable team/workspace id",
+      "becomes": {
+        "informational": "Where the value comes from: Slack's own team id, which phase D's adapter copies (A.8, item 1). The schema's side is a non-empty string, which the notation gives."
+      }
+    },
+    {
+      "types": ["slack.message.posted"],
+      "quote": "`author` may omit both ids only when Slack supplied neither; otherwise each present id is non-empty.",
+      "becomes": { "keyword": { "paths": ["/author/userId", "/author/botId"], "optional": true, "minLength": 1 } }
+    },
+    {
+      "types": ["slack.message.posted"],
+      "quote": "`author` may omit both ids only when Slack supplied neither; otherwise each present id is non-empty.",
+      "becomes": {
+        "informational": "When the adapter may leave both ids out: only when Slack gave neither (phase D). An event cannot show what Slack supplied, so the catalogue allows any combination of the two optional ids."
+      }
+    },
+    {
+      "types": ["slack.message.posted"],
+      "quote": "`mentions` preserves first appearance across `references` then `fallbackReferences` and removes exact duplicate `(kind,id,label)` tuples.",
+      "becomes": { "keyword": { "paths": ["/mentions"], "uniqueItems": true } }
+    },
+    {
+      "types": ["slack.message.posted"],
+      "quote": "`mentions` preserves first appearance across `references` then `fallbackReferences` and removes exact duplicate `(kind,id,label)` tuples.",
+      "becomes": {
+        "informational": "The order phase D's adapter writes mentions in: first appearance, references before fallbackReferences. Array order is retained (A.1) and this array is not canonical-sorted, so the catalogue states no order."
+      }
+    },
+    {
+      "types": ["slack.message.posted"],
+      "quote": "The metadata is exactly:",
+      "becomes": {
+        "informational": "Introduces the metadata block, which the extractor reads into the five lists."
+      }
+    },
+    {
+      "types": ["slack.message.posted"],
+      "quote": "`subject(event) = event.channel.id + \"/\" + event.ts`; `dedupeKey` is the same string.",
+      "becomes": { "subject": { "join": "/", "pointers": ["/channel/id", "/ts"] } }
+    },
+    {
+      "types": ["slack.message.posted"],
+      "quote": "`subject(event) = event.channel.id + \"/\" + event.ts`; `dedupeKey` is the same string.",
+      "becomes": { "dedupeKey": { "join": "/", "pointers": ["/channel/id", "/ts"] } }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "receivedAt: DateTimeV1; // same instant as occurredAt",
+      "becomes": { "invariant": { "rule": "same-instant", "pointers": ["/receivedAt", "/occurredAt"] } }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "body?: string; // sanitised visible text; schema maxLength: 20000 Unicode code points, never an untrusted envelope",
+      "becomes": {
+        "informational": "What phase D's adapter puts in body: the sanitised text with the read-time envelope removed (an envelope is applied again only at delivery, D3). The keyword this comment states, maxLength 20000, is in the closed vocabulary and is extracted mechanically."
+      }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "bodyTruncated?: boolean; // present exactly when body is present; true when the source text was longer",
+      "becomes": {
+        "keyword": { "paths": [""], "dependentRequired": { "body": ["bodyTruncated"], "bodyTruncated": ["body"] } }
+      }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "bodyTruncated?: boolean; // present exactly when body is present; true when the source text was longer",
+      "becomes": {
+        "informational": "“true when the source text was longer”: the flag's value is readBody's truncated, which phase D's normalisation copies (decision 21's normaliseResendBody). An event does not carry the source text, so no schema keyword or invariant can check it."
+      }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "The bidirectional `dependentRequired` makes the fields mutually required: either both are absent or both are present. It is not a prose-only validation rule.",
+      "becomes": {
+        "keyword": { "paths": [""], "dependentRequired": { "body": ["bodyTruncated"], "bodyTruncated": ["body"] } }
+      }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "When `attachments` is present its length equals `attachmentCount`.",
+      "becomes": { "invariant": { "rule": "length-equals", "pointers": ["/attachments", "/attachmentCount"] } }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "Normalisation unwraps that envelope back to its sanitised text (the envelope is re-applied at delivery according to the target's representation, D3), removes a trailing lone surrogate (necessarily a high surrogate) when `slice(0, 20000)` split an astral character, and then validates the result against the 20,000-Unicode-code-point schema limit and as a well-formed Unicode scalar sequence.",
+      "becomes": {
+        "informational": "Phase D's normalisation of readBody's text, done by decision 21's normaliseResendBody (Task 11's Resend fixtures): unwrap, drop a trailing lone high surrogate, then check the limit and well-formedness. The limit is the body's maxLength, extracted from the comment and A.5's fragment. Decision 7's closed vocabulary names no well-formedness invariant, so none is stated for validateEvent."
+      }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "Any other unpaired surrogate is a malformed materialisation response under D3, so no event emits one.",
+      "becomes": {
+        "informational": "The adapter refuses such a response as a materialisation failure (D3), through decision 21's normaliseResendBody (Task 11's Resend fixtures), so no event is built from it. Decision 7's closed vocabulary names no well-formedness invariant, so none is stated for validateEvent."
+      }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "`bodyTruncated` remains exactly `readBody.truncated`; normalisation does not recompute it from the shorter repaired string.",
+      "becomes": {
+        "informational": "Phase D's normalisation keeps bodyTruncated equal to readBody's truncated (decision 21). An event does not carry readBody's result, so the catalogue cannot check it."
+      }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "Attachment `riskFlags` are Resend's `attachmentRisks` values unchanged, de-duplicated and sorted.",
+      "becomes": { "invariant": { "rule": "sorted-utf8", "pattern": ["attachments", { "any": true }, "riskFlags"] } }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "Attachment `riskFlags` are Resend's `attachmentRisks` values unchanged, de-duplicated and sorted.",
+      "becomes": { "keyword": { "paths": ["/attachments/*/riskFlags"], "uniqueItems": true } }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "Attachment `riskFlags` are Resend's `attachmentRisks` values unchanged, de-duplicated and sorted.",
+      "becomes": {
+        "informational": "“values unchanged”: phase D's adapter copies Resend's attachmentRisks without renaming (decision 21's canonicalRiskFlags only de-duplicates and sorts). The values themselves are RiskFlagV1's enum."
+      }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "`subject(event) = event.emailId`; `dedupeKey(event) = event.emailId`.",
+      "becomes": { "subject": { "pointer": "/emailId" } }
+    },
+    {
+      "types": ["resend.email.received"],
+      "quote": "`subject(event) = event.emailId`; `dedupeKey(event) = event.emailId`.",
+      "becomes": { "dedupeKey": { "pointer": "/emailId" } }
+    },
+    {
+      "types": ["resend.email.status_changed"],
+      "quote": "Version 1 recognises the closed status vocabulary exposed by the current sent-list/event surface; a newly observed provider status is an adapter/schema failure and requires an explicit catalogue-version decision rather than being silently accepted as prose.",
+      "becomes": { "keyword": { "paths": ["/previous", "/current"], "kind": "enum" } }
+    },
+    {
+      "types": ["resend.email.status_changed"],
+      "quote": "at: DateTimeV1; // first durable observation; equals occurredAt and observedAt",
+      "becomes": { "invariant": { "rule": "identical", "pointers": ["/at", "/occurredAt"] } }
+    },
+    {
+      "types": ["resend.email.status_changed"],
+      "quote": "at: DateTimeV1; // first durable observation; equals occurredAt and observedAt",
+      "becomes": {
+        "informational": "“first durable observation”: when the daemon samples the value (D3; B1's staging). That at also equals observedAt follows from the A.1 rule that occurredAt and observedAt are identical for this type, which is its own invariant."
+      }
+    },
+    {
+      "types": ["resend.email.status_changed"],
+      "quote": "`previous !== current`; the first state seen after a status-tracking activation seeds state and emits no event.",
+      "becomes": { "invariant": { "rule": "differs", "pointers": ["/previous", "/current"] } }
+    },
+    {
+      "types": ["resend.email.status_changed"],
+      "quote": "`previous !== current`; the first state seen after a status-tracking activation seeds state and emits no event.",
+      "becomes": {
+        "informational": "B1's status tracking: the first state seen after activation is a baseline, and no event exists for it."
+      }
+    },
+    {
+      "types": ["resend.email.status_changed"],
+      "quote": "`subject(event) = event.emailId`; `dedupeKey` is canonical JSON of `[event.emailId,event.previous,event.current,event.at]`.",
+      "becomes": { "subject": { "pointer": "/emailId" } }
+    },
+    {
+      "types": ["resend.email.status_changed"],
+      "quote": "`subject(event) = event.emailId`; `dedupeKey` is canonical JSON of `[event.emailId,event.previous,event.current,event.at]`.",
+      "becomes": {
+        "dedupeKey": {
+          "canonicalJson": [
+            { "pointer": "/emailId" },
+            { "pointer": "/previous" },
+            { "pointer": "/current" },
+            { "pointer": "/at" }
+          ]
+        }
+      }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "workspaceId: AccountIdV1; // exactly account.id; the local account is the handle scope",
+      "becomes": { "invariant": { "rule": "identical", "pointers": ["/workspaceId", "/account/id"] } }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "workspaceId: AccountIdV1; // exactly account.id; the local account is the handle scope",
+      "becomes": {
+        "informational": "“the local account is the handle scope”: why the handles name workspaceId as their workspace. The handles themselves are extracted from the metadata block."
+      }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "messageId: NonEmptyString; // D4's WhatsApp protocol message key; never MessageView.id/Z_PK",
+      "becomes": {
+        "informational": "Which raw value phase D's adapter puts in messageId: the protocol key, never the rebuild-sensitive row id. The schema's side is a non-empty string, which the notation gives."
+      }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "id: NonEmptyString; // exact raw ZFROMJID from the eligible source row",
+      "becomes": {
+        "informational": "Which raw column phase D's adapter copies into sender.id. The schema's side is a non-empty string, which the notation gives."
+      }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "at: DateTimeV1; // same instant as occurredAt",
+      "becomes": { "invariant": { "rule": "same-instant", "pointers": ["/at", "/occurredAt"] } }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "The `WhatsAppMessageKindV1` JSON Schema is `anyOf` the listed 19-value enum and the `^unknown:[0-9]+$` pattern; arbitrary strings do not satisfy the final notation branch.",
+      "becomes": {
+        "keyword": {
+          "paths": ["/kind", "/media/type"],
+          "kind": "anyOf",
+          "branches": [
+            {
+              "kind": "enum",
+              "enum": [
+                "text",
+                "image",
+                "video",
+                "audio",
+                "contact",
+                "location",
+                "group-event",
+                "link",
+                "document",
+                "system",
+                "gif",
+                "waiting",
+                "deleted",
+                "sticker",
+                "poll",
+                "video-note",
+                "call",
+                "album",
+                "unknown"
+              ]
+            },
+            { "kind": "string", "pattern": "^unknown:[0-9]+$" }
+          ]
+        }
+      }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "The event `messageId` is exactly D4's canonical raw protocol message key: `[\"wa-msg\", chatJid, senderJidRaw, stanzaId]`.",
+      "becomes": {
+        "informational": "How phase D's adapter builds messageId: the canonical JSON of the raw key tuple, through Task 11's whatsappMessageKey helper. The schema's side is a non-empty string; decision 7 names no invariant on the key's inner shape, so validateEvent does not parse it."
+      }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "`sender.id` is the same exact raw `senderJidRaw`; only `sender.name` may use a presentation lookup.",
+      "becomes": {
+        "informational": "Which raw value phase D's adapter copies into sender.id, and that only sender.name may be derived for presentation. Decision 7 names no invariant relating sender.id to messageId's key, so none is stated."
+      }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "A null or empty raw chat JID, stanza id or sender JID is a skipped source row, not a `whatsapp.message.received` event.",
+      "becomes": {
+        "informational": "Phase D's row filter (D4): such a row never becomes an event. The catalogue's side, that chat.id, sender.id and messageId are non-empty strings, is the notation's."
+      }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "The raw `ZISFROMME` value must also be exactly `false`; `true` and unknown values are skipped before `Visibility.seesMessage`, snapshot, occurrence-ledger or normalisation work.",
+      "becomes": { "keyword": { "paths": ["/fromMe"], "kind": "const", "const": false } }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "The raw `ZISFROMME` value must also be exactly `false`; `true` and unknown values are skipped before `Visibility.seesMessage`, snapshot, occurrence-ledger or normalisation work.",
+      "becomes": {
+        "informational": "Phase D's adapter skips such rows before any other work, so they never become events."
+      }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "The same visibility call hides a denied chat and, under restricting lists, a denied or unattributable status author.",
+      "becomes": {
+        "informational": "Phase D's visibility filter decides which rows become events. No event value is involved."
+      }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "In particular, `rebuildIndex`'s member/direct-chat sender fallback does not make a missing or different raw sender JID eligible, and `Presenter.message`'s wrapped content cannot affect the key (`packages/whatsapp/src/index-db.ts:107-112,172-236`; `packages/whatsapp/src/present.ts:126-159`).",
+      "becomes": {
+        "informational": "Which values phase D's adapter may not use for eligibility or the key. The catalogue sees only the resulting strings."
+      }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "Its first representation—chosen when D4's pointer/diff transaction first stages the key, which for any admitted key is after the admitting version's activation—supplies `text`, media, other payload fields and the stored timestamp used for `at` and `occurredAt`; later edits, delete/placeholder states, media downloads and duplicate rows cannot change the emitted event or create another one.",
+      "becomes": {
+        "informational": "D4's staging and B1's ingest: which representation of a message is emitted, once. That at and occurredAt come from the same stored timestamp is the same-instant invariant on the at field's comment."
+      }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "`subject(event) = event.chat.id + \"/\" + event.messageId`; `dedupeKey` is the same string.",
+      "becomes": { "subject": { "join": "/", "pointers": ["/chat/id", "/messageId"] } }
+    },
+    {
+      "types": ["whatsapp.message.received"],
+      "quote": "`subject(event) = event.chat.id + \"/\" + event.messageId`; `dedupeKey` is the same string.",
+      "becomes": { "dedupeKey": { "join": "/", "pointers": ["/chat/id", "/messageId"] } }
+    }
+  ]
+}
