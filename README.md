@@ -476,6 +476,14 @@ pnpm verify          # lint, typecheck, test, build, skills, packed-tarball cons
 Node 22.18 or newer to develop (the bundler needs it); the published packages run on 22.12, and
 `@agentcomms/whatsapp` on 22.16 (it reads with Node's own SQLite).
 
+## Contributing
+
+Pull requests are welcome. Each one carries a proposed version (`X.Y.Z-<branch-slug>`, one semver step on from
+`main`), tests, documentation, a changelog entry and its provenance — why it was made, what it relies on, anything
+tested against a real account, and any AI assistance. A check on every pull request says what is missing, and a pull
+request is merged once it carries all of it. [CONTRIBUTING.md](CONTRIBUTING.md) has the detail, and the
+[Code of Conduct](CODE_OF_CONDUCT.md) applies everywhere.
+
 ## Licence
 
 [MIT](LICENSE)

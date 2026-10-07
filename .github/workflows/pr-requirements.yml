@@ -1,0 +1,44 @@
+# What every pull request carries (CONTRIBUTING.md), checked from its description and file list.
+#
+# `pull_request_target`, so the check that runs is the base branch's copy and a pull request cannot rewrite the rule it
+# is held to; and so its token can leave a comment on a pull request from a fork. That token is why nothing from the pull
+# request is checked out or run here: only `scripts/pr-requirements.mjs` and `package.json` from the base commit, read
+# by Node with no install step. The pull request's code is never executed by any workflow in this repository — its
+# author runs `pnpm verify` before pushing, the maintainer runs it again before merging, and the release runs it on
+# every platform before publishing (CONTRIBUTING.md, "Local setup").
+
+name: PR requirements
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+concurrency:
+  group: pr-requirements-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  requirements:
+    name: what every pull request carries
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/pr-requirements.mjs
+            package.json
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.18.0
+      - run: node scripts/pr-requirements.mjs --github
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

@@ -19,6 +19,14 @@
 - Only `send.execute` may call Gmail's send endpoints, and only `executeSend` Resend's. Do not add another path.
 - Anything a sender controls must pass through the HTML sanitiser and the untrusted-content envelope before it
   reaches a result.
+- **Every pull request carries what `CONTRIBUTING.md` lists under "What every pull request carries"**: what changes
+  for the person using it and how, a proposed version `X.Y.Z-<branch-slug>` with its semver reason, tests, docs, a
+  changelog entry, provenance (why, sources with the date read, live testing, AI assistance) and no real data. When you
+  open one, fill in every part of the template. When you review one and a part is missing, ask the submitter for it —
+  draft the comment and show it to the maintainer before it is posted — and do not fill it in for them or merge it.
+- Review and merge a pull request as `.claude/skills/review-pr/SKILL.md` says: on a worktree of its own, never the
+  shared checkout another session may be using; the contributor's code read before it is run; and the merge done on
+  GitHub, by the maintainer's word, pinned to the commit that was verified.
 - Keep CLI and MCP in parity: both call the same function in `packages/*/src/operations`, and every command and
   tool has a row in `capabilities.json` naming that function as its `operation` — see "Adding a capability" in
   `CONTRIBUTING.md`. `pnpm verify:parity` runs both sides of every row against stand-ins to check it.
