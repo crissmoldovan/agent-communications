@@ -1,3 +1,4 @@
+import { isCommsError } from '@agentcomms/core';
 import { Command, CommanderError } from 'commander';
 import { createEventsMcpServer } from '../mcp/server.ts';
 import { status } from '../operations/status.ts';
@@ -61,6 +62,10 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   } catch (error) {
     if (error instanceof CommanderError) return error.exitCode;
     streams.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    if (isCommsError(error)) {
+      if (error.hint !== undefined) streams.stderr.write(`${error.hint}\n`);
+      return error.exitCode;
+    }
     return 1;
   }
 }

@@ -5,7 +5,8 @@ package it deliberately exposes only a content-free ownership status: no event i
 sent, and the service never starts a background owner.
 
 The `agent-events status` command and `events_status` MCP tool both report that the owner is not running. The package
-uses Node's built-in SQLite support; it does not ship a native database dependency.
+uses Node's built-in SQLite support; it does not ship a native database dependency. It needs **Node 22.16 or newer**, the first
+Node whose SQLite is complete without a flag; an older Node is refused with what to install.
 
 It is held from publication until the first daemon consumer is ready. See the [release guide](../../docs/RELEASING.md#A-package-held-back-from-release).
 
