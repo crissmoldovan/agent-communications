@@ -4,6 +4,7 @@
  */
 import { canonicalJsonRunner } from './canonical-json.ts';
 import { catalogueRunner } from './catalogue.ts';
+import { conditionsRunner } from './conditions.ts';
 import { eventIdRunner } from './event-id.ts';
 import { formatsRunner } from './formats.ts';
 import { idnaRunner } from './idna.ts';
@@ -17,6 +18,7 @@ export type { EventsLibrary, Runner, RunnerResult, VectorFile } from './types.ts
 export const RUNNERS: Readonly<Record<string, Runner>> = {
   'canonical-json': canonicalJsonRunner,
   catalogue: catalogueRunner,
+  conditions: conditionsRunner,
   'event-id': eventIdRunner,
   pointers: pointersRunner,
   'resend-body': resendBodyRunner,

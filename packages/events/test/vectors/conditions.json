@@ -1,0 +1,237 @@
+{
+  "family": "conditions",
+  "description": "D5 deterministic and static-agentic condition vectors. The legality table is the committed operator matrix Task 12 checks against every catalogue field.",
+  "legality": [
+    {
+      "op": "exists",
+      "kinds": ["object", "array", "string", "integer", "boolean", "const", "enum", "union"],
+      "formats": ["*"]
+    },
+    { "op": "equals", "kinds": ["string", "integer", "boolean", "const", "enum", "union"], "formats": ["*"] },
+    { "op": "notEquals", "kinds": ["string", "integer", "boolean", "const", "enum", "union"], "formats": ["*"] },
+    { "op": "in", "kinds": ["string", "integer", "boolean", "const", "enum", "union"], "formats": ["*"] },
+    { "op": "contains", "kinds": ["string"], "formats": ["none", "email", "domain", "uri", "uuid"] },
+    { "op": "contains", "kinds": ["array-scalar"], "formats": ["*"] },
+    { "op": "startsWith", "kinds": ["string"], "formats": ["none", "email", "domain", "uri", "uuid"] },
+    { "op": "endsWith", "kinds": ["string"], "formats": ["none", "email", "domain", "uri", "uuid"] },
+    { "op": "gt", "kinds": ["integer"], "formats": ["*"] },
+    { "op": "gt", "kinds": ["string"], "formats": ["date-time"] },
+    { "op": "gte", "kinds": ["integer"], "formats": ["*"] },
+    { "op": "gte", "kinds": ["string"], "formats": ["date-time"] },
+    { "op": "lt", "kinds": ["integer"], "formats": ["*"] },
+    { "op": "lt", "kinds": ["string"], "formats": ["date-time"] },
+    { "op": "lte", "kinds": ["integer"], "formats": ["*"] },
+    { "op": "lte", "kinds": ["string"], "formats": ["date-time"] },
+    { "op": "domainIs", "kinds": ["string"], "formats": ["email", "domain"] }
+  ],
+  "vectors": [
+    {
+      "kind": "canonical",
+      "name": "CND-h: omitted caseSensitive canonicalises to explicit false",
+      "type": "gmail.message.received",
+      "condition": { "path": "/subject", "op": "equals", "value": "Straße" },
+      "expected": "{\"caseSensitive\":false,\"op\":\"equals\",\"path\":\"/subject\",\"value\":\"Straße\"}"
+    },
+    {
+      "kind": "canonical",
+      "name": "CND-h: explicit false has the same bytes",
+      "type": "gmail.message.received",
+      "condition": { "path": "/subject", "op": "equals", "value": "Straße", "caseSensitive": false },
+      "expected": "{\"caseSensitive\":false,\"op\":\"equals\",\"path\":\"/subject\",\"value\":\"Straße\"}"
+    },
+    {
+      "kind": "canonical",
+      "name": "CND-h: true differs from false",
+      "type": "gmail.message.received",
+      "condition": { "path": "/subject", "op": "equals", "value": "Straße", "caseSensitive": true },
+      "expected": "{\"caseSensitive\":true,\"op\":\"equals\",\"path\":\"/subject\",\"value\":\"Straße\"}"
+    },
+    {
+      "kind": "evaluate",
+      "name": "case folding is pinned while caseSensitive is exact",
+      "type": "gmail.message.received",
+      "condition": { "path": "/subject", "op": "equals", "value": "straße" },
+      "event": { "subject": "STRASSE" },
+      "expected": true
+    },
+    {
+      "kind": "agentic",
+      "name": "agentic static form defaults onUncertain without deduplicating inputs",
+      "type": "slack.message.posted",
+      "prefilter": { "path": "/text", "op": "contains", "value": "hello" },
+      "agentic": {
+        "judgeId": "judge",
+        "judgeVersion": 1,
+        "question": "",
+        "inputs": ["/text", "/text"],
+        "threshold": 0
+      },
+      "expected": "{\"inputs\":[\"/text\",\"/text\"],\"judgeId\":\"judge\",\"judgeVersion\":1,\"onUncertain\":\"no-match\",\"question\":\"\",\"threshold\":0}"
+    },
+    {
+      "kind": "evaluate",
+      "name": "caseSensitive uses no NFC or folding",
+      "type": "gmail.message.received",
+      "condition": { "path": "/subject", "op": "equals", "value": "straße", "caseSensitive": true },
+      "event": { "subject": "STRASSE" },
+      "expected": false
+    },
+    {
+      "kind": "evaluate",
+      "name": "caseSensitive uses no NFC before exact comparison",
+      "type": "gmail.message.received",
+      "condition": { "path": "/subject", "op": "equals", "value": "é", "caseSensitive": true },
+      "event": { "subject": "é" },
+      "expected": false
+    },
+    {
+      "kind": "evaluate",
+      "name": "CND-d: every missing leaf is false",
+      "type": "gmail.message.received",
+      "condition": { "path": "/body", "op": "equals", "value": "Body" },
+      "expected": false
+    },
+    {
+      "kind": "evaluate",
+      "name": "CND-d: not is ordinary Boolean negation",
+      "type": "gmail.message.received",
+      "condition": { "not": { "path": "/body", "op": "equals", "value": "Body" } },
+      "expected": true
+    },
+    {
+      "kind": "evaluate",
+      "name": "CND-d: exists sees a present null",
+      "type": "gmail.message.received",
+      "condition": { "path": "/from", "op": "exists" },
+      "expected": true
+    },
+    {
+      "kind": "evaluate",
+      "name": "CND-d: contains on runtime null is false",
+      "type": "whatsapp.message.received",
+      "condition": { "path": "/text", "op": "contains", "value": "Hello" },
+      "expected": false
+    },
+    {
+      "kind": "evaluate",
+      "name": "CND-g: domainIs excludes a string suffix without a label boundary",
+      "type": "gmail.message.received",
+      "condition": {
+        "path": "/warnings/fromDomain",
+        "op": "domainIs",
+        "value": "example.com",
+        "includeSubdomains": true
+      },
+      "event": { "warnings": { "fromDomain": "badexample.com" } },
+      "expected": false
+    },
+    {
+      "kind": "evaluate",
+      "name": "CND-g: domainIs includes a proper subdomain",
+      "type": "gmail.message.received",
+      "condition": {
+        "path": "/warnings/fromDomain",
+        "op": "domainIs",
+        "value": "example.com",
+        "includeSubdomains": true
+      },
+      "event": { "warnings": { "fromDomain": "a.b.example.com" } },
+      "expected": true
+    },
+    {
+      "kind": "describe",
+      "name": "describe all",
+      "condition": { "all": [{ "path": "/subject", "op": "equals", "value": "x" }] },
+      "expected": "all of (/subject equals \"x\")"
+    },
+    {
+      "kind": "describe",
+      "name": "describe any",
+      "condition": { "any": [{ "path": "/subject", "op": "equals", "value": "x" }] },
+      "expected": "any of (/subject equals \"x\")"
+    },
+    {
+      "kind": "describe",
+      "name": "describe not",
+      "condition": { "not": { "path": "/subject", "op": "equals", "value": "x" } },
+      "expected": "not (/subject equals \"x\")"
+    },
+    {
+      "kind": "describe",
+      "name": "describe exists",
+      "condition": { "path": "/body", "op": "exists" },
+      "expected": "/body exists"
+    },
+    {
+      "kind": "describe",
+      "name": "describe equals",
+      "condition": { "path": "/subject", "op": "equals", "value": "x", "caseSensitive": true },
+      "expected": "/subject equals \"x\" (case-sensitive)"
+    },
+    {
+      "kind": "describe",
+      "name": "describe notEquals",
+      "condition": { "path": "/unread", "op": "notEquals", "value": false },
+      "expected": "/unread does not equal false"
+    },
+    {
+      "kind": "describe",
+      "name": "describe contains",
+      "condition": { "path": "/subject", "op": "contains", "value": "x" },
+      "expected": "/subject contains \"x\""
+    },
+    {
+      "kind": "describe",
+      "name": "describe startsWith",
+      "condition": { "path": "/subject", "op": "startsWith", "value": "x" },
+      "expected": "/subject starts with \"x\""
+    },
+    {
+      "kind": "describe",
+      "name": "describe endsWith",
+      "condition": { "path": "/subject", "op": "endsWith", "value": "x" },
+      "expected": "/subject ends with \"x\""
+    },
+    {
+      "kind": "describe",
+      "name": "describe in",
+      "condition": { "path": "/subject", "op": "in", "values": ["x", "y"] },
+      "expected": "/subject is one of [\"x\",\"y\"]"
+    },
+    {
+      "kind": "describe",
+      "name": "describe gt",
+      "condition": { "path": "/authentication/ignoredHeaders", "op": "gt", "value": 0 },
+      "expected": "/authentication/ignoredHeaders is greater than 0"
+    },
+    {
+      "kind": "describe",
+      "name": "describe gte",
+      "condition": { "path": "/authentication/ignoredHeaders", "op": "gte", "value": 0 },
+      "expected": "/authentication/ignoredHeaders is at least 0"
+    },
+    {
+      "kind": "describe",
+      "name": "describe lt",
+      "condition": { "path": "/authentication/ignoredHeaders", "op": "lt", "value": 1 },
+      "expected": "/authentication/ignoredHeaders is less than 1"
+    },
+    {
+      "kind": "describe",
+      "name": "describe lte",
+      "condition": { "path": "/authentication/ignoredHeaders", "op": "lte", "value": 1 },
+      "expected": "/authentication/ignoredHeaders is at most 1"
+    },
+    {
+      "kind": "describe",
+      "name": "describe domainIs",
+      "condition": {
+        "path": "/warnings/fromDomain",
+        "op": "domainIs",
+        "value": "example.com",
+        "includeSubdomains": true
+      },
+      "expected": "/warnings/fromDomain is example.com or a subdomain"
+    }
+  ]
+}

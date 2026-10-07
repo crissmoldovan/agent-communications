@@ -93,6 +93,45 @@ assert.equal(events.foldForComparison('STRASSE'), events.foldForComparison('stra
 console.log('events consumer check: Unicode 15.1 NFC and case folding OK');
 // --- end Unicode 15.1 ---
 
+// --- Deterministic conditions and static agentic checks (events phase A, task 12) ---
+{
+  const definition = events.CATALOGUE.find((entry) => entry.type === 'gmail.message.received');
+  assert.ok(definition);
+  const condition = events.canonicaliseCondition(definition, { path: '/subject', op: 'equals', value: 'Straße' });
+  assert.deepEqual(condition, {
+    ok: true,
+    value: { path: '/subject', op: 'equals', value: 'Straße', caseSensitive: false },
+  });
+  assert.equal(
+    events.evaluateCondition(definition, condition.value, { ...definition.examples[0], subject: 'STRASSE' }),
+    true,
+  );
+  assert.equal(events.describeCondition(condition.value), '/subject equals "Straße"');
+  assert.deepEqual(events.conditionPointers(condition.value), ['/subject']);
+  assert.deepEqual(
+    events.canonicaliseAgenticCondition(definition, condition.value, {
+      judgeId: 'consumer-check',
+      judgeVersion: 1,
+      question: '',
+      inputs: [],
+      threshold: 0,
+    }),
+    {
+      ok: true,
+      value: {
+        judgeId: 'consumer-check',
+        judgeVersion: 1,
+        question: '',
+        inputs: [],
+        threshold: 0,
+        onUncertain: 'no-match',
+      },
+    },
+  );
+  console.log('events consumer check: deterministic conditions and static agentic checks OK');
+}
+// --- end deterministic conditions ---
+
 // --- UTS #46 revision 31: the canonical domain (events phase A, task 6) ---
 // Bundled and pinned: nontransitional, so ß is kept; a trailing root dot is refused (decision 13).
 assert.deepEqual(events.toAsciiDomain('Bücher.Example'), { ok: true, value: 'xn--bcher-kva.example' });
