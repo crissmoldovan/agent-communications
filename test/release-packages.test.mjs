@@ -499,7 +499,12 @@ test('the package verifier installs the whole closure, and no @agentcomms packag
     /`--\$\{SCOPE\}:registry=\$\{registry\.url\}`/,
     'the scope is not sent to the refusing registry',
   );
-  assert.match(verifier, /\.\.\.dependencyTarballs,\s*tarball,/);
+  // Both installs go through the one helper that names the refusing registry, the workspace closure before the
+  // candidate: installed after it, a dependency that sorts later was asked of the registry.
+  assert.match(verifier, /const install = \(tarballs\) =>/);
+  assert.match(verifier, /`--\$\{SCOPE\}:registry=\$\{registry\.url\}`,\s*\.\.\.tarballs,/);
+  assert.match(verifier, /await install\(dependencyTarballs\);\s*await install\(\[tarball\]\);/);
+  assert.equal(verifier.match(/runAsync\(\s*'npm',\s*\[\s*'install'/g)?.length, 1, 'one npm install helper, no other');
 });
 
 // ── The publish job's shape ──────────────────────────────────────────────────────────────────────────────────────
