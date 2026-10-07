@@ -613,6 +613,10 @@ to decline:
   invariant), so that a phase D adapter that skipped `normaliseResendBody` cannot emit one? Not implemented; the spec
   places the rule in normalisation only (A.5, 3825-3830).
 
+- **A-K3-1 (committee K3-1, 2–1, APPLIED):** the fixed test event's message changed from "agentcomms test event" to
+  "agent-communications test event" (spec 621–622), so no string a person reads starts with a suite binary. The owner
+  may revert it; reverting needs a guard exception the guard's design forbids.
+
 ## Where the spec is ambiguous or contradicts itself, for phase A
 
 Each is resolved by the decision named. Line numbers are the spec's at `225d7855`.
@@ -654,6 +658,9 @@ literal words; safety and downstream consumers; a devil's advocate for the other
 | K2-1 | Task 10 (track T), prose entries 19-20 | Resend `body`: does `validateEvent` refuse an unpaired surrogate, or only `normaliseResendBody`? | **Only `normaliseResendBody`** (as built). Added to "Spec amendments to raise with the owner" as A-K2-1. | 2–1. A.5 (spec 3825-3830) places the rule under "Normalisation from the existing read" and calls the failure "a malformed materialisation response under D3"; the schema block (3806-3814) states only `maxLength`, and decision 7 requires each invariant to quote a spec sentence. Dissent (safety): a phase D adapter that skipped the normaliser could emit a body the daemon's UTF-8 envelope turns into U+FFFD, so delivered text would differ from the hashed payload — raised with the owner rather than invented here. |
 | K2-2 | Task 10 (track T), prose entries 28-29 | WhatsApp `messageId`: opaque string, or an invariant tying it to the protocol key? | **An invariant, `whatsapp-message-key`** (new name in decision 7's vocabulary): `messageId` parses as core-canonical JSON of exactly four non-empty strings, re-serialises canonically to the identical string, its first element is `"wa-msg"`, and its third element equals `sender.id`. Nothing about `chat.id` (the spec never says `chat.id` is `chatJid`). | 2–1. A.7: "The event `messageId` is exactly D4's canonical raw protocol message key: `["wa-msg", chatJid, senderJidRaw, stanzaId]`" (3977-3978) and "`sender.id` is the same exact raw `senderJidRaw`" (3981); D4 line 755; empty elements are skipped (3982). `messageId` is the identity and dedupe basis, so a wrongly built one must not validate. Dissent (devil's advocate): the validator cannot see `chatJid`/`stanzaId`, so protection is partial — accepted: the adapter (phase D) still owns full derivation, and consumers must not parse `messageId` (it stays an opaque identity on the wire). |
 | K2-3 | Task 10 (track T), prose entry 6 | Gmail `hasAttachments` vs `attachments`: invariant or adapter guidance? | **Adapter guidance only** (as built; no invariant, no `dependentRequired`). | Unanimous. A.1 (3577-3582) makes both separately lazy and the sentence describes what an adapter writes when it fetches; only Resend has `dependentRequired` (3812-3820); a projection may ask for the boolean alone (3579-3580). |
+| K3-1 | Task 14 (track M) | The spec's fixed test event (D3, spec 621–622) carried `"message":"agentcomms test event"`; the printed-command guard refuses it as the `agentcomms` binary written as a word, and lists no file or value to skip by design. | **Amend the fixed bytes:** the message is `"agent-communications test event"` in the target-test CloudEvent and the judge test input (spec 621–622, D3-b, `test-event.ts`). Recorded as owner-facing amendment A-K3-1. | 2–1. A value-based exception would be the first entry in a skip list the guard forbids ("Nothing here lists a channel, a binary or a file to skip"); a data file or a string built from parts would be an evasion; a person reading a webhook log could paste `agentcomms test event` as a command; the event is synthetic and unshipped, so the change costs one string. Dissent (spec fidelity): keep the reviewed bytes with one narrow, test-pinned exception. |
+| K3-2 | Task 14 (track M) | Every envelope vector must "copy at least one untrusted, one address and one id field", but `gmail.message.labelled` has no untrusted or address field and Slack and WhatsApp have no address field. | **Each vector copies what its type has** — an id always, an untrusted field and an address where the type has one. | Unanimous. Inventing fields would contradict Appendix A; the labelled vector covers MAP-f's no-untrusted case. |
+| K3-3 | Task 14 (track M) | The `observedAt` mutation: the plan says only the labelled vector still passes; `resend.email.status_changed` passes too. | **The plan is wrong in that detail; the Resend vector stays.** | The spec requires `occurredAt === observedAt` for both `gmail.message.labelled` and `resend.email.status_changed` (spec 600–603), so changing the Resend times would contradict it; the mutation is still caught by every other vector. |
 
 Follow-ups owed by Task 11: (K1, corrected while building Task 11) Appendix A's metadata patterns DO end on nullable
 fields — `from.name` and others — so the earlier follow-up ("no pattern ends on a nullable field", from an unchecked
@@ -1715,7 +1722,7 @@ proves Batch 1 end to end.
     **Tests first.** Cover MAP-f, MAP-g, MAP-h, MAP-i and D3-b.
 
     - **"MAP-h: one full-envelope byte vector for each of the seven types"**. Each vector names a catalogue example, a
-      small template that copies at least one untrusted, one address and one id field, `plain` representation, a
+      small template that copies an id field and, where the type has one, an untrusted and an address field (K3-2), `plain` representation, a
       fixed delivery id, a synthetic installation id, a rule id and version, and a target id and version. It holds the
       expected envelope **as a hand-written JSON object** — `specversion` `"1.0"`; `id`; `source`
       `urn:agentcomms:<inst>:<account id>`; `type` `com.agentcomms.<type>.v1`; `time` exactly the example's
@@ -1744,9 +1751,9 @@ proves Batch 1 end to end.
       `/`, `%`, a space, `é` and an astral character, and `agentcommsrule` with a hostile rule id, use uppercase hex
       and RFC 3986's unreserved set exactly (decision 16). An unpaired surrogate is refused.
     - **"D3-b: the fixed test event"**: `TEST_CLOUD_EVENT_BYTES` is exactly
-      `{"data":{"message":"agentcomms test event","synthetic":true},"datacontenttype":"application/json","id":"agentcomms-test-v1","source":"urn:agentcomms:test","specversion":"1.0","time":"2000-01-01T00:00:00Z","type":"io.agentcomms.test.v1"}`,
+      `{"data":{"message":"agent-communications test event","synthetic":true},"datacontenttype":"application/json","id":"agentcomms-test-v1","source":"urn:agentcomms:test","specversion":"1.0","time":"2000-01-01T00:00:00Z","type":"io.agentcomms.test.v1"}`,
       which is the canonical JSON of D3's object (line 622). `JUDGE_TEST_INPUT` is
-      `{ "synthetic": true, "message": "agentcomms test event" }`. Neither can be built through `buildCloudEvent`,
+      `{ "synthetic": true, "message": "agent-communications test event" }`. Neither can be built through `buildCloudEvent`,
       because its type is refused.
 
     **Then the code.** `buildCloudEvent` validates its inputs (non-empty ids, positive integer versions, pointers
@@ -1755,7 +1762,7 @@ proves Batch 1 end to end.
 
     **Mutations.**
 
-    - Take `time` from `observedAt`: the labelled vector still passes (they are equal) while every other one fails. The
+    - Take `time` from `observedAt`: the labelled and Resend status-change vectors still pass (they are equal, spec 600–603; K3-3) while every other one fails. The
       vectors must include both cases.
     - Sort after encoding: MAP-f must fail.
     - Use `encodeURIComponent`: MAP-g must fail on `!'()*`.

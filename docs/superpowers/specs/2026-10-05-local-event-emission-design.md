@@ -618,8 +618,9 @@ operational records are never event inputs. The target-level installation reset 
 likewise neither selectable nor routed from an event.
 
 The fixed synthetic test value is also not a catalogue source event. Judge tests receive only
-`{ synthetic: true, message: "agentcomms test event" }`; target tests send the exact canonical CloudEvent bytes
-`{ "specversion":"1.0", "id":"agentcomms-test-v1", "source":"urn:agentcomms:test", "type":"io.agentcomms.test.v1", "time":"2000-01-01T00:00:00Z", "datacontenttype":"application/json", "data":{ "synthetic":true, "message":"agentcomms test event" } }`.
+`{ synthetic: true, message: "agent-communications test event" }` (amended 2026-10-07 during phase A, from "agentcomms test event", so no string a
+person reads starts with a suite command; see the phase A plan, committee K3-1); target tests send the exact canonical CloudEvent bytes
+`{ "specversion":"1.0", "id":"agentcomms-test-v1", "source":"urn:agentcomms:test", "type":"io.agentcomms.test.v1", "time":"2000-01-01T00:00:00Z", "datacontenttype":"application/json", "data":{ "synthetic":true, "message":"agent-communications test event" } }`.
 No runtime id, timestamp, account value, mapping or caller field is inserted.
 
 Bodies or file metadata are fetched only when at least one active, source-option-matching rule version's per-rule
