@@ -1580,12 +1580,13 @@ function jobBlock(workflow, key) {
   return workflow.slice(start, end);
 }
 
-test('the publish waits for the Node 22.12.0 leg, which builds on the tooling Node and then runs its built-command tests', async () => {
+test('the publish waits for the old-Node leg, which builds on the tooling Node and then runs its built-command tests', async () => {
   /*
    * Case 0000 of the CUE-403 design: a located command for a `.ts` entry runs on the oldest Node the packages claim.
    * The verify matrix starts at the repository's own tooling floor, 22.18.0, which strips types without being asked,
    * so it cannot see a missing `--experimental-strip-types`. One job builds there, switches to exactly 22.12.0 and runs
-   * the built-package tests; the publish needs them as well as the matrix.
+   * the built-package tests; the publish needs them as well as the matrix. The held event service is run again under
+   * exactly 22.16.0, its own floor (events B1 plan amendment B1-F): below it the command must refuse, at it reach SQLite.
    */
   const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
   const job = jobBlock(workflow, 'old-node');
@@ -1603,12 +1604,17 @@ test('the publish waits for the Node 22.12.0 leg, which builds on the tooling No
   const run = at(
     '- run: node --test packages/core/test/cli-command-old-node.test.mjs packages/events-daemon/test/old-node.test.mjs\n',
   );
-  assert.ok(tooling < install && install < build && build < old && old < run, 'built on 22.18.0, then run on 22.12.0');
-  assert.equal([...job.matchAll(/node-version: /g)].length, 2, 'two Node versions, and no range');
+  const floor = at('node-version: 22.16.0\n');
+  const service = at('- run: node --test packages/events-daemon/test/old-node.test.mjs\n');
+  assert.ok(
+    tooling < install && install < build && build < old && old < run && run < floor && floor < service,
+    'built on 22.18.0, then run on 22.12.0, then the event service on 22.16.0',
+  );
+  assert.equal([...job.matchAll(/node-version: /g)].length, 3, 'three exact Node versions, and no range');
   assert.equal(
     [...job.matchAll(/node --test|pnpm (?:test|verify)\b/g)].length,
-    1,
-    'only the built-command tests run on the old Node',
+    2,
+    'only the built-command tests run on the old Nodes',
   );
   // The publish needs it, and the ordinary verify matrix too.
   const publish = jobBlock(workflow, 'publish');
@@ -1623,6 +1629,7 @@ test('the publish waits for the Node 22.12.0 leg, which builds on the tooling No
   await readFile(join(ROOT, 'packages', 'core', 'test', 'cli-command-old-node.test.mjs'), 'utf8');
   const eventService = await readFile(join(ROOT, 'packages', 'events-daemon', 'test', 'old-node.test.mjs'), 'utf8');
   assert.match(eventService, /node:sqlite|Node SQLite/, 'the old-node service check reaches Node SQLite');
+  assert.match(eventService, /needs Node 22\\.16\\.0 or newer/, 'and below the floor, checks the refusal by name');
   const root = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
   assert.equal(root.engines.node, '>=22.18.0');
 });

@@ -182,7 +182,8 @@ function serviceProse(directory) {
     approval: 'a local service action needs a person or is unavailable',
     unavailable: 'the local service is unavailable',
     permission: 'a local permission is needed',
-    configuration: 'a local service configuration problem',
+    configuration:
+      'a local service configuration problem, including a Node older than 22.16, which has no complete `node:sqlite`',
     intro: [
       'The local service offers the same operations through its CLI and over stdio.',
       '',

@@ -29,7 +29,7 @@ Scripts should read these rather than parse output.
 | `69` | the local service is unavailable |
 | `75` | temporary; retrying later is reasonable |
 | `77` | a local permission is needed |
-| `78` | a local service configuration problem |
+| `78` | a local service configuration problem, including a Node older than 22.16, which has no complete `node:sqlite` |
 
 ## Commands
 

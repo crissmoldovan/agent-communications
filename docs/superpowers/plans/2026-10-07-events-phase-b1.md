@@ -56,7 +56,9 @@ Reasonable alternatives rejected for B1:
 
 ### 2. SQLite is Node built-in, with incremental owned migrations
 
-Use node:sqlite and DatabaseSync, not better-sqlite3, sqlite3, or another native module. The repository’s public floor is Node 22.12, where node:sqlite is present; the build legs run 22.18 and the release workflow already has an explicit 22.12 leg. A built-in driver avoids ABI-specific native binaries, package-manager install scripts, optional-platform omissions, and a new third-party closure in every release/consumer tarball. Task 4 adds an actual built daemon command test to the 22.12 release leg; if node:sqlite is not usable there, B1 stops rather than quietly raising the package engine floor.
+Use node:sqlite and DatabaseSync, not better-sqlite3, sqlite3, or another native module. A built-in driver avoids ABI-specific native binaries, package-manager install scripts, optional-platform omissions, and a new third-party closure in every release/consumer tarball.
+
+**Amended during the build (B1-F, committee K4).** This paragraph first said “The repository’s public floor is Node 22.12, where node:sqlite is present … if node:sqlite is not usable there, B1 stops rather than quietly raising the package engine floor.” Its premise was false: Node 22.12 has node:sqlite only behind `--experimental-sqlite` (measured: `ERR_UNKNOWN_BUILTIN_MODULE` unflagged; unflagged from 22.13, complete from 22.16, as the WhatsApp channel already states). The daemon therefore declares `engines.node >=22.16.0`, the WhatsApp floor, loads node:sqlite lazily through one loader that refuses an older Node with a CONFIG error naming 22.16.0 (`NODE_TOO_OLD`), and never runs on an experimental flag. The raise is recorded, tested and documented, not quiet. The release workflow's old-node job runs the built daemon under 22.12.0 (it must answer `--help` and refuse `status` by name, never crash) and again under 22.16.0 (it must reach Node SQLite). Core's 22.12 floor is unchanged.
 
 Use one database at <stateDir>/events/events.sqlite. Its 0700 parent, database, WAL, SHM, lock, socket directory, token, and file-store secret directory are owner-only: 0600 files on POSIX, and current-user owner-only ACL helpers on Windows. The helper refuses a symlink/reparse-point path and verifies permissions after creation. SQLite opens with foreign keys enabled, WAL journal mode, synchronous FULL, a bounded busy timeout, and explicit BEGIN IMMEDIATE transactions for serialised authority transitions.
 
@@ -163,6 +165,16 @@ The review judged B1-A, B1-C, B1-D and B1-E safe plan decisions: none weakens a 
 | B1-E — adopted | 1913-1941, 2016, 2823, 2825 | B1 names an independent event secret store/migration, while B3 names the public terminal/app secret-operation set and migration. | B1 implements and tests the independent backend/migration engine and selector; B3 exposes the terminal/app command/exception row. No B1 model-facing secret operation exists, and a failed keychain selection remains fail-closed. |
 
 Phase A owner-facing amendments A-K2-1 and A-K3-1 are not reopened. B1 follows the established normaliser boundary and the amended synthetic fixed bytes.
+
+## Decisions made during the build (committee)
+
+Each was put to a committee of three (spec and plan fidelity; safety and the people who run it; devil's advocate), then decided by the coordinator. The owner may overrule any of them.
+
+| Id | Found in | Question | Decision and reason |
+|---|---|---|---|
+| K4 → B1-F | Task 5 review | Node 22.12, the floor decision 2 assumed, has node:sqlite only behind `--experimental-sqlite`; Task 4's `status` imported it statically, so the built command crashed there even for `--help`, and the old-node test never opened a database. Raise the floor, keep 22.12 with the flag, or stop? | Unanimous: raise only the daemon to Node 22.16.0 with WhatsApp's pattern (lazy loader, named CONFIG refusal, `engines`), test both edges in the old-node job, and record it here. A flag in a process that holds the event keys, or a re-exec wrapper, is worse than a stated floor; the package is held, so no installed user is affected. Decision 2 and Task 4 are amended in place. |
+
+Builders of later tasks must also know: `EventRecordCipher.encrypt()` reserves its nonce-counter invocation in its own `BEGIN IMMEDIATE` transaction and awaits the master, so it must run before, not inside, a caller's write transaction; a reservation whose write later rolls back only spends a counter, which is safe. Key rotation rewrites a row only if it still holds the bytes it read.
 
 ## Ambiguities resolved by this plan
 
@@ -280,7 +292,7 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
 
 ## Batch 2 — one protected owner
 
-4. **Package skeleton, owner-only paths, Node 22.12 SQLite proof, and the first parity row.**
+4. **Package skeleton, owner-only paths, the Node SQLite floor proof (B1-F), and the first parity row.**
 
    **Files.** Create packages/events-daemon/package.json, README.md, LICENSE, THIRD_PARTY_LICENSES, tsconfig.json, tsdown.config.ts, src/index.ts, src/cli.ts, src/cli/program.ts, src/mcp/server.ts, src/operations/status.ts, src/runtime/paths.ts and test/consumer-check.mjs. Add package tests for manifest, paths, CLI/MCP bootstrap, status parity and consumer. Change capabilities.json, pnpm-lock.yaml, scripts/record-git-head.cjs only if package discovery requires it, test/release-packages.test.mjs, test/manifests.test.mjs, test/install-docs.test.mjs, .github/workflows/release.yml and CONTRIBUTING.md.
 
@@ -290,7 +302,7 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
    - Verify owner-only parent/file creation and refusal of link/reparse-point or weak-permission paths on platform-specific test doubles.
    - Build the package, run agent-events --help and a minimal MCP tools/list probe in a temporary state root, and prove their stdout protocols remain clean.
    - Add the non-pending `events.status` `both` row and drive the real status command and status tool through the sealed operation stand-in, proving both call `status` and no other operation.
-   - Extend the old-node release test to execute the built agent-events --help/status fixture under Node 22.12, proving node:sqlite resolves without native installation.
+   - Extend the old-node release test to execute the built agent-events --help/status fixture under Node 22.12 (refused by name, never a crash) and under 22.16 (node:sqlite resolves without native installation) — B1-F.
 
    **Then the implementation.**
 
@@ -303,7 +315,7 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
    - Remove agentcommsRelease.hold: held-package test fails.
    - Replace node:sqlite with a native dependency: manifest/dependency closure test fails.
    - Make the events parent world-readable: permissions test fails.
-   - Remove the Node 22.12 command invocation: release-shape test fails.
+   - Remove the Node 22.12 or 22.16 command invocation: release-shape test fails.
 
    **Run.** pnpm --filter @agentcomms/events-daemon build; pnpm --filter @agentcomms/events-daemon test; node --test test/release-packages.test.mjs; pnpm verify:parity --strict; pnpm sync:reference (commit the generated docs/reference changes with this task, so `verify:reference` inside `pnpm verify` passes); then pnpm verify.
 
@@ -697,7 +709,7 @@ Each B1-owned portion of §5 has one accountable owner exactly once; supporting 
 | CRY-B1: packed encryption/AAD vectors, key rotation/loss/unreadable behaviour and no plaintext | 5 |
 | CTRL-B1: owner-only state, same-user/token protocol, negotiation, stale recovery and protocol compatibility | 6 |
 | PKG-B1-a: strict service declaration, automatic publication/surface/driver/reference discovery | 1 |
-| PKG-B1-b: held daemon packaging, Node 22.12 SQLite leg, consumer package shape | 4 |
+| PKG-B1-b: held daemon packaging, Node 22.12 refusal and 22.16 SQLite legs (B1-F), consumer package shape | 4 |
 | PAR-B1: every implemented B1 operation has exactly one capability row and is driven on both surfaces or its stated exception | 14 |
 | REL-B1: B1 merges held; generated docs and consumer test prove no release path publishes either held package | 15 |
 
