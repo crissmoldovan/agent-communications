@@ -1,0 +1,63 @@
+import type { DatabaseSync } from 'node:sqlite';
+import { SCHEMA_V1_STATEMENTS } from './schema-v1.ts';
+
+export interface EventMigration {
+  readonly version: number;
+  readonly name: string;
+  readonly statements: readonly string[];
+}
+
+export interface MigrationHooks {
+  readonly beforeStatement?:
+    | ((context: { readonly migration: EventMigration; readonly statementIndex: number }) => void)
+    | undefined;
+}
+
+export const EVENT_MIGRATIONS: readonly EventMigration[] = [
+  { version: 1, name: 'event-authority-v1', statements: SCHEMA_V1_STATEMENTS },
+];
+
+function initialiseLedger(database: DatabaseSync): void {
+  database.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    applied_at INTEGER NOT NULL
+  ) STRICT`);
+}
+
+/** Applies ordered daemon-owned migrations, one BEGIN IMMEDIATE transaction per version. */
+export function applyMigrations(
+  database: DatabaseSync,
+  migrations: readonly EventMigration[] = EVENT_MIGRATIONS,
+  hooks: MigrationHooks = {},
+): void {
+  initialiseLedger(database);
+  const applied = database.prepare('SELECT version, name FROM schema_migrations ORDER BY version').all() as Array<{
+    version: number;
+    name: string;
+  }>;
+  for (const [index, migration] of migrations.entries()) {
+    if (migration.version !== index + 1)
+      throw new Error('event migrations must have consecutive versions starting at 1');
+    const recorded = applied.find((entry) => entry.version === migration.version);
+    if (recorded) {
+      if (recorded.name !== migration.name)
+        throw new Error(`event migration ${migration.version} does not match its ledger name`);
+      continue;
+    }
+    database.exec('BEGIN IMMEDIATE');
+    try {
+      migration.statements.forEach((statement, statementIndex) => {
+        hooks.beforeStatement?.({ migration, statementIndex });
+        database.exec(statement);
+      });
+      database
+        .prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)')
+        .run(migration.version, migration.name, Date.now());
+      database.exec('COMMIT');
+    } catch (error) {
+      database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+}
