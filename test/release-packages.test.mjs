@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
@@ -77,6 +77,15 @@ async function treeWithShelf({ held = true, dependents = [], extra = {}, full = 
     if (!entry.isDirectory()) continue;
     await mkdir(join(root, 'packages', entry.name), { recursive: true });
     await cp(join(ROOT, 'packages', entry.name, 'package.json'), join(root, 'packages', entry.name, 'package.json'));
+    const manifest = JSON.parse(await readFile(join(ROOT, 'packages', entry.name, 'package.json'), 'utf8'));
+    const declaration = manifest.agentcommsPackage;
+    if (declaration?.kind === 'service') {
+      for (const path of [declaration.server.entry, declaration.operations]) {
+        const target = join(root, 'packages', entry.name, path);
+        await mkdir(dirname(target), { recursive: true });
+        await cp(join(ROOT, 'packages', entry.name, path), target, { recursive: true });
+      }
+    }
   }
   const { version } = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
   const shelf = {
@@ -1515,6 +1524,13 @@ test('sync-versions bumps every skill, Slack included, and --check catches one l
     await mkdir(join(dir, 'packages', name), { recursive: true });
     await cp(join(ROOT, 'packages', name, 'package.json'), join(dir, 'packages', name, 'package.json'));
   }
+  for (const { directory, declaration } of REGISTRY.services) {
+    for (const path of [declaration.server.entry, declaration.operations]) {
+      const target = join(dir, 'packages', directory, path);
+      await mkdir(dirname(target), { recursive: true });
+      await cp(join(ROOT, 'packages', directory, path), target, { recursive: true });
+    }
+  }
   const rootManifest = JSON.parse(await readFile(join(dir, 'package.json'), 'utf8'));
   const old = rootManifest.version;
   const next = `${old}-bump.1`;
@@ -1559,12 +1575,12 @@ function jobBlock(workflow, key) {
   return workflow.slice(start, end);
 }
 
-test('the publish waits for the Node 22.12.0 leg, which builds on the tooling Node and then runs only its one test', async () => {
+test('the publish waits for the Node 22.12.0 leg, which builds on the tooling Node and then runs its built-command tests', async () => {
   /*
    * Case 0000 of the CUE-403 design: a located command for a `.ts` entry runs on the oldest Node the packages claim.
    * The verify matrix starts at the repository's own tooling floor, 22.18.0, which strips types without being asked,
    * so it cannot see a missing `--experimental-strip-types`. One job builds there, switches to exactly 22.12.0 and runs
-   * the one built-package test; the publish needs it as well as the matrix.
+   * the built-package tests; the publish needs them as well as the matrix.
    */
   const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
   const job = jobBlock(workflow, 'old-node');
@@ -1579,13 +1595,15 @@ test('the publish waits for the Node 22.12.0 leg, which builds on the tooling No
   const install = at('- run: pnpm install --frozen-lockfile');
   const build = at('- run: pnpm build');
   const old = at('node-version: 22.12.0\n');
-  const run = at('- run: node --test packages/core/test/cli-command-old-node.test.mjs\n');
+  const run = at(
+    '- run: node --test packages/core/test/cli-command-old-node.test.mjs packages/events-daemon/test/old-node.test.mjs\n',
+  );
   assert.ok(tooling < install && install < build && build < old && old < run, 'built on 22.18.0, then run on 22.12.0');
   assert.equal([...job.matchAll(/node-version: /g)].length, 2, 'two Node versions, and no range');
   assert.equal(
     [...job.matchAll(/node --test|pnpm (?:test|verify)\b/g)].length,
     1,
-    'only the one test runs on the old Node',
+    'only the built-command tests run on the old Node',
   );
   // The publish needs it, and the ordinary verify matrix too.
   const publish = jobBlock(workflow, 'publish');
@@ -1598,6 +1616,8 @@ test('the publish waits for the Node 22.12.0 leg, which builds on the tooling No
   assert.match(jobBlock(workflow, 'verify'), /node: \[22\.18\.0, 24\]/, 'the matrix keeps its own Node versions');
   // The test is there, and the repository's own tooling floor stays where it is.
   await readFile(join(ROOT, 'packages', 'core', 'test', 'cli-command-old-node.test.mjs'), 'utf8');
+  const eventService = await readFile(join(ROOT, 'packages', 'events-daemon', 'test', 'old-node.test.mjs'), 'utf8');
+  assert.match(eventService, /node:sqlite|Node SQLite/, 'the old-node service check reaches Node SQLite');
   const root = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
   assert.equal(root.engines.node, '>=22.18.0');
 });

@@ -1506,6 +1506,22 @@
       "args": { "channel": "whatsapp" },
       "expect": { "request.channel": "whatsapp" },
       "reason": "From chat this is the core server's comms_server_prune, which prunes any channel's runtimes: `channel: \"whatsapp\"` is this command — the same change, `serverPruneChange`, so an approval either one prepared is claimed by the other (design §5)."
+    },
+    {
+      "id": "events-daemon.status",
+      "package": "events-daemon",
+      "cli": "status",
+      "mcp": "events_status",
+      "status": "both",
+      "operation": "status"
+    },
+    {
+      "id": "events-daemon.mcp.serve",
+      "package": "events-daemon",
+      "cli": "mcp",
+      "mcp": null,
+      "status": "exception",
+      "reason": "It starts the service server that a tool would need already running."
     }
   ]
 }

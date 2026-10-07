@@ -1,0 +1,66 @@
+{
+  "name": "@agentcomms/events-daemon",
+  "version": "0.14.1",
+  "description": "The held local event-emission service for agent-communications.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Criss Moldovan",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/crissmoldovan/agent-communications.git",
+    "directory": "packages/events-daemon"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "bin": {
+    "agent-events": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_LICENSES"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@agentcomms/core": "workspace:*",
+    "@agentcomms/events": "workspace:*",
+    "@agentcomms/gmail": "workspace:*"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "commander": "^15.0.0",
+    "tsdown": "catalog:",
+    "typescript": "catalog:"
+  },
+  "agentcommsPackage": {
+    "kind": "service",
+    "binary": "agent-events",
+    "server": {
+      "defaultName": "events",
+      "entry": "src/mcp/server.ts",
+      "factory": "createEventsMcpServer"
+    },
+    "operations": "src/operations"
+  },
+  "agentcommsRelease": {
+    "hold": "Held until the owner elects to release the first daemon consumer, alongside @agentcomms/events."
+  }
+}

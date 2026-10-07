@@ -51,9 +51,19 @@ test('the scan reads every runtime package the capabilities and the channel regi
   const capabilities = JSON.parse(readFileSync(join(ROOT, 'capabilities.json'), 'utf8'));
   for (const row of capabilities.capabilities) assert.ok(FACTS.packages.includes(row.package), row.package);
   // The event library too: it is published, and its source is scanned like every runtime package's.
-  assert.deepEqual(FACTS.packages, ['core', 'events', 'gmail', 'gmail-mcp', 'resend', 'slack', 'whatsapp']);
+  assert.deepEqual(FACTS.packages, [
+    'core',
+    'events',
+    'events-daemon',
+    'gmail',
+    'gmail-mcp',
+    'resend',
+    'slack',
+    'whatsapp',
+  ]);
   // Every manifest's command and every server's own, and every package's `bin`: the wrapper's included.
   assert.deepEqual([...FACTS.binaries].sort(), [
+    'agent-events',
     'agent-gmail',
     'agent-gmail-mcp',
     'agent-resend',
