@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { cp, mkdir, readdir, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,20 @@ async function fixture() {
       path.join(repository, 'packages', directory, 'package.json'),
       path.join(root, 'packages', directory, 'package.json'),
     );
+    // A service's declaration names its server entry and operations directory, and the registry checks both exist.
+    const manifest = JSON.parse(await readFile(path.join(repository, 'packages', directory, 'package.json'), 'utf8'));
+    const service = manifest.agentcommsPackage?.kind === 'service' ? manifest.agentcommsPackage : null;
+    if (service !== null) {
+      for (const declared of [service.server.entry, service.operations]) {
+        await cp(
+          path.join(repository, 'packages', directory, declared),
+          path.join(root, 'packages', directory, declared),
+          {
+            recursive: true,
+          },
+        );
+      }
+    }
   }
   await mkdir(path.join(root, 'skills', 'valid-skill', 'references'), { recursive: true });
   await writeFile(
