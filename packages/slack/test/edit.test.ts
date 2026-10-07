@@ -639,6 +639,27 @@ test('under confirm, a person approves the edit they were shown, and only then i
   assert.equal(w.fake.count('chat.update'), 1);
 });
 
+test('an @channel edit in a room read without its member count is never approved at a terminal, as a post is not', async () => {
+  // Slack answers some conversations with no `num_members`: the room is read, and its reach still cannot be counted.
+  const w = await amendWorld({ policy: 'confirm', room: { num_members: undefined } });
+  const prepared = await preparedEdit(w, { broadcast: 'channel' });
+  assert.notEqual(prepared.preview.notifies.unknown, undefined, 'the preview says the reach is not known');
+  for (const [step, attempt] of [
+    ['the screen', () => beginApproval(w.context, prepared.approvalId, w.slack)],
+    ['the typed code', () => finishApproval(w.context, prepared.approvalId, 'any-code', w.slack)],
+  ] as const) {
+    const error = await refusal(attempt(), `${step} approved an uncounted broadcast edit`);
+    assert.equal(error.code, 'PROVIDER_UNAVAILABLE', step);
+    assert.equal(
+      error.message,
+      'the channel’s members could not be counted, so who this reaches cannot be shown',
+      step,
+    );
+  }
+  assert.equal(await stateOf(w.harness, prepared.approvalId), 'pending', 'nothing was approved, and nothing voided');
+  assert.equal(w.fake.count('chat.update'), 0);
+});
+
 test('an edit whose message changed is never shown for approval, and its approval is void', async () => {
   const w = await amendWorld({ policy: 'confirm' });
   const prepared = await preparedEdit(w);

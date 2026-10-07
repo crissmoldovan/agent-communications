@@ -270,6 +270,22 @@ async function currentEdit(
       details: { approvalId: record.approvalId, reason: view.roomUnread },
     });
   }
+  /*
+   * A room read without its count is the same gap, as `currentPost` says of a post: Slack answers some conversations
+   * with no `num_members`, and an `@channel` or `@here` edit is never approved without a count, whichever way it went
+   * missing (§E6, an edit's ceremony is a post's). The edit's screen lacked this until review of #52.
+   */
+  const uncounted = notifiesRoom ? view.preview.notifies.unknown : undefined;
+  if (!edited && uncounted !== undefined) {
+    throw new CommsError(
+      'PROVIDER_UNAVAILABLE',
+      'the channel’s members could not be counted, so who this reaches cannot be shown',
+      {
+        hint: 'Nothing was approved. Take the @channel or @here out of the edit, or make it in Slack itself.',
+        details: { approvalId: record.approvalId, reason: uncounted },
+      },
+    );
+  }
   if (edited || view.digest !== record.contentDigest) {
     const prepared = preparedEditReach(record);
     const reach = view.preview.notifies.estimated;
