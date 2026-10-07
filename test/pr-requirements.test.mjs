@@ -10,6 +10,7 @@ import {
   MARKER,
   nextVersions,
   PROVENANCE_LABELS,
+  REQUIRED_CHECKS,
   SECTIONS,
   sectionsOf,
 } from '../scripts/pr-requirements.mjs';
@@ -48,7 +49,10 @@ operations/amend.ts is the gate; read its last look first.
 ## Checks
 
 - [x] \`pnpm verify\` passes locally
-- [x] Tests cover the change
+- [x] Tests cover the change, and I broke each guard on purpose to see its test fail
+- [x] No real email, address, token, client secret or account id in code, fixtures or docs
+- [x] Docs and skills updated where a command, tool or behaviour changed
+- [x] \`CHANGELOG.md\` updated under \`## Unreleased\` when users will notice
 `;
   return {
     body,
@@ -108,7 +112,7 @@ test('a version that is not one semver step on from main is refused, with the th
     const pr = complete();
     const result = checkPullRequest({
       ...pr,
-      body: pr.body.replace('0.15.0-slack-edit-delete', `${right}-slack-edit-delete`),
+      body: pr.body.replace('0.15.0-slack-edit-delete — a minor', `${right}-slack-edit-delete — a ${step}`),
     });
     assert.deepEqual(result.missing, [], right);
     assert.equal(result.proposal.step, step);
@@ -173,6 +177,50 @@ test('a description with no version or provenance at all gets one line for each,
   ]);
 });
 
+test('a deleted box is not a ticked one: each required box is asked back, the whole checklist too', () => {
+  const pr = complete();
+  const noChecks = checkPullRequest({ ...pr, body: pr.body.replace(/## Checks[\s\S]*$/, '') });
+  assert.deepEqual(
+    noChecks.missing,
+    REQUIRED_CHECKS.map(
+      (check) => `The box "${check}…" is missing from "Checks": put it back from the template, and tick it.`,
+    ),
+  );
+  const oneGone = checkPullRequest({ ...pr, body: pr.body.replace(/^- \[x\] No real email.*$/m, '') });
+  assert.deepEqual(oneGone.missing, [
+    'The box "No real email, address, token, client secret or account id…" is missing from "Checks": put it back from the template, and tick it.',
+  ]);
+});
+
+test('every required box is one the template has, so the two cannot drift apart', async () => {
+  const template = await readFile(join(ROOT, '.github', 'PULL_REQUEST_TEMPLATE.md'), 'utf8');
+  const boxes = template.split('\n').filter((line) => line.startsWith('- [ ] '));
+  for (const check of REQUIRED_CHECKS)
+    assert.ok(
+      boxes.some((box) => box.includes(check)),
+      check,
+    );
+  assert.equal(boxes.length, REQUIRED_CHECKS.length, 'a box in the template that the check does not require');
+});
+
+test('a proposed version needs its reason: the step named, as the number makes it, and why in words', () => {
+  const pr = complete();
+  const reasonless = `Under "Proposed version", say why \`0.15.0-slack-edit-delete\` is a minor: name the step — patch, minor or major — and the reason, in a sentence.`;
+  const bare = pr.body.replace(/^0\.15\.0-slack-edit-delete — .*$/m, '0.15.0-slack-edit-delete');
+  assert.deepEqual(checkPullRequest({ ...pr, body: bare }).missing, [reasonless]);
+  const wordOnly = pr.body.replace(/^0\.15\.0-slack-edit-delete — .*$/m, '0.15.0-slack-edit-delete — minor.');
+  assert.deepEqual(checkPullRequest({ ...pr, body: wordOnly }).missing, [reasonless]);
+  const noStep = pr.body.replace(
+    /^0\.15\.0-slack-edit-delete — .*$/m,
+    '0.15.0-slack-edit-delete — two new tools arrive.',
+  );
+  assert.deepEqual(checkPullRequest({ ...pr, body: noStep }).missing, [reasonless]);
+  const wrongStep = pr.body.replace('— a minor:', '— a patch:');
+  assert.deepEqual(checkPullRequest({ ...pr, body: wrongStep }).missing, [
+    'The proposed version `0.15.0-slack-edit-delete` is a minor by its number, but its reason calls it a patch.',
+  ]);
+});
+
 test('an unticked box is named', () => {
   const pr = complete();
   const result = checkPullRequest({
@@ -180,7 +228,7 @@ test('an unticked box is named', () => {
     body: pr.body.replace('- [x] Tests cover the change', '- [ ] Tests cover the change'),
   });
   assert.deepEqual(result.missing, [
-    'A box is not ticked: "Tests cover the change". Do it and tick it, or say in the box why it does not apply.',
+    'A box is not ticked: "Tests cover the change, and I broke each guard on purpose to see its test fail". Do it and tick it, or say in the box why it does not apply.',
   ]);
 });
 
