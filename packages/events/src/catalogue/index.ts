@@ -80,10 +80,13 @@ const issue = (
   message: string,
 ) => ({ ok: false as const, issues: [{ code, message }] });
 
+/** The reserved prefix of the daemon's operational record names (spec D3): never a selectable source event. */
+const OPERATIONAL_RECORD_TYPE = /^agentcomms\./u;
+
 /** A selectable source-event definition, never a daemon operational record. */
 export function catalogueEntry(type: string, version: number): Result<CatalogueDefinition> {
-  if (type.startsWith('agentcomms.'))
-    return issue('EVENT_TYPE_NOT_SELECTABLE', 'agentcomms operational records are not catalogue source events');
+  if (OPERATIONAL_RECORD_TYPE.test(type))
+    return issue('EVENT_TYPE_NOT_SELECTABLE', 'operational records are not catalogue source events');
   const typeMatch = CATALOGUE.find((definition) => definition.type === type);
   if (typeMatch === undefined) return issue('EVENT_TYPE_UNKNOWN', 'the event type is not in the version-1 catalogue');
   if (version !== typeMatch.version)
