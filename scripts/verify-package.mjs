@@ -226,8 +226,8 @@ async function main() {
       JSON.stringify({ name: 'consumer', private: true, type: 'module' }),
     );
     const registry = await refusingRegistry();
-    try {
-      await runAsync(
+    const install = (tarballs) =>
+      runAsync(
         'npm',
         [
           'install',
@@ -237,11 +237,19 @@ async function main() {
           '--cache',
           join(tempRoot, 'npm-cache'),
           `--${SCOPE}:registry=${registry.url}`,
-          ...dependencyTarballs,
-          tarball,
+          ...tarballs,
         ],
         consumer,
       );
+    try {
+      /*
+       * The workspace dependencies first, then the candidate. npm places a consumer's dependencies in name order, so a
+       * candidate whose workspace dependency sorts after it (`@agentcomms/events-daemon` before `@agentcomms/gmail`)
+       * was resolved while that tarball was not yet placed — and npm asked the registry for it. Installed already, the
+       * dependency satisfies the candidate's exact pin, and every request still goes to the refusing registry.
+       */
+      if (dependencyTarballs.length > 0) await install(dependencyTarballs);
+      await install([tarball]);
     } catch (error) {
       // Asking the registry is the failure to report; npm's own words for it are a 404 that names neither cause.
       if (registry.asked.size === 0) throw error;
