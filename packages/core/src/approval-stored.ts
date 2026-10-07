@@ -42,7 +42,7 @@ export interface CorruptStub {
 }
 
 /** What an attribution-verified corrupt record may still show its owner: the fields its binding was made over. */
-export interface SafeFields {
+export interface OrdinarySafeFields {
   readonly kind: ApprovalKind;
   readonly channel: string;
   readonly ownerScope: OwnerScope;
@@ -52,6 +52,13 @@ export interface SafeFields {
   readonly draftMessageId: string;
   readonly expect: Expectation;
 }
+
+/** A disclosure record has no channel owner or sender-controlled operational fields to expose. */
+export interface DisclosureSafeFields {
+  readonly kind: 'disclosure';
+}
+
+export type SafeFields = OrdinarySafeFields | DisclosureSafeFields;
 
 export type StoredApproval =
   | { readonly form: 'v2'; readonly record: ApprovalRecord }
@@ -69,7 +76,7 @@ export type StoredApproval =
 // ── Decoding ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const STATES: readonly string[] = ['pending', 'approved', 'sending', 'used', 'failed', 'unknown', 'expired', 'revoked'];
-const KINDS: readonly string[] = ['send', 'change', 'download'];
+const KINDS: readonly string[] = ['send', 'change', 'download', 'disclosure'];
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -145,6 +152,68 @@ function commonShape(raw: Record<string, unknown>): UnreadableReason | null {
   return null;
 }
 
+/** The disclosure union member is deliberately closed: it cannot acquire a send-shaped field by optionality. */
+function disclosureShape(raw: Record<string, unknown>): UnreadableReason | null {
+  for (const field of ['approvalId', 'state', 'createdAt', 'expiresAt', 'updatedAt', 'bindingDigest'] as const) {
+    if (!isString(raw[field])) return 'wrong-shape';
+  }
+  for (const field of ['pendingMs', 'approvedMs', 'challengeAttempts'] as const) {
+    if (typeof raw[field] !== 'number') return 'wrong-shape';
+  }
+  for (const field of [
+    'approvedDigest',
+    'approvedVia',
+    'approvedAt',
+    'usableUntil',
+    'challengeHash',
+    'usedAt',
+    'revokedAt',
+    'expiredAt',
+    'reason',
+  ] as const) {
+    if (!optional(raw[field], isString)) return 'wrong-shape';
+  }
+  const disclosure = raw.disclosure;
+  if (
+    !isObject(disclosure) ||
+    !isString(disclosure.digest) ||
+    !isString(disclosure.activationIntentId) ||
+    !isString(disclosure.activationKind) ||
+    !Array.isArray(disclosure.versions) ||
+    !disclosure.versions.every(
+      (entry) => isObject(entry) && isString(entry.kind) && isString(entry.id) && typeof entry.version === 'number',
+    )
+  ) {
+    return 'wrong-shape';
+  }
+  for (const field of [
+    'channel',
+    'ownerScope',
+    'route',
+    'inboxId',
+    'inboxSub',
+    'draftId',
+    'draftMessageId',
+    'expect',
+    'sendEpoch',
+    'policy',
+    'requiredPolicy',
+    'riskFlags',
+    'approvedBindingDigest',
+    'sendingAt',
+    'sendingHeartbeatAt',
+    'sentAt',
+    'sentMessageId',
+    'failedAt',
+    'change',
+    'download',
+    'contentDigest',
+  ] as const) {
+    if (Object.hasOwn(raw, field)) return 'wrong-shape';
+  }
+  return null;
+}
+
 /** The version-2 fields' types: a number where a number belongs, a string where a string does. */
 function v2Shape(raw: Record<string, unknown>): UnreadableReason | null {
   for (const field of ['channel', 'ownerScope', 'contentDigest'] as const) {
@@ -189,6 +258,21 @@ export function decodeStored(fileId: string, text: string, config: Config | null
   }
   if (!isObject(raw)) return unreadable(fileId, 'wrong-shape');
   if (!isString(raw.approvalId)) return unreadable(fileId, 'wrong-shape');
+  if (raw.kind === 'disclosure') {
+    if (raw.digestVersion === LEGACY_DIGEST_VERSION) return unreadable(fileId, 'wrong-shape');
+    const shape = disclosureShape(raw);
+    if (shape !== null) return unreadable(fileId, shape);
+    const record = raw as unknown as ApprovalRecord;
+    const validation = validateV2(record, fileId);
+    if (validation.ok) return { form: 'v2', record };
+    return {
+      form: 'corrupt',
+      approvalId: fileId,
+      reason: validation.reason,
+      attribution: validation.attribution,
+      safe: validation.attribution === 'verified' ? safeFieldsOf(record) : null,
+    };
+  }
   const shape = commonShape(raw);
   if (shape !== null) return unreadable(fileId, shape);
 
@@ -219,6 +303,7 @@ export function decodeStored(fileId: string, text: string, config: Config | null
 }
 
 function safeFieldsOf(record: ApprovalRecord): SafeFields {
+  if (record.kind === 'disclosure') return { kind: 'disclosure' };
   return {
     kind: record.kind,
     channel: record.channel,
@@ -252,11 +337,11 @@ export function ownerOf(stored: StoredApproval | null): string | null {
   if (stored === null) return null;
   switch (stored.form) {
     case 'v2':
-      return stored.record.inboxId;
+      return stored.record.kind === 'disclosure' ? null : stored.record.inboxId;
     case 'legacy':
       return stored.record.inboxId;
     case 'corrupt':
-      return stored.safe?.inboxId ?? null;
+      return stored.safe?.kind === 'disclosure' ? null : (stored.safe?.inboxId ?? null);
     case 'unreadable':
       return null;
   }
@@ -286,11 +371,11 @@ export function channelOf(stored: StoredApproval | null): string | null {
   if (stored === null) return null;
   switch (stored.form) {
     case 'v2':
-      return stored.record.channel;
+      return stored.record.kind === 'disclosure' ? null : stored.record.channel;
     case 'legacy':
       return stored.view.channel;
     case 'corrupt':
-      return stored.safe?.channel ?? null;
+      return stored.safe?.kind === 'disclosure' ? null : (stored.safe?.channel ?? null);
     case 'unreadable':
       return null;
   }

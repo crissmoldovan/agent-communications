@@ -233,7 +233,8 @@ function verdictOf(stored: StoredApproval, now: number): Verdict {
         : '';
     return {
       keep: false,
-      owner: record.inboxId,
+      // Standing disclosure has no mailbox/account owner; retention is still auditable without inventing one.
+      owner: record.kind === 'disclosure' ? '' : record.inboxId,
       row: {
         kind: record.kind,
         state: record.state,
