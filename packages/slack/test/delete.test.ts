@@ -217,6 +217,38 @@ test('a message edited in Slack, or a thread that gained a reply, after the prev
   }
 });
 
+/** Changes what Slack holds at the message the moment the approval is claimed: the gap the last look closes. */
+function changeOnClaim(w: AmendWorld, next: Record<string, unknown> | null): void {
+  const store = w.harness.core.approvals;
+  const claim = store.claimForSend.bind(store);
+  store.claimForSend = async (...args: Parameters<typeof claim>) => {
+    const claimed = await claim(...args);
+    w.setMessage(next);
+    return claimed;
+  };
+}
+
+test('a message edited in Slack after the claim, just before the deletion, is not deleted', async () => {
+  const w = await amendWorld();
+  const { approvalId } = await prepared(w);
+  changeOnClaim(w, mine({ text: 'changed in Slack meanwhile', edited: { user: 'U0001', ts: '1700000200.000000' } }));
+  const error = await refusal(send(w, approvalId), 'a deletion of a message changed after its claim');
+  assert.equal(error.code, 'APPROVAL_VOID');
+  assert.equal(error.message, 'nothing was deleted: the message changed in Slack after the preview');
+  assert.equal(w.fake.count('chat.delete'), 0);
+  assert.equal(await stateOf(w.harness, approvalId), 'failed');
+});
+
+test('a message already gone at the last look is the deletion asked for: used, and nothing is asked of chat.delete', async () => {
+  const w = await amendWorld();
+  const { approvalId } = await prepared(w);
+  changeOnClaim(w, null);
+  const deleted = await send(w, approvalId);
+  assert.equal(deleted.note, ALREADY_GONE);
+  assert.equal(deleted.approval.state, 'used');
+  assert.equal(w.fake.count('chat.delete'), 0);
+});
+
 test('delete send refuses a message that is not the approval’s, and spends nothing', async () => {
   const w = await amendWorld();
   const { approvalId } = await prepared(w);

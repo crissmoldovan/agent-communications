@@ -678,6 +678,19 @@ async function editClassified(
     if (policy !== undefined && view.files !== null) {
       // The new files go up first, shared nowhere; each step after its own fence, the first one included.
       added = await uploadForEdit(deps, approvalId, claim, draft, view.files.add, policy, ids);
+      // The last look, now that the uploads are done: the message is still the one the edit was built from.
+      const look = await lastLook(deps, view.message, 'edit');
+      if (look !== 'same') {
+        const refusal = look === 'gone' ? editTargetGone(target.ts) : look;
+        throw await recordNotChanged(
+          deps,
+          approvalId,
+          claim,
+          'edit',
+          withFiles(ids, added),
+          withLeftovers(refusal, namedOnly(added), false),
+        );
+      }
       const verdict = await fenceOrStop(deps.approvals, approvalId, claim.claimToken, {
         stepsStarted: added.length * 2 + 1,
       });
@@ -692,6 +705,18 @@ async function editClassified(
         );
       }
     } else {
+      // The last look: a read, so before the fence, which stands immediately before the request that edits.
+      const look = await lastLook(deps, view.message, 'edit');
+      if (look !== 'same') {
+        throw await recordNotChanged(
+          deps,
+          approvalId,
+          claim,
+          'edit',
+          ids,
+          look === 'gone' ? editTargetGone(target.ts) : look,
+        );
+      }
       // The fence (design 2026-10-05 §D1): the edit starts only while this claim still holds the send.
       await fenceFirstStep(deps, approvalId, claim, WORDS.edit.operation, ids);
     }
@@ -1314,6 +1339,13 @@ async function deleteClassified(
         cancelled('delete', spentByCancel('delete')),
       );
     }
+    // The last look: still the message the person was shown — or already gone, which is what was asked for.
+    const look = await lastLook(deps, view.message, 'delete');
+    if (look === 'gone') {
+      const { note, approval } = await recordChanged(deps, approvalId, claim, 'delete', ids, where.ts, ALREADY_GONE);
+      return { approvalId, ...where, ...(note === undefined ? {} : { note }), approval };
+    }
+    if (look !== 'same') throw await recordNotChanged(deps, approvalId, claim, 'delete', ids, look);
     await fenceFirstStep(deps, approvalId, claim, WORDS.delete.operation, ids);
     let response: SlackResponse;
     try {
@@ -1333,6 +1365,57 @@ async function deleteClassified(
     }
     const { note, approval } = await recordChanged(deps, approvalId, claim, 'delete', ids, providerId(response.ts));
     return { approvalId, ...where, ...(note === undefined ? {} : { note }), approval };
+  });
+}
+
+// ── The last look ───────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The message, read once more immediately before the act — after any uploads, however long they took — and compared
+ * with the reading the claim was made on (design §E3).
+ *
+ * The approval binds the message as it was read, and the claim compares that reading with the record; but an edit with
+ * files spends its uploads between the claim and `chat.update`, and an edit sends the words and the file list it
+ * computed from that reading. A message changed in Slack in that gap would be overwritten by a request built from an
+ * older one — the words put back as they were, a file added since taken off. So the act starts only if the message is
+ * still exactly what it was (`targetDigest`); otherwise nothing is changed, and the approval, spent by its claim, is
+ * recorded as failed. Found during review of the pull request that added these acts.
+ *
+ * `gone` when Slack has no message there any more. A read that fails otherwise is a refusal too: what the message is
+ * now is not known, so neither act is made against it.
+ */
+async function lastLook(deps: PostDeps, read: TargetMessage, act: Act): Promise<'same' | 'gone' | CommsError> {
+  let now: TargetMessage;
+  try {
+    now = await messageAt(deps.call, { channel: read.channel, ts: read.ts });
+  } catch (error) {
+    if (error instanceof CommsError && error.code === 'NOT_FOUND') return 'gone';
+    return new CommsError(
+      'PROVIDER_UNAVAILABLE',
+      `nothing was ${WORDS[act].done}: the message could not be read again just before it was to be ${WORDS[act].done}`,
+      {
+        cause: error,
+        hint: `Slack could not be asked (${messageOf(error)}). Prepare the ${WORDS[act].noun} again once it answers.`,
+        details: { reason: 'last-look-failed' },
+      },
+    );
+  }
+  if (targetDigest(now, act) === targetDigest(read, act)) return 'same';
+  return new CommsError(
+    'APPROVAL_VOID',
+    `nothing was ${WORDS[act].done}: the message changed in Slack after the preview`,
+    {
+      hint: `It was ${act === 'delete' ? 'edited, or its thread gained a reply,' : 'edited'} while the ${WORDS[act].noun} was being made. Prepare the ${WORDS[act].noun} again, and show the new preview to the user.`,
+      details: { reason: 'message-changed' },
+    },
+  );
+}
+
+/** What an edit says when the message it was to change is no longer there. */
+function editTargetGone(ts: string): CommsError {
+  return new CommsError('NOT_FOUND', 'nothing was changed: the message is no longer there', {
+    hint: `The message at ${ts} was deleted after the preview, so there is nothing to edit.`,
+    details: { reason: 'message-gone' },
   });
 }
 

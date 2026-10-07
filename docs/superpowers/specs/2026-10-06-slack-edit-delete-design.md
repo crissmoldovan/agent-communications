@@ -76,6 +76,16 @@ author, its words, its files and, for a deletion, how many replies it has — as
 Slack between the preview and the claim, or a deletion's thread that gained a reply, is not the act the person agreed
 to, and its approval is void.
 
+> **The last look, added in review (#52).** Comparing at the claim was not enough. An edit with files spends its
+> uploads between the claim and `chat.update`, and an edit sends the words and the file list it built from the reading
+> the claim compared — so a message changed in Slack in that gap, which may be minutes long, would have been
+> overwritten by an older one: the words put back, a file added since taken off. The message is now read once more
+> immediately before every edit and every deletion — after any uploads, before the fence — and the act starts only if
+> it is still exactly what was read. Otherwise nothing is changed and the approval, spent by its claim, is failed
+> (`message-changed`), naming any files already up. Gone by then, an edit has nothing to change (`NOT_FOUND`), and a
+> deletion has what it asked for (`used`, as `message_not_found` from `chat.delete` is). A read that fails otherwise
+> refuses too: what the message is now is not known.
+
 The message's words are this account's own (E2), so they are treated as an outgoing post's are (D4): decoded, not
 neutralised, and escaped for the terminal by the renderer. Unfurled content and attachments added by Slack are not
 part of what is shown; the files are, by name.

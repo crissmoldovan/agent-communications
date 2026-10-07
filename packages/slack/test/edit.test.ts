@@ -265,6 +265,44 @@ test('a message changed in Slack after the preview is not the edit approved, and
   assert.equal(w.fake.count('chat.update'), 0);
 });
 
+/** Changes what Slack holds at the message the moment the approval is claimed: the gap the last look closes. */
+function changeOnClaim(w: AmendWorld, next: Record<string, unknown> | null): void {
+  const store = w.harness.core.approvals;
+  const claim = store.claimForSend.bind(store);
+  store.claimForSend = async (...args: Parameters<typeof claim>) => {
+    const claimed = await claim(...args);
+    w.setMessage(next);
+    return claimed;
+  };
+}
+
+test('a message edited in Slack after the claim, just before the edit, is never overwritten by it', async () => {
+  const w = await amendWorld();
+  const prepared = await preparedEdit(w);
+  changeOnClaim(w, mine({ text: 'changed in Slack meanwhile', edited: { user: 'U0001', ts: '1700000200.000000' } }));
+  const error = await refusal(send(w, prepared), 'an edit over a message changed after its claim');
+  assert.equal(error.code, 'APPROVAL_VOID');
+  assert.equal(error.message, 'nothing was changed: the message changed in Slack after the preview');
+  assert.equal(error.details?.reason, 'message-changed');
+  assert.equal(w.fake.count('chat.update'), 0);
+  // Read twice at send: before the claim, and the last look after it.
+  assert.equal(w.fake.count('conversations.history'), 3);
+  assert.equal(await stateOf(w.harness, prepared.approvalId), 'failed');
+  const [record] = await audited(w.harness, 'slack.edit');
+  assert.equal(record?.outcome, 'failed');
+});
+
+test('a message deleted after the claim is not edited: there is nothing left to edit', async () => {
+  const w = await amendWorld();
+  const prepared = await preparedEdit(w);
+  changeOnClaim(w, null);
+  const error = await refusal(send(w, prepared), 'an edit of a message deleted after its claim');
+  assert.equal(error.code, 'NOT_FOUND');
+  assert.equal(error.message, 'nothing was changed: the message is no longer there');
+  assert.equal(w.fake.count('chat.update'), 0);
+  assert.equal(await stateOf(w.harness, prepared.approvalId), 'failed');
+});
+
 test('edit send refuses a channel or a ts that is not the approval’s, and spends nothing', async () => {
   const w = await amendWorld();
   const prepared = await preparedEdit(w);

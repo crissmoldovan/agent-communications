@@ -39,6 +39,8 @@ async function filesWorld(
     grantedScopes?: readonly string[];
     files?: readonly { id: string; name: string }[];
     update?: (request: SlackRequest) => unknown;
+    /** Edit the message in Slack as the first file goes up: during the edit's uploads, after its claim. */
+    changeDuringUpload?: boolean;
   } = {},
 ) {
   const harness = await newHarness();
@@ -71,7 +73,18 @@ async function filesWorld(
       })),
   });
   t.after(() => fake.close());
-  const uploads = fake.acceptUploads({ ts: TS });
+  const uploads = fake.acceptUploads({
+    ts: TS,
+    onUploadUrl: () => {
+      if (options.changeDuringUpload) {
+        message = {
+          ...message,
+          text: 'changed in Slack meanwhile',
+          edited: { user: 'U0001', ts: '1700000200.000000' },
+        };
+      }
+    },
+  });
   const context = new SlackContext({ core: harness.core, env: harness.env, platform: 'darwin', surface: 'mcp' });
   const chart = homeFile(harness, 'chart-v2.png', 'the second chart');
   const sheet = homeFile(harness, 'q3.csv', 'quarter,revenue');
@@ -259,6 +272,21 @@ test('a refused edit after its files went up says they were never attached, and 
     error.hint ?? '',
     /chart-v2\.png was uploaded for this edit and never attached: Slack keeps it, private to this account\. Delete it in Slack if it is not wanted\./,
   );
+  assert.equal(await stateOf(w.harness, prepared.approvalId), 'failed');
+});
+
+test('a message edited in Slack while the edit’s files went up is not overwritten, and the files are said to be kept privately', async (t) => {
+  const w = await filesWorld(t, { changeDuringUpload: true });
+  const prepared = await w.prepare({ files: [w.chart], removeFiles: [OLD.id] });
+  const error = await refusal(w.send(prepared), 'an edit built from a reading older than the message');
+  assert.equal(error.code, 'APPROVAL_VOID');
+  assert.equal(error.message, 'nothing was changed: the message changed in Slack after the preview');
+  assert.match(
+    error.hint ?? '',
+    /chart-v2\.png was uploaded for this edit and never attached: Slack keeps it, private to this account\./,
+  );
+  assert.equal(w.uploads.completed.length, 1, 'the file went up, shared nowhere');
+  assert.equal(w.asked('chat.update').length, 0, 'the newer message was not overwritten');
   assert.equal(await stateOf(w.harness, prepared.approvalId), 'failed');
 });
 
