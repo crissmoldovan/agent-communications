@@ -27,9 +27,9 @@
  * publishes may depend at runtime on a held one, which the registry would never have; that is checked too.
  *
  * **Derived from the manifests** (`scripts/channels.mjs`): every package that declares a channel, every package a
- * channel's server is run through, and every declared library, in an order computed from their dependencies. A new
- * package is published by declaring itself — there is no list here to add it to, and the test above still fails when
- * a publishable package is not in the result.
+ * channel's server is run through, and every declared library or service, in an order computed from their
+ * dependencies. A new package is published by declaring itself — there is no list here to add it to, and the test
+ * above still fails when a publishable package is not in the result.
  *
  *   node scripts/packages.mjs      # prints PACKAGES, e.g. core gmail gmail-mcp resend slack whatsapp
  */

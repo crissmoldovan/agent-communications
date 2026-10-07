@@ -40,12 +40,12 @@ export const scratchEnv = (dir = join(ROOT, '.tmp-reference-config')) => ({
 /**
  * The packages with a surface of their own: a CLI, and — when that CLI has an `mcp` command that runs — a server.
  *
- * `cli` says how the command tree is read. A channel's CLI is a Commander program; the core's is not, and its
+ * `cli` says how the command tree is read. A channel or service CLI is a Commander program; the core's is not, and its
  * `--help` is one usage table with a line per command. `program` is the module exporting `run()`, imported directly
  * because `dist/cli.mjs` is a bin that runs on import and neither bundle re-exports `run`.
  *
- * Read from the channel registry (`channels.mjs`), which derives it from each channel's manifest: a new channel's
- * surface is read the moment its package declares itself.
+ * Read from the declaration registry (`channels.mjs`): a new channel or service surface is read the moment its
+ * package declares itself.
  */
 export const SURFACES = Object.freeze(REGISTRY.surfaces.map((surface) => Object.freeze({ ...surface })));
 
@@ -66,6 +66,9 @@ export const WRAPPERS = Object.freeze({ ...REGISTRY.wrappers });
  * is exempt the moment its package declares itself.
  */
 export const LIBRARIES = Object.freeze(REGISTRY.libraries.map((library) => library.directory));
+
+/** Published services must be surfaces; only `LIBRARIES` are deliberately surface-free. */
+export const SERVICES = Object.freeze(REGISTRY.services.map((service) => service.directory));
 
 export const surfaceOf = (name) => {
   const found = SURFACES.find((surface) => surface.package === name);

@@ -50,6 +50,14 @@ async function documents() {
   return Promise.all(files.map(async (path) => ({ path: relative(ROOT, path), text: await readFile(path, 'utf8') })));
 }
 
+test('every declared CLI/MCP surface has generated reference destinations', () => {
+  for (const surface of REGISTRY.surfaces) {
+    const reference = REGISTRY.reference[surface.package];
+    assert.ok(reference?.mcp, `${surface.package}: MCP reference is missing`);
+    if (surface.cli === 'commander') assert.ok(reference?.cli, `${surface.package}: CLI reference is missing`);
+  }
+});
+
 /**
  * Every `mcp install` a document gives, with the CLI it belongs to and the flags it passes.
  *

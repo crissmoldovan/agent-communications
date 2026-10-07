@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { REGISTRY } from '../scripts/channels.mjs';
 import { PUBLISHABLE } from '../scripts/packages.mjs';
 
 /**
@@ -18,6 +19,14 @@ import { PUBLISHABLE } from '../scripts/packages.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const run = promisify(execFile);
+
+test('every declared library or service is among the publishable package manifests', () => {
+  const declared = [...REGISTRY.libraries, ...REGISTRY.services];
+  assert.ok(declared.length > 0, 'the declaration registry should have the event library at least');
+  for (const { directory } of declared) {
+    assert.ok(PUBLISHABLE.includes(directory), `@agentcomms/${directory} is declared but its manifest is not checked`);
+  }
+});
 
 test('the plugin manifest lists every skill that exists, and only those', async () => {
   const manifest = JSON.parse(await readFile(join(ROOT, '.claude-plugin', 'marketplace.json'), 'utf8'));
