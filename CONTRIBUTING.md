@@ -45,10 +45,12 @@ pnpm verify
 ```
 
 `pnpm verify` runs Biome, the type checks, every test suite, the builds and the skill verifier. It must pass before you
-push: nothing runs it for you on GitHub, because this repository has no CI for pushes or pull requests. `pnpm install`
-sets up a pre-push hook (`.githooks/pre-push`) that runs it. The one workflow is the release: a `v*` tag runs
-`pnpm verify` on Linux, macOS and Windows and publishes only if all pass, so a failure only Windows shows turns up
-there — see [Releasing](docs/RELEASING.md).
+push: nothing runs it for you on GitHub, because this repository has no CI that runs your code on a push or a pull
+request. `pnpm install` sets up a pre-push hook (`.githooks/pre-push`) that runs it. The release workflow does: a `v*`
+tag runs `pnpm verify` on Linux, macOS and Windows and publishes only if all pass, so a failure only Windows shows turns
+up there — see [Releasing](docs/RELEASING.md). The only other workflow, the pull-request requirements check, reads a
+pull request's description and file list and never its code — see
+[What every pull request carries](#what-every-pull-request-carries).
 
 **A change to `packages/events` runs `pnpm verify:browser` too.** It runs the event library's vectors in real Chromium
 and WebKit, the engines of the desktop app's webviews, under the app's production CSP. `pnpm verify` does not run it,
@@ -346,12 +348,58 @@ pick the library up from its declaration; `test/channel-registry.test.mjs` fails
 
 ## Pull requests
 
-- Keep each pull request focused, and say what changes for the person using it.
-- Add tests with the change. The send gate, path jails and untrusted-content handling always need them.
-- Update docs and skills when a command, tool or behaviour changes; a test fails when a skill names a tool or command
-  that does not exist.
+- Keep each pull request focused: one feature, one fix, one change of documentation. Two things that could be reverted
+  apart are two pull requests.
+- Branch from `main`, and name the branch for what it does: `feat/slack-edit-delete`, `fix/slack-team-param`. Its last
+  segment is the slug your proposed version carries.
 - Follow the [Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities through [SECURITY.md](SECURITY.md), never
   in a public issue.
+
+### What every pull request carries
+
+Every feature, fix or other change comes with all of the following. The
+[template](.github/PULL_REQUEST_TEMPLATE.md) has a place for each, and the pull-request requirements check
+(`scripts/pr-requirements.mjs`) reads what it can see of them. When something is missing, it comments on the pull
+request saying what, and the reviewer asks for it too. **Nobody fills it in for you, and a pull request is not merged
+until it carries all of it.**
+
+1. **What changes for the person using it**, and **how**: the outcome in their words, then the approach and what a
+   reviewer should look at first.
+2. **A proposed version, `X.Y.Z-<slug>`.** The number is one semver step on from the version on `main`: a **patch**
+   for a fix that changes nobody's use, a **minor** for something new that breaks nothing, a **major** when something
+   people rely on changes or goes. The slug is your branch's last segment: `feat/slack-edit-delete` on 0.14.1 proposes
+   `0.15.0-slack-edit-delete`. Say why it is that step. The final number is fixed when the release is cut, since
+   several pull requests can ship in one release; yours is the proposal and its reason, and the release takes the
+   largest step any of them needs.
+3. **Tests that prove it.** Tests come with the change, never after it. Break each guard you add on purpose and watch
+   its test fail before you trust it, and say which ones you broke. The send gate, path jails and untrusted-content
+   handling always need them.
+4. **Documentation.** The README, the guides under `docs/`, the reference pages (`pnpm sync:reference`) and the skills
+   say what changed, wherever a command, tool or behaviour did; a test fails when a skill names a tool or command that
+   does not exist. A design worth arguing about gets a spec under `docs/superpowers/specs/`, with its decisions
+   numbered so review can point at them.
+5. **A changelog entry** under `## Unreleased` in `CHANGELOG.md` when users will notice, written for them rather than
+   as a list of commits. A change to a package nobody will notice — a hint's wording, a comment — says so instead,
+   with a line `No changelog: <why>` in the description.
+6. **Provenance**, so the next person can check it rather than trust it:
+   - **Why**: the issue, report or conversation behind it, linked.
+   - **Sources**: every doc, spec or API reference it relies on, with the date you read it; behaviour you observed
+     rather than read is said to be observed, with where it is recorded.
+   - **Live testing**: anything run against a real Gmail, Slack, Resend or WhatsApp account. The tests never do
+     ([AGENTS.md](AGENTS.md)); a probe needs the maintainer's agreement before it runs, and its record says what was
+     sent, where, and what was cleaned up.
+   - **AI assistance**: the tool and model, and which parts it wrote.
+7. **No real data**: no real mail, address, token, client secret or account id, in code, fixtures, docs or screenshots
+   ([Ground rules](#ground-rules)).
+
+### How a pull request is reviewed and merged
+
+1. The requirements check and the [Blocks](https://blocks.team) review run on every pull request. Answer each finding
+   in its thread, and push the fix to the same branch.
+2. The maintainer checks the change out on its own, away from any other work, runs `pnpm verify`, and reads the
+   riskiest part — the send gate, the Slack guard, anything that holds a credential — before anything else.
+3. Only the maintainer merges, and only the maintainer pushes `main` or a `v*` tag: rulesets on the repository enforce
+   both. A merge is a rebase-and-merge, so each commit keeps its author and its message.
 
 ## Releasing
 
