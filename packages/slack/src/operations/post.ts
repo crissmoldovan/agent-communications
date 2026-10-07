@@ -237,7 +237,7 @@ function filesToRemove(request: EditPrepareRequest): string[] {
   for (const id of ids) {
     if (FILE_ID.test(id)) continue;
     throw new CommsError('USAGE', `"${id.slice(0, 40)}" is not a Slack file id`, {
-      hint: 'A file id is F and then capitals and digits, such as F0C739JK4LE: read the message to see its files.',
+      hint: 'A file id is F and then capitals and digits, such as F0EXAMPLE01: read the message to see its files.',
       details: { file: id, reason: 'not-a-file-id' },
     });
   }

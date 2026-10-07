@@ -276,7 +276,7 @@ agent-slack edit send --workspace acme/slack --draft <draftId> --approval <appro
 
 # Replace a file and keep the words: a draft with the new file and no words, and the old file's id to take off.
 agent-slack draft create --workspace acme/slack --channel C024BE7LR --file ~/reports/q3-chart-v2.png
-agent-slack edit prepare --workspace acme/slack --draft <draftId> --ts 1700000000.000100 --remove-file F0C739JK4LE
+agent-slack edit prepare --workspace acme/slack --draft <draftId> --ts 1700000000.000100 --remove-file F0EXAMPLE01
 
 agent-slack delete prepare --workspace acme/slack --channel C024BE7LR --ts 1700000000.000100  # deletes nothing
 agent-slack delete send --workspace acme/slack --channel C024BE7LR --ts 1700000000.000100 --approval <approvalId>
