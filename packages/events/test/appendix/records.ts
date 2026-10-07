@@ -64,6 +64,7 @@ export const POINTER_RULES: readonly string[] = [
   'disjoint',
   'length-equals',
   'differs',
+  'whatsapp-message-key',
 ];
 
 export type Invariant = { rule: string; pattern: Pattern } | { rule: string; pointers: string[] };

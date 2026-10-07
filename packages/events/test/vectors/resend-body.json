@@ -1,0 +1,14 @@
+{
+  "family": "resend-body",
+  "description": "Resend body normalisation preserves its read-time truncation flag and repairs only a trailing split pair.",
+  "vectors": [
+    { "name": "unchanged", "text": "Body", "truncated": false, "body": "Body", "bodyTruncated": false },
+    {
+      "name": "trailing high surrogate dropped",
+      "text": "Body\ud83d",
+      "truncated": true,
+      "body": "Body",
+      "bodyTruncated": true
+    }
+  ]
+}

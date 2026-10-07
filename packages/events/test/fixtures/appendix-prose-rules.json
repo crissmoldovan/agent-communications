@@ -504,14 +504,14 @@
       "types": ["whatsapp.message.received"],
       "quote": "The event `messageId` is exactly D4's canonical raw protocol message key: `[\"wa-msg\", chatJid, senderJidRaw, stanzaId]`.",
       "becomes": {
-        "informational": "How phase D's adapter builds messageId: the canonical JSON of the raw key tuple, through Task 11's whatsappMessageKey helper. The schema's side is a non-empty string; decision 7 names no invariant on the key's inner shape, so validateEvent does not parse it."
+        "invariant": { "rule": "whatsapp-message-key", "pointers": ["/messageId", "/sender/id"] }
       }
     },
     {
       "types": ["whatsapp.message.received"],
       "quote": "`sender.id` is the same exact raw `senderJidRaw`; only `sender.name` may use a presentation lookup.",
       "becomes": {
-        "informational": "Which raw value phase D's adapter copies into sender.id, and that only sender.name may be derived for presentation. Decision 7 names no invariant relating sender.id to messageId's key, so none is stated."
+        "invariant": { "rule": "whatsapp-message-key", "pointers": ["/messageId", "/sender/id"] }
       }
     },
     {

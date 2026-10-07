@@ -1,0 +1,13 @@
+{
+  "family": "catalogue",
+  "description": "Every version-1 source event has a valid Appendix A example.",
+  "vectors": [
+    { "name": "gmail received", "type": "gmail.message.received", "example": 0 },
+    { "name": "gmail sent", "type": "gmail.message.sent", "example": 0 },
+    { "name": "gmail labelled", "type": "gmail.message.labelled", "example": 0 },
+    { "name": "slack posted", "type": "slack.message.posted", "example": 0 },
+    { "name": "resend received", "type": "resend.email.received", "example": 0 },
+    { "name": "resend changed", "type": "resend.email.status_changed", "example": 0 },
+    { "name": "whatsapp received", "type": "whatsapp.message.received", "example": 0 }
+  ]
+}

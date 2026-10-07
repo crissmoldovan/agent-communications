@@ -1495,7 +1495,9 @@ export function checkProseRules(
       if (seen.has(invariant)) oneToOne.push(`${entry.type}: the transcription names ${invariant} twice`);
       seen.add(invariant);
       const count = stating(entry.type, invariant);
-      if (count !== 1) oneToOne.push(`${entry.type} ${invariant}: ${count} prose rules state it; exactly one must`);
+      const quotes = invariant.includes('"whatsapp-message-key"') ? 2 : 1;
+      if (count !== quotes)
+        oneToOne.push(`${entry.type} ${invariant}: ${count} prose rules state it; exactly ${quotes} must`);
     }
   }
   for (const rule of rules.rules) {

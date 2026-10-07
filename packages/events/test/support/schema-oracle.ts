@@ -5,7 +5,8 @@
  *
  * Kept here rather than in one test file because the catalogue's tests (Task 11) run the same corpus over every
  * example: `mutationCorpus` walks a description and a valid value together and makes, at every position the value
- * reaches, each change the description forbids — and the two it allows — so a validator wrong in one place cannot hide.
+ * reaches, each change the description forbids — and the freedom it allows — so a validator wrong in one place cannot
+ * hide.
  */
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { canonicalJson, type JsonValue } from '../../src/index.ts';
@@ -139,7 +140,7 @@ function refusedByString(node: StringNode, value: string): boolean | undefined {
  * removed and each extra property added, at every object; `null` where it is not allowed; another JSON type; a value
  * outside a `const` or an enum; one code point past a length limit; a broken pattern or format; a fraction or a step
  * below the minimum; a duplicate where `uniqueItems`; an orphan under `dependentRequired`; a reversed `sorted` array.
- * And what is allowed: an optional property absent, and `null` where nullable.
+ * And what is allowed: an optional property absent, `null` where nullable, and the unconstrained values A.1 permits.
  */
 export function mutationCorpus(root: SchemaNode, valid: JsonValue): Mutation[] {
   const corpus: Mutation[] = [];
@@ -196,6 +197,28 @@ export function mutationCorpus(root: SchemaNode, valid: JsonValue): Mutation[] {
           if (STUB_FORMATS[node.format](broken)) throw new Error(`the ${node.format} stub accepts "${broken}"`);
           add(path, 'format', `not a ${node.format}`, replaced(valid, path, broken), 'refused');
         }
+        if (
+          node.maxLength === undefined &&
+          node.minLength === undefined &&
+          node.pattern === undefined &&
+          node.format === undefined
+        ) {
+          add(
+            path,
+            'permissive',
+            '100000 code points without a maxLength',
+            replaced(valid, path, astral(100_000)),
+            'accepted',
+          );
+          add(path, 'permissive', 'an empty string without a minLength', replaced(valid, path, ''), 'accepted');
+          add(
+            path,
+            'permissive',
+            'an arbitrary unconstrained string',
+            replaced(valid, path, 'permitted string'),
+            'accepted',
+          );
+        }
         return;
       }
       case 'integer':
@@ -203,6 +226,15 @@ export function mutationCorpus(root: SchemaNode, valid: JsonValue): Mutation[] {
         add(path, 'multipleOf', 'a fraction', replaced(valid, path, (node.minimum ?? 0) + 0.5), 'refused');
         if (node.minimum !== undefined) {
           add(path, 'minimum', 'one below the minimum', replaced(valid, path, node.minimum - 1), 'refused');
+        }
+        if (node.minimum !== undefined && path.at(-1) !== 'attachmentCount') {
+          add(
+            path,
+            'permissive',
+            'a large integer without a maximum',
+            replaced(valid, path, 9_007_199_254_740_991),
+            'accepted',
+          );
         }
         return;
       case 'boolean':
@@ -240,6 +272,27 @@ export function mutationCorpus(root: SchemaNode, valid: JsonValue): Mutation[] {
         }
         if (node.sorted === true && new Set(items.map((item) => canonicalJson(item))).size > 1) {
           add(path, 'sorted', 'reversed', replaced(valid, path, [...items].reverse()), 'zod-only');
+        }
+        if (node.uniqueItems !== true && path.at(-1) !== 'attachments') {
+          add(path, 'permissive', 'an empty array without a minItems', replaced(valid, path, []), 'accepted');
+          if (items.length > 0) {
+            add(
+              path,
+              'permissive',
+              'duplicate items without uniqueItems',
+              replaced(valid, path, [items[0], ...items]),
+              'accepted',
+            );
+          }
+          if (items.length > 1) {
+            add(
+              path,
+              'permissive',
+              'a reverse order without sorted-utf8',
+              replaced(valid, path, [...items].reverse()),
+              'accepted',
+            );
+          }
         }
         return;
       }

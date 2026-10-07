@@ -4,6 +4,7 @@
  */
 
 export { UNICODE_VERSION } from '../vendor/unicode-15.1.0/generated/version.ts';
+export * from './catalogue/index.ts';
 export * from './formats/index.ts';
 export * from './identity/event-id.ts';
 export * from './idna/domain.ts';

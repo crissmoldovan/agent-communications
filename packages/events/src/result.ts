@@ -23,7 +23,21 @@ export type IssueCode =
   /** A value is not in its semantic format: an address's local part, an instant given to `compareInstants`. */
   | 'FORMAT_INVALID'
   /** A name is not one of the five semantic formats. */
-  | 'FORMAT_UNKNOWN';
+  | 'FORMAT_UNKNOWN'
+  /** A value does not satisfy a catalogue definition's generated schema. */
+  | 'EVENT_INVALID'
+  /** A value passes the generated schema but breaks one of Appendix A's named cross-field rules. */
+  | 'EVENT_INVARIANT_INVALID'
+  /** A source event type beginning `agentcomms.` is never selectable. */
+  | 'EVENT_TYPE_NOT_SELECTABLE'
+  /** No catalogue definition has this source event type. */
+  | 'EVENT_TYPE_UNKNOWN'
+  /** A known source event type has no definition at this version. */
+  | 'EVENT_VERSION_UNKNOWN'
+  /** A catalogue declaration is inconsistent with its schema. */
+  | 'DEFINITION_INVALID'
+  /** A Resend risk flag is outside the closed Appendix A vocabulary. */
+  | 'RISK_FLAG_UNKNOWN';
 
 /** One thing wrong, where it is (an RFC 6901 pointer into the value checked), and any detail a caller can show. */
 export interface Issue {

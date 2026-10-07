@@ -1108,7 +1108,8 @@
       },
       "invariants": [
         { "rule": "same-instant", "pointers": ["/at", "/occurredAt"] },
-        { "rule": "identical", "pointers": ["/workspaceId", "/account/id"] }
+        { "rule": "identical", "pointers": ["/workspaceId", "/account/id"] },
+        { "rule": "whatsapp-message-key", "pointers": ["/messageId", "/sender/id"] }
       ],
       "subject": { "join": "/", "pointers": ["/chat/id", "/messageId"] },
       "dedupeKey": { "join": "/", "pointers": ["/chat/id", "/messageId"] }
