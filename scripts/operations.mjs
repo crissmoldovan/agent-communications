@@ -56,9 +56,9 @@ const SELF = import.meta.url;
  * Each package's two surfaces, as the drive loads them: the module a command line runs through, and the module that
  * builds the MCP server. The core's CLI exports `main(argv, env)`; the channels' export `run(argv, deps)`.
  *
- * Read from the channel registry (`channels.mjs`), so a new channel's rows are driven as soon as its package declares
- * itself. `test/parity.test.mjs` fails when a package in `registries.mjs`'s `SURFACES` is missing here, so a new
- * channel's rows cannot go undriven.
+ * Read from the declaration registry (`channels.mjs`), so a new channel or service's rows are driven as soon as its
+ * package declares itself. `test/parity.test.mjs` fails when a package in `registries.mjs`'s `SURFACES` is missing
+ * here, so a new surface's rows cannot go undriven.
  */
 export const DRIVERS = Object.freeze(
   Object.fromEntries(Object.entries(REGISTRY.drivers).map(([pkg, driver]) => [pkg, Object.freeze({ ...driver })])),
@@ -70,8 +70,8 @@ export const DRIVERS = Object.freeze(
  */
 const placeholderPlatform = (pkg) => (REGISTRY.platforms.includes(pkg) ? pkg : (REGISTRY.platforms[0] ?? pkg));
 
-/** Where a package's operations live. */
-export const operationsDir = (pkg) => join(ROOT, 'packages', pkg, 'src', 'operations');
+/** Where a package's operations live: services declare theirs; channels retain their established convention. */
+export const operationsDir = (pkg) => join(ROOT, 'packages', pkg, DRIVERS[pkg]?.operations ?? 'src/operations');
 
 /**
  * How many operations one drive may call before it is stopped: a loop over an inert value never ends by itself. The
@@ -121,7 +121,8 @@ export function resolveOperation(operations, pkg, name) {
     }
     return { id: `${owner}:${name}`, module: `${owner}'s ${modules[0]}` };
   }
-  const where = pkg === 'core' ? 'packages/core/src/operations' : `packages/${pkg}/src/operations or the core's`;
+  const own = `packages/${pkg}/${DRIVERS[pkg]?.operations ?? 'src/operations'}`;
+  const where = pkg === 'core' ? own : `${own} or the core's`;
   return { problem: `no module in ${where} exports a function called "${name}"` };
 }
 

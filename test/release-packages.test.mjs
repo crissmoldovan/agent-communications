@@ -99,6 +99,46 @@ async function treeWithShelf({ held = true, dependents = [], extra = {}, full = 
   return root;
 }
 
+/** A held D14 service with a deliberately non-default operations directory. */
+async function treeWithService() {
+  const root = await treeWithShelf();
+  const { version } = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
+  const directory = join(root, 'packages', 'service-fixture');
+  await mkdir(join(directory, 'src', 'mcp'), { recursive: true });
+  await mkdir(join(directory, 'src', 'actions'), { recursive: true });
+  await writeFile(
+    join(directory, 'src', 'mcp', 'server.ts'),
+    'export async function createServiceFixtureMcpServer() { return {}; }\n',
+  );
+  await writeFile(join(directory, 'src', 'actions', 'status.ts'), 'export {}\n');
+  await writeFile(
+    join(directory, 'package.json'),
+    `${JSON.stringify(
+      {
+        name: '@agentcomms/service-fixture',
+        version,
+        type: 'module',
+        license: 'MIT',
+        bin: { 'service-fixture': './dist/cli.mjs' },
+        agentcommsPackage: {
+          kind: 'service',
+          binary: 'service-fixture',
+          server: {
+            defaultName: 'service-fixture',
+            entry: 'src/mcp/server.ts',
+            factory: 'createServiceFixtureMcpServer',
+          },
+          operations: 'src/actions',
+        },
+        agentcommsRelease: { hold: 'Held until its first complete release.' },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  return root;
+}
+
 /** The three lists of the tree at `root`, read through its own `scripts/packages.mjs`. */
 async function listsOf(root) {
   if (root === ROOT) return { PUBLISHABLE, HELD, PACKAGES };
@@ -111,9 +151,9 @@ async function listsOf(root) {
 }
 
 test('D14-c: PUBLISHABLE names every non-private package, and nothing else; PACKAGES is it less the held ones, in the same order', async () => {
-  // This checkout, and a copy with a held library in it: the lists must be right for the package the registry learns
+  // This checkout, a held library and a held service: the lists must be right for the package the registry learns
   // about next, not only for the ones it already knows.
-  for (const root of [ROOT, await treeWithShelf()]) {
+  for (const root of [ROOT, await treeWithShelf(), await treeWithService()]) {
     const lists = await listsOf(root);
     const publishable = [...(await manifests(root)).keys()];
     assert.ok(publishable.length > 0, 'no publishable packages found — the discovery is wrong');
@@ -138,12 +178,16 @@ test('D14-c: PUBLISHABLE names every non-private package, and nothing else; PACK
       lists.PUBLISHABLE.filter((name) => !Object.hasOwn(lists.HELD, name)),
     );
   }
-  // In the copy, the library is publishable and held, so a tag leaves it out.
+  // In the copies, a library and a service are each publishable and held, so a tag leaves them out.
   const copy = await listsOf(await treeWithShelf());
   assert.ok(copy.PUBLISHABLE.includes('shelf'));
   assert.ok(Object.hasOwn(copy.HELD, 'shelf'));
   assert.ok(!copy.PACKAGES.includes('shelf'));
   assert.deepEqual(copy.PACKAGES, PACKAGES, 'the copy publishes exactly what this checkout does');
+  const service = await listsOf(await treeWithService());
+  assert.ok(service.PUBLISHABLE.includes('service-fixture'));
+  assert.ok(Object.hasOwn(service.HELD, 'service-fixture'));
+  assert.ok(!service.PACKAGES.includes('service-fixture'));
 });
 
 test('PKG-a: every publishable package comes after what it depends on, a library too', async () => {

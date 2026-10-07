@@ -24,7 +24,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { driveOperations, namedOperations, operationNames, resolveOperation } from './operations.mjs';
+import { DRIVERS, driveOperations, namedOperations, operationNames, resolveOperation } from './operations.mjs';
 import { deriveRegistries, ROOT, scratchEnv } from './registries.mjs';
 
 export const TABLE = join(ROOT, 'capabilities.json');
@@ -41,6 +41,9 @@ export const STATUSES = Object.freeze(['both', 'pending', 'exception']);
 
 /** The design's phases that add a surface; P1 is core machinery with no command or tool of its own. */
 export const PHASES = Object.freeze(['P2', 'P3', 'P4', 'P5', 'P6']);
+
+/** A service's declaration can choose its operations directory; channels keep the established convention. */
+const operationsPath = (pkg) => `packages/${pkg}/${DRIVERS[pkg]?.operations ?? 'src/operations'}`;
 
 /**
  * Every field a row may carry.
@@ -215,7 +218,7 @@ export function checkParity(table, registries, { strict = false } = {}) {
         new Set(names).size !== names.length
       ) {
         problems.push(
-          `${at}: "${field}" must name a function exported from packages/${row.package}/src/operations, or be a list of distinct names`,
+          `${at}: "${field}" must name a function exported from ${operationsPath(row.package)}, or be a list of distinct names`,
         );
       }
     }
@@ -264,7 +267,7 @@ export function checkParity(table, registries, { strict = false } = {}) {
     if (row.status === 'both') {
       if (row.operation === undefined && row.unchecked === undefined) {
         problems.push(
-          `${at} is "both" but names no "operation": the function of packages/${row.package}/src/operations that its command and its tool both run`,
+          `${at} is "both" but names no "operation": the function of ${operationsPath(row.package)} that its command and its tool both run`,
         );
       }
       if (row.operation !== undefined && row.unchecked !== undefined) {

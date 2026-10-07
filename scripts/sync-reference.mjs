@@ -142,6 +142,13 @@ const PROSE = {
 /** A channel's manifest, from the registry. */
 const manifestOf = (directory) => REGISTRY.channels.find((channel) => channel.directory === directory).manifest;
 
+/** A service's D14 declaration, from the same registry. */
+const serviceOf = (directory) => REGISTRY.services.find((service) => service.directory === directory);
+
+/** Any package with a generated CLI/MCP surface: a channel or a service. */
+const surfacedPackageOf = (directory) =>
+  REGISTRY.channels.find((channel) => channel.directory === directory) ?? serviceOf(directory);
+
 /** The words of a channel's pages when none are written above: built from what its manifest says. */
 function defaultProse(directory) {
   const manifest = manifestOf(directory);
@@ -169,7 +176,23 @@ function defaultProse(directory) {
   };
 }
 
-const proseOf = (directory) => ({ ...defaultProse(directory), ...PROSE[directory] });
+function serviceProse(directory) {
+  const service = serviceOf(directory);
+  return {
+    approval: 'a local service action needs a person or is unavailable',
+    unavailable: 'the local service is unavailable',
+    permission: 'a local permission is needed',
+    configuration: 'a local service configuration problem',
+    intro: [
+      'The local service offers the same operations through its CLI and over stdio.',
+      '',
+      `This server identifies itself as \`${service.declaration.server.defaultName}\`. Read each tool's input schema before calling it.`,
+    ],
+  };
+}
+
+const proseOf = (directory) =>
+  serviceOf(directory) ? serviceProse(directory) : { ...defaultProse(directory), ...PROSE[directory] };
 
 /**
  * The CLIs these pages are generated from: every channel's, read from the registry.
@@ -183,7 +206,7 @@ const CLIS = REGISTRY.surfaces
   .filter((surface) => surface.cli === 'commander')
   .map((surface) => ({
     binary: surface.binary,
-    pkg: REGISTRY.channels.find((channel) => channel.directory === surface.package).packageName,
+    pkg: surfacedPackageOf(surface.package).packageName,
     package: surface.package,
     out: REGISTRY.reference[surface.package].cli,
     approval: proseOf(surface.package).approval,
@@ -286,12 +309,12 @@ async function cliPage(cli) {
 
 // ── The MCP pages, once per server ────────────────────────────────────────────────────────────────────────────
 /**
- * The servers these pages are generated from, each asked for `tools/list` while running: every channel's.
+ * The servers these pages are generated from, each asked for `tools/list` while running: every channel's and service's.
  *
  * Slack's server shipped with eleven tools and a reference for none of them, because this read only Gmail's. Every
  * server in the registry gets a page generated from what it actually offers, and `--check` fails when it drifts.
  */
-const SERVERS = REGISTRY.channels.map(({ directory }) => ({
+const SERVERS = REGISTRY.surfaces.map(({ package: directory }) => ({
   package: directory,
   out: REGISTRY.reference[directory].mcp,
   intro: proseOf(directory).intro,

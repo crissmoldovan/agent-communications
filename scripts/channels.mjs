@@ -9,12 +9,11 @@
  * had to be added by hand, or would silently not be checked. Every one of those now reads `REGISTRY`, a view of this
  * derivation, so a new `packages/<channel>` with the field is discovered by all of them without an edit.
  *
- * **Libraries** (design 2026-10-05, D14). A package that is not a channel declares itself with a separate field,
- * `"agentcommsPackage": { "kind": "library" }`, read in the same walk; `"agentcomms"` still means a channel and
- * nothing else. A library is published — it joins `packages`, in dependency order, so it is built, version-synced,
- * licence-checked and consumer-checked like every other package — and it has no surface: no CLI, no server, no
- * reference pages, no skills and no accounts, so it is in none of the views that need one. `"service"`, the other kind
- * D14 names, is read from phase B1 of that design; until then it is refused here.
+ * **Libraries and services** (design 2026-10-05, D14). A package that is not a channel declares itself with a
+ * separate `"agentcommsPackage"` field; `"agentcomms"` still means a channel and nothing else. A library is published
+ * — it joins `packages`, in dependency order, so it is built, version-synced, licence-checked and consumer-checked
+ * like every other package — and has no surface. A service is also published, but its closed declaration names the
+ * CLI binary, MCP entry/factory and operations directory that drive its CLI/MCP surface, parity checks and references.
  *
  * **Holds** (events phase A plan, decision 1). A published package can be held back from a tag's publish with
  * `"agentcommsRelease": { "hold": "<why, one sentence>" }` in its own `package.json`. It lands in `held`, and
@@ -29,7 +28,7 @@
  *
  *   node scripts/channels.mjs      # prints the channel words, e.g. core gmail resend slack whatsapp
  */
-import { readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -44,17 +43,20 @@ export const SCOPE = '@agentcomms';
  *   the core first, then the rest by their channel word;
  * - `libraries`: each package with `"agentcommsPackage": { "kind": "library" }`, as
  *   `{ directory, packageName, declaration, packageJson }`, by directory;
+ * - `services`: each package with a D14 `"agentcommsPackage": { "kind": "service", … }`, as
+ *   `{ directory, packageName, declaration, packageJson }`, by directory;
  * - `held`: each package held back from release, as `{ directory, packageName, reason }`, by directory;
  * - `undeclared`: each package that is not private and declares neither, as `{ directory, packageName }` — except a
  *   server-only package a channel runs its server through, which is that channel's.
  *
- * A directory is found by being there. There is no list to add a channel or a library to — a new `packages/<name>`
+ * A directory is found by being there. There is no list to add a channel, library or service to — a new `packages/<name>`
  * with its field is one for every tool that reads this. A package's word is its directory's name, as a package's
  * directory is its unscoped name, so the two cannot drift apart. Whatever cannot be read is refused, naming the file.
  */
 export function readDeclarations(root = ROOT) {
   const channels = [];
   const libraries = [];
+  const services = [];
   const holds = [];
   const plain = [];
   for (const entry of readdirSync(join(root, 'packages'), { withFileTypes: true })) {
@@ -66,24 +68,30 @@ export function readDeclarations(root = ROOT) {
     const declaration = packageJson.agentcommsPackage;
     if (manifest !== undefined && declaration !== undefined) {
       throw new Error(
-        `${where}: declares both "agentcomms" and "agentcommsPackage"; a channel declares the first, a library the second`,
+        `${where}: declares both "agentcomms" and "agentcommsPackage"; a channel declares the first, a library or service the second`,
       );
     }
     if (manifest !== undefined) channels.push(readChannel(entry.name, packageJson));
-    else if (declaration !== undefined) libraries.push(readLibrary(entry.name, packageJson));
-    else if (packageJson.private !== true) plain.push({ directory: entry.name, packageName: packageJson.name });
+    else if (declaration !== undefined) {
+      if (declaration !== null && typeof declaration === 'object' && declaration.kind === 'service') {
+        services.push(readService(root, entry.name, packageJson));
+      } else {
+        libraries.push(readLibrary(entry.name, packageJson));
+      }
+    } else if (packageJson.private !== true) plain.push({ directory: entry.name, packageName: packageJson.name });
     if (packageJson.agentcommsRelease !== undefined) holds.push({ directory: entry.name, packageJson });
   }
   channels.sort((a, b) =>
     a.directory === 'core' ? -1 : b.directory === 'core' ? 1 : a.directory < b.directory ? -1 : 1,
   );
   libraries.sort(byDirectory);
+  services.sort(byDirectory);
   const wrappers = wrappersOf(channels);
   const undeclared = plain.filter(({ directory }) => !Object.hasOwn(wrappers, directory)).sort(byDirectory);
   const held = holds
     .map(({ directory, packageJson }) => readHold(directory, packageJson, undeclared))
     .sort(byDirectory);
-  return { channels, libraries, held, undeclared };
+  return { channels, libraries, services, held, undeclared };
 }
 
 /** Every package under `root/packages` that declares a channel: `readDeclarations(root).channels`. */
@@ -135,11 +143,6 @@ function readLibrary(directory, packageJson) {
   if (!Object.hasOwn(declaration, 'kind')) {
     throw new Error(`${where}: "agentcommsPackage" has no "kind"; this registry reads { "kind": "library" }`);
   }
-  if (declaration.kind === 'service') {
-    throw new Error(
-      `${where}: "agentcommsPackage".kind "service" is not read yet: this registry reads "library"; "service" arrives with phase B1 of the event-emission design`,
-    );
-  }
   if (declaration.kind !== 'library') {
     throw new Error(
       `${where}: "agentcommsPackage".kind ${JSON.stringify(declaration.kind)} is unknown; this registry reads "library"`,
@@ -155,6 +158,126 @@ function readLibrary(directory, packageJson) {
     throw new Error(`${where}: a library's package is ${SCOPE}/${directory}`);
   }
   return { directory, packageName: packageJson.name, declaration, packageJson };
+}
+
+/** A D14 service declaration: closed, published, and sufficient to drive both of its surfaces. */
+function readService(root, directory, packageJson) {
+  const where = `packages/${directory}/package.json`;
+  const declaration = packageJson.agentcommsPackage;
+  if (declaration === null || typeof declaration !== 'object' || Array.isArray(declaration)) {
+    throw new Error(`${where}: "agentcommsPackage" must be an object`);
+  }
+  const unknown = Object.keys(declaration).find((key) => !['kind', 'binary', 'server', 'operations'].includes(key));
+  if (unknown !== undefined) throw new Error(`${where}: "agentcommsPackage" has unknown key "${unknown}"`);
+  for (const key of ['kind', 'binary', 'server', 'operations']) {
+    if (!Object.hasOwn(declaration, key)) throw new Error(`${where}: "agentcommsPackage" has no "${key}"`);
+  }
+  if (declaration.kind !== 'service') throw new Error(`${where}: "agentcommsPackage".kind must be "service"`);
+  if (packageJson.private === true) {
+    throw new Error(`${where}: a service is published, so it cannot be "private": true`);
+  }
+  if (packageJson.name !== `${SCOPE}/${directory}`) {
+    throw new Error(`${where}: a service's package is ${SCOPE}/${directory}`);
+  }
+  if (typeof declaration.binary !== 'string' || declaration.binary.trim() === '') {
+    throw new Error(`${where}: "agentcommsPackage".binary must be a non-empty string`);
+  }
+  if (packageJson.bin === null || typeof packageJson.bin !== 'object' || Array.isArray(packageJson.bin)) {
+    throw new Error(`${where}: a service's package.json "bin" must map its declared binary`);
+  }
+  if (!Object.hasOwn(packageJson.bin, declaration.binary)) {
+    throw new Error(
+      `${where}: "agentcommsPackage".binary ${JSON.stringify(declaration.binary)} is not a key in package.json "bin"`,
+    );
+  }
+  if (declaration.server === null || typeof declaration.server !== 'object' || Array.isArray(declaration.server)) {
+    throw new Error(`${where}: "agentcommsPackage".server must be an object`);
+  }
+  const serverUnknown = Object.keys(declaration.server).find(
+    (key) => !['defaultName', 'entry', 'factory'].includes(key),
+  );
+  if (serverUnknown !== undefined) {
+    throw new Error(`${where}: "agentcommsPackage".server has unknown key "${serverUnknown}"`);
+  }
+  for (const key of ['defaultName', 'entry', 'factory']) {
+    if (!Object.hasOwn(declaration.server, key))
+      throw new Error(`${where}: "agentcommsPackage".server has no "${key}"`);
+  }
+  if (typeof declaration.server.defaultName !== 'string' || declaration.server.defaultName.trim() === '') {
+    throw new Error(`${where}: "agentcommsPackage".server.defaultName must be a non-empty string`);
+  }
+  if (typeof declaration.server.factory !== 'string' || !/^[A-Za-z_$][\w$]*$/.test(declaration.server.factory)) {
+    throw new Error(`${where}: "agentcommsPackage".server.factory must be a non-empty JavaScript identifier`);
+  }
+  const packageRoot = join(root, 'packages', directory);
+  const entry = declaredPath(where, 'server.entry', declaration.server.entry);
+  const entryPath = join(packageRoot, entry);
+  if (!isFile(entryPath)) {
+    throw new Error(`${where}: "agentcommsPackage".server.entry ${JSON.stringify(entry)} is not a file`);
+  }
+  if (!exportsName(entryPath, declaration.server.factory)) {
+    throw new Error(
+      `${where}: "agentcommsPackage".server.factory ${JSON.stringify(declaration.server.factory)} is not exported by ${JSON.stringify(entry)}`,
+    );
+  }
+  const operations = declaredPath(where, 'operations', declaration.operations);
+  if (!isDirectory(join(packageRoot, operations))) {
+    throw new Error(`${where}: "agentcommsPackage".operations ${JSON.stringify(operations)} is not a directory`);
+  }
+  return { directory, packageName: packageJson.name, declaration, packageJson };
+}
+
+/** A declaration path is package-relative and cannot escape into another package or the checkout. */
+function declaredPath(where, field, value) {
+  if (
+    typeof value !== 'string' ||
+    value === '' ||
+    value.startsWith('/') ||
+    value.includes('\\') ||
+    value.split('/').some((part) => part === '' || part === '.' || part === '..')
+  ) {
+    throw new Error(`${where}: "agentcommsPackage".${field} must be a package-relative path`);
+  }
+  return value;
+}
+
+const isFile = (path) => {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+};
+
+const isDirectory = (path) => {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+/** The declaration names the MCP module's public factory, so a spelling that is not exported is not a runnable service. */
+function exportsName(path, name) {
+  const source = readFileSync(path, 'utf8');
+  const escaped = escapeRegExp(name);
+  if (
+    new RegExp(`\\bexport\\s+(?:async\\s+)?(?:function|class)\\s+${escaped}\\b`).test(source) ||
+    new RegExp(`\\bexport\\s+(?:const|let|var)\\s+${escaped}\\b`).test(source) ||
+    new RegExp(`\\bexport\\s*\\*\\s+as\\s+${escaped}\\b`).test(source)
+  ) {
+    return true;
+  }
+  for (const match of source.matchAll(/\bexport\s*\{([^}]*)\}/g)) {
+    for (const item of match[1].split(',')) {
+      const [local, alias] = item
+        .trim()
+        .replace(/^type\s+/, '')
+        .split(/\s+as\s+/);
+      if ((alias ?? local) === name) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -265,43 +388,53 @@ const escapeRegExp = (text) => text.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
  * Everything the tooling knows about the channels under `root`, derived from their manifests.
  *
  * - `channels`: the entries `readChannels` returns.
- * - `libraries`, `held` and `undeclared`: the entries `readDeclarations` returns. A library feeds `packages` and
- *   nothing else here: every other view is of a surface, and a library has none (D14).
+ * - `libraries`, `services`, `held` and `undeclared`: the entries `readDeclarations` returns. A library feeds
+ *   `packages` and nothing else here; a service also feeds the surface views from its D14 declaration.
  * - `packages`: every package to publish, in publish order — each channel, any package a channel's server is run
- *   through (`server.npxPackage`, Gmail's `gmail-mcp`), and each library. Held packages are among them: what a tag
+ *   through (`server.npxPackage`, Gmail's `gmail-mcp`), each library and each service. Held packages are among them: what a tag
  *   leaves out is `scripts/packages.mjs`'s to say.
  * - `wrappers`: those server-only packages, and the channel each wraps.
  * - `surfaces`: how each CLI and server is read (`registries.mjs`); `drivers`: how each is driven (`operations.mjs`).
  *   A channel's CLI is `src/cli.ts`, its Commander program `src/cli/program.ts` exporting `run`, and its server
  *   `src/mcp/server.ts` exporting `create<Label>McpServer`. The core's CLI is a usage table, and `main`.
- * - `reference`: each channel's generated reference pages. `products`: what `tool-drift` checks.
+ * - `reference`: each channel's and service's generated reference pages. `products`: what `tool-drift` checks.
  * - `skillFamilies`: each channel's skill prefix and contract, with the words of every *other* channel its skills
  *   must never use (`foreign`). The core's `comms-` skills manage every channel, so theirs is empty.
  * - `platforms`: the platform words accounts are named with (`cue/<platform>`).
  */
 export function loadRegistry(root = ROOT) {
-  const { channels, libraries, held, undeclared } = readDeclarations(root);
+  const { channels, libraries, services, held, undeclared } = readDeclarations(root);
   const wrappers = wrappersOf(channels);
   const packages = publishOrder(root, [
     ...channels.map((c) => c.directory),
     ...Object.keys(wrappers),
     ...libraries.map((library) => library.directory),
+    ...services.map((service) => service.directory),
   ]);
 
   const isCore = (directory) => directory === 'core';
-  const surfaces = channels.map(({ directory, manifest }) =>
-    isCore(directory)
-      ? { package: directory, binary: manifest.binary, entry: `packages/${directory}/src/cli.ts`, cli: 'usage' }
-      : {
-          package: directory,
-          binary: manifest.binary,
-          entry: `packages/${directory}/src/cli.ts`,
-          program: `packages/${directory}/src/cli/program.ts`,
-          cli: 'commander',
-        },
-  );
-  const drivers = Object.fromEntries(
-    channels.map(({ directory, manifest }) => [
+  const surfaces = [
+    ...channels.map(({ directory, manifest }) =>
+      isCore(directory)
+        ? { package: directory, binary: manifest.binary, entry: `packages/${directory}/src/cli.ts`, cli: 'usage' }
+        : {
+            package: directory,
+            binary: manifest.binary,
+            entry: `packages/${directory}/src/cli.ts`,
+            program: `packages/${directory}/src/cli/program.ts`,
+            cli: 'commander',
+          },
+    ),
+    ...services.map(({ directory, declaration }) => ({
+      package: directory,
+      binary: declaration.binary,
+      entry: `packages/${directory}/src/cli.ts`,
+      program: `packages/${directory}/src/cli/program.ts`,
+      cli: 'commander',
+    })),
+  ];
+  const drivers = Object.fromEntries([
+    ...channels.map(({ directory, manifest }) => [
       directory,
       isCore(directory)
         ? {
@@ -317,18 +450,32 @@ export function loadRegistry(root = ROOT) {
             factory: `create${pascal(manifest.label)}McpServer`,
           },
     ]),
-  );
+    ...services.map(({ directory, declaration }) => [
+      directory,
+      {
+        cli: `packages/${directory}/src/cli/program.ts`,
+        run: 'run',
+        server: `packages/${directory}/${declaration.server.entry}`,
+        factory: declaration.server.factory,
+        operations: declaration.operations,
+      },
+    ]),
+  ]);
   /** A channel's tool prefix is its word; the core's tools are `comms_…`. */
   const toolPrefix = (directory, manifest) => (isCore(directory) ? 'comms' : manifest.channel);
-  const reference = Object.fromEntries(
-    channels.map(({ directory }) => [
+  const reference = Object.fromEntries([
+    ...channels.map(({ directory }) => [
       directory,
       REFERENCE_NAMES[directory] ?? {
         cli: isCore(directory) ? null : `docs/reference/${directory}-cli.md`,
         mcp: `docs/reference/${directory}-mcp-tools.md`,
       },
     ]),
-  );
+    ...services.map(({ directory }) => [
+      directory,
+      { cli: `docs/reference/${directory}-cli.md`, mcp: `docs/reference/${directory}-mcp-tools.md` },
+    ]),
+  ]);
   const products = channels.map(({ directory, manifest }) => {
     const surface = surfaces.find((s) => s.package === directory);
     return {
@@ -385,6 +532,7 @@ export function loadRegistry(root = ROOT) {
     root,
     channels,
     libraries,
+    services,
     held,
     undeclared,
     packages,

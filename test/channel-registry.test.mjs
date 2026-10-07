@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -67,8 +67,30 @@ function libraryManifest(version, extra = {}) {
   };
 }
 
+/** A service declares its surface explicitly: D14 keeps it separate from channel manifests. */
+function serviceManifest(version, extra = {}) {
+  return {
+    name: '@agentcomms/service-fixture',
+    version,
+    type: 'module',
+    license: 'MIT',
+    bin: { 'agent-service-fixture': './dist/cli.mjs' },
+    agentcommsPackage: {
+      kind: 'service',
+      binary: 'agent-service-fixture',
+      server: {
+        defaultName: 'service-fixture',
+        entry: 'src/service/server.ts',
+        factory: 'createServiceFixtureMcpServer',
+      },
+      operations: 'src/actions',
+    },
+    ...extra,
+  };
+}
+
 /** A copy of the repository's tooling, manifests and skills — no source, no dependencies. */
-async function repositoryCopy(prefix) {
+async function repositoryCopy(prefix, { sources = false } = {}) {
   const root = await tempDir(prefix);
   for (const path of [
     'package.json',
@@ -81,12 +103,124 @@ async function repositoryCopy(prefix) {
   ]) {
     await cp(join(ROOT, path), join(root, path), { recursive: true });
   }
-  for (const entry of await readdir(join(ROOT, 'packages'), { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    await mkdir(join(root, 'packages', entry.name), { recursive: true });
-    await cp(join(ROOT, 'packages', entry.name, 'package.json'), join(root, 'packages', entry.name, 'package.json'));
+  if (sources) {
+    await cp(join(ROOT, 'packages'), join(root, 'packages'), {
+      recursive: true,
+      // pnpm's per-package links are restored below. Copying their targets would make one small fixture copy every
+      // installed dependency tree, while links keep package imports resolving as they do in this checkout.
+      filter: (source) => !source.endsWith('/node_modules'),
+    });
+    for (const entry of await readdir(join(ROOT, 'packages'), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        await symlink(
+          join(ROOT, 'packages', entry.name, 'node_modules'),
+          join(root, 'packages', entry.name, 'node_modules'),
+          'dir',
+        );
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
+    }
+  } else {
+    for (const entry of await readdir(join(ROOT, 'packages'), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      await mkdir(join(root, 'packages', entry.name), { recursive: true });
+      await cp(join(ROOT, 'packages', entry.name, 'package.json'), join(root, 'packages', entry.name, 'package.json'));
+    }
   }
   const version = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8')).version;
+  return { root, version };
+}
+
+/** A copied tree with a runnable service whose declared server and operations paths are deliberately non-default. */
+async function treeWithService({ held = false } = {}) {
+  const { root, version } = await repositoryCopy('service-registry-', { sources: true });
+  const directory = join(root, 'packages', 'service-fixture');
+  const hold = held ? { agentcommsRelease: { hold: 'Held until a consumer needs this service.' } } : {};
+  await mkdir(join(directory, 'src', 'cli'), { recursive: true });
+  await mkdir(join(directory, 'src', 'service'), { recursive: true });
+  await mkdir(join(directory, 'src', 'actions'), { recursive: true });
+  await symlink(join(ROOT, 'packages', 'whatsapp', 'node_modules'), join(directory, 'node_modules'), 'dir');
+  await writeFile(join(directory, 'package.json'), `${JSON.stringify(serviceManifest(version, hold), null, 2)}\n`);
+  await writeFile(
+    join(directory, 'src', 'cli.ts'),
+    "#!/usr/bin/env node\nimport { run } from './cli/program.ts';\nprocess.exitCode = await run(process.argv.slice(2));\n",
+  );
+  await writeFile(
+    join(directory, 'src', 'cli', 'program.ts'),
+    `import { Command, CommanderError } from 'commander';
+import { status } from '../actions/status.ts';
+import { createServiceFixtureMcpServer } from '../service/server.ts';
+
+export async function run(argv, deps = {}) {
+  const streams = deps.streams ?? { stdout: process.stdout, stderr: process.stderr, stdin: process.stdin };
+  const program = new Command()
+    .name('agent-service-fixture')
+    .option('--json')
+    .option('--config-dir <dir>')
+    .option('--state-dir <dir>')
+    .option('--data-dir <dir>')
+    .option('--secrets-dir <dir>')
+    .option('--downloads-dir <dir>')
+    .configureOutput({ writeOut: (text) => streams.stdout.write(text), writeErr: (text) => streams.stderr.write(text) })
+    .exitOverride();
+  program.command('status').description('Show the synthetic service status.').allowUnknownOption().action(async () => status());
+  program.command('mcp').description('Start the synthetic service server.').action(async () => {
+    await (await createServiceFixtureMcpServer()).connectStdio();
+  });
+  try {
+    await program.parseAsync(argv, { from: 'user' });
+    return 0;
+  } catch (error) {
+    if (error instanceof CommanderError && error.code === 'commander.helpDisplayed') return 0;
+    throw error;
+  }
+}
+`,
+  );
+  await writeFile(
+    join(directory, 'src', 'actions', 'status.ts'),
+    'export async function status() { return { ok: true }; }\n',
+  );
+  await writeFile(
+    join(directory, 'src', 'service', 'server.ts'),
+    `import { McpServer } from '@modelcontextprotocol/server';
+import { status } from '../actions/status.ts';
+
+export async function createServiceFixtureMcpServer() {
+  const server = new McpServer({ name: 'service-fixture', version: '0' });
+  server.registerTool('service_fixture_status', { description: 'Show the synthetic service status.', inputSchema: {} }, async () => ({
+    content: [{ type: 'text', text: JSON.stringify(await status()) }],
+  }));
+  return {
+    server,
+    async connectStdio() {
+      const { StdioServerTransport } = await import('@modelcontextprotocol/server/stdio');
+      await server.connect(new StdioServerTransport());
+    },
+  };
+}
+`,
+  );
+  const capabilities = JSON.parse(await readFile(join(ROOT, 'capabilities.json'), 'utf8'));
+  capabilities.capabilities.push({
+    id: 'service-fixture.status',
+    package: 'service-fixture',
+    cli: 'status',
+    mcp: 'service_fixture_status',
+    status: 'both',
+    operation: 'status',
+  });
+  capabilities.capabilities.push({
+    id: 'service-fixture.mcp',
+    package: 'service-fixture',
+    cli: 'mcp',
+    mcp: null,
+    status: 'exception',
+    reason: 'It starts the service server that a tool would need already running.',
+  });
+  await writeFile(join(root, 'capabilities.json'), `${JSON.stringify(capabilities, null, 2)}\n`);
   return { root, version };
 }
 
@@ -416,11 +550,8 @@ test('D14-a: a malformed library declaration is refused, naming the package', as
   };
 
   await refused({ ...library, agentcommsPackage: {} }, /"agentcommsPackage" has no "kind"/);
-  // A service is the other kind D14 names; this registry does not read it until the daemon's phase.
-  await refused(
-    { ...library, agentcommsPackage: { kind: 'service' } },
-    /this registry reads "library"; "service" arrives with phase B1/,
-  );
+  // A service is the other D14 kind; without its required surface declaration it is still refused.
+  await refused({ ...library, agentcommsPackage: { kind: 'service' } }, /"agentcommsPackage" has no "binary"/);
   await refused({ ...library, agentcommsPackage: { kind: 'plugin' } }, /kind "plugin" is unknown/);
   await refused({ ...library, agentcommsPackage: { kind: 'library', binary: 'agent-shelf' } }, /unknown key "binary"/);
   for (const shape of ['library', null, ['library'], 1]) {
@@ -438,6 +569,142 @@ test('D14-a: a malformed library declaration is refused, naming the package', as
   // As declared in the first place, accepted.
   await writeFile(path, JSON.stringify(library));
   assert.ok(loadRegistry(root).libraries.some((entry) => entry.directory === 'shelf'));
+});
+
+test('D14-b: a declared service is publishable, has surfaces and drivers, and executes its declared parity operation', async () => {
+  const { root } = await treeWithService({ held: true });
+  const registry = loadRegistry(root);
+  const service = registry.services.find((entry) => entry.directory === 'service-fixture');
+  assert.deepEqual(service?.declaration, serviceManifest('ignored').agentcommsPackage);
+  assert.ok(registry.packages.includes('service-fixture'), 'a service is publishable');
+  assert.ok(
+    registry.held.some((entry) => entry.directory === 'service-fixture'),
+    'a service may be held',
+  );
+  assert.deepEqual(
+    registry.surfaces.find((entry) => entry.package === 'service-fixture'),
+    {
+      package: 'service-fixture',
+      binary: 'agent-service-fixture',
+      entry: 'packages/service-fixture/src/cli.ts',
+      program: 'packages/service-fixture/src/cli/program.ts',
+      cli: 'commander',
+    },
+  );
+  assert.deepEqual(registry.drivers['service-fixture'], {
+    cli: 'packages/service-fixture/src/cli/program.ts',
+    run: 'run',
+    server: 'packages/service-fixture/src/service/server.ts',
+    factory: 'createServiceFixtureMcpServer',
+    operations: 'src/actions',
+  });
+  assert.deepEqual(registry.reference['service-fixture'], {
+    cli: 'docs/reference/service-fixture-cli.md',
+    mcp: 'docs/reference/service-fixture-mcp-tools.md',
+  });
+  assert.ok(!registry.libraries.some((entry) => entry.directory === 'service-fixture'), 'a service is not a library');
+
+  const lists = await import(pathToFileURL(join(root, 'scripts', 'packages.mjs')).href);
+  assert.ok(lists.PUBLISHABLE.includes('service-fixture'), 'held service remains checked as publishable');
+  assert.ok(!lists.PACKAGES.includes('service-fixture'), 'held service is absent from tag publication');
+
+  const registries = await import(pathToFileURL(join(root, 'scripts', 'registries.mjs')).href);
+  const operations = await import(pathToFileURL(join(root, 'scripts', 'operations.mjs')).href);
+  assert.ok(registries.SURFACES.some((entry) => entry.package === 'service-fixture'));
+  assert.deepEqual(operations.DRIVERS['service-fixture'], registry.drivers['service-fixture']);
+
+  const parity = await exec(
+    process.execPath,
+    ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', 'scripts/parity.mjs', '--strict'],
+    {
+      cwd: root,
+    },
+  );
+  assert.match(parity.stdout, /matches every command and tool/);
+  const driven = await operations.driveOperations(JSON.parse(await readFile(join(root, 'capabilities.json'), 'utf8')), {
+    dir: await tempDir('service-parity-drive-'),
+  });
+  assert.deepEqual(driven.reports['service-fixture.status'].cli.calls, ['service-fixture:status']);
+  assert.deepEqual(driven.reports['service-fixture.status'].mcp.calls, ['service-fixture:status']);
+
+  await run(root, 'sync-reference.mjs');
+  for (const path of ['service-fixture-cli.md', 'service-fixture-mcp-tools.md']) {
+    await readFile(join(root, 'docs', 'reference', path), 'utf8');
+  }
+});
+
+test('D14-b: a service declaration is closed and validates the declared package paths', async () => {
+  const { root, version } = await treeWithService();
+  const path = join(root, 'packages', 'service-fixture', 'package.json');
+  const base = serviceManifest(version);
+  const refuse = async (manifest, message) => {
+    await writeFile(path, JSON.stringify(manifest));
+    assert.throws(
+      () => loadRegistry(root),
+      (error) => {
+        assert.match(error.message, /^packages\/service-fixture\/package\.json: /);
+        assert.match(error.message, message);
+        return true;
+      },
+      JSON.stringify(manifest),
+    );
+  };
+
+  await refuse({ ...base, agentcommsPackage: { ...base.agentcommsPackage, unknown: true } }, /unknown key "unknown"/);
+  await refuse({ ...base, agentcommsPackage: { kind: 'service' } }, /has no "binary"/);
+  await refuse(
+    { ...base, agentcommsPackage: { ...base.agentcommsPackage, binary: 'agent-other-service' } },
+    /binary "agent-other-service" is not a key in package\.json "bin"/,
+  );
+  await refuse(
+    {
+      ...base,
+      agentcommsPackage: {
+        ...base.agentcommsPackage,
+        server: { ...base.agentcommsPackage.server, entry: 'src/missing/server.ts' },
+      },
+    },
+    /server\.entry "src\/missing\/server\.ts" is not a file/,
+  );
+  await refuse(
+    {
+      ...base,
+      agentcommsPackage: {
+        ...base.agentcommsPackage,
+        server: { ...base.agentcommsPackage.server, factory: '' },
+      },
+    },
+    /server\.factory must be a non-empty JavaScript identifier/,
+  );
+  await refuse(
+    {
+      ...base,
+      agentcommsPackage: {
+        ...base.agentcommsPackage,
+        server: { ...base.agentcommsPackage.server, factory: 'createMissingService' },
+      },
+    },
+    /server\.factory "createMissingService" is not exported by "src\/service\/server\.ts"/,
+  );
+  await refuse(
+    { ...base, agentcommsPackage: { ...base.agentcommsPackage, operations: 'src/missing-actions' } },
+    /operations "src\/missing-actions" is not a directory/,
+  );
+  await refuse({ ...base, private: true }, /a service is published, so it cannot be "private": true/);
+  await refuse(
+    { ...base, agentcomms: { contract: 1, channel: 'service-fixture' } },
+    /declares both "agentcomms" and "agentcommsPackage"/,
+  );
+  await refuse(
+    {
+      ...base,
+      agentcommsPackage: { kind: 'library' },
+    },
+    /a library has no "bin"/,
+  );
+
+  await writeFile(path, `${JSON.stringify(base, null, 2)}\n`);
+  assert.ok(loadRegistry(root).services.some((entry) => entry.directory === 'service-fixture'));
 });
 
 test('PKG-c: "agentcomms" means a channel; one carrying a kind is refused, naming agentcommsPackage', async () => {
@@ -751,7 +1018,7 @@ const CONSUMERS = {
   'scripts/operations.mjs': [/REGISTRY\.drivers/, /REGISTRY\.platforms/],
   'scripts/sync-reference.mjs': [
     /const CLIS = REGISTRY\.surfaces/,
-    /const SERVERS = REGISTRY\.channels/,
+    /const SERVERS = REGISTRY\.surfaces/,
     /REGISTRY\.skillFamilies/,
   ],
   'scripts/sync-skills.mjs': [/skillFamilyOf\(REGISTRY, name\)/],

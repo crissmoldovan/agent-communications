@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { DRIVERS, driveOperations, parameterNames, recordArguments, resolveOperation } from '../scripts/operations.mjs';
 import { PUBLISHABLE } from '../scripts/packages.mjs';
 import { checkOperations, checkParity, readTable, uncheckedRows, verifyParity } from '../scripts/parity.mjs';
-import { deriveRegistries, LIBRARIES, ROOT, SURFACES, scratchEnv, WRAPPERS } from '../scripts/registries.mjs';
+import { deriveRegistries, LIBRARIES, ROOT, SERVICES, SURFACES, scratchEnv, WRAPPERS } from '../scripts/registries.mjs';
 import { tempDir } from './helpers/temp-dir.mjs';
 
 /**
@@ -103,11 +103,17 @@ test('groups are told from commands the way the derivation documents', () => {
  * D14) — the only kind with no surface. Being declared is not enough: a library with a command, a CLI module, a
  * server or a row in the table has a surface after all, which nothing here would read, so each is refused.
  */
-async function unreadPackages({ root, publishable, surfaces, wrappers, libraries, table: rows }) {
+async function unreadPackages({ root, publishable, surfaces, wrappers, libraries, services = [], table: rows }) {
   const read = new Set(surfaces.map((surface) => surface.package));
   const problems = [];
   for (const name of publishable) {
     if (read.has(name) || name in wrappers) continue;
+    if (services.includes(name)) {
+      problems.push(
+        `service @agentcomms/${name} is published, but scripts/registries.mjs does not read its declared CLI/MCP surface — its commands and tools would escape the parity check`,
+      );
+      continue;
+    }
     if (!libraries.includes(name)) {
       problems.push(
         `@agentcomms/${name} is published, but scripts/registries.mjs neither reads it, names it as a wrapper nor knows it as a declared library — its commands and tools would escape the parity check`,
@@ -137,6 +143,7 @@ test('every published package is read, directly or as the package it wraps, or i
     surfaces: SURFACES,
     wrappers: WRAPPERS,
     libraries: LIBRARIES,
+    services: SERVICES,
     table,
   });
   assert.deepEqual(problems, [], listed(problems));
@@ -188,6 +195,31 @@ test('PKG-b: only a declared library is a surface-free published package', async
     'library @agentcomms/shelf has a capabilities.json row, shelf.read',
   );
   assert.deepEqual(await check(), [], 'back to a bare library, exempt again');
+});
+
+test('PKG-b: a service declared as a library still must have its CLI/MCP surface read', async () => {
+  const root = await tempDir('agentcomms-parity-service-');
+  const directory = join(root, 'packages', 'service-fixture');
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(directory, 'package.json'),
+    JSON.stringify({
+      name: '@agentcomms/service-fixture',
+      version: '1.0.0',
+      agentcommsPackage: { kind: 'service' },
+    }),
+  );
+  const problems = await unreadPackages({
+    root,
+    publishable: ['service-fixture'],
+    surfaces: [],
+    wrappers: {},
+    // The mutation this guards would put the service into the library exemption as well.
+    libraries: ['service-fixture'],
+    services: ['service-fixture'],
+    table,
+  });
+  assertNamed(problems, 'service @agentcomms/service-fixture is published, but scripts/registries.mjs does not read');
 });
 
 // ── The table, against the product ──────────────────────────────────────────────────────────────────────────────

@@ -126,6 +126,46 @@ test('a package a newer capability names, and its binary, are scanned without an
   assert.throws(() => suiteFacts(root), /names the package signal, and there is no packages\/signal/);
 });
 
+test('a declared service and its binary are scanned without an edit here', async () => {
+  const root = await tempDir('printed-command-service-');
+  cpSync(join(ROOT, 'packages', 'core', 'package.json'), join(root, 'packages', 'core', 'package.json'), {
+    recursive: true,
+  });
+  const directory = join(root, 'packages', 'service-fixture');
+  mkdirSync(join(directory, 'src', 'mcp'), { recursive: true });
+  mkdirSync(join(directory, 'src', 'actions'), { recursive: true });
+  writeFileSync(
+    join(directory, 'package.json'),
+    JSON.stringify({
+      name: '@agentcomms/service-fixture',
+      version: '1.0.0',
+      bin: { 'service-fixture': './dist/cli.mjs' },
+      agentcommsPackage: {
+        kind: 'service',
+        binary: 'service-fixture',
+        server: {
+          defaultName: 'service-fixture',
+          entry: 'src/mcp/server.ts',
+          factory: 'createServiceFixtureMcpServer',
+        },
+        operations: 'src/actions',
+      },
+    }),
+  );
+  writeFileSync(join(directory, 'src', 'cli.ts'), 'export const status = true;\n');
+  writeFileSync(
+    join(directory, 'src', 'mcp', 'server.ts'),
+    'export async function createServiceFixtureMcpServer() { return {}; }\n',
+  );
+  writeFileSync(join(directory, 'src', 'actions', 'status.ts'), 'export {};\n');
+  writeFileSync(join(root, 'capabilities.json'), JSON.stringify({ capabilities: [] }));
+
+  const facts = suiteFacts(root);
+  assert.deepEqual(facts.packages, ['core', 'service-fixture']);
+  assert.ok(facts.binaries.includes('service-fixture'));
+  assert.ok(runtimeSources(facts).some(({ path }) => path === 'packages/service-fixture/src/cli.ts'));
+});
+
 test('every runtime package prints no command of this suite but through the locator', () => {
   const findings = scan(runtimeSources(FACTS), FACTS);
   assert.deepEqual(
