@@ -37,7 +37,19 @@ export type IssueCode =
   /** A catalogue declaration is inconsistent with its schema. */
   | 'DEFINITION_INVALID'
   /** A Resend risk flag is outside the closed Appendix A vocabulary. */
-  | 'RISK_FLAG_UNKNOWN';
+  | 'RISK_FLAG_UNKNOWN'
+  /** A mapping template is not D6's JSON-template grammar. */
+  | 'MAPPING_INVALID'
+  /** A mapping reference was absent while its policy was `reject`. */
+  | 'MAPPING_PATH_MISSING'
+  /** A mapping constant, leaf count or mapped JSON byte length exceeds D6's limit. */
+  | 'MAPPING_LIMIT_EXCEEDED'
+  /** A CloudEvents field is absent or has the wrong D6 type. */
+  | 'CLOUD_EVENT_INVALID'
+  /** A rule-defined CloudEvent type is not a non-empty string. */
+  | 'CLOUD_EVENT_TYPE_INVALID'
+  /** An untrusted extension pointer is not present in data as a string. */
+  | 'UNTRUSTED_POINTER_INVALID';
 
 /** One thing wrong, where it is (an RFC 6901 pointer into the value checked), and any detail a caller can show. */
 export interface Issue {

@@ -1,0 +1,249 @@
+{
+  "family": "envelopes",
+  "description": "Each Version-1 catalogue type has a hand-written CloudEvents structured-envelope and UTF-8 oracle.",
+  "vectors": [
+    {
+      "name": "gmail received",
+      "type": "gmail.message.received",
+      "example": 1,
+      "deliveryId": "delivery-1",
+      "template": {
+        "id": {
+          "$path": "/id"
+        },
+        "subject": {
+          "$path": "/subject"
+        },
+        "from": {
+          "$path": "/from/address"
+        }
+      },
+      "expected": {
+        "specversion": "1.0",
+        "id": "delivery-1",
+        "source": "urn:agentcomms:installation-1:ibx_ABCDEFGHIJKLMNOP",
+        "type": "com.agentcomms.gmail.message.received.v1",
+        "time": "2026-10-07T12:00:00Z",
+        "datacontenttype": "application/json",
+        "dataschema": "urn:agentcomms:schema:delivery:rule-1:v1:target-1:v1",
+        "subject": "message-1",
+        "agentcommsrule": "rule-1@1",
+        "agentcommsuntrusted": "%2Fsubject",
+        "data": {
+          "id": "0123456789abcdef0123456789abcdef",
+          "subject": "Subject",
+          "from": "sender@example.com"
+        }
+      },
+      "bytes": "{\"agentcommsrule\":\"rule-1@1\",\"agentcommsuntrusted\":\"%2Fsubject\",\"data\":{\"from\":\"sender@example.com\",\"id\":\"0123456789abcdef0123456789abcdef\",\"subject\":\"Subject\"},\"datacontenttype\":\"application/json\",\"dataschema\":\"urn:agentcomms:schema:delivery:rule-1:v1:target-1:v1\",\"id\":\"delivery-1\",\"source\":\"urn:agentcomms:installation-1:ibx_ABCDEFGHIJKLMNOP\",\"specversion\":\"1.0\",\"subject\":\"message-1\",\"time\":\"2026-10-07T12:00:00Z\",\"type\":\"com.agentcomms.gmail.message.received.v1\"}",
+      "hex": "7b226167656e74636f6d6d7372756c65223a2272756c652d314031222c226167656e74636f6d6d73756e74727573746564223a222532467375626a656374222c2264617461223a7b2266726f6d223a2273656e646572406578616d706c652e636f6d222c226964223a223031323334353637383961626364656630313233343536373839616263646566222c227375626a656374223a225375626a656374227d2c2264617461636f6e74656e7474797065223a226170706c69636174696f6e2f6a736f6e222c2264617461736368656d61223a2275726e3a6167656e74636f6d6d733a736368656d613a64656c69766572793a72756c652d313a76313a7461726765742d313a7631222c226964223a2264656c69766572792d31222c22736f75726365223a2275726e3a6167656e74636f6d6d733a696e7374616c6c6174696f6e2d313a6962785f4142434445464748494a4b4c4d4e4f50222c227370656376657273696f6e223a22312e30222c227375626a656374223a226d6573736167652d31222c2274696d65223a22323032362d31302d30375431323a30303a30305a222c2274797065223a22636f6d2e6167656e74636f6d6d732e676d61696c2e6d6573736167652e72656365697665642e7631227d"
+    },
+    {
+      "name": "gmail sent",
+      "type": "gmail.message.sent",
+      "example": 1,
+      "deliveryId": "delivery-2",
+      "template": {
+        "id": {
+          "$path": "/id"
+        },
+        "subject": {
+          "$path": "/subject"
+        },
+        "from": {
+          "$path": "/from/address"
+        }
+      },
+      "expected": {
+        "specversion": "1.0",
+        "id": "delivery-2",
+        "source": "urn:agentcomms:installation-1:ibx_ABCDEFGHIJKLMNOP",
+        "type": "com.agentcomms.gmail.message.sent.v1",
+        "time": "2026-10-07T12:00:00Z",
+        "datacontenttype": "application/json",
+        "dataschema": "urn:agentcomms:schema:delivery:rule-1:v1:target-1:v1",
+        "subject": "message-1",
+        "agentcommsrule": "rule-1@1",
+        "agentcommsuntrusted": "%2Fsubject",
+        "data": {
+          "id": "0123456789abcdef0123456789abcdef",
+          "subject": "Subject",
+          "from": "sender@example.com"
+        }
+      },
+      "bytes": "{\"agentcommsrule\":\"rule-1@1\",\"agentcommsuntrusted\":\"%2Fsubject\",\"data\":{\"from\":\"sender@example.com\",\"id\":\"0123456789abcdef0123456789abcdef\",\"subject\":\"Subject\"},\"datacontenttype\":\"application/json\",\"dataschema\":\"urn:agentcomms:schema:delivery:rule-1:v1:target-1:v1\",\"id\":\"delivery-2\",\"source\":\"urn:agentcomms:installation-1:ibx_ABCDEFGHIJKLMNOP\",\"specversion\":\"1.0\",\"subject\":\"message-1\",\"time\":\"2026-10-07T12:00:00Z\",\"type\":\"com.agentcomms.gmail.message.sent.v1\"}",
+      "hex": "7b226167656e74636f6d6d7372756c65223a2272756c652d314031222c226167656e74636f6d6d73756e74727573746564223a222532467375626a656374222c2264617461223a7b2266726f6d223a2273656e646572406578616d706c652e636f6d222c226964223a223031323334353637383961626364656630313233343536373839616263646566222c227375626a656374223a225375626a656374227d2c2264617461636f6e74656e7474797065223a226170706c69636174696f6e2f6a736f6e222c2264617461736368656d61223a2275726e3a6167656e74636f6d6d733a736368656d613a64656c69766572793a72756c652d313a76313a7461726765742d313a7631222c226964223a2264656c69766572792d32222c22736f75726365223a2275726e3a6167656e74636f6d6d733a696e7374616c6c6174696f6e2d313a6962785f4142434445464748494a4b4c4d4e4f50222c227370656376657273696f6e223a22312e30222c227375626a656374223a226d6573736167652d31222c2274696d65223a22323032362d31302d30375431323a30303a30305a222c2274797065223a22636f6d2e6167656e74636f6d6d732e676d61696c2e6d6573736167652e73656e742e7631227d"
+    },
+    {
+      "name": "gmail labelled",
+      "type": "gmail.message.labelled",
+      "example": 0,
+      "deliveryId": "delivery-3",
+      "template": {
+        "id": {
+          "$path": "/id"
+        }
+      },
+      "expected": {
+        "specversion": "1.0",
+        "id": "delivery-3",
+        "source": "urn:agentcomms:installation-1:ibx_ABCDEFGHIJKLMNOP",
+        "type": "com.agentcomms.gmail.message.labelled.v1",
+        "time": "2026-10-07T12:00:00Z",
+        "datacontenttype": "application/json",
+        "dataschema": "urn:agentcomms:schema:delivery:rule-1:v1:target-1:v1",
+        "subject": "message-1",
+        "agentcommsrule": "rule-1@1",
+        "data": {
+          "id": "0123456789abcdef0123456789abcdef"
+        }
+      },
+      "bytes": "{\"agentcommsrule\":\"rule-1@1\",\"data\":{\"id\":\"0123456789abcdef0123456789abcdef\"},\"datacontenttype\":\"application/json\",\"dataschema\":\"urn:agentcomms:schema:delivery:rule-1:v1:target-1:v1\",\"id\":\"delivery-3\",\"source\":\"urn:agentcomms:installation-1:ibx_ABCDEFGHIJKLMNOP\",\"specversion\":\"1.0\",\"subject\":\"message-1\",\"time\":\"2026-10-07T12:00:00Z\",\"type\":\"com.agentcomms.gmail.message.labelled.v1\"}",
+      "hex": "7b226167656e74636f6d6d7372756c65223a2272756c652d314031222c2264617461223a7b226964223a223031323334353637383961626364656630313233343536373839616263646566227d2c2264617461636f6e74656e7474797065223a226170706c69636174696f6e2f6a736f6e222c2264617461736368656d61223a2275726e3a6167656e74636f6d6d733a736368656d613a64656c69766572793a72756c652d313a76313a7461726765742d313a7631222c226964223a2264656c69766572792d33222c22736f75726365223a2275726e3a6167656e74636f6d6d733a696e7374616c6c6174696f6e2d313a6962785f4142434445464748494a4b4c4d4e4f50222c227370656376657273696f6e223a22312e30222c227375626a656374223a226d6573736167652d31222c2274696d65223a22323032362d31302d30375431323a30303a30305a222c2274797065223a22636f6d2e6167656e74636f6d6d732e676d61696c2e6d6573736167652e6c6162656c6c65642e7631227d"
+    },
+    {
+      "name": "slack posted",
+      "type": "slack.message.posted",
+      "example": 1,
+      "deliveryId": "delivery-4",
+      "template": {
+        "id": {
+          "$path": "/id"
+        },
+        "text": {
+          "$path": "/text"
+        },
+        "author": {
+          "$path": "/author/userId"
+        }
+      },
+      "expected": {
+        "specversion": "1.0",
+        "id": "delivery-4",
+        "source": "urn:agentcomms:installation-1:acc_ABCDEFGHIJKLMNOP",
+        "type": "com.agentcomms.slack.message.posted.v1",
+        "time": "2023-11-14T22:13:21Z",
+        "datacontenttype": "application/json",
+        "dataschema": "urn:agentcomms:schema:delivery:rule-1:v1:target-1:v1",
+        "subject": "C00000000/1700000001.000000",
+        "agentcommsrule": "rule-1@1",
+        "agentcommsuntrusted": "%2Ftext",
+        "data": {
+          "id": "fedcba9876543210fedcba9876543210",
+          "text": "Hello again",
+          "author": "U00000000"
+        }
+      },
+      "bytes": "{\"agentcommsrule\":\"rule-1@1\",\"agentcommsuntrusted\":\"%2Ftext\",\"data\":{\"author\":\"U00000000\",\"id\":\"fedcba9876543210fedcba9876543210\",\"text\":\"Hello again\"},\"datacontenttype\":\"application/json\",\"dataschema\":\"urn:agentcomms:schema:delivery:rule-1:v1:target-1:v1\",\"id\":\"delivery-4\",\"source\":\"urn:agentcomms:installation-1:acc_ABCDEFGHIJKLMNOP\",\"specversion\":\"1.0\",\"subject\":\"C00000000/1700000001.000000\",\"time\":\"2023-11-14T22:13:21Z\",\"type\":\"com.agentcomms.slack.message.posted.v1\"}",
+      "hex": "7b226167656e74636f6d6d7372756c65223a2272756c652d314031222c226167656e74636f6d6d73756e74727573746564223a2225324674657874222c2264617461223a7b22617574686f72223a22553030303030303030222c226964223a226665646362613938373635343332313066656463626139383736353433323130222c2274657874223a2248656c6c6f20616761696e227d2c2264617461636f6e74656e7474797065223a226170706c69636174696f6e2f6a736f6e222c2264617461736368656d61223a2275726e3a6167656e74636f6d6d733a736368656d613a64656c69766572793a72756c652d313a76313a7461726765742d313a7631222c226964223a2264656c69766572792d34222c22736f75726365223a2275726e3a6167656e74636f6d6d733a696e7374616c6c6174696f6e2d313a6163635f4142434445464748494a4b4c4d4e4f50222c227370656376657273696f6e223a22312e30222c227375626a656374223a224330303030303030302f313730303030303030312e303030303030222c2274696d65223a22323032332d31312d31345432323a31333a32315a222c2274797065223a22636f6d2e6167656e74636f6d6d732e736c61636b2e6d6573736167652e706f737465642e7631227d"
+    },
+    {
+      "name": "resend received",
+      "type": "resend.email.received",
+      "example": 1,
+      "deliveryId": "delivery-5",
+      "template": {
+        "id": {
+          "$path": "/id"
+        },
+        "subject": {
+          "$path": "/subject"
+        },
+        "from": {
+          "$path": "/from/address"
+        }
+      },
+      "expected": {
+        "specversion": "1.0",
+        "id": "delivery-5",
+        "source": "urn:agentcomms:installation-1:acc_ABCDEFGHIJKLMNOP",
+        "type": "com.agentcomms.resend.email.received.v1",
+        "time": "2026-10-07T12:01:00Z",
+        "datacontenttype": "application/json",
+        "dataschema": "urn:agentcomms:schema:delivery:rule-1:v1:target-1:v1",
+        "subject": "12345678-89ab-cdef-0123-456789abcdef",
+        "agentcommsrule": "rule-1@1",
+        "agentcommsuntrusted": "%2Fsubject",
+        "data": {
+          "id": "fedcba9876543210fedcba9876543210",
+          "subject": "Subject",
+          "from": "sender@example.com"
+        }
+      },
+      "bytes": "{\"agentcommsrule\":\"rule-1@1\",\"agentcommsuntrusted\":\"%2Fsubject\",\"data\":{\"from\":\"sender@example.com\",\"id\":\"fedcba9876543210fedcba9876543210\",\"subject\":\"Subject\"},\"datacontenttype\":\"application/json\",\"dataschema\":\"urn:agentcomms:schema:delivery:rule-1:v1:target-1:v1\",\"id\":\"delivery-5\",\"source\":\"urn:agentcomms:installation-1:acc_ABCDEFGHIJKLMNOP\",\"specversion\":\"1.0\",\"subject\":\"12345678-89ab-cdef-0123-456789abcdef\",\"time\":\"2026-10-07T12:01:00Z\",\"type\":\"com.agentcomms.resend.email.received.v1\"}",
+      "hex": "7b226167656e74636f6d6d7372756c65223a2272756c652d314031222c226167656e74636f6d6d73756e74727573746564223a222532467375626a656374222c2264617461223a7b2266726f6d223a2273656e646572406578616d706c652e636f6d222c226964223a226665646362613938373635343332313066656463626139383736353433323130222c227375626a656374223a225375626a656374227d2c2264617461636f6e74656e7474797065223a226170706c69636174696f6e2f6a736f6e222c2264617461736368656d61223a2275726e3a6167656e74636f6d6d733a736368656d613a64656c69766572793a72756c652d313a76313a7461726765742d313a7631222c226964223a2264656c69766572792d35222c22736f75726365223a2275726e3a6167656e74636f6d6d733a696e7374616c6c6174696f6e2d313a6163635f4142434445464748494a4b4c4d4e4f50222c227370656376657273696f6e223a22312e30222c227375626a656374223a2231323334353637382d383961622d636465662d303132332d343536373839616263646566222c2274696d65223a22323032362d31302d30375431323a30313a30305a222c2274797065223a22636f6d2e6167656e74636f6d6d732e726573656e642e656d61696c2e72656365697665642e7631227d"
+    },
+    {
+      "name": "resend changed",
+      "type": "resend.email.status_changed",
+      "example": 1,
+      "deliveryId": "delivery-6",
+      "template": {
+        "id": {
+          "$path": "/id"
+        },
+        "subject": {
+          "$path": "/subject"
+        },
+        "from": {
+          "$path": "/from/address"
+        }
+      },
+      "expected": {
+        "specversion": "1.0",
+        "id": "delivery-6",
+        "source": "urn:agentcomms:installation-1:acc_ABCDEFGHIJKLMNOP",
+        "type": "com.agentcomms.resend.email.status_changed.v1",
+        "time": "2026-10-07T12:01:00Z",
+        "datacontenttype": "application/json",
+        "dataschema": "urn:agentcomms:schema:delivery:rule-1:v1:target-1:v1",
+        "subject": "12345678-89ab-cdef-0123-456789abcdef",
+        "agentcommsrule": "rule-1@1",
+        "agentcommsuntrusted": "%2Fsubject",
+        "data": {
+          "id": "fedcba9876543210fedcba9876543210",
+          "subject": "Subject",
+          "from": "sender@example.com"
+        }
+      },
+      "bytes": "{\"agentcommsrule\":\"rule-1@1\",\"agentcommsuntrusted\":\"%2Fsubject\",\"data\":{\"from\":\"sender@example.com\",\"id\":\"fedcba9876543210fedcba9876543210\",\"subject\":\"Subject\"},\"datacontenttype\":\"application/json\",\"dataschema\":\"urn:agentcomms:schema:delivery:rule-1:v1:target-1:v1\",\"id\":\"delivery-6\",\"source\":\"urn:agentcomms:installation-1:acc_ABCDEFGHIJKLMNOP\",\"specversion\":\"1.0\",\"subject\":\"12345678-89ab-cdef-0123-456789abcdef\",\"time\":\"2026-10-07T12:01:00Z\",\"type\":\"com.agentcomms.resend.email.status_changed.v1\"}",
+      "hex": "7b226167656e74636f6d6d7372756c65223a2272756c652d314031222c226167656e74636f6d6d73756e74727573746564223a222532467375626a656374222c2264617461223a7b2266726f6d223a2273656e646572406578616d706c652e636f6d222c226964223a226665646362613938373635343332313066656463626139383736353433323130222c227375626a656374223a225375626a656374227d2c2264617461636f6e74656e7474797065223a226170706c69636174696f6e2f6a736f6e222c2264617461736368656d61223a2275726e3a6167656e74636f6d6d733a736368656d613a64656c69766572793a72756c652d313a76313a7461726765742d313a7631222c226964223a2264656c69766572792d36222c22736f75726365223a2275726e3a6167656e74636f6d6d733a696e7374616c6c6174696f6e2d313a6163635f4142434445464748494a4b4c4d4e4f50222c227370656376657273696f6e223a22312e30222c227375626a656374223a2231323334353637382d383961622d636465662d303132332d343536373839616263646566222c2274696d65223a22323032362d31302d30375431323a30313a30305a222c2274797065223a22636f6d2e6167656e74636f6d6d732e726573656e642e656d61696c2e7374617475735f6368616e6765642e7631227d"
+    },
+    {
+      "name": "whatsapp received",
+      "type": "whatsapp.message.received",
+      "example": 1,
+      "deliveryId": "delivery-7",
+      "template": {
+        "id": {
+          "$path": "/id"
+        },
+        "text": {
+          "$path": "/text"
+        },
+        "sender": {
+          "$path": "/sender/id"
+        }
+      },
+      "expected": {
+        "specversion": "1.0",
+        "id": "delivery-7",
+        "source": "urn:agentcomms:installation-1:acc_ABCDEFGHIJKLMNOP",
+        "type": "com.agentcomms.whatsapp.message.received.v1",
+        "time": "2026-10-07T12:01:00Z",
+        "datacontenttype": "application/json",
+        "dataschema": "urn:agentcomms:schema:delivery:rule-1:v1:target-1:v1",
+        "subject": "group-display/[\"wa-msg\",\"120363000000000@g.us\",\"447700900003@s.whatsapp.net\",\"stanza-2\"]",
+        "agentcommsrule": "rule-1@1",
+        "agentcommsuntrusted": "%2Ftext",
+        "data": {
+          "id": "fedcba9876543210fedcba9876543210",
+          "text": "Hello",
+          "sender": "447700900003@s.whatsapp.net"
+        }
+      },
+      "bytes": "{\"agentcommsrule\":\"rule-1@1\",\"agentcommsuntrusted\":\"%2Ftext\",\"data\":{\"id\":\"fedcba9876543210fedcba9876543210\",\"sender\":\"447700900003@s.whatsapp.net\",\"text\":\"Hello\"},\"datacontenttype\":\"application/json\",\"dataschema\":\"urn:agentcomms:schema:delivery:rule-1:v1:target-1:v1\",\"id\":\"delivery-7\",\"source\":\"urn:agentcomms:installation-1:acc_ABCDEFGHIJKLMNOP\",\"specversion\":\"1.0\",\"subject\":\"group-display/[\\\"wa-msg\\\",\\\"120363000000000@g.us\\\",\\\"447700900003@s.whatsapp.net\\\",\\\"stanza-2\\\"]\",\"time\":\"2026-10-07T12:01:00Z\",\"type\":\"com.agentcomms.whatsapp.message.received.v1\"}",
+      "hex": "7b226167656e74636f6d6d7372756c65223a2272756c652d314031222c226167656e74636f6d6d73756e74727573746564223a2225324674657874222c2264617461223a7b226964223a226665646362613938373635343332313066656463626139383736353433323130222c2273656e646572223a2234343737303039303030303340732e77686174736170702e6e6574222c2274657874223a2248656c6c6f227d2c2264617461636f6e74656e7474797065223a226170706c69636174696f6e2f6a736f6e222c2264617461736368656d61223a2275726e3a6167656e74636f6d6d733a736368656d613a64656c69766572793a72756c652d313a76313a7461726765742d313a7631222c226964223a2264656c69766572792d37222c22736f75726365223a2275726e3a6167656e74636f6d6d733a696e7374616c6c6174696f6e2d313a6163635f4142434445464748494a4b4c4d4e4f50222c227370656376657273696f6e223a22312e30222c227375626a656374223a2267726f75702d646973706c61792f5b5c2277612d6d73675c222c5c2231323033363330303030303030303040672e75735c222c5c2234343737303039303030303340732e77686174736170702e6e65745c222c5c227374616e7a612d325c225d222c2274696d65223a22323032362d31302d30375431323a30313a30305a222c2274797065223a22636f6d2e6167656e74636f6d6d732e77686174736170702e6d6573736167652e72656365697665642e7631227d"
+    }
+  ]
+}

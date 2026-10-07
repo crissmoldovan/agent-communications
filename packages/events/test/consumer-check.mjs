@@ -107,6 +107,54 @@ assert.deepEqual(events.toAsciiDomain('a_b.example').issues?.[0]?.detail, ['V6']
 console.log('events consumer check: UTS #46 domains OK');
 // --- end UTS #46 ---
 
+// --- Mapping, provenance and delivery schemas (events phase A, task 13) ---
+{
+  const definition = events.CATALOGUE[0];
+  const event = definition.examples[1];
+  const compiled = events.compileMapping(definition, {
+    subject: { $path: '/subject' },
+    from: { $path: '/from' },
+    omitted: { $path: '/body', missing: 'omit' },
+  });
+  assert.equal(compiled.ok, true);
+  if (!compiled.ok) throw new Error('mapping did not compile');
+  const mapped = events.evaluateMapping(compiled.value, event);
+  const classified = events.classifyMapped(definition, event, mapped);
+  assert.deepEqual(
+    classified.untrusted.map((entry) => entry.pointer),
+    ['/subject', '/from/name', '/omitted'],
+  );
+  const delivered = events.applyRepresentation(mapped.data, classified, { kind: 'plain' });
+  assert.deepEqual(delivered, { subject: event.subject, from: event.from, omitted: event.body });
+  assert.equal(
+    events.deliverySchema(definition, compiled.value, { kind: 'plain' }, 'rule/one', 1, 'target one', 1).$id,
+    'urn:agentcomms:schema:delivery:rule%2Fone:v1:target%20one:v1',
+  );
+  console.log('events consumer check: mapping, provenance, representation and delivery schema OK');
+}
+// --- end mapping ---
+
+// --- CloudEvents wire contract (events phase A, task 14) ---
+{
+  const definition = events.CATALOGUE[0];
+  const event = definition.examples[0];
+  const cloudEvent = events.buildCloudEvent(definition, event, {
+    deliveryId: 'delivery-1',
+    installationId: 'installation-1',
+    ruleId: 'rule-1',
+    ruleVersion: 1,
+    targetId: 'target-1',
+    targetVersion: 1,
+    data: { subject: event.subject },
+    untrusted: ['/subject'],
+  });
+  assert.equal(cloudEvent.type, 'com.agentcomms.gmail.message.received.v1');
+  assert.equal(cloudEvent.agentcommsuntrusted, '%2Fsubject');
+  assert.equal(events.cloudEventBytes(events.TEST_CLOUD_EVENT), events.TEST_CLOUD_EVENT_BYTES);
+  console.log('events consumer check: CloudEvents bytes, D6 type and untrusted extension OK');
+}
+// --- end CloudEvents wire ---
+
 // --- The semantic formats and exact instants (events phase A, task 7) ---
 // Never through Date: a Slack ts's microseconds survive, and .1 is .100000.
 assert.equal(events.compareInstants('2024-05-01T12:00:00.000999Z', '2024-05-01T12:00:00.001Z'), -1);
