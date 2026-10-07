@@ -37,7 +37,19 @@ export type IssueCode =
   /** A catalogue declaration is inconsistent with its schema. */
   | 'DEFINITION_INVALID'
   /** A Resend risk flag is outside the closed Appendix A vocabulary. */
-  | 'RISK_FLAG_UNKNOWN';
+  | 'RISK_FLAG_UNKNOWN'
+  /** A deterministic condition is not D5's tree grammar. */
+  | 'CONDITION_INVALID'
+  /** A deterministic operator is not legal for its selected schema field. */
+  | 'CONDITION_OPERATOR_INVALID'
+  /** A deterministic operand is not valid for its selected schema field. */
+  | 'CONDITION_VALUE_INVALID'
+  /** A deterministic tree or operand exceeds D5's closed limits. */
+  | 'CONDITION_LIMIT_EXCEEDED'
+  /** The static record of an agentic condition is not D5's save-time form. */
+  | 'AGENTIC_CONDITION_INVALID'
+  /** The deterministic prefilter names no exact catalogue content field. */
+  | 'AGENTIC_PREFILTER_INVALID';
 
 /** One thing wrong, where it is (an RFC 6901 pointer into the value checked), and any detail a caller can show. */
 export interface Issue {
