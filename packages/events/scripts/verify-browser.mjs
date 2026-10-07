@@ -28,6 +28,32 @@ const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const at = (...parts) => join(PACKAGE_ROOT, ...parts);
 const say = (line) => process.stdout.write(`${line}\n`);
 
+/** Every phase-A vector family, deliberately listed so a later one cannot silently skip either browser. */
+export const VECTOR_FAMILIES = [
+  'canonical-json',
+  'event-id',
+  'unicode',
+  'idna',
+  'formats',
+  'pointers',
+  'catalogue',
+  'resend-body',
+  'conditions',
+  'mapping',
+  'envelopes',
+];
+
+/** The two derived conformance files Phase A's final audit owns; CaseFolding.txt still runs as the unicode family. */
+export const REQUIRED_CONFORMANCE_FILES = ['NormalizationTest.txt', 'IdnaTestV2.txt'];
+
+function sameNames(actual, expected, what) {
+  const found = [...actual].sort();
+  const wanted = [...expected].sort();
+  if (JSON.stringify(found) !== JSON.stringify(wanted)) {
+    throw new Error(`${what}: expected ${wanted.join(', ')}, found ${found.join(', ')}`);
+  }
+}
+
 /** D13's production `security.csp`, exactly (spec line 2631). */
 export const PRODUCTION_CSP =
   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'";
@@ -71,6 +97,8 @@ const library = await import(new URL('../src/index.ts', import.meta.url).href);
 const { RUNNERS } = await import(new URL('../test/realm/runners/index.ts', import.meta.url).href);
 const { createRealm, realmBundle } = await import(new URL('../test/support/realm.ts', import.meta.url).href);
 
+sameNames(Object.keys(RUNNERS), VECTOR_FAMILIES, 'BRW-a: test/realm/runners/index.ts names the phase-A families');
+
 const bundle = await realmBundle();
 const realm = createRealm(bundle);
 
@@ -89,17 +117,30 @@ async function addFamily(name, text, label) {
   if (JSON.parse(inNode).failures.length > 0) throw new Error(`${label}: fails in Node`);
   families.push({ name, family: file.family, label, text, expected: inNode, vectors: file.vectors.length });
 }
-for (const name of readdirSync(at('test', 'vectors'))
+const vectorFiles = readdirSync(at('test', 'vectors'))
   .filter((file) => file.endsWith('.json'))
-  .sort()) {
+  .sort();
+const vectorFamilies = [];
+for (const name of vectorFiles) {
   const text = readFileSync(at('test', 'vectors', name), 'utf8');
-  await addFamily(`test/vectors/${name}`, text, JSON.parse(text).family);
+  const file = JSON.parse(text);
+  vectorFamilies.push(file.family);
+  await addFamily(`test/vectors/${name}`, text, file.family);
 }
-if (families.length === 0) throw new Error('no vector families under test/vectors');
+sameNames(vectorFamilies, VECTOR_FAMILIES, 'test/vectors names exactly the eleven phase-A families');
 // Unicode's own conformance files — NormalizationTest.txt, CaseFolding.txt and IdnaTestV2.txt — derived from their
 // pinned sources exactly as the package's tests derive them (test/support/conformance-sources.ts).
 const { conformanceFiles } = await import(new URL('../test/support/conformance-sources.ts', import.meta.url).href);
-for (const derived of conformanceFiles()) {
+const derivedFiles = conformanceFiles();
+sameNames(
+  derivedFiles.filter((derived) => REQUIRED_CONFORMANCE_FILES.includes(derived.name)).map((derived) => derived.name),
+  REQUIRED_CONFORMANCE_FILES,
+  'BRW-d: the final browser audit has both required Unicode conformance files',
+);
+for (const derived of derivedFiles) {
+  if (!VECTOR_FAMILIES.includes(derived.family)) {
+    throw new Error(`${derived.name}: its ${derived.family} family is not in the phase-A browser audit`);
+  }
   await addFamily(derived.name, derived.text, `${derived.family} (${derived.name})`);
 }
 
@@ -190,5 +231,5 @@ if (problems.length > 0) {
 }
 const derived = families.filter((family) => !family.name.startsWith('test/vectors/')).length;
 say(
-  `event vectors in real browsers OK: ${families.length - derived} vector ${families.length - derived === 1 ? 'file' : 'files'} and ${derived} Unicode conformance ${derived === 1 ? 'file' : 'files'} in chromium and webkit, under the production CSP`,
+  `BRW-a and BRW-d: event vectors in real browsers OK: ${families.length - derived} vector ${families.length - derived === 1 ? 'file' : 'files'} and ${derived} Unicode conformance ${derived === 1 ? 'file' : 'files'} in chromium and webkit, under the production CSP`,
 );

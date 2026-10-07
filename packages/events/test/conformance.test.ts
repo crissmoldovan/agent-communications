@@ -14,6 +14,31 @@ import { createRealm, PACKAGE_ROOT, type Realm, realmBundle } from './support/re
 
 const VECTORS = join(PACKAGE_ROOT, 'test', 'vectors');
 
+/** Every phase-A vector family, deliberately listed so a later one cannot silently skip the realm. */
+const VECTOR_FAMILIES = [
+  'canonical-json',
+  'event-id',
+  'unicode',
+  'idna',
+  'formats',
+  'pointers',
+  'catalogue',
+  'resend-body',
+  'conditions',
+  'mapping',
+  'envelopes',
+] as const;
+
+function vectorFiles(): readonly { readonly name: string; readonly text: string; readonly file: VectorFile }[] {
+  return readdirSync(VECTORS)
+    .filter((name) => name.endsWith('.json'))
+    .sort()
+    .map((name) => {
+      const text = readFileSync(join(VECTORS, name), 'utf8');
+      return { name, text, file: JSON.parse(text) as VectorFile };
+    });
+}
+
 let realm: Realm;
 before(async () => {
   realm = createRealm(await realmBundle());
@@ -42,15 +67,17 @@ test('ISO-d: the realm is given one host capability, crypto.subtle.digest, and n
   );
 });
 
-test('ISO-b: every vector family runs identically in Node and in the bare realm', async (t) => {
-  const files = readdirSync(VECTORS)
-    .filter((name) => name.endsWith('.json'))
-    .sort();
-  assert.ok(files.length > 0, 'no vector files found');
-  for (const name of files) {
-    await t.test(name, async () => {
-      const text = readFileSync(join(VECTORS, name), 'utf8');
-      const file = JSON.parse(text) as VectorFile;
+test('ISO-c: every phase-A family runs identically in Node and in the bare realm', async (t) => {
+  const files = vectorFiles();
+  const expected = [...VECTOR_FAMILIES].sort();
+  assert.deepEqual(
+    files.map(({ file }) => file.family).sort(),
+    expected,
+    'the vector files name exactly the eleven phase-A families',
+  );
+  assert.deepEqual(Object.keys(RUNNERS).sort(), expected, 'every vector family has one runner, and no runner is idle');
+  for (const { name, text, file } of files) {
+    await t.test(file.family, async () => {
       assert.equal(typeof file.family, 'string', `${name} declares no family`);
       const runner = RUNNERS[file.family];
       assert.ok(runner, `${name}: no runner for the family "${file.family}" in test/realm/runners/index.ts`);

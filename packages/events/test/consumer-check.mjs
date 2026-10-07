@@ -38,6 +38,7 @@ assert.equal(
   '["agentcomms-event-v1","00112233445566778899aabbccddeeff","ibx_TESTINBOX0000001","gmail.message.received",1,"[\\"123456\\",\\"18f00000000000a1\\",\\"received\\"]"]',
 );
 assert.equal(await events.eventId(identity), '9a9231c84c9ef1a5cde18246e5d09a2f');
+assert.equal(events.CATALOGUE.length, 7, 'the installed catalogue has every version-1 definition');
 
 // Every file it ships under dist: no `node:` specifier and no `require(`.
 const dist = dirname(fileURLToPath(import.meta.resolve('@agentcomms/events')));
@@ -102,6 +103,10 @@ console.log('events consumer check: Unicode 15.1 NFC and case folding OK');
     ok: true,
     value: { path: '/subject', op: 'equals', value: 'Straße', caseSensitive: false },
   });
+  assert.equal(
+    events.canonicalJson(condition.value),
+    '{"caseSensitive":false,"op":"equals","path":"/subject","value":"Straße"}',
+  );
   assert.equal(
     events.evaluateCondition(definition, condition.value, { ...definition.examples[0], subject: 'STRASSE' }),
     true,
@@ -207,3 +212,11 @@ assert.equal(events.isFormat('email', 'Someone@example.com'), true);
 assert.deepEqual(events.canonicalEmail('Someone@Bücher.Example'), { ok: true, value: 'Someone@xn--bcher-kva.example' });
 console.log('events consumer check: the five semantic formats and exact instants OK');
 // --- end semantic formats ---
+
+// --- Bundled Unicode licence (events phase A, task 15) ---
+assert.match(
+  readFileSync(join(dist, '..', 'THIRD_PARTY_LICENSES'), 'utf8'),
+  /unicode-character-database@15\.1\.0 — Unicode-3\.0/u,
+);
+console.log('events consumer check: bundled Unicode licence OK');
+// --- end bundled Unicode licence ---

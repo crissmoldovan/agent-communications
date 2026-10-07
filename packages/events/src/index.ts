@@ -14,6 +14,7 @@ export * from './mapping/index.ts';
 export { expandPattern, matchesPattern, type PointerPattern, type PointerPatternToken } from './pattern.ts';
 export { formatPointer, getPointer, parsePointer, relatePointers } from './pointer.ts';
 export * from './result.ts';
+export type { JsonSchema } from './schema/to-json-schema.ts';
 export * from './text.ts';
 export * from './unicode/fold.ts';
 export * from './unicode/nfc.ts';

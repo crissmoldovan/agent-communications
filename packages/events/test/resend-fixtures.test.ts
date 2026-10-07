@@ -14,7 +14,7 @@ if (!definition) throw new Error('missing Resend received definition');
 const minimal = definition.examples[0];
 if (!minimal) throw new Error('missing Resend received example');
 
-test('CAT-r1–CAT-r3: Resend flags are canonical and body limits count code points', () => {
+test('CAT-r1, CAT-r2 and CAT-r3: Resend flags are canonical and body limits count code points', () => {
   const accepted = {
     ...minimal,
     attachments: [
@@ -63,7 +63,7 @@ test('CAT-r1–CAT-r3: Resend flags are canonical and body limits count code poi
   );
 });
 
-test('CAT-r4–CAT-r8: body normalisation preserves truncation and rejects malformed pairs', () => {
+test('CAT-r4, CAT-r5, CAT-r6, CAT-r7 and CAT-r8: body normalisation preserves truncation and rejects malformed pairs', () => {
   const capped = normaliseResendBody({ text: 'a'.repeat(25_000).slice(0, 20_000), truncated: true });
   assert.equal(capped.body.length, 20_000);
   assert.equal(capped.bodyTruncated, true);
