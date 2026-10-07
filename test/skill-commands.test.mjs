@@ -80,15 +80,36 @@ const CLIS = REGISTRY.surfaces
   .filter((surface) => surface.cli === 'commander')
   .map((surface) => {
     const family = REGISTRY.skillFamilies.find((each) => each.channel === surface.package);
-    return { binary: surface.binary, entry: surface.entry, prefix: family?.prefix, readme: family?.readme };
+    return {
+      package: surface.package,
+      binary: surface.binary,
+      entry: surface.entry,
+      prefix: family?.prefix,
+      readme: family?.readme,
+    };
   });
+
+/**
+ * A service's CLI (D14) may have no skills family only while its package is held from release: its skill arrives with
+ * a later phase (the events daemon's in B3). Once the hold is lifted it is checked like every channel CLI, so a release
+ * cannot ship a CLI that no skill names.
+ */
+const SERVICE_PACKAGES = new Set(
+  REGISTRY.services.map((service) => (typeof service === 'string' ? service : service.directory)),
+);
+const HELD_PACKAGES = new Set(REGISTRY.held.map((held) => (typeof held === 'string' ? held : held.directory)));
+const heldServiceWithoutSkills = (cli) =>
+  cli.prefix === undefined && SERVICE_PACKAGES.has(cli.package) && HELD_PACKAGES.has(cli.package);
 
 test('every channel CLI is checked here, with the skills that name it', () => {
   assert.ok(CLIS.length >= 2, 'the registry should list the channel CLIs');
-  for (const cli of CLIS) assert.ok(cli.prefix && cli.readme, `${cli.binary} has no skills family in its manifest`);
+  for (const cli of CLIS) {
+    if (heldServiceWithoutSkills(cli)) continue;
+    assert.ok(cli.prefix && cli.readme, `${cli.binary} has no skills family in its manifest`);
+  }
 });
 
-for (const cli of CLIS) {
+for (const cli of CLIS.filter((cli) => !heldServiceWithoutSkills(cli))) {
   test(`every ${cli.binary} command the skills and readme promise actually exists`, async () => {
     const dirs = (await readdir(join(ROOT, 'skills'), { withFileTypes: true }))
       .filter((entry) => entry.isDirectory() && entry.name.startsWith(cli.prefix))
