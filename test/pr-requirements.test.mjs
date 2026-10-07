@@ -126,12 +126,13 @@ test("a version whose slug is not the branch's is asked to carry the branch's", 
 test("the template's guidance is not the submitter's words: an untouched template is missing everything", async () => {
   const template = await readFile(join(ROOT, '.github', 'PULL_REQUEST_TEMPLATE.md'), 'utf8');
   const result = checkPullRequest({ body: template, headRef: 'feat/x', currentVersion: '0.14.1', files: [] });
-  for (const name of SECTIONS.filter((section) => section !== 'Provenance')) {
+  for (const name of ['What changes for the person using it', 'How']) {
     assert.ok(
       result.missing.some((line) => line.includes(`"${name}" section`)),
       name,
     );
   }
+  assert.ok(result.missing.some((line) => line.startsWith('A proposed version, as `X.Y.Z-x`')));
   for (const label of PROVENANCE_LABELS) {
     assert.ok(
       result.missing.some((line) => line.includes(`**${label}:** says nothing`)),
@@ -160,6 +161,16 @@ test('a provenance label left empty is asked for by name', () => {
       label,
     );
   }
+});
+
+test('a description with no version or provenance at all gets one line for each, not one per part', () => {
+  const pr = complete();
+  const body = pr.body.replace(/## Proposed version[\s\S]*?(?=## Checks)/, '');
+  const result = checkPullRequest({ ...pr, body });
+  assert.deepEqual(result.missing, [
+    'A proposed version, as `X.Y.Z-slack-edit-delete` under "Proposed version", with why it is a patch, a minor or a major change.',
+    'A "Provenance" section, from the template: **Why:**, **Sources:**, **Live testing:** and **AI assistance:**, each saying what applies, or "none" and why.',
+  ]);
 });
 
 test('an unticked box is named', () => {

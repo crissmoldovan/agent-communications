@@ -95,7 +95,8 @@ export function checkPullRequest({ body, headRef, files, currentVersion }) {
   const missing = [];
   const sections = sectionsOf(body);
 
-  for (const name of SECTIONS) {
+  // "Proposed version" and "Provenance" are checked below, each in words that say what to write there.
+  for (const name of SECTIONS.filter((section) => section !== 'Proposed version' && section !== 'Provenance')) {
     if (!sections.get(name)) missing.push(`The "${name}" section is empty or missing: fill it in from the template.`);
   }
 
@@ -125,7 +126,13 @@ export function checkPullRequest({ body, headRef, files, currentVersion }) {
   }
 
   const provenance = sections.get('Provenance') ?? '';
-  for (const label of PROVENANCE_LABELS) {
+  const labels = PROVENANCE_LABELS.map((label) => `**${label}:**`);
+  if (!provenance) {
+    missing.push(
+      `A "Provenance" section, from the template: ${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}, each saying what applies, or "none" and why.`,
+    );
+  }
+  for (const label of provenance ? PROVENANCE_LABELS : []) {
     // Spaces only, never \s: a label left empty must not borrow the next line's words.
     const line = new RegExp(`^[ \\t]*[-*]?[ \\t]*\\**${label}:?\\**:?[ \\t]*(.*)$`, 'im').exec(provenance);
     if (!line?.[1].replace(/[*_`]/g, '').trim()) {
