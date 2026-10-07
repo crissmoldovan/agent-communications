@@ -12,6 +12,8 @@ The implementation must read the local-event design, the CLI/MCP parity design, 
 - K3-1: the fixed synthetic message is exactly “agent-communications test event”; use the Phase A exported judge input and CloudEvent bytes rather than reconstructing them.
 - K3-2 and K3-3 remain true for any Gmail materialisation/vector fixtures B1 adds.
 
+`pnpm verify` is strict about capability parity. Consequently, the task which first exposes a daemon operation must, in that same commit, add its shared operation export, its CLI command and MCP tool or its documented human-only/CLI-only exception, and its non-pending `capabilities.json` row. No task may defer any of those parts to a later adapter pass.
+
 Every batch ends with the full root verification command, pnpm verify. Any batch that changes @agentcomms/events also runs pnpm verify:browser before that final root command, even though B1 should consume rather than alter the Phase A library.
 
 For every task’s Run paragraph, passing means each named focused command exits zero (node:test reports zero failures) and the batch-ending pnpm verify exits zero. A focused success never substitutes for the batch command.
@@ -56,7 +58,7 @@ Use node:sqlite and DatabaseSync, not better-sqlite3, sqlite3, or another native
 
 Use one database at <stateDir>/events/events.sqlite. Its 0700 parent, database, WAL, SHM, lock, socket directory, token, and file-store secret directory are owner-only: 0600 files on POSIX, and current-user owner-only ACL helpers on Windows. The helper refuses a symlink/reparse-point path and verifies permissions after creation. SQLite opens with foreign keys enabled, WAL journal mode, synchronous FULL, a bounded busy timeout, and explicit BEGIN IMMEDIATE transactions for serialised authority transitions.
 
-Migration v1 creates every B1-owned table and index: meta; event_settings; immutable object/version and active-pointer/lineage tables; activation intents, points, baselines and Gmail replacement drains; Gmail cursors, staging and terminal-resolution tables; ingest, projections, decisions, deliveries, dryrun_log, leases/work attempts/cap charges; event-secret metadata/counters; reset/degradation metadata needed for a local dry-run; and content-free operational/audit state. It does not pre-create B2 network/SSE tables, D-source tables, or E/E2 judge-runtime tables solely because D8 names their eventual forms. Those arrive in ordered, transactional migrations when their phase owns their operational meaning. Meta records the schema version and installation/reset identity, while a schema_migrations ledger records the applied named migrations; an interrupted migration rolls back as one transaction.
+Migration v1 creates every B1-owned table and index: meta; event_settings; immutable object/version and active-pointer/lineage tables; activation intents, points, baselines and Gmail replacement drains; Gmail cursors, staging and terminal-resolution tables; ingest, projections, decisions, deliveries, dryrun_log, leases/work attempts/cap charges; event-secret metadata/counters; and reset metadata/local-barrier state for dry-run only, plus content-free operational/audit state. It does not pre-create B2 network/SSE tables, D-source tables, or E/E2 judge-runtime tables solely because D8 names their eventual forms. Those arrive in ordered, transactional migrations when their phase owns their operational meaning. Meta records the schema version and installation/reset identity, while a schema_migrations ledger records the applied named migrations; an interrupted migration rolls back as one transaction.
 
 This resolves the D8 full eventual schema list against the explicit phase rows: one database and one migration lineage now, not speculative tables with unimplemented fences. All encrypted-table primary keys are declared in the migration that creates that table, so the exact AAD order can never be inferred from an ad hoc query.
 
@@ -97,6 +99,14 @@ Task 3 inserts these exact B1 SECURITY.md bullets, with no Laya wording:
 >
 > - **A standing disclosure authorisation is not approval of each event.** Once a person enables one at the terminal or in the app, future unseen content that matches its approved rule may leave automatically through its approved target or be evaluated by its approved judge. agent-events doctor and the app list every active authorisation. Disabling or removing any bound rule, target, subscriber or judge, or disabling a judge kind, revokes it immediately; content already in a network operation cannot be recalled.
 
+### 5a. One shared live-disclosure fence
+
+`assertDisclosable` is the one daemon-owned live fence. It accepts the exact bound rule/target/subscriber/judge versions, account, switch generation and intended boundary, and returns only a content-free authorisation snapshot or a stable refusal. It is called before a source worker admits or projects content, before activation/recovery resumes work, before evaluation/dispatch appends a delivery, and before a terminal dry-run read decrypts a row. No caller may replace it with an active-pointer lookup, a lifecycle-only check, or a cached result.
+
+For an exact activation, the fence verifies the bound rule version’s immutable approval and authorisation-activation ids against the used core disclosure record and its exact canonical activation document: activation kind, digest, sorted version list and the persisted digest of every named immutable version must agree. For a derived tightening, it starts at that rule version and walks `derived_authorizations` to that exact activation, refusing a missing or malformed edge, a repeated version, an incorrect parent rule/version or approval, a non-whitelisted/non-tightening edit, a canonical-document or binding-digest mismatch, or a chain which does not end at the bound used approval. It verifies rule lifecycle, every bound-object revocation, enabled generation and live account at the same boundary. A superseded version with retained work may pass only through its own valid immutable lineage; a revoked version never does.
+
+The helper is deliberately used on recovery as well as live worker paths: restart cannot turn a formerly accepted, malformed or later-revoked lineage into a release. Tests inject malformed, cyclic, wrong-parent, digest-mismatched and revoked chains into the database at both dry-run append and read boundaries; each must refuse before source admission, decrypt, append or content rendering.
+
 ### 6. B1’s control surface is the smallest usable service slice
 
 B1 needs real, parity-tested operations to create inert versions, prepare/approve/complete a Gmail-to-dry-run activation, observe health, and shut work down safely. Its capability rows are:
@@ -110,9 +120,11 @@ B1 needs real, parity-tested operations to create inert versions, prepare/approv
 
 Rule enable prepares or resumes the immutable activation intent; terminal approve completes the D2 challenge/claim path. The only B1 target shape is dry-run. The CLI always talks to the control client except run. MCP never reads a dry-run row, approves/claims disclosure, starts a daemon, or receives content-bearing data. The terminal dry-run renderer decrypts only after every live fence passes and renders strings through the untrusted renderer; JSON output for dry-run content is refused.
 
-This is intentionally not the whole D10 list. B3 adds rule test/test-retained, target test/resume, delivery/hold controls, subscribers, all secret operations, judges/budgets, and the rest of the reference surface. The source/operation names are exported functions under packages/events-daemon/src/operations, and every B1 command/tool pair has a capabilities.json operation row driven by pnpm verify:parity --strict.
+This is intentionally not the whole D10 list. B3 adds rule test/test-retained, target test, delivery/hold controls, subscribers, all secret operations, judges/budgets, and the rest of the reference surface. It also adds `target resume` as a terminal/app-only exception: MCP has no tool or schema for it. The source/operation names are exported functions under packages/events-daemon/src/operations, and every B1 command/tool pair has a capabilities.json operation row driven by pnpm verify:parity --strict.
 
-The spec’s B1 “human-only safe reads” and B3 “dry-run reads” wording conflict. This plan implements the B1 requirement now and treats B3 as expanding/auditing the exception catalog, not first introducing reads; the owner must ratify that amendment below.
+The exposure order is part of the safety plan: Task 4 lands `status` with a `both` row; Task 6 lands `run` as an exception and `stop`, pause/resume, disable-all/enable-all and `doctor` as `both` rows; Task 9 lands catalogue/source/rule/target operations as `both` rows and terminal `approve` as an exception; and Task 13 lands terminal dry-run list/show as exceptions. Each task drives its new rows through the sealed parity harness before its required root verification. Task 14 may audit those rows and regenerate references, but may not be the first task to expose an operation or add a row.
+
+The spec’s B1 “human-only safe reads” and B3 “dry-run reads” wording conflict. This plan implements the B1 requirement now and treats B3 as expanding/auditing the exception catalog, not first introducing reads; the round-1 phase-allocation decision below adopts that interpretation unless the owner overrules it.
 
 ### 7. Gmail B1 is history.list plus only necessary reading
 
@@ -136,17 +148,17 @@ When the owner decides a released daemon is wanted, they make a normal lockstep 
 
 Events must precede the daemon because the daemon has an exact runtime dependency on it. The owner does this only when the daemon’s first real consumer release is intended, not when B1 merges. If that release is a prerelease, use next rather than latest as docs/RELEASING.md prescribes.
 
-## Spec amendments to raise with the owner
+## Decisions on the phase-allocation amendments (review round 1)
 
-These are not silently resolved as implementation authority.
+The review judged B1-A, B1-C, B1-D and B1-E safe plan decisions: none weakens a safety invariant. B1-B is adopted with the correction below. The owner may overrule any of these decisions.
 
 | Id | Lines | Issue | Proposed amendment |
 |---|---:|---|---|
-| B1-A | 2823, 2825, 2049-2057 | B1 explicitly owes human-only safe dry-run reads, while B3 says it adds dry-run reads and all exception rows. | Say B1 introduces terminal-only dry-run list/show and its exception rows; B3 broadens/completes D10 and audits them, without duplicating the feature. |
-| B1-B | 1740-1750, 2824-2825 | D8 requires reset/barrier semantics when a key is lost, but B2’s phase row assigns durable reset barriers/degraded resume. | Say B1 persists reset/barrier metadata and can create the local dry-run reset append barrier; B2 adds webhook/SSE dispatch, degraded network retry and target resume. |
-| B1-C | 1404-1558, 2823, 2827-2829 | D8 enumerates all future-source, SSE and judge tables as one database while B1 owns Gmail/dry-run only. | Say v1 migration creates B1 tables and future phases add their listed tables with forward-only migrations; the database and migration authority remain one. |
-| B1-D | 2823 versus 2827 | B1 says activation points “for every source” while B1 explicitly builds Gmail only and D is the other-source phase. | Say B1 provides generic activation-point schema and lifecycle, but only Gmail has a runnable acquisition/baseline adapter; other source activations are refused until their phase. |
-| B1-E | 1913-1941, 2016, 2823, 2825 | B1 names an independent event secret store/migration, while B3 names the public terminal/app secret-operation set and migration. | Say B1 implements and tests the independent backend/migration engine and selector; B3 exposes the terminal/app command/exception row. No B1 model-facing secret operation exists. |
+| B1-A — adopted | 2823, 2825, 2049-2057 | B1 explicitly owes human-only safe dry-run reads, while B3 says it adds dry-run reads and all exception rows. | B1 introduces terminal-only dry-run list/show and their exception rows; B3 broadens/completes D10 and audits them, without duplicating the feature. |
+| B1-B — adopted as corrected | 1740-1750, 2824-2825 | D8 requires reset/barrier semantics when a key is lost, but B2’s phase row assigns durable reset barriers/degraded resume. | B1 creates and enforces the local dry-run reset append barrier. B2 adds the network-target barriers and degraded network behaviour. B3 keeps `target resume` terminal/app-only, with MCP excluded; neither B1 nor B2 exposes it. |
+| B1-C — adopted | 1404-1558, 2823, 2827-2829 | D8 enumerates all future-source, SSE and judge tables as one database while B1 owns Gmail/dry-run only. | v1 creates B1 tables and future phases add their listed tables with forward-only migrations; the database and migration authority remain one. Before any future source is enabled, its migration must create D8’s exact schemas and AAD contracts for the tables it uses. |
+| B1-D — adopted | 2823 versus 2827 | B1 says activation points “for every source” while B1 explicitly builds Gmail only and D is the other-source phase. | B1 provides generic activation-point schema and lifecycle, but only Gmail has a runnable acquisition/baseline adapter; other source activations are refused until their phase. |
+| B1-E — adopted | 1913-1941, 2016, 2823, 2825 | B1 names an independent event secret store/migration, while B3 names the public terminal/app secret-operation set and migration. | B1 implements and tests the independent backend/migration engine and selector; B3 exposes the terminal/app command/exception row. No B1 model-facing secret operation exists, and a failed keychain selection remains fail-closed. |
 
 Phase A owner-facing amendments A-K2-1 and A-K3-1 are not reopened. B1 follows the established normaliser boundary and the amended synthetic fixed bytes.
 
@@ -167,10 +179,10 @@ Phase A owner-facing amendments A-K2-1 and A-K3-1 are not reopened. B1 follows t
 |---|---|---|
 | 1 — authority and discoverability | 1, 2, 3 | Tasks 1 and 3 may start in separate worktrees; Task 2 is independent and may run in a third worktree. Integrate/rebase all three before the batch verification. |
 | 2 — one protected owner | 4 → 5 → 6 | none |
-| 3 — authority lifecycle | 7 → 8 → 9 | none |
-| 4 — Gmail acquisition | 10 → 11 | none |
+| 3 — Gmail baseline and activation | 7 → 8 → 9 | none |
+| 4 — Gmail acquisition and replacement completion | 10 → 11 | none |
 | 5 — durable local disclosure | 12 → 13 | none |
-| 6 — surfaces, packages and handoff | 14 → 15 | Task 14 and package prose portions of Task 15 may be drafted in separate worktrees after Task 13, then integrated by Task 15. |
+| 6 — parity audit, references, packages and handoff | 14 → 15 | none |
 
 Do not merge parallel worktree changes by copying generated files. Rebase the later task, rerun its named tests, then rerun the batch’s full pnpm verify. No task may weaken the sealed parity runner, use a real provider, or bypass the Gmail send gate.
 
@@ -266,20 +278,21 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
 
 ## Batch 2 — one protected owner
 
-4. **Package skeleton, owner-only paths, and Node 22.12 SQLite proof.**
+4. **Package skeleton, owner-only paths, Node 22.12 SQLite proof, and the first parity row.**
 
-   **Files.** Create packages/events-daemon/package.json, README.md, LICENSE, THIRD_PARTY_LICENSES, tsconfig.json, tsdown.config.ts, src/index.ts, src/cli.ts, src/cli/program.ts, src/mcp/server.ts, src/operations/status.ts, src/runtime/paths.ts and test/consumer-check.mjs. Add package tests for manifest, paths, CLI/MCP bootstrap and consumer. Change pnpm-lock.yaml, scripts/record-git-head.cjs only if package discovery requires it, test/release-packages.test.mjs, test/manifests.test.mjs, test/install-docs.test.mjs, .github/workflows/release.yml and CONTRIBUTING.md.
+   **Files.** Create packages/events-daemon/package.json, README.md, LICENSE, THIRD_PARTY_LICENSES, tsconfig.json, tsdown.config.ts, src/index.ts, src/cli.ts, src/cli/program.ts, src/mcp/server.ts, src/operations/status.ts, src/runtime/paths.ts and test/consumer-check.mjs. Add package tests for manifest, paths, CLI/MCP bootstrap, status parity and consumer. Change capabilities.json, pnpm-lock.yaml, scripts/record-git-head.cjs only if package discovery requires it, test/release-packages.test.mjs, test/manifests.test.mjs, test/install-docs.test.mjs, .github/workflows/release.yml and CONTRIBUTING.md.
 
    **Tests first.**
 
    - Assert the manifest is a non-private held service with exact bin/service declaration, exact runtime workspace pins, package files and consumer import.
    - Verify owner-only parent/file creation and refusal of link/reparse-point or weak-permission paths on platform-specific test doubles.
    - Build the package, run agent-events --help and a minimal MCP tools/list probe in a temporary state root, and prove their stdout protocols remain clean.
+   - Add the non-pending `events.status` `both` row and drive the real status command and status tool through the sealed operation stand-in, proving both call `status` and no other operation.
    - Extend the old-node release test to execute the built agent-events --help/status fixture under Node 22.12, proving node:sqlite resolves without native installation.
 
    **Then the implementation.**
 
-   - Add the held service package with a non-network status operation and standard tsdown entries.
+   - Add the held service package with a non-network `status` operation, paired CLI command and MCP tool, and its `capabilities.json` `both` row in the same commit as the exposed surface.
    - Add path/permission helpers shared only inside the daemon. No config event field is introduced.
    - Update package/release discovery assertions and documentation for a service’s README/consumer contract.
 
@@ -290,7 +303,7 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
    - Make the events parent world-readable: permissions test fails.
    - Remove the Node 22.12 command invocation: release-shape test fails.
 
-   **Run.** pnpm --filter @agentcomms/events-daemon build; pnpm --filter @agentcomms/events-daemon test; node --test test/release-packages.test.mjs; then pnpm verify.
+   **Run.** pnpm --filter @agentcomms/events-daemon build; pnpm --filter @agentcomms/events-daemon test; node --test test/release-packages.test.mjs; pnpm verify:parity --strict; then pnpm verify.
 
    **Commit.** feat(events): scaffold the held local events service (events phase B1, task 4).
 
@@ -326,9 +339,9 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
 
    **Commit.** feat(events): make encrypted SQLite and event secrets the sole event authority (events phase B1, task 5).
 
-6. **Riskiest control task — one owner, authenticated control, stale recovery and global fences.**
+6. **Riskiest control task — one owner, authenticated control, global fences, and their parity surfaces.**
 
-   **Files.** Create packages/events-daemon/src/control/protocol.ts, client.ts, server.ts, session.ts, instance.ts, peer.ts and test support; create src/runtime/owner.ts, lifecycle.ts and locks.ts; expand cli/program.ts, mcp/server.ts and src/operations/status.ts, run.ts, stop.ts, pause.ts, disable-all.ts, enable-all.ts and doctor.ts. Add packages/events-daemon/test/control.test.ts, owner.test.ts, stale-recovery.test.ts, global-switch.test.ts and protocol-compat.test.ts.
+   **Files.** Create packages/events-daemon/src/control/protocol.ts, client.ts, server.ts, session.ts, instance.ts, peer.ts and test support; create src/runtime/owner.ts, lifecycle.ts and locks.ts; expand cli/program.ts, mcp/server.ts and src/operations/status.ts, run.ts, stop.ts, pause.ts, disable-all.ts, enable-all.ts and doctor.ts. Change capabilities.json. Add packages/events-daemon/test/control.test.ts, owner.test.ts, stale-recovery.test.ts, global-switch.test.ts, protocol-compat.test.ts and runtime-operation-parity.test.ts.
 
    **Tests first.**
 
@@ -337,12 +350,14 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
    - Test second owner refusal, authenticated stale probe recovery only with a dead pid plus failed probe, live-pid/identity mismatch refusal, crash cleanup and graceful stop.
    - Test client CLI and stdio MCP both reach the same stand-in operation through EventControlClient; run is CLI-only.
    - Test pause retains state; disable-all increments generation and atomically cancels/purges B1 staging, projections, decisions, delivery payloads and dry-run rows; stale-generation commits cannot recreate work.
+   - Add and drive this task’s non-pending rows: `stop`, pause/resume, disable-all/enable-all and `doctor` are `both`; `run` is an explicit CLI-only exception because a tool cannot start the owner it requires. The sealed driver proves each paired CLI/tool reaches its named operation and the exception has no MCP registration.
 
    **Then the implementation.**
 
    - Implement protocol v1, endpoint/token/instance lifecycle and foreground owner loop.
    - Keep all database/session opening in run; clients get no store handle.
    - Implement global pause and disabled switch as distinct durable states; initialise disabled, and make enable-all an operation shell whose disclosure path arrives in Batch 3.
+   - Add those capability rows and the paired adapters in this task; do not create a `pending` row or leave a discovered command/tool unlisted.
 
    **Mutations.**
 
@@ -351,13 +366,13 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
    - Let MCP call run: exception/parity test fails.
    - Delete switch-generation recheck at commit: disable race test fails.
 
-   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="control|owner|stale|switch"; pnpm verify:parity --strict; then pnpm verify.
+   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="control|owner|stale|switch|runtime.*parity"; pnpm verify:parity --strict; then pnpm verify.
 
    **Commit.** feat(events): run one authenticated local event daemon owner (events phase B1, task 6).
 
 **Batch 2 ends** with pnpm verify. It must exit 0 and no process is left running after the test suite.
 
-## Batch 3 — standing-authority lifecycle
+## Batch 3 — Gmail baseline and standing-authority activation
 
 7. **Canonical documents, inert immutable versions, and classification.**
 
@@ -387,23 +402,54 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
 
    **Commit.** feat(events): bind immutable event versions into disclosure documents (events phase B1, task 7).
 
-8. **Riskiest activation task — prepare/approve/claim, points, first activation and enable-all recovery.**
+8. **Establish the real Gmail baseline adapter and loopback fake before any activation.**
 
-   **Files.** Create packages/events-daemon/src/runtime/activations.ts, baseline.ts, recovery.ts and account-fence.ts; add operations/rules.ts, approve.ts and enable-all.ts; extend store schema/repository modules. Add packages/events-daemon/test/activation-recovery.test.ts, enable-all.test.ts, account-fence.test.ts and fixtures/activation-crashes.ts.
+   **Files.** Change packages/gmail/src/gmail-api/transport.ts and index.ts; create packages/gmail/src/operations/events.ts; change packages/gmail/test/support/fake-google.ts; add packages/gmail/test/events-transport.test.ts and packages/gmail/test/events-source-contract.test.ts; update any fake transport helpers required by TypeScript.
+
+   **Tests first.**
+
+   - Prove GmailTransport has one history-list method that accepts historyId/pageToken and returns specific change arrays/final history id; test unfiltered request parameters, multi-page replies, 404 cursor expiry, and provider error mapping.
+   - Prove its real event-source adapter exposes a fake-backed `getProfile` baseline method, separate from scan and lazy materialisation; record that activation can use this method without a history/body read, normalisation, projection or delivery.
+   - Prove event metadata reads contain labels/internalDate/headers/attachment metadata but no body bytes, and full/lazy reads use existing transport pathways.
+   - Extend only the loopback fake Google routes with history fixtures, profile baseline replies, page tokens, per-message metadata, deletion/404 and request recording. Assert every test endpoint is loopback and no send route is invoked.
+   - Prove the new operations/events adapter constructs its transport via existing Gmail context and never imports Google client classes in the daemon.
+
+   **Then the implementation.**
+
+   - Extend the narrow GmailTransport interface/real adapter and fake; preserve the existing send permit guard unchanged.
+   - Implement a structural Gmail event-source adapter that exposes scan, one baseline-only `getProfile` call and lazy-materialisation capabilities to the daemon without a runtime dependency from Gmail back to the daemon.
+
+   **Mutations.**
+
+   - Add labelId to the history request: unfiltered-history assertion fails.
+   - Implement baseline by scanning history: baseline-only request-recording test fails.
+   - Return body bytes from metadata: no-body/retention fixture fails.
+   - Add another Gmail send caller: repository send-path guard fails.
+
+   **Run.** pnpm --filter @agentcomms/gmail test -- --test-name-pattern="event|transport"; pnpm --filter @agentcomms/gmail typecheck; then pnpm verify.
+
+   **Commit.** feat(gmail): expose bounded history and profile baselines for local events (events phase B1, task 8).
+
+9. **Riskiest activation task — prepare/approve/claim, points, first activation, live lineage fence and enable-all recovery.**
+
+   **Files.** Create packages/events-daemon/src/runtime/activations.ts, baseline.ts, recovery.ts, account-fence.ts and disclosure-fence.ts; add operations/catalogue.ts, sources.ts, rules.ts, targets.ts, approve.ts and enable-all.ts; expand cli/program.ts and mcp/server.ts; extend store schema/repository modules; change capabilities.json. Add packages/events-daemon/test/activation-recovery.test.ts, enable-all.test.ts, account-fence.test.ts, disclosure-fence.test.ts, lifecycle-operation-parity.test.ts and fixtures/activation-crashes.ts.
 
    **Tests first.**
 
    - Cover pending intent insert/attachment, disclosure create, terminal/app approve, core used/usedAt, SQLite claimedAt copy, baseline response persistence, first active-pointer commit and completed-intent mark at every crash point.
    - Prove no provider baseline call happens before used authority; claimedAt is byte-identical to core usedAt; downtime counts toward exactly one hour; expiry/failure writes content-free stable detail and never retries/reclaims.
-   - Cover one Gmail getProfile baseline per account reused across fixed point rows, disabled-state narrow baseline exception, first activation no backfill, enable-all pointer/generation drift refusal and global disable winning over completion.
+   - Drive the real, fake-backed Task 8 adapter: cover one Gmail `getProfile` baseline per account reused across fixed point rows, disabled-state narrow baseline exception, first activation no backfill, enable-all pointer/generation drift refusal and global disable winning over completion. A provider baseline before core `used` or a history/body call in this baseline path fails.
    - Prove all active-pointer mutations join used intents, return ACTIVATION_COMPLETING or REPLACEMENT_PENDING as applicable, and only revoking actions may cancel a completion fence.
    - Cover account disappearance at every source/append/read boundary with direct ConfigStore.load, no daemon identity cache, and atomically purged account work.
+   - Define `assertDisclosable` and prove its exact-activation branch rejects wrong approval kind/state, activation kind, document/binding digest, sorted version list, immutable version digest, lifecycle, object-revocation, account or generation fence. Prove recovery invokes that same helper before resuming a used intent.
+   - Add and seal this task’s non-pending capability rows: catalogue list/show, sources list/source show, rules list/show/create/update/enable/disable/remove and targets list/add/update/remove are `both`; `approve` is a terminal-only exception. Drive every paired CLI/tool to its exported operation and prove the exception registers no MCP tool.
 
    **Then the implementation.**
 
    - Implement intent planning with fixed point and acquisition-call sets, core disclosure lifecycle integration, ordered locks and recovery before accepting control calls.
-   - Implement first activation and enable-all finalisation. Use direct ConfigStore.load at each required boundary.
+   - Implement first activation and enable-all finalisation through the Task 8 Gmail baseline adapter. Use direct ConfigStore.load at each required boundary.
    - Implement account-revocation and global-disable paths using the transaction/purge helpers from Task 5.
+   - Implement `assertDisclosable` as the only source/recovery/evaluation/dispatch/read authority resolver; it validates an exact used approval binding or the complete acyclic, valid derived lineage, not a current pointer alone. Add the listed operations, both-surface adapters and exception row in this same task; no task may expose a command/tool without its row.
 
    **Mutations.**
 
@@ -411,73 +457,20 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
    - Start a baseline before claim: provider-call ordering test fails.
    - Let pointer update ignore a used intent: mutation-fence test fails.
    - Cache account identity: removal race test fails.
+   - Replace the shared fence with a current-pointer check: immutable approval/digest test fails.
+   - Register `approve` in MCP or omit a rule/target surface row: exception/strict-parity test fails.
 
-   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="activation|enable-all|account"; then pnpm verify.
+   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="activation|enable-all|account|disclosable|lifecycle.*parity"; pnpm verify:parity --strict; then pnpm verify.
 
-   **Commit.** feat(events): recover standing-authority activation without backfill (events phase B1, task 8).
+   **Commit.** feat(events): recover standing-authority activation without backfill (events phase B1, task 9).
 
-9. **Exact replacement drains, derived tightenings and durable lifecycle revocation.**
+**Batch 3 ends** with pnpm verify. It must exit 0; a real Gmail baseline adapter is present, but no Gmail cursor worker, judge transport or external target exists.
 
-   **Files.** Change src/runtime/activations.ts, recovery.ts, lifecycle.ts, retention.ts and relevant store repositories; add packages/events-daemon/src/runtime/replacements.ts. Add packages/events-daemon/test/replacements.test.ts, tightening.test.ts, revocation.test.ts and lifecycle-recovery.test.ts.
+## Batch 4 — Gmail acquisition and replacement completion
 
-   **Tests first.**
+10. **Riskiest source task — one Gmail cursor, observation classification, staging and terminal lazy resolution.**
 
-   - Cover a Gmail exact replacement: fixed union scope, P stored before drain, old version inclusive through P, after-P staging withheld, one atomic old superseded/new active pointer swap, and restart at each durable edge.
-   - Cover second replacement refusal while pending/draining, failure settlement at one hour with old pointer still active, explicit disable/remove/tightening cancellation winning, and no duplicate projection after recovery.
-   - Cover every whitelist tightening as a derived version: inherited points, immutable acyclic parent approval lineage, old version revoked, only shortened deadlines, and no approval.
-   - Cover active/superseded/revoked fences: superseded bound work remains readable/deliverable, revoked work cannot cross any boundary and purges matching dry-run rows.
-
-   **Then the implementation.**
-
-   - Add replacement_drains and derived_authorizations transactions and explicit lifecycle transitions.
-   - Give Gmail an ordered P drain contract; keep the generic source shape ready but refuse non-Gmail adapter activation.
-   - Make doctor/status report nonterminal/failed/cancelled intent state without returning content.
-
-   **Mutations.**
-
-   - Swap pointers before old P drain: replacement sequencing test fails.
-   - Treat superseded as revoked: retained-work test fails.
-   - Recompute point sets after claim: drift/fixed-plan test fails.
-   - Permit a second pending replacement: uniqueness test fails.
-
-   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="replacement|tightening|revocation"; then pnpm verify.
-
-   **Commit.** feat(events): drain exact rule replacements before their pointer swap (events phase B1, task 9).
-
-**Batch 3 ends** with pnpm verify. It must exit 0; no judge transport or external target exists.
-
-## Batch 4 — Gmail acquisition
-
-10. **Extend the Gmail provider boundary and loopback fake, without a real request.**
-
-   **Files.** Change packages/gmail/src/gmail-api/transport.ts and index.ts; create packages/gmail/src/operations/events.ts; change packages/gmail/test/support/fake-google.ts; add packages/gmail/test/events-transport.test.ts and packages/gmail/test/events-source-contract.test.ts; update any fake transport helpers required by TypeScript.
-
-   **Tests first.**
-
-   - Prove GmailTransport has one history-list method that accepts historyId/pageToken and returns specific change arrays/final history id; test unfiltered request parameters, multi-page replies, 404 cursor expiry, and provider error mapping.
-   - Prove event metadata reads contain labels/internalDate/headers/attachment metadata but no body bytes, and full/lazy reads use existing transport pathways.
-   - Extend only the loopback fake Google routes with history fixtures, page tokens, per-message metadata, deletion/404 and request recording. Assert every test endpoint is loopback and no send route is invoked.
-   - Prove the new operations/events adapter constructs its transport via existing Gmail context and never imports Google client classes in the daemon.
-
-   **Then the implementation.**
-
-   - Extend the narrow GmailTransport interface/real adapter and fake; preserve the existing send permit guard unchanged.
-   - Implement a structural Gmail event-source adapter that exposes scan, baseline and lazy-materialisation capabilities to the daemon without a runtime dependency from Gmail back to the daemon.
-
-   **Mutations.**
-
-   - Add labelId to the history request: unfiltered-history assertion fails.
-   - Use generic history messages rather than specific arrays: de-duplication fixture fails.
-   - Return body bytes from metadata: no-body/retention fixture fails.
-   - Add another Gmail send caller: repository send-path guard fails.
-
-   **Run.** pnpm --filter @agentcomms/gmail test -- --test-name-pattern="event|transport"; pnpm --filter @agentcomms/gmail typecheck; then pnpm verify.
-
-   **Commit.** feat(gmail): expose bounded history acquisition for local events (events phase B1, task 10).
-
-11. **Riskiest source task — one Gmail cursor, observation classification, staging and terminal lazy resolution.**
-
-   **Files.** Create packages/events-daemon/src/sources/gmail.ts, source-worker.ts and materialise.ts; extend store repositories and runtime/baseline.ts. Add packages/events-daemon/test/gmail-source.test.ts, gmail-materialisation.test.ts, gmail-stage-deadline.test.ts and gmail-source-recovery.test.ts.
+   **Files.** Create packages/events-daemon/src/sources/gmail.ts, source-worker.ts, materialise.ts and mailbox-lock.ts; extend store repositories and runtime/baseline.ts. Add packages/events-daemon/test/gmail-source.test.ts, gmail-materialisation.test.ts, gmail-stage-deadline.test.ts, gmail-source-recovery.test.ts and mailbox-lock.test.ts.
 
    **Tests first.**
 
@@ -486,12 +479,13 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
    - Cover first durable observedAt/occurredAt samples, crash before/after durable staging, and exact activated Gmail profile point storage.
    - Cover lazy body/attachment fetch only when an eligible projection needs it; 404 vanished, retry failure/unresolvable, stage expiry/retention-expired, one source gap only for unresolvable, unaffected metadata projection success, and no retry/fetch after terminal resolution.
    - Cover before/at/after the shorter first-staging deadline, downtime startup expiry, and cursor advancement only after every affected occurrence/projection terminalises.
+   - Prove the per-account mailbox lock serialises a page’s durable stage and final cursor commit against activation/replacement baseline work, and that source admission calls the shared `assertDisclosable` fence before it decrypts, projects or advances an occurrence.
 
    **Then the implementation.**
 
    - Persist encrypted raw-page/occurrence continuation and durable retry state. Normalise through existing Gmail sanitisation/body logic plus Phase A catalogue validation.
    - Compute the Phase A event identity at durable ingest and compare the full preimage on unique conflict.
-   - Implement Gmail baseline-only getProfile and replacement P integration, with no body, normalisation, projection or delivery in that baseline path.
+   - Implement the account-scoped mailbox lock around stage/cursor transitions and use the Task 8 adapter for scan/materialisation. The source worker calls `assertDisclosable`; baseline/P completion remains Task 11.
 
    **Mutations.**
 
@@ -500,10 +494,42 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
    - Resample observedAt on retry: CloudEvent identity/byte test fails.
    - Fetch full bodies for all history rows: lazy-fetch counting test fails.
    - Turn lazy 404 into a source gap: vanished test fails.
+   - Stage or commit a page outside the mailbox lock: deterministic interleaving test fails.
+   - Bypass `assertDisclosable` on source admission: rejected-lineage source test fails.
 
    **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="gmail|stage"; then pnpm verify.
 
-   **Commit.** feat(events): ingest Gmail history through one durable mailbox cursor (events phase B1, task 11).
+   **Commit.** feat(events): ingest Gmail history through one durable mailbox cursor (events phase B1, task 10).
+
+11. **Complete exact replacement only against the real Gmail worker and its mailbox lock.**
+
+   **Files.** Change packages/events-daemon/src/runtime/activations.ts, recovery.ts, lifecycle.ts, retention.ts, disclosure-fence.ts, sources/source-worker.ts and mailbox-lock.ts, and relevant store repositories; add packages/events-daemon/src/runtime/replacements.ts. Add packages/events-daemon/test/replacements.test.ts, replacement-worker-race.test.ts, tightening.test.ts, revocation.test.ts and lifecycle-recovery.test.ts.
+
+   **Tests first.**
+
+   - Drive the Task 8 fake-backed adapter and Task 10 worker together. Cover a Gmail exact replacement: fixed union scope, P persisted before the drain, old-version processing inclusive through P, after-P staging withheld, and one atomic old-superseded/new-active pointer swap.
+   - With deterministic failpoints, race a first activation and an exact replacement against (a) a source page before durable stage, (b) after the page stages but before final cursor commit, and (c) immediately before cursor commit. The mailbox lock and restart matrix must prove every occurrence is either pre-point baseline or admitted exactly once by the correct version: no backfill, duplicate or skipped occurrence.
+   - Crash at every durable P, drain, stage, cursor and swap edge; restart through the actual worker and prove the same one-occurrence result. Cover a second replacement refusal while pending/draining, one-hour failure with the old pointer active, and disable/remove/tightening cancellation winning.
+   - Cover every whitelist tightening as a derived version: inherited points, immutable acyclic parent approval lineage, old version revoked, only shortened deadlines and no approval. Inject malformed, cyclic, wrong-parent, digest-mismatched and revoked lineage rows into recovery and source-fence paths; each blocks effectiveness before a cursor commit.
+   - Cover active/superseded/revoked fences: superseded bound work remains readable/deliverable only through its immutable valid lineage, while revoked work cannot cross any boundary and purges matching dry-run rows.
+
+   **Then the implementation.**
+
+   - Add `replacement_drains` and `derived_authorizations` transactions and explicit lifecycle transitions. The derived edge must name the immediate eligible parent rule/version and its bound approval, store the validated edit kind, and be committed with the derived version/pointer or not at all.
+   - Acquire the Task 10 mailbox lock for baseline P capture, page stage and final cursor commit; drain P through the actual worker before the atomic swap. Keep after-P work staged until that swap; never compute P or complete a drain against a test-only adapter.
+   - Exercise the already-shared derived-lineage branch of `assertDisclosable` against committed `derived_authorizations`, and make recovery and source resumption use that same implementation. Make doctor/status report content-free nonterminal/failed/cancelled intent state without returning content.
+
+   **Mutations.**
+
+   - Swap pointers before the real worker drains P: replacement sequencing/race test fails.
+   - Let baseline, page stage or cursor commit escape the mailbox lock: no-backfill/no-duplicate/no-skip interleaving test fails.
+   - Treat superseded as revoked: retained-work test fails.
+   - Recompute point sets after claim: drift/fixed-plan test fails.
+   - Permit a second pending replacement or accept a cyclic/wrong/digest-mismatched parent: uniqueness/lineage tests fail.
+
+   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="replacement|worker.*race|tightening|revocation|lifecycle"; then pnpm verify.
+
+   **Commit.** feat(events): drain real Gmail replacements before their pointer swap (events phase B1, task 11).
 
 **Batch 4 ends** with pnpm verify. It must exit 0; all Gmail tests run solely against fakes/injected transport.
 
@@ -511,7 +537,7 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
 
 12. **Riskiest pipeline task — evaluate exactly one projection and complete its local outbox atomically.**
 
-   **Files.** Create packages/events-daemon/src/runtime/evaluate.ts, projections.ts, decisions.ts, deliveries.ts, mapping.ts and untrusted.ts; extend store repositories. Add packages/events-daemon/test/evaluation.test.ts, decision-outbox.test.ts, event-identity-ingest.test.ts, taint-before-dryrun.test.ts and fixtures/dryrun-cloud-events.json.
+   **Files.** Create packages/events-daemon/src/runtime/evaluate.ts, projections.ts, decisions.ts, deliveries.ts, mapping.ts and untrusted.ts; change disclosure-fence.ts; extend store repositories. Add packages/events-daemon/test/evaluation.test.ts, decision-outbox.test.ts, event-identity-ingest.test.ts, disclosure-fence-evaluation.test.ts, taint-before-dryrun.test.ts and fixtures/dryrun-cloud-events.json.
 
    **Tests first.**
 
@@ -520,12 +546,13 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
    - Inject failures after terminal decision insert, each delivery insert, projection purge and pre-commit; prove no partial decision/outbox state, and after commit exactly the complete outcome set with projection purged.
    - Cover projection minimisation: metadata-only and body-requiring rules over one occurrence retain independently and do not share a recoverable full event.
    - Cover sanitisation before mapping, durable untrusted-envelope boundary reuse, provenance-derived header/body taint with origin event, and a taint flush failure causing no dry-run append.
+   - Prove evaluation calls the shared `assertDisclosable` fence before it maps or writes a decision/outbox; a stale/revoked exact binding or derived lineage leaves the encrypted projection retained for its ordinary terminal handling and creates no decision/delivery.
 
    **Then the implementation.**
 
    - Build per-rule projections from catalogue metadata and use @agentcomms/events for condition/mapping/CloudEvent; do not duplicate Phase A semantic logic.
    - Persist a delivery-stable untrusted boundary in the encrypted record before it can be retried; envelope only where the approved target representation requires it.
-   - In one SQLite transaction, terminalise the decision, create all dry-run deliveries, and purge the projection. Do not introduce webhooks, SSE or a judge transport.
+   - Call `assertDisclosable` at the evaluation boundary and, in one SQLite transaction, terminalise the decision, create all dry-run deliveries, and purge the projection. Do not introduce webhooks, SSE or a judge transport.
 
    **Mutations.**
 
@@ -533,88 +560,93 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
    - Store the full event beside every rule: projection-minimisation scan fails.
    - Generate a new envelope boundary on retry: byte-stability test fails.
    - Append before taint flush: taint ordering test fails.
+   - Map before the shared disclosure fence: stale-lineage evaluation test fails.
    - Reimplement cloudEventBytes with JSON.stringify: byte-vector test fails.
 
    **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="evaluation|outbox|identity|taint"; pnpm verify:browser; then pnpm verify.
 
    **Commit.** feat(events): evaluate authorised Gmail projections into a local outbox (events phase B1, task 12).
 
-13. **Dry-run delivery/read, leases, retention and reset fences.**
+13. **Dry-run delivery/read, leases, cap charging, retention and local reset fences.**
 
-   **Files.** Create packages/events-daemon/src/targets/dry-run.ts, runtime/dispatcher.ts and runtime/expiry.ts; extend operations/dryrun.ts and doctor.ts; add packages/events-daemon/test/dryrun.test.ts, dispatcher.test.ts, expiry.test.ts, reset.test.ts and content-purge.test.ts.
+   **Files.** Create packages/events-daemon/src/targets/dry-run.ts, runtime/dispatcher.ts and runtime/expiry.ts; change disclosure-fence.ts and cli/program.ts; extend operations/dryrun.ts and doctor.ts, store schema/repositories and capabilities.json. Add packages/events-daemon/test/dryrun.test.ts, dispatcher.test.ts, delivery-cap.test.ts, expiry.test.ts, reset.test.ts, disclosure-fence-boundaries.test.ts, dryrun-operation-parity.test.ts and content-purge.test.ts.
 
    **Tests first.**
 
    - Prove only dry-run target validation exists; its retention is positive and no more than 24 hours; no package imports an HTTP/SSE client or opens a network socket.
-   - Cover worker lease crash recovery, boundary recheck of enabled generation/rule lifecycle/object revocation/account liveness, append plus delivered mark in one transaction, and cancellation races with disable/remove/account removal.
-   - Cover encrypted dryrun_log append/read/expiry/purge; terminal renderer untrusted output; CLI TTY/agent-marker/JSON refusal; MCP tools/list absence and direct invocation refusal.
+   - Validate the persisted, approval-bound delivery cap at the append boundary and cover a full rolling window: exhaustion leaves the delivery `queued`, does no local append and makes no `delivery_cap_charges` row; a later slot appends exactly once. A lease crash/recovery around the one append transaction cannot double-charge its delivery, and dry-run reads consume no charge.
+   - Cover worker lease crash recovery, boundary recheck through `assertDisclosable` of enabled generation/rule lifecycle/exact-or-derived lineage/object revocation/account liveness, append plus `delivery_cap_charges` insert plus delivered mark in one transaction, and cancellation races with disable/remove/account removal.
+   - At both append and dry-run read boundaries, inject malformed, cyclic, wrong-parent, digest-mismatched and revoked lineage records. Each refuses before decrypt/append/render; no append, delivery state change or charge occurs. Cover encrypted dryrun_log append/read/expiry/purge; terminal renderer untrusted output; CLI TTY/agent-marker/JSON refusal; MCP tools/list absence and direct invocation refusal.
+   - Run one cross-boundary fixture through source admission, recovery, evaluation, append and terminal read, proving all five paths call the same `assertDisclosable` resolver rather than a pointer/lifecycle shortcut; each invalid lineage shape is rejected consistently, with the required direct injection at append and read.
    - Cover all B1 retention outcomes, start-up expiry before source/control/read, content-free terminal rows, database/WAL/free-page fixture-byte scans, and a shortened-retention derived rule.
-   - Cover lost master/database reset: fresh identity, no backfill, local reset barrier/notice append before ordinary local delivery, and closed barrier stops ordinary rows. Network degraded resume remains B2.
+   - Cover a queued delivery expiring behind a full cap: it purges encrypted content at its original deadline without an append or charge. Cover lost master/database reset: fresh identity, no backfill, local dry-run reset barrier/notice append before ordinary local delivery, and a closed barrier stops ordinary rows. Network-target barriers and degraded network behaviour remain B2; terminal/app-only `target resume`, with no MCP tool, remains B3.
+   - Add and drive non-pending terminal-only exception rows for dryrun list/show in this task. The sealed driver proves neither command registers an MCP tool and no discovered CLI command/tool lacks a row.
 
    **Then the implementation.**
 
-   - Implement local append as the delivery boundary, not a logger bypass. Reads run the same live fence and delete expired/unreadable rows before rendering.
-   - Implement B1 expiry/lease sweeps and local reset-barrier state using the generic D8 state; retain no plaintext diagnostic error.
-   - Wire dryrun list/show operations for the terminal-only surface planned in decision 6.
+   - Implement local append as the delivery boundary, not a logger bypass. Under one `BEGIN IMMEDIATE` transaction, revalidate the approval-bound cap, insert the unique `delivery_cap_charges` row for this delivery, append the encrypted dry-run row and mark delivery delivered; a full cap leaves it queued and untouched. Reads run the same live fence, never insert a cap charge, and delete expired/unreadable rows before rendering.
+   - Implement B1 expiry/lease sweeps and a local-only reset-barrier state using the generic D8 state; retain no plaintext diagnostic error. Do not expose network degradation or a resume operation in B1.
+   - Wire dryrun list/show operations, their terminal-only exception rows, and the explicit MCP absence in this same task.
 
    **Mutations.**
 
    - Add a dry-run MCP tool: exception/capability test fails.
    - Allow a non-TTY or --json content read: human-only renderer test fails.
    - Mark delivery delivered outside the append transaction: crash test fails.
+   - Insert a cap charge outside that transaction or retry it after a recovered lease: cap atomicity/double-charge test fails.
+   - Append while the rolling cap is full or let expiry retain queued encrypted bytes: cap exhaustion/expiry-purge test fails.
+   - Let an invalid derived chain pass append or read: lineage-boundary test fails.
    - Let a closed reset barrier append normal content: reset ordering test fails.
    - Leave bytes after expiry: database/WAL scan fails.
 
-   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="dryrun|dispatcher|expiry|reset"; then pnpm verify.
+   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="dryrun|dispatcher|cap|expiry|reset|lineage|parity"; pnpm verify:parity --strict; then pnpm verify.
 
    **Commit.** feat(events): deliver only encrypted local dry-run records (events phase B1, task 13).
 
 **Batch 5 ends** with pnpm verify. It must exit 0; repository scans prove no test payload survives purges.
 
-## Batch 6 — surfaces, packages and handoff
+## Batch 6 — parity audit, references, packages and handoff
 
-14. **Complete B1 CLI/MCP adapters and strict capability parity.**
+14. **Audit the already-exposed B1 capability contract and regenerate references.**
 
-   **Files.** Change packages/events-daemon/src/cli/program.ts, cli.ts, mcp/server.ts and all B1 operations under src/operations; add packages/events-daemon/src/mcp/schemas.ts and cli/render.ts; change capabilities.json, test/parity.test.mjs and add packages/events-daemon/test/cli.test.ts, mcp.test.ts, operation-parity.test.ts and dryrun-terminal.test.ts.
+   **Files.** Regenerate docs/reference/events-daemon-cli.md and docs/reference/events-daemon-mcp-tools.md through the existing generator. Add packages/events-daemon/test/capability-audit.test.ts; change test/parity.test.mjs only for an audit assertion that reads the completed B1 contract. Do not change packages/events-daemon/src/cli/program.ts, cli.ts, mcp/server.ts, operations, schemas or capabilities.json in this task.
 
    **Tests first.**
 
-   - Add exactly one capabilities row per B1 operation named in decision 6, with operation export, CLI words/tool name, status and exception reason where required.
-   - Drive every both row through sealed CLI and MCP paths and prove the same EventControlClient operation/arguments. Drive exception rows and prove no MCP registration.
-   - Spawn the built CLI/MCP with temporary state roots; verify help/envelopes/error codes/first stdout byte, deterministic tools/list, protocol handoff and no content-bearing dry-run result in MCP structured/text output.
-   - Verify every create/update produces only inert versions; enable uses the disclosure prepare path; terminal approve renders canonical data safely; status/doctor expose content-free health.
+   - Read the final B1 operation inventory from decision 6 and assert it is already complete: exactly one non-pending row per B1 operation, every `both` row recorded as reaching its named shared operation from both surfaces, and `run`, `approve`, dryrun list/show having their stated exception/no-tool shape.
+   - Re-run the sealed full parity drive against the actual accumulated surface, including CLI/MCP argument equality for every `both` row and tools/list absence for exceptions. Mutating any earlier row, command, tool or operation association must make the audit fail.
+   - Generate references from that already-real surface and assert their command/tool lists exactly equal the registries; they name no B3 command, no `target resume`, and no content-bearing MCP result.
 
    **Then the implementation.**
 
-   - Add thin Commander/MCP schema adapters around the shared exported operations. The operation opens an EventControlClient, not SQLite.
-   - Add explicit exception rows for run, approve and dryrun reads with the exact reasons. Do not pre-add B3/D10 rows merely to make the table look complete.
-   - Generate/update reference material through the existing reference synchronisation process after the surface is real.
+   - Run `pnpm sync:reference` and commit only the generated reference changes plus the audit test.
+   - If the audit finds a missing row, adapter or exception, repair the task that first exposes that operation and rerun its focused test and `pnpm verify`; do not make Task 14 the delayed implementation site and do not add a pending row.
 
    **Mutations.**
 
-   - Call a store directly from an MCP handler: client-boundary test fails.
-   - Rename an operation only on one surface: strict parity fails.
-   - Mark dryrun show both: exception/MCP absence test fails.
-   - Omit a B1 capability row: strict parity fails.
+   - Omit or duplicate an earlier B1 capability row: inventory/strict-parity audit fails.
+   - Rename an already-exposed operation on only one surface: sealed drive/reference audit fails.
+   - Mark dryrun show `both` or register its MCP tool: exception/MCP-absence audit fails.
+   - Add `target resume` to a generated B1 reference: phase-allocation audit fails.
 
-   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="cli|mcp|parity|terminal"; pnpm verify:parity --strict; then pnpm verify.
+   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="capability.*audit"; pnpm sync:reference; pnpm verify:parity --strict; then pnpm verify.
 
-   **Commit.** feat(events): expose the B1 daemon slice through paired control clients (events phase B1, task 14).
+   **Commit.** docs(events): audit B1 parity and regenerate daemon references (events phase B1, task 14).
 
 15. **Release/documentation integration and end-to-end no-publish verification.**
 
-   **Files.** Change docs/reference/events-daemon-cli.md and events-daemon-mcp-tools.md through the generator, packages/events-daemon/README.md, CONTRIBUTING.md and docs/RELEASING.md only where the new held service needs a named first-release example; change test/install-docs.test.mjs, test/release-packages.test.mjs, test/events-daemon-e2e.test.mjs and package consumer checks.
+   **Files.** Change packages/events-daemon/README.md, CONTRIBUTING.md and docs/RELEASING.md only where the new held service needs a named first-release example; change test/install-docs.test.mjs, test/release-packages.test.mjs, test/events-daemon-e2e.test.mjs and package consumer checks. Task 14 is the sole B1 reference-regeneration task.
 
    **Tests first.**
 
    - Packed-tarball consumer creates a temporary config/state, starts foreground owner, uses CLI and MCP clients, creates/activates a synthetic Gmail fake event to dry-run, safely reads it at a TTY simulation, stops it, and verifies no network request/no real credential.
    - Prove both events and events-daemon are in PUBLISHABLE/HELD but absent from scripts/packages.mjs’s printed tag list; release preflight/confirm does not touch their packuments while held.
    - Prove release documentation orders the owner’s eventual manual publish events then events-daemon from one checked tag and never tells a B1 merge to publish.
-   - Ensure generated references name only B1’s public surface and no deferred B3 command.
+   - Ensure Task 14’s generated references name only B1’s public surface and no deferred B3 command.
 
    **Then the implementation.**
 
-   - Regenerate references from the real surface, write the service README’s foreground/safety/hold contract, and make release prose point to the existing held-package mechanics.
+   - Consume the Task 14 generated references, write the service README’s foreground/safety/hold contract, and make release prose point to the existing held-package mechanics.
    - Add the minimal consumer fixture and make it fake-only. Do not add npm credentials, publishing code, an OS service, or a real Gmail fixture.
 
    **Mutations.**
@@ -632,11 +664,11 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
 
 ## §5 coverage ownership
 
-Each B1-owned portion of §5 has one owner. Rows that belong to Phase A, B2, B3, C, D, E or E2 are intentionally absent.
+Each B1-owned portion of §5 has one accountable owner exactly once; supporting calls and integration assertions in other tasks do not create a second ownership row. Rows that belong to Phase A, B2, B3, C, D, E or E2 are intentionally absent.
 
 | §5 item/case | Task |
 |---|---:|
-| CAT-B1-a: injected event-id collision stops Gmail cursor/source instead of merging identities | 11 |
+| CAT-B1-a: injected event-id collision stops Gmail cursor/source instead of merging identities | 10 |
 | CAT-B1-b: operational agentcomms records and reset/test controls are nonselectable and do not ingest | 7 |
 | CND-B1: deterministic condition evaluation inside authorised event processing; no agentic/judge call before E | 12 |
 | JDG-B1: all judge kinds initially disabled; deterministic activation works; disabled judge rule activation refuses JUDGE_KIND_DISABLED | 7 |
@@ -644,16 +676,19 @@ Each B1-owned portion of §5 has one owner. Rows that belong to Phase A, B2, B3,
 | MAP-B1-b: delivery-stable untrusted envelope representation and provenance-derived taint | 12 |
 | APR-B1-a: four activation-document golden vectors and exact derived version lists | 7 |
 | APR-B1-b: core disclosure create/challenge terminal-or-app approval/claim, wrong-kind matrix and immutable usedAt | 2 |
-| APR-B1-c: crash matrix through intent/core used/usedAt/baseline/pointer/completion; one-hour failure | 8 |
-| APR-B1-d: exact Gmail first activation and enable-all staged points/recovery/no backfill | 8 |
-| APR-B1-e: Gmail exact replacement P/drain/swap and second replacement refusal | 9 |
-| APR-B1-f: derived tightening lineage, inherited points, lifecycle and revocation | 9 |
+| APR-B1-c: crash matrix through intent/core used/usedAt/baseline/pointer/completion; one-hour failure | 9 |
+| APR-B1-d: exact Gmail first activation and enable-all staged points/recovery/no backfill | 9 |
+| APR-B1-e: Gmail exact replacement P/drain/swap, real-worker/mailbox-lock race matrix and second replacement refusal | 11 |
+| APR-B1-f: derived tightening lineage, inherited points, lifecycle and revocation | 11 |
+| APR-B1-g: one `assertDisclosable` exact-or-derived, acyclic/digest/revocation fence across source, recovery, evaluation, append and terminal read | 13 |
 | ING-B1-a: cursor/ingest/decision/delivery/dry-run crash atomicity and complete target set | 12 |
 | ING-B1-b: independent metadata/body projections and lazy fetch-once/no-full-event retention | 12 |
-| ING-B1-c: Gmail deleted-after-list, lazy 404 vanished, retry unresolvable, terminal cursor advance | 11 |
-| STG-B1: Gmail staged-at/deadline before-at-after, retry-deadline composition, restart and content purge | 11 |
-| TGT-B1: account removal, global disable, pause distinction and generation fences for Gmail/dry-run | 8 |
+| ING-B1-c: Gmail deleted-after-list, lazy 404 vanished, retry unresolvable, terminal cursor advance | 10 |
+| STG-B1: Gmail staged-at/deadline before-at-after, retry-deadline composition, restart and content purge | 10 |
+| TGT-B1: account removal, global disable, pause distinction and generation fences for Gmail/dry-run | 9 |
 | DEL-B1: dry-run append/read state fences, lease recovery, cancellation and no MCP content read | 13 |
+| CAP-B1: approved delivery-cap validation; atomic `delivery_cap_charges`/append/delivered mark; full-cap queue, recovery, read and expiry behaviour | 13 |
+| RST-B1: B1 local dry-run reset append barrier and notice ordering; B2 network barriers/degraded behaviour and B3 terminal/app-only resume excluded | 13 |
 | RET-B1: B1 retention table rows, fixed/shortenable deadlines, startup expiry and WAL/free-page scans | 13 |
 | TNT-B1: two-lock taint origins, old-writer compatibility and taint-before-dry-run | 3 |
 | SEC-B1: independent event store/selector/migration and old-core migration independence | 5 |
@@ -678,4 +713,4 @@ git status --short
 
 Passing means every package, including both held packages, builds/tests/packs as the repository requires; strict parity drives every B1 row; browser vectors still agree with Phase A; no consumer or release path reaches a held package; and no test reached a real provider. Do not commit from this worktree if its shared git directory blocks it. The commit message for the completed plan is:
 
-docs(plan): local event emission — phase B1
+docs(plan): local event emission — phase B1, revised for review round 1
