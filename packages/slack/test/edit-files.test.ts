@@ -225,6 +225,10 @@ test('a file id that is not one of the message’s, or not a file id, is refused
   const garbage = await refusal(w.prepare({ removeFiles: ['chart-v1.png'] }), 'a name passed as an id');
   assert.equal(garbage.code, 'USAGE');
   assert.equal(garbage.details?.reason, 'not-a-file-id');
+  // The hint's own example is an id the check accepts, and plainly made up: never one copied from a real workspace.
+  const example = /such as (F\w+)/.exec(garbage.hint ?? '')?.[1] ?? '';
+  assert.match(example, /^F[A-Z0-9]{1,39}$/);
+  assert.match(example, /EXAMPLE/);
   assert.equal(w.asked('chat.update').length, 0);
 });
 
