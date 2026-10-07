@@ -82,9 +82,11 @@ to, and its approval is void.
 > overwritten by an older one: the words put back, a file added since taken off. The message is now read once more
 > immediately before every edit and every deletion — after any uploads, before the fence — and the act starts only if
 > it is still exactly what was read. Otherwise nothing is changed and the approval, spent by its claim, is failed
-> (`message-changed`), naming any files already up. Gone by then, an edit has nothing to change (`NOT_FOUND`), and a
-> deletion has what it asked for (`used`, as `message_not_found` from `chat.delete` is). A read that fails otherwise
-> refuses too: what the message is now is not known.
+> (`message-changed`), naming any files already up. Gone by then — the channel read, and no message at that ts in it or
+> its thread — an edit has nothing to change (`NOT_FOUND`), and a deletion has what it asked for (`used`, as
+> `message_not_found` from `chat.delete` is). Any other failed read refuses, with Slack's reason: a channel not found or
+> archived since also reads as `NOT_FOUND` from `callSlack`, and taking that for a missing message would let a deletion
+> report a success with the message still there (found in the same review).
 
 The message's words are this account's own (E2), so they are treated as an outgoing post's are (D4): decoded, not
 neutralised, and escaped for the terminal by the renderer. Unfurled content and attachments added by Slack are not

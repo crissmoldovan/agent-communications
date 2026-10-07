@@ -249,6 +249,33 @@ test('a message already gone at the last look is the deletion asked for: used, a
   assert.equal(w.fake.count('chat.delete'), 0);
 });
 
+test('a channel archived or gone after the claim is not taken for a deleted message: refused, never a false success', async () => {
+  for (const slackError of ['is_archived', 'channel_not_found']) {
+    const w = await amendWorld();
+    const { approvalId } = await prepared(w);
+    const store = w.harness.core.approvals;
+    const claim = store.claimForSend.bind(store);
+    store.claimForSend = async (...args: Parameters<typeof claim>) => {
+      const claimed = await claim(...args);
+      w.fake.script['conversations.history'] = () => ({ ok: false, error: slackError });
+      return claimed;
+    };
+    const error = await refusal(send(w, approvalId), `${slackError} at the last look`);
+    assert.equal(error.code, 'NOT_FOUND', slackError);
+    assert.match(
+      error.message,
+      /^nothing was deleted: the message could not be read again just before it was to be deleted — /,
+      slackError,
+    );
+    assert.equal(error.details?.reason, 'last-look-failed', slackError);
+    assert.equal(error.details?.slackError, slackError, slackError);
+    assert.equal(w.fake.count('chat.delete'), 0, slackError);
+    assert.equal(await stateOf(w.harness, approvalId), 'failed', `${slackError}: recorded as a success`);
+    const [record] = await audited(w.harness, 'slack.delete');
+    assert.equal(record?.outcome, 'failed', slackError);
+  }
+});
+
 test('delete send refuses a message that is not the approval’s, and spends nothing', async () => {
   const w = await amendWorld();
   const { approvalId } = await prepared(w);

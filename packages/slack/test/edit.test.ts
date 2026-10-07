@@ -303,6 +303,26 @@ test('a message deleted after the claim is not edited: there is nothing left to 
   assert.equal(await stateOf(w.harness, prepared.approvalId), 'failed');
 });
 
+test('a channel archived after the claim refuses the edit in its own words, not as a message that is gone', async () => {
+  const w = await amendWorld();
+  const prepared = await preparedEdit(w);
+  const store = w.harness.core.approvals;
+  const claim = store.claimForSend.bind(store);
+  store.claimForSend = async (...args: Parameters<typeof claim>) => {
+    const claimed = await claim(...args);
+    w.fake.script['conversations.history'] = () => ({ ok: false, error: 'is_archived' });
+    return claimed;
+  };
+  const error = await refusal(send(w, prepared), 'an edit in a channel archived after its claim');
+  assert.equal(
+    error.message,
+    'nothing was changed: the message could not be read again just before it was to be changed — that channel is archived',
+  );
+  assert.equal(error.details?.reason, 'last-look-failed');
+  assert.equal(w.fake.count('chat.update'), 0);
+  assert.equal(await stateOf(w.harness, prepared.approvalId), 'failed');
+});
+
 test('edit send refuses a channel or a ts that is not the approval’s, and spends nothing', async () => {
   const w = await amendWorld();
   const prepared = await preparedEdit(w);

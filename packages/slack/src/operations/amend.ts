@@ -1381,22 +1381,33 @@ async function deleteClassified(
  * still exactly what it was (`targetDigest`); otherwise nothing is changed, and the approval, spent by its claim, is
  * recorded as failed. Found during review of the pull request that added these acts.
  *
- * `gone` when Slack has no message there any more. A read that fails otherwise is a refusal too: what the message is
- * now is not known, so neither act is made against it.
+ * `gone` only when Slack read the channel and has no message at that ts any more. A read that fails otherwise — the
+ * channel not found, archived since, Slack not answering — is a refusal: what the message is now is not known, so
+ * neither act is made against it, and a deletion never reports a success it cannot see.
  */
 async function lastLook(deps: PostDeps, read: TargetMessage, act: Act): Promise<'same' | 'gone' | CommsError> {
   let now: TargetMessage;
   try {
     now = await messageAt(deps.call, { channel: read.channel, ts: read.ts });
   } catch (error) {
-    if (error instanceof CommsError && error.code === 'NOT_FOUND') return 'gone';
+    /*
+     * Gone only on `messageAt`'s own answer: the channel read, and no message at that ts in it or its thread. Not on
+     * NOT_FOUND alone, which `callSlack` also gives a channel it cannot find or one archived since — the message still
+     * there, and a deletion that took that for gone would report success having deleted nothing (review of #52).
+     */
+    if (error instanceof CommsError && error.details?.reason === 'no-message') return 'gone';
     return new CommsError(
-      'PROVIDER_UNAVAILABLE',
-      `nothing was ${WORDS[act].done}: the message could not be read again just before it was to be ${WORDS[act].done}`,
+      error instanceof CommsError ? error.code : 'PROVIDER_UNAVAILABLE',
+      `nothing was ${WORDS[act].done}: the message could not be read again just before it was to be ${WORDS[act].done} — ${messageOf(error)}`,
       {
         cause: error,
-        hint: `Slack could not be asked (${messageOf(error)}). Prepare the ${WORDS[act].noun} again once it answers.`,
-        details: { reason: 'last-look-failed' },
+        hint: `What the message is now is not known, so it was not ${WORDS[act].done}. Prepare the ${WORDS[act].noun} again once Slack can read it.`,
+        details: {
+          reason: 'last-look-failed',
+          ...(error instanceof CommsError && typeof error.details?.slackError === 'string'
+            ? { slackError: error.details.slackError }
+            : {}),
+        },
       },
     );
   }
