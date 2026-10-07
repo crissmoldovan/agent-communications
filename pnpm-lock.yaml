@@ -93,6 +93,34 @@ importers:
         specifier: 'catalog:'
         version: 7.0.2
 
+  packages/events-daemon:
+    dependencies:
+      '@agentcomms/core':
+        specifier: workspace:*
+        version: link:../core
+      '@agentcomms/events':
+        specifier: workspace:*
+        version: link:../events
+      '@agentcomms/gmail':
+        specifier: workspace:*
+        version: link:../gmail
+    devDependencies:
+      '@modelcontextprotocol/client':
+        specifier: 2.0.0
+        version: 2.0.0
+      '@modelcontextprotocol/server':
+        specifier: ^2.0.0
+        version: 2.0.0
+      commander:
+        specifier: ^15.0.0
+        version: 15.0.0
+      tsdown:
+        specifier: 'catalog:'
+        version: 0.23.0(typescript@7.0.2)
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+
   packages/gmail:
     dependencies:
       '@agentcomms/core':

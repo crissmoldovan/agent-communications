@@ -70,7 +70,8 @@ jobs:
   # checkout's `src/cli.ts`, registered by the local launcher — carries `--experimental-strip-types`, which Node
   # 22.12–22.17 needs and 22.18 does not. The matrix above starts at the repository's own tooling floor, 22.18.0, so it
   # cannot see the flag go missing. This builds there, then runs the one built-package test that runs such a command
-  # under exactly 22.12.0 (case 0000 of docs/superpowers/specs/2026-10-04-cli-path-shims-design.md). Only that test:
+  # under exactly 22.12.0 (case 0000 of docs/superpowers/specs/2026-10-04-cli-path-shims-design.md). The held
+  # event service's built command is exercised there too, including its Node-owned SQLite boundary. Only those tests:
   # the tooling itself needs 22.18. `test/release-packages.test.mjs` holds the job to this shape.
   old-node:
     name: located commands on node 22.12.0
@@ -92,7 +93,7 @@ jobs:
         with:
           node-version: 22.12.0
       - run: node --version
-      - run: node --test packages/core/test/cli-command-old-node.test.mjs
+      - run: node --test packages/core/test/cli-command-old-node.test.mjs packages/events-daemon/test/old-node.test.mjs
 
   # **The event library's vectors in real browsers.** The `verify:browser` script runs every vector family of
   # `@agentcomms/events` in Playwright's Chromium and WebKit, under the desktop app's production CSP, and requires the

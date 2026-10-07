@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { access, chmod, constants, cp, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, constants, cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -227,7 +227,13 @@ test('a version bump reaches the Slack pin in the Gemini extension', async () =>
       'skills',
       // Every manifest the sync rewrites: each publishable package, held back from a release or not.
       ...PUBLISHABLE.map((name) => `packages/${name}/package.json`),
+      // A declared service's registry contract also reads its server and operations paths.
+      ...REGISTRY.services.flatMap(({ directory, declaration }) => [
+        `packages/${directory}/${declaration.server.entry}`,
+        `packages/${directory}/${declaration.operations}`,
+      ]),
     ]) {
+      await mkdir(dirname(join(scratch, path)), { recursive: true });
       await cp(join(ROOT, path), join(scratch, path), { recursive: true });
     }
     const root = JSON.parse(await readFile(join(scratch, 'package.json'), 'utf8'));

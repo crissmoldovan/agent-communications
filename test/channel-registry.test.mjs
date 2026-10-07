@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { cp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
@@ -127,6 +127,15 @@ async function repositoryCopy(prefix, { sources = false } = {}) {
       if (!entry.isDirectory()) continue;
       await mkdir(join(root, 'packages', entry.name), { recursive: true });
       await cp(join(ROOT, 'packages', entry.name, 'package.json'), join(root, 'packages', entry.name, 'package.json'));
+      const manifest = JSON.parse(await readFile(join(ROOT, 'packages', entry.name, 'package.json'), 'utf8'));
+      const declaration = manifest.agentcommsPackage;
+      if (declaration?.kind === 'service') {
+        for (const path of [declaration.server.entry, declaration.operations]) {
+          const target = join(root, 'packages', entry.name, path);
+          await mkdir(dirname(target), { recursive: true });
+          await cp(join(ROOT, 'packages', entry.name, path), target, { recursive: true });
+        }
+      }
     }
   }
   const version = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8')).version;
@@ -267,6 +276,7 @@ test('a channel package dropped into the tree is discovered by every consumer of
   // Every channel this checkout ships, and the newcomer among them in its place.
   const shipped = REGISTRY.channels.map((channel) => channel.directory);
   const every = ['core', ...[...shipped.filter((channel) => channel !== 'core'), 'newcomer'].sort()];
+  const surfaced = [...every, ...REGISTRY.services.map((service) => service.directory)];
   const others = shipped.filter((channel) => channel !== 'core');
 
   // The registry itself, and the two scripts a shell reads it through.
@@ -279,7 +289,7 @@ test('a channel package dropped into the tree is discovered by every consumer of
   const registries = await import(pathToFileURL(join(root, 'scripts', 'registries.mjs')).href);
   assert.deepEqual(
     registries.SURFACES.map((surface) => surface.package),
-    every,
+    surfaced,
   );
   assert.deepEqual(
     registries.SURFACES.find((surface) => surface.package === 'newcomer'),
@@ -293,7 +303,7 @@ test('a channel package dropped into the tree is discovered by every consumer of
   );
   assert.deepEqual(registries.WRAPPERS, { 'gmail-mcp': 'gmail' }, 'a channel that is its own server wraps nothing');
   const operations = await import(pathToFileURL(join(root, 'scripts', 'operations.mjs')).href);
-  assert.deepEqual(Object.keys(operations.DRIVERS), every);
+  assert.deepEqual(Object.keys(operations.DRIVERS), surfaced);
   assert.deepEqual(operations.DRIVERS.newcomer, {
     cli: 'packages/newcomer/src/cli/program.ts',
     run: 'run',
@@ -1122,20 +1132,33 @@ test('the hand-written-list guard reads its words from the registry, so a channe
   assert.doesNotMatch('const ALSO_FOREIGN = { newcomer: [/\\bmailbox(es)?\\b/i] };', guard);
 });
 
-test('this checkout’s registry is the five channels, one held library and seven packages it ships', () => {
+test('this checkout’s registry is the five channels, one held library, one held service and eight packages it ships', () => {
   assert.deepEqual(
     REGISTRY.channels.map((channel) => channel.directory),
     ['core', 'gmail', 'resend', 'slack', 'whatsapp'],
   );
-  assert.deepEqual(REGISTRY.packages, ['core', 'events', 'gmail', 'gmail-mcp', 'resend', 'slack', 'whatsapp']);
+  assert.deepEqual(REGISTRY.packages, [
+    'core',
+    'events',
+    'gmail',
+    'events-daemon',
+    'gmail-mcp',
+    'resend',
+    'slack',
+    'whatsapp',
+  ]);
   assert.deepEqual(REGISTRY.platforms, ['gmail', 'resend', 'slack', 'whatsapp']);
   assert.deepEqual(
     REGISTRY.libraries.map((library) => library.directory),
     ['events'],
   );
   assert.deepEqual(
+    REGISTRY.services.map((service) => service.directory),
+    ['events-daemon'],
+  );
+  assert.deepEqual(
     REGISTRY.held.map((entry) => entry.directory),
-    ['events'],
+    ['events', 'events-daemon'],
   );
   assert.deepEqual(REGISTRY.undeclared, []);
 });
