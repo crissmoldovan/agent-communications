@@ -29,6 +29,18 @@ export const SECTIONS = Object.freeze([
 /** The labelled lines under "Provenance": each must say something, even if it is "none". */
 export const PROVENANCE_LABELS = Object.freeze(['Why', 'Sources', 'Live testing', 'AI assistance']);
 
+/**
+ * The template's checklist, by a phrase each box's line carries. Every one must be there and ticked: a box deleted is
+ * not a box ticked (review of #55).
+ */
+export const REQUIRED_CHECKS = Object.freeze([
+  '`pnpm verify` passes locally',
+  'Tests cover the change',
+  'No real email, address, token, client secret or account id',
+  'Docs and skills updated',
+  '`CHANGELOG.md` updated under `## Unreleased`',
+]);
+
 /** The comment's own marker, so a later run edits it rather than adding another. */
 export const MARKER = '<!-- pr-requirements -->';
 
@@ -123,6 +135,19 @@ export function checkPullRequest({ body, headRef, files, currentVersion }) {
         `The proposed version's slug should be the branch's: \`${number}-${slug}\`, not \`${proposed[0]}\`.`,
       );
     }
+    // The reason is part of the proposal (review of #55): the step named, as the number makes it, and why, in words.
+    const reason = (sections.get('Proposed version') ?? '').replace(proposed[0], ' ');
+    const named = /\b(patch|minor|major)\b/i.exec(reason)?.[1].toLowerCase();
+    const words = reason.replace(/\b(patch|minor|major)\b/gi, ' ').match(/[A-Za-z]{2,}/g) ?? [];
+    if (!named || words.length < 3) {
+      missing.push(
+        `Under "Proposed version", say why \`${proposed[0]}\` is ${step ? `a ${step}` : 'the step it is'}: name the step — patch, minor or major — and the reason, in a sentence.`,
+      );
+    } else if (step && named !== step) {
+      missing.push(
+        `The proposed version \`${proposed[0]}\` is a ${step} by its number, but its reason calls it a ${named}.`,
+      );
+    }
   }
 
   const provenance = sections.get('Provenance') ?? '';
@@ -140,6 +165,12 @@ export function checkPullRequest({ body, headRef, files, currentVersion }) {
     }
   }
 
+  const boxes = [...withoutComments(body ?? '').matchAll(/^\s*[-*]\s+\[[ xX]\]\s+(.+)$/gm)].map((box) => box[1]);
+  for (const check of REQUIRED_CHECKS) {
+    if (!boxes.some((box) => box.includes(check))) {
+      missing.push(`The box "${check}…" is missing from "Checks": put it back from the template, and tick it.`);
+    }
+  }
   for (const box of withoutComments(body ?? '').matchAll(/^\s*[-*]\s+\[ \]\s+(.+)$/gm)) {
     missing.push(
       `A box is not ticked: "${box[1].trim()}". Do it and tick it, or say in the box why it does not apply.`,
