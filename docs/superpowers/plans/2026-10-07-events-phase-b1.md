@@ -18,6 +18,8 @@ Every batch ends with the full root verification command, pnpm verify. Any batch
 
 For every task’s Run paragraph, passing means each named focused command exits zero (node:test reports zero failures) and the batch-ending pnpm verify exits zero. A focused success never substitutes for the batch command.
 
+**References land with their surfaces (review round 2).** Root `pnpm verify` runs `verify:reference`, so every task that adds or changes a CLI command or MCP tool runs `pnpm sync:reference` and commits the generated `docs/reference` pages in the same task; Task 14 only confirms they are current.
+
 ## Decisions the spec leaves to the plan
 
 ### 1. A held service package, foreground in B1
@@ -303,7 +305,7 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
    - Make the events parent world-readable: permissions test fails.
    - Remove the Node 22.12 command invocation: release-shape test fails.
 
-   **Run.** pnpm --filter @agentcomms/events-daemon build; pnpm --filter @agentcomms/events-daemon test; node --test test/release-packages.test.mjs; pnpm verify:parity --strict; then pnpm verify.
+   **Run.** pnpm --filter @agentcomms/events-daemon build; pnpm --filter @agentcomms/events-daemon test; node --test test/release-packages.test.mjs; pnpm verify:parity --strict; pnpm sync:reference (commit the generated docs/reference changes with this task, so `verify:reference` inside `pnpm verify` passes); then pnpm verify.
 
    **Commit.** feat(events): scaffold the held local events service (events phase B1, task 4).
 
@@ -366,7 +368,7 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
    - Let MCP call run: exception/parity test fails.
    - Delete switch-generation recheck at commit: disable race test fails.
 
-   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="control|owner|stale|switch|runtime.*parity"; pnpm verify:parity --strict; then pnpm verify.
+   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="control|owner|stale|switch|runtime.*parity"; pnpm verify:parity --strict; pnpm sync:reference (commit the generated docs/reference changes with this task, so `verify:reference` inside `pnpm verify` passes); then pnpm verify.
 
    **Commit.** feat(events): run one authenticated local event daemon owner (events phase B1, task 6).
 
@@ -460,7 +462,7 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
    - Replace the shared fence with a current-pointer check: immutable approval/digest test fails.
    - Register `approve` in MCP or omit a rule/target surface row: exception/strict-parity test fails.
 
-   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="activation|enable-all|account|disclosable|lifecycle.*parity"; pnpm verify:parity --strict; then pnpm verify.
+   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="activation|enable-all|account|disclosable|lifecycle.*parity"; pnpm verify:parity --strict; pnpm sync:reference (commit the generated docs/reference changes with this task, so `verify:reference` inside `pnpm verify` passes); then pnpm verify.
 
    **Commit.** feat(events): recover standing-authority activation without backfill (events phase B1, task 9).
 
@@ -599,7 +601,7 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
    - Let a closed reset barrier append normal content: reset ordering test fails.
    - Leave bytes after expiry: database/WAL scan fails.
 
-   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="dryrun|dispatcher|cap|expiry|reset|lineage|parity"; pnpm verify:parity --strict; then pnpm verify.
+   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="dryrun|dispatcher|cap|expiry|reset|lineage|parity"; pnpm verify:parity --strict; pnpm sync:reference (commit the generated docs/reference changes with this task, so `verify:reference` inside `pnpm verify` passes); then pnpm verify.
 
    **Commit.** feat(events): deliver only encrypted local dry-run records (events phase B1, task 13).
 
@@ -607,9 +609,9 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
 
 ## Batch 6 — parity audit, references, packages and handoff
 
-14. **Audit the already-exposed B1 capability contract and regenerate references.**
+14. **Audit the already-exposed B1 capability contract and confirm its references are current.**
 
-   **Files.** Regenerate docs/reference/events-daemon-cli.md and docs/reference/events-daemon-mcp-tools.md through the existing generator. Add packages/events-daemon/test/capability-audit.test.ts; change test/parity.test.mjs only for an audit assertion that reads the completed B1 contract. Do not change packages/events-daemon/src/cli/program.ts, cli.ts, mcp/server.ts, operations, schemas or capabilities.json in this task.
+   **Files.** The reference pages docs/reference/events-daemon-cli.md and docs/reference/events-daemon-mcp-tools.md were generated and committed by the tasks that exposed each command and tool (4, 6, 9, 13); this task only confirms they are current. Add packages/events-daemon/test/capability-audit.test.ts; change test/parity.test.mjs only for an audit assertion that reads the completed B1 contract. Do not change packages/events-daemon/src/cli/program.ts, cli.ts, mcp/server.ts, operations, schemas or capabilities.json in this task.
 
    **Tests first.**
 
@@ -619,7 +621,7 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
 
    **Then the implementation.**
 
-   - Run `pnpm sync:reference` and commit only the generated reference changes plus the audit test.
+   - Run `pnpm verify:reference`: it must pass with no changes. A difference means an earlier task skipped its `pnpm sync:reference`; repair that task, not this one. Commit only the audit test.
    - If the audit finds a missing row, adapter or exception, repair the task that first exposes that operation and rerun its focused test and `pnpm verify`; do not make Task 14 the delayed implementation site and do not add a pending row.
 
    **Mutations.**
@@ -629,7 +631,7 @@ Do not merge parallel worktree changes by copying generated files. Rebase the la
    - Mark dryrun show `both` or register its MCP tool: exception/MCP-absence audit fails.
    - Add `target resume` to a generated B1 reference: phase-allocation audit fails.
 
-   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="capability.*audit"; pnpm sync:reference; pnpm verify:parity --strict; then pnpm verify.
+   **Run.** pnpm --filter @agentcomms/events-daemon test -- --test-name-pattern="capability.*audit"; pnpm verify:reference (must report no changes); pnpm verify:parity --strict; then pnpm verify.
 
    **Commit.** docs(events): audit B1 parity and regenerate daemon references (events phase B1, task 14).
 
