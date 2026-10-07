@@ -609,6 +609,10 @@ to decline:
 5. **Confirm the readings** of decision 12 (canonical email keeps the local part), decision 13 (no trailing root dot),
    and decision 15 (an operand validates against its field's enum, pattern and format, as "the schema's exact type").
 
+- **A-K2-1 (committee K2-1, 2–1):** should `validateEvent` itself refuse an unpaired surrogate in a Resend `body` (a new
+  invariant), so that a phase D adapter that skipped `normaliseResendBody` cannot emit one? Not implemented; the spec
+  places the rule in normalisation only (A.5, 3825-3830).
+
 ## Where the spec is ambiguous or contradicts itself, for phase A
 
 Each is resolved by the decision named. Line numbers are the spec's at `225d7855`.
@@ -638,6 +642,25 @@ Each is resolved by the decision named. Line numbers are the spec's at `225d7855
 | U | 3828-3831 | unpaired surrogates are refused in the Resend body only | decision 8: only there; amendment 2 |
 | V | 1024-1027 | canonicalisation names only `caseSensitive`; `in` order and duplicates, and `onUncertain`'s default form, are unsaid | decisions 15 and 20; amendment 4 |
 | W | 3504-3507, 3511-3525 | Appendix A is normative, but several of its constraints are stated in comments and prose, not in the notation A.1 maps | Task 10's extraction and prose-rule file |
+
+## Decisions made during the build (committee)
+
+Points the plan and spec left open that came up while building. Each was argued by a three-member committee (the spec's
+literal words; safety and downstream consumers; a devil's advocate for the other reading), then decided.
+
+| # | Raised in | Question | Decision | Why |
+|---|---|---|---|---|
+| K1 | Task 9 (track S) | A metadata pointer pattern reaching a `null` at the END of its path: does it contribute a concrete pointer? | **No.** A `null` at any position, terminal included, contributes no pointer (as `pattern.ts` implements). | A.1 (spec 3589-3590) says an optional property "contributes no concrete pointer when absent or null" and that every terminal a pattern names has "the declared non-null scalar type", so a pointer to `null` would break that guarantee. No requirement needs the other reading: conditions and mappings use concrete paths, not metadata patterns (1017, 1122); a `null` carries no sender content (670-679); formats apply only to non-null scalars. The other reading would make every later consumer filter `null` itself. Unanimous. |
+| K2-1 | Task 10 (track T), prose entries 19-20 | Resend `body`: does `validateEvent` refuse an unpaired surrogate, or only `normaliseResendBody`? | **Only `normaliseResendBody`** (as built). Added to "Spec amendments to raise with the owner" as A-K2-1. | 2–1. A.5 (spec 3825-3830) places the rule under "Normalisation from the existing read" and calls the failure "a malformed materialisation response under D3"; the schema block (3806-3814) states only `maxLength`, and decision 7 requires each invariant to quote a spec sentence. Dissent (safety): a phase D adapter that skipped the normaliser could emit a body the daemon's UTF-8 envelope turns into U+FFFD, so delivered text would differ from the hashed payload — raised with the owner rather than invented here. |
+| K2-2 | Task 10 (track T), prose entries 28-29 | WhatsApp `messageId`: opaque string, or an invariant tying it to the protocol key? | **An invariant, `whatsapp-message-key`** (new name in decision 7's vocabulary): `messageId` parses as core-canonical JSON of exactly four non-empty strings, re-serialises canonically to the identical string, its first element is `"wa-msg"`, and its third element equals `sender.id`. Nothing about `chat.id` (the spec never says `chat.id` is `chatJid`). | 2–1. A.7: "The event `messageId` is exactly D4's canonical raw protocol message key: `["wa-msg", chatJid, senderJidRaw, stanzaId]`" (3977-3978) and "`sender.id` is the same exact raw `senderJidRaw`" (3981); D4 line 755; empty elements are skipped (3982). `messageId` is the identity and dedupe basis, so a wrongly built one must not validate. Dissent (devil's advocate): the validator cannot see `chatJid`/`stanzaId`, so protection is partial — accepted: the adapter (phase D) still owns full derivation, and consumers must not parse `messageId` (it stays an opaque identity on the wire). |
+| K2-3 | Task 10 (track T), prose entry 6 | Gmail `hasAttachments` vs `attachments`: invariant or adapter guidance? | **Adapter guidance only** (as built; no invariant, no `dependentRequired`). | Unanimous. A.1 (3577-3582) makes both separately lazy and the sentence describes what an adapter writes when it fetches; only Resend has `dependentRequired` (3812-3820); a projection may ask for the boolean alone (3579-3580). |
+
+Follow-ups owed by Task 11: (K1) assert that no metadata pattern in any of the seven definitions ends on a `T | null`
+field (the guarantee in A.1 must hold, not be assumed); (K2-2) add the `whatsapp-message-key` invariant to the WhatsApp
+definition and to decision 7's vocabulary, move prose entries 28-29 from "informational" to that invariant in
+`appendix-prose-rules.json` and `catalogue-v1.json` together, and add strict probes (wrong first element, empty element,
+non-canonical spacing, third element ≠ `sender.id`) and a permissive probe (a valid key); and (K1) record as an erratum candidate for the spec's next revision that 3589
+should read "absent or null at any position, terminal included".
 
 ## Batch 1 — release safety
 

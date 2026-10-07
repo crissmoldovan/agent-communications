@@ -11,7 +11,13 @@ export type IssueCode =
   /** Text that has to be UTF-8 holds a surrogate without its partner, which UTF-8 cannot encode. */
   | 'NOT_WELL_FORMED'
   /** An event identity's tuple is not D3's: an id that is not a string, a type version that is not an integer. */
-  | 'IDENTITY_INVALID';
+  | 'IDENTITY_INVALID'
+  /** A schema description the compilers cannot compile faithfully: an empty enum, a pattern without exactly `u`. */
+  | 'SCHEMA_DESCRIPTION_INVALID'
+  /** A path the schema does not declare: an undeclared key, an index on an object, a key on an array, a step too far. */
+  | 'POINTER_NOT_IN_SCHEMA'
+  /** Not an RFC 6901 pointer (an escape other than `~0` or `~1`, no leading `/`), or not a D3 pointer pattern. */
+  | 'POINTER_MALFORMED';
 
 /** One thing wrong, where it is (an RFC 6901 pointer into the value checked), and any detail a caller can show. */
 export interface Issue {

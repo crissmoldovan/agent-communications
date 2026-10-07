@@ -57,3 +57,27 @@ assert.deepEqual(manifest.agentcommsPackage, { kind: 'library' });
 console.log(
   `events consumer check: imports, canonical JSON, an event id through WebCrypto, no node: or require( in ${shipped.length} dist files, no bin OK`,
 );
+
+// --- Pointers and pointer patterns (events phase A plan, Task 9; test/vectors/pointers.json) ---
+{
+  const parsed = events.parsePointer('/a~1b/~0c');
+  assert.deepEqual(parsed, { ok: true, value: ['a/b', '~c'] });
+  assert.equal(events.parsePointer('/~2').ok, false);
+  assert.equal(events.formatPointer(['a/b', '~c', 0]), '/a~1b/~0c/0');
+  const own = JSON.parse('{"__proto__": {"x": 1}, "list": [10, 20]}');
+  assert.deepEqual(events.getPointer(own, '/__proto__/x'), { found: true, value: 1 });
+  assert.deepEqual(events.getPointer({}, '/constructor'), { found: false });
+  assert.throws(() => events.getPointer(own, '/list/01'), events.EventsError);
+  assert.equal(events.relatePointers('/a/b', '/a/bc'), 'disjoint');
+  assert.equal(events.relatePointers('/to/0', '/to/0/name'), 'ancestor');
+  const nested = { a: [{ b: ['x', 'y'] }, { b: [] }, { b: ['z'] }], n: null };
+  assert.deepEqual(events.expandPattern(['a', { any: true }, 'b', { any: true }], nested), [
+    '/a/0/b/0',
+    '/a/0/b/1',
+    '/a/2/b/0',
+  ]);
+  assert.deepEqual(events.expandPattern(['n', 'x'], nested), []);
+  assert.equal(events.matchesPattern(['to', { any: true }, 'name'], '/to/12/name'), true);
+  assert.equal(events.matchesPattern(['to', { any: true }, 'name'], '/to/01/name'), false);
+  console.log('events consumer check: RFC 6901 pointers and pointer patterns, own properties only, OK');
+}
