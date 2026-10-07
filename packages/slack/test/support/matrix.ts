@@ -23,13 +23,14 @@ import { createSlackMcpServer } from '../../src/mcp/server.ts';
 import { beginApproval, finishApproval } from '../../src/operations/approve.ts';
 import type { FileDownloader } from '../../src/operations/files.ts';
 import { gateDepsFor } from '../../src/operations/gate.ts';
-import { prepareDraftPost } from '../../src/operations/post.ts';
+import { prepareDelete, prepareDraftPost, prepareEdit } from '../../src/operations/post.ts';
 import { prepareReaction } from '../../src/operations/send.ts';
 import { DROP, type FakeSlack, startFakeSlack } from './fake-slack.ts';
 import { type Harness, newHarness, tempDir } from './harness.ts';
 
 /*
- * Slack's posts, posts with files and reactions in the D2 matrix (CUE-404 Task 24): `test/approval-matrix.test.mjs`
+ * Slack's posts, posts with files, reactions, edits and deletions in the D2 matrix (CUE-404 Task 24; edits and
+ * deletions, design 2026-10-06): `test/approval-matrix.test.mjs`
  * runs this as its own program and holds what each must say. Each row starts from a post, a post with a file or a
  * reaction this package prepared itself, on a fresh home and a loopback Slack, with the approval store on a clock of
  * its own; `test/helpers/approval-matrix.mjs` puts it into the row's state.
@@ -38,7 +39,7 @@ import { type Harness, newHarness, tempDir } from './harness.ts';
  * and of a reaction (`approve`: its begin, then its finish), and `slack_approval_wait`.
  */
 
-type What = 'post' | 'files' | 'reaction';
+type What = 'post' | 'files' | 'reaction' | 'edit' | 'edit-files' | 'delete';
 
 interface ToolResult {
   isError?: boolean;
@@ -62,6 +63,8 @@ interface World {
 
 const TS = '1700000000.000100';
 const REACTION = { channel: 'C1', ts: '1.1', emoji: 'tada' };
+/** The message an edit and a deletion act on: this account's, in `C1`. */
+const MESSAGE = { channel: 'C1', ts: TS };
 const emit = emitter('send', 'slack');
 
 /** The provider call that is the outward act of each kind: the post, the files' share, the reaction. */
@@ -69,6 +72,9 @@ const ACT: Record<What, string> = {
   post: 'chat.postMessage',
   files: 'files.completeUploadExternal',
   reaction: 'reactions.add',
+  edit: 'chat.update',
+  'edit-files': 'chat.update',
+  delete: 'chat.delete',
 };
 
 async function prepare(context: SlackContext, fake: FakeSlack, what: What, alias: string, file: string) {
@@ -77,6 +83,15 @@ async function prepare(context: SlackContext, fake: FakeSlack, what: What, alias
     await lib.ensureSendEpochConfig(context.core, { now: context.now });
     const gate = await gateDepsFor(context, alias, { fetch: fake.fetch });
     const prepared = await prepareReaction(gate, { channel: REACTION.channel, ts: REACTION.ts, name: REACTION.emoji });
+    return { draftId: '', approvalId: prepared.approvalId };
+  }
+  if (what === 'edit' || what === 'edit-files') {
+    const words = what === 'edit' ? { text: 'shipping at noon' } : { files: [file] };
+    const prepared = await prepareEdit(context, alias, { ...MESSAGE, ...words }, { fetch: fake.fetch });
+    return { draftId: prepared.draftId, approvalId: prepared.approvalId };
+  }
+  if (what === 'delete') {
+    const prepared = await prepareDelete(context, alias, MESSAGE, { fetch: fake.fetch });
     return { draftId: '', approvalId: prepared.approvalId };
   }
   const prepared = await prepareDraftPost(
@@ -97,6 +112,13 @@ function worldOf(what: What) {
       'conversations.info': () => ({ ok: true, channel: { id: 'C1', name: 'eng', num_members: 4, is_member: true } }),
       'chat.postMessage': () => ({ ok: true, ts: TS }),
       'reactions.add': () => ({ ok: true }),
+      // This account's message, which an edit and a deletion act on: each workspace's account is `U0001`.
+      'conversations.history': () => ({
+        ok: true,
+        messages: [{ type: 'message', user: 'U0001', text: 'shipping now', ts: TS }],
+      }),
+      'chat.update': () => ({ ok: true, channel: 'C1', ts: TS }),
+      'chat.delete': () => ({ ok: true, channel: 'C1', ts: TS }),
     });
     fake.acceptUploads({ ts: TS });
     const docs = join(harness.home, 'docs');
@@ -221,7 +243,10 @@ async function mcp(w: World, pinned?: string) {
   };
 }
 
-/** The claim: `slack_post_send` for a post (with its file or not), `slack_react_send` for a reaction. */
+/**
+ * The claim: `slack_post_send` for a post (with its file or not), `slack_react_send` for a reaction, `slack_edit_send`
+ * for an edit and `slack_delete_send` for a deletion.
+ */
 async function claim(w: World, approvalId: string, pinned?: string): Promise<Observation> {
   const client = await mcp(w, pinned);
   try {
@@ -230,7 +255,17 @@ async function claim(w: World, approvalId: string, pinned?: string): Promise<Obs
     const result =
       w.what === 'reaction'
         ? await client.call('slack_react_send', { ...where, ...REACTION, approvalId })
-        : await client.call('slack_post_send', { ...where, draftId: w.draftId, approvalId, expectChannel: 'C1' });
+        : w.what === 'edit' || w.what === 'edit-files'
+          ? await client.call('slack_edit_send', {
+              ...where,
+              draftId: w.draftId,
+              approvalId,
+              expectChannel: 'C1',
+              ts: MESSAGE.ts,
+            })
+          : w.what === 'delete'
+            ? await client.call('slack_delete_send', { ...where, ...MESSAGE, approvalId })
+            : await client.call('slack_post_send', { ...where, draftId: w.draftId, approvalId, expectChannel: 'C1' });
     return observeTool(result, w.sends() - before);
   } finally {
     await client.close();
@@ -294,9 +329,20 @@ const NAMES: Record<What, { claim: string; approve: string; look: string }> = {
     approve: 'approve (terminal, a reaction)',
     look: 'slack_approval_wait (a reaction)',
   },
+  edit: { claim: 'slack_edit_send', approve: 'approve (terminal, an edit)', look: 'slack_approval_wait (an edit)' },
+  'edit-files': {
+    claim: 'slack_edit_send (an edit with a file)',
+    approve: 'approve (terminal, an edit with a file)',
+    look: 'slack_approval_wait (an edit with a file)',
+  },
+  delete: {
+    claim: 'slack_delete_send',
+    approve: 'approve (terminal, a deletion)',
+    look: 'slack_approval_wait (a deletion)',
+  },
 };
 
-for (const what of ['post', 'files', 'reaction'] as const) {
+for (const what of ['post', 'files', 'reaction', 'edit', 'edit-files', 'delete'] as const) {
   const surfaces: ReadonlyArray<MatrixSurface<World>> = [
     { name: NAMES[what].look, action: 'look', act: (w, id) => look(w, id) },
     { name: NAMES[what].claim, action: 'claim', act: (w, id) => claim(w, id) },

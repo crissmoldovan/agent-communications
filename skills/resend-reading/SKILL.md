@@ -2,7 +2,7 @@
 name: resend-reading
 description: "Read a Resend team — its domains, the sent emails and what happened to each, received email, delivery metrics and the suppression list — and report what was read without overstating it. Symptoms: 'is our domain verified', 'did the welcome email bounce', 'what came in to support@', 'how many complaints this week', 'why is this address not getting mail'. Not for sending — resend-sending does that."
 license: MIT
-compatibility: "@agentcomms/resend@0.14.0"
+compatibility: "@agentcomms/resend@0.14.1"
 metadata:
   group: communications
   lifecycle: release

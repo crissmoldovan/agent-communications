@@ -144,6 +144,8 @@ test('slack_workspace_add selects the profile app with omitted arguments and kee
     assert.equal(flow?.clientId, READ_CLIENT_ID);
     assert.equal(flow?.port, port);
     assert.equal(flow?.profile?.role, 'read');
+    // The profile names its workspace, so the link sends the browser there rather than wherever it was last.
+    assert.equal(new URL(started.authUrl).searchParams.get('team'), 'TRGC0001');
     const own = failed(await mcp.call('slack_workspace_add', { workspace: 'other/slack', clientId: TEST_CLIENT_ID }));
     assert.equal(own.code, 'USAGE');
     assert.match(own.message, /port/i);
@@ -230,6 +232,7 @@ test('connecting in read starts at once and returns the link; finishing records 
     assert.equal(started.mode, 'read');
     assert.equal(started.reauth, false);
     assert.doesNotMatch(started.authUrl, /chat%3Awrite/, 'a read sign-in asks for no posting');
+    assert.equal(new URL(started.authUrl).searchParams.has('team'), false, 'an own app names no workspace');
     assert.deepEqual(started.finish, {
       tool: 'slack_workspace_finish',
       // This installation's own command, located; never a bare `agent-slack` (CUE-403).
@@ -346,6 +349,8 @@ test('a renewal starts at once; read → send by reauth is approved first', asyn
     await track(harness, renewal.flowId);
     assert.equal(renewal.reauth, true);
     assert.equal(renewal.mode, 'read', 'its own mode, not a default');
+    // A renewal must come back as the same workspace, so the link names it.
+    assert.equal(new URL(renewal.authUrl).searchParams.get('team'), 'T0001');
     assert.equal(
       renewal.finish.command,
       slackCommand(harness.core.paths, ['workspace', 'reauth', 'acme', '--finish', renewal.flowId], 'darwin'),

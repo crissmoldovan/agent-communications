@@ -2,7 +2,7 @@
 name: slack-setup
 description: "Connect a Slack workspace to agent-slack: the app manifest, the PKCE sign-in, read and send modes, and what doctor reports. Symptoms: 'connect my Slack', 'set up agent-slack', 'why can't it post', 'move this workspace to send mode', 'agent-slack doctor says something is wrong'. Not for reading or posting once it works — slack-reading and slack-posting do those."
 license: MIT
-compatibility: "@agentcomms/slack@0.14.0"
+compatibility: "@agentcomms/slack@0.14.1"
 metadata:
   group: communications
   lifecycle: release
@@ -115,6 +115,9 @@ If a profile sign-in ends before a token is stored, report Slack's error and des
 available and say the sign-in did not complete. The person may have declined, or the workspace may
 require an administrator to approve the app; never state that the person declined as a fact. Name
 the organisation, workspace name and id, and the profile app's role and Client ID from the result.
+If the person says Slack's page showed `invalid_team_for_non_distributed_app`, their browser was
+signed in to another workspace: ask them to sign in to the workspace the profile names in that
+browser, then start the sign-in again — not to ask an administrator.
 If an MCP client cancels a waiting `slack_workspace_finish`, the detached sign-in stays open and can
 be finished later. Interrupting a detached CLI `workspace add --finish` or `reauth --finish` also
 leaves the flow open: after consent, run `--finish` again. Interrupting a foreground sign-in ends its
@@ -205,6 +208,7 @@ learns when with `slack_approval_wait` — and under `never` nothing posts — s
 | `slack_file_download` | `agent-slack files download` — see `slack-reading` |
 | `slack_post_prepare`, `slack_draft_list`, `slack_draft_get`, `slack_draft_delete` | `agent-slack draft …` and `agent-slack post prepare` — see `slack-posting` |
 | `slack_post_send`, `slack_react`, `slack_react_send` | `agent-slack post send`, `agent-slack react` — see `slack-posting` |
+| `slack_edit_prepare`, `slack_edit_send`, `slack_delete_prepare`, `slack_delete_send` | `agent-slack edit …` and `agent-slack delete …` — see `slack-posting` |
 
 `slack_mode_request_send`, `slack_mode_narrow` and `slack_manifest` return steps and change nothing. A server
 pinned to one workspace offers no `slack_workspace_add` or `slack_workspace_remove`: it reaches that workspace and no

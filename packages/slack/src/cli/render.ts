@@ -14,6 +14,7 @@ import {
 import type { SlackDraft } from '../compose/drafts.ts';
 import { handoffsSentence } from '../handoffs.ts';
 import { renderManifest } from '../manifest.ts';
+import type { DeletedMessage, EditedMessage } from '../operations/amend.ts';
 import type { AppCreated, AppUpdated } from '../operations/app.ts';
 import type { AppUpdateNeeded, PolicyResult } from '../operations/changes.ts';
 import type { DoctorResult } from '../operations/doctor.ts';
@@ -315,6 +316,20 @@ export function renderPosted(posted: PostedMessage | PostedFiles): string {
       (file) => `  ${file.id}  ${truncateDisplay(file.name, 80)} · ${describeSize(file.size)} · sha256 ${file.sha256}`,
     ),
   ].join('\n');
+}
+
+/** What `edit send` and `delete send` did: the message, and anything else true of it, as `renderPosted` says it. */
+export function renderChanged(done: EditedMessage | DeletedMessage, act: 'edit' | 'delete'): string {
+  const after =
+    done.note === undefined
+      ? ''
+      : ` ${done.note.charAt(0).toUpperCase()}${done.note.slice(1)}${/[.!?]$/.test(done.note) ? '' : '.'}`;
+  const head = `${act === 'edit' ? 'Edited' : 'Deleted'} the message at ${done.ts} in ${done.channel}.${after}`;
+  // An edit that changed the files says which the message has now, by id and name, as `post send` lists a post's.
+  const files = 'files' in done ? done.files : undefined;
+  if (files === undefined) return head;
+  if (files.length === 0) return `${head}\n  It has no files now.`;
+  return [head, ...files.map((file) => `  ${file.id}  ${truncateDisplay(file.name, 80)}`)].join('\n');
 }
 
 /** What `draft delete` removed — and, for a draft nobody could read, that what it said is gone unseen. */

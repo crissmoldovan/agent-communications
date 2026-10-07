@@ -43,6 +43,20 @@ test('the url carries the PKCE challenge, never the verifier', () => {
   assert.equal(url.searchParams.get('state'), request.state);
 });
 
+test('the url names the workspace the sign-in must land in, and only when one is known', () => {
+  /*
+   * An organisation's app is not distributed, so Slack authorises it only in the workspace that made it — and with
+   * no `team`, Slack signs the person in to whichever workspace their browser was last in. A member signed in to
+   * another one met `invalid_team_for_non_distributed_app` on Slack's own page, and nothing came back to the listener.
+   */
+  const known = buildAuthorizeUrl({ clientId: CLIENT, mode: 'read', port: 51234, team: 'TJYMH92Q2' });
+  assert.equal(new URL(known.url).searchParams.get('team'), 'TJYMH92Q2');
+
+  // An own app's workspace is not known until Slack answers, so nothing is guessed.
+  const unknown = buildAuthorizeUrl({ clientId: CLIENT, mode: 'read', port: 51234 });
+  assert.equal(new URL(unknown.url).searchParams.has('team'), false);
+});
+
 test('the redirect is localhost, which is the spelling Slack documents', () => {
   /*
    * The Gmail side deliberately uses `127.0.0.1`, because `localhost` resolves to whatever a name service says.

@@ -48,8 +48,10 @@ Scripts should read these rather than parse output.
 | [`draft`](#agent-slack-draft) | compose and keep messages locally; nothing reaches Slack |
 | [`post`](#agent-slack-post) | take a draft through the approval gate |
 | [`react`](#agent-slack-react) | add a reaction or remove your reaction. Behind the same gate, at lower ceremony |
+| [`edit`](#agent-slack-edit) | change the words of a message this account posted, through the gate |
+| [`delete`](#agent-slack-delete) | delete a message this account posted, through the gate |
 | [`approval`](#agent-slack-approval) | where an approval stands |
-| [`approve`](#agent-slack-approve) | approve a post, a reaction or a change at this terminal: read it, then type the code back — or answer where a download is saved |
+| [`approve`](#agent-slack-approve) | approve a post, a reaction, an edit, a deletion or a change at this terminal: read it, then type the code back — or answer where a download is saved |
 | [`mcp`](#agent-slack-mcp) | run the MCP server on stdio, for a coding agent to connect to |
 
 ### `agent-slack manifest`
@@ -458,6 +460,82 @@ agent-slack react [options]
 | `--remove` | remove your reaction instead | `false` |
 | `--approval <approvalId>` | the approval a person gave with `approve`, under `confirm` | — |
 
+### `agent-slack edit`
+
+change the words of a message this account posted, through the gate
+
+```
+agent-slack edit [options] [command]
+```
+
+### `agent-slack edit prepare`
+
+show the message as it is and as it would be, and how many people see it. Changes nothing
+
+```
+agent-slack edit prepare [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
+| `--draft <draftId>` | the draft holding the new words and files to add, in the message’s channel — with no words, the message keeps its own | — |
+| `--ts <ts>` | the message to edit | — |
+| `--remove-file <fileId...>` | take this file of the message off it, by id; it stays in Slack, shared nowhere | — |
+
+### `agent-slack edit send`
+
+make a prepared edit. Refuses unless the approval, the draft, the message and the room are what they were
+
+```
+agent-slack edit send [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
+| `--draft <draftId>` | the draft | — |
+| `--approval <approvalId>` | the approval `edit prepare` returned | — |
+| `--expect-channel <id>` | the channel you believe the message is in | — |
+| `--ts <ts>` | the message you believe this edits | — |
+
+### `agent-slack delete`
+
+delete a message this account posted, through the gate
+
+```
+agent-slack delete [options] [command]
+```
+
+### `agent-slack delete prepare`
+
+show the message that would be deleted, and what stays behind. Deletes nothing
+
+```
+agent-slack delete prepare [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
+| `--channel <id>` | the conversation the message is in | — |
+| `--ts <ts>` | the message to delete | — |
+
+### `agent-slack delete send`
+
+delete a message as prepared. Refuses unless the approval and the message are what they were
+
+```
+agent-slack delete send [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
+| `--channel <id>` | the conversation the message is in | — |
+| `--ts <ts>` | the message | — |
+| `--approval <approvalId>` | the approval `delete prepare` returned | — |
+
 ### `agent-slack approval`
 
 where an approval stands
@@ -480,7 +558,7 @@ agent-slack approval wait [options] <approvalId>
 
 ### `agent-slack approve`
 
-approve a post, a reaction or a change at this terminal: read it, then type the code back — or answer where a download is saved
+approve a post, a reaction, an edit, a deletion or a change at this terminal: read it, then type the code back — or answer where a download is saved
 
 ```
 agent-slack approve [options] <approvalId>

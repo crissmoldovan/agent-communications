@@ -119,12 +119,17 @@ agent with a shell, and it does not stop a different Gmail server installed besi
 Slack's read and write scopes are disjoint, so the default `read` mode is a token Slack itself will not let post —
 no bug here can change that. In `send` mode the gate is the same shape as Gmail's, with two differences that come
 from Slack: every way of putting something in front of people (`chat.postMessage`, a file share's comment, a
-reaction) is behind the one permit, and the approval covers how many people the post reaches, so a room that grew
-after the preview voids it. Both surfaces post through that one gate: `slack_post_prepare` returns the preview, and
-`slack_post_send` (or `agent-slack post send`) posts it once the approval allows — a yes in the conversation under
-`chat`, the approve command the result gives, at the person's own terminal under `confirm`, which no tool can run —
-the agent learns that it was with `slack_approval_wait`. Each step of a post — each upload, the share, the message, a
-reaction — starts only after a fence on the approval's lease, so a long file post stays `sending` while it renews.
+reaction, an edit or a deletion of a message) is behind the one permit, and the approval covers how many people the
+post reaches, so a room that grew after the preview voids it. Both surfaces post through that one gate:
+`slack_post_prepare` returns the preview, and `slack_post_send` (or `agent-slack post send`) posts it once the
+approval allows — a yes in the conversation under `chat`, the approve command the result gives, at the person's own
+terminal under `confirm`, which no tool can run — the agent learns that it was with `slack_approval_wait`. Each step of a post — each upload, the share, the message, a
+reaction, an edit, a deletion — starts only after a fence on the approval's lease, so a long file post stays
+`sending` while it renews.
+
+An edit or a deletion acts on a message this account posted, and on nobody else's: the message is read from Slack and
+refused before any preview unless its author is the connected account, and the approval binds it as it was read, so
+a message changed in Slack after the preview voids it ([design](superpowers/specs/2026-10-06-slack-edit-delete-design.md)).
 
 A post can carry local files, chosen by the attachment jail Gmail uses (under the home folder, never from its hidden
 folders). The draft records each by real path, name, size, type and SHA-256; the preview lists them and the digest

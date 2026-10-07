@@ -3,6 +3,47 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**Slack: edit or delete a message this account posted — its words, its files, or the whole message — through the
+gate a post goes through.** An agent that posted a typo, the wrong figure, the wrong chart or to the wrong thread could
+only ask you to fix it in Slack. Now:
+- **`slack_edit_prepare` and `slack_edit_send`** — `agent-slack edit prepare --draft <id> --ts <ts>` and `edit send` —
+  change a message's words, add files, take files off (`removeFiles`, `--remove-file`), or replace one by doing both.
+  The preview shows the words now and after, the files it keeps, removes and attaches — each new one by name, size,
+  type and SHA-256 — and counts who sees it as a post's does. Leave the words out to keep them exactly, mentions and
+  all. New files are checked and bound by hash, go up shared nowhere, and are attached by the edit itself; a file taken
+  off stays in Slack, shared nowhere. The edit is sent as text, so Slack marks the message edited, and it works on a
+  message typed in Slack too.
+- **`slack_delete_prepare` and `slack_delete_send`** — `agent-slack delete prepare --channel <id> --ts <ts>` and
+  `delete send` — delete one. The preview shows the message, and the replies and files that are not deleted with it.
+  A deletion is at the workspace's own policy, like a post.
+- **Only your own messages.** Both read the message from Slack first and refuse one the connected account did not
+  write, before any preview — a deletion too, even where Slack would let an admin's account delete anybody's.
+- **What you approved is what happens.** The approval binds the message as it was read: one edited in Slack after the
+  preview, or a deletion's thread that gained a reply, voids it. `approve` shows an edit's and a deletion's preview
+  and reads the message again first. Outcomes are recorded as a post's are; a deletion Slack answers
+  `message_not_found` is done, with a note saying there was nothing left to delete.
+- What `chat.update` does with files is not in Slack's reference, so it was observed against a real workspace first:
+  the list it is given replaces the message's files. Both acts use `chat:write`, which `send` mode already has;
+  changing files also needs `files:write`, which it has too.
+
+## 0.14.1
+
+**Connecting Slack through your organisation's app works when your browser is in another workspace.** An
+organisation's Slack app is made in its own workspace and is not distributed, so Slack will sign you in to it only
+there. The sign-in link did not say which workspace that was, so Slack used whichever one your browser was last in:
+someone also signed in to a second workspace got "Something went wrong when authorizing this app" with
+`invalid_team_for_non_distributed_app` on Slack's page, and the sign-in never came back. Now:
+- **The link names the workspace.** A sign-in through an organisation profile, and every `workspace reauth`, carries
+  the workspace's id (`team=T…`), so a browser already signed in to it goes straight there. Connecting your own app for
+  the first time is unchanged: which workspace it belongs to is only known once Slack answers.
+- **A sign-in that never comes back says why it may not have.** When a profile sign-in times out, the message now
+  says that if Slack's page showed `invalid_team_for_non_distributed_app`, the browser was in another workspace: sign
+  in to the one the profile names, in that browser, and start again. Before, it said only to ask an administrator.
+- If you are not signed in to that workspace in the browser at all, Slack asks you to choose one and ignores the
+  link's: choose your organisation's. `docs/troubleshooting.md` has the steps.
+
 ## 0.14.0
 
 **Approving a send no longer races the clock.** One email to a colleague, from Claude Code, took four attempts and

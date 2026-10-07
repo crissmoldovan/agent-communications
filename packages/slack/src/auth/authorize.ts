@@ -49,11 +49,19 @@ export interface AuthorizeRequest {
  * Only `user_scope` is set, never `scope`. Two independent reasons, either sufficient: a user token is the only
  * one that reaches the person's DMs and unjoined public channels (research §1.3), and Slack states "desktop
  * redirects are not allowed to request bot scopes" — and this is a desktop redirect.
+ *
+ * `team` is set whenever the workspace is known before Slack answers: a profile names it, and a renewal must come back
+ * as the account's own. An app that is not distributed is authorised only in the workspace that created it, and with
+ * no `team` Slack uses whichever workspace the browser was last signed in to — so a person also signed in to another
+ * one meets `invalid_team_for_non_distributed_app` on Slack's own page, and nothing comes back to the listener. Slack
+ * documents that `team` "ensures the user will auth against that workspace" when they are signed in to it. An own app's
+ * first sign-in names none, because which workspace it belongs to is only learnt from the exchange.
  */
 export function buildAuthorizeUrl(options: {
   clientId: string;
   mode: InstallMode;
   port: number;
+  team?: string | undefined;
   pkce?: PkcePair;
   state?: string;
 }): AuthorizeRequest {
@@ -69,6 +77,7 @@ export function buildAuthorizeUrl(options: {
   url.searchParams.set('state', state);
   url.searchParams.set('code_challenge', pkce.challenge);
   url.searchParams.set('code_challenge_method', pkce.method);
+  if (options.team) url.searchParams.set('team', options.team);
 
   return { url: url.href, state, pkce, redirectUrl, scopes };
 }

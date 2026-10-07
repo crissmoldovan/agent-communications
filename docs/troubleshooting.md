@@ -427,6 +427,18 @@ The port in the app's manifest and the port given to `workspace add` differ. Sla
 so they must be the same number: `agent-slack manifest --port 51234` and
 `agent-slack workspace add acme/slack --client-id <id> --port 51234`.
 
+### Slack says `invalid_team_for_non_distributed_app`
+
+Slack's page says "Something went wrong when authorizing this app", and the sign-in never comes back. The app was
+made in one workspace and is not distributed, so Slack authorises it there only — and the browser was signed in to a
+different one. It happens most with an organisation's app, for someone signed in to several workspaces.
+
+A sign-in through an organisation profile, and every `workspace reauth`, puts the workspace's id in the link
+(`team=T…`), which takes a browser already signed in to that workspace straight to it. Up to 0.14.0 the link carried
+none, so update first. Then sign in to that workspace in the same browser — the profile names it, and so does the
+error when the sign-in times out — and start the sign-in again. An own app's first sign-in names no workspace, so
+pick the one you made the app in on Slack's page.
+
 ### The agent has no `slack_*` tools
 
 The workspace is connected but the server is not registered with the client:

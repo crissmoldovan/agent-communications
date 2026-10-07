@@ -170,10 +170,15 @@ export function urlsInWords(text: string): string[] {
  */
 function unfurlWarnings(files: readonly SlackDraftFile[], urls: readonly string[]): string[] {
   if (files.length === 0 || urls.length === 0) return [];
-  return [
-    'Slack may fetch a link in this post’s words and show its preview to everyone in the channel: Slack offers no way to turn that off for a post with files. To keep a link from unfurling, post it as a message of its own.',
-  ];
+  return [FILE_POST_UNFURLS];
 }
+
+/**
+ * The warning `unfurlWarnings` gives a post with files. Exported so an edit with files, which warns about unfurling in
+ * its own words — its links go out through `chat.update`, not a file share — can leave the post's out.
+ */
+export const FILE_POST_UNFURLS =
+  'Slack may fetch a link in this post’s words and show its preview to everyone in the channel: Slack offers no way to turn that off for a post with files. To keep a link from unfurling, post it as a message of its own.';
 
 /** Warnings about the person's own text: not refusals, just what a reader should notice before saying yes. */
 function warningsOf(text: string): string[] {

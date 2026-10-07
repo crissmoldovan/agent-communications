@@ -143,7 +143,7 @@ export interface PrepareDeps {
 }
 
 /** The channel, and how many people are in it — or why that could not be established. */
-async function roomOf(
+export async function roomOf(
   call: SlackCall,
   channelId: string,
 ): Promise<{ channel: Channel | undefined; members: number | undefined; why: string | undefined }> {
@@ -206,7 +206,7 @@ export const CONTAINS_FILES = 'contains-files';
 export const LINK_MAY_UNFURL = 'link-may-unfurl';
 
 /** Anything about this post a person should look at twice. Flags, never refusals. */
-function risksOf(
+export function risksOf(
   payload: { text: string },
   notifies: { channel: boolean; here: boolean; estimated: number; unknown?: string | undefined },
   files: number,
@@ -393,7 +393,7 @@ export function requireFileSending(
 }
 
 /** The jail's folders, which every file post needs — and which only a caller that built its deps by hand could lack. */
-function attachPolicyFor(deps: Pick<PrepareDeps, 'attachPolicy'>): AttachPolicy {
+export function attachPolicyFor(deps: Pick<PrepareDeps, 'attachPolicy'>): AttachPolicy {
   if (deps.attachPolicy === undefined) {
     throw new CommsError('SEND_REFUSED', 'a post with files was prepared without the folders files may come from', {
       hint: 'This is a bug — please report it.',
@@ -418,7 +418,7 @@ export function refileCommand(workspace: string, draftId: string, handoffs: CliH
  * bytes other than the ones listed. The draft's record is what the digest binds, so a file that changed since is
  * refused here rather than shown as its old self.
  */
-async function filesAsRecorded(
+export async function filesAsRecorded(
   deps: Pick<PrepareDeps, 'attachPolicy' | 'workspaceName' | 'handoffs'>,
   draft: SlackDraft,
 ): Promise<void> {
@@ -637,21 +637,24 @@ export function approveCommand(approvalId: string, handoffs: CliHandoffs): Hando
  * own, and this may be printed at a terminal.
  */
 export function waitingHint(
-  kind: 'post' | 'reaction',
+  kind: 'post' | 'reaction' | 'edit' | 'delete',
   surface: 'cli' | 'mcp' | undefined,
   approvalId: string,
   handoffs: CliHandoffs,
 ): string {
   const show =
-    kind === 'post' ? 'Show the user the preview, then' : 'Tell the user which emoji and which message, then';
+    kind === 'reaction' ? 'Tell the user which emoji and which message, then' : 'Show the user the preview, then';
+  // An edit and a deletion are sent as a post is: the same call, made again (design 2026-10-06 §E9).
+  const sendTool = { post: 'slack_post_send', edit: 'slack_edit_send', delete: 'slack_delete_send' } as const;
+  const sendCommand = { post: 'post send', edit: 'edit send', delete: 'delete send' } as const;
   const again =
     surface === 'mcp'
-      ? kind === 'post'
-        ? 'call `slack_post_send` again with the same arguments'
-        : `call \`slack_react_send\` with approvalId ${approvalId} and the same channel, ts and emoji`
-      : kind === 'post'
-        ? 'run the same post send command again'
-        : `run the same react command again with \`--approval ${approvalId}\` added`;
+      ? kind === 'reaction'
+        ? `call \`slack_react_send\` with approvalId ${approvalId} and the same channel, ts and emoji`
+        : `call \`${sendTool[kind]}\` again with the same arguments`
+      : kind === 'reaction'
+        ? `run the same react command again with \`--approval ${approvalId}\` added`
+        : `run the same ${sendCommand[kind]} command again`;
   // Terminal-only under `confirm`: with no command here, the sentence saying why, and no other way to approve it. With
   // one, the wait that learns when they have used it, as this surface takes it (design 2026-10-05 §D7).
   const ask = approveAndWaitSentence(handoffs, surface ?? 'cli', approvalId, (command, wait) =>
@@ -686,7 +689,11 @@ function approvalOfError(error: unknown): ApprovalObject | null {
  * Where a claimed post's approval stands now, read under its lock — or, when that read fails, what `fallback` said: a
  * report never turns into a failure of the post it reports on.
  */
-async function approvalNow(deps: PostDeps, approvalId: string, fallback: ApprovalObject): Promise<ApprovalObject> {
+export async function approvalNow(
+  deps: PostDeps,
+  approvalId: string,
+  fallback: ApprovalObject,
+): Promise<ApprovalObject> {
   try {
     return (await deps.approvals.inspect(approvalId, { kind: 'send', owner: deps.accountId })).outcome.approval;
   } catch {
@@ -695,7 +702,7 @@ async function approvalNow(deps: PostDeps, approvalId: string, fallback: Approva
 }
 
 /** `error`, saying where its approval stands now that it is settled — whatever it said of it before. */
-function settledWith(error: unknown, approval: ApprovalObject): unknown {
+export function settledWith(error: unknown, approval: ApprovalObject): unknown {
   if (!(error instanceof CommsError)) return error;
   return new CommsError(error.code, error.message, {
     ...(error.hint === undefined ? {} : { hint: error.hint }),
@@ -725,14 +732,14 @@ const POSTED_ANYWAY =
  * exactly this, never an id made up and never `used`. The approval stays `sending`, and reads `unknown` once its lease
  * runs out.
  */
-const NO_ID = 'sent; the provider returned no id';
+export const NO_ID = 'sent; the provider returned no id';
 
 /** What its audit record says in place of the id it omits. */
-const ACCEPTED_WITHOUT_ID =
+export const ACCEPTED_WITHOUT_ID =
   'accepted without an id: the approval is not marked used, and reads unknown once its lease runs out';
 
 /** A provider id, or absence: `undefined`, `null`, `''` and anything not a string are no id at all — never `''`. */
-function providerId(value: unknown): string | undefined {
+export function providerId(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
@@ -749,12 +756,17 @@ function providerId(value: unknown): string | undefined {
  * caught before the claim, because it is the same outcome: nothing was posted, and the approval is unused.
  *
  * Everything else the claim throws goes out exactly as the store threw it.
+ *
+ * `unclaimed` is what a cancellation before the claim says, in the words of the act: a post's, unless an edit or a
+ * deletion gives its own (design 2026-10-06), so nobody is told "nothing was posted" about a message they asked to
+ * delete.
  */
-async function claimOrHandOver(
+export async function claimOrHandOver(
   deps: PostDeps,
   approvalId: string,
   live: Parameters<PostDeps['approvals']['claimForSend']>[1],
   pendingHint: string,
+  unclaimed: () => CommsError = () => cancelledPost(NOT_USED),
 ): Promise<{ claimToken: string; claimed: ApprovalObject }> {
   try {
     const { claimToken, approval } = await deps.approvals.claimForSend(approvalId, live, {
@@ -764,7 +776,7 @@ async function claimOrHandOver(
     });
     return { claimToken, claimed: approval };
   } catch (error) {
-    if (isCancelledPost(error)) throw withApproval(cancelledPost(NOT_USED), approvalOfError(error));
+    if (isCancelledPost(error)) throw withApproval(unclaimed(), approvalOfError(error));
     if (!(error instanceof CommsError) || error.code !== 'APPROVAL_PENDING') throw error;
     // Another call's send under way is not waiting for a person: no approve command for it.
     if (error.details?.state === 'sending') throw error;
@@ -927,12 +939,12 @@ async function postClassified(
 }
 
 /** A failure's message, whatever was thrown. */
-function messageOf(error: unknown): string {
+export function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 /** What a result's note says: each thing worth saying, in order, or nothing at all. */
-function noteOf(said: readonly (string | undefined)[]): string | undefined {
+export function noteOf(said: readonly (string | undefined)[]): string | undefined {
   return said.filter((one) => one !== undefined).join('; ') || undefined;
 }
 
@@ -943,7 +955,7 @@ function noteOf(said: readonly (string | undefined)[]): string | undefined {
  * (`lease-lost-before-send`), and this audits it and throws the refusal saying nothing was sent, with where the
  * approval stands.
  */
-async function fenceFirstStep(
+export async function fenceFirstStep(
   deps: PostDeps,
   approvalId: string,
   claim: { claimToken: string; claimed: ApprovalObject },
@@ -1142,7 +1154,7 @@ const PUBLISH_FILES = 'files.completeUploadExternal';
 const SHARE_WAITS_MS: readonly number[] = [0, 250, 750, 2000];
 
 /** Who uploaded what, in words: for a failure after some files had gone up and before any was shared. */
-function discarded(uploaded: readonly { name: string }[]): string {
+export function discarded(uploaded: readonly { name: string }[]): string {
   if (uploaded.length === 0) return '';
   const names = uploaded.map((file) => truncateDisplay(file.name, 60));
   return uploaded.length === 1
@@ -1154,7 +1166,7 @@ function discarded(uploaded: readonly { name: string }[]): string {
  * A file whose bytes went out and whose answer did not come back as success, in words: a 500 after the body was read,
  * or a connection dropped. Whether Slack kept them is not known, so it is said to be possible, never either way.
  */
-function perhapsDiscarded(possible: readonly { name: string }[]): string {
+export function perhapsDiscarded(possible: readonly { name: string }[]): string {
   if (possible.length === 0) return '';
   const names = possible.map((file) => truncateDisplay(file.name, 60)).join(', ');
   return `${names} may have been uploaded before the failure; nothing shared it, so if Slack has it, Slack discards it.`;
@@ -1607,7 +1619,7 @@ function reactionIds(options: ReactionOptions): Record<string, string> {
 }
 
 /** Keeps Slack's refusal as the error, adding only what failed while this tried to record it. */
-function refusalWithBookkeeping(error: CommsError, unrecorded: readonly string[]): CommsError {
+export function refusalWithBookkeeping(error: CommsError, unrecorded: readonly string[]): CommsError {
   if (unrecorded.length === 0) return error;
   const said = unrecorded.join('; ');
   const sentence = `${said.slice(0, 1).toUpperCase()}${said.slice(1)}.`;

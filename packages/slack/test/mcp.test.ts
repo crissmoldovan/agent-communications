@@ -159,7 +159,13 @@ test('the tools that reach people say what approval they need, and the one that 
     for (const posting of ['slack_post', 'slack_send', 'slack_reaction_add']) {
       assert.ok(!names.includes(posting), `${posting} is a way round the prepared post`);
     }
-    for (const outward of ['slack_post_send', 'slack_react', 'slack_react_send']) {
+    for (const outward of [
+      'slack_post_send',
+      'slack_react',
+      'slack_react_send',
+      'slack_edit_send',
+      'slack_delete_send',
+    ]) {
       const tool = tools.find((candidate) => candidate.name === outward);
       assert.ok(tool, `${outward} is part of the agent's surface`);
       assert.match(String(tool.description), /approve command/, `${outward} says a person runs the approve command`);
@@ -177,6 +183,14 @@ test('the tools that reach people say what approval they need, and the one that 
     }
     const prepare = tools.find((tool) => tool.name === 'slack_post_prepare');
     assert.match(String(prepare?.description), /Nothing is posted/i);
+    // An edit and a deletion are prepared as a post is, and each says nothing changes until a person says yes.
+    const editPrepare = tools.find((tool) => tool.name === 'slack_edit_prepare');
+    assert.match(String(editPrepare?.description), /Nothing is changed/);
+    assert.match(String(editPrepare?.description), /anyone else wrote is refused/);
+    const deletePrepare = tools.find((tool) => tool.name === 'slack_delete_prepare');
+    assert.match(String(deletePrepare?.description), /Nothing is deleted/);
+    assert.match(String(deletePrepare?.description), /anyone else wrote is refused/);
+    assert.match(String(tools.find((tool) => tool.name === 'slack_delete_send')?.description), /cannot be undone/);
   } finally {
     await close();
   }
@@ -533,6 +547,10 @@ test('no tool approves, and the only tools that change a workspace are the named
       'slack_post_send',
       'slack_react',
       'slack_react_send',
+      'slack_edit_prepare',
+      'slack_edit_send',
+      'slack_delete_prepare',
+      'slack_delete_send',
       'slack_doctor',
       'slack_manifest',
       'slack_workspace_show',
@@ -555,10 +573,15 @@ test('every tool says whether it writes and whether it reaches Slack', async () 
     }
     const writers = tools.filter((tool) => tool.annotations?.readOnlyHint === false).map((tool) => tool.name);
     assert.deepEqual(writers.sort(), [
+      // A deletion's and an edit's prepare write an approval, as a post's does; nothing changes in Slack.
+      'slack_delete_prepare',
+      'slack_delete_send',
       'slack_draft_create',
       'slack_draft_delete',
       // It replaces what a draft said, on this machine; nothing reaches Slack.
       'slack_draft_update',
+      'slack_edit_prepare',
+      'slack_edit_send',
       // It writes files on this machine, as `gmail_attachment_download` does — never over one, so not destructive.
       'slack_file_download',
       'slack_mode_set',
@@ -572,10 +595,12 @@ test('every tool says whether it writes and whether it reaches Slack', async () 
       'slack_workspace_reauth',
       'slack_workspace_remove',
     ]);
-    // A post cannot be taken back once people have read it, nor a deleted token, and a client that asks before such a
-    // call must know.
+    // A post cannot be taken back once people have read it, nor an edit or a deletion, nor a deleted token, and a client
+    // that asks before such a call must know.
     for (const irreversible of [
+      'slack_delete_send',
       'slack_draft_delete',
+      'slack_edit_send',
       'slack_post_send',
       'slack_react',
       'slack_react_send',
@@ -584,6 +609,12 @@ test('every tool says whether it writes and whether it reaches Slack', async () 
       const tool = tools.find((candidate) => candidate.name === irreversible);
       assert.equal(tool?.annotations?.destructiveHint, true, `${irreversible} is marked destructive`);
       assert.equal(tool?.annotations?.idempotentHint ?? false, false, `${irreversible} is not safe to repeat`);
+    }
+    // Preparing an edit or a deletion changes nothing in Slack: it reads the message and writes an approval.
+    for (const prepare of ['slack_edit_prepare', 'slack_delete_prepare']) {
+      const tool = tools.find((candidate) => candidate.name === prepare);
+      assert.equal(tool?.annotations?.destructiveHint, false, `${prepare} is not destructive`);
+      assert.equal(tool?.annotations?.openWorldHint, true, `${prepare} reads Slack`);
     }
     // A download creates files and never replaces one, and it reaches Slack for them.
     const download = tools.find((candidate) => candidate.name === 'slack_file_download');

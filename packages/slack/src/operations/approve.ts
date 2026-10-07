@@ -9,14 +9,30 @@ import {
 } from '@agentcomms/core';
 import { openDraftStore, type SlackDraft } from '../compose/drafts.ts';
 import type { SlackContext } from '../context.ts';
+import {
+  type DeletionView,
+  deletionOfApproval,
+  type EditView,
+  editOfApproval,
+  renderDeletionPreview,
+  viewDeletion,
+  viewEdit,
+} from './amend.ts';
 import { gateDepsFor } from './gate.ts';
 import { NameBook } from './people.ts';
-import { type PostView, REACH_UNKNOWN, type ReactionOptions, reactionOfApproval, viewPost } from './send.ts';
+import {
+  filesAsRecorded,
+  type PostView,
+  REACH_UNKNOWN,
+  type ReactionOptions,
+  reactionOfApproval,
+  viewPost,
+} from './send.ts';
 import type { SessionDeps } from './session.ts';
 import { requireWorkspace } from './workspaces.ts';
 
 /**
- * Approving a post or a reaction at a terminal.
+ * Approving a post, a reaction, an edit or a deletion at a terminal.
  *
  * Separate from posting, and that separation is the point: an agent that could approve and post in one step could
  * post anything it liked. This command approves and does not post; the posting is a second act, which the
@@ -26,13 +42,16 @@ import { requireWorkspace } from './workspaces.ts';
  * caller claimed was displayed.
  */
 
-/** What this command approves: a Slack send — a post or a reaction — and nothing of another channel's (§D2). */
+/**
+ * What this command approves: a Slack send — a post, a reaction, an edit or a deletion — and nothing of another
+ * channel's (§D2).
+ */
 const SLACK_SEND = { kind: 'send', channel: 'slack' } as const;
 
 export interface ApprovalPrompt {
   readonly approvalId: string;
   /** What the approval permits, so the command can say what it did and did not do. */
-  readonly kind: 'post' | 'reaction';
+  readonly kind: 'post' | 'reaction' | 'edit' | 'delete';
   /** The preview as a person should read it, rendered from what the approval is bound to. */
   readonly preview: string;
   /** The code to type back. Never stored; only its hash is. */
@@ -174,10 +193,119 @@ async function currentPost(
   return { draft, view };
 }
 
+/** Revokes an approval whose act is no longer the one it was prepared for, and returns the refusal to throw. */
+async function voidIntegrity(
+  context: SlackContext,
+  approvalId: string,
+  reason: string,
+  act: 'edit' | 'deletion',
+): Promise<CommsError> {
+  const voided = await context.core.approvals.revoke(approvalId, reason, {
+    disposition: 'integrity',
+    expect: { kind: 'send' },
+  });
+  return new CommsError('APPROVAL_VOID', `nothing was approved: ${reason}`, {
+    hint: `Prepare the ${act} again, and approve the preview that prints.`,
+    details: {
+      approvalId,
+      approval: voided.form === 'v2' ? await context.core.approvals.approvalOf(voided.record) : null,
+    },
+  });
+}
+
+/**
+ * The deletion as it would be made now, and only if that is still what the approval binds — `currentPost` for a
+ * deletion. The message is read again; one edited in Slack since the preview, or whose thread gained a reply, is not
+ * what the person was shown, so its approval is void rather than offered to them.
+ */
+async function currentDeletion(
+  context: SlackContext,
+  record: ApprovalRecord,
+  workspace: string,
+  where: { channel: string; ts: string },
+  deps: SessionDeps,
+): Promise<DeletionView> {
+  const gate = await gateDepsFor(context, workspace, deps);
+  const view = await viewDeletion(gate, where, new NameBook());
+  if (view.digest !== record.contentDigest) {
+    throw await voidIntegrity(
+      context,
+      record.approvalId,
+      'the message, or its thread, is not what the preview showed',
+      'deletion',
+    );
+  }
+  return view;
+}
+
+/** What the reach of an edit was when it was prepared, read from its expectation — `edits 1.2, reaches 412`. */
+function preparedEditReach(record: ApprovalRecord): string | undefined {
+  return /, reaches (\d+)$/.exec(record.expect.subject)?.[1];
+}
+
+/**
+ * The edit as it would be made now, and only if that is still what the approval binds — `currentPost` for an edit.
+ *
+ * Its draft, the message and the room are all read again. A room that could not be read approves no edit that
+ * notifies it, for the reason a post's does not; anything that changed voids the approval.
+ */
+async function currentEdit(
+  context: SlackContext,
+  record: ApprovalRecord,
+  workspace: string,
+  edit: { ts: string; removeFiles: readonly string[] },
+  deps: SessionDeps,
+): Promise<{ draft: SlackDraft; view: EditView }> {
+  const drafts = openDraftStore(context.core.paths.stateDir, context.now, context.handoffs);
+  const draft = await drafts.get(record.draftId);
+  const gate = await gateDepsFor(context, workspace, deps);
+  // An edit that adds files reads each one again first, as `prepareMessageEdit` did: a changed file is refused here.
+  await filesAsRecorded(gate, draft);
+  const view = await viewEdit(gate, draft, edit.ts, edit.removeFiles, new NameBook());
+  const edited = draft.revision !== record.draftMessageId;
+  const notifiesRoom = view.preview.notifies.channel || view.preview.notifies.here;
+  if (!edited && view.roomUnread && (notifiesRoom || view.digest !== record.contentDigest)) {
+    throw new CommsError('PROVIDER_UNAVAILABLE', 'the channel could not be read, so who this reaches cannot be shown', {
+      hint: 'Nothing was approved. Try again in a moment.',
+      details: { approvalId: record.approvalId, reason: view.roomUnread },
+    });
+  }
+  /*
+   * A room read without its count is the same gap, as `currentPost` says of a post: Slack answers some conversations
+   * with no `num_members`, and an `@channel` or `@here` edit is never approved without a count, whichever way it went
+   * missing (§E6, an edit's ceremony is a post's). The edit's screen lacked this until review of #52.
+   */
+  const uncounted = notifiesRoom ? view.preview.notifies.unknown : undefined;
+  if (!edited && uncounted !== undefined) {
+    throw new CommsError(
+      'PROVIDER_UNAVAILABLE',
+      'the channel’s members could not be counted, so who this reaches cannot be shown',
+      {
+        hint: 'Nothing was approved. Take the @channel or @here out of the edit, or make it in Slack itself.',
+        details: { approvalId: record.approvalId, reason: uncounted },
+      },
+    );
+  }
+  if (edited || view.digest !== record.contentDigest) {
+    const prepared = preparedEditReach(record);
+    const reach = view.preview.notifies.estimated;
+    const reason = edited
+      ? 'the draft was edited after the preview'
+      : record.riskFlags.includes(REACH_UNKNOWN)
+        ? 'the room could not be read when this was prepared; prepare it again to see who it reaches'
+        : prepared !== undefined && prepared !== String(reach)
+          ? `the channel now reaches ${reach}, not the ${prepared} it was prepared for`
+          : 'the message, the channel, or the account it posts as is not what the preview showed';
+    throw await voidIntegrity(context, record.approvalId, reason, 'edit');
+  }
+  return { draft, view };
+}
+
 /**
  * Shows what is being approved, and issues the code that binds this screen to this approval.
  *
- * `deps` reaches Slack for a post, to read the room: see `currentPost`. A reaction asks Slack nothing.
+ * `deps` reaches Slack for a post, to read the room — see `currentPost` — and for an edit or a deletion, to read the
+ * message as well. A reaction asks Slack nothing.
  */
 export async function beginApproval(
   context: SlackContext,
@@ -190,6 +318,28 @@ export async function beginApproval(
   if (reaction) {
     const challenge = await context.core.approvals.issueChallenge(approvalId, 'send', context.platform);
     return { approvalId, kind: 'reaction', preview: renderReaction(name, record, reaction), challenge };
+  }
+
+  // A deletion and an edit read the message again, as a post reads the room: shown only if it is what is bound.
+  const deletion = deletionOfApproval(record);
+  if (deletion) {
+    const view = await currentDeletion(context, record, name, deletion, deps);
+    const preview = renderDeletionPreview({
+      ...view.preview,
+      context: { ...view.preview.context, approvalId, note: 'nothing has been deleted — approving does not delete it' },
+    });
+    const challenge = await context.core.approvals.issueChallenge(approvalId, 'send', context.platform);
+    return { approvalId, kind: 'delete', preview, challenge };
+  }
+  const edit = editOfApproval(record);
+  if (edit) {
+    const { view } = await currentEdit(context, record, name, edit, deps);
+    const preview = renderChannelPreview({
+      ...view.preview,
+      context: { ...view.preview.context, approvalId, note: 'nothing has been changed — approving does not change it' },
+    });
+    const challenge = await context.core.approvals.issueChallenge(approvalId, 'send', context.platform);
+    return { approvalId, kind: 'edit', preview, challenge };
   }
 
   // Shown only if it is what the approval binds.
@@ -232,7 +382,24 @@ export async function finishApproval(
     );
     return;
   }
-  const { draft, view } = await currentPost(context, record, name, deps);
+  const deletion = deletionOfApproval(record);
+  if (deletion) {
+    const view = await currentDeletion(context, record, name, deletion, deps);
+    await context.core.approvals.approve(
+      approvalId,
+      'terminal',
+      { draftMessageId: view.digest, contentDigest: view.digest },
+      answer,
+      'send',
+      context.platform,
+    );
+    return;
+  }
+  const edit = editOfApproval(record);
+  const { draft, view } =
+    edit === undefined
+      ? await currentPost(context, record, name, deps)
+      : await currentEdit(context, record, name, edit, deps);
   await context.core.approvals.approve(
     approvalId,
     'terminal',

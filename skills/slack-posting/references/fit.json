@@ -1,5 +1,5 @@
 {
   "kind": "requestOnly",
   "group": "communications",
-  "useWhen": "Draft a Slack message, with local files if asked, and take it through the approval gate, including how many people a post would interrupt."
+  "useWhen": "Draft a Slack message, with local files if asked, and take it through the approval gate, including how many people a post would interrupt — or edit (words or files) or delete a message this account posted, through the same gate."
 }

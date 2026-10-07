@@ -340,7 +340,13 @@ test('foreground profile timeout uses cautious snapshot wording', async () => {
     listenerTimeoutMs: 20,
   });
   assert.ok(started.listener);
-  cautious(await caught(started.listener.result), 'TRANSIENT');
+  const text = cautious(await caught(started.listener.result), 'TRANSIENT');
+  /*
+   * Slack refuses an undistributed app on its own page and never redirects, so this timeout is the only thing the
+   * person hears — and "ask the administrator" sends them the wrong way when the browser was in another workspace.
+   */
+  assert.match(text, /invalid_team_for_non_distributed_app/);
+  assert.match(text, /signed in to another Slack workspace/);
   assert.deepEqual(await readdir(f.directory), []);
   await nothingSaved(f);
 });

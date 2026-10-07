@@ -2,7 +2,7 @@
 name: whatsapp-reading
 description: "Read WhatsApp on this Mac, read-only: sync, list chats, read, search, and draft a reply as a link the person sends. Symptoms: 'what did Alice say on WhatsApp', 'catch me up on the family group'. Nothing here sends."
 license: MIT
-compatibility: "@agentcomms/whatsapp@0.14.0"
+compatibility: "@agentcomms/whatsapp@0.14.1"
 metadata:
   group: communications
   lifecycle: release

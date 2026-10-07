@@ -147,7 +147,13 @@ export async function startSignIn(context: SlackContext, options: StartOptions):
     });
   }
 
-  const request = buildAuthorizeUrl({ clientId: options.clientId, mode: options.mode, port: options.port });
+  const request = buildAuthorizeUrl({
+    clientId: options.clientId,
+    mode: options.mode,
+    port: options.port,
+    // The account a renewal must turn out to be, else the profile's workspace; an own app's first sign-in knows none.
+    team: options.expect?.workspaceId ?? options.profile?.workspace,
+  });
   const startedAt = context.now();
   const flow: SlackFlow = {
     flowId: newFlowId(),
@@ -919,11 +925,20 @@ async function profileFailure(
   const identity = `${displaySlackFailureText(profile.label)}; workspace ${displaySlackFailureText(profile.workspaceName)} (${profile.workspace}); ${profile.role} app, client id ${profile.clientId}.`;
   const slackError = displaySlackFailureText(error);
   const slackDescription = displaySlackFailureText(description);
+  /*
+   * Only when nothing came back. Slack refuses an organisation's undistributed app in the wrong workspace on its own
+   * page and never redirects, so a browser signed in to another workspace ends here, not in a refusal — and the
+   * administrator is the wrong person to send them to.
+   */
+  const otherWorkspace =
+    code === 'TRANSIENT'
+      ? " If Slack's page said invalid_team_for_non_distributed_app, the browser was signed in to another Slack workspace: sign in to the workspace named here in that browser, then start the sign-in again."
+      : '';
   return new CommsError(
     code,
     `The sign-in did not complete. The person may have declined or the workspace may require an administrator to approve the app. ${wrapUntrusted(identity, { field: 'slack-signin-profile' })}`,
     {
-      hint: `Ask the workspace administrator about this app, then start the sign-in again.${slackError || slackDescription ? ` Slack reported: ${wrapUntrusted([slackError, slackDescription].filter(Boolean).join(': '), { field: 'slack-signin-error' })}` : ''}`,
+      hint: `Ask the workspace administrator about this app, then start the sign-in again.${otherWorkspace}${slackError || slackDescription ? ` Slack reported: ${wrapUntrusted([slackError, slackDescription].filter(Boolean).join(': '), { field: 'slack-signin-error' })}` : ''}`,
     },
   );
 }
