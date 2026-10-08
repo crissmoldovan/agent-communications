@@ -45,16 +45,19 @@ function entry(
   };
 }
 
-/** A fake filesystem: `/home/me/state/events/socket`, under a sticky shared `/home`-style tree unless changed. */
-function fakeIo(overrides: Record<string, EndpointStat> = {}): EndpointIo & { readonly seen: string[] } {
+/** A fake filesystem: `/srv/me/state/events/socket`, under a root-owned tree unless changed. */
+function fakeIo(
+  overrides: Record<string, EndpointStat> = {},
+  links: Record<string, string> = {},
+): EndpointIo & { readonly seen: string[] } {
   const tree: Record<string, EndpointStat> = {
     '/': entry('dir', 0o755, 0),
-    '/home': entry('dir', 0o755, 0),
-    '/home/me': entry('dir', 0o750),
-    '/home/me/state': entry('dir', 0o700),
-    '/home/me/state/events': entry('dir', 0o700),
-    '/home/me/state/events/socket': entry('dir', 0o700),
-    '/home/me/state/events/socket/control.sock': entry('socket', 0o600),
+    '/srv': entry('dir', 0o755, 0),
+    '/srv/me': entry('dir', 0o750),
+    '/srv/me/state': entry('dir', 0o700),
+    '/srv/me/state/events': entry('dir', 0o700),
+    '/srv/me/state/events/socket': entry('dir', 0o700),
+    '/srv/me/state/events/socket/control.sock': entry('socket', 0o600),
     ...overrides,
   };
   const seen: string[] = [];
@@ -67,12 +70,12 @@ function fakeIo(overrides: Record<string, EndpointStat> = {}): EndpointIo & { re
       return found;
     },
     async realpath(path) {
-      return path === '/home/me/link-to-events' ? '/home/me/state/events' : path;
+      return links[path] ?? path;
     },
   };
 }
 
-const PATHS = eventPaths('/home/me/state');
+const PATHS = eventPaths('/srv/me/state');
 
 test('CTRL-B1: the control endpoint is a private Unix socket path, a full-digest pipe name, and never TCP', () => {
   assert.equal(controlEndpoint(PATHS, 'linux'), PATHS.controlSocket);
@@ -106,34 +109,44 @@ test('CTRL-B1: Windows refuses the event service, since Node cannot give a pipe 
 test('CTRL-B1: only a 0700 socket directory of this uid, under ancestors nobody else can change, is private', async () => {
   const check = (io: EndpointIo) => verifyPrivateSocketDirectory(PATHS, { platform: 'linux', uid: UID, io });
   await check(fakeIo());
-  await check(fakeIo({ '/home': entry('dir', 0o1777, 0) }));
+  await check(fakeIo({ '/srv': entry('dir', 0o1777, 0) }));
   await assert.rejects(
-    check(fakeIo({ '/home/me/state/events/socket': entry('dir', 0o750) })),
+    check(fakeIo({ '/srv/me/state/events/socket': entry('dir', 0o750) })),
     refusal('SOCKET_DIRECTORY_MODE'),
   );
   await assert.rejects(
-    check(fakeIo({ '/home/me/state/events/socket': entry('dir', 0o700, UID + 1) })),
+    check(fakeIo({ '/srv/me/state/events/socket': entry('dir', 0o700, UID + 1) })),
     refusal('SOCKET_DIRECTORY_OWNER'),
   );
   await assert.rejects(
-    check(fakeIo({ '/home/me/state/events/socket': entry('link', 0o777) })),
+    check(fakeIo({ '/srv/me/state/events/socket': entry('link', 0o777) })),
     refusal('SOCKET_DIRECTORY_NOT_DIRECTORY'),
   );
-  await assert.rejects(check(fakeIo({ '/home/me': entry('dir', 0o755, UID + 1) })), refusal('SOCKET_ANCESTOR_OWNER'));
-  await assert.rejects(check(fakeIo({ '/home': entry('dir', 0o777, 0) })), refusal('SOCKET_ANCESTOR_WRITABLE'));
-  await assert.rejects(check(fakeIo({ '/home/me': entry('dir', 0o770) })), refusal('SOCKET_ANCESTOR_WRITABLE'));
+  await assert.rejects(check(fakeIo({ '/srv/me': entry('dir', 0o755, UID + 1) })), refusal('SOCKET_ANCESTOR_OWNER'));
+  await assert.rejects(check(fakeIo({ '/srv': entry('dir', 0o777, 0) })), refusal('SOCKET_ANCESTOR_WRITABLE'));
+  await assert.rejects(check(fakeIo({ '/srv/me': entry('dir', 0o770) })), refusal('SOCKET_ANCESTOR_WRITABLE'));
   await assert.rejects(
     verifyPrivateSocketDirectory(PATHS, { platform: 'win32', uid: UID, io: fakeIo() }),
     refusal('WINDOWS_CONTROL_UNAVAILABLE'),
   );
+  // The walk follows the real path, as the kernel does: a link to a directory others can change is refused there.
+  await assert.rejects(
+    check(
+      fakeIo(
+        { '/shared': entry('dir', 0o777, 0), '/shared/events': entry('dir', 0o700) },
+        { '/srv/me/state/events': '/shared/events' },
+      ),
+    ),
+    refusal('SOCKET_ANCESTOR_WRITABLE'),
+  );
   const io = fakeIo();
   await check(io);
   assert.deepEqual(io.seen, [
-    '/home/me/state/events/socket',
-    '/home/me/state/events',
-    '/home/me/state',
-    '/home/me',
-    '/home',
+    '/srv/me/state/events/socket',
+    '/srv/me/state/events',
+    '/srv/me/state',
+    '/srv/me',
+    '/srv',
     '/',
   ]);
 });
