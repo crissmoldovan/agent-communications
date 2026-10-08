@@ -133,7 +133,7 @@ export class GmailMaterialiser {
       const message = await this.#source.getMessage(first.messageId);
       const normalised = normaliseGmailEventMetadata(message, { includeBody: true });
       this.#store.immediate(() => {
-      this.#guard();
+        this.#guard();
         this.#store.database.prepare('DELETE FROM source_scan_state WHERE id = ?').run(this.#stateId(first));
       });
       const ready: GmailMaterialisationResult = { state: 'ready', message: normalised };
