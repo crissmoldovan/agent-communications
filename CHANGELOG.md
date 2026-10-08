@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.15.2
 
 **A Slack post, reaction, edit or deletion that Slack rate-limits waits and tries again, as Gmail and Resend sends do
 since 0.15.1.** A burst of posts or reactions could meet Slack's per-method rate limits, and the refusal — which proves

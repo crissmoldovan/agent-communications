@@ -2,7 +2,7 @@
 name: slack-reading
 description: "Read a Slack workspace — channels, threads, search, people and files — save the files people shared where the person says, and report what was read without overstating it. Symptoms: 'what did they say in #engineering', 'catch me up on that thread', 'search Slack for the invoice', 'who is in this channel', 'download the file Sam shared'. Not for drafting or posting — slack-posting does that."
 license: MIT
-compatibility: "@agentcomms/slack@0.15.1"
+compatibility: "@agentcomms/slack@0.15.2"
 metadata:
   group: communications
   lifecycle: release

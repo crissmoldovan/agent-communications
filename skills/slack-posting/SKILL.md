@@ -2,7 +2,7 @@
 name: slack-posting
 description: "Draft a Slack message, with local files if asked, and take it through the approval gate, including how many people a post would interrupt — or edit (words or files) or delete a message this account posted, through the same gate. Symptoms: 'post this to #engineering', 'reply in that thread', 'let the team know', 'send the report to the channel', 'share this file in Slack', 'react to that message', 'fix the typo in what you posted', 'replace the chart in that message', 'delete that message'. Not for reading — slack-reading does that; not for connecting a workspace — slack-setup does."
 license: MIT
-compatibility: "@agentcomms/slack@0.15.1"
+compatibility: "@agentcomms/slack@0.15.2"
 metadata:
   group: communications
   lifecycle: release

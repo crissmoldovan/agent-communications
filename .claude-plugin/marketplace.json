@@ -10,7 +10,7 @@
       "name": "gmail",
       "source": "./",
       "description": "Gmail and Slack for coding agents. The Gmail server is included: search, read, analyse, draft and organise mail, with sending behind your approval. The Slack skills read a workspace and post only what a person approves; connect their server with `npx -y @agentcomms/slack mcp install --client claude-code` (or `--client` codex, cursor, gemini, claude-desktop or vscode), a registration you approve. The Resend skills read a team's domains and mail and send only what a person approves; connect an account at your terminal with `npx -y @agentcomms/resend account add acme/resend`, and its server with `npx -y @agentcomms/resend mcp install --client claude-code`. The WhatsApp skill reads the chats WhatsApp for Mac keeps on this Mac and drafts replies as links you send \u2014 it never sends; add the account at your terminal with `npx -y @agentcomms/whatsapp add personal/whatsapp`, and its server with `npx -y @agentcomms/whatsapp mcp install --client claude-code --account personal/whatsapp`. The onboarding skill works through the core server, which the plugin does not start either: `npx -y @agentcomms/core mcp install --client claude-code`.",
-      "version": "0.15.1",
+      "version": "0.15.2",
       "author": {
         "name": "crissmoldovan"
       },
