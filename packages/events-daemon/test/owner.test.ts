@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { lstat, rm } from 'node:fs/promises';
+import { lstat, readFile, rm } from 'node:fs/promises';
 import { test } from 'node:test';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
@@ -18,6 +18,13 @@ async function clientModule(): Promise<ClientModule | null> {
 async function pathsModule(): Promise<PathsModule | null> {
   return import('../src/runtime/paths.ts').catch(() => null);
 }
+
+test('CTRL-B2: the owner retains the B1 dry-run adapter behind the generic delivery facade', async () => {
+  const owner = await readFile(new URL('../src/runtime/owner.ts', import.meta.url), 'utf8');
+  assert.match(owner, /const dryrun = new DryRunDispatcher/);
+  assert.match(owner, /const dispatcher = new DeliveryDispatcher/);
+  assert.match(owner, /dryrun,\n {4}webhook: unavailable/);
+});
 
 test('CTRL-B1: only one foreground owner opens the event database and a graceful stop closes it', {
   skip: WINDOWS_SKIP,

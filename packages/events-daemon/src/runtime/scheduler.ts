@@ -12,7 +12,7 @@ import type { EventRecordCipher } from '../store/records.ts';
 import { assertLiveGmailAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
 import type { ActivationRuntime } from './activations.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
-import type { DryRunDispatcher } from './dispatcher.ts';
+import type { DeliveryDispatcher } from './dispatcher.ts';
 import { EventEvaluator } from './evaluate.ts';
 import type { EventExpiry } from './expiry.ts';
 import type { EventLifecycle } from './lifecycle.ts';
@@ -35,7 +35,7 @@ export interface EventSchedulerOptions {
   readonly store: EventDatabase;
   readonly lifecycle: EventLifecycle;
   readonly activations: ActivationRuntime;
-  readonly dispatcher: DryRunDispatcher;
+  readonly dispatcher: DeliveryDispatcher;
   readonly expiry: EventExpiry;
   readonly cipher: EventRecordCipher;
   readonly approvals: Pick<ApprovalStore, 'get'>;
@@ -54,7 +54,7 @@ export class EventScheduler {
   readonly #store: EventDatabase;
   readonly #lifecycle: EventLifecycle;
   readonly #activations: ActivationRuntime;
-  readonly #dispatcher: DryRunDispatcher;
+  readonly #dispatcher: DeliveryDispatcher;
   readonly #expiry: EventExpiry;
   readonly #cipher: EventRecordCipher;
   readonly #approvals: Pick<ApprovalStore, 'get'>;

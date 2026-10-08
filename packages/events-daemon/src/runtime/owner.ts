@@ -29,7 +29,7 @@ import { openEventDatabase } from '../store/database.ts';
 import { openEventSecretStore } from '../store/event-secrets.ts';
 import { EventRecordCipher } from '../store/records.ts';
 import { ActivationRuntime } from './activations.ts';
-import { DryRunDispatcher } from './dispatcher.ts';
+import { DeliveryDispatcher, type DeliveryDispatchHandler, DryRunDispatcher } from './dispatcher.ts';
 import { EventExpiry } from './expiry.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
@@ -99,12 +99,19 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
   });
   const cipher = new EventRecordCipher(database.database, eventSecrets);
   const expiry = new EventExpiry(database);
-  const dispatcher = new DryRunDispatcher({
+  const dryrun = new DryRunDispatcher({
     store: database,
     cipher,
     approvals: core.approvals,
     config: core.config,
     expiry,
+  });
+  const unavailable = unavailableDeliveryHandler();
+  const dispatcher = new DeliveryDispatcher({
+    store: database,
+    dryrun,
+    webhook: unavailable,
+    sse: unavailable,
   });
   const mailboxLock = new MailboxLock();
   const gmailSourceFor = async (accountId: string): Promise<GmailEventSource> => {
@@ -261,7 +268,7 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
       endpoint: instance.endpoint,
       token,
       handle: async (request) =>
-        handleControl(owner, lifecycle, database.installationId, database, activations, dispatcher, request),
+        handleControl(owner, lifecycle, database.installationId, database, activations, dryrun, request),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
     await chmod(instance.endpoint, 0o600);
@@ -273,6 +280,15 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
     await owner.stop();
     throw error;
   }
+}
+
+/** Webhook and SSE documents cannot enter B1, so these stubs are unreachable until their later B2 adapters replace them. */
+function unavailableDeliveryHandler(): DeliveryDispatchHandler {
+  return {
+    async dispatch(): Promise<never> {
+      throw new CommsError('BAD_DATA', 'the persisted delivery adapter is unavailable');
+    },
+  };
 }
 
 /** Runs the owner until a local stop request or a terminal signal closes it cleanly. */
