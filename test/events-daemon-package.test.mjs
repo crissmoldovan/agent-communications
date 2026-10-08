@@ -38,7 +38,13 @@ test('PKG-B1-b: the local event daemon is a held service with its declared runti
     'the service uses Node SQLite rather than a native dependency',
   );
   const statusSource = readFileSync(join(PACKAGE_DIR, 'src', 'operations', 'status.ts'), 'utf8');
-  assert.match(statusSource, /loadSqlite\(\)/, 'the Node SQLite boundary is explicit');
+  assert.match(
+    statusSource,
+    /requireSupportedNode\(\)|loadSqlite\(\)/,
+    'status refuses a Node below the floor by name',
+  );
+  const databaseSource = readFileSync(join(PACKAGE_DIR, 'src', 'store', 'database.ts'), 'utf8');
+  assert.match(databaseSource, /loadSqlite\(\)/, 'the owner opens its database through the floor-checked loader');
   const loader = readFileSync(join(PACKAGE_DIR, 'src', 'runtime', 'sqlite.ts'), 'utf8');
   assert.match(loader, /await import\('node:sqlite'\)/, 'the one runtime import of Node SQLite is the lazy loader');
   assert.match(loader, /export const MIN_NODE = '22\.16\.0';/, 'the loader checks the floor engines states');

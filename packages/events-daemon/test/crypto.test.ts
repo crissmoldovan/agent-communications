@@ -9,6 +9,7 @@ import { decryptPackedRecord, encryptPackedRecord, PackedRecordError, packedReco
 import { openEventDatabase } from '../src/store/database.ts';
 import { type EventSecretStore, openEventSecretStore, selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { EventRecordCipher, RecordStorageError } from '../src/store/records.ts';
+import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 interface AadVector {
   readonly name: string;
@@ -116,7 +117,9 @@ class MemorySecretStore implements SecretStore {
   invalidate(): void {}
 }
 
-test('CRY-B1: durable nonce counters and BLOB-only records prevent plaintext and nonce reuse', async () => {
+test('CRY-B1: durable nonce counters and BLOB-only records prevent plaintext and nonce reuse', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-record-'));
   const fixture = Buffer.from('event-fixture-plaintext-must-not-reach-sqlite');
   try {
@@ -204,7 +207,9 @@ test('CRY-B1: durable nonce counters and BLOB-only records prevent plaintext and
   }
 });
 
-test('CRY-B1: rotation never writes an older record back over a row a worker replaced while it was re-encrypting', async () => {
+test('CRY-B1: rotation never writes an older record back over a row a worker replaced while it was re-encrypting', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-rotation-race-'));
   try {
     const opened = await openEventDatabase({ stateDir });

@@ -15,6 +15,14 @@ export interface MigrationHooks {
 
 export const EVENT_MIGRATIONS: readonly EventMigration[] = [
   { version: 1, name: 'event-authority-v1', statements: SCHEMA_V1_STATEMENTS },
+  {
+    version: 2,
+    name: 'event-lifecycle-pause-v1',
+    statements: [
+      'ALTER TABLE event_settings ADD COLUMN paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1))',
+      "UPDATE meta SET value = '2' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

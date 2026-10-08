@@ -25,7 +25,9 @@ export interface EventPaths {
   readonly databaseShm: string;
   readonly lock: string;
   readonly socketDir: string;
+  readonly controlSocket: string;
   readonly controlToken: string;
+  readonly instance: string;
   readonly secretsDir: string;
 }
 
@@ -70,7 +72,9 @@ export function eventPaths(stateDir: string): EventPaths {
     databaseShm: join(root, 'events.sqlite-shm'),
     lock: join(root, 'events.lock'),
     socketDir: join(root, 'socket'),
+    controlSocket: join(root, 'socket', 'control.sock'),
     controlToken: join(root, 'control.token'),
+    instance: join(root, 'instance.json'),
     secretsDir: join(root, 'secrets'),
   };
 }
@@ -84,6 +88,16 @@ export async function ensureEventPaths(
   await ensureOwnerOnlyDirectory(paths.stateDir, { io, platform });
   await ensureOwnerOnlyDirectory(paths.root, { io, platform });
   return paths;
+}
+
+/** Creates and verifies the private directory that contains the Unix control socket. */
+export async function ensureEventSocketDirectory(
+  paths: EventPaths,
+  options: { io?: EventPathIo; platform?: NodeJS.Platform } = {},
+): Promise<void> {
+  const io = options.io ?? nodePathIo;
+  const platform = options.platform ?? process.platform;
+  await ensureOwnerOnlyDirectory(paths.socketDir, { io, platform });
 }
 
 export async function ensureOwnerOnlyFile(

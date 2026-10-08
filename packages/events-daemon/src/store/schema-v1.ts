@@ -243,7 +243,7 @@ export const SCHEMA_V1_STATEMENTS: readonly string[] = [
     target_key TEXT NOT NULL,
     target_id TEXT NOT NULL,
     target_version INTEGER NOT NULL,
-    encrypted_record BLOB NOT NULL,
+    encrypted_record BLOB,
     attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     cap_charged_at INTEGER,
     next_at INTEGER,
@@ -253,7 +253,9 @@ export const SCHEMA_V1_STATEMENTS: readonly string[] = [
     lease_until INTEGER,
     last_error_code TEXT,
     last_status INTEGER,
-    UNIQUE (decision_id, target_key)
+    UNIQUE (decision_id, target_key),
+    -- Only work that may still disclose holds its payload; a terminal delivery's record is purged (D12, D8).
+    CHECK (encrypted_record IS NOT NULL OR state NOT IN ('queued', 'retryable', 'disclosing'))
   ) STRICT`,
   `CREATE TABLE dryrun_log (
     delivery_id TEXT PRIMARY KEY REFERENCES deliveries(id),

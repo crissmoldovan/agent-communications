@@ -12,6 +12,7 @@ import {
   openEventSecretStore,
   selectEventSecretStore,
 } from '../src/store/event-secrets.ts';
+import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 class MemorySecretStore implements SecretStore {
   readonly values = new Map<string, string>();
@@ -38,7 +39,9 @@ class MemorySecretStore implements SecretStore {
   invalidate(): void {}
 }
 
-test('SEC-B1: event masters use the database-selected backend, separate namespace, and rotation ledger', async () => {
+test('SEC-B1: event masters use the database-selected backend, separate namespace, and rotation ledger', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-secrets-'));
   try {
     const opened = await openEventDatabase({ stateDir });
@@ -77,7 +80,9 @@ test('SEC-B1: event masters use the database-selected backend, separate namespac
   }
 });
 
-test('SEC-B1: an unavailable initial keychain stops selection instead of falling back to files', async () => {
+test('SEC-B1: an unavailable initial keychain stops selection instead of falling back to files', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-secret-no-fallback-'));
   try {
     const opened = await openEventDatabase({ stateDir });
@@ -106,7 +111,9 @@ test('SEC-B1: an unavailable initial keychain stops selection instead of falling
   }
 });
 
-test('SEC-B1: event file secrets use the daemon-owned private directory and hashed owner-only files', async () => {
+test('SEC-B1: event file secrets use the daemon-owned private directory and hashed owner-only files', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-file-secrets-'));
   try {
     const opened = await openEventDatabase({ stateDir });
@@ -133,7 +140,9 @@ test('SEC-B1: event file secrets use the daemon-owned private directory and hash
   }
 });
 
-test('SEC-B1: event-secret migration uses only database references and rolls copied values back before a selector change', async () => {
+test('SEC-B1: event-secret migration uses only database references and rolls copied values back before a selector change', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-secret-migration-'));
   try {
     const opened = await openEventDatabase({ stateDir });
@@ -218,7 +227,9 @@ test('SEC-B1: the event-secret implementation never reads core configuration’s
   assert.doesNotMatch(source, /config\??\.secrets\??\.store/);
 });
 
-test('SEC-B1: a released core secret migration cannot enumerate, select, or change event secret values', async () => {
+test('SEC-B1: a released core secret migration cannot enumerate, select, or change event secret values', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-released-core-'));
   try {
     const opened = await openEventDatabase({ stateDir });

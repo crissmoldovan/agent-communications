@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -45,20 +45,37 @@ test(`Node ${process.versions.node} opens a WAL, STRICT database with immediate 
     t.skip('below the daemon floor; the refusal above is what this Node must show');
     return;
   }
-  // Until the owner command lands (Task 6 makes this a run, status, stop round trip), prove the SQLite the daemon
-  // uses on this exact Node: a file database, WAL, STRICT tables and BEGIN IMMEDIATE.
-  const { DatabaseSync } = await import('node:sqlite');
-  const dir = mkdtempSync(join(tmpdir(), 'agent-events-old-node-'));
+  // Short enough for a Unix socket path on macOS (103 bytes), whose per-user temporary directory is about 48.
+  const dir = mkdtempSync(join(process.platform === 'win32' ? tmpdir() : '/tmp', 'aev-old-node-'));
+  let child;
   try {
-    const database = new DatabaseSync(join(dir, 'events.sqlite'));
-    assert.equal(database.prepare('PRAGMA journal_mode = WAL').get().journal_mode, 'wal');
-    database.exec('CREATE TABLE probe (id INTEGER PRIMARY KEY, value BLOB NOT NULL) STRICT');
-    database.exec('BEGIN IMMEDIATE');
-    database.prepare('INSERT INTO probe (id, value) VALUES (?, ?)').run(1, new Uint8Array([1, 2, 3]));
-    database.exec('COMMIT');
-    assert.deepEqual([...database.prepare('SELECT value FROM probe WHERE id = 1').get().value], [1, 2, 3]);
-    database.close();
+    child = spawn(process.execPath, [CLI, '--state-dir', dir, 'run'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    let status;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      status = spawnSync(process.execPath, [CLI, '--state-dir', dir, '--json', 'status'], { encoding: 'utf8' });
+      if (status.status === 0 && /"owner":"running"/.test(status.stdout)) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(status);
+    assert.equal(status.status, 0, `${status.stderr}\nowner stderr: ${stderr}`);
+    assert.match(status.stdout, /"owner":"running"/, `owner stderr: ${stderr}`);
+    const database = join(dir, 'events', 'events.sqlite');
+    assert.ok(existsSync(database), 'run opens and migrates the owner database before it serves status');
+    assert.ok(statSync(database).size > 0);
+    const stop = spawnSync(process.execPath, [CLI, '--state-dir', dir, '--json', 'stop'], { encoding: 'utf8' });
+    assert.equal(stop.status, 0, stop.stderr);
+    const exit = await new Promise((resolve) => child.once('exit', resolve));
+    assert.equal(exit, 0, stderr);
   } finally {
+    if (child && child.exitCode === null) {
+      child.kill('SIGTERM');
+      await new Promise((resolve) => child.once('exit', resolve));
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 });

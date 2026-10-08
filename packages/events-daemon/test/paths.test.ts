@@ -10,8 +10,11 @@ import {
   ensureOwnerOnlyFile,
   eventPaths,
 } from '../src/runtime/paths.ts';
+import { WINDOWS_SKIP } from './support/short-temp.ts';
 
-test('CTRL-B1: event paths create an owner-only directory and file below the supplied state root', async () => {
+test('CTRL-B1: event paths create an owner-only directory and file below the supplied state root', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const root = await mkdtemp(join(tmpdir(), 'events-daemon-paths-'));
   try {
     await chmod(root, 0o700);
@@ -27,7 +30,9 @@ test('CTRL-B1: event paths create an owner-only directory and file below the sup
   }
 });
 
-test('CTRL-B1: event paths refuse a state root that is a symbolic link or group-readable', async () => {
+test('CTRL-B1: event paths refuse a state root that is a symbolic link or group-readable', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const root = await mkdtemp(join(tmpdir(), 'events-daemon-paths-'));
   try {
     const actual = join(root, 'actual');
@@ -60,7 +65,9 @@ test('CTRL-B1: event paths refuse a state root that is a symbolic link or group-
   }
 });
 
-test('CTRL-B1: an event state file must be a private regular file, never a directory', async () => {
+test('CTRL-B1: an event state file must be a private regular file, never a directory', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const root = await mkdtemp(join(tmpdir(), 'events-daemon-paths-'));
   try {
     await chmod(root, 0o700);
