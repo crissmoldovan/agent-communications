@@ -61,7 +61,16 @@ sends people to re-authorise. It becomes `CONFIG` with R4's words, on every Gmai
 **R7. Core paces; each channel classifies.** `sendPacing` (`packages/core/src/send-pacing.ts`) knows budgets and
 delays and nothing about providers. Each channel says what a refusal is (`sendThrottleOf` in Gmail's
 `gmail-api/errors.ts`, Resend's in `api/client.ts`) and owns its last look and fence. Slack's posts, reactions, edits
-and deletions take the same pacing in a second pull request, so this one stays within the email sends.
+and deletions take the same pacing in a second pull request, so the first stays within the email sends.
+
+**R8. Slack (the second pull request).** Slack says "later" before acting two ways: a `429` with `Retry-After`, and
+`ratelimited` in an answer; both are in `certainlyRefused`'s allowlist for every posting method. `throttledRequest`
+(`packages/slack/src/operations/send.ts`) runs an act's `ready` — its fence, and an edit's or deletion's last look —
+before every attempt, and opens a fresh permit per attempt, because the guard spends one on every write. What `ready`
+throws propagates as it did before the request; the request's own final failure is returned to the caller's existing
+recording. A file post's sharing call, and an edit's call finishing its uploads, are first attempted inside the permit
+their uploads rode in; a throttle there is retried in permits of their own, without uploading again. Slack has no
+daily quota to stop on: every `ratelimited` is waited on within the budget.
 
 ## Not changed
 

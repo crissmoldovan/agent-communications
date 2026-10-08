@@ -30,6 +30,7 @@ import { messageAt, requireOwnMessage, shownText, type TargetMessage, targetDige
 import type { Channel, NameBook } from './people.ts';
 import {
   ACCEPTED_WITHOUT_ID,
+  type Attempted,
   type AuditSink,
   approvalNow,
   attachPolicyFor,
@@ -47,12 +48,14 @@ import {
   type PrepareDeps,
   perhapsDiscarded,
   providerId,
+  rateLimitedBeforeActing,
   refileCommand,
   refusalWithBookkeeping,
   requireFileSending,
   risksOf,
   roomOf,
   settledWith,
+  throttledRequest,
   viewPost,
   waitingHint,
 } from './send.ts';
@@ -678,66 +681,81 @@ async function editClassified(
     if (policy !== undefined && view.files !== null) {
       // The new files go up first, shared nowhere; each step after its own fence, the first one included.
       added = await uploadForEdit(deps, approvalId, claim, draft, view.files.add, policy, ids);
-      // The last look, now that the uploads are done: the message is still the one the edit was built from.
-      const look = await lastLook(deps, view.message, 'edit');
-      if (look !== 'same') {
-        const refusal = look === 'gone' ? editTargetGone(target.ts) : look;
-        throw await recordNotChanged(
-          deps,
-          approvalId,
-          claim,
-          'edit',
-          withFiles(ids, added),
-          withLeftovers(refusal, namedOnly(added), false),
-        );
-      }
-      const verdict = await fenceOrStop(deps.approvals, approvalId, claim.claimToken, {
-        stepsStarted: added.length * 2 + 1,
-      });
-      if (!verdict.proceed) {
-        throw await recordNotChanged(
-          deps,
-          approvalId,
-          claim,
-          'edit',
-          withFiles(ids, added),
-          editLeaseRanOut(namedOnly(added), true),
-        );
-      }
-    } else {
-      // The last look: a read, so before the fence, which stands immediately before the request that edits.
-      const look = await lastLook(deps, view.message, 'edit');
-      if (look !== 'same') {
-        throw await recordNotChanged(
-          deps,
-          approvalId,
-          claim,
-          'edit',
-          ids,
-          look === 'gone' ? editTargetGone(target.ts) : look,
-        );
-      }
-      // The fence (design 2026-10-05 §D1): the edit starts only while this claim still holds the send.
-      await fenceFirstStep(deps, approvalId, claim, WORDS.edit.operation, ids);
     }
+    /*
+     * The last look and the fence, before every attempt at the edit (design 2026-10-08 §R3): a retry after a throttle
+     * edits only the message the edit was built from, and only while this claim still holds the send.
+     */
+    const readyToEdit = async (): Promise<void> => {
+      if (policy !== undefined && view.files !== null) {
+        // The last look, now that the uploads are done: the message is still the one the edit was built from.
+        const look = await lastLook(deps, view.message, 'edit');
+        if (look !== 'same') {
+          const refusal = look === 'gone' ? editTargetGone(target.ts) : look;
+          throw await recordNotChanged(
+            deps,
+            approvalId,
+            claim,
+            'edit',
+            withFiles(ids, added),
+            withLeftovers(refusal, namedOnly(added), false),
+          );
+        }
+        const verdict = await fenceOrStop(deps.approvals, approvalId, claim.claimToken, {
+          stepsStarted: added.length * 2 + 1,
+        });
+        if (!verdict.proceed) {
+          throw await recordNotChanged(
+            deps,
+            approvalId,
+            claim,
+            'edit',
+            withFiles(ids, added),
+            editLeaseRanOut(namedOnly(added), true),
+          );
+        }
+      } else {
+        // The last look: a read, so before the fence, which stands immediately before the request that edits.
+        const look = await lastLook(deps, view.message, 'edit');
+        if (look !== 'same') {
+          throw await recordNotChanged(
+            deps,
+            approvalId,
+            claim,
+            'edit',
+            ids,
+            look === 'gone' ? editTargetGone(target.ts) : look,
+          );
+        }
+        // The fence (design 2026-10-05 §D1): the edit starts only while this claim still holds the send.
+        await fenceFirstStep(deps, approvalId, claim, WORDS.edit.operation, ids);
+      }
+    };
     const fileIds =
       view.files === null ? undefined : [...view.files.keep.map((file) => file.id), ...added.map((file) => file.id)];
     const auditIds = withFiles(ids, added);
-    let response: SlackResponse;
-    try {
+    const attempted = await throttledRequest(
+      deps,
+      'chat.update',
+      'edited',
+      readyToEdit,
       // Without the signal, deliberately: this is the request that edits, and it is never abandoned once it is out.
-      response = await spendOn(deps.permit, approvalId, 'chat.update', () =>
-        callSlack({ ...deps.call, permit: deps.permit }, 'chat.update', {
-          ...view.request,
-          ...(fileIds === undefined ? {} : { file_ids: JSON.stringify(fileIds) }),
-        }),
-      );
-    } catch (error) {
+      () =>
+        spendOn(deps.permit, approvalId, 'chat.update', () =>
+          callSlack({ ...deps.call, permit: deps.permit }, 'chat.update', {
+            ...view.request,
+            ...(fileIds === undefined ? {} : { file_ids: JSON.stringify(fileIds) }),
+          }),
+        ),
+    );
+    if (!attempted.ok) {
+      const { error } = attempted;
       if (certainlyRefused(error, 'chat.update')) {
         throw await recordNotChanged(deps, approvalId, claim, 'edit', auditIds, withLeftovers(error, added, false));
       }
       throw await recordMaybeChanged(deps, approvalId, claim.claimed, 'edit', auditIds, error, leftovers(added, true));
     }
+    const response: SlackResponse = attempted.value;
     const after = fileIds === undefined ? undefined : filesAfter(response, added, view.files);
     const mismatch =
       after !== undefined && fileIds !== undefined && after.map((file) => file.id).join(' ') !== fileIds.join(' ')
@@ -906,6 +924,18 @@ async function uploadForEdit(
       if (!verdict.proceed) throw editLeaseRanOut(uploaded, false);
     }
   };
+  // No channel: this finishes the uploads and shares them nowhere. Only the edit attaches them (§5).
+  const finish = () =>
+    callSlack(call, 'files.completeUploadExternal', {
+      files: JSON.stringify(added.map((file) => ({ id: file.id, title: file.name }))),
+    });
+  // Every attempt at it stands after its own fence, the bytes up and unfinished (design 2026-10-08 §R3).
+  const readyToFinish = async () => {
+    stage = 'upload';
+    await fence();
+    stepsStarted += 1;
+    stage = 'complete';
+  };
   try {
     await spendOn(deps.permit, approvalId, 'files.completeUploadExternal', async () => {
       for (const file of files) {
@@ -941,17 +971,31 @@ async function uploadForEdit(
       }
       // Every file is up and none is finished: the last moment a cancellation keeps any of them from being kept.
       if (deps.signal?.aborted) throw cancelled('edit', spentByCancel('edit'));
-      await fence();
-      stepsStarted += 1;
-      stage = 'complete';
-      // No channel: this finishes the uploads and shares them nowhere. Only the edit attaches them (§5).
-      await callSlack(call, 'files.completeUploadExternal', {
-        files: JSON.stringify(added.map((file) => ({ id: file.id, title: file.name }))),
-      });
+      await readyToFinish();
+      await finish();
     });
-  } catch (error) {
+  } catch (thrown) {
     // Stopped before the first step: recorded and audited already, and nothing had been asked of Slack.
-    if (error === stoppedFirst) throw error;
+    if (thrown === stoppedFirst) throw thrown;
+    let error = thrown;
+    if (stage === 'complete' && rateLimitedBeforeActing(thrown, 'files.completeUploadExternal')) {
+      // Throttled finishing the uploads: nothing is finished, and the bytes are up. Finish them again, each attempt in a
+      // permit of its own (design 2026-10-08 §R1–§R3); a stop at its fence is recorded below, as any other.
+      try {
+        const attempted = await throttledRequest(
+          deps,
+          'files.completeUploadExternal',
+          'edited',
+          readyToFinish,
+          () => spendOn(deps.permit, approvalId, 'files.completeUploadExternal', finish),
+          thrown,
+        );
+        if (attempted.ok) return added;
+        error = attempted.error;
+      } catch (stop) {
+        error = stop;
+      }
+    }
     const possibly = inFlight === undefined ? [] : [inFlight];
     const auditIds = {
       ...ids,
@@ -1339,20 +1383,31 @@ async function deleteClassified(
         cancelled('delete', spentByCancel('delete')),
       );
     }
-    // The last look: still the message the person was shown — or already gone, which is what was asked for.
-    const look = await lastLook(deps, view.message, 'delete');
-    if (look === 'gone') {
+    /*
+     * The last look and the fence, before every attempt at the deletion (design 2026-10-08 §R3): still the message the
+     * person was shown — or already gone, which is what was asked for, and is said by `gone` rather than an error.
+     */
+    const gone = new Error('the message is already gone');
+    const readyToDelete = async (): Promise<void> => {
+      const look = await lastLook(deps, view.message, 'delete');
+      if (look === 'gone') throw gone;
+      if (look !== 'same') throw await recordNotChanged(deps, approvalId, claim, 'delete', ids, look);
+      await fenceFirstStep(deps, approvalId, claim, WORDS.delete.operation, ids);
+    };
+    let attempted: Attempted<SlackResponse>;
+    try {
+      attempted = await throttledRequest(deps, 'chat.delete', 'deleted', readyToDelete, () =>
+        spendOn(deps.permit, approvalId, 'chat.delete', () =>
+          callSlack({ ...deps.call, permit: deps.permit }, 'chat.delete', { channel: where.channel, ts: where.ts }),
+        ),
+      );
+    } catch (stop) {
+      if (stop !== gone) throw stop;
       const { note, approval } = await recordChanged(deps, approvalId, claim, 'delete', ids, where.ts, ALREADY_GONE);
       return { approvalId, ...where, ...(note === undefined ? {} : { note }), approval };
     }
-    if (look !== 'same') throw await recordNotChanged(deps, approvalId, claim, 'delete', ids, look);
-    await fenceFirstStep(deps, approvalId, claim, WORDS.delete.operation, ids);
-    let response: SlackResponse;
-    try {
-      response = await spendOn(deps.permit, approvalId, 'chat.delete', () =>
-        callSlack({ ...deps.call, permit: deps.permit }, 'chat.delete', { channel: where.channel, ts: where.ts }),
-      );
-    } catch (error) {
+    if (!attempted.ok) {
+      const { error } = attempted;
       if (error instanceof CommsError && error.details?.slackError === 'message_not_found') {
         // The state asked for holds: recorded by the message the approval names, which Slack just said is gone.
         const { note, approval } = await recordChanged(deps, approvalId, claim, 'delete', ids, where.ts, ALREADY_GONE);
@@ -1363,6 +1418,7 @@ async function deleteClassified(
       }
       throw await recordMaybeChanged(deps, approvalId, claim.claimed, 'delete', ids, error);
     }
+    const response = attempted.value;
     const { note, approval } = await recordChanged(deps, approvalId, claim, 'delete', ids, providerId(response.ts));
     return { approvalId, ...where, ...(note === undefined ? {} : { note }), approval };
   });

@@ -435,6 +435,14 @@ compare `messageCount` against the messages returned, and check each message's o
 `agent-slack doctor` is the Slack equivalent, and exits `78` the same way. `--offline` skips the one call it makes
 to Slack.
 
+### Slack is rate-limiting this workspace
+
+A post, file post, reaction, edit or deletion that Slack rate-limits is tried again by itself: Slack answers before it
+acts, so nothing was posted, and the act waits the `Retry-After` Slack gives (or backs off) and tries up to three more
+times within 45 seconds, repeating its checks first — an edit and a deletion read the message again. A file post's
+files are not uploaded twice. Only when that runs out does it stop, with "Slack is rate-limiting this workspace (tried
+4 times)", "Nothing was posted" and the time to try after. Prepare it again then.
+
 ### The sign-in completes at Slack and never comes back
 
 The port in the app's manifest and the port given to `workspace add` differ. Slack matches redirect URLs exactly,

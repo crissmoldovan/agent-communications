@@ -23,8 +23,10 @@ import {
   type OutcomeAction,
   type SendClaim,
   type SendOutcome,
+  type SendPacing,
   type SendPolicy,
   type StoredApproval,
+  sendPacing,
   sha256Hex,
   stricterPolicy,
   truncateDisplay,
@@ -570,6 +572,8 @@ export interface PostDeps extends PrepareDeps {
    * after it: see {@link postPrepared}.
    */
   readonly signal?: AbortSignal | undefined;
+  /** How a throttled act waits before it tries again (design 2026-10-08 §R2): core's pacing when left out. */
+  readonly sendPacing?: (() => SendPacing) | undefined;
 }
 
 export interface PostedMessage {
@@ -900,26 +904,33 @@ async function postClassified(
     // Claimed, and nothing sent yet: the approval is spent on a post that did not happen, and recorded as failed.
     if (deps.signal?.aborted)
       throw await recordNotPosted(deps, approvalId, { claimToken, claimed }, where, cancelledPost(SPENT_BY_CANCEL));
-    // The fence (design 2026-10-05 §D1): the post starts only while this claim still holds the send.
-    await fenceFirstStep(deps, approvalId, { claimToken, claimed }, 'slack.post', where);
-    let response: SlackResponse;
-    try {
+    const attempted = await throttledRequest(
+      deps,
+      'chat.postMessage',
+      'posted',
+      // The fence (design 2026-10-05 §D1): the post starts only while this claim still holds the send — before every
+      // attempt, a retry after a throttle included (design 2026-10-08 §R3).
+      () => fenceFirstStep(deps, approvalId, { claimToken, claimed }, 'slack.post', where),
       // Without the signal, deliberately: this is the request that posts, and it is never abandoned once it is out.
-      response = await spendOn(deps.permit, approvalId, 'chat.postMessage', () =>
-        callSlack({ ...deps.call, permit: deps.permit }, 'chat.postMessage', {
-          channel: payload.channel,
-          text: payload.text,
-          blocks: JSON.stringify(payload.blocks),
-          thread_ts: payload.thread_ts,
-          unfurl_links: payload.unfurl_links,
-          unfurl_media: payload.unfurl_media,
-        }),
-      );
-    } catch (error) {
+      () =>
+        spendOn(deps.permit, approvalId, 'chat.postMessage', () =>
+          callSlack({ ...deps.call, permit: deps.permit }, 'chat.postMessage', {
+            channel: payload.channel,
+            text: payload.text,
+            blocks: JSON.stringify(payload.blocks),
+            thread_ts: payload.thread_ts,
+            unfurl_links: payload.unfurl_links,
+            unfurl_media: payload.unfurl_media,
+          }),
+        ),
+    );
+    if (!attempted.ok) {
+      const { error } = attempted;
       if (certainlyRefused(error, 'chat.postMessage'))
         throw await recordNotPosted(deps, approvalId, { claimToken, claimed }, where, error);
       throw await recordMaybePosted(deps, approvalId, claimed, where, error, 'it was posted');
     }
+    const response: SlackResponse = attempted.value;
 
     // Posted. Nothing from here records the approval as failed, or throws: see `recordPosted`.
     const ts = providerId(response.ts);
@@ -936,6 +947,81 @@ async function postClassified(
       approval,
     };
   });
+}
+
+/**
+ * Whether Slack refused a posting request with a rate limit before acting (design 2026-10-08 §R1): a 429 with or
+ * without `Retry-After`, or `ratelimited` in an answer — both in `certainlyRefused`'s allowlist, so nothing happened.
+ */
+export function rateLimitedBeforeActing(error: unknown, method: PostingMethod): error is CommsError {
+  if (!(error instanceof CommsError) || !certainlyRefused(error, method)) return false;
+  const details = error.details ?? {};
+  return details.slackError === 'ratelimited' || 'retryAfterSeconds' in details;
+}
+
+/** Slack's own wait, in milliseconds, when it gave one. */
+function slackWaitMs(error: CommsError): number | undefined {
+  const seconds = error.details?.retryAfterSeconds;
+  return typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : undefined;
+}
+
+/**
+ * The refusal a throttled act ends with once it stops (design 2026-10-08 §R5): nothing happened, try after this. It
+ * keeps Slack's details, so it is still a certain refusal for whoever records it.
+ */
+function slackThrottled(error: CommsError, retries: number, waitMs: number | undefined, done: string): CommsError {
+  const retryAt = waitMs === undefined ? undefined : new Date(Date.now() + waitMs).toISOString();
+  return new CommsError(
+    'TRANSIENT',
+    `Slack is rate-limiting this workspace${retries === 0 ? '' : ` (tried ${retries + 1} times)`}`,
+    {
+      hint: `Nothing was ${done}. ${retryAt ? `Prepare it again after ${retryAt}.` : 'Prepare it again in a minute.'}`,
+      details: { ...error.details, limit: 'rate', retries, ...(retryAt ? { retryAt } : {}) },
+      cause: error,
+    },
+  );
+}
+
+/** How a throttled request ended: Slack's answer, or the failure its caller records, as it always did. */
+export type Attempted<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: unknown };
+
+/**
+ * One posting request, tried again while Slack refuses it with a rate limit before acting (design 2026-10-08 §R1–§R3).
+ *
+ * `ready` is everything that stands before the request — its fence, and for an edit or a deletion its last look — and
+ * runs before every attempt, so a retry acts only on what was approved, and only while the claim still holds. What
+ * `ready` throws is thrown as it came: those stops record themselves, exactly as they did before the request. The
+ * request's own failure is returned, never thrown, so the caller records it as it always did — a throttle that outlasts
+ * the pacing as a certain refusal that says when to try again. `attempt` opens its own permit each time: the guard spends
+ * one on every write. `first` is a refusal already in hand, when the first attempt had to be made inside another permit
+ * (a file post's, whose uploads ride inside it).
+ */
+export async function throttledRequest<T>(
+  deps: Pick<PostDeps, 'sendPacing'>,
+  method: PostingMethod,
+  /** What did not happen, when it stops: `posted`, `edited`, `deleted`, `changed`. */
+  done: string,
+  ready: () => Promise<void>,
+  attempt: () => Promise<T>,
+  first?: CommsError,
+): Promise<Attempted<T>> {
+  const pacing = (deps.sendPacing ?? (() => sendPacing()))();
+  let refused = first;
+  for (;;) {
+    if (refused !== undefined) {
+      const waitMs = slackWaitMs(refused);
+      const delay = pacing.next(waitMs);
+      if (delay === null) return { ok: false, error: slackThrottled(refused, pacing.retries, waitMs, done) };
+      await pacing.wait(delay);
+    }
+    await ready();
+    try {
+      return { ok: true, value: await attempt() };
+    } catch (error) {
+      if (!rateLimitedBeforeActing(error, method)) return { ok: false, error };
+      refused = error;
+    }
+  }
 }
 
 /** A failure's message, whatever was thrown. */
@@ -1326,6 +1412,22 @@ async function postFiles(
       if (!verdict.proceed) throw leaseRanOut(uploaded);
     }
   };
+  // The call that shares the files: in the permit the uploads rode in, and — after a throttle — in one of its own.
+  const share = () =>
+    callSlack(call, PUBLISH_FILES, {
+      files: JSON.stringify(posted.map((file) => ({ id: file.id, title: file.name }))),
+      channel_id: payload.channel,
+      // The words, when there are any, as the files' own message: one post, not a message and then some files.
+      initial_comment: payload.text === '' ? undefined : payload.text,
+      thread_ts: payload.thread_ts,
+    });
+  // Every attempt at it stands after its own fence, the files up and unshared (design 2026-10-08 §R3).
+  const readyToShare = async () => {
+    stage = 'upload';
+    await fence();
+    stepsStarted += 1;
+    stage = 'complete';
+  };
   try {
     await spendOn(deps.permit, approvalId, PUBLISH_FILES, async () => {
       for (const file of files) {
@@ -1365,43 +1467,57 @@ async function postFiles(
       // Every file is up and none is shared: the last moment a cancellation keeps the post from happening.
       if (deps.signal?.aborted) throw cancelledPost(SPENT_BY_CANCEL);
       // Before the stage moves on: a lease run out here shared nothing, and is no post that may have happened.
-      await fence();
-      stepsStarted += 1;
-      stage = 'complete';
-      await callSlack(call, PUBLISH_FILES, {
-        files: JSON.stringify(posted.map((file) => ({ id: file.id, title: file.name }))),
-        channel_id: payload.channel,
-        // The words, when there are any, as the files' own message: one post, not a message and then some files.
-        initial_comment: payload.text === '' ? undefined : payload.text,
-        thread_ts: payload.thread_ts,
-      });
+      await readyToShare();
+      await share();
     });
-  } catch (error) {
+  } catch (thrown) {
     // Stopped before the first step: recorded and audited already, and nothing had been asked of Slack.
-    if (error === stoppedFirst) throw error;
-    const possiblyUploaded = inFlight === undefined ? [] : [inFlight];
-    // Which files went up, and which may have: by id and name, never by what is in them.
-    const ids = {
-      channel: payload.channel,
-      ...(uploaded.length > 0
-        ? { files: uploaded.map((file) => file.id), fileNames: uploaded.map((file) => file.name) }
-        : {}),
-      ...(possiblyUploaded.length > 0
-        ? {
-            possiblyUploaded: possiblyUploaded.map((file) => file.id),
-            possiblyUploadedNames: possiblyUploaded.map((file) => file.name),
-          }
-        : {}),
-    };
-    // The call that shares the files went out and came back as neither a success nor a refusal: they may be posted.
-    if (stage === 'complete' && !certainlyRefused(error, PUBLISH_FILES)) {
-      throw await recordMaybePosted(deps, approvalId, claim.claimed, ids, error, 'the files were posted', {
-        stage,
-        uploaded: [...uploaded],
-      });
+    if (thrown === stoppedFirst) throw thrown;
+    let error = thrown;
+    let shared = false;
+    if (stage === 'complete' && rateLimitedBeforeActing(thrown, PUBLISH_FILES)) {
+      // The sharing call was throttled: nothing is shared, and the files are up. Share them again, each attempt in a
+      // permit of its own (design 2026-10-08 §R1–§R3); a stop at its fence is recorded below, as any other.
+      try {
+        const attempted = await throttledRequest(
+          deps,
+          PUBLISH_FILES,
+          'posted',
+          readyToShare,
+          () => spendOn(deps.permit, approvalId, PUBLISH_FILES, share),
+          thrown,
+        );
+        if (attempted.ok) shared = true;
+        else error = attempted.error;
+      } catch (stop) {
+        error = stop;
+      }
     }
-    const reported = reportFailure(error, stage, uploaded, possiblyUploaded);
-    throw await recordNotPosted(deps, approvalId, claim, ids, reported, stage === 'check' ? 'refused' : 'failed');
+    if (!shared) {
+      const possiblyUploaded = inFlight === undefined ? [] : [inFlight];
+      // Which files went up, and which may have: by id and name, never by what is in them.
+      const ids = {
+        channel: payload.channel,
+        ...(uploaded.length > 0
+          ? { files: uploaded.map((file) => file.id), fileNames: uploaded.map((file) => file.name) }
+          : {}),
+        ...(possiblyUploaded.length > 0
+          ? {
+              possiblyUploaded: possiblyUploaded.map((file) => file.id),
+              possiblyUploadedNames: possiblyUploaded.map((file) => file.name),
+            }
+          : {}),
+      };
+      // The call that shares the files went out and came back as neither a success nor a refusal: they may be posted.
+      if (stage === 'complete' && !certainlyRefused(error, PUBLISH_FILES)) {
+        throw await recordMaybePosted(deps, approvalId, claim.claimed, ids, error, 'the files were posted', {
+          stage,
+          uploaded: [...uploaded],
+        });
+      }
+      const reported = reportFailure(error, stage, uploaded, possiblyUploaded);
+      throw await recordNotPosted(deps, approvalId, claim, ids, reported, stage === 'check' ? 'refused' : 'failed');
+    }
   }
 
   // Posted. Nothing from here records the approval as failed, or throws: see `recordPosted`.
@@ -1773,17 +1889,24 @@ export async function reactPrepared(
   // Claimed: the lease is renewed while Slack's answer is outstanding.
   return withSendingLease(deps.approvals, approvalId, claim.claimToken, async () => {
     const method: PostingMethod = options.remove ? 'reactions.remove' : 'reactions.add';
-    // The fence (design 2026-10-05 §D1): the reaction starts only while this claim still holds the send.
-    await fenceFirstStep(deps, approvalId, claim, reactionOperation(options), reactionIds(options));
-    try {
-      await spendOn(deps.permit, approvalId, method, () =>
-        callSlack({ ...deps.call, permit: deps.permit }, method, {
-          channel: options.channel,
-          timestamp: options.ts,
-          name: options.name,
-        }),
-      );
-    } catch (error) {
+    const attempted = await throttledRequest(
+      deps,
+      method,
+      'changed',
+      // The fence (design 2026-10-05 §D1): the reaction starts only while this claim still holds the send — before
+      // every attempt (design 2026-10-08 §R3).
+      () => fenceFirstStep(deps, approvalId, claim, reactionOperation(options), reactionIds(options)),
+      () =>
+        spendOn(deps.permit, approvalId, method, () =>
+          callSlack({ ...deps.call, permit: deps.permit }, method, {
+            channel: options.channel,
+            timestamp: options.ts,
+            name: options.name,
+          }),
+        ),
+    );
+    if (!attempted.ok) {
+      const { error } = attempted;
       /*
        * `already_reacted` means the state this approval asked for already holds. Recording it as failed would tell a
        * caller to try the same outward act again, so it is used and audited as success, with Slack's answer in the note.

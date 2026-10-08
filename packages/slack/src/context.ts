@@ -7,7 +7,9 @@ import {
   type PathOverrides,
   requireHandoffs,
   type SecretStore,
+  type SendPacing,
   secretsStoreOf,
+  sendPacing,
 } from '@agentcomms/core';
 import { closedPermit, type FetchLike, guardSlackRequests } from './api/guard.ts';
 import { SLACK_ORIGIN } from './api/methods.ts';
@@ -56,6 +58,8 @@ export interface SlackContextOptions {
         register(flowId: string, settled: Promise<unknown>): void;
       }
     | undefined;
+  /** How a throttled post, reaction, edit or deletion waits (design 2026-10-08 §R2): core's; a test injects one. */
+  sendPacing?: (() => SendPacing) | undefined;
 }
 
 /**
@@ -120,6 +124,8 @@ export class SlackContext {
   readonly core: Core;
   readonly env: NodeJS.ProcessEnv;
   readonly now: () => Date;
+  /** A fresh pacing for each act: how a throttled one waits before it tries again. */
+  readonly sendPacing: () => SendPacing;
   readonly platform: NodeJS.Platform;
   readonly surface: 'cli' | 'mcp';
   readonly cwd: string;
@@ -141,6 +147,7 @@ export class SlackContext {
         caller: SLACK_CALLER,
       });
     this.now = options.now ?? (() => new Date());
+    this.sendPacing = options.sendPacing ?? (() => sendPacing());
     this.foregroundSignIn = options.foregroundSignIn;
     this.platform = options.platform ?? process.platform;
     this.surface = options.surface ?? 'cli';

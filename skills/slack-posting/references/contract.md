@@ -168,7 +168,9 @@ Every post, reaction and change has an approval, and every result that touches o
   it" is another call's post under way, and a file post can take many minutes. Wait until it reads `used`, `failed`
   or `unknown`.
 - **`SEND_OUTCOME_UNKNOWN`, or an approval that reads `unknown`, means it may have posted.** Consumers branch on
-  `SEND_OUTCOME_UNKNOWN` (exit `10`, never retryable), not on its message. Tell the person a late result can still be
+  `SEND_OUTCOME_UNKNOWN` (exit `10`, never retryable), not on its message. A rate-limited post, reaction, edit or
+  deletion the tool already tried again, for up to 45 seconds, before it answered: do not retry it yourself; prepare it
+  again after the time the refusal gives. Tell the person a late result can still be
   recorded for it, check the channel before anything else, and never prepare it again automatically: only once the
   person knows it did not post.
 - **Say a post as the result says it.** A post Slack accepted without a `ts` is "sent; the provider returned no id" —

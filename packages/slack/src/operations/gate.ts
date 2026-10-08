@@ -45,5 +45,6 @@ export async function gateDepsFor(context: SlackContext, alias: string, deps: Se
     audit: context.core.audit,
     surface: context.surface,
     permit: closedPermit(),
+    sendPacing: context.sendPacing,
   };
 }
