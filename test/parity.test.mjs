@@ -346,6 +346,37 @@ test('every "both" row was run on both sides, unless it says in "unchecked" why 
   assert.ok(uncheckedRows(table).length <= 5, 'a table of mostly unchecked rows checks nothing');
 });
 
+test('PAR-B1 audit: every paired daemon row reaches its shared operation with the same semantic arguments', () => {
+  const rows = table.capabilities.filter((row) => row.package === 'events-daemon');
+  assert.ok(rows.length > 0, 'the completed B1 daemon contract has capability rows');
+  assert.ok(
+    rows.every((row) => row.status !== 'pending'),
+    'B1 leaves no deferred capability row',
+  );
+
+  for (const row of rows.filter((row) => row.status === 'both')) {
+    const operation = `events-daemon:${row.operation}`;
+    const report = driven.reports[row.id];
+    assert.deepEqual(report.cli.calls, [operation], `row "${row.id}": its command reaches only ${operation}`);
+    assert.deepEqual(report.mcp.calls, [operation], `row "${row.id}": its tool reaches only ${operation}`);
+
+    const comparable = (side) =>
+      Object.fromEntries(
+        Object.entries(report[side].received[operation] ?? {}).filter(([path]) => !path.startsWith('options.')),
+      );
+    assert.deepEqual(
+      comparable('cli'),
+      comparable('mcp'),
+      `row "${row.id}": the command and tool disagree on the operation's semantic arguments`,
+    );
+  }
+
+  const tools = new Set(registries['events-daemon'].tools);
+  for (const tool of ['events_run', 'events_approve', 'events_dryrun_list', 'events_dryrun_show']) {
+    assert.ok(!tools.has(tool), `${tool} is an explicit B1 exception, not an MCP tool`);
+  }
+});
+
 test('every command was driven with all five path options before its command path (CUE-403)', () => {
   /*
    * The five suite folders are flags, not capabilities: no row names them (design 2026-10-04, D2). So the drive gives
