@@ -19,6 +19,7 @@ import {
   type GmailHistoryOccurrence,
   occurrencesFromHistory,
 } from './gmail.ts';
+import { isMailboxFenced } from './mailbox-fence.ts';
 import type { MailboxLock } from './mailbox-lock.ts';
 import type { GmailMaterialisationRequest, GmailMaterialisationResult } from './materialise.ts';
 
@@ -227,7 +228,17 @@ export class GmailSourceWorker {
    * re-checks this snapshot inside its own transaction and writes nothing once it has moved (D12's post-provider
    * generation fence) — a stale scan can never recreate purged staging, resolutions or a cursor.
    */
-  #snapshot: { readonly generation: number; readonly enabled: number; readonly startedAt: number } | undefined;
+  #snapshot:
+    | { readonly generation: number; readonly enabled: number; readonly startedAt: number; readonly rules: string }
+    | undefined;
+
+  /** The rule versions this mailbox's scan fans occurrences to; a change mid-scan makes the scan stale. */
+  #ruleSet(): string {
+    return this.#rules()
+      .map((rule) => `${rule.ruleId}@${rule.ruleVersion}`)
+      .sort()
+      .join(',');
+  }
 
   /** For the materialiser and any other writer working inside this scan: throws once the snapshot has moved. */
   assertScanLive(): void {
@@ -239,29 +250,17 @@ export class GmailSourceWorker {
     const revoked = this.#store.database
       .prepare('SELECT 1 AS present FROM account_revocations WHERE account_id = ? AND revoked_at >= ?')
       .get(this.#mailbox.accountId, snapshot.startedAt);
+    // A rule set that changed under the scan (a tightening, a swap, a revocation, a new activation) makes the scan
+    // stale: it would mark occurrences complete that a version it never fanned to is now owed.
     if (
       settings === undefined ||
       settings.enabled !== snapshot.enabled ||
       settings.switch_generation !== snapshot.generation ||
-      revoked !== undefined
+      revoked !== undefined ||
+      this.#ruleSet() !== snapshot.rules
     ) {
       throw new StaleScanError();
     }
-  }
-
-  #firstActivationFenced(): boolean {
-    return (
-      this.#store.database
-        .prepare(
-          `SELECT 1 AS present
-           FROM activation_baselines JOIN activation_intents ON activation_intents.id = activation_baselines.intent_id
-           WHERE activation_baselines.source = 'gmail' AND activation_baselines.account_id = ?
-             AND activation_baselines.position_scope = 'mailbox'
-             AND activation_intents.status = 'pending-completion'
-             AND activation_intents.replacement_of_version IS NULL`,
-        )
-        .get(this.#mailbox.accountId) !== undefined
-    );
   }
 
   #write<T>(work: () => T): T {
@@ -288,13 +287,13 @@ export class GmailSourceWorker {
       generation: settings?.switch_generation ?? 0,
       enabled: settings?.enabled ?? 0,
       startedAt: this.#now(),
+      rules: this.#ruleSet(),
     };
     try {
-      // D12's activation-completion scope fence: a claimed first activation pauses every commit on this mailbox from
-      // before its getProfile (the mailbox lock covers that call) until its finalisation installs the point and drops
-      // the baseline. Otherwise an active rule could move the shared cursor past P meanwhile, and the new version —
-      // starting at P — would never see what it consumed. A stuck claim fails at its deadline, which lifts the fence.
-      if (this.#firstActivationFenced()) return { cursor: this.#cursor(), pending: true };
+      // D12's activation-completion scope fence (see isMailboxFenced): the mailbox lock covers the getProfile-to-
+      // baseline step, and the durable baseline fences this mailbox from then until the point is installed.
+      if (isMailboxFenced(this.#store.database, this.#mailbox.accountId))
+        return { cursor: this.#cursor(), pending: true };
       return await this.#scanFromSnapshot();
     } catch (error) {
       if (error instanceof StaleScanError) return { cursor: this.#cursor(), pending: true };

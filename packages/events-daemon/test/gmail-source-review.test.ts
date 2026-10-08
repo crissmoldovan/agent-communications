@@ -25,6 +25,8 @@ async function world(
     accountLive?: () => Promise<void>;
     eventIdFor?: () => Promise<string>;
     onDisclosable?: () => void;
+    onMetadata?: () => void;
+    rules?: () => readonly GmailSourceRule[];
   } = {},
 ) {
   const stateDir = await shortTempDir('aev-gmail-review-');
@@ -62,6 +64,7 @@ async function world(
       },
       async getMessageMetadata(messageId: string) {
         metadataReads.push(messageId);
+        hooks.onMetadata?.();
         return {
           id: messageId,
           threadId: 'thread',
@@ -73,7 +76,7 @@ async function world(
     },
     mailbox: { accountId: ACCOUNT, name: 'Events inbox' },
     mailboxLock: new MailboxLock(),
-    rules: () => rules,
+    rules: hooks.rules ?? (() => rules),
     accountLive: hooks.accountLive,
     ...(hooks.eventIdFor ? { eventIdFor: hooks.eventIdFor } : {}),
     onPageStaged: async () => {
@@ -424,5 +427,88 @@ test('GML-B1: a removed account is not polled, and a removal before a metadata r
       w.store.close();
       await rm(w.stateDir, { recursive: true, force: true });
     }
+  }
+});
+
+function pendingActivation(
+  store: Awaited<ReturnType<typeof openEventDatabase>>,
+  intentId: string,
+  replacementOf: string | null,
+) {
+  if (replacementOf !== null)
+    store.database
+      .prepare(
+        "INSERT OR IGNORE INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, 'rule-old', 1, '{}', 'digest')",
+      )
+      .run(replacementOf);
+  store.database
+    .prepare(
+      `INSERT INTO activation_intents
+       (id, kind, document, digest, effect, replacement_of_version, required_points, acquisition_scopes, status, claimed_at, completion_deadline, created_at, updated_at)
+       VALUES (?, 'rule', '{}', 'digest', '{}', ?, '[]', '[]', 'pending-completion', 1, 99999999999999, 1, 1)`,
+    )
+    .run(intentId, replacementOf);
+  store.database
+    .prepare(
+      `INSERT INTO activation_baselines (intent_id, source, account_id, position_scope, encrypted_position, response_at)
+       VALUES (?, 'gmail', ?, 'mailbox', X'00', 1)`,
+    )
+    .run(intentId, ACCOUNT);
+}
+
+test('GML-B1: an unpublished P with no old-version drain fences the mailbox; a drained scope is not fenced (D12)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  for (const kind of ['first activation', 'new-only replacement scope', 'shared replacement scope'] as const) {
+    const w = await world([received]);
+    try {
+      w.store.database.exec('UPDATE event_settings SET enabled = 1');
+      pendingActivation(w.store, 'act_pending', kind === 'first activation' ? null : 'rule-old@1');
+      if (kind === 'shared replacement scope') {
+        w.store.database
+          .prepare(
+            `INSERT INTO replacement_drains (intent_id, source, account_id, position_scope, old_in_scope, new_in_scope)
+             VALUES ('act_pending', 'gmail', ?, 'mailbox', 1, 1)`,
+          )
+          .run(ACCOUNT);
+      }
+      w.mailbox.history = [added('101')];
+      const result = await w.worker.scan();
+      if (kind === 'shared replacement scope') {
+        // The drain withholds after-P work itself and the old version must reach P, so the mailbox keeps scanning.
+        assert.equal(w.listCalls(), 1, `${kind}: not fenced`);
+      } else {
+        assert.deepEqual(result, { cursor: '100', pending: true }, `${kind}: fenced`);
+        assert.equal(w.listCalls(), 0, `${kind}: no history call while P is unpublished`);
+      }
+    } finally {
+      w.store.close();
+      await rm(w.stateDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('GML-B1: a scan whose rule set changes under it (a tightening, a swap) writes nothing more and is re-run (D12)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const child: GmailSourceRule = { ...received, ruleVersion: 2 };
+  let current: readonly GmailSourceRule[] = [received];
+  const w = await world([received], {
+    rules: () => current,
+    onMetadata: () => {
+      // The parent is tightened while the scan awaits Gmail: its child is now the version owed this mail.
+      current = [child];
+    },
+  });
+  try {
+    w.store.database.exec('UPDATE event_settings SET enabled = 1');
+    w.mailbox.history = [added('101')];
+    assert.deepEqual(await w.worker.scan(), { cursor: '100', pending: true }, 'the stale scan stops');
+    assert.deepEqual(w.admitted, [], 'and marks nothing complete for the parent');
+    assert.deepEqual(await w.worker.scan(), { cursor: '101', pending: false });
+    assert.deepEqual(w.admitted, ['rule-received:message-101'], 'the re-run admits it for the child');
+  } finally {
+    w.store.close();
+    await rm(w.stateDir, { recursive: true, force: true });
   }
 });

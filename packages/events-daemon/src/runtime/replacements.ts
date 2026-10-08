@@ -558,6 +558,15 @@ export async function applyDerivedTightening(input: {
         now: input.now,
       });
     }
+    // The child inherits the parent's points, so it inherits the raw pages the parent was owed: a page staged for the
+    // parent survives the parent's purge and is processed for the child (an in-flight scan of it goes stale on the
+    // rule-set change and writes nothing).
+    database
+      .prepare(
+        `INSERT OR IGNORE INTO source_stage_rule_debts (stage_id, rule_id, rule_version)
+         SELECT stage_id, rule_id, ? FROM source_stage_rule_debts WHERE rule_id = ? AND rule_version = ?`,
+      )
+      .run(input.child.version, input.parent.ruleId, input.parent.version);
     purgeRevokedRuleWork(database, input.parent.ruleId, [input.parent.version]);
     database
       .prepare("UPDATE rule_versions SET state = 'revoked', revoked_at = ? WHERE id = ? AND state = 'active'")

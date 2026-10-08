@@ -3,6 +3,7 @@ import { conditionPointers } from '@agentcomms/events';
 import type { GmailEventSource } from '@agentcomms/gmail';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import { GmailReplacementDrains } from '../runtime/replacements.ts';
+import { isMailboxFenced } from '../sources/mailbox-fence.ts';
 import type { MailboxLock } from '../sources/mailbox-lock.ts';
 import { GmailMaterialiser } from '../sources/materialise.ts';
 import { type GmailSourceRule, GmailSourceWorker } from '../sources/source-worker.ts';
@@ -164,7 +165,12 @@ export class EventScheduler {
     const rules = () => this.#rulesForAccount(account.accountId);
     const bound = rules();
     if (bound.length === 0) return;
-    await this.#installInitialCursor(account.accountId, bound);
+    // The initial cursor is installed under the mailbox lock and never while a claimed activation's unpublished P
+    // fences the mailbox: installing it from the points already published could start past that P.
+    await this.#mailboxLock.withMailbox(account.accountId, async () => {
+      if (isMailboxFenced(this.#store.database, account.accountId)) return;
+      await this.#installInitialCursor(account.accountId, bound);
+    });
     const source = await this.#gmailSourceFor(account.accountId);
     const evaluator = new EventEvaluator({
       store: this.#store,
