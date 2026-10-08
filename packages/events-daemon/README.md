@@ -1,17 +1,23 @@
 # @agentcomms/events-daemon
 
-`@agentcomms/events-daemon` is the held local service package for agent-communications event emission. In this first
-package it deliberately exposes only a content-free ownership status: no event is accepted, persisted, delivered or
-sent, and the service never starts a background owner.
+`@agentcomms/events-daemon` is the held local service package for agent-communications event emission. B1 has a
+**foreground owner only**: it owns local state while the controlling terminal runs it, and it stops cleanly on request
+or terminal shutdown. It has no background fork, OS service, autostart, tray owner, or network listener.
 
-The `agent-events status` command and `events_status` MCP tool both report that the owner is not running. The package
-uses Node's built-in SQLite support; it does not ship a native database dependency. It needs **Node 22.16 or newer**, the first
-Node whose SQLite is complete without a flag; an older Node is refused with what to install. It runs on macOS and Linux:
-on Windows it refuses for now, because Node cannot create a control pipe that only your account can open. Its control
-socket lives under the state directory, and a state directory deep enough to make that path longer than the system allows
-(103 bytes on macOS, 107 on Linux) is refused with a hint to pin a shorter one.
+The package runs on **macOS and Linux only**. Windows refuses in B1 because Node cannot yet create a control pipe that
+only the current account can open. It needs **Node 22.16.0 or newer**, the first Node release with complete built-in
+SQLite support without a flag; an older Node is refused with what to install. Its control socket lives under the state
+directory, and a state directory deep enough to make that path longer than the system allows (103 bytes on macOS,
+107 on Linux) is refused with a hint to pin a shorter one.
 
-It is held from publication until the first daemon consumer is ready. See the [release guide](../../docs/RELEASING.md#A-package-held-back-from-release).
+B1 accepts only the local **dry-run target**. It creates no network delivery target and does not send mail or messages.
+Dry-run reads are terminal-only: MCP never receives retained content, JSON output cannot select it, and an interactive
+human terminal renders it through the untrusted-content envelope after the live disclosure fence passes.
+
+Both this package and `@agentcomms/events` are held from publication. A B1 merge publishes neither package. When the
+owner elects to make the first release from one checked tag, they publish `@agentcomms/events` first and then
+`@agentcomms/events-daemon`, because the daemon has an exact runtime dependency on the library. See the [release
+guide](../../docs/RELEASING.md#the-held-event-library-and-daemon).
 
 ## Licence
 

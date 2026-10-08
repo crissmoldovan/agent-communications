@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { chmod, lstat, readFile, rm, writeFile } from 'node:fs/promises';
 import { CommsError, openCore, resolvePaths } from '@agentcomms/core';
 import { CATALOGUE } from '@agentcomms/events';
-import { createGmailEventSource } from '@agentcomms/gmail';
+import { createGmailEventSource, type GmailEventSource } from '@agentcomms/gmail';
 import { probeControl } from '../control/client.ts';
 import {
   assertControlSupported,
@@ -58,9 +58,20 @@ interface StartedOwner extends EventOwner {
   readonly instance: EventInstanceRecord;
 }
 
-export async function startEventOwner(
-  options: { readonly stateDir?: string | undefined; readonly configDir?: string | undefined } = {},
-): Promise<EventOwner> {
+export interface EventOwnerOptions {
+  readonly stateDir?: string | undefined;
+  readonly configDir?: string | undefined;
+  /**
+   * The Gmail provider boundary for one connected account. Production leaves it unset: the installed Gmail package's
+   * own event source, which talks only to Google. An embedding host or a test supplies one — a test must, since the
+   * built Gmail package never honours a loopback endpoint override and would reach the real Google.
+   */
+  readonly gmailSourceFor?:
+    | ((input: { readonly accountId: string; readonly alias: string }) => Promise<GmailEventSource>)
+    | undefined;
+}
+
+export async function startEventOwner(options: EventOwnerOptions = {}): Promise<EventOwner> {
   assertControlSupported();
   const stateDir = options.stateDir ?? resolvePaths().stateDir;
   const paths = await ensureEventPaths(eventPaths(stateDir));
@@ -102,9 +113,17 @@ export async function startEventOwner(
       )?.[0];
       if (!alias)
         throw new CommsError('NOT_FOUND', 'the Gmail account bound to this activation is no longer connected');
-      // `openCore` is bundled through the package boundary while the adapter uses its source declaration; their
-      // private ConfigStore types are nominally distinct but this is the exact core instance created above.
-      return createGmailEventSource({ alias, core: core as never });
+      // Gmail opens its own context, and so its own core with Gmail's caller, for the same folders: the commands its
+      // errors tell a person to run are located from Gmail's installation. Handing it the daemon's core instead fails
+      // before the first provider call, since only a suite package may be a caller.
+      if (options.gmailSourceFor) return options.gmailSourceFor({ accountId, alias });
+      return createGmailEventSource({
+        alias,
+        pathOverrides: {
+          stateDir,
+          ...(options.configDir === undefined ? {} : { configDir: options.configDir }),
+        },
+      });
     },
     encryptBaseline: async (intentId, accountId, position) =>
       cipher.encrypt(
@@ -179,9 +198,7 @@ export async function startEventOwner(
 }
 
 /** Runs the owner until a local stop request or a terminal signal closes it cleanly. */
-export async function runEventOwner(
-  options: { readonly stateDir?: string | undefined; readonly configDir?: string | undefined } = {},
-): Promise<void> {
+export async function runEventOwner(options: EventOwnerOptions = {}): Promise<void> {
   const owner = await startEventOwner(options);
   const stop = () => {
     void owner.stop();
