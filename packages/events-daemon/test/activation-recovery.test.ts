@@ -528,7 +528,7 @@ test('APR-B1: only one exact replacement may drain, and its one-hour failure lea
     versions.createRule({ ...rule, version: 2, mapping: { constant: 'safer' } });
     versions.createRule({ ...rule, version: 3, mapping: { constant: 'safest' } });
     setup.store.database.exec(
-      "UPDATE rule_versions SET state = 'active', approval_id = 'ap_old', authorization_activation_id = 'act_old', activated_at = 1 WHERE id = 'rule-1@1'; INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-1', 1, 'act_old', 1)",
+      "UPDATE rule_versions SET state = 'active', approval_id = 'ap_old', authorization_activation_id = 'act_old', activated_at = 1 WHERE id = 'rule-1@1'; INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-1', 1, 'act_old', 1); INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at) VALUES ('act_old', 'rule-1', 1, 'gmail', 'ibx_AAAAAAAAAAAAAAAA', 'mailbox', CAST('{\"historyId\":\"100\"}' AS BLOB), 1)",
     );
     const first = (await setup.runtime.prepareRule({ ruleId: 'rule-1', version: 2 })) as PreparedActivation;
     await assert.rejects(
@@ -567,7 +567,7 @@ test('APR-B1: a revocation cancels a draining replacement before it can move its
     versions.createRule(rule);
     versions.createRule({ ...rule, version: 2, mapping: { constant: 'safer' } });
     setup.store.database.exec(
-      "UPDATE rule_versions SET state = 'active', approval_id = 'ap_old', authorization_activation_id = 'act_old', activated_at = 1 WHERE id = 'rule-1@1'; INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-1', 1, 'act_old', 1)",
+      "UPDATE rule_versions SET state = 'active', approval_id = 'ap_old', authorization_activation_id = 'act_old', activated_at = 1 WHERE id = 'rule-1@1'; INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-1', 1, 'act_old', 1); INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at) VALUES ('act_old', 'rule-1', 1, 'gmail', 'ibx_AAAAAAAAAAAAAAAA', 'mailbox', CAST('{\"historyId\":\"100\"}' AS BLOB), 1)",
     );
     const prepared = (await setup.runtime.prepareRule({ ruleId: 'rule-1', version: 2 })) as PreparedActivation;
     const challenge = await setup.runtime.issueChallenge(prepared.approvalId);
@@ -1016,6 +1016,263 @@ test('P1-B1: an account removed from the configuration while its activation poin
     assert.equal(count('cursors'), 0, 'no cursor is installed for the removed account');
     assert.equal(sources, 0, 'and its provider is never opened');
     assert.equal(count('account_revocations'), 1, 'the removal is recorded');
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+const A = 'ibx_AAAAAAAAAAAAAAAA';
+const B = 'ibx_BBBBBBBBBBBBBBBB';
+const multi = { ...rule, ruleId: 'rule-multi', source: { ...rule.source, accountIds: [A, B] } };
+
+/** Adds the primary events mailbox back with the same stable id, as a person re-adding it would. */
+async function readdAccount(root: string, inbox: unknown): Promise<void> {
+  const path = join(root, 'config', 'config.json');
+  const config = JSON.parse(await readFile(path, 'utf8')) as { inboxes: Record<string, unknown> };
+  config.inboxes['events/gmail'] = inbox;
+  await writeFile(path, `${JSON.stringify(config)}\n`);
+}
+
+async function primaryInbox(root: string): Promise<unknown> {
+  const config = JSON.parse(await readFile(join(root, 'config', 'config.json'), 'utf8')) as {
+    inboxes: Record<string, unknown>;
+  };
+  return config.inboxes['events/gmail'];
+}
+
+/** Activates the two-account rule through the real approval path, then removes A and lets one tick purge it. */
+async function multiWithARemoved(setup: Awaited<ReturnType<typeof fixture>>, sources: string[]) {
+  const versions = new ImmutableVersions(setup.store.database);
+  versions.createTarget(target);
+  versions.createRule(multi);
+  const prepared = (await setup.runtime.prepareRule({ ruleId: multi.ruleId, version: 1 })) as PreparedActivation;
+  await setup.runtime.approve({
+    approvalId: prepared.approvalId,
+    answer: await setup.approvals.issueDisclosureChallenge(prepared.approvalId),
+  });
+  const inbox = await primaryInbox(setup.root);
+  await removeAccount(setup.root);
+  const scheduler = new EventScheduler({
+    store: setup.store,
+    lifecycle: new EventLifecycle(setup.store),
+    activations: setup.runtime,
+    dispatcher: { recoverLeases: async () => undefined, dispatch: async () => undefined } as never,
+    expiry: new EventExpiry(setup.store, setup.time.now),
+    cipher: {
+      encrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+      decrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+    } as never,
+    approvals: setup.approvals,
+    config: setup.configStore,
+    taint: { record: async () => undefined } as never,
+    gmailSourceFor: async (accountId: string) => {
+      sources.push(accountId);
+      return {
+        getProfile: async () => ({
+          emailAddress: 'x@example.test',
+          messagesTotal: 1,
+          threadsTotal: 1,
+          historyId: '300',
+        }),
+        listHistory: async () => ({ historyId: '300', nextPageToken: undefined, history: [] }),
+        getMessageMetadata: async () => {
+          throw new Error('no metadata read is expected');
+        },
+      } as never;
+    },
+    mailboxLock: setup.mailboxLock,
+    now: setup.time.now,
+  });
+  await scheduler.tick();
+  return { versions, inbox, scheduler };
+}
+
+const count = (setup: Awaited<ReturnType<typeof fixture>>, sql: string, ...values: unknown[]) =>
+  (
+    setup.store.database.prepare(`SELECT COUNT(*) AS count FROM ${sql}`).get(...(values as string[])) as {
+      count: number;
+    }
+  ).count;
+
+test('K6: an account re-added after its removal stays dark for a multi-account version until an approval re-samples it', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const sources: string[] = [];
+    const { versions, inbox, scheduler } = await multiWithARemoved(setup, sources);
+    assert.equal(versions.activeVersion('rule', multi.ruleId)?.version, 1, 'the version stays live for B (D9)');
+    assert.equal(count(setup, 'rule_activation_points WHERE account_id = ?', A), 0, "A's cut-over is purged");
+    assert.equal(count(setup, 'rule_activation_points WHERE account_id = ?', B), 1, "B's is kept");
+
+    await readdAccount(setup.root, inbox);
+    setup.store.database.prepare('UPDATE event_settings SET enabled = 1').run();
+    sources.length = 0;
+    setup.time.advance(120_000);
+    await scheduler.tick();
+    assert.deepEqual(sources, [B], 'B is polled; the re-added A is not, and gets no source at all');
+    assert.equal(count(setup, 'cursors WHERE account_id = ?', A), 0, 'A gets no cursor from a stale cut-over');
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('K6: a replacement opens no drain for an account its old version holds no point for, and samples it afresh', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const sources: string[] = [];
+    const { versions, inbox } = await multiWithARemoved(setup, sources);
+    await readdAccount(setup.root, inbox);
+    versions.createRule({ ...multi, version: 2, mapping: { constant: 'safer' } });
+    const prepared = (await setup.runtime.prepareRule({ ruleId: multi.ruleId, version: 2 })) as PreparedActivation;
+    await assert.rejects(
+      () =>
+        (async () =>
+          setup.runtime.approve({
+            approvalId: prepared.approvalId,
+            answer: await setup.approvals.issueDisclosureChallenge(prepared.approvalId),
+          }))(),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+      'B still owes its drain',
+    );
+    const drains = (
+      setup.store.database
+        .prepare('SELECT account_id FROM replacement_drains WHERE intent_id = ?')
+        .all(prepared.intentId) as Array<{
+        account_id: string;
+      }>
+    ).map((row) => row.account_id);
+    assert.deepEqual(drains, [B], 'no drain waits on A, which the old version no longer polls');
+    assert.equal(
+      count(setup, 'activation_baselines WHERE intent_id = ? AND account_id = ?', prepared.intentId, A),
+      1,
+      'the new version samples A afresh',
+    );
+    // B's worker drains it; the replacement then completes with a fresh point for A.
+    setup.store.database
+      .prepare('UPDATE replacement_drains SET drained_at = ? WHERE intent_id = ?')
+      .run(1, prepared.intentId);
+    await setup.runtime.recover();
+    assert.equal(versions.activeVersion('rule', multi.ruleId)?.version, 2);
+    assert.equal(
+      count(setup, 'rule_activation_points WHERE rule_id = ? AND rule_version = 2 AND account_id = ?', multi.ruleId, A),
+      1,
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('K6: a replacement while an account is out of the configuration plans nothing for it and is not cancelled', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createTarget(target);
+    versions.createRule(multi);
+    const first = (await setup.runtime.prepareRule({ ruleId: multi.ruleId, version: 1 })) as PreparedActivation;
+    await setup.runtime.approve({
+      approvalId: first.approvalId,
+      answer: await setup.approvals.issueDisclosureChallenge(first.approvalId),
+    });
+    // A leaves the configuration; no tick has purged it yet, so the old version still holds its point.
+    await removeAccount(setup.root);
+    versions.createRule({ ...multi, version: 2, source: { ...multi.source, accountIds: [B] } });
+    const prepared = (await setup.runtime.prepareRule({ ruleId: multi.ruleId, version: 2 })) as PreparedActivation;
+    await assert.rejects(
+      () =>
+        (async () =>
+          setup.runtime.approve({
+            approvalId: prepared.approvalId,
+            answer: await setup.approvals.issueDisclosureChallenge(prepared.approvalId),
+          }))(),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+    );
+    assert.equal(
+      (
+        setup.store.database.prepare('SELECT status FROM activation_intents WHERE id = ?').get(prepared.intentId) as {
+          status: string;
+        }
+      ).status,
+      'pending-completion',
+      'the removed account does not cancel the replacement',
+    );
+    assert.equal(count(setup, 'activation_baselines WHERE intent_id = ? AND account_id = ?', prepared.intentId, A), 0);
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('K6: enable-all re-samples a re-added account for a version that went dark for it, and skips a removed one', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const sources: string[] = [];
+    const { inbox } = await multiWithARemoved(setup, sources);
+    // Removed: enable-all plans only B and completes.
+    const removed = await setup.runtime.prepareEnableAll();
+    await setup.runtime.approve({
+      approvalId: removed.approvalId,
+      answer: await setup.approvals.issueDisclosureChallenge(removed.approvalId),
+    });
+    assert.equal(
+      count(setup, 'rule_activation_points WHERE activation_id = ? AND account_id = ?', removed.intentId, A),
+      0,
+    );
+    assert.equal(
+      count(setup, 'rule_activation_points WHERE activation_id = ? AND account_id = ?', removed.intentId, B),
+      1,
+    );
+    // Re-added: a later enable-all, under its own approval, gives A a fresh cut-over.
+    await new EventLifecycle(setup.store).disableAll();
+    await readdAccount(setup.root, inbox);
+    const readded = await setup.runtime.prepareEnableAll();
+    await setup.runtime.approve({
+      approvalId: readded.approvalId,
+      answer: await setup.approvals.issueDisclosureChallenge(readded.approvalId),
+    });
+    assert.equal(
+      count(setup, 'rule_activation_points WHERE activation_id = ? AND account_id = ?', readded.intentId, A),
+      1,
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('K6: a replacement samples no account its old version went dark for and its new version does not name', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const sources: string[] = [];
+    const { versions, inbox } = await multiWithARemoved(setup, sources);
+    await readdAccount(setup.root, inbox);
+    versions.createRule({ ...multi, version: 2, source: { ...multi.source, accountIds: [B] } });
+    const prepared = (await setup.runtime.prepareRule({ ruleId: multi.ruleId, version: 2 })) as PreparedActivation;
+    await assert.rejects(
+      () =>
+        (async () =>
+          setup.runtime.approve({
+            approvalId: prepared.approvalId,
+            answer: await setup.approvals.issueDisclosureChallenge(prepared.approvalId),
+          }))(),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+    );
+    assert.equal(
+      count(setup, 'activation_baselines WHERE intent_id = ? AND account_id = ?', prepared.intentId, A),
+      0,
+      'A is neither polled by the old version nor named by the new one: no Gmail call is made for it',
+    );
   } finally {
     setup.store.close();
     await rm(setup.root, { recursive: true, force: true });

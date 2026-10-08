@@ -13,6 +13,16 @@ export async function assertLiveGmailAccount(config: Pick<ConfigStore, 'load'>, 
   }
 }
 
+/** The Gmail account ids core's configuration names now; read at the boundary, never cached. */
+export async function liveGmailAccountIds(config: Pick<ConfigStore, 'load'>): Promise<ReadonlySet<string>> {
+  const current = await config.load();
+  return new Set(
+    Object.values(current.inboxes)
+      .filter((inbox) => inbox.provider === 'gmail')
+      .map((inbox) => inbox.id),
+  );
+}
+
 /** The same stable reason crosses source, evaluation, dispatch and terminal-read boundaries unchanged. */
 export function isRemovedAccountError(error: unknown): error is CommsError {
   return error instanceof CommsError && error.details?.reason === 'ACCOUNT_REMOVED';

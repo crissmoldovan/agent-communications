@@ -16,7 +16,12 @@ import {
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { MailboxLock } from '../sources/mailbox-lock.ts';
 import type { EventDatabase } from '../store/database.ts';
-import { assertLiveGmailAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
+import {
+  assertLiveGmailAccount,
+  isRemovedAccountError,
+  liveGmailAccountIds,
+  purgeRemovedAccountWork,
+} from './account-fence.ts';
 import { persistGmailBaseline } from './baseline.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import {
@@ -214,7 +219,16 @@ export class ActivationRuntime {
           details: { reason: 'REPLACEMENT_PENDING' },
         });
       }
-      const points = unionReplacementPoints(parent, document.rule);
+      // K6: the old version owes a drain only where it still polls — an account it holds a cut-over point for, still in
+      // the configuration. An account removed from it (and purged) is dark for it and owes nothing, so it neither
+      // blocks this replacement nor gets a baseline; the new version's own accounts are always planned (a removed one
+      // refuses at its baseline).
+      const live = await liveGmailAccountIds(this.#config);
+      const points = unionReplacementPoints(parent, document.rule).filter(
+        (point) =>
+          point.ruleVersion !== parent.version ||
+          (live.has(point.accountId) && this.#holdsActivePoint(parent.ruleId, parent.version, point.accountId)),
+      );
       return this.#prepare(document, points, { switchGeneration: this.#switch().generation }, oldId);
     }
     const points = pointsForRule(document.rule);
@@ -236,9 +250,12 @@ export class ActivationRuntime {
       ruleVersions: rows.map((row) => ({ ruleId: row.object_id, ruleVersion: row.version })),
     };
     const versions = new ImmutableVersions(this.#store.database);
+    // K6: fresh points for every account still in the configuration; a removed one stays dark (it cannot be sampled),
+    // and one re-added since its removal gets a fresh cut-over here, under this approval.
+    const live = await liveGmailAccountIds(this.#config);
     const points = rows.flatMap((row) => {
       const planned = versions.prepareRule(row.object_id, row.version);
-      return pointsForRule(planned.rule);
+      return pointsForRule(planned.rule).filter((point) => live.has(point.accountId));
     });
     return this.#prepare(document, points, {
       switchGeneration: current.generation,
@@ -802,11 +819,32 @@ export class ActivationRuntime {
   }
 
   #replacementIncludesAccount(versionId: string, accountId: string): boolean {
-    const row = this.#store.database.prepare('SELECT document FROM rule_versions WHERE id = ?').get(versionId) as
-      | { document: string }
-      | undefined;
+    const row = this.#store.database
+      .prepare('SELECT rule_id, version, document FROM rule_versions WHERE id = ?')
+      .get(versionId) as { rule_id: string; version: number; document: string } | undefined;
     if (!row) throw new CommsError('BAD_DATA', 'the exact replacement predecessor no longer exists');
-    return canonicalFullRuleDocument(JSON.parse(row.document)).source.accountIds.includes(accountId);
+    // K6: named is not enough — a drain waits for the old version's worker, which runs only where it holds a point.
+    return (
+      canonicalFullRuleDocument(JSON.parse(row.document)).source.accountIds.includes(accountId) &&
+      this.#holdsActivePoint(row.rule_id, row.version, accountId)
+    );
+  }
+
+  /** Whether a version is the active one and holds a cut-over point for an account at its current cut-over. */
+  #holdsActivePoint(ruleId: string, version: number, accountId: string): boolean {
+    return (
+      this.#store.database
+        .prepare(
+          `SELECT 1 AS present
+           FROM active_versions JOIN rule_activation_points
+             ON rule_activation_points.activation_id = active_versions.current_cutover_id
+            AND rule_activation_points.rule_id = active_versions.object_id
+            AND rule_activation_points.rule_version = active_versions.version
+           WHERE active_versions.kind = 'rule' AND active_versions.object_id = ? AND active_versions.version = ?
+             AND rule_activation_points.account_id = ? AND rule_activation_points.position_scope = 'mailbox'`,
+        )
+        .get(ruleId, version, accountId) !== undefined
+    );
   }
 
   #isRevokedBinding(
