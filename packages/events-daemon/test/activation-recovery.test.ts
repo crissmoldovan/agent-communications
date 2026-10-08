@@ -1366,3 +1366,103 @@ test('K6: a version naming an account outside the configuration is refused befor
     }
   }
 });
+
+test("APR-B1: a scan during a first activation's completion commits nothing, so the new version misses no mail after P (D12)", {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  let gap: (() => Promise<void>) | undefined;
+  const setup = await fixture({
+    // Runs between the baseline (P) and the finalisation that installs the point and pointer.
+    encryptPoint: async (input) => {
+      const run = gap;
+      gap = undefined;
+      await run?.();
+      return Buffer.from(JSON.stringify(input.position));
+    },
+  });
+  try {
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createTarget(target);
+    versions.createRule(rule);
+    const first = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 1 })) as PreparedActivation;
+    await setup.runtime.approve({
+      approvalId: first.approvalId,
+      answer: await setup.approvals.issueDisclosureChallenge(first.approvalId),
+    });
+    setup.store.database.exec('UPDATE event_settings SET enabled = 1');
+    // rule-1 is active and polling A; the shared mailbox cursor sits at P = 202 (the fixture's profile).
+    setup.store.database
+      .prepare(
+        "INSERT OR REPLACE INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('gmail', ?, 'mailbox', '202', 1)",
+      )
+      .run(A);
+    const second = { ...rule, ruleId: 'rule-2' };
+    versions.createRule(second);
+    const sourceRule = (ruleId: string): GmailSourceRule => ({
+      ruleId,
+      ruleVersion: 1,
+      eventType: 'gmail.message.received',
+      options: rule.source.options,
+      ingestRetentionMs: rule.retention.ingestMs,
+    });
+    let rules = [sourceRule('rule-1')];
+    const admitted: string[] = [];
+    const worker = new GmailSourceWorker({
+      store: setup.store,
+      source: {
+        async listHistory({ historyId }: { historyId: string }) {
+          const history =
+            Number(historyId) < 203
+              ? [
+                  {
+                    id: '203',
+                    messagesAdded: [{ message: { id: 'message-203', threadId: 'thread-203' } }],
+                    labelsAdded: [],
+                    labelsRemoved: [],
+                  },
+                ]
+              : [];
+          return { historyId: history.length > 0 ? '203' : historyId, nextPageToken: undefined, history } as never;
+        },
+        async getMessageMetadata(messageId: string) {
+          return {
+            id: messageId,
+            threadId: 'thread-203',
+            labelIds: ['INBOX'],
+            internalDate: '1760000000000',
+            payload: { headers: [{ name: 'Subject', value: 'after P' }] },
+          };
+        },
+      },
+      mailbox: { accountId: A, name: 'Events inbox' },
+      mailboxLock: setup.mailboxLock,
+      rules: () => rules,
+      assertDisclosable: async () => undefined,
+      admit: async (occurrence) => {
+        admitted.push(`${occurrence.rule.ruleId}:${String(occurrence.event.messageId)}`);
+        return 'terminal';
+      },
+      encryptStage: async (value: unknown) => Buffer.from(JSON.stringify(value)),
+      decryptStage: async (stored: Uint8Array) => JSON.parse(Buffer.from(stored).toString('utf8')),
+    });
+
+    let during: unknown;
+    gap = async () => {
+      during = await worker.scan();
+    };
+    const prepared = (await setup.runtime.prepareRule({ ruleId: 'rule-2', version: 1 })) as PreparedActivation;
+    await setup.runtime.approve({
+      approvalId: prepared.approvalId,
+      answer: await setup.approvals.issueDisclosureChallenge(prepared.approvalId),
+    });
+    assert.deepEqual(during, { cursor: '202', pending: true }, 'the scan inside the completion commits nothing');
+    assert.deepEqual(admitted, [], 'and admits nothing for the version already active');
+
+    rules = [sourceRule('rule-1'), sourceRule('rule-2')];
+    assert.deepEqual(await worker.scan(), { cursor: '203', pending: false });
+    assert.deepEqual(admitted.sort(), ['rule-1:message-203', 'rule-2:message-203'], 'both versions see mail after P');
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
