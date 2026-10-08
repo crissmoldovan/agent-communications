@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { CommsError } from '@agentcomms/core';
 import { GmailContext } from '../src/context.ts';
-import { createGmailEventSource } from '../src/operations/events.ts';
+import { createGmailEventSource, normaliseGmailEventMetadata } from '../src/operations/events.ts';
 import { newHarness } from './support/harness.ts';
 
 function hasBodyData(value: unknown): boolean {
@@ -151,4 +151,54 @@ test('events source unit contract obtains its provider boundary from GmailContex
 
   const sourceText = readFileSync(new URL('../src/operations/events.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(sourceText, /@googleapis\/|google-auth-library/);
+});
+
+test('events source normalises observation metadata without retaining body bytes', () => {
+  const normalised = normaliseGmailEventMetadata({
+    id: 'message',
+    threadId: 'thread',
+    labelIds: ['UNREAD', 'INBOX'],
+    snippet: 'A <|im_start|> sender snippet',
+    internalDate: '1760000000000',
+    payload: {
+      headers: [
+        { name: 'From', value: 'Sender <sender@example.test>' },
+        { name: 'Subject', value: 'Subject' },
+      ],
+      parts: [
+        { partId: '0', mimeType: 'text/plain', body: { size: 20 } },
+        { partId: '1', mimeType: 'application/pdf', filename: 'invoice.pdf', body: { size: 5, attachmentId: 'a' } },
+      ],
+    },
+  });
+
+  assert.equal(normalised.messageId, 'message');
+  assert.equal(normalised.body, undefined);
+  assert.equal(normalised.snippet.includes('<|im_start|>'), false);
+  assert.deepEqual(normalised.attachments, [
+    { name: 'invoice.pdf', type: 'application/pdf', size: 5, inline: false, riskFlags: [] },
+  ]);
+});
+
+test('events metadata gives an absent or empty address display name as null, never an empty string (D3)', () => {
+  const metadata = normaliseGmailEventMetadata({
+    id: 'm1',
+    threadId: 't1',
+    labelIds: ['INBOX'],
+    snippet: 'hello',
+    internalDate: '1791430731000',
+    payload: {
+      mimeType: 'text/plain',
+      headers: [
+        { name: 'From', value: 'plain@example.test' },
+        { name: 'To', value: '"" <to@example.test>, Named Person <named@example.test>' },
+        { name: 'Subject', value: 'x' },
+      ],
+    },
+  } as never);
+  assert.deepEqual(metadata.from, { address: 'plain@example.test', name: null });
+  assert.deepEqual(metadata.to, [
+    { address: 'to@example.test', name: null },
+    { address: 'named@example.test', name: 'Named Person' },
+  ]);
 });

@@ -24,6 +24,7 @@ import type { ControlRequest } from '../control/protocol.ts';
 import { type RunningControlServer, startControlServer } from '../control/server.ts';
 import { EventDomainError } from '../domain/lifecycle.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
+import { MailboxLock } from '../sources/mailbox-lock.ts';
 import { openEventDatabase } from '../store/database.ts';
 import { openEventSecretStore } from '../store/event-secrets.ts';
 import { EventRecordCipher } from '../store/records.ts';
@@ -73,6 +74,7 @@ export async function startEventOwner(
     configDir: core.paths.configDir,
   });
   const cipher = new EventRecordCipher(database.database, eventSecrets);
+  const mailboxLock = new MailboxLock();
   const activations = new ActivationRuntime({
     store: database,
     approvals: core.approvals,
@@ -102,6 +104,7 @@ export async function startEventOwner(
         },
         Buffer.from(JSON.stringify(position)),
       ),
+    mailboxLock,
   });
   const token = randomBytes(32).toString('hex');
   const instance = newInstanceRecord(controlEndpoint(paths), token);

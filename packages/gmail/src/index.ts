@@ -10,10 +10,13 @@ import { cliHandoffs, type Handoff, type HandoffUse, type PathOverrides, resolve
 import { createGmailMcpServer as createServer, type GmailMcpOptions } from './mcp/server.ts';
 import { redirectConsoleToStderr } from './mcp/stdio-entry.ts';
 
+export type { GmailHistoryPage } from './gmail-api/transport.ts';
 export {
   type CreateGmailEventSourceOptions,
   createGmailEventSource,
+  type GmailEventMessageMetadata,
   type GmailEventSource,
+  normaliseGmailEventMetadata,
 } from './operations/events.ts';
 
 import { VERSION } from './version.ts';

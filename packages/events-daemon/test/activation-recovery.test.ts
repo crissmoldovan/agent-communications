@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { ApprovalStore, ConfigStore, emptyConfig } from '@agentcomms/core';
 import { ImmutableVersions } from '../src/domain/versions.ts';
 import { ActivationRuntime } from '../src/runtime/activations.ts';
+import { MailboxLock } from '../src/sources/mailbox-lock.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
@@ -87,6 +88,7 @@ async function fixture() {
       },
     }),
     encryptBaseline: async (_intentId, _accountId, position) => Buffer.from(JSON.stringify(position)),
+    mailboxLock: new MailboxLock(),
   });
   return { root, store, approvals, runtime, time, profileCalls: () => profileCalls };
 }

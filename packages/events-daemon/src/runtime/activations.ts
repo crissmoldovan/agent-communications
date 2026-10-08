@@ -13,9 +13,10 @@ import {
   disclosureBindingFor,
 } from '../domain/activation-documents.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
+import type { MailboxLock } from '../sources/mailbox-lock.ts';
 import type { EventDatabase } from '../store/database.ts';
 import { purgeRemovedAccountWork } from './account-fence.ts';
-import { gmailBaseline } from './baseline.ts';
+import { persistGmailBaseline } from './baseline.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 
 type IntentKind = ActivationDocumentV1['kind'];
@@ -76,6 +77,7 @@ export interface ActivationRuntimeOptions {
     accountId: string,
     value: { readonly historyId: string },
   ) => Promise<Uint8Array>;
+  readonly mailboxLock: MailboxLock;
   readonly now?: (() => number) | undefined;
   readonly newIntentId?: (() => string) | undefined;
 }
@@ -87,6 +89,7 @@ export class ActivationRuntime {
   readonly #config: ActivationRuntimeOptions['config'];
   readonly #gmailSourceFor: ActivationRuntimeOptions['gmailSourceFor'];
   readonly #encryptBaseline: ActivationRuntimeOptions['encryptBaseline'];
+  readonly #mailboxLock: MailboxLock;
   readonly #now: () => number;
   readonly #newIntentId: () => string;
 
@@ -96,6 +99,7 @@ export class ActivationRuntime {
     this.#config = options.config;
     this.#gmailSourceFor = options.gmailSourceFor;
     this.#encryptBaseline = options.encryptBaseline;
+    this.#mailboxLock = options.mailboxLock;
     this.#now = options.now ?? Date.now;
     this.#newIntentId = options.newIntentId ?? (() => `act_${randomBytes(16).toString('hex')}`);
   }
@@ -335,19 +339,24 @@ export class ActivationRuntime {
         }
         throw error;
       }
-      const source = await this.#gmailSourceFor(accountId);
-      const position = await gmailBaseline(source);
-      // Encryption (in production EventRecordCipher) completes before this write transaction reserves its own nonce.
-      const encrypted = await this.#encryptBaseline(current.id, accountId, position);
-      this.#store.immediate(() => {
-        this.#store.database
-          .prepare(
-            `INSERT OR IGNORE INTO activation_baselines
-             (intent_id, source, account_id, position_scope, encrypted_position, response_at)
-             VALUES (?, 'gmail', ?, 'mailbox', ?, ?)`,
-          )
-          .run(current.id, accountId, encrypted, this.#now());
-      });
+      await persistGmailBaseline(
+        this.#mailboxLock,
+        accountId,
+        () => this.#gmailSourceFor(accountId),
+        async (position) => {
+          // Encryption (in production EventRecordCipher) completes before this write transaction reserves its own nonce.
+          const encrypted = await this.#encryptBaseline(current.id, accountId, position);
+          this.#store.immediate(() => {
+            this.#store.database
+              .prepare(
+                `INSERT OR IGNORE INTO activation_baselines
+               (intent_id, source, account_id, position_scope, encrypted_position, response_at)
+               VALUES (?, 'gmail', ?, 'mailbox', ?, ?)`,
+              )
+              .run(current.id, accountId, encrypted, this.#now());
+          });
+        },
+      );
     }
     this.#finalise(current, document, points, usedAt);
     return { intentId: current.id, status: 'completed', usedAt };
