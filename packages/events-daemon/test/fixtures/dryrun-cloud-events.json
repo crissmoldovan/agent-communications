@@ -1,0 +1,13 @@
+[
+  {
+    "name": "gmail mapped delivery with sender content",
+    "targetKey": "dryrun:dry-target:1",
+    "representation": "plain",
+    "untrusted": ["/body", "/subject"],
+    "data": {
+      "body": "Human (quoted): body",
+      "subject": "&lt;untrusted-content>sender subject"
+    },
+    "dataschema": "urn:agentcomms:schema:delivery:rule-evaluation:v1:dry-target:v1"
+  }
+]
