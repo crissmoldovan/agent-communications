@@ -23,6 +23,22 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '2' WHERE key = 'schema_version'",
     ],
   },
+  {
+    version: 3,
+    name: 'event-subscriber-versions-v1',
+    statements: [
+      `CREATE TABLE subscriber_versions (
+        id TEXT PRIMARY KEY,
+        subscriber_id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        document TEXT NOT NULL,
+        digest TEXT NOT NULL,
+        revoked_at INTEGER,
+        UNIQUE (subscriber_id, version)
+      ) STRICT`,
+      "UPDATE meta SET value = '3' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {
