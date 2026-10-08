@@ -363,12 +363,23 @@ export class EventScheduler {
   }
 
   #rulesForAccount(accountId: string): readonly GmailSourceRule[] {
+    // K6: an active version polls an account only where it holds a cut-over point there. One whose point a removal
+    // purged is dark for that account — even after the same id is added back — until an approved activation (a
+    // replacement or enable-all) takes a fresh point (D9: it "can no longer poll, judge or disclose the missing one").
     const rows = this.#store.database
       .prepare(
         `SELECT rule_versions.document
          FROM active_versions JOIN rule_versions
            ON rule_versions.rule_id = active_versions.object_id AND rule_versions.version = active_versions.version
          WHERE active_versions.kind = 'rule'
+           AND EXISTS (
+             SELECT 1 FROM rule_activation_points
+             WHERE rule_activation_points.activation_id = active_versions.current_cutover_id
+               AND rule_activation_points.rule_id = active_versions.object_id
+               AND rule_activation_points.rule_version = active_versions.version
+               AND rule_activation_points.account_id = ?
+               AND rule_activation_points.position_scope = 'mailbox'
+           )
          UNION ALL
          SELECT rule_versions.document
          FROM replacement_drains JOIN activation_intents ON activation_intents.id = replacement_drains.intent_id
@@ -376,7 +387,7 @@ export class EventScheduler {
          WHERE replacement_drains.account_id = ? AND replacement_drains.drained_at IS NULL
            AND activation_intents.status = 'pending-completion'`,
       )
-      .all(accountId) as unknown as StoredRule[];
+      .all(accountId, accountId) as unknown as StoredRule[];
     const rules = new Map<string, GmailSourceRule>();
     for (const row of rows) {
       const rule = ruleFromRow(row);
