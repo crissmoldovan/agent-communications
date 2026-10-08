@@ -29,6 +29,8 @@ import { openEventDatabase } from '../store/database.ts';
 import { openEventSecretStore } from '../store/event-secrets.ts';
 import { EventRecordCipher } from '../store/records.ts';
 import { ActivationRuntime } from './activations.ts';
+import { DryRunDispatcher } from './dispatcher.ts';
+import { EventExpiry } from './expiry.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
@@ -80,6 +82,14 @@ export async function startEventOwner(
     configDir: core.paths.configDir,
   });
   const cipher = new EventRecordCipher(database.database, eventSecrets);
+  const expiry = new EventExpiry(database);
+  const dispatcher = new DryRunDispatcher({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    expiry,
+  });
   const mailboxLock = new MailboxLock();
   const activations = new ActivationRuntime({
     store: database,
@@ -147,13 +157,15 @@ export async function startEventOwner(
   };
 
   try {
+    expiry.sweep();
+    await dispatcher.recoverLeases();
     await recoverActivations(activations);
     await writeToken(paths, token);
     control = await startControlServer({
       endpoint: instance.endpoint,
       token,
       handle: async (request) =>
-        handleControl(owner, lifecycle, database.installationId, database, activations, request),
+        handleControl(owner, lifecycle, database.installationId, database, activations, dispatcher, request),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
     await chmod(instance.endpoint, 0o600);
@@ -191,6 +203,7 @@ async function handleControl(
   installationId: string,
   database: Awaited<ReturnType<typeof openEventDatabase>>,
   activations: ActivationRuntime,
+  dispatcher: DryRunDispatcher,
   request: ControlRequest,
 ): Promise<unknown> {
   switch (request.operation) {
@@ -210,7 +223,11 @@ async function handleControl(
     case 'enable-all':
       return activations.prepareEnableAll();
     case 'doctor':
-      return { ...owner.status(), protocolVersions: [1], installationId };
+      return { ...owner.status(), protocolVersions: [1], installationId, dryrun: dispatcher.summary() };
+    case 'dryrun-list':
+      return dispatcher.list();
+    case 'dryrun-show':
+      return dispatcher.read(requiredText(request.args.deliveryId, 'local delivery id'));
     case 'catalogue-list':
       return CATALOGUE.map((definition) => ({ type: definition.type, version: definition.version }));
     case 'catalogue-show': {

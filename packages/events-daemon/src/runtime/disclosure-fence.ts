@@ -17,14 +17,15 @@ import {
 import { classifyGmailSourceOptionChange } from '../domain/source-options.ts';
 import { assertLiveGmailAccount } from './account-fence.ts';
 
-type Boundary = 'activation' | 'recovery' | 'source' | 'evaluation' | 'dispatch' | 'read';
+/** Every plaintext boundary declares itself so the one resolver covers source, evaluation, dispatch, and terminal read. */
+export type DisclosureBoundary = 'activation' | 'recovery' | 'source' | 'evaluation' | 'dispatch' | 'read';
 
 interface FenceCommon {
   readonly database: DatabaseSync;
   readonly approvals: Pick<ApprovalStore, 'get'>;
   readonly config: Pick<ConfigStore, 'load'>;
   readonly accountId: string;
-  readonly boundary: Boundary;
+  readonly boundary: DisclosureBoundary;
 }
 
 /** A live-work check after an exact or derived version has become effective. */
