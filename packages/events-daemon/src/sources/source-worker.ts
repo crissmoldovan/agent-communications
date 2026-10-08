@@ -67,6 +67,11 @@ export interface GmailSourceWorkerOptions {
   readonly replacementDrains?:
     | Pick<GmailReplacementDrains, 'shouldWithhold' | 'isAfterActivePoint' | 'markPageDrained'>
     | undefined;
+  /**
+   * D9: the account is read from core's configuration at each boundary, never cached. Called immediately before every
+   * write that keeps provider content or moves the cursor; throws the ACCOUNT_REMOVED refusal once the account is gone.
+   */
+  readonly accountLive?: (() => Promise<void>) | undefined;
   readonly materialise?:
     | ((requests: readonly GmailMaterialisationRequest[]) => Promise<readonly GmailMaterialisationResult[]>)
     | undefined;
@@ -144,6 +149,14 @@ function retryJitter(occurrenceKey: string, attempts: number): number {
   return hash % 251;
 }
 
+/** Whether a rule version has been revoked — its immutable row stays, marked, so a revocation is always visible. */
+export function isRevokedVersion(store: EventDatabase, ruleId: string, ruleVersion: number): boolean {
+  const row = store.database
+    .prepare('SELECT state, revoked_at FROM rule_versions WHERE rule_id = ? AND version = ?')
+    .get(ruleId, ruleVersion) as { state: string | null; revoked_at: number | null } | undefined;
+  return row !== undefined && (row.revoked_at !== null || row.state === 'revoked');
+}
+
 /** A scan whose switch or account moved under it: it stops and writes nothing more. */
 export class StaleScanError extends CommsError {
   constructor() {
@@ -168,6 +181,7 @@ export class GmailSourceWorker {
   readonly #onPageStaged: GmailSourceWorkerOptions['onPageStaged'];
   readonly #beforeCursorCommit: GmailSourceWorkerOptions['beforeCursorCommit'];
   readonly #replacementDrains: GmailSourceWorkerOptions['replacementDrains'];
+  readonly #accountLive: () => Promise<void>;
   readonly #materialise: GmailSourceWorkerOptions['materialise'];
   readonly #now: () => number;
 
@@ -185,6 +199,7 @@ export class GmailSourceWorker {
     this.#onPageStaged = options.onPageStaged;
     this.#beforeCursorCommit = options.beforeCursorCommit;
     this.#replacementDrains = options.replacementDrains;
+    this.#accountLive = options.accountLive ?? (async () => undefined);
     this.#materialise = options.materialise;
     this.#now = options.now ?? Date.now;
   }
@@ -287,7 +302,9 @@ export class GmailSourceWorker {
         if (pageToken === undefined) break;
       }
     } catch (error) {
-      if (!(error instanceof CommsError) || error.code !== 'NOT_FOUND') throw error;
+      // Only Gmail's expired-history NOT_FOUND re-baselines; an account removal (also NOT_FOUND) ends the scan, and
+      // must never be answered with another provider call for an account that is gone.
+      if (!(error instanceof CommsError) || error.code !== 'NOT_FOUND' || isRemovedAccountError(error)) throw error;
       // A response may have been staged before Gmail aged the cursor out. Drain that durable work first; re-baselining
       // it away would turn a successful acquisition into a silent loss.
       if (!(await this.#resumeStagedPages())) return { cursor, pending: true };
@@ -301,6 +318,7 @@ export class GmailSourceWorker {
     }
     if (heldAfterPoint) return { cursor, pending: true };
     await this.#beforeCursorCommit?.();
+    await this.#accountLive();
     this.#write(() => {
       const remaining = this.#store.database
         .prepare(
@@ -371,7 +389,13 @@ export class GmailSourceWorker {
     };
     const encrypted = await this.#encryptStage(value, id);
     const expiresAt = stagedAt + this.#shortestRetention();
+    await this.#accountLive();
     this.#write(() => {
+      // A page is kept only for the rule versions still live when it is written: one revoked during the provider call
+      // or the encryption owes it nothing, and a page no live version owes would have nothing to resume or purge it.
+      // A revoked version keeps its immutable row as `revoked`, so a revocation during the await is visible here.
+      const live = this.#rules().filter((rule) => !isRevokedVersion(this.#store, rule.ruleId, rule.ruleVersion));
+      if (live.length === 0) throw new StaleScanError();
       this.#store.database
         .prepare(
           `INSERT OR IGNORE INTO source_scan_state
@@ -379,7 +403,7 @@ export class GmailSourceWorker {
            VALUES (?, 'gmail', ?, 'mailbox', ?, ?, ?, ?)`,
         )
         .run(id, this.#mailbox.accountId, stagedAt, expiresAt, encrypted, stagedAt);
-      for (const rule of this.#rules()) {
+      for (const rule of live) {
         this.#store.database
           .prepare(
             `INSERT OR IGNORE INTO source_stage_rule_debts (stage_id, rule_id, rule_version)
@@ -726,6 +750,7 @@ export class GmailSourceWorker {
 
   async #persistStage(stage: StagedPage, value: StoredHistoryPage): Promise<void> {
     const encrypted = await this.#encryptStage(value, stage.id);
+    await this.#accountLive();
     const now = this.#now();
     this.#write(() => {
       this.#store.database
@@ -858,6 +883,7 @@ export class GmailSourceWorker {
     if (!this.#source.getProfile)
       throw new CommsError('CONFIG', 'the Gmail source cannot rebaseline an expired cursor');
     const profile = await this.#source.getProfile();
+    await this.#accountLive();
     const now = this.#now();
     this.#write(() => {
       this.#store.database

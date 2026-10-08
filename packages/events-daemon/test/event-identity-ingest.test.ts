@@ -30,6 +30,8 @@ test('EVAL-B1: equal event identity repeats retain one projection for exactly on
 }, async () => {
   const stateDir = await shortTempDir('events-identity-');
   const store = await openEventDatabase({ stateDir });
+  // Projections are kept only while collection is enabled, as the scheduler admits them.
+  store.database.exec('UPDATE event_settings SET enabled = 1 WHERE singleton = 1');
   try {
     await selectEventSecretStore(store.database, 'file');
     const secrets = await openEventSecretStore({

@@ -68,7 +68,16 @@ test('GML-B1: the real Gmail page stage, final cursor commit, and baseline captu
         },
         mailbox: { accountId: 'ibx_ABCDEFGHIJKLMNOP', name: 'Events inbox' },
         mailboxLock: lock,
-        rules: () => [],
+        // The scheduler polls only an account some live rule version binds; a page is staged for that version.
+        rules: () => [
+          {
+            ruleId: 'rule-lock',
+            ruleVersion: 1,
+            eventType: 'gmail.message.received' as const,
+            options: { channel: 'gmail' as const, labels: 'inbox' as const, includeSpamTrash: false },
+            ingestRetentionMs: 600_000,
+          },
+        ],
         assertDisclosable: async () => undefined,
         admit: async () => 'terminal' as const,
         encryptStage: async (value) => Buffer.from(JSON.stringify(value)),

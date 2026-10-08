@@ -16,7 +16,7 @@ import {
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { MailboxLock } from '../sources/mailbox-lock.ts';
 import type { EventDatabase } from '../store/database.ts';
-import { isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
+import { assertLiveGmailAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
 import { persistGmailBaseline } from './baseline.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import {
@@ -515,48 +515,62 @@ export class ActivationRuntime {
         }
         throw error;
       }
-      await persistGmailBaseline(
-        this.#mailboxLock,
-        accountId,
-        () => this.#gmailSourceFor(accountId),
-        async (position) => {
-          // Encryption (in production EventRecordCipher) completes before this write transaction reserves its own nonce.
-          const encrypted = await this.#encryptBaseline(current.id, accountId, position);
-          this.#store.immediate(() => {
-            // The provider call and encryption awaited: a disable-all or revocation may have cancelled this intent
-            // and purged its baselines meanwhile. Write only while it is still the claimed work it was, at the same
-            // switch generation — never recreate a purged baseline or drain that nothing would ever clean up.
-            const live = this.#store.database
-              .prepare('SELECT status, effect FROM activation_intents WHERE id = ?')
-              .get(current.id) as { status: string; effect: string } | undefined;
-            const planned = live === undefined ? null : (JSON.parse(live.effect) as ActivationEffect).switchGeneration;
-            if (live?.status !== 'pending-completion' || planned !== this.#switch().generation) return;
-            this.#store.database
-              .prepare(
-                `INSERT OR IGNORE INTO activation_baselines
-                 (intent_id, source, account_id, position_scope, encrypted_position, response_at)
-                 VALUES (?, 'gmail', ?, 'mailbox', ?, ?)`,
-              )
-              .run(current.id, accountId, encrypted, this.#now());
-            if (current.replacement_of_version !== null) {
-              const oldRule = current.replacement_of_version;
-              const oldInScope = this.#replacementIncludesAccount(oldRule, accountId);
-              const newInScope = document.kind === 'rule' && document.rule.source.accountIds.includes(accountId);
-              // A new-only scope gets its own P activation point but owes no old-version occurrence, so it must not
-              // leave an impossible drain open waiting for a worker that never ran the old rule there.
-              if (oldInScope) {
-                this.#store.database
-                  .prepare(
-                    `INSERT OR IGNORE INTO replacement_drains
-                     (intent_id, source, account_id, position_scope, old_in_scope, new_in_scope)
-                     VALUES (?, 'gmail', ?, 'mailbox', ?, ?)`,
-                  )
-                  .run(current.id, accountId, 1, newInScope ? 1 : 0);
+      try {
+        await persistGmailBaseline(
+          this.#mailboxLock,
+          accountId,
+          () => this.#gmailSourceFor(accountId),
+          async (position) => {
+            // Encryption (in production EventRecordCipher) completes before this write transaction reserves its own nonce.
+            const encrypted = await this.#encryptBaseline(current.id, accountId, position);
+            // D9: the account is read again immediately before the baseline is written (a removal during the profile
+            // call or the encryption throws the ACCOUNT_REMOVED refusal, which purges and cancels below).
+            await assertLiveGmailAccount(this.#config, accountId);
+            this.#store.immediate(() => {
+              // The provider call and encryption awaited: a disable-all or revocation may have cancelled this intent
+              // and purged its baselines meanwhile. Write only while it is still the claimed work it was, at the same
+              // switch generation — never recreate a purged baseline or drain that nothing would ever clean up.
+              const live = this.#store.database
+                .prepare('SELECT status, effect FROM activation_intents WHERE id = ?')
+                .get(current.id) as { status: string; effect: string } | undefined;
+              const planned =
+                live === undefined ? null : (JSON.parse(live.effect) as ActivationEffect).switchGeneration;
+              if (live?.status !== 'pending-completion' || planned !== this.#switch().generation) return;
+              this.#store.database
+                .prepare(
+                  `INSERT OR IGNORE INTO activation_baselines
+                   (intent_id, source, account_id, position_scope, encrypted_position, response_at)
+                   VALUES (?, 'gmail', ?, 'mailbox', ?, ?)`,
+                )
+                .run(current.id, accountId, encrypted, this.#now());
+              if (current.replacement_of_version !== null) {
+                const oldRule = current.replacement_of_version;
+                const oldInScope = this.#replacementIncludesAccount(oldRule, accountId);
+                const newInScope = document.kind === 'rule' && document.rule.source.accountIds.includes(accountId);
+                // A new-only scope gets its own P activation point but owes no old-version occurrence, so it must not
+                // leave an impossible drain open waiting for a worker that never ran the old rule there.
+                if (oldInScope) {
+                  this.#store.database
+                    .prepare(
+                      `INSERT OR IGNORE INTO replacement_drains
+                       (intent_id, source, account_id, position_scope, old_in_scope, new_in_scope)
+                       VALUES (?, 'gmail', ?, 'mailbox', ?, ?)`,
+                    )
+                    .run(current.id, accountId, 1, newInScope ? 1 : 0);
+                }
               }
-            }
+            });
+          },
+        );
+      } catch (error) {
+        if (isRemovedAccountError(error)) {
+          this.#store.immediate(() => {
+            purgeRemovedAccountWork(this.#store.database, accountId, this.#now());
+            this.#cancel(current.id, 'ACCOUNT_REMOVED');
           });
-        },
-      );
+        }
+        throw error;
+      }
     }
     const preparedPoints = await Promise.all(
       points
@@ -581,6 +595,20 @@ export class ActivationRuntime {
           return { ...point, encryptedPosition };
         }),
     );
+    // D9: every account the points bind is read again immediately before the pointer transaction.
+    for (const accountId of new Set(preparedPoints.map((point) => point.accountId))) {
+      try {
+        await assertLiveGmailAccount(this.#config, accountId);
+      } catch (error) {
+        if (isRemovedAccountError(error)) {
+          this.#store.immediate(() => {
+            purgeRemovedAccountWork(this.#store.database, accountId, this.#now());
+            this.#cancel(current.id, 'ACCOUNT_REMOVED');
+          });
+        }
+        throw error;
+      }
+    }
     this.#finalise(current, document, preparedPoints, usedAt);
     return { intentId: current.id, status: 'completed', usedAt };
   }
