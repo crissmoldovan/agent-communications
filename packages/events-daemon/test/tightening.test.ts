@@ -248,3 +248,51 @@ test('APR-B1: a derived tightening copies no point an account removal purged or 
     }
   }
 });
+
+test("APR-B1: a derived tightening keeps a page staged for its parent, now owed to the child that inherits the parent's point", {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-tightening-debt-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const versions = new ImmutableVersions(store.database);
+    versions.createTarget(target);
+    versions.createRule(base);
+    const child: CanonicalFullRuleDocument = {
+      ...base,
+      version: 2,
+      source: { ...base.source, options: { ...base.source.options, labels: ['Label_a'] } },
+    };
+    versions.createRule(child);
+    store.database.exec(
+      "UPDATE rule_versions SET state = 'active', approval_id = 'ap_root', authorization_activation_id = 'act_root', activated_at = 1 WHERE id = 'rule-tightening@1'; INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-tightening', 1, 'act_root', 1); INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at) VALUES ('act_root', 'rule-tightening', 1, 'gmail', 'account-1', 'mailbox', X'00', 1); INSERT INTO source_scan_state (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at) VALUES ('stage-1', 'gmail', 'account-1', 'mailbox', 1, 99999999999999, X'00', 1); INSERT INTO source_stage_rule_debts (stage_id, rule_id, rule_version) VALUES ('stage-1', 'rule-tightening', 1)",
+    );
+    await applyDerivedTightening({
+      database: store.database,
+      parent: base,
+      child,
+      now: 2,
+      decryptPoint: async () => ({ historyId: '1' }),
+      encryptPoint: async ({ position }) => Buffer.from(JSON.stringify(position)),
+    });
+    assert.equal(
+      (
+        store.database.prepare("SELECT COUNT(*) AS count FROM source_scan_state WHERE id = 'stage-1'").get() as {
+          count: number;
+        }
+      ).count,
+      1,
+      "the parent's purge does not delete a page the child is owed",
+    );
+    assert.deepEqual(
+      store.database
+        .prepare("SELECT rule_id, rule_version FROM source_stage_rule_debts WHERE stage_id = 'stage-1'")
+        .all()
+        .map((row) => ({ ...row })),
+      [{ rule_id: 'rule-tightening', rule_version: 2 }],
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});

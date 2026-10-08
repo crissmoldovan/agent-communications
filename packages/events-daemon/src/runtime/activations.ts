@@ -559,11 +559,13 @@ export class ActivationRuntime {
               // and purged its baselines meanwhile. Write only while it is still the claimed work it was, at the same
               // switch generation — never recreate a purged baseline or drain that nothing would ever clean up.
               const live = this.#store.database
-                .prepare('SELECT status, effect FROM activation_intents WHERE id = ?')
-                .get(current.id) as { status: string; effect: string } | undefined;
+                .prepare('SELECT status, effect, completion_deadline FROM activation_intents WHERE id = ?')
+                .get(current.id) as { status: string; effect: string; completion_deadline: number | null } | undefined;
               const planned =
                 live === undefined ? null : (JSON.parse(live.effect) as ActivationEffect).switchGeneration;
               if (live?.status !== 'pending-completion' || planned !== this.#switch().generation) return;
+              // Past the completion deadline nothing more is written; finalisation then settles the timeout.
+              if (live.completion_deadline !== null && live.completion_deadline <= this.#now()) return;
               this.#store.database
                 .prepare(
                   `INSERT OR IGNORE INTO activation_baselines
@@ -614,6 +616,13 @@ export class ActivationRuntime {
         throw error;
       }
     }
+    // A baseline call that ended past the completion deadline wrote nothing; settle the timeout now rather than
+    // leaving the intent waiting for a baseline that will never be written.
+    const afterBaselines = this.#intent(current.id);
+    if (afterBaselines.completion_deadline !== null && afterBaselines.completion_deadline <= this.#now()) {
+      this.#fail(current.id, 'COMPLETION_TIMEOUT');
+      throw new CommsError('APPROVAL_VOID', 'the activation completion deadline has passed');
+    }
     const preparedPoints = await Promise.all(
       points
         .filter((point) => document.kind !== 'rule' || point.ruleVersion === document.rule.version)
@@ -656,15 +665,26 @@ export class ActivationRuntime {
   }
 
   #finalise(intent: IntentRow, document: ActivationDocumentV1, points: readonly PreparedPoint[], usedAt: string): void {
+    // A settlement found here (a cancel, or a failure at the deadline) must commit, so it is recorded inside the
+    // transaction and its refusal is thrown only after the commit: a throw inside would roll the settlement back.
+    let settled: CommsError | undefined;
     this.#store.immediate(() => {
       const latest = this.#intent(intent.id);
       if (latest.status !== 'pending-completion')
         throw new CommsError('APPROVAL_VOID', 'the activation was cancelled before its pointer effect committed');
+      // The deadline is the completion boundary: a completion that started in time but reached here after it (a
+      // slow profile call or encryption) installs nothing.
+      if (latest.completion_deadline !== null && latest.completion_deadline <= this.#now()) {
+        this.#failWithin(intent.id, 'COMPLETION_TIMEOUT');
+        settled = new CommsError('APPROVAL_VOID', 'the activation completion deadline has passed');
+        return;
+      }
       const effect = JSON.parse(latest.effect) as ActivationEffect;
       const settings = this.#switch();
       if (settings.generation !== effect.switchGeneration) {
         this.#cancel(intent.id, 'STALE_GENERATION');
-        throw new CommsError('APPROVAL_VOID', 'the global event switch changed before activation completed');
+        settled = new CommsError('APPROVAL_VOID', 'the global event switch changed before activation completed');
+        return;
       }
       if (effect.currentCutovers !== undefined) {
         const currentCutovers = this.#store.database
@@ -678,10 +698,35 @@ export class ActivationRuntime {
           });
         if (canonicalJson(currentCutovers) !== canonicalJson(effect.currentCutovers)) {
           this.#cancel(intent.id, 'STALE_POINTER');
-          throw new CommsError('APPROVAL_VOID', 'an enabled rule pointer changed before global activation completed');
+          settled = new CommsError(
+            'APPROVAL_VOID',
+            'an enabled rule pointer changed before global activation completed',
+          );
+          return;
         }
       }
+      if (document.kind === 'rule') {
+        const active = new ImmutableVersions(this.#store.database).activeVersion('rule', document.rule.ruleId);
+        if (latest.replacement_of_version === null && active !== null)
+          throw new CommsError('TRANSIENT', 'the active rule pointer changed during activation', {
+            details: { reason: 'ACTIVATION_COMPLETING' },
+          });
+        if (
+          latest.replacement_of_version !== null &&
+          (active === null || `${document.rule.ruleId}@${active.version}` !== latest.replacement_of_version)
+        ) {
+          this.#cancel(intent.id, 'STALE_POINTER');
+          settled = new CommsError('APPROVAL_VOID', 'the old rule pointer changed before replacement finalisation');
+          return;
+        }
+      } else if (document.kind === 'enable-all') {
+        if (settings.enabled)
+          throw new CommsError('CONFIG', 'collection became enabled before this approval completed');
+      } else {
+        throw new CommsError('CONFIG', 'this activation kind is not enabled in B1');
+      }
       if (latest.replacement_of_version !== null) assertReplacementDrained(this.#store.database, latest.id);
+
       for (const point of points) {
         this.#store.database
           .prepare(
@@ -701,24 +746,13 @@ export class ActivationRuntime {
           );
       }
       if (document.kind === 'rule') {
-        const active = new ImmutableVersions(this.#store.database).activeVersion('rule', document.rule.ruleId);
-        if (latest.replacement_of_version === null && active !== null)
-          throw new CommsError('TRANSIENT', 'the active rule pointer changed during activation', {
-            details: { reason: 'ACTIVATION_COMPLETING' },
-          });
-        if (
-          latest.replacement_of_version !== null &&
-          (active === null || `${document.rule.ruleId}@${active.version}` !== latest.replacement_of_version)
-        ) {
-          this.#cancel(intent.id, 'STALE_POINTER');
-          throw new CommsError('APPROVAL_VOID', 'the old rule pointer changed before replacement finalisation');
-        }
         if (latest.replacement_of_version !== null) {
           this.#store.database
             .prepare(
               "UPDATE rule_versions SET state = 'superseded', superseded_at = ? WHERE id = ? AND state = 'active'",
             )
             .run(this.#now(), latest.replacement_of_version);
+          this.#settleOldOnlyStages(latest.replacement_of_version, document.rule.source.accountIds);
         }
         this.#store.database
           .prepare(
@@ -738,9 +772,7 @@ export class ActivationRuntime {
             )
             .run(document.rule.version, intent.id, Date.parse(usedAt), document.rule.ruleId);
         }
-      } else if (document.kind === 'enable-all') {
-        if (settings.enabled)
-          throw new CommsError('CONFIG', 'collection became enabled before this approval completed');
+      } else {
         for (const entry of document.ruleVersions) {
           this.#store.database
             .prepare(
@@ -751,8 +783,6 @@ export class ActivationRuntime {
         this.#store.database
           .prepare('UPDATE event_settings SET enabled = 1, activation_id = ?, changed_at = ? WHERE singleton = 1')
           .run(intent.id, this.#now());
-      } else {
-        throw new CommsError('CONFIG', 'this activation kind is not enabled in B1');
       }
       this.#store.database.prepare('DELETE FROM activation_baselines WHERE intent_id = ?').run(intent.id);
       this.#store.database.prepare('DELETE FROM replacement_drains WHERE intent_id = ?').run(intent.id);
@@ -760,6 +790,41 @@ export class ActivationRuntime {
         .prepare("UPDATE activation_intents SET status = 'completed', updated_at = ? WHERE id = ?")
         .run(this.#now(), intent.id);
     });
+    if (settled !== undefined) throw settled;
+  }
+
+  /**
+   * At a replacement's swap, an account only the old version named is polled by nothing of this rule any more: the
+   * old version's debt on that account's raw pages (its withheld after-P work) is owed to nobody, so it is dropped, and
+   * a page left owing nothing is deleted rather than kept for ever.
+   */
+  #settleOldOnlyStages(oldVersionId: string, newAccountIds: readonly string[]): void {
+    const old = this.#store.database
+      .prepare('SELECT rule_id, version, document FROM rule_versions WHERE id = ?')
+      .get(oldVersionId) as { rule_id: string; version: number; document: string } | undefined;
+    if (!old) return;
+    const oldAccounts = canonicalFullRuleDocument(JSON.parse(old.document)).source.accountIds;
+    for (const accountId of oldAccounts.filter((id) => !newAccountIds.includes(id))) {
+      const stages = (
+        this.#store.database
+          .prepare(
+            `SELECT debt.stage_id FROM source_stage_rule_debts AS debt
+             JOIN source_scan_state AS stage ON stage.id = debt.stage_id
+             WHERE debt.rule_id = ? AND debt.rule_version = ? AND stage.account_id = ? AND stage.cursor_scope = 'mailbox'`,
+          )
+          .all(old.rule_id, old.version, accountId) as Array<{ stage_id: string }>
+      ).map((row) => row.stage_id);
+      for (const stageId of stages) {
+        this.#store.database
+          .prepare('DELETE FROM source_stage_rule_debts WHERE stage_id = ? AND rule_id = ? AND rule_version = ?')
+          .run(stageId, old.rule_id, old.version);
+        this.#store.database
+          .prepare(
+            'DELETE FROM source_scan_state WHERE id = ? AND NOT EXISTS (SELECT 1 FROM source_stage_rule_debts WHERE stage_id = ?)',
+          )
+          .run(stageId, stageId);
+      }
+    }
   }
 
   #intentForApproval(approvalId: string): IntentRow {
@@ -918,13 +983,16 @@ export class ActivationRuntime {
   }
 
   #fail(intentId: string, code: string): void {
-    this.#store.immediate(() => {
-      this.#store.database
-        .prepare("UPDATE activation_intents SET status = 'failed', failure_code = ?, updated_at = ? WHERE id = ?")
-        .run(code, this.#now(), intentId);
-      this.#store.database.prepare('DELETE FROM activation_baselines WHERE intent_id = ?').run(intentId);
-      this.#store.database.prepare('DELETE FROM replacement_drains WHERE intent_id = ?').run(intentId);
-    });
+    this.#store.immediate(() => this.#failWithin(intentId, code));
+  }
+
+  /** The failure's writes, for a caller already inside a transaction. */
+  #failWithin(intentId: string, code: string): void {
+    this.#store.database
+      .prepare("UPDATE activation_intents SET status = 'failed', failure_code = ?, updated_at = ? WHERE id = ?")
+      .run(code, this.#now(), intentId);
+    this.#store.database.prepare('DELETE FROM activation_baselines WHERE intent_id = ?').run(intentId);
+    this.#store.database.prepare('DELETE FROM replacement_drains WHERE intent_id = ?').run(intentId);
   }
 }
 

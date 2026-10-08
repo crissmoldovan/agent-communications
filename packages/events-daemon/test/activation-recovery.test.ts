@@ -1466,3 +1466,255 @@ test("APR-B1: a scan during a first activation's completion commits nothing, so 
     await rm(setup.root, { recursive: true, force: true });
   }
 });
+
+function stubScheduler(setup: Awaited<ReturnType<typeof fixture>>, sources: string[]) {
+  return new EventScheduler({
+    store: setup.store,
+    lifecycle: new EventLifecycle(setup.store),
+    // The pending activation below is driven by hand; the tick must not resume it.
+    activations: { resumeClaimedCompletions: async () => undefined } as never,
+    dispatcher: { recoverLeases: async () => undefined, dispatch: async () => undefined } as never,
+    expiry: new EventExpiry(setup.store, setup.time.now),
+    cipher: {
+      encrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+      decrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+    } as never,
+    approvals: setup.approvals,
+    config: setup.configStore,
+    taint: { record: async () => undefined } as never,
+    gmailSourceFor: async (accountId: string) => {
+      sources.push(accountId);
+      return {
+        getProfile: async () => ({
+          emailAddress: 'x@example.test',
+          messagesTotal: 1,
+          threadsTotal: 1,
+          historyId: '300',
+        }),
+        listHistory: async ({ historyId }: { historyId: string }) => ({
+          historyId,
+          nextPageToken: undefined,
+          history: [],
+        }),
+        getMessageMetadata: async () => {
+          throw new Error('no metadata read is expected');
+        },
+      } as never;
+    },
+    mailboxLock: setup.mailboxLock,
+    now: setup.time.now,
+  });
+}
+
+test("APR-B1: the scheduler installs no initial cursor past a claimed first activation's unpublished P (D12)", {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const db = setup.store.database;
+    // rule-1 is active on A with a published point at 300; rule-2's first activation has sampled P = 250 and is
+    // waiting to publish it. No mailbox cursor exists yet.
+    const doc = (ruleId: string) => canonicalJson({ ...rule, ruleId });
+    db.prepare(
+      `INSERT INTO rule_versions (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+       VALUES ('rule-1@1', 'rule-1', 1, ?, 'digest', 'active', 'approval', 'act_c', 1)`,
+    ).run(doc('rule-1'));
+    db.prepare(
+      "INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES ('rule-2@1', 'rule-2', 1, ?, 'digest')",
+    ).run(doc('rule-2'));
+    db.exec(
+      "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-1', 1, 'act_c', 1)",
+    );
+    db.prepare(
+      `INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at)
+       VALUES ('act_c', 'rule-1', 1, 'gmail', ?, 'mailbox', CAST('{"historyId":"300"}' AS BLOB), 1)`,
+    ).run(A);
+    db.prepare(
+      `INSERT INTO activation_intents
+       (id, kind, document, digest, effect, replacement_of_version, required_points, acquisition_scopes, status, claimed_at, completion_deadline, created_at, updated_at)
+       VALUES ('act_b', 'rule', '{}', 'digest', '{}', NULL, '[]', '[]', 'pending-completion', 1, 99999999999999, 1, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO activation_baselines (intent_id, source, account_id, position_scope, encrypted_position, response_at)
+       VALUES ('act_b', 'gmail', ?, 'mailbox', CAST('{"historyId":"250"}' AS BLOB), 1)`,
+    ).run(A);
+    db.exec('UPDATE event_settings SET enabled = 1');
+    const sources: string[] = [];
+    const scheduler = stubScheduler(setup, sources);
+    await scheduler.tick();
+    assert.equal(count(setup, 'cursors WHERE account_id = ?', A), 0, 'no cursor is installed past the unpublished P');
+
+    // rule-2 publishes P = 250 (as finalisation does, in one transaction); the cursor then starts at the lowest point.
+    setup.store.immediate(() => {
+      db.exec(
+        "UPDATE rule_versions SET state = 'active', approval_id = 'approval', authorization_activation_id = 'act_b', activated_at = 2 WHERE id = 'rule-2@1'; INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-2', 1, 'act_b', 2); DELETE FROM activation_baselines WHERE intent_id = 'act_b'; UPDATE activation_intents SET status = 'completed' WHERE id = 'act_b'",
+      );
+      db.prepare(
+        `INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at)
+         VALUES ('act_b', 'rule-2', 1, 'gmail', ?, 'mailbox', CAST('{"historyId":"250"}' AS BLOB), 2)`,
+      ).run(A);
+    });
+    setup.time.advance(120_000);
+    await scheduler.tick();
+    assert.equal(
+      (db.prepare('SELECT cursor FROM cursors WHERE account_id = ?').get(A) as { cursor: string }).cursor,
+      '250',
+      'the cursor starts at the lowest published point, so rule-2 misses nothing after its P',
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test("APR-B1: a replacement's swap drops the old version's debt on an account the new version leaves, and its orphaned page", {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createTarget(target);
+    versions.createRule(multi);
+    const first = (await setup.runtime.prepareRule({ ruleId: multi.ruleId, version: 1 })) as PreparedActivation;
+    await setup.runtime.approve({
+      approvalId: first.approvalId,
+      answer: await setup.approvals.issueDisclosureChallenge(first.approvalId),
+    });
+    setup.store.database.exec('UPDATE event_settings SET enabled = 1');
+    versions.createRule({ ...multi, version: 2, source: { ...multi.source, accountIds: [B] } });
+    const prepared = (await setup.runtime.prepareRule({ ruleId: multi.ruleId, version: 2 })) as PreparedActivation;
+    await assert.rejects(
+      () =>
+        (async () =>
+          setup.runtime.approve({
+            approvalId: prepared.approvalId,
+            answer: await setup.approvals.issueDisclosureChallenge(prepared.approvalId),
+          }))(),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+    );
+    // A's worker held two after-P pages for the old version; one is also owed to another rule.
+    const stage = setup.store.database.prepare(
+      `INSERT INTO source_scan_state (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at)
+       VALUES (?, 'gmail', ?, 'mailbox', 1, 99999999999999, X'00', 1)`,
+    );
+    const debt = setup.store.database.prepare(
+      'INSERT INTO source_stage_rule_debts (stage_id, rule_id, rule_version) VALUES (?, ?, ?)',
+    );
+    stage.run('stage-only-old', A);
+    debt.run('stage-only-old', multi.ruleId, 1);
+    stage.run('stage-shared', A);
+    debt.run('stage-shared', multi.ruleId, 1);
+    debt.run('stage-shared', 'rule-other', 1);
+    setup.store.database
+      .prepare('UPDATE replacement_drains SET drained_at = ? WHERE intent_id = ?')
+      .run(1, prepared.intentId);
+    await setup.runtime.recover();
+    assert.equal(versions.activeVersion('rule', multi.ruleId)?.version, 2);
+    assert.equal(count(setup, "source_scan_state WHERE id = 'stage-only-old'"), 0, 'a page owed to nobody is deleted');
+    assert.equal(count(setup, "source_scan_state WHERE id = 'stage-shared'"), 1, 'a page another rule is owed stays');
+    assert.equal(
+      count(setup, 'source_stage_rule_debts WHERE rule_id = ? AND rule_version = 1', multi.ruleId),
+      0,
+      "the old version's debt on A is gone",
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('APR-B1: a completion that crosses its deadline during the baseline or point encryption installs nothing', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  for (const stage of ['baseline', 'point'] as const) {
+    let advance: () => void = () => undefined;
+    const setup = await fixture(
+      stage === 'baseline'
+        ? {
+            encryptBaseline: async (_intentId, _accountId, position) => {
+              advance();
+              return Buffer.from(JSON.stringify(position));
+            },
+          }
+        : {
+            encryptPoint: async (input) => {
+              advance();
+              return Buffer.from(JSON.stringify(input.position));
+            },
+          },
+    );
+    advance = () => setup.time.advance(3_600_001);
+    try {
+      const versions = new ImmutableVersions(setup.store.database);
+      versions.createTarget(target);
+      versions.createRule(rule);
+      const prepared = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 1 })) as PreparedActivation;
+      await assert.rejects(
+        () =>
+          (async () =>
+            setup.runtime.approve({
+              approvalId: prepared.approvalId,
+              answer: await setup.approvals.issueDisclosureChallenge(prepared.approvalId),
+            }))(),
+        (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_VOID',
+        `${stage}: refused at the deadline`,
+      );
+      assert.equal(versions.activeVersion('rule', rule.ruleId), null, `${stage}: no pointer`);
+      assert.equal(count(setup, 'rule_activation_points'), 0, `${stage}: no point`);
+      assert.equal(count(setup, 'activation_baselines'), 0, `${stage}: no baseline left`);
+      assert.deepEqual(
+        {
+          ...(setup.store.database
+            .prepare('SELECT status, failure_code FROM activation_intents WHERE id = ?')
+            .get(prepared.intentId) as Record<string, unknown>),
+        },
+        { status: 'failed', failure_code: 'COMPLETION_TIMEOUT' },
+        `${stage}: the timeout is recorded`,
+      );
+    } finally {
+      setup.store.close();
+      await rm(setup.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('APR-B1: a settlement found at finalisation commits rather than rolling back with its refusal', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  let bump: () => void = () => undefined;
+  const setup = await fixture({
+    encryptPoint: async (input) => {
+      bump();
+      return Buffer.from(JSON.stringify(input.position));
+    },
+  });
+  // The switch generation moves while the point is encrypted (no disable-all cancels the intent itself).
+  bump = () => setup.store.database.exec('UPDATE event_settings SET switch_generation = switch_generation + 1');
+  try {
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createTarget(target);
+    versions.createRule(rule);
+    const prepared = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 1 })) as PreparedActivation;
+    await assert.rejects(
+      () =>
+        (async () =>
+          setup.runtime.approve({
+            approvalId: prepared.approvalId,
+            answer: await setup.approvals.issueDisclosureChallenge(prepared.approvalId),
+          }))(),
+      (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_VOID',
+    );
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare('SELECT status, failure_code FROM activation_intents WHERE id = ?')
+          .get(prepared.intentId) as Record<string, unknown>),
+      },
+      { status: 'cancelled', failure_code: 'STALE_GENERATION' },
+    );
+    assert.equal(count(setup, 'activation_baselines'), 0, 'its baseline is gone, so it fences no mailbox');
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
