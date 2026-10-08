@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { ApprovalStore, ConfigStore, emptyConfig } from '@agentcomms/core';
 import { ImmutableVersions } from '../src/domain/versions.ts';
 import { ActivationRuntime } from '../src/runtime/activations.ts';
+import { MailboxLock } from '../src/sources/mailbox-lock.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
@@ -76,6 +77,7 @@ async function setup() {
       },
     }),
     encryptBaseline: async (_intent, _account, position) => Buffer.from(JSON.stringify(position)),
+    mailboxLock: new MailboxLock(),
   });
   // The rule is made active the only way a real one is: an approved, claimed, completed exact activation, whose
   // lineage the shared fence then proves. A row merely marked active would be refused at every boundary.
