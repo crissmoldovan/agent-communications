@@ -2,7 +2,7 @@
 name: resend-sending
 description: "Send email through Resend: prepare it, show the person the whole preview, and send it once they approve — then check what happened, and see or cancel what is scheduled. Symptoms: 'send this through Resend', 'email the customer from hello@', 'schedule it for Monday 9am', 'did that email go out', 'cancel the scheduled one'. Not for reading mail or delivery stats — resend-reading does that."
 license: MIT
-compatibility: "@agentcomms/resend@0.14.1"
+compatibility: "@agentcomms/resend@0.15.0"
 metadata:
   group: communications
   lifecycle: release
