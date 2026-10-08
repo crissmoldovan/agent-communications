@@ -322,3 +322,137 @@ test('CRY-B1: rotation never writes an older record back over a row a worker rep
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+test('CRY-B1: rotation re-encrypts every remaining row when a worker deletes one mid-batch (keyset, not OFFSET)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-rotation-delete-'));
+  try {
+    const opened = await openEventDatabase({ stateDir });
+    try {
+      await selectEventSecretStore(opened.database, 'file');
+      const secrets = await openEventSecretStore({
+        database: opened.database,
+        paths: opened.paths,
+        configDir: '/separate/config',
+        stores: { file: new MemorySecretStore() },
+      });
+      const worker = new EventRecordCipher(opened.database, secrets);
+      const location = (id: string) => ({
+        table: 'source_scan_state',
+        column: 'encryptedRecord',
+        key: [{ type: 'text' as const, value: id }],
+      });
+      for (const id of ['scan-a', 'scan-b', 'scan-c']) {
+        opened.database
+          .prepare(
+            'INSERT INTO source_scan_state (id, source, account_id, cursor_scope, encrypted_record, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+          )
+          .run(id, 'gmail', 'account-1', 'mailbox', await worker.encrypt(location(id), Buffer.from(id)), 1);
+      }
+      // With one row a batch, a worker purges scan-a while rotation decrypts it: an OFFSET of 1 would then start the
+      // next batch at scan-c and leave scan-b under the old key.
+      let purged = false;
+      const racing = {
+        currentMaster: () => secrets.currentMaster(),
+        rotateMaster: () => secrets.rotateMaster(),
+        master: async (keyId: string) => {
+          const key = await secrets.master(keyId);
+          if (!purged) {
+            purged = true;
+            opened.database.prepare("DELETE FROM source_scan_state WHERE id = 'scan-a'").run();
+          }
+          return key;
+        },
+      } as unknown as EventSecretStore;
+      const rotation = await new EventRecordCipher(opened.database, racing).rotateAndReencrypt({ batchSize: 1 });
+
+      assert.equal(purged, true);
+      const rows = opened.database
+        .prepare('SELECT id, encrypted_record FROM source_scan_state ORDER BY id')
+        .all() as Array<{ id: string; encrypted_record: Uint8Array }>;
+      assert.deepEqual(
+        rows.map((row) => [row.id, packedRecordKeyId(row.encrypted_record) === rotation.keyId]),
+        [
+          ['scan-b', true],
+          ['scan-c', true],
+        ],
+        'no remaining row is left under the old key',
+      );
+      for (const row of rows)
+        assert.equal((await worker.decrypt(location(row.id), row.encrypted_record)).toString(), row.id);
+    } finally {
+      opened.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('CRY-B1: rotation passes again for a record written under the old key while a pass ran, behind its position', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-rotation-late-'));
+  try {
+    const opened = await openEventDatabase({ stateDir });
+    try {
+      await selectEventSecretStore(opened.database, 'file');
+      const secrets = await openEventSecretStore({
+        database: opened.database,
+        paths: opened.paths,
+        configDir: '/separate/config',
+        stores: { file: new MemorySecretStore() },
+      });
+      const worker = new EventRecordCipher(opened.database, secrets);
+      const location = (id: string) => ({
+        table: 'source_scan_state',
+        column: 'encryptedRecord',
+        key: [{ type: 'text' as const, value: id }],
+      });
+      const insert = opened.database.prepare(
+        'INSERT INTO source_scan_state (id, source, account_id, cursor_scope, encrypted_record, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      );
+      insert.run(
+        'scan-m',
+        'gmail',
+        'account-1',
+        'mailbox',
+        await worker.encrypt(location('scan-m'), Buffer.from('m')),
+        1,
+      );
+      // Encrypted under the old master before the rotation began, written only once the pass is past its key.
+      const late = await worker.encrypt(location('scan-a'), Buffer.from('a'));
+      let wrote = false;
+      const racing = {
+        currentMaster: () => secrets.currentMaster(),
+        rotateMaster: () => secrets.rotateMaster(),
+        master: async (keyId: string) => {
+          const key = await secrets.master(keyId);
+          if (!wrote) {
+            wrote = true;
+            insert.run('scan-a', 'gmail', 'account-1', 'mailbox', late, 2);
+          }
+          return key;
+        },
+      } as unknown as EventSecretStore;
+      const rotation = await new EventRecordCipher(opened.database, racing).rotateAndReencrypt({ batchSize: 1 });
+
+      assert.equal(wrote, true);
+      const rows = opened.database
+        .prepare('SELECT id, encrypted_record FROM source_scan_state ORDER BY id')
+        .all() as Array<{ id: string; encrypted_record: Uint8Array }>;
+      assert.deepEqual(
+        rows.map((row) => [row.id, packedRecordKeyId(row.encrypted_record) === rotation.keyId]),
+        [
+          ['scan-a', true],
+          ['scan-m', true],
+        ],
+        'the late old-key record is re-encrypted by a further pass',
+      );
+    } finally {
+      opened.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});

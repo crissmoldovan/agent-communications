@@ -12,7 +12,7 @@ import { type EventMaster, EventSecretError, type EventSecretStore } from './eve
 const MAX_INVOCATIONS_PER_TABLE_KEY = 0xffffffff;
 
 export class RecordStorageError extends Error {
-  readonly code: 'NONCE_LIMIT' | 'RECORD_STORAGE_CLASS' | 'RECORD_UNREADABLE_RESET_REQUIRED';
+  readonly code: 'NONCE_LIMIT' | 'RECORD_STORAGE_CLASS' | 'RECORD_UNREADABLE_RESET_REQUIRED' | 'ROTATION_INCOMPLETE';
 
   constructor(code: RecordStorageError['code'], message: string) {
     super(message);
@@ -83,6 +83,9 @@ export interface RotationResult {
 }
 
 /** Encrypts and decrypts B1 table records while reserving the D8 nonce-invocation budget in SQLite. */
+/** A rotation pass that still meets an older key this many times is refused, never looped. */
+const MAX_ROTATION_PASSES = 32;
+
 export class EventRecordCipher {
   readonly #database: DatabaseSync;
   readonly #secrets: EventSecretStore;
@@ -175,53 +178,77 @@ export class EventRecordCipher {
   }
 
   private async reencryptLayout(layout: RecordLayout, master: EventMaster, batchSize: number): Promise<number> {
-    let offset = 0;
     let rewritten = 0;
     const selectedColumns = [...layout.keyColumns, layout.sqlColumn].join(', ');
     const orderedColumns = layout.keyColumns.join(', ');
-    for (;;) {
-      const rows = this.#database
-        .prepare(
-          `SELECT ${selectedColumns} FROM ${layout.table} WHERE ${layout.sqlColumn} IS NOT NULL ORDER BY ${orderedColumns} LIMIT ? OFFSET ?`,
-        )
-        .all(batchSize, offset) as Array<Record<string, unknown>>;
-      if (rows.length === 0) break;
-      offset += rows.length;
-      const updates: Array<{ readonly record: Buffer; readonly read: Uint8Array; readonly keys: readonly SqlValue[] }> =
-        [];
-      for (const row of rows) {
-        const stored = row[layout.sqlColumn];
-        if (!(stored instanceof Uint8Array)) {
-          throw new RecordStorageError('RECORD_STORAGE_CLASS', `${layout.table}.${layout.sqlColumn} is not a BLOB`);
-        }
-        if (packedRecordKeyId(stored) === master.keyId) continue;
-        const location = this.locationFor(layout, row);
-        const plaintext = await this.decrypt(location, stored);
-        updates.push({
-          record: await this.encrypt(location, plaintext),
-          read: stored,
-          keys: this.keyValues(layout, row),
-        });
+    const first = this.#database.prepare(
+      `SELECT ${selectedColumns} FROM ${layout.table} WHERE ${layout.sqlColumn} IS NOT NULL ORDER BY ${orderedColumns} LIMIT ?`,
+    );
+    // Keyset pagination: each batch starts strictly after the last primary key read, so a row a worker deletes or
+    // replaces while a batch awaits cannot shift a later row out of the pass (an OFFSET would skip it).
+    const next = this.#database.prepare(
+      `SELECT ${selectedColumns} FROM ${layout.table}
+       WHERE ${layout.sqlColumn} IS NOT NULL AND (${orderedColumns}) > (${layout.keyColumns.map(() => '?').join(', ')})
+       ORDER BY ${orderedColumns} LIMIT ?`,
+    );
+    const where = layout.keyColumns.map((column) => `${column} = ?`).join(' AND ');
+    const update = this.#database.prepare(
+      `UPDATE ${layout.table} SET ${layout.sqlColumn} = ? WHERE ${where} AND ${layout.sqlColumn} = ?`,
+    );
+    // Passes repeat until one meets no row under an older key: a record a worker encrypted under the old master
+    // before the rotation and wrote during a pass is met by the next one. New writes use the new master, so the passes
+    // end; the cap only turns a writer that keeps reintroducing the old key into a refusal rather than a loop.
+    for (let pass = 0; ; pass += 1) {
+      if (pass === MAX_ROTATION_PASSES) {
+        throw new RecordStorageError(
+          'ROTATION_INCOMPLETE',
+          `${layout.table}.${layout.sqlColumn} still held a record under an older key after ${MAX_ROTATION_PASSES} passes`,
+        );
       }
-      if (updates.length === 0) continue;
-      // Only a row still holding the bytes read above is rewritten. The reads and encryptions await, so a worker may
-      // have replaced or purged the row meanwhile; writing the older content back over it would undo that work.
-      const where = layout.keyColumns.map((column) => `${column} = ?`).join(' AND ');
-      const update = this.#database.prepare(
-        `UPDATE ${layout.table} SET ${layout.sqlColumn} = ? WHERE ${where} AND ${layout.sqlColumn} = ?`,
-      );
-      this.#database.exec('BEGIN IMMEDIATE');
-      try {
-        for (const item of updates) {
-          if (Number(update.run(item.record, ...item.keys, item.read).changes) === 1) rewritten += 1;
+      let sawOlder = false;
+      let last: readonly SqlValue[] | undefined;
+      for (;;) {
+        const rows = (last === undefined ? first.all(batchSize) : next.all(...last, batchSize)) as Array<
+          Record<string, unknown>
+        >;
+        if (rows.length === 0) break;
+        last = this.keyValues(layout, rows[rows.length - 1] as Record<string, unknown>);
+        const updates: Array<{
+          readonly record: Buffer;
+          readonly read: Uint8Array;
+          readonly keys: readonly SqlValue[];
+        }> = [];
+        for (const row of rows) {
+          const stored = row[layout.sqlColumn];
+          if (!(stored instanceof Uint8Array)) {
+            throw new RecordStorageError('RECORD_STORAGE_CLASS', `${layout.table}.${layout.sqlColumn} is not a BLOB`);
+          }
+          if (packedRecordKeyId(stored) === master.keyId) continue;
+          sawOlder = true;
+          const location = this.locationFor(layout, row);
+          const plaintext = await this.decrypt(location, stored);
+          updates.push({
+            record: await this.encrypt(location, plaintext),
+            read: stored,
+            keys: this.keyValues(layout, row),
+          });
         }
-        this.#database.exec('COMMIT');
-      } catch (error) {
-        this.#database.exec('ROLLBACK');
-        throw error;
+        if (updates.length === 0) continue;
+        // Only a row still holding the bytes read above is rewritten. The reads and encryptions await, so a worker may
+        // have replaced or purged the row meanwhile; writing the older content back over it would undo that work.
+        this.#database.exec('BEGIN IMMEDIATE');
+        try {
+          for (const item of updates) {
+            if (Number(update.run(item.record, ...item.keys, item.read).changes) === 1) rewritten += 1;
+          }
+          this.#database.exec('COMMIT');
+        } catch (error) {
+          this.#database.exec('ROLLBACK');
+          throw error;
+        }
       }
+      if (!sawOlder) return rewritten;
     }
-    return rewritten;
   }
 
   private locationFor(layout: RecordLayout, row: Record<string, unknown>): EncryptedRecordLocation {
