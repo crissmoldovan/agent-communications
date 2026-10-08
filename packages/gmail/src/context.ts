@@ -10,6 +10,8 @@ import {
   type PathOverrides,
   requireHandoffs,
   requireInbox,
+  type SendPacing,
+  sendPacing,
 } from '@agentcomms/core';
 import { type GoogleEndpoints, resolveEndpoints } from './auth/endpoints.ts';
 import { FlowStore } from './auth/flows.ts';
@@ -49,6 +51,8 @@ export interface GmailContextOptions {
   cwd?: string | undefined;
   /** Replaced in tests by a fake; the default builds the real Google transport. */
   createTransport?: (request: TransportRequest) => GmailTransport;
+  /** How a throttled send waits (design 2026-10-08 §R2): core's pacing; a test injects one that does not wait. */
+  sendPacing?: () => SendPacing;
 }
 
 /**
@@ -62,6 +66,8 @@ export class GmailContext {
   readonly endpoints: GoogleEndpoints;
   readonly flows: FlowStore;
   readonly now: () => Date;
+  /** A fresh pacing for each send: how a throttled one waits before it tries again. */
+  readonly sendPacing: () => SendPacing;
   readonly platform: NodeJS.Platform;
   readonly surface: 'cli' | 'mcp';
   readonly cwd: string;
@@ -87,6 +93,7 @@ export class GmailContext {
     this.cwd = options.cwd ?? process.cwd();
     this.flows = new FlowStore(this.core.paths.stateDir, this.now, this.surface, () => this.handoffs);
     this.#createTransport = options.createTransport ?? defaultTransport;
+    this.sendPacing = options.sendPacing ?? (() => sendPacing());
   }
 
   /**

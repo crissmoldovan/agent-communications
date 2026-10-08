@@ -8,8 +8,10 @@ import {
   type PathOverrides,
   requireHandoffs,
   type SecretStore,
+  type SendPacing,
   type SendPolicy,
   secretsStoreOf,
+  sendPacing,
 } from '@agentcomms/core';
 import { AccountStore, type NamedAccount } from './accounts.ts';
 import type { ResendTransport } from './api/client.ts';
@@ -37,6 +39,8 @@ export interface ResendContextOptions {
   fetch?: FetchLike | undefined;
   /** The throttle's clock and pause. Tests shorten the pause; nothing a person or an agent passes can. */
   throttle?: ThrottleOptions | undefined;
+  /** How a throttled send waits (design 2026-10-08 §R2): core's pacing; a test injects one on the throttle's clock. */
+  sendPacing?: (() => SendPacing) | undefined;
 }
 
 const TEAM_DOMAINS_TTL_MS = 5 * 60 * 1000;
@@ -69,6 +73,8 @@ export class ResendContext {
   readonly handoffs: CliHandoffs;
   readonly accounts: AccountStore;
   readonly #fetch: FetchLike | undefined;
+  /** A fresh pacing for each send: how a throttled one waits before it tries again. */
+  readonly sendPacing: () => SendPacing;
   readonly #throttle: Throttle;
   readonly #teamDomains = new Map<string, { at: number; domains: readonly string[] }>();
 
@@ -89,6 +95,7 @@ export class ResendContext {
     this.accounts = new AccountStore(() => this.core.config.load(), this.handoffs);
     this.#fetch = options.fetch;
     this.#throttle = new Throttle(this.core.paths.stateDir, options.throttle);
+    this.sendPacing = options.sendPacing ?? (() => sendPacing());
   }
 
   config(): Promise<Config> {

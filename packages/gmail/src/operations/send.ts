@@ -31,7 +31,7 @@ import {
 import type { GmailContext, ResolvedInbox } from '../context.ts';
 import { analyseDraft, type DraftAnalysis, type Unsendable, unsendable } from '../domain/outbound.ts';
 import { addressField, domainField, type FieldEnvelope, filenameField, wrapField } from '../domain/untrusted-fields.ts';
-import { sendCertainlyRefused } from '../gmail-api/errors.ts';
+import { sendCertainlyRefused, sendThrottleOf, throttledRefusal } from '../gmail-api/errors.ts';
 import { type GmailTransport, providerId } from '../gmail-api/transport.ts';
 import type { HistoryResult } from './history-cache.ts';
 import { type UnsentSection, unsentSection } from './unsent.ts';
@@ -1008,77 +1008,99 @@ export async function executeSend(
       throw await recordNoSend(context, bookkeeping, claimToken, claimedApproval, error);
     }
 
-    // The last look. Between the claim and here, nothing of ours can have changed the draft — `draft update` and
-    // `draft delete` refuse while an approval is sending — but a person in Gmail web still can.
-    let now: Awaited<ReturnType<typeof readDraft>>;
-    try {
-      now = await readDraft(context, alias, options.draftId);
-    } catch (error) {
-      throw await recordNoSend(context, bookkeeping, claimToken, claimedApproval, error);
-    }
-    if (now.draftMessageId !== claimed.draftMessageId || now.analysis.digest !== claimed.contentDigest) {
-      const error = new CommsError('APPROVAL_VOID', 'nothing was sent: the draft changed while it was being sent', {
-        hint: 'Prepare the send again to see what it says now.',
-      });
-      throw await recordNoSend(context, bookkeeping, claimToken, claimedApproval, error);
-    }
-
     /*
-     * The fence (design 2026-10-05 §D1): immediately before the one provider mutation, after the reservation and the
-     * final read, this claim must still hold a `sending` record — its lease renewed by the look. Once another caller has
-     * read it `unknown` (this call stalled past its lease), the send does not start: the record is completed `failed`,
-     * `lease-lost-before-send`, and nothing was sent. A fence narrows the window and cannot close it: a call suspended
-     * after it and before Gmail answers can still send, which is what `unknown` means.
+     * The last look and the fence, before every attempt (design 2026-10-08 §R3): a retry after a throttle sends only
+     * the draft that was approved, and only while this claim still holds its lease. Nothing has been sent before any
+     * of them — a retry follows only a refusal that proves it — so the fence always runs with `stepsStarted: 0`.
      */
-    const fenced = await fenceOrStop(context.core.approvals, options.approvalId, claimToken, { stepsStarted: 0 });
-    if (!fenced.proceed) {
-      throw await recordNoSend(
-        context,
-        bookkeeping,
-        claimToken,
-        claimedApproval,
-        fenced.error ?? new CommsError('APPROVAL_VOID', 'nothing was sent: the sending lease ran out'),
-        { recorded: LEASE_LOST_BEFORE_SEND },
-      );
-    }
-
-    let sent: { id: string | undefined; threadId: string | undefined };
-    try {
-      sent = await transport.sendDraft(options.draftId);
-    } catch (error) {
-      const said = error instanceof Error ? error.message : String(error);
-      const ids = { approvalIds: [options.approvalId], draftIds: [options.draftId] };
-      if (sendCertainlyRefused(error)) {
-        throw await recordNoSend(context, bookkeeping, claimToken, claimedApproval, error, { sayNothingSent: true });
-      }
-
-      let unaudited = '';
+    const readyToSend = async (): Promise<void> => {
+      // The last look. Between the claim and here, nothing of ours can have changed the draft — `draft update` and
+      // `draft delete` refuse while an approval is sending — but a person in Gmail web still can.
+      let now: Awaited<ReturnType<typeof readDraft>>;
       try {
-        await context.core.audit.append({
-          inboxId: resolved.inbox.id,
-          alias,
-          operation: 'send.execute',
-          outcome: 'failed',
-          surface: context.surface,
-          ids,
-          reason: `outcome unknown: ${said}`,
-        });
-      } catch (failure) {
-        unaudited = ` The audit log could not record this either (${failure instanceof Error ? failure.message : String(failure)}).`;
+        now = await readDraft(context, alias, options.draftId);
+      } catch (error) {
+        throw await recordNoSend(context, bookkeeping, claimToken, claimedApproval, error);
       }
-      // Uncertain from the moment the answer is lost, and said with its own code at once: never retried, never a
-      // retryable transport code an agent would follow with the same call, never "prepare again" (§D2).
-      throw new CommsError('SEND_OUTCOME_UNKNOWN', `whether the email was sent is not known: ${said}`, {
-        hint: `Check the Sent folder before anything else: Gmail may have sent it. This approval is not used again. Do not prepare the draft again automatically: only once the person has checked that it is not in Sent.${unaudited}`,
-        details: {
-          ...(error instanceof CommsError ? error.details : {}),
-          approvalId: options.approvalId,
-          outcome: 'unknown',
-          // Still `sending`: nothing is recorded of a send whose outcome is not known.
-          approval: await approvalNow(context, options.approvalId, resolved.inbox.id, claimedApproval),
-        },
-        cause: error,
-      });
+      if (now.draftMessageId !== claimed.draftMessageId || now.analysis.digest !== claimed.contentDigest) {
+        const error = new CommsError('APPROVAL_VOID', 'nothing was sent: the draft changed while it was being sent', {
+          hint: 'Prepare the send again to see what it says now.',
+        });
+        throw await recordNoSend(context, bookkeeping, claimToken, claimedApproval, error);
+      }
+
+      /*
+       * The fence (design 2026-10-05 §D1): immediately before the one provider mutation, after the reservation and the
+       * final read, this claim must still hold a `sending` record — its lease renewed by the look. Once another caller has
+       * read it `unknown` (this call stalled past its lease), the send does not start: the record is completed `failed`,
+       * `lease-lost-before-send`, and nothing was sent. A fence narrows the window and cannot close it: a call suspended
+       * after it and before Gmail answers can still send, which is what `unknown` means.
+       */
+      const fenced = await fenceOrStop(context.core.approvals, options.approvalId, claimToken, { stepsStarted: 0 });
+      if (!fenced.proceed) {
+        throw await recordNoSend(
+          context,
+          bookkeeping,
+          claimToken,
+          claimedApproval,
+          fenced.error ?? new CommsError('APPROVAL_VOID', 'nothing was sent: the sending lease ran out'),
+          { recorded: LEASE_LOST_BEFORE_SEND },
+        );
+      }
+    };
+
+    // A refusal that proves nothing was sent and says "later" waits and tries again, within core's pacing (§R1, §R2).
+    const pacing = context.sendPacing();
+    let sent: { id: string | undefined; threadId: string | undefined };
+    for (;;) {
+      await readyToSend();
+      try {
+        sent = await transport.sendDraft(options.draftId);
+        break;
+      } catch (error) {
+        const said = error instanceof Error ? error.message : String(error);
+        const ids = { approvalIds: [options.approvalId], draftIds: [options.draftId] };
+        if (sendCertainlyRefused(error)) {
+          const throttle = sendThrottleOf(error, context.now().getTime());
+          const delay = throttle?.limit === 'rate' ? pacing.next(throttle.waitMs) : null;
+          if (delay !== null) {
+            await pacing.wait(delay);
+            continue;
+          }
+          const refusal = throttle ? throttledRefusal(throttle, pacing.retries, error) : error;
+          throw await recordNoSend(context, bookkeeping, claimToken, claimedApproval, refusal, {
+            sayNothingSent: true,
+          });
+        }
+
+        let unaudited = '';
+        try {
+          await context.core.audit.append({
+            inboxId: resolved.inbox.id,
+            alias,
+            operation: 'send.execute',
+            outcome: 'failed',
+            surface: context.surface,
+            ids,
+            reason: `outcome unknown: ${said}`,
+          });
+        } catch (failure) {
+          unaudited = ` The audit log could not record this either (${failure instanceof Error ? failure.message : String(failure)}).`;
+        }
+        // Uncertain from the moment the answer is lost, and said with its own code at once: never retried, never a
+        // retryable transport code an agent would follow with the same call, never "prepare again" (§D2).
+        throw new CommsError('SEND_OUTCOME_UNKNOWN', `whether the email was sent is not known: ${said}`, {
+          hint: `Check the Sent folder before anything else: Gmail may have sent it. This approval is not used again. Do not prepare the draft again automatically: only once the person has checked that it is not in Sent.${unaudited}`,
+          details: {
+            ...(error instanceof CommsError ? error.details : {}),
+            approvalId: options.approvalId,
+            outcome: 'unknown',
+            // Still `sending`: nothing is recorded of a send whose outcome is not known.
+            approval: await approvalNow(context, options.approvalId, resolved.inbox.id, claimedApproval),
+          },
+          cause: error,
+        });
+      }
     }
 
     /*

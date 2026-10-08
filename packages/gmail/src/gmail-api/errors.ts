@@ -99,6 +99,91 @@ export function sendCertainlyRefused(error: unknown): boolean {
   return status !== undefined && SEND_REFUSED_BEFORE_ACTING.has(status);
 }
 
+/** Which limit refused a send (design 2026-10-08 §R1, §R4). */
+export type SendLimit = 'rate' | 'sending-limit' | 'project-quota';
+
+export interface SendThrottle {
+  readonly limit: SendLimit;
+  /** The provider's own wait, uncapped, when it gave one. */
+  readonly waitMs?: number | undefined;
+  /** When that wait ends. */
+  readonly retryAt?: string | undefined;
+}
+
+/**
+ * The limit a send refusal names, or undefined when it names none (design 2026-10-08 §R1, §R4).
+ *
+ * Read from Gmail's documented answers: `403 rateLimitExceeded` and `userRateLimitExceeded`, and a `429` for concurrent
+ * requests or bandwidth, are a short throttle (`rate`); a `429` "User-rate limit exceeded (Mail sending)" is the account's
+ * sending limit, which "might result in these errors for multiple hours"; `403 dailyLimitExceeded` is the Cloud
+ * project's quota. The wait is read uncapped — `parseRetryAfter` caps it at a minute for reads, which would turn Google's
+ * "after three hours" into "after a minute" — from `Retry-After`, else the "Retry after <time>" Gmail puts in its message.
+ */
+export function sendThrottleOf(error: unknown, nowMs: number = Date.now()): SendThrottle | undefined {
+  const raw = error instanceof Error && error.cause !== undefined ? error.cause : error;
+  const shape = describeGoogleError(raw, nowMs);
+  const limit: SendLimit | undefined =
+    shape.status === 403 && shape.reasons.includes('dailyLimitExceeded')
+      ? 'project-quota'
+      : shape.status === 429
+        ? /mail sending/i.test(shape.message)
+          ? 'sending-limit'
+          : 'rate'
+        : shape.status === 403 &&
+            shape.reasons.some((reason) => reason === 'rateLimitExceeded' || reason === 'userRateLimitExceeded')
+          ? 'rate'
+          : undefined;
+  if (limit === undefined) return undefined;
+  const waitMs = waitOf(
+    headerValue((raw as { response?: { headers?: unknown } } | undefined)?.response?.headers, 'retry-after'),
+    shape.message,
+    nowMs,
+  );
+  return {
+    limit,
+    ...(waitMs === undefined ? {} : { waitMs, retryAt: new Date(nowMs + waitMs).toISOString() }),
+  };
+}
+
+function waitOf(header: string | undefined, message: string, nowMs: number): number | undefined {
+  const fromHeader = header === undefined ? Number.NaN : Number(header.trim());
+  if (Number.isFinite(fromHeader) && fromHeader >= 0) return fromHeader * 1000;
+  const at =
+    header !== undefined ? Date.parse(header) : Date.parse(/retry after (\S+?)[.)]?(?:\s|$)/i.exec(message)?.[1] ?? '');
+  return Number.isFinite(at) && at >= nowMs ? at - nowMs : undefined;
+}
+
+/**
+ * The refusal a throttled send ends with, once it stops (design 2026-10-08 §R4, §R5): which limit, and when it lifts.
+ * Nothing was sent; `noSendError` says so in front of these words.
+ */
+export function throttledRefusal(throttle: SendThrottle, retries: number, cause: unknown): CommsError {
+  const after = throttle.retryAt === undefined ? undefined : `after ${throttle.retryAt}`;
+  const tried = retries === 0 ? '' : ` (tried ${retries + 1} times)`;
+  const details = { limit: throttle.limit, retries, ...(throttle.retryAt ? { retryAt: throttle.retryAt } : {}) };
+  if (throttle.limit === 'project-quota') {
+    return new CommsError('CONFIG', "this Google Cloud project's daily Gmail API quota is used up", {
+      hint: 'Raise it in the Google Cloud console (APIs & Services → Gmail API → Quotas), or wait for the daily reset. Then prepare the send again.',
+      details,
+      cause,
+    });
+  }
+  if (throttle.limit === 'sending-limit') {
+    return new CommsError('TRANSIENT', "Gmail's sending limit for this account is reached", {
+      hint: after
+        ? `Google accepts mail from this account again ${after}. Prepare the send again then.`
+        : 'Google says this can last several hours. Prepare the send again later.',
+      details,
+      cause,
+    });
+  }
+  return new CommsError('TRANSIENT', `Google is rate-limiting this account${tried}`, {
+    hint: after ? `Prepare the send again ${after}.` : 'Prepare the send again in a minute.',
+    details,
+    cause,
+  });
+}
+
 /** True when the same request may be sent again (the caller still decides whether the operation is safe to repeat). */
 export function isRetryable(shape: GoogleErrorShape): boolean {
   if (shape.status === 429) return true;
@@ -173,6 +258,13 @@ export function mapGoogleError(error: unknown, context: ErrorContext = {}): Comm
     if (reasons.has('domainPolicy')) {
       return new CommsError('AUTH_REQUIRED', `a Google Workspace policy blocks this app for ${alias}${where}`, {
         hint: 'An administrator can allow the OAuth client under Security → API controls → Manage third-party app access.',
+        cause: error,
+      });
+    }
+    if (reasons.has('dailyLimitExceeded')) {
+      // The Cloud project's quota, not the account: re-authorising changes nothing (design 2026-10-08 §R6).
+      return new CommsError('CONFIG', `this Google Cloud project's daily Gmail API quota is used up${where}`, {
+        hint: 'Raise it in the Google Cloud console (APIs & Services → Gmail API → Quotas), or wait for the daily reset.',
         cause: error,
       });
     }

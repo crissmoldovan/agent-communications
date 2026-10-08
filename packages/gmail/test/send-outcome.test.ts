@@ -9,9 +9,11 @@ import {
   CommsError,
   ERROR_REGISTRY,
   LEASE_LOST_BEFORE_SEND,
+  SEND_RETRY_MAX,
   SENDING_HEARTBEAT_MS,
   SENDING_LEASE_MS,
   SendLedger,
+  sendPacing,
   waitForApproval,
 } from '@agentcomms/core';
 import { renderSent } from '../src/cli/render.ts';
@@ -47,7 +49,12 @@ async function world(): Promise<{ harness: Harness; context: GmailContext; draft
     ],
   });
   await harness.connectInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', sendPolicy: 'chat' });
-  const context = new GmailContext({ core: harness.core, env: harness.env });
+  // A throttled send's waits are recorded, not slept (design 2026-10-08 §R2).
+  const context = new GmailContext({
+    core: harness.core,
+    env: harness.env,
+    sendPacing: () => sendPacing({ sleep: async () => undefined }),
+  });
   const draft = await createDraft(context, 'work', {
     to: ['sam@partner.test'],
     subject: 'Tuesday',
@@ -174,7 +181,9 @@ test('only Gmail responses documented as pre-action refusals mark the approval f
     await t.test(String(status), async () => {
       const setup = await world();
       const { send, state } = await prepared(setup);
-      setup.harness.google.failNext(DRAFT_SEND_PATH, 1, status);
+      // A 429 is a throttle: the send tries again within its pacing (design 2026-10-08 §R1), so it is refused for good
+      // only once Gmail has refused every attempt — the first and SEND_RETRY_MAX more.
+      setup.harness.google.failNext(DRAFT_SEND_PATH, status === 429 ? SEND_RETRY_MAX + 1 : 1, status);
 
       const error = await send().then(
         () => assert.fail(`${status} was reported as a send`),

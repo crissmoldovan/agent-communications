@@ -28,7 +28,7 @@ import {
   withSendingLease,
 } from '@agentcomms/core';
 import { keyPermissionOf, type NamedAccount } from '../accounts.ts';
-import { resendRequest, type WriteOutcome } from '../api/client.ts';
+import { resendRequest, sendThrottleOf, throttledRefusal, type WriteOutcome } from '../api/client.ts';
 import { APPROVAL_TAG, closedPermit, type FetchLike, spendOn } from '../api/guard.ts';
 import {
   type BuiltMessage,
@@ -782,103 +782,119 @@ async function claimAndSend(
     }
 
     /*
-     * The fence (design 2026-10-05 §D1), the last thing before the one request that sends: while this claim still
-     * holds a `sending` record its lease is renewed and the request may leave. Once another caller has found the lease
-     * run out — the record `unknown` — nothing is sent: the fence completes the approval `failed`
-     * (`lease-lost-before-send`), and the rest of the no-send bookkeeping follows.
+     * A refusal Resend gave before acting that says "later" waits and tries again, within core's pacing (design
+     * 2026-10-08 §R1, §R2). The message cannot change underneath: it was reloaded and held to its digest before the
+     * claim. So each attempt repeats the fence, and nothing else (§R3).
      */
-    const fenced = await fenceOrStop(context.core.approvals, options.approvalId, claimToken, { stepsStarted: 0 });
-    if (!fenced.proceed) {
-      const stopped =
-        fenced.error ?? new CommsError('UNEXPECTED', 'the sending lease ran out before anything was sent');
-      throw await recordNoSend(context, records, bookkeeping, claimToken, claimedApproval, stopped, 'settled');
-    }
-
+    const pacing = context.sendPacing();
     let resendId: string | undefined;
-    let requestIssued = false;
-    const innerFetch = transport.fetch ?? (fetch as FetchLike);
-    // Mark the inner fetch, after the throttle and request guard: before this runs, Resend certainly saw nothing.
-    const trackedTransport = {
-      ...transport,
-      fetch: async (...args: Parameters<FetchLike>) => {
-        requestIssued = true;
-        return innerFetch(...args);
-      },
-    };
-    try {
-      const response = await spendOn(permit, options.approvalId, 'emails.send', () =>
-        resendRequest<{ id?: unknown }>(trackedTransport, 'POST', '/emails', {
-          body: payloadOf(message, options.approvalId, contents),
-          idempotencyKey: options.approvalId,
-        }),
-      );
-      // Resend's id, when it gave one: no id, null, an empty or blank string, or anything not a string is no id at all —
-      // absent, never '' (design 2026-10-05 §D8). Resend accepted the send either way.
-      resendId = typeof response.id === 'string' && response.id.trim() !== '' ? response.id : undefined;
-    } catch (error) {
-      if (!requestIssued) {
-        throw await recordNoSend(context, records, bookkeeping, claimToken, claimedApproval, error);
+    for (;;) {
+      /*
+       * The fence (design 2026-10-05 §D1), the last thing before the one request that sends: while this claim still
+       * holds a `sending` record its lease is renewed and the request may leave. Once another caller has found the lease
+       * run out — the record `unknown` — nothing is sent: the fence completes the approval `failed`
+       * (`lease-lost-before-send`), and the rest of the no-send bookkeeping follows.
+       */
+      const fenced = await fenceOrStop(context.core.approvals, options.approvalId, claimToken, { stepsStarted: 0 });
+      if (!fenced.proceed) {
+        const stopped =
+          fenced.error ?? new CommsError('UNEXPECTED', 'the sending lease ran out before anything was sent');
+        throw await recordNoSend(context, records, bookkeeping, claimToken, claimedApproval, stopped, 'settled');
       }
-      const outcome: WriteOutcome =
-        error instanceof CommsError && error.details?.outcome === 'not-sent'
-          ? 'not-sent'
-          : error instanceof CommsError && error.code === 'SEND_REFUSED'
-            ? 'not-sent'
-            : 'unknown';
-      const said = error instanceof Error ? error.message : String(error);
-      if (outcome === 'not-sent') {
-        throw await recordNoSend(context, records, bookkeeping, claimToken, claimedApproval, error);
-      }
-      const unrecorded: string[] = [];
-      try {
-        await records.record(named.account.id, {
-          approvalId: options.approvalId,
-          event: 'unknown',
-          error: said.slice(0, 300),
-        });
-      } catch (failure) {
-        unrecorded.push(
-          `the send record could not record this (${failure instanceof Error ? failure.message : String(failure)})`,
-        );
-      }
-      try {
-        await context.core.audit.append({
-          inboxId: named.account.id,
-          alias: name,
-          operation: 'resend.send.execute',
-          outcome: 'failed',
-          surface: context.surface,
-          approvalId: options.approvalId,
-          reason: `outcome unknown: ${said.slice(0, 200)}`,
-        });
-      } catch (failure) {
-        unrecorded.push(
-          `the audit log could not record this (${failure instanceof Error ? failure.message : String(failure)})`,
-        );
-      }
-      // At once, and never retryable: the send may have happened (design 2026-10-05 §D2).
-      throw new CommsError('SEND_OUTCOME_UNKNOWN', `whether the email was sent is not known: ${said}`, {
-        hint: [
-          `Do not send it again, and do not prepare it again until you know it did not go. ${handoffSentence(
-            statusCommand(context.handoffs, options.approvalId, name),
-            (command) =>
-              `Check the Resend dashboard or ask the recipient, and check with ${command}; this approval is not used again.`,
-            {
-              instead:
-                'Check the Resend dashboard or ask the recipient, and check with resend_send_status; this approval is not used again.',
-            },
-          )}`,
-          ...unrecorded,
-        ].join(' '),
-        details: {
-          ...(error instanceof CommsError ? error.details : {}),
-          approvalId: options.approvalId,
-          outcome: 'unknown',
-          // Still `sending`: nothing is recorded of a send whose outcome is not known.
-          approval: await approvalNow(context, options.approvalId, named.account.id, claimedApproval),
+
+      let requestIssued = false;
+      const innerFetch = transport.fetch ?? (fetch as FetchLike);
+      // Mark the inner fetch, after the throttle and request guard: before this runs, Resend certainly saw nothing.
+      const trackedTransport = {
+        ...transport,
+        fetch: async (...args: Parameters<FetchLike>) => {
+          requestIssued = true;
+          return innerFetch(...args);
         },
-        cause: error,
-      });
+      };
+      try {
+        const response = await spendOn(permit, options.approvalId, 'emails.send', () =>
+          resendRequest<{ id?: unknown }>(trackedTransport, 'POST', '/emails', {
+            body: payloadOf(message, options.approvalId, contents),
+            idempotencyKey: options.approvalId,
+          }),
+        );
+        // Resend's id, when it gave one: no id, null, an empty or blank string, or anything not a string is no id at all —
+        // absent, never '' (design 2026-10-05 §D8). Resend accepted the send either way.
+        resendId = typeof response.id === 'string' && response.id.trim() !== '' ? response.id : undefined;
+        break;
+      } catch (error) {
+        if (!requestIssued) {
+          throw await recordNoSend(context, records, bookkeeping, claimToken, claimedApproval, error);
+        }
+        const outcome: WriteOutcome =
+          error instanceof CommsError && error.details?.outcome === 'not-sent'
+            ? 'not-sent'
+            : error instanceof CommsError && error.code === 'SEND_REFUSED'
+              ? 'not-sent'
+              : 'unknown';
+        const said = error instanceof Error ? error.message : String(error);
+        if (outcome === 'not-sent') {
+          const throttle = sendThrottleOf(error, context.now().getTime());
+          const delay = throttle?.limit === 'rate' ? pacing.next(throttle.waitMs) : null;
+          if (delay !== null) {
+            await pacing.wait(delay);
+            continue;
+          }
+          const refusal = throttle ? throttledRefusal(throttle, pacing.retries, error) : error;
+          throw await recordNoSend(context, records, bookkeeping, claimToken, claimedApproval, refusal);
+        }
+        const unrecorded: string[] = [];
+        try {
+          await records.record(named.account.id, {
+            approvalId: options.approvalId,
+            event: 'unknown',
+            error: said.slice(0, 300),
+          });
+        } catch (failure) {
+          unrecorded.push(
+            `the send record could not record this (${failure instanceof Error ? failure.message : String(failure)})`,
+          );
+        }
+        try {
+          await context.core.audit.append({
+            inboxId: named.account.id,
+            alias: name,
+            operation: 'resend.send.execute',
+            outcome: 'failed',
+            surface: context.surface,
+            approvalId: options.approvalId,
+            reason: `outcome unknown: ${said.slice(0, 200)}`,
+          });
+        } catch (failure) {
+          unrecorded.push(
+            `the audit log could not record this (${failure instanceof Error ? failure.message : String(failure)})`,
+          );
+        }
+        // At once, and never retryable: the send may have happened (design 2026-10-05 §D2).
+        throw new CommsError('SEND_OUTCOME_UNKNOWN', `whether the email was sent is not known: ${said}`, {
+          hint: [
+            `Do not send it again, and do not prepare it again until you know it did not go. ${handoffSentence(
+              statusCommand(context.handoffs, options.approvalId, name),
+              (command) =>
+                `Check the Resend dashboard or ask the recipient, and check with ${command}; this approval is not used again.`,
+              {
+                instead:
+                  'Check the Resend dashboard or ask the recipient, and check with resend_send_status; this approval is not used again.',
+              },
+            )}`,
+            ...unrecorded,
+          ].join(' '),
+          details: {
+            ...(error instanceof CommsError ? error.details : {}),
+            approvalId: options.approvalId,
+            outcome: 'unknown',
+            // Still `sending`: nothing is recorded of a send whose outcome is not known.
+            approval: await approvalNow(context, options.approvalId, named.account.id, claimedApproval),
+          },
+          cause: error,
+        });
+      }
     }
 
     const unrecorded: string[] = [];

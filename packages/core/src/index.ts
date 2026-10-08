@@ -181,6 +181,7 @@ export * from './save-destination.ts';
 export * from './saved-files.ts';
 export * from './secrets.ts';
 export * from './send-epoch.ts';
+export * from './send-pacing.ts';
 export * from './sending-lease.ts';
 export * from './state.ts';
 export * from './system-programs.ts';

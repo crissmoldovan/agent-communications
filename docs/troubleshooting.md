@@ -126,6 +126,20 @@ preview and an approval id and exits `10`; after your yes it runs the same comma
 Exit `75`. Gmail's per-user quota is generous but finite, and a wide search over many mailboxes spends it quickly.
 The transport already backs off and retries. Narrow the query or the mailbox list.
 
+A **send** that Gmail rate-limits is tried again by `send execute` itself: Gmail's answer proves nothing was sent, so
+it waits the time Gmail gives, reads the draft again and tries up to three more times within 45 seconds. Resend sends do
+the same on Resend's `rate_limit_exceeded`. Only when that runs out does the send stop, with "nothing was sent: Google is
+rate-limiting this account (tried 4 times)" and the time to try after. Prepare it again then. Two limits are never
+waited on, because they last hours:
+
+- **"Gmail's sending limit for this account is reached"** (exit `75`): the account's daily sending limit, shared with
+  every other client of the mailbox. The hint says when Google accepts mail again. It cannot be raised from here.
+- **"this Google Cloud project's daily Gmail API quota is used up"** (exit `78`): the OAuth client's project, not the
+  mailbox. Raise it in the Google Cloud console (APIs & Services → Gmail API → Quotas). Signing in again changes
+  nothing; up to 0.15.0 this was wrongly reported as an authorisation problem.
+- For Resend, **the team's daily sending quota** resets at midnight UTC and **the monthly quota** needs a larger plan;
+  both stop at once and say so.
+
 ## Sending
 
 ### `approval required`

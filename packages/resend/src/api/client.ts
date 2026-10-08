@@ -91,6 +91,81 @@ export function writeOutcomeOf(status: number | undefined): WriteOutcome {
   return status !== undefined && REFUSED_BEFORE_ACTING.has(status) ? 'not-sent' : 'unknown';
 }
 
+/** Which limit refused a send (design 2026-10-08 §R1, §R4), from Resend's documented `429` names. */
+export type SendLimit = 'rate' | 'daily-quota' | 'monthly-quota';
+
+export interface SendThrottle {
+  readonly limit: SendLimit;
+  /** Resend's own wait, when it gave one. */
+  readonly waitMs?: number | undefined;
+  /** When the limit lifts, when that is known: the wait's end, or midnight UTC for the daily quota. */
+  readonly retryAt?: string | undefined;
+}
+
+/**
+ * The limit a send's refusal names, or undefined when it names none.
+ *
+ * Only a `429` Resend gave before acting: `rate_limit_exceeded` (or no name) is requests per second; `daily_quota_exceeded`
+ * resets at midnight UTC; `monthly_quota_exceeded` needs a larger plan (resend.com/docs/api-reference/errors, read
+ * 2026-10-08).
+ */
+export function sendThrottleOf(error: unknown, nowMs: number = Date.now()): SendThrottle | undefined {
+  if (!(error instanceof CommsError)) return undefined;
+  const details = (error.details ?? {}) as ResendErrorDetails;
+  if (details.status !== 429 || details.outcome !== 'not-sent') return undefined;
+  const name = details.resendError;
+  const limit: SendLimit | undefined =
+    name === 'daily_quota_exceeded'
+      ? 'daily-quota'
+      : name === 'monthly_quota_exceeded'
+        ? 'monthly-quota'
+        : name === 'rate_limit_exceeded' || name === 'http_429' || name === undefined
+          ? 'rate'
+          : undefined;
+  // A 429 under another name is not a limit this knows how to wait on: it keeps today's handling.
+  if (limit === undefined) return undefined;
+  if (limit === 'monthly-quota') return { limit };
+  if (limit === 'daily-quota') {
+    const midnight = new Date(nowMs);
+    midnight.setUTCHours(24, 0, 0, 0);
+    return { limit, retryAt: midnight.toISOString() };
+  }
+  const seconds = details.retryAfterSeconds;
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return { limit };
+  const waitMs = Math.max(1, seconds) * 1000;
+  return { limit, waitMs, retryAt: new Date(nowMs + waitMs).toISOString() };
+}
+
+/**
+ * The refusal a throttled send ends with, once it stops (design 2026-10-08 §R4, §R5). Nothing was sent; the send's
+ * no-send bookkeeping says so in front of these words.
+ */
+export function throttledRefusal(throttle: SendThrottle, retries: number, cause: unknown): CommsError {
+  const tried = retries === 0 ? '' : ` (tried ${retries + 1} times)`;
+  const details = { limit: throttle.limit, retries, ...(throttle.retryAt ? { retryAt: throttle.retryAt } : {}) };
+  if (throttle.limit === 'monthly-quota') {
+    return new CommsError('TRANSIENT', "this Resend team's monthly sending quota is used up", {
+      hint: 'A larger Resend plan raises it. Prepare the send again once it has.',
+      details,
+      cause,
+    });
+  }
+  if (throttle.limit === 'daily-quota') {
+    return new CommsError('TRANSIENT', "this Resend team's daily sending quota is used up", {
+      hint: `It resets at midnight UTC (${throttle.retryAt}). Prepare the send again then, or move to a plan without a daily quota.`,
+      details,
+      cause,
+    });
+  }
+  return new CommsError('TRANSIENT', `Resend is rate-limiting this team${tried}`, {
+    hint: throttle.retryAt
+      ? `Prepare the send again after ${throttle.retryAt}.`
+      : 'Prepare the send again in a minute.',
+    details,
+    cause,
+  });
+}
+
 export interface RequestOptions {
   query?: Record<string, string | number | undefined> | undefined;
   body?: unknown;
