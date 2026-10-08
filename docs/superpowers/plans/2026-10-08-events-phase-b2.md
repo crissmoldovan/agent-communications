@@ -80,7 +80,16 @@ The entire B1 plan, including B1-A through B1-G and its committee table, is bind
 
    Every B2 network-capable Node process begins with:
        node --import test/helpers/loopback-seal-preload.mjs
-   (or equivalent NODE_OPTIONS) before evaluation. The preload imports Node built-ins
+   before evaluation. The root `test` script and the events-daemon `test` script each
+   pass that `--import` directly to `node` (never through a shell-specific
+   `NODE_OPTIONS` assignment), so ordinary `pnpm verify` seals their root and package
+   test processes on macOS, Linux and Windows. Every fixture child that can import
+   daemon/transport code likewise invokes `process.execPath` with the same `--import`
+   argument before its entry module. `loopback-seal-preload.mjs` sets a private global
+   marker; `assertLoopbackSeal()` is the first executable statement of every
+   network-capable fixture/test before its dynamic daemon/transport import. The root
+   E2E and a daemon `network-process-seal.test.ts` run on the normal `pnpm verify`
+   path and fail if their process has no marker before that import. The preload imports Node built-ins
    only and patches callback/promise lookup and resolve*, dns.Resolver variants,
    net.connect/net.createConnection/net.Socket.prototype.connect, tls.connect, and
    http/https request entries. It allows Unix sockets and literal 127.0.0.1/::1 only;
@@ -125,9 +134,13 @@ The entire B1 plan, including B1-A through B1-G and its committee table, is bind
    One removal/replacement never cancels if another reference exists; final empty
    query alone cleans it.
 
-4. **Atomic claim and order.** Decision insert allocates immutable ordering_sequence
-   from delivery_order_counters keyed by exact rule/version/account/target/version.
-   Claim waits while earlier sequence is queued, retryable or unexpired disclosing.
+4. **Atomic claim and cross-version order.** Decision insert allocates immutable
+   ordering_sequence from delivery_order_counters keyed only by stable
+   `(rule_id, account_id, target_id)` identities—never by a rule or target version.
+   The atomic predecessor predicate uses that same stable triple, so a later
+   replacement version cannot overtake an earlier queued, retryable or unexpired
+   disclosing delivery; recovery retains the original sequence. Claim waits while
+   such an earlier sequence is queued, retryable or unexpired disclosing.
    One BEGIN IMMEDIATE checks exact row/lineage, deadline, switch/enablement/pause,
    cap window/unique first charge and open current barrier **before** lease/attempt.
    Cap/barrier block changes no attempt, lease, work attempt, charge, append or
@@ -148,7 +161,7 @@ The entire B1 plan, including B1-A through B1-G and its committee table, is bind
    current lineage remains live; late owner cannot settle newer lease/cancel/purge.
    Post-write crash may repeat external request (bounded at-least-once), but cannot
    double-charge, duplicate state, resurrect secret/ciphertext, or recreate purge.
-   Task 6 crash matrix is normative.
+   Task 7 crash matrix is normative.
 
 7. **Internal loopback SSE bearer listener.** Serve only GET
    /v1/streams/<subscriber-id> at persisted literal authority. Subscriber docs bind
@@ -188,26 +201,29 @@ loss wins.
 | B2-A | §4 2824–2825; D2 471–500 | B2 needs secret URLs/rotation; B3 reserves named terminal/app secret operations. | Opaque backing/internal tests in B2; no named operation until B3. Ask owner to state split. |
 | B2-B | §4; D7; D10 | B2 reset recovery but B3 human-only resume. | Private recovery seam B2; terminal/app target resume exception B3. |
 | B2-C | §4; D11 | Local-endpoint named B2 but no judge before E. | Non-reachable validator/connector only; no scheduler/operation/CLI/MCP judge path. |
-| B2-D | D2; D8 | Ordering/retry enum/default unstated. | per-rule-account-target, default 20/range 1–20 and Task 4 fence; ask owner to name normatively. |
+| B2-D | D2; D8 | Ordering/retry enum/default unstated. | Stable `(rule_id, account_id, target_id)` ordering across superseded rule/target versions; default 20/range 1–20 and Task 5 fence; ask owner to name normatively. |
 | B2-E | D6; D7 | Listener authority/identity schema incomplete. | Persist literal authority/require agreement; ask owner to approve fields/multi-listener policy. |
 | B2-F | D6 | Bounded overlap duration unspecified. | Five minutes/current+previous only; ask owner to make normative. |
 | B2-G | D7 | IANA source/update cadence unspecified. | Versioned checked-in snapshot with source metadata/hashes/exhaustive vectors; ask owner for cadence. |
 
 ## Batch map and safe parallelism
 
-There are **nine tasks in five batches**. Tasks 1/2 may run in separate worktrees.
-Later tasks are serial because each owns state the next uses; one builder completes
-one task, including full verification, in one sitting.
+There are **ten tasks in six batches**. The seal must land before any task may claim
+the ordinary `pnpm verify` route protects B2 network-capable tests. The target
+construction/routing seam then lands before any task widens target documents. Later
+tasks are serial because each owns state the next uses; one builder completes one
+task, including full verification, in one sitting.
 
 | Batch | Tasks | Can run in parallel | Why / dependency |
 | --- | --- | --- | --- |
-| 1 — safety/model substrate | 1, 2 | 1 and 2 separate worktrees | Seal/address and document/secret files do not overlap. |
-| 2 — persistence/eligibility | 3, 4 | No | Task 3 defines storage/references; Task 4 claims them. |
-| 3 — webhook transport/recovery | 5, 6 | No | Task 5 transport; Task 6 its crashes. |
-| 4 — SSE boundary | 7, 8 | No | Task 7 persistence/auth; Task 8 listener/browser. |
-| 5 — held integration | 9 | No | Audits public boundary/E2E/release after runtime work. |
+| 1 — safety and routing substrate | 1 → 2 | No | Task 1 seals normal verification; Task 2 then makes all three target forms constructable and generically routable. |
+| 2 — documents and persistence | 3 → 4 | No | Task 3 may widen documents only after Task 2; Task 4 persists its prepared target rows and references. |
+| 3 — eligibility | 5 | No | Task 5 claims Task 4 rows using stable cross-version ordering. |
+| 4 — webhook transport/recovery | 6 → 7 | No | Task 6 installs the webhook adapter in Task 2's router; Task 7 tests its crashes. |
+| 5 — SSE boundary | 8 → 9 | No | Task 8 installs durable SSE handling; Task 9 exposes its listener/browser proof. |
+| 6 — held integration | 10 | No | Audits public boundary/E2E/release after runtime work. |
 
-## Batch 1 — safety/model substrate
+## Batch 1 — safety and routing substrate
 
 ### Task 1 — registry-derived address policy and pre-import loopback seal **(high risk)**
 
@@ -226,7 +242,11 @@ one task, including full verification, in one sitting.
 - Add packages/events-daemon/test/support/loopback-receiver.ts,
   packages/events-daemon/test/support/test-tls.ts, and
   test/helpers/loopback-seal-preload.mjs; update test/helpers/loopback-seal.mjs,
-  test/helpers/loopback-seal.test.mjs, and test/events-daemon-e2e.test.mjs.
+  test/helpers/loopback-seal.test.mjs, test/events-daemon-e2e.test.mjs,
+  package.json, and packages/events-daemon/package.json.
+- Add packages/events-daemon/test/network-process-seal.test.ts. It imports only the
+  seal assertion statically and dynamically imports its daemon/transport fixture
+  after that assertion, so the package test entrypoint itself is exercised.
 
 **Tests first**
 
@@ -238,8 +258,10 @@ one task, including full verification, in one sitting.
 3. Inject resolver/literal fake to test TLS/SNI/Host/all answers/cert/no redirect/no
    proxy/fingerprint-before-resolver/exact HTTP matrix.
 4. Fresh preloaded child statically imports transport and tests patched DNS/resolver/
-   net/tls/http entry refusal; Unix/literal loopback succeeds. E2E dynamic imports
-   modules only after marker assertion.
+   net/tls/http entry refusal; Unix/literal loopback succeeds. The root E2E and the
+   daemon network-process-seal test, both reached by an ordinary `pnpm verify`, first
+   assert the preload marker then dynamically import daemon/transport code; an
+   unsealed network-capable test process therefore fails before its import.
 5. Local-endpoint accepts literal-loopback HTTP singleton only and no operation/
    dispatcher import or judge call.
 
@@ -248,27 +270,117 @@ one task, including full verification, in one sitting.
 1. Check in/import static snapshot; implement CIDR and recursive address validation.
 2. Implement injected resolver/raw connector without cache/proxy/redirect.
 3. Build loopback receiver and fixture-only throwaway TLS material.
-4. Implement pre-import seal and all named resolver/socket/request patches.
-5. Keep local endpoint unreachable from operations and add graph assertion.
+4. Implement pre-import seal, marker assertion and all named resolver/socket/request
+   patches.
+5. Change the root `test` script to
+   `node --import ./test/helpers/loopback-seal-preload.mjs --test "test/**/*.test.mjs" && pnpm -r --filter "./packages/**" run test`
+   and the events-daemon `test` script to
+   `node --import ../../test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test "test/**/*.test.ts"`.
+   These are Node argv, not shell environment syntax, so work on macOS, Linux and
+   Windows. Make every network-capable fixture child build the same
+   `process.execPath, --import, entry` argv. Keep direct focused commands explicit
+   too.
+6. Keep local endpoint unreachable from operations and add graph assertion.
 
 **Required mutations**
 
 - Missing/changed non-global registry vector/metadata/version: snapshot test fails.
 - Outer-only/embedded-only validation or guessed NAT64: address test fails.
 - Hostname HTTP/proxy/redirect/missing answer or cert check: connector test fails.
-- Import before preload/missing patch: fresh-process seal/E2E fails.
+- Delete either root/package script preload, start a fixture child without its
+  `--import`, or import daemon/transport before `assertLoopbackSeal()`: the normal
+  `pnpm verify` seal sentinel/E2E fails before the network-capable import.
 - Local endpoint operation import: graph test fails.
 
 **Run**
 
-    pnpm --filter @agentcomms/events-daemon exec node --import ../../test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test test/network/address-policy.test.ts test/network/iana-snapshot.test.ts test/network/pinned-connection.test.ts test/network/local-endpoint.test.ts
+    pnpm --filter @agentcomms/events-daemon exec node --import ../../test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test test/network/address-policy.test.ts test/network/iana-snapshot.test.ts test/network/pinned-connection.test.ts test/network/local-endpoint.test.ts test/network-process-seal.test.ts
     node --import test/helpers/loopback-seal-preload.mjs --test test/helpers/loopback-seal.test.mjs test/events-daemon-e2e.test.mjs
     pnpm verify
 
-Passing: literal loopback only, zero DNS, every snapshot non-global range refused.
+Passing: literal loopback only, zero DNS, every snapshot non-global range refused;
+the unqualified root and daemon test scripts used by `pnpm verify` have installed the
+seal before any network-capable daemon/transport import on macOS, Linux and Windows.
 Commit: feat(events): seal and validate pinned network transport.
 
-### Task 2 — immutable B2 documents and complete event-secret reconciliation **(high risk)**
+### Task 2 — three-target construction and generic dispatch routing **(high risk)**
+
+**Files**
+
+- Add packages/events-daemon/src/runtime/target-delivery.ts.
+- Update packages/events-daemon/src/runtime/deliveries.ts,
+  packages/events-daemon/src/runtime/dispatcher.ts,
+  packages/events-daemon/src/runtime/owner.ts, and
+  packages/events-daemon/src/runtime/scheduler.ts.
+- Add packages/events-daemon/test/target-delivery.test.ts and
+  packages/events-daemon/test/delivery-routing.test.ts; update
+  packages/events-daemon/test/decision-outbox.test.ts,
+  packages/events-daemon/test/dispatcher.test.ts, and
+  packages/events-daemon/test/owner.test.ts.
+
+**Tests first**
+
+1. Exercise the private `DeliveryTarget` union directly for dry-run, webhook and SSE:
+   assert the only keys are `dryrun:<targetId>:<targetVersion>`,
+   `webhook:<targetId>:<targetVersion>`, and
+   `sse:<targetId>:<targetVersion>:<subscriberId>:<subscriberVersion>`; two target
+   versions sharing one subscriber produce distinct SSE deliveries.
+2. For each union branch, prepare an actual decision delivery and assert one canonical
+   CloudEvent structured JSON byte string is generated before the write boundary,
+   retained as that target's representation, and is neither rebuilt nor changed by
+   dispatch selection. Keep the B1 dry-run byte/key vector unchanged.
+3. Inject dry-run/webhook/SSE handlers into the generic dispatcher, then drive an
+   owner scheduler tick for every branch. Assert exact-kind routing, exhaustive
+   unknown-kind refusal, and that owner/scheduler no longer construct or type their
+   dispatcher as dry-run-only. Webhook/SSE handlers are internal no-network fakes
+   until Tasks 6 and 8 install the real adapters.
+4. Assert the accepted target document remains B1 dry-run-only and no new operation,
+   CLI/MCP/capability/reference surface exists; these are construction and routing
+   seams, not early target activation.
+
+**Implementation, in order**
+
+1. Define a closed private `DeliveryTarget` union and `constructTargetDelivery()` in
+   target-delivery.ts. Its result carries exact target key, exact bound target/
+   subscriber versions, kind-specific representation and the already-canonical
+   CloudEvent bytes; it accepts no URL, token or other secret.
+2. Make `prepareDeliveries()` call that constructor for every prepared target and
+   persist its representation with the encrypted record. Preserve the B1 dry-run
+   form byte-for-byte; do not make any transport regenerate the CloudEvent.
+3. Introduce an exhaustive `DeliveryDispatcher` facade in dispatcher.ts with injected
+   dry-run, webhook and SSE handlers, and make EventScheduler and startEventOwner
+   depend on that facade rather than `DryRunDispatcher`. The owner attaches the B1
+   handler; direct internal test fakes cover the two B2 branches until their later
+   adapters are supplied.
+4. Keep document validation and public target acceptance unchanged in this task. Task
+   3 alone maps canonical webhook/SSE documents to this already-tested union.
+
+**Required mutations**
+
+- Reuse a dry-run key for webhook/SSE, omit a bound subscriber version, or collapse
+  two target versions: target-delivery vectors fail.
+- Rebuild/change the prepared CloudEvent bytes at dispatch selection or lose the
+  target-specific representation: prepared-byte vectors fail.
+- Retain a dry-run-only owner/scheduler type, skip a branch, or add a default that
+  silently accepts an unknown kind: routing/owner tests fail.
+- Widen the accepted target document or expose a B3 surface here: negative document
+  audit fails.
+
+**Run**
+
+    pnpm --filter @agentcomms/events-daemon exec node --import ../../test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test test/target-delivery.test.ts test/delivery-routing.test.ts test/decision-outbox.test.ts test/dispatcher.test.ts test/owner.test.ts
+    pnpm verify
+
+Passing: all three B2 target forms have exact keys, immutable target-specific bytes
+and generic owner/scheduler routing before any accepted document can name them.
+Commit: feat(events): prepare and route all B2 target deliveries.
+
+**Batch 1 close.** Run pnpm verify after Tasks 1 and 2; target construction/routing
+must be complete before a later batch widens target documents.
+
+## Batch 2 — documents and persistence
+
+### Task 3 — immutable B2 documents and complete event-secret reconciliation **(high risk)**
 
 **Files**
 
@@ -288,8 +400,9 @@ Commit: feat(events): seal and validate pinned network transport.
 
 **Tests first**
 
-1. Canonical plain/secret webhook and SSE subscriber docs; URL byte changes version;
-   public serialisations/errors/logs reveal no synthetic URL/slot/token/key.
+1. Canonical plain/secret webhook and SSE subscriber docs map only to Task 2's
+   already-tested `DeliveryTarget` union; URL byte changes version; public
+   serialisations/errors/logs reveal no synthetic URL/slot/token/key.
 2. B1 fixture proves append-only slot/AAD migration covers secret URL, webhook signing
    current/previous, SSE bearer current/previous.
 3. Pausable fake store races create/rotate/reconcile/migrate and asserts lock →
@@ -301,8 +414,10 @@ Commit: feat(events): seal and validate pinned network transport.
 **Implementation, in order**
 
 1. Add append-only slot migration/AAD; never change B1 migration text.
-2. Add canonical types and existing shared target validation; add no delivery/
-   subscriber operations, CLI/MCP, capability row or reference.
+2. Add canonical types and existing shared target validation that pass exact bound
+   fields to Task 2's `constructTargetDelivery()`; do not duplicate target-key or
+   representation/CloudEvent construction. Add no delivery/subscriber operations,
+   CLI/MCP, capability row or reference.
 3. Extend EventSecretStore references/migration with complete locked
    write/verify/commit/retire protocol.
 4. Add internal factories which reveal no complete secret.
@@ -324,12 +439,7 @@ Commit: feat(events): seal and validate pinned network transport.
 Passing: B1 migration, B2 secret references and B3-surface absence hold.
 Commit: feat(events): model network descriptors and reconcile event secrets.
 
-**Batch 1 close.** Integrate worktrees then pnpm verify; sealed substrate and model
-must coexist before outbox use.
-
-## Batch 2 — persistence and eligibility
-
-### Task 3 — ordinary delivery persistence and distinct system reset outbox **(highest risk)**
+### Task 4 — ordinary delivery persistence and distinct system reset outbox **(highest risk)**
 
 **Files**
 
@@ -337,6 +447,7 @@ must coexist before outbox use.
   packages/events-daemon/src/store/aad.ts,
   packages/events-daemon/src/store/records.ts,
   packages/events-daemon/src/runtime/decisions.ts,
+  packages/events-daemon/src/runtime/deliveries.ts,
   packages/events-daemon/src/runtime/reset.ts,
   packages/events-daemon/src/runtime/replacements.ts, and
   packages/events-daemon/src/runtime/revocations.ts.
@@ -349,7 +460,8 @@ must coexist before outbox use.
 
 **Tests first**
 
-1. B1 migration proves deliveries gains ordinary lease/order only; system_reset_outbox
+1. B1 migration proves each Task 2 prepared dry-run/webhook/SSE representation and
+   exact key/lineage is persisted with ordinary lease/order fields; system_reset_outbox
    owns reset bytes/state and no reset can satisfy ordinary decision/account/rule
    constraints or insert fake identities.
 2. Active-rule plus retained superseded-delivery exact-version references remove/
@@ -362,9 +474,11 @@ must coexist before outbox use.
 
 **Implementation, in order**
 
-1. Add forward ordinary lease-token/attempt/order, system-outbox, target-reference,
-   order-counter/barrier-link migrations and AAD.
-2. Persist active refs on activation and retained refs atomically with ordinary bytes.
+1. Add forward ordinary lease-token/attempt/order plus target-kind/representation
+   fields, system-outbox, target-reference, order-counter/barrier-link migrations and
+   AAD; consume the Task 2 prepared bytes/key without rebuilding either.
+2. Persist active refs on activation and retained refs atomically with each ordinary
+   target's prepared bytes.
 3. Use exact reference query in all reset create/recover/cleanup/revocation paths.
 4. Implement cap-free system repository and forbid reset insertion into deliveries,
    decisions, cap charges or fabricated account/rule.
@@ -380,10 +494,16 @@ must coexist before outbox use.
     pnpm --filter @agentcomms/events-daemon exec node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/outbox-persistence.test.ts test/system-reset-outbox.test.ts test/system-reset-references.test.ts test/migrations.test.ts
     pnpm verify
 
-Passing: reset is system outbox work with final-reference semantics.
+Passing: every B2 target row is constructable and persisted with its exact prepared
+representation; reset is system outbox work with final-reference semantics.
 Commit: feat(events): persist distinct reset outbox and target references.
 
-### Task 4 — atomic cap/barrier claims and per-target ordering fence **(highest risk)**
+**Batch 2 close.** Run pnpm verify after the document and persistence tasks; accepted
+webhook/SSE documents now have constructable, persistable, generically routed rows.
+
+## Batch 3 — eligibility
+
+### Task 5 — atomic cap/barrier claims and stable cross-version ordering fence **(highest risk)**
 
 **Files**
 
@@ -405,25 +525,36 @@ Commit: feat(events): persist distinct reset outbox and target references.
 1. At/before/after cap-window and closed/degraded/open barrier boundaries, including
    restart, prove blocked means no attempt, lease, work attempt, cap charge, append
    or ciphertext mutation.
-2. Later deterministic sequence waits behind earlier retry, active lease and expired/
-   recovered lease; runs after earlier completion/failure/cancel/expiry; cover restart
-   and stale completion.
+2. Allocate deliveries for the same stable `(rule_id, account_id, target_id)` across
+   both a rule replacement and a target replacement: the later version waits behind
+   the earlier version while it is queued, retryable or under an active lease.
+   Expire that first lease and recover it without allocating a new sequence; the
+   later version still waits. It runs only after the recovered earlier row completes,
+   fails, cancels or expires. Cover restart and a stale former owner that attempts to
+   settle or reorder the recovered row.
 3. First charge/attempt/token is atomic once; retries/recovery reuse it; reset never
    charges; cover pause/disable/revoke/account removal/expiry.
 4. Keep B1 dry-run green through shared eligibility, no webhook transport yet.
 
 **Implementation, in order**
 
-1. Allocate sequence in decision insert; one claimant serves scheduler/recovery.
-2. One immediate transaction evaluates all predicates before lease/attempt; blocked
-   result is content-free and mutation-free.
+1. Allocate sequence in decision insert from `delivery_order_counters` whose sole
+   identity is `(rule_id, account_id, target_id)`. Store no rule/target version in
+   that counter key; one claimant serves scheduler/recovery.
+2. In the one immediate claim transaction, find predecessor rows using the same
+   stable triple and lower sequence regardless of their superseded rule/target
+   versions, then evaluate that predicate and every other eligibility predicate
+   before lease/attempt. A blocked result is content-free and mutation-free.
 3. Persist attempt id/random token; require both for release/recovery/completion.
 4. Apply token/lineage semantics to system reset while preserving cap exemption.
 
 **Required mutations**
 
 - Attempt/lease/work/charge/append while cap or reset blocked: cap-barrier fails.
-- Later sequence past retry/recovered lease or recovery bypass: ordering fails.
+- Key `delivery_order_counters` or the atomic predecessor predicate by rule/target
+  version, allocate a replacement-version fresh sequence, let it pass a retry or
+  recovered lease, or let a stale owner settle/reorder it: cross-version ordering
+  cases fail.
 - Missing token/attempt or stale settlement: stale recovery fails.
 
 **Run**
@@ -431,14 +562,15 @@ Commit: feat(events): persist distinct reset outbox and target references.
     pnpm --filter @agentcomms/events-daemon exec node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/claim-cap-barrier.test.ts test/claim-ordering.test.ts test/stale-recovery.test.ts test/dispatcher.test.ts test/retention.test.ts
     pnpm verify
 
-Passing: blocked work consumes no attempt and ordering survives retry/recovery.
+Passing: blocked work consumes no attempt and stable rule/account/target order survives
+replacement versions, retry, lease recovery and stale-owner races.
 Commit: feat(events): fence claims with caps barriers and ordering.
 
-**Batch 2 close.** Run pnpm verify before raw transport.
+**Batch 3 close.** Run pnpm verify before raw transport.
 
-## Batch 3 — webhook transport and recovery
+## Batch 4 — webhook transport and recovery
 
-### Task 5 — fenced Standard Webhooks with DNS, TCP, TLS and write gates **(highest risk)**
+### Task 6 — fenced Standard Webhooks with DNS, TCP, TLS and write gates **(highest risk)**
 
 **Files**
 
@@ -469,7 +601,8 @@ Commit: feat(events): fence claims with caps barriers and ordering.
    row/lease/lineage/generation/account/barrier reread.
 3. Invoke net.connect synchronously after TCP gate, tls.connect({socket}) after TLS
    gate, socket.write after write gate; never combine TCP/TLS.
-4. Classify no-follow response and hand outcome to Task 6; no operation/CLI/MCP/
+4. Install this concrete handler in Task 2's generic router; classify no-follow
+   response and hand outcome to Task 7; no operation/CLI/MCP/
    capability/reference change.
 
 **Required mutations**
@@ -487,7 +620,7 @@ Commit: feat(events): fence claims with caps barriers and ordering.
 Passing: each byte phase has separate immediately-prior authority.
 Commit: feat(events): add separately fenced webhook transport.
 
-### Task 6 — deterministic webhook crash, lease-expiry and stale-owner recovery **(highest risk)**
+### Task 7 — deterministic webhook crash, lease-expiry and stale-owner recovery **(highest risk)**
 
 **Files**
 
@@ -525,7 +658,7 @@ Commit: feat(events): add separately fenced webhook transport.
 
 1. Add test-only failpoints and durable content-free owner facts; production cannot
    enable hooks.
-2. Recovery uses Task 4 expired claim then re-fences before DNS.
+2. Recovery uses Task 5's expired claim then re-fences before DNS.
 3. Completion compares outbox/state/attempt/token; loser never compensates with
    insert/encryption/reference/key restoration.
 4. Apply same stale-owner rule to system reset, preserving cap-free/final-ref stop.
@@ -545,11 +678,11 @@ Commit: feat(events): add separately fenced webhook transport.
 Passing: bounded at-least-once requests have exactly-owned non-resurrectable state.
 Commit: feat(events): recover fenced webhook leases safely.
 
-**Batch 3 close.** Run pnpm verify; all crash outcomes share lease/lineage/cap rules.
+**Batch 4 close.** Run pnpm verify; all crash outcomes share lease/lineage/cap rules.
 
-## Batch 4 — SSE boundary
+## Batch 5 — SSE boundary
 
-### Task 7 — persisted SSE log, bearer generations and frame authority **(high risk)**
+### Task 8 — persisted SSE log, bearer generations and frame authority **(high risk)**
 
 **Files**
 
@@ -582,10 +715,10 @@ Commit: feat(events): recover fenced webhook leases safely.
 
 **Implementation, in order**
 
-1. Add forward stream-log migration/AAD and Task 2 generation refs.
-2. Append/settle together under Task 4 eligibility and purge bytes/refs together.
+1. Add forward stream-log migration/AAD and Task 3 generation refs.
+2. Append/settle together under Task 5 eligibility and purge bytes/refs together.
 3. Implement internal registry/mutex/auth boolean with live rereads/invalidation.
-4. Prepare replay/live outside writes then require Task 8 final frame gate.
+4. Prepare replay/live outside writes then require Task 9 final frame gate.
 
 **Required mutations**
 
@@ -601,7 +734,7 @@ Commit: feat(events): recover fenced webhook leases safely.
 Passing: SSE has durable disclosure semantics before listener. Commit:
 feat(events): persist fenced SSE replay and bearer state.
 
-### Task 8 — loopback SSE listener and real-browser CORS verification **(high risk)**
+### Task 9 — loopback SSE listener and real-browser CORS verification **(high risk)**
 
 **Files**
 
@@ -636,7 +769,7 @@ feat(events): persist fenced SSE replay and bearer state.
 
 **Implementation, in order**
 
-1. Loopback-only listener over Task 7 registry; reject route/Host/auth/CORS before
+1. Loopback-only listener over Task 8 registry; reject route/Host/auth/CORS before
    registration and add no control/operation/CLI/MCP surface.
 2. Gate immediately before writeHead; independently gate immediately before every
    synchronous response.write frame under mutex.
@@ -661,12 +794,12 @@ Passing: Chromium/WebKit verify preflight and credential-omitting CORS against
 loopback daemon SSE; release requires it. Commit:
 feat(events): verify loopback SSE in real browsers.
 
-**Batch 4 close.** Run pnpm verify and pnpm verify:browser; stream state/listener/
+**Batch 5 close.** Run pnpm verify and pnpm verify:browser; stream state/listener/
 both browsers must share final fencing.
 
-## Batch 5 — held integration gate
+## Batch 6 — held integration gate
 
-### Task 9 — sealed B2 E2E, B1-surface audit and release hold **(high risk)**
+### Task 10 — sealed B2 E2E, B1-surface audit and release hold **(high risk)**
 
 **Files**
 
@@ -717,7 +850,7 @@ both browsers must share final fencing.
 Passing: B2 is sealed/held, B1 doctor persists, B3/E public surface is absent.
 Commit: docs(events): document held B2 runtime boundaries.
 
-**Batch 5 close.** Run pnpm verify once more and pnpm verify:browser alongside it;
+**Batch 6 close.** Run pnpm verify once more and pnpm verify:browser alongside it;
 release browser gate requires real-browser SSE/CORS.
 
 ## §5 coverage ownership
@@ -728,15 +861,16 @@ test/resume, full doctor/dry-run surface and callable judges.
 
 | §5 row / B2-owned assertion | Sole task owner |
 | --- | --- |
-| Canonical URLs, all-answer pinning, redirect/proxy refusal, HTTPS/HTTP matrix, recursive transitions and every non-global IANA IPv4/IPv6 snapshot range | Task 1 |
-| Versioned webhook/subscriber docs, secret URL redaction/fingerprint/versioning, masters plus every current/overlap B2 secret ref migration/reconciliation | Task 2 |
-| Forward outbox/AAD schema, cap-free system reset outbox, active-plus-retained exact final-reference model | Task 3 |
-| Atomic cap/barrier-before-attempt eligibility, reset wait, deterministic ordering, stale claim prevention | Task 4 |
-| Webhook bytes/signing/overlap and separate DNS/TCP/TLS/write gates | Task 5 |
-| Webhook/system-reset crash matrix, lease ownership, no duplicate charge/stale outcome/recreated purge, exact-lineage recovery | Task 6 |
-| SSE encrypted append/replay, bearer current/overlap auth, rotation invalidation, internal frame authority | Task 7 |
-| Loopback SSE listener/CORS/final header-frame writes and Chromium/WebKit preflight credential-omitting verification in verify:browser/release | Task 8 |
-| Sealed full path, B1 doctor preservation, B3/E public-surface absence, held-release evidence | Task 9 |
+| Canonical URLs, all-answer pinning, redirect/proxy refusal, HTTPS/HTTP matrix, recursive transitions and every non-global IANA IPv4/IPv6 snapshot range; root/package `pnpm verify` preload seal and network-process sentinel | Task 1 |
+| Exact dry-run/webhook/SSE target keys, target-specific immutable CloudEvent representations and generic owner/scheduler routing before document widening | Task 2 |
+| Versioned webhook/subscriber docs, secret URL redaction/fingerprint/versioning, masters plus every current/overlap B2 secret ref migration/reconciliation | Task 3 |
+| Forward outbox/AAD schema, prepared three-target persistence, cap-free system reset outbox, active-plus-retained exact final-reference model | Task 4 |
+| Atomic cap/barrier-before-attempt eligibility, reset wait, stable rule/account/target ordering across superseded versions, stale claim prevention | Task 5 |
+| Webhook bytes/signing/overlap and separate DNS/TCP/TLS/write gates | Task 6 |
+| Webhook/system-reset crash matrix, lease ownership, no duplicate charge/stale outcome/recreated purge, exact-lineage recovery | Task 7 |
+| SSE encrypted append/replay, bearer current/overlap auth, rotation invalidation, internal frame authority | Task 8 |
+| Loopback SSE listener/CORS/final header-frame writes and Chromium/WebKit preflight credential-omitting verification in verify:browser/release | Task 9 |
+| Sealed full path, B1 doctor preservation, B3/E public-surface absence, held-release evidence | Task 10 |
 
 ## Final verification and hand-off
 
@@ -752,4 +886,4 @@ plan.
 
 Commit this plan with:
 
-    docs(plan): local event emission — phase B2, review round 1
+    docs(plan): local event emission — phase B2, review round 2
