@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.15.1
 
 **A send that Gmail or Resend rate-limits waits and tries again, instead of costing you a new approval.** A burst of
 sends could hit Gmail's per-user rate limit, and the refusal — which proves nothing was sent — spent the approval: the

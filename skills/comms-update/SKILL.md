@@ -2,7 +2,7 @@
 name: comms-update
 description: "Bring agent-communications on this computer up to the latest release from chat: see what is behind, update the servers, their runtimes and any global commands in one approved step, then restart and clear out the old versions. Symptoms: 'update my comms', 'update agentcomms', 'upgrade Gmail and Slack', 'is there a new version', 'my Gmail tools are out of date', a tool answering 'Hang on a minute, there's an update. Let's update first.' (UPDATE_REQUIRED), 'not now', 'stop asking me to update'. Not for first-time setup — comms-onboarding does that — nor for one account's settings."
 license: MIT
-compatibility: "@agentcomms/core@0.15.0"
+compatibility: "@agentcomms/core@0.15.1"
 metadata:
   group: communications
   lifecycle: release
