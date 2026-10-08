@@ -432,6 +432,8 @@ export async function assertDisclosable(request: DisclosableRequest): Promise<Di
   const lineage = await resolveLineage(request.database, request.approvals, row);
   if (!lineage.rule.source.accountIds.includes(request.accountId))
     return refuse('ACCOUNT_NOT_BOUND', 'the account is not bound into this exact rule version');
+  if ((request.targetId === undefined) !== (request.targetVersion === undefined))
+    return refuse('BOUND_OBJECT_REVOKED', 'a disclosure target boundary needs its exact id and version');
   if (
     request.targetId !== undefined &&
     !lineage.rule.targets.some(
