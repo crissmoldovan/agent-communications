@@ -1,3 +1,5 @@
 * text=auto eol=lf
 *.cmd text eol=crlf
 *.gz binary
+# IANA registry exports, byte for byte as published (CRLF): the snapshot test hashes them
+packages/events-daemon/test/fixtures/iana/*.csv -text

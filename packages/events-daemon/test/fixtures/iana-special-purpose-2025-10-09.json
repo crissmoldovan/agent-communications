@@ -1,0 +1,223 @@
+{
+  "snapshotVersion": "iana-special-purpose-2025-10-09",
+  "ipv4": {
+    "title": "IANA IPv4 Special-Purpose Address Registry",
+    "url": "https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry-1.csv",
+    "lastUpdated": "2025-10-09",
+    "rawSourceSha256": "e3e39e76d00b1677335db8e9a805c7b9480ea2f4dc9e33f0b93cd3a905128d73",
+    "prefixes": [
+      {
+        "prefix": "0.0.0.0/8",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "0.0.0.0/32",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "10.0.0.0/8",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "100.64.0.0/10",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "127.0.0.0/8",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "169.254.0.0/16",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "172.16.0.0/12",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "192.0.0.0/24",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "192.0.0.0/29",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "192.0.0.8/32",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "192.0.0.9/32",
+        "globallyReachable": true
+      },
+      {
+        "prefix": "192.0.0.10/32",
+        "globallyReachable": true
+      },
+      {
+        "prefix": "192.0.0.170/32",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "192.0.0.171/32",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "192.0.2.0/24",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "192.31.196.0/24",
+        "globallyReachable": true
+      },
+      {
+        "prefix": "192.52.193.0/24",
+        "globallyReachable": true
+      },
+      {
+        "prefix": "192.88.99.0/24",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "192.88.99.2/32",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "192.168.0.0/16",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "192.175.48.0/24",
+        "globallyReachable": true
+      },
+      {
+        "prefix": "198.18.0.0/15",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "198.51.100.0/24",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "203.0.113.0/24",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "240.0.0.0/4",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "255.255.255.255/32",
+        "globallyReachable": false
+      }
+    ]
+  },
+  "ipv6": {
+    "title": "IANA IPv6 Special-Purpose Address Registry",
+    "url": "https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry-1.csv",
+    "lastUpdated": "2025-10-09",
+    "rawSourceSha256": "775feea0621dec8735a44fbf30f762e721e8f0a1b3ab7eb341961a88cfce2139",
+    "prefixes": [
+      {
+        "prefix": "::1/128",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "::/128",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "::ffff:0:0/96",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "64:ff9b::/96",
+        "globallyReachable": true
+      },
+      {
+        "prefix": "64:ff9b:1::/48",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "100::/64",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "100:0:0:1::/64",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "2001::/23",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "2001::/32",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "2001:1::1/128",
+        "globallyReachable": true
+      },
+      {
+        "prefix": "2001:1::2/128",
+        "globallyReachable": true
+      },
+      {
+        "prefix": "2001:1::3/128",
+        "globallyReachable": true
+      },
+      {
+        "prefix": "2001:2::/48",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "2001:3::/32",
+        "globallyReachable": true
+      },
+      {
+        "prefix": "2001:4:112::/48",
+        "globallyReachable": true
+      },
+      {
+        "prefix": "2001:10::/28",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "2001:20::/28",
+        "globallyReachable": true
+      },
+      {
+        "prefix": "2001:30::/28",
+        "globallyReachable": true
+      },
+      {
+        "prefix": "2001:db8::/32",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "2002::/16",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "2620:4f:8000::/48",
+        "globallyReachable": true
+      },
+      {
+        "prefix": "3fff::/20",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "5f00::/16",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "fc00::/7",
+        "globallyReachable": false
+      },
+      {
+        "prefix": "fe80::/10",
+        "globallyReachable": false
+      }
+    ]
+  }
+}

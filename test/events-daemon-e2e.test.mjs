@@ -3,22 +3,37 @@ import { readFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { run as runCli } from '../packages/events-daemon/src/cli/program.ts';
-import { createEventsMcpServer } from '../packages/events-daemon/src/mcp/server.ts';
-import { approve, disclosureChallenge } from '../packages/events-daemon/src/operations/approve.ts';
-import { startEventOwner } from '../packages/events-daemon/src/runtime/owner.ts';
-import { openEventDatabase } from '../packages/events-daemon/src/store/database.ts';
-import { selectEventSecretStore } from '../packages/events-daemon/src/store/event-secrets.ts';
-import { shortTempDir, WINDOWS_SKIP } from '../packages/events-daemon/test/support/short-temp.ts';
-import { GmailContext } from '../packages/gmail/src/context.ts';
-import { createGmailEventSource } from '../packages/gmail/src/operations/events.ts';
-import { DRAFT_SEND_PATH } from '../packages/gmail/test/support/fake-google.ts';
-import { newHarness } from '../packages/gmail/test/support/harness.ts';
-import { sealToLoopback } from './helpers/loopback-seal.mjs';
+import { assertLoopbackSeal, loopbackSealAttempts } from './helpers/loopback-seal-preload.mjs';
 
-// Sealed before anything runs: a path that ignores the fake (a built Gmail package never honours its loopback
-// override) fails here instead of reaching the real Google. An earlier draft of this test did exactly that.
-const refused = sealToLoopback();
+assertLoopbackSeal();
+
+const [
+  { run: runCli },
+  { createEventsMcpServer },
+  { approve, disclosureChallenge },
+  { startEventOwner },
+  { openEventDatabase },
+  { selectEventSecretStore },
+  { shortTempDir, WINDOWS_SKIP },
+  { GmailContext },
+  { createGmailEventSource },
+  { DRAFT_SEND_PATH },
+  { newHarness },
+] = await Promise.all([
+  import('../packages/events-daemon/src/cli/program.ts'),
+  import('../packages/events-daemon/src/mcp/server.ts'),
+  import('../packages/events-daemon/src/operations/approve.ts'),
+  import('../packages/events-daemon/src/runtime/owner.ts'),
+  import('../packages/events-daemon/src/store/database.ts'),
+  import('../packages/events-daemon/src/store/event-secrets.ts'),
+  import('../packages/events-daemon/test/support/short-temp.ts'),
+  import('../packages/gmail/src/context.ts'),
+  import('../packages/gmail/src/operations/events.ts'),
+  import('../packages/gmail/test/support/fake-google.ts'),
+  import('../packages/gmail/test/support/harness.ts'),
+]);
+
+const refused = loopbackSealAttempts();
 
 const requireFromDaemon = createRequire(new URL('../packages/events-daemon/package.json', import.meta.url));
 const { Client } = requireFromDaemon('@modelcontextprotocol/client');
@@ -117,7 +132,10 @@ test('REL-B1: the Gmail end-to-end path is sealed to the repository fake', async
   // A reserved name stands in for any provider host: the seal refuses it before it is looked up or connected.
   const net = await import('node:net');
   assert.throws(() => net.connect(443, 'provider.example.test'), /loopback seal/);
-  assert.ok(refused.includes('provider.example.test'), 'the seal refuses every host that is not loopback');
+  assert.ok(
+    refused.some((attempt) => attempt.target === 'provider.example.test'),
+    'the seal refuses every host that is not loopback',
+  );
   refused.length = 0;
   assert.doesNotMatch(source, /https?:\/\/(?!127\.0\.0\.1)/, 'the test may not name a real Google endpoint');
 });
