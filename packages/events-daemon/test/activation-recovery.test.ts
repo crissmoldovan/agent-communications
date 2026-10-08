@@ -809,3 +809,57 @@ test('P1-B1: a mailbox cursor starts at the oldest active point, and each rule a
     await rm(setup.root, { recursive: true, force: true });
   }
 });
+
+test('APR-B1: no rule-pointer mutation may move a pointer a claimed completion binds, and a drifted completion settles', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createTarget(target);
+    versions.createRule(rule);
+    versions.createRule({ ...rule, version: 2, mapping: { constant: 'safer' } });
+    versions.createRule({ ...rule, version: 3, deliveryRateCap: 30 });
+    setup.store.database.exec(
+      "UPDATE rule_versions SET state = 'active', approval_id = 'ap_old', authorization_activation_id = 'act_old', activated_at = 1 WHERE id = 'rule-1@1'; INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-1', 1, 'act_old', 1); INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('gmail', 'ibx_AAAAAAAAAAAAAAAA', 'mailbox', '201', 1)",
+    );
+    setup.store.database
+      .prepare(
+        "INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at) VALUES ('act_old', 'rule-1', 1, 'gmail', 'ibx_AAAAAAAAAAAAAAAA', 'mailbox', ?, 1)",
+      )
+      .run(Buffer.from(JSON.stringify({ historyId: '200' })));
+    // An exact replacement (v2) is claimed and left draining.
+    const replacement = (await setup.runtime.prepareRule({ ruleId: 'rule-1', version: 2 })) as PreparedActivation;
+    const challenge = await setup.runtime.issueChallenge(replacement.approvalId);
+    await assert.rejects(
+      () => setup.runtime.approve({ approvalId: replacement.approvalId, answer: challenge }),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+    );
+    // A whitelisted tightening (v3, lower cap) would swap the pointer under the drain: refused.
+    await assert.rejects(
+      () => setup.runtime.prepareRule({ ruleId: 'rule-1', version: 3 }),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'ACTIVATION_COMPLETING',
+    );
+    assert.deepEqual(versions.activeVersion('rule', 'rule-1'), { version: 1, currentCutoverId: 'act_old' });
+
+    // Had a stray mutation moved the pointer anyway, the completion settles instead of throwing on every tick and at startup.
+    setup.store.database.exec(
+      "UPDATE rule_versions SET state = 'active', approval_id = 'ap_old', authorization_activation_id = 'rule-1@3', activated_at = 2 WHERE id = 'rule-1@3'; UPDATE active_versions SET version = 3, current_cutover_id = 'rule-1@3' WHERE object_id = 'rule-1'",
+    );
+    await setup.runtime.resumeClaimedCompletions();
+    const settled = setup.store.database
+      .prepare('SELECT status, failure_code FROM activation_intents WHERE id = ?')
+      .get(replacement.intentId) as { status: string; failure_code: string };
+    assert.deepEqual({ ...settled }, { status: 'cancelled', failure_code: 'APPROVAL_BINDING_DRIFT' });
+    assert.equal(
+      (setup.store.database.prepare('SELECT COUNT(*) AS count FROM replacement_drains').get() as { count: number })
+        .count,
+      0,
+      'its drain no longer holds the mailbox',
+    );
+    await setup.runtime.recover();
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
