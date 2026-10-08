@@ -273,8 +273,10 @@ even when it would succeed.
   `SEND_OUTCOME_UNKNOWN` or an `unknown` approval until the person has checked Sent: a late result
   can still be recorded, and a second prepare is a second email.
 - **Reading a certain failure as doubt, or doubt as failure.** "nothing was sent: …" is certain;
-  `SEND_OUTCOME_UNKNOWN` is not. A send is never retried, because nothing here can tell whether a
-  lost answer delivered.
+  `SEND_OUTCOME_UNKNOWN` is not. A send whose answer was lost is never retried, because nothing here
+  can tell whether it delivered. A rate-limited one the tool already tried again, for up to 45
+  seconds, before it answered: do not retry it yourself. When it says Gmail's sending limit is
+  reached, tell the person, with the time it gives, and do not prepare it again before then.
 - **Sending from the wrong mailbox.** A draft id is meaningless in another inbox, but an alias typo
   can name a real different mailbox. `gmail_whoami` before the first write of a session.
 

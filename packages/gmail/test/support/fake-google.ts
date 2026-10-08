@@ -148,6 +148,13 @@ export interface FakeGoogle {
   /** Called after a draft has become a sent message, to lose or replace the answer to that send. */
   afterSend: ((message: FakeMessage) => { status: number; body?: unknown; drop?: boolean } | undefined) | null;
   /**
+   * Answers a draft send before Gmail does anything — a throttle or a quota, as Gmail refuses them: the draft stays,
+   * nothing is sent. Undefined lets the send go ahead.
+   */
+  beforeSend:
+    | ((draftId: string) => { status: number; body?: unknown; headers?: Record<string, string> } | undefined)
+    | null;
+  /**
    * At most this many rows to a page of a listing, whatever `maxResults` asked for — as Gmail may return fewer than it
    * was asked for, with a next page. Null: as many as asked.
    */
@@ -390,9 +397,9 @@ function readBody(request: IncomingMessage): Promise<string> {
   });
 }
 
-function json(response: ServerResponse, status: number, body: unknown): void {
+function json(response: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   const text = JSON.stringify(body);
-  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...headers });
   response.end(text);
 }
 
@@ -421,6 +428,7 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
   >();
   const requests: FakeGoogle['requests'] = [];
   let afterSend: FakeGoogle['afterSend'] = null;
+  let beforeSend: FakeGoogle['beforeSend'] = null;
   let pageLimit: number | null = null;
 
   const fail = (
@@ -762,6 +770,11 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
           json(response, 404, { error: { code: 404, message: 'Not Found', errors: [{ reason: 'notFound' }] } });
           return;
         }
+        const refusal = beforeSend?.(parsed.id ?? '');
+        if (refusal) {
+          json(response, refusal.status, refusal.body ?? {}, refusal.headers);
+          return;
+        }
         const message: FakeMessage = {
           ...draft.message,
           labelIds: [...(draft.message.labelIds ?? []).filter((label) => label !== 'DRAFT'), 'SENT'],
@@ -849,6 +862,12 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
     tokens,
     get afterSend() {
       return afterSend;
+    },
+    get beforeSend() {
+      return beforeSend;
+    },
+    set beforeSend(value) {
+      beforeSend = value;
     },
     set afterSend(value) {
       afterSend = value;

@@ -120,6 +120,8 @@ approval is still alive. Hand the person the command, then learn when they have 
 | `SEND_OUTCOME_UNKNOWN` — "whether the email was sent is not known" | It may have gone, and a late result is still possible. **Do not send it again**, and never prepare it again automatically: check it first |
 | the email or an attachment changed after the preview | The approved bytes are the sent bytes, or nothing is |
 | `TRANSIENT` — rate limit, with a time | Nothing was sent and the approval is untouched; try after that time |
+| `TRANSIENT` — "Resend is rate-limiting this team (tried 4 times)" | The send already waited and tried again. Nothing was sent; prepare it again after the time it gives |
+| `TRANSIENT` — the team's daily or monthly sending quota is used up | Nothing was sent. The daily quota resets at midnight UTC; the monthly one needs a larger plan. Tell the person; do not prepare it again before then |
 | Resend refused it (an error it gives before accepting the email) | Nothing was sent; the refusal says why |
 
 Branch on the code, not the words. `resend_send_status` (`agent-resend send status <approvalId>`) reads the local

@@ -3,6 +3,30 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**A send that Gmail or Resend rate-limits waits and tries again, instead of costing you a new approval.** A burst of
+sends could hit Gmail's per-user rate limit, and the refusal — which proves nothing was sent — spent the approval: the
+person saw the preview again and approved it again, for a few seconds of throttling. The advice was always "Wait a
+minute and retry", even for Gmail's daily sending limit, which no minute fixes. Now:
+- **A throttled send tries again by itself.** When Gmail answers `429`, or `403` with `rateLimitExceeded` or
+  `userRateLimitExceeded`, and when Resend answers `429 rate_limit_exceeded`, the send waits the time the provider gives
+  (or backs off from one second), and tries again: at most three more times, within 45 seconds. Before each attempt it
+  reads the Gmail draft again and checks it still holds its claim, so only the approved email goes, and only once. An
+  answer that leaves the outcome uncertain is still never retried (`SEND_OUTCOME_UNKNOWN`).
+- **A limit that lasts hours stops at once and says which.** "Gmail's sending limit for this account is reached", with
+  when Google accepts mail again; "this Resend team's daily sending quota is used up", with its midnight-UTC reset; the
+  monthly quota, which needs a larger plan. Each says nothing was sent and carries `details.limit` and, when known,
+  `details.retryAt`.
+- **A Google Cloud project's daily Gmail API quota is no longer "sign in again".** `403 dailyLimitExceeded` was
+  reported as `AUTH_REQUIRED` (exit 77), sending people to re-authorise; it is now `CONFIG` (exit 78), "this Google
+  Cloud project's daily Gmail API quota is used up", pointing at the quota in the Cloud console. This applies to every
+  Gmail call, not only sends.
+
+**Upgrading.** Nothing to change. A send that would have failed with a rate limit may now take up to 45 seconds longer
+and succeed. Anything that branched on `AUTH_REQUIRED` for a project quota sees `CONFIG`. Slack's posts, reactions,
+edits and deletions take the same retry in a following release.
+
 ## 0.15.0
 
 **Slack: edit or delete a message this account posted — its words, its files, or the whole message — through the

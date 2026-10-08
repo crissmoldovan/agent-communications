@@ -37,8 +37,11 @@ read is what they read.
 
 **`execute` re-reads the draft** and checks it against the record. The Gmail message id changes on every save, so
 any edit after the preview voids the approval. The approval is single-use, claimed with an exclusive marker so two
-processes cannot both spend it. It is never retried at any layer: a retried send may deliver twice and nothing here
-could tell.
+processes cannot both spend it. It is retried in one case only: Gmail refused it with a rate limit, an answer that
+proves nothing was sent. Then it waits the time Gmail gives (or backs off), reads the draft again and checks its claim,
+and tries again: at most three more times within 45 seconds. Anything else is never retried: a retried send may deliver
+twice and nothing here could tell. Gmail's daily sending limit and a Cloud project's quota are not waited on; the
+refusal names the limit and, when Gmail gives one, when it lifts.
 
 **You must pass what you believe you are sending.** `--expect-to` and friends are checked against the draft. If
 they disagree, nothing is sent.
