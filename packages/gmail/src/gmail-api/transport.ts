@@ -26,6 +26,11 @@ export interface GmailTransport {
   readonly alias: string;
   readonly inboxId: string;
   getProfile(): Promise<GmailProfile>;
+  /**
+   * One unfiltered page of the mailbox history. The event source owns filtering because Gmail accepts only one
+   * singular label id, while several active rules may name different label sets.
+   */
+  listHistory(options: HistoryListOptions): Promise<GmailHistoryPage>;
   listLabels(): Promise<GmailLabel[]>;
   listSendAs(): Promise<SendAsAddress[]>;
   /** One message with its full part tree. `format=metadata` has no parts, so reading always uses `full`. */
@@ -134,6 +139,38 @@ export interface GmailProfile {
   messagesTotal: number;
   threadsTotal: number;
   historyId: string;
+}
+
+/** The only cursor inputs Gmail's history endpoint needs for a B1 mailbox scan. */
+export interface HistoryListOptions {
+  readonly historyId: string;
+  readonly pageToken?: string | undefined;
+}
+
+/** The message reference Gmail includes in a history-specific change. It deliberately has no body fields. */
+export interface GmailHistoryMessage {
+  readonly id: string;
+  readonly threadId?: string | undefined;
+}
+
+export interface GmailHistoryLabelChange {
+  readonly message: GmailHistoryMessage;
+  readonly labelIds: readonly string[];
+}
+
+/** A history record reduced to the specific change arrays; the generic `messages` array is intentionally excluded. */
+export interface GmailHistoryRecord {
+  readonly id: string;
+  readonly messagesAdded: readonly { readonly message: GmailHistoryMessage }[];
+  readonly labelsAdded: readonly GmailHistoryLabelChange[];
+  readonly labelsRemoved: readonly GmailHistoryLabelChange[];
+}
+
+/** One page and Gmail's cursor after that page. The final page's `historyId` becomes the durable cursor. */
+export interface GmailHistoryPage {
+  readonly history: readonly GmailHistoryRecord[];
+  readonly historyId: string;
+  readonly nextPageToken: string | undefined;
 }
 
 export interface GmailLabel {
@@ -351,6 +388,47 @@ export class GoogleGmailTransport implements GmailTransport {
       messagesTotal: data.messagesTotal ?? 0,
       threadsTotal: data.threadsTotal ?? 0,
       historyId: data.historyId ?? '',
+    };
+  }
+
+  async listHistory(options: HistoryListOptions): Promise<GmailHistoryPage> {
+    const { data } = await this.call('read mailbox history', () =>
+      this.gmail().users.history.list({
+        userId: 'me',
+        startHistoryId: options.historyId,
+        ...(options.pageToken === undefined ? {} : { pageToken: options.pageToken }),
+      }),
+    );
+    // A cursor or message id Gmail did not send is never invented: an empty cursor committed later would break every
+    // scan after it, and an empty message id would name no message. Such a page is refused as bad provider data.
+    const malformed = (what: string) =>
+      new CommsError('BAD_DATA', `Gmail returned a mailbox history page without ${what}`, {
+        hint: 'Try again later; if it keeps happening, the mailbox history cannot be read safely.',
+      });
+    if (!data.historyId) throw malformed('its history id');
+    const present = (value: string | null | undefined, what: string): string => {
+      if (!value) throw malformed(what);
+      return value;
+    };
+    const message = (value: gmail_v1.Schema$Message | null | undefined): GmailHistoryMessage => ({
+      id: present(value?.id, 'a message id'),
+      ...(value?.threadId ? { threadId: value.threadId } : {}),
+    });
+    return {
+      history: (data.history ?? []).map((record) => ({
+        id: present(record.id, 'a history record id'),
+        messagesAdded: (record.messagesAdded ?? []).map((change) => ({ message: message(change.message) })),
+        labelsAdded: (record.labelsAdded ?? []).map((change) => ({
+          message: message(change.message),
+          labelIds: [...(change.labelIds ?? [])],
+        })),
+        labelsRemoved: (record.labelsRemoved ?? []).map((change) => ({
+          message: message(change.message),
+          labelIds: [...(change.labelIds ?? [])],
+        })),
+      })),
+      historyId: data.historyId,
+      nextPageToken: data.nextPageToken ?? undefined,
     };
   }
 

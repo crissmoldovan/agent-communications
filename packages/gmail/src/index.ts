@@ -9,6 +9,13 @@
 import { cliHandoffs, type Handoff, type HandoffUse, type PathOverrides, resolvePaths } from '@agentcomms/core';
 import { createGmailMcpServer as createServer, type GmailMcpOptions } from './mcp/server.ts';
 import { redirectConsoleToStderr } from './mcp/stdio-entry.ts';
+
+export {
+  type CreateGmailEventSourceOptions,
+  createGmailEventSource,
+  type GmailEventSource,
+} from './operations/events.ts';
+
 import { VERSION } from './version.ts';
 
 /** How a command is rendered for a person: in a sentence, or as a value of its own (CUE-403). */
