@@ -242,6 +242,20 @@ earlier, if the owner decides to publish it on its own:
 Steps 3 and 4 need the owner's npm account; an agent cannot do them. They are
 [a new package's first version](#a-new-packages-first-version), reached by lifting the hold.
 
+### The held event library and daemon
+
+`@agentcomms/events` and `@agentcomms/events-daemon` are both held throughout B1. A B1 merge publishes neither
+package: both remain in `PUBLISHABLE` for builds, licences, version synchronisation and packed-tarball consumer
+checks, but neither is in `PACKAGES`, so the release preflight, publish and confirmation paths do not read their
+packuments.
+
+When the owner decides to release the first daemon consumer, they remove both holds in one normal version/release
+commit and tag it only after the complete release checks pass. From that same checked tag, the owner first publishes
+`@agentcomms/events`, then publishes `@agentcomms/events-daemon` with the same checked tag and command form. The order
+is required: the daemon pins its runtime dependency on the library to exactly that version. The owner then configures
+trusted publishing for each package and re-runs the tagged release, as [a new package's first
+version](#a-new-packages-first-version) describes. Use `next`, rather than `latest`, for a prerelease.
+
 ## If a publish fails part way through
 
 The packages that already went out are on the registry permanently, and a version can never be replaced.

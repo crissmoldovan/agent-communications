@@ -35,6 +35,11 @@ scripts/              repository checks
 
 The design lives in `docs/superpowers/specs/`, and the implementation plan in `docs/superpowers/plans/`.
 
+`@agentcomms/events` and `@agentcomms/events-daemon` remain held through the B1 merge. Their eventual first release
+is an owner action from one checked tag: publish the library first, then the daemon that pins it at runtime. See [the
+held event library and daemon](docs/RELEASING.md#the-held-event-library-and-daemon); do not add either package to a B1
+tag publish.
+
 ## Local setup
 
 Use Node.js 22.18 or newer and pnpm 11 (`npm install -g pnpm@11`, or `corepack enable` on Node 22/24). The build tool

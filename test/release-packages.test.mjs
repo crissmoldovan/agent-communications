@@ -1003,6 +1003,24 @@ test('REL-d: the release documents say what a hold is, and how it is lifted', as
 
 // ── The OIDC preflight and the commit check, against a fake GitHub and a fake registry ───────────────────────────
 
+test('REL-B1: B1 stays held, while its eventual owner publish is events then events-daemon from one checked tag', async () => {
+  assert.ok(PUBLISHABLE.includes('events'), '@agentcomms/events is consumer-checked while held');
+  assert.ok(PUBLISHABLE.includes('events-daemon'), '@agentcomms/events-daemon is consumer-checked while held');
+  assert.ok(Object.hasOwn(HELD, 'events'), '@agentcomms/events remains held for B1');
+  assert.ok(Object.hasOwn(HELD, 'events-daemon'), '@agentcomms/events-daemon remains held for B1');
+  assert.ok(!PACKAGES.includes('events'), '@agentcomms/events is absent from a B1 tag publish');
+  assert.ok(!PACKAGES.includes('events-daemon'), '@agentcomms/events-daemon is absent from a B1 tag publish');
+
+  const release = (await readFile(join(ROOT, 'docs', 'RELEASING.md'), 'utf8')).replace(/\s+/g, ' ');
+  assert.match(release, /A B1 merge publishes neither package/i);
+  assert.match(release, /same checked tag/i);
+  assert.match(
+    release,
+    /owner first publishes `@agentcomms\/events`, then publishes `@agentcomms\/events-daemon`/i,
+    'the daemon follows the library that it depends on',
+  );
+});
+
 /**
  * One loopback server playing both parts. GitHub hands out numbered ID tokens; the registry mints a publish token
  * for every package except those in `untrusted`, and records which ID token each exchange carried.

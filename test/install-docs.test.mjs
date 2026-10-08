@@ -58,6 +58,18 @@ test('every declared CLI/MCP surface has generated reference destinations', () =
   }
 });
 
+test('the held local event service README states B1’s foreground, platform, runtime, and read boundary', async () => {
+  const readme = await readFile(join(ROOT, 'packages', 'events-daemon', 'README.md'), 'utf8');
+  const prose = readme.replace(/\s+/g, ' ');
+  assert.match(prose, /foreground owner only/i);
+  assert.match(prose, /macOS and Linux only/i);
+  assert.match(prose, /Windows refuses/i);
+  assert.match(prose, /Node 22\.16(?:\.0)? or newer/i);
+  assert.match(prose, /only the local .*dry-run target/i);
+  assert.match(prose, /reads are terminal-only/i);
+  assert.match(prose, /held from publication/i);
+});
+
 /**
  * Every `mcp install` a document gives, with the CLI it belongs to and the flags it passes.
  *
