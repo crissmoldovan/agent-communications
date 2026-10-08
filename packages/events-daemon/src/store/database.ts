@@ -40,6 +40,8 @@ export async function openEventDatabase(options: OpenEventDatabaseOptions): Prom
     database.exec('PRAGMA foreign_keys = ON');
     database.exec('PRAGMA journal_mode = WAL');
     database.exec('PRAGMA synchronous = FULL');
+    // Expiry and revocation delete encrypted content; SQLite must scrub released pages rather than retain old bytes.
+    database.exec('PRAGMA secure_delete = ON');
     database.exec('PRAGMA busy_timeout = 5000');
     applyMigrations(database);
     const installationId = installationIdFor(database);

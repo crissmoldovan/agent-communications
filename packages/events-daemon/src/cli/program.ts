@@ -6,6 +6,7 @@ import { approve, disclosureChallenge } from '../operations/approve.ts';
 import { catalogueList, catalogueShow } from '../operations/catalogue.ts';
 import { disableAll } from '../operations/disable-all.ts';
 import { doctor } from '../operations/doctor.ts';
+import { dryrunList, dryrunShow } from '../operations/dryrun.ts';
 import { enableAll } from '../operations/enable-all.ts';
 import { pause, resume } from '../operations/pause.ts';
 import {
@@ -22,11 +23,12 @@ import { sourceShow, sourcesList } from '../operations/sources.ts';
 import { status } from '../operations/status.ts';
 import { stop } from '../operations/stop.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
+import { assertHumanTerminal, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
 
 export interface EventsCliStreams {
-  readonly stdin: NodeJS.ReadableStream;
-  readonly stdout: NodeJS.WritableStream;
-  readonly stderr: NodeJS.WritableStream;
+  readonly stdin: NodeJS.ReadableStream & { readonly isTTY?: boolean };
+  readonly stdout: NodeJS.WritableStream & { readonly isTTY?: boolean };
+  readonly stderr: NodeJS.WritableStream & { readonly isTTY?: boolean };
 }
 
 export interface EventsCliDeps {
@@ -181,6 +183,18 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   target.command('remove <target-id>').action(async (targetId: string) => {
     ran = true;
     print(await removeTarget(targetId, controlOptions(program)));
+  });
+
+  const dryrun = program.command('dryrun').description('inspect retained local records at an interactive terminal');
+  dryrun.command('list').action(async () => {
+    ran = true;
+    assertHumanTerminal(process.env, streams, program.opts<EventsCliOptions>().json === true);
+    streams.stdout.write(`${renderDryRunList(await dryrunList(controlOptions(program)))}\n`);
+  });
+  dryrun.command('show <delivery-id>').action(async (deliveryId: string) => {
+    ran = true;
+    assertHumanTerminal(process.env, streams, program.opts<EventsCliOptions>().json === true);
+    streams.stdout.write(`${renderDryRunRecord(await dryrunShow(deliveryId, controlOptions(program)))}\n`);
   });
 
   program

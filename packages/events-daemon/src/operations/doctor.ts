@@ -1,4 +1,5 @@
 import { EventControlClient } from '../control/client.ts';
+import type { DryRunSummary } from '../runtime/dispatcher.ts';
 import type { ActivationIntentStatusSummary } from './status.ts';
 
 export interface EventsDoctorReport {
@@ -9,6 +10,7 @@ export interface EventsDoctorReport {
   readonly protocolVersions: readonly number[];
   readonly installationId: string;
   readonly activationIntents: readonly ActivationIntentStatusSummary[];
+  readonly dryrun: DryRunSummary;
 }
 
 export async function doctor(options: { readonly stateDir?: string | undefined } = {}): Promise<EventsDoctorReport> {

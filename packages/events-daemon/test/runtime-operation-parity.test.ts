@@ -33,6 +33,7 @@ test('PAR-B1: runtime CLI commands and tools expose every paired operation, whil
     'targets',
     'target',
     'approve',
+    'dryrun',
   ]) {
     assert.match(help, new RegExp(`\\b${command}\\b`));
   }
@@ -69,6 +70,12 @@ test('PAR-B1: runtime CLI commands and tools expose every paired operation, whil
     ]);
     assert.ok(!names.includes('events_run'), 'the owner-starting command is not an MCP tool');
     assert.ok(!names.includes('events_approve'), 'standing disclosure approval is terminal-only');
+    assert.ok(!names.includes('events_dryrun_list'), 'retained local content has no MCP selection surface');
+    await assert.rejects(
+      client.callTool({ name: 'events_dryrun_show', arguments: { deliveryId: 'delivery-1' } }),
+      /not found/,
+      'direct model-context invocation is rejected because no tool is registered',
+    );
   } finally {
     await Promise.all([client.close(), server.close()]);
   }

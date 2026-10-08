@@ -50,6 +50,7 @@ Scripts should read these rather than parse output.
 | [`rule`](#agent-events-rule) | create, inspect and control immutable event rules |
 | [`targets`](#agent-events-targets) | inspect immutable local event target versions |
 | [`target`](#agent-events-target) | create, inspect and revoke immutable dry-run targets |
+| [`dryrun`](#agent-events-dryrun) | inspect retained local records at an interactive terminal |
 | [`approve`](#agent-events-approve) | approve a standing disclosure by typing its challenge at this terminal |
 | [`mcp`](#agent-events-mcp) | serve the MCP interface over standard input and output |
 
@@ -261,6 +262,26 @@ agent-events target update [options] <document>
 
 ```
 agent-events target remove [options] <target-id>
+```
+
+### `agent-events dryrun`
+
+inspect retained local records at an interactive terminal
+
+```
+agent-events dryrun [options] [command]
+```
+
+### `agent-events dryrun list`
+
+```
+agent-events dryrun list [options]
+```
+
+### `agent-events dryrun show`
+
+```
+agent-events dryrun show [options] <delivery-id>
 ```
 
 ### `agent-events approve`

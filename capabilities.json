@@ -1722,6 +1722,22 @@
       "reason": "Standing disclosure can be approved only by a person typing the challenge at an interactive terminal."
     },
     {
+      "id": "events-daemon.dryrun.list",
+      "package": "events-daemon",
+      "cli": "dryrun list",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Retained sender content may be selected only by a person outside model context at an interactive terminal."
+    },
+    {
+      "id": "events-daemon.dryrun.show",
+      "package": "events-daemon",
+      "cli": "dryrun show",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Retained sender content may be rendered only for a person at an interactive terminal, never in model context."
+    },
+    {
       "id": "events-daemon.mcp.serve",
       "package": "events-daemon",
       "cli": "mcp",
