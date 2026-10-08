@@ -3,20 +3,12 @@ import { readFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { openCore } from '../packages/core/src/index.ts';
 import { run as runCli } from '../packages/events-daemon/src/cli/program.ts';
 import { createEventsMcpServer } from '../packages/events-daemon/src/mcp/server.ts';
 import { approve, disclosureChallenge } from '../packages/events-daemon/src/operations/approve.ts';
-import { assertDisclosable } from '../packages/events-daemon/src/runtime/disclosure-fence.ts';
-import { DryRunDispatcher } from '../packages/events-daemon/src/runtime/dispatcher.ts';
-import { EventEvaluator } from '../packages/events-daemon/src/runtime/evaluate.ts';
 import { startEventOwner } from '../packages/events-daemon/src/runtime/owner.ts';
-import { recordEventTaint } from '../packages/events-daemon/src/runtime/untrusted.ts';
-import { MailboxLock } from '../packages/events-daemon/src/sources/mailbox-lock.ts';
-import { GmailSourceWorker } from '../packages/events-daemon/src/sources/source-worker.ts';
 import { openEventDatabase } from '../packages/events-daemon/src/store/database.ts';
-import { openEventSecretStore, selectEventSecretStore } from '../packages/events-daemon/src/store/event-secrets.ts';
-import { EventRecordCipher } from '../packages/events-daemon/src/store/records.ts';
+import { selectEventSecretStore } from '../packages/events-daemon/src/store/event-secrets.ts';
 import { shortTempDir, WINDOWS_SKIP } from '../packages/events-daemon/test/support/short-temp.ts';
 import { GmailContext } from '../packages/gmail/src/context.ts';
 import { createGmailEventSource } from '../packages/gmail/src/operations/events.ts';
@@ -234,78 +226,15 @@ test('REL-B1: a fake-Google Gmail event crosses the foreground owner, CLI and MC
       const allChallenge = await disclosureChallenge(allPrepared.approvalId, { stateDir });
       assert.equal((await approve(allPrepared.approvalId, allChallenge, { stateDir })).status, 'completed');
 
-      // The components the owner will run in B2 are driven here directly, on the owner's own folders: its core
-      // approvals, configuration and taint, not the Gmail harness's.
-      const ownerCore = openCore({ pathOverrides: { stateDir, configDir: harness.configDir } });
+      // The foreground owner owns acquisition, evaluation and local delivery. A deterministic tick keeps this
+      // release fixture fake-only while proving no caller can bypass the owner loop.
+      await owner.tick();
       store = await openEventDatabase({ stateDir });
-      store.database
-        .prepare(
-          `INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at)
-           VALUES ('gmail', ?, 'mailbox', '201', 0)`,
-        )
-        .run(inbox.id);
-      const cipher = new EventRecordCipher(
-        store.database,
-        await openEventSecretStore({ database: store.database, paths: store.paths, configDir: harness.configDir }),
-      );
-      const source = await createGmailEventSource({
-        alias: 'events',
-        context: new GmailContext({ core: harness.core, env: harness.env }),
-      });
-      const evaluator = new EventEvaluator({
-        store,
-        cipher,
-        approvals: ownerCore.approvals,
-        config: ownerCore.config,
-        taint: {
-          record: (input) => recordEventTaint(ownerCore.taint, { ownAddresses: [], internalDomains: [] }, input),
-        },
-      });
-      const sourceRule = {
-        ruleId: rule.ruleId,
-        ruleVersion: rule.version,
-        eventType: rule.event.type,
-        options: rule.source.options,
-        ingestRetentionMs: rule.retention.ingestMs,
-      };
-      const location = (id) => ({
-        table: 'source_scan_state',
-        column: 'encryptedRecord',
-        key: [{ type: 'text', value: id }],
-      });
-      const worker = new GmailSourceWorker({
-        store,
-        source,
-        mailbox: { accountId: inbox.id, name: 'events' },
-        mailboxLock: new MailboxLock(),
-        rules: () => [sourceRule],
-        assertDisclosable: () =>
-          assertDisclosable({
-            database: store.database,
-            approvals: ownerCore.approvals,
-            config: ownerCore.config,
-            accountId: inbox.id,
-            boundary: 'source',
-            ruleId: rule.ruleId,
-            ruleVersion: rule.version,
-            switchGeneration: 0,
-          }),
-        admit: (occurrence) => evaluator.admitGmailOccurrence(occurrence),
-        encryptStage: (value) =>
-          cipher.encrypt(location(`gmail-history:${inbox.id}:201:0`), Buffer.from(JSON.stringify(value))),
-        decryptStage: async (value) =>
-          JSON.parse((await cipher.decrypt(location(`gmail-history:${inbox.id}:201:0`), value)).toString('utf8')),
-      });
-      assert.deepEqual(await worker.scan(), { cursor: '202', pending: false });
-
       const deliveryId = store.database.prepare('SELECT id FROM deliveries').get().id;
-      const dispatcher = new DryRunDispatcher({
-        store,
-        cipher,
-        approvals: ownerCore.approvals,
-        config: ownerCore.config,
-      });
-      assert.deepEqual(await dispatcher.dispatch(deliveryId), { state: 'delivered', deliveryId });
+      assert.equal(
+        store.database.prepare('SELECT state FROM deliveries WHERE id = ?').get(deliveryId).state,
+        'delivered',
+      );
       store.close();
       store = undefined;
 

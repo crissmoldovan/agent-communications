@@ -25,6 +25,9 @@ interface BaselinePosition {
 interface DrainRow {
   readonly intent_id: string;
   readonly replacement_of_version: string;
+  readonly source: 'gmail';
+  readonly account_id: string;
+  readonly position_scope: 'mailbox';
   readonly encrypted_position: Uint8Array;
 }
 
@@ -64,16 +67,34 @@ export function tighteningKind(
  */
 export class GmailReplacementDrains {
   readonly #database: DatabaseSync;
-  readonly #decryptBaseline: (record: Uint8Array) => Promise<unknown>;
+  readonly #decryptPosition: (input: {
+    readonly table: 'activation_baselines' | 'rule_activation_points';
+    readonly activationId: string;
+    readonly ruleId?: string | undefined;
+    readonly ruleVersion?: number | undefined;
+    readonly source: 'gmail';
+    readonly accountId: string;
+    readonly positionScope: 'mailbox';
+    readonly record: Uint8Array;
+  }) => Promise<unknown>;
   readonly #now: () => number;
 
   constructor(options: {
     readonly database: DatabaseSync;
-    readonly decryptBaseline: (record: Uint8Array) => Promise<unknown>;
+    readonly decryptPosition: (input: {
+      readonly table: 'activation_baselines' | 'rule_activation_points';
+      readonly activationId: string;
+      readonly ruleId?: string | undefined;
+      readonly ruleVersion?: number | undefined;
+      readonly source: 'gmail';
+      readonly accountId: string;
+      readonly positionScope: 'mailbox';
+      readonly record: Uint8Array;
+    }) => Promise<unknown>;
     readonly now?: (() => number) | undefined;
   }) {
     this.#database = options.database;
-    this.#decryptBaseline = options.decryptBaseline;
+    this.#decryptPosition = options.decryptPosition;
     this.#now = options.now ?? Date.now;
   }
 
@@ -86,9 +107,20 @@ export class GmailReplacementDrains {
   }): Promise<boolean> {
     const oldVersion = ruleVersionId(input.ruleId, input.ruleVersion);
     const occurrence = historyId(input.historyRecordId, 'a Gmail history record id');
-    for (const drain of this.#drains(input.accountId)) {
+    // A completed drain proves P is durable; it does not make the pending replacement pointer effective. Keep
+    // post-P occurrences held until the completion transaction publishes the new active version.
+    for (const drain of this.#drains(input.accountId, { includeCompleted: true })) {
       if (drain.replacement_of_version !== oldVersion) continue;
-      const baseline = position(await this.#decryptBaseline(drain.encrypted_position));
+      const baseline = position(
+        await this.#decryptPosition({
+          table: 'activation_baselines',
+          activationId: drain.intent_id,
+          source: drain.source,
+          accountId: drain.account_id,
+          positionScope: drain.position_scope,
+          record: drain.encrypted_position,
+        }),
+      );
       if (occurrence > historyId(baseline.historyId, 'a replacement baseline history id')) return true;
     }
     return false;
@@ -106,7 +138,7 @@ export class GmailReplacementDrains {
   }): Promise<boolean> {
     const row = this.#database
       .prepare(
-        `SELECT rule_activation_points.encrypted_position
+        `SELECT active_versions.current_cutover_id, rule_activation_points.encrypted_position
          FROM active_versions
          JOIN rule_activation_points
            ON rule_activation_points.activation_id = active_versions.current_cutover_id
@@ -119,9 +151,23 @@ export class GmailReplacementDrains {
            AND active_versions.object_id = ?
            AND active_versions.version = ?`,
       )
-      .get(input.accountId, input.ruleId, input.ruleVersion) as { encrypted_position: Uint8Array } | undefined;
-    if (row === undefined) return true;
-    const baseline = position(await this.#decryptBaseline(row.encrypted_position));
+      .get(input.accountId, input.ruleId, input.ruleVersion) as
+      | { current_cutover_id: string; encrypted_position: Uint8Array }
+      | undefined;
+    // An active version with no cut-over point has no authorised start: admit nothing rather than everything.
+    if (row === undefined) return false;
+    const baseline = position(
+      await this.#decryptPosition({
+        table: 'rule_activation_points',
+        activationId: row.current_cutover_id,
+        ruleId: input.ruleId,
+        ruleVersion: input.ruleVersion,
+        source: 'gmail',
+        accountId: input.accountId,
+        positionScope: 'mailbox',
+        record: row.encrypted_position,
+      }),
+    );
     return (
       historyId(input.historyRecordId, 'a Gmail history record id') >
       historyId(baseline.historyId, 'a replacement baseline history id')
@@ -133,7 +179,16 @@ export class GmailReplacementDrains {
     const covered = historyId(input.historyId, 'a Gmail page history id');
     const complete: string[] = [];
     for (const drain of this.#drains(input.accountId)) {
-      const baseline = position(await this.#decryptBaseline(drain.encrypted_position));
+      const baseline = position(
+        await this.#decryptPosition({
+          table: 'activation_baselines',
+          activationId: drain.intent_id,
+          source: drain.source,
+          accountId: drain.account_id,
+          positionScope: drain.position_scope,
+          record: drain.encrypted_position,
+        }),
+      );
       if (covered >= historyId(baseline.historyId, 'a replacement baseline history id')) complete.push(drain.intent_id);
     }
     if (complete.length === 0) return;
@@ -145,10 +200,12 @@ export class GmailReplacementDrains {
     }
   }
 
-  #drains(accountId: string): readonly DrainRow[] {
+  #drains(accountId: string, options: { readonly includeCompleted?: boolean } = {}): readonly DrainRow[] {
     return this.#database
       .prepare(
-        `SELECT replacement_drains.intent_id, activation_intents.replacement_of_version, activation_baselines.encrypted_position
+        `SELECT replacement_drains.intent_id, activation_intents.replacement_of_version,
+                replacement_drains.source, replacement_drains.account_id, replacement_drains.position_scope,
+                activation_baselines.encrypted_position
          FROM replacement_drains
          JOIN activation_intents ON activation_intents.id = replacement_drains.intent_id
          JOIN activation_baselines
@@ -159,7 +216,7 @@ export class GmailReplacementDrains {
          WHERE replacement_drains.source = 'gmail'
            AND replacement_drains.account_id = ?
            AND replacement_drains.position_scope = 'mailbox'
-           AND replacement_drains.drained_at IS NULL
+           ${options.includeCompleted ? '' : 'AND replacement_drains.drained_at IS NULL'}
            AND activation_intents.status = 'pending-completion'
            AND activation_intents.replacement_of_version IS NOT NULL`,
       )
@@ -348,17 +405,80 @@ export function shortenRuleRetentionDeadlines(input: {
  * Commits one no-approval rule narrowing as an immutable derived authorisation. The lineage edge, copied point set,
  * pointer, and lifecycle transition share a transaction, so a crash can expose all of them or none of them.
  */
-export function applyDerivedTightening(input: {
+export async function applyDerivedTightening(input: {
   readonly database: DatabaseSync;
   readonly parent: CanonicalFullRuleDocument;
   readonly child: CanonicalFullRuleDocument;
   readonly now: number;
-}): { readonly editKind: TighteningKind; readonly versionId: string } {
+  /** Reads a parent point using the parent row's own complete D8 AAD location. */
+  readonly decryptPoint: (input: {
+    readonly activationId: string;
+    readonly ruleId: string;
+    readonly ruleVersion: number;
+    readonly source: 'gmail';
+    readonly accountId: string;
+    readonly positionScope: 'mailbox';
+    readonly encryptedPosition: Uint8Array;
+  }) => Promise<BaselinePosition>;
+  /** Encrypts the inherited plaintext for the child's distinct D8 AAD location before the write transaction. */
+  readonly encryptPoint: (input: {
+    readonly activationId: string;
+    readonly ruleId: string;
+    readonly ruleVersion: number;
+    readonly source: 'gmail';
+    readonly accountId: string;
+    readonly positionScope: 'mailbox';
+    readonly position: BaselinePosition;
+  }) => Promise<Uint8Array>;
+}): Promise<{ readonly editKind: TighteningKind; readonly versionId: string }> {
   const editKind = tighteningKind(input.parent, input.child);
   if (editKind === null) throw new CommsError('APPROVAL_VOID', 'the requested rule edit is not an allowed tightening');
   const database = input.database;
   const parentId = ruleVersionId(input.parent.ruleId, input.parent.version);
   const childId = ruleVersionId(input.child.ruleId, input.child.version);
+  // Encryption reserves its nonce with BEGIN IMMEDIATE. It must finish before the pointer/lifecycle transaction,
+  // and the copied plaintext must be authenticated for the child row rather than moved as a parent-row ciphertext.
+  const parentActivationId = (
+    database
+      .prepare("SELECT current_cutover_id FROM active_versions WHERE kind = 'rule' AND object_id = ?")
+      .get(input.parent.ruleId) as { current_cutover_id: string | null } | undefined
+  )?.current_cutover_id;
+  const inherited = database
+    .prepare(
+      `SELECT source, account_id, position_scope, encrypted_position
+       FROM rule_activation_points
+       WHERE activation_id = ? AND rule_id = ? AND rule_version = ?`,
+    )
+    .all(parentActivationId ?? '', input.parent.ruleId, input.parent.version) as Array<{
+    source: 'gmail';
+    account_id: string;
+    position_scope: 'mailbox';
+    encrypted_position: Uint8Array;
+  }>;
+  const preparedPoints = await Promise.all(
+    inherited.map(async (point) => ({
+      source: point.source,
+      accountId: point.account_id,
+      positionScope: point.position_scope,
+      encryptedPosition: await input.encryptPoint({
+        activationId: childId,
+        ruleId: input.child.ruleId,
+        ruleVersion: input.child.version,
+        source: point.source,
+        accountId: point.account_id,
+        positionScope: point.position_scope,
+        position: await input.decryptPoint({
+          activationId: parentActivationId ?? '',
+          ruleId: input.parent.ruleId,
+          ruleVersion: input.parent.version,
+          source: point.source,
+          accountId: point.account_id,
+          positionScope: point.position_scope,
+          encryptedPosition: point.encrypted_position,
+        }),
+      }),
+    })),
+  );
   database.exec('BEGIN IMMEDIATE');
   try {
     const parent = database.prepare('SELECT state, approval_id FROM rule_versions WHERE id = ?').get(parentId) as
@@ -379,18 +499,6 @@ export function applyDerivedTightening(input: {
     if (pointer.version !== input.parent.version || pointer.current_cutover_id === null) {
       throw new CommsError('APPROVAL_VOID', 'the active rule pointer no longer names the tightening parent');
     }
-    const points = database
-      .prepare(
-        `SELECT source, account_id, position_scope, encrypted_position
-         FROM rule_activation_points
-         WHERE activation_id = ? AND rule_id = ? AND rule_version = ?`,
-      )
-      .all(pointer.current_cutover_id, input.parent.ruleId, input.parent.version) as Array<{
-      source: string;
-      account_id: string;
-      position_scope: string;
-      encrypted_position: Uint8Array;
-    }>;
     database
       .prepare(
         `INSERT INTO derived_authorizations (version_id, parent_approval_id, parent_version_id, edit_kind, created_at)
@@ -404,7 +512,7 @@ export function applyDerivedTightening(input: {
          WHERE id = ? AND state IS NULL`,
       )
       .run(parent.approval_id, childId, input.now, childId);
-    for (const point of points) {
+    for (const point of preparedPoints) {
       database
         .prepare(
           `INSERT INTO rule_activation_points
@@ -416,9 +524,9 @@ export function applyDerivedTightening(input: {
           input.child.ruleId,
           input.child.version,
           point.source,
-          point.account_id,
-          point.position_scope,
-          point.encrypted_position,
+          point.accountId,
+          point.positionScope,
+          point.encryptedPosition,
           parentId,
           input.now,
         );

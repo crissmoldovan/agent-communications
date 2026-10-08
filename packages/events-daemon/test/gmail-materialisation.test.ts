@@ -60,6 +60,62 @@ test('ING-B1: a lazy Gmail 404 terminalises vanished without another full-messag
   }
 });
 
+test('P1-B1: one lazy 404 resolves every affected body projection while leaving no source gap', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-gmail-materialise-union-'));
+  try {
+    const store = await openEventDatabase({ stateDir });
+    try {
+      let reads = 0;
+      const materialiser = new GmailMaterialiser({
+        store,
+        accountId: 'ibx_ABCDEFGHIJKLMNOP',
+        source: {
+          getMessage: async () => {
+            reads += 1;
+            throw new CommsError('NOT_FOUND', 'message removed');
+          },
+        },
+        assertDisclosable: async () => undefined,
+        encryptState: async (value) => Buffer.from(JSON.stringify(value)),
+        decryptState: async (stored) => JSON.parse(Buffer.from(stored).toString('utf8')),
+        now: () => 1_760_000_000_000,
+      });
+      const shared = {
+        occurrenceKey: '101:message:gone',
+        messageId: 'gone',
+        materializationKey: '230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5',
+        stageExpiresAt: 1_760_000_060_000,
+      } as const;
+      assert.deepEqual(
+        await materialiser.materialiseAll([
+          { ...shared, ruleId: 'metadata-plus-body', ruleVersion: 1 },
+          { ...shared, ruleId: 'another-body-rule', ruleVersion: 2 },
+        ]),
+        [{ state: 'vanished' }, { state: 'vanished' }],
+      );
+      assert.equal(reads, 1);
+      assert.equal(
+        (
+          store.database.prepare('SELECT count(*) AS count FROM source_projection_resolutions').get() as {
+            count: number;
+          }
+        ).count,
+        2,
+      );
+      assert.equal(
+        (store.database.prepare('SELECT count(*) AS count FROM operational_records').get() as { count: number }).count,
+        0,
+      );
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('ING-B1: a failed lazy Gmail read keeps a capped retry and terminalises unresolvable once', {
   skip: WINDOWS_SKIP,
 }, async () => {

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { CommsError } from '@agentcomms/core';
 import {
   eventId,
@@ -9,6 +10,7 @@ import {
 } from '@agentcomms/events';
 import { type GmailEventMessageMetadata, type GmailEventSource, normaliseGmailEventMetadata } from '@agentcomms/gmail';
 import type { GmailSourceOptions } from '../domain/source-options.ts';
+import { isRemovedAccountError, purgeRemovedAccountWork } from '../runtime/account-fence.ts';
 import type { GmailReplacementDrains } from '../runtime/replacements.ts';
 import type { EventDatabase } from '../store/database.ts';
 import {
@@ -18,9 +20,10 @@ import {
   occurrencesFromHistory,
 } from './gmail.ts';
 import type { MailboxLock } from './mailbox-lock.ts';
+import type { GmailMaterialisationRequest, GmailMaterialisationResult } from './materialise.ts';
 
 type GmailSource = Pick<GmailEventSource, 'listHistory' | 'getMessageMetadata'> &
-  Partial<Pick<GmailEventSource, 'getProfile'>>;
+  Partial<Pick<GmailEventSource, 'getProfile' | 'getMessage'>>;
 
 export interface GmailSourceRule {
   readonly ruleId: string;
@@ -28,6 +31,8 @@ export interface GmailSourceRule {
   readonly eventType: 'gmail.message.received' | 'gmail.message.sent' | 'gmail.message.labelled';
   readonly options: GmailSourceOptions;
   readonly ingestRetentionMs: number;
+  /** The exact immutable rule's Gmail lazy fields. B1 Gmail currently supports only `body`. */
+  readonly lazyFields?: readonly string[] | undefined;
 }
 
 export interface GmailSourceOccurrence {
@@ -51,8 +56,8 @@ export interface GmailSourceWorkerOptions {
   /** Task 12 continues the terminal ingest/projection path; Task 10 keeps its result durable at this boundary. */
   readonly admit: (occurrence: GmailSourceOccurrence) => Promise<'terminal' | 'pending'>;
   /** Source staging is encrypted before, never inside, the write transaction. */
-  readonly encryptStage: (value: StoredHistoryPage) => Promise<Uint8Array>;
-  readonly decryptStage?: ((stored: Uint8Array) => Promise<StoredHistoryPage>) | undefined;
+  readonly encryptStage: (value: StoredHistoryPage, stageId?: string) => Promise<Uint8Array>;
+  readonly decryptStage?: ((stored: Uint8Array, stageId?: string) => Promise<StoredHistoryPage>) | undefined;
   /** Test-only collision injection; production uses Phase A's SHA-256 event identity function. */
   readonly eventIdFor?: ((input: Parameters<typeof eventId>[0]) => Promise<string>) | undefined;
   /** Deterministic test failpoints for the mailbox-lock interleaving contract. */
@@ -61,6 +66,9 @@ export interface GmailSourceWorkerOptions {
   /** The real replacement fence holds post-P content inside its encrypted source stage until the pointer swap. */
   readonly replacementDrains?:
     | Pick<GmailReplacementDrains, 'shouldWithhold' | 'isAfterActivePoint' | 'markPageDrained'>
+    | undefined;
+  readonly materialise?:
+    | ((requests: readonly GmailMaterialisationRequest[]) => Promise<readonly GmailMaterialisationResult[]>)
     | undefined;
   readonly now?: (() => number) | undefined;
 }
@@ -151,6 +159,7 @@ export class GmailSourceWorker {
   readonly #onPageStaged: GmailSourceWorkerOptions['onPageStaged'];
   readonly #beforeCursorCommit: GmailSourceWorkerOptions['beforeCursorCommit'];
   readonly #replacementDrains: GmailSourceWorkerOptions['replacementDrains'];
+  readonly #materialise: GmailSourceWorkerOptions['materialise'];
   readonly #now: () => number;
 
   constructor(options: GmailSourceWorkerOptions) {
@@ -167,11 +176,25 @@ export class GmailSourceWorker {
     this.#onPageStaged = options.onPageStaged;
     this.#beforeCursorCommit = options.beforeCursorCommit;
     this.#replacementDrains = options.replacementDrains;
+    this.#materialise = options.materialise;
     this.#now = options.now ?? Date.now;
   }
 
   async scan(): Promise<{ readonly cursor: string | null; readonly pending: boolean }> {
-    return this.#mailboxLock.withMailbox(this.#mailbox.accountId, () => this.#scanLocked());
+    return this.#mailboxLock.withMailbox(this.#mailbox.accountId, async () => {
+      try {
+        return await this.#scanLocked();
+      } catch (error) {
+        // Account removal is a terminal source boundary. Re-throw the original stable error so the owner records no
+        // provider detail, but do not let the staged page or a later cursor commit resurrect account-bound work.
+        if (isRemovedAccountError(error)) {
+          this.#store.immediate(() =>
+            purgeRemovedAccountWork(this.#store.database, this.#mailbox.accountId, this.#now()),
+          );
+        }
+        throw error;
+      }
+    });
   }
 
   async #scanLocked(): Promise<{ readonly cursor: string | null; readonly pending: boolean }> {
@@ -252,7 +275,10 @@ export class GmailSourceWorker {
       throw new CommsError('CONFIG', 'the Gmail source worker needs its stage decryptor to resume a durable page');
     await this.#assertAllRules();
     for (const row of rows) {
-      const outcome = await this.#processPage({ id: row.id, value: await this.#decryptStage(row.encrypted_record) });
+      const outcome = await this.#processPage({
+        id: row.id,
+        value: await this.#decryptStage(row.encrypted_record, row.id),
+      });
       if (outcome !== 'terminal') return false;
     }
     return true;
@@ -267,7 +293,7 @@ export class GmailSourceWorker {
     if (this.#decryptStage === undefined)
       throw new CommsError('CONFIG', 'the Gmail source worker needs its stage decryptor to resume a durable page');
     await this.#assertAllRules();
-    return { id, value: await this.#decryptStage(existing.encrypted_record) };
+    return { id, value: await this.#decryptStage(existing.encrypted_record, id) };
   }
 
   async #stagePage(id: string, cursorBefore: string, page: StoredHistoryPage['page']): Promise<StagedPage> {
@@ -280,7 +306,7 @@ export class GmailSourceWorker {
       stagedObservedAt: new Date(stagedAt).toISOString(),
       messageStates: {},
     };
-    const encrypted = await this.#encryptStage(value);
+    const encrypted = await this.#encryptStage(value, id);
     const expiresAt = stagedAt + this.#shortestRetention();
     this.#store.immediate(() => {
       this.#store.database
@@ -422,40 +448,83 @@ export class GmailSourceWorker {
     const event = await this.#eventFor(occurrence, stage, eligibleCandidates);
     if (event === undefined) return 'pending';
     if (event === null) return 'terminal';
-    for (const rule of eligibleCandidates) {
-      if (rule.eventType !== event.type) continue;
+    const selected = eligibleCandidates.filter((rule) => {
+      if (rule.eventType !== event.type) return false;
       const selection =
         occurrence.kind === 'message'
           ? classifyGmailMessage(rule.options, { labelIds: event.labels as readonly string[] })
           : classifyGmailLabelChange(rule.options, occurrence);
-      if (!selection.eligible) continue;
-      const definition = this.#definitionFor(event.type as string);
-      const dedupeKey = definition.dedupeKey(event as never, { historyRecordId: occurrence.historyRecordId } as never);
-      const identity = {
-        installationId: this.#store.installationId,
-        accountId: this.#mailbox.accountId,
-        eventType: definition.type,
-        typeVersion: definition.version,
-        dedupeKey,
-      };
-      const calculated = await this.#eventIdFor(identity);
-      const full = { ...event, id: calculated };
-      const checked = validateEvent(definition as never, full);
-      if (!checked.ok)
-        throw new CommsError('BAD_DATA', checked.issues[0]?.message ?? 'the Gmail occurrence is not a catalogue event');
-      const validated = checked.value as unknown as Record<string, unknown>;
-      this.#recordIdentity(calculated, identity, validated, String(validated.observedAt));
-      const outcome = await this.#admit({
-        event: validated,
-        eventId: calculated,
-        preimage: eventIdPreimage(identity),
-        rule,
-        stageId: stage.id,
-        observedAt: String(validated.observedAt),
-      });
-      if (outcome !== 'terminal') return 'pending';
+      return selection.eligible;
+    });
+    const metadataRules = selected.filter((rule) => !this.#needsLazyField(rule, 'body'));
+    for (const rule of metadataRules) {
+      if ((await this.#admitEvent(occurrence, stage, event, rule)) !== 'terminal') return 'pending';
+    }
+    const bodyRules = selected.filter((rule) => this.#needsLazyField(rule, 'body'));
+    if (bodyRules.length === 0) return 'terminal';
+    if (!this.#materialise)
+      throw new CommsError('CONFIG', 'the Gmail source worker needs a materialiser for a body-dependent rule');
+    const stageExpiresAt = this.#stageExpiry(stage.id);
+    if (stageExpiresAt === null) return 'pending';
+    const requiredFields = [...new Set(bodyRules.flatMap((rule) => rule.lazyFields ?? []))].sort();
+    const materializationKey = createHash('sha256').update(requiredFields.join(','), 'utf8').digest('hex');
+    const requests = bodyRules.map((rule) => ({
+      occurrenceKey: this.#occurrenceKey(occurrence),
+      messageId: occurrence.messageId,
+      ruleId: rule.ruleId,
+      ruleVersion: rule.ruleVersion,
+      materializationKey,
+      stageExpiresAt,
+    }));
+    const results = await this.#materialise(requests);
+    if (results.length !== bodyRules.length)
+      throw new CommsError('BAD_DATA', 'the Gmail materialiser did not return one result for each affected projection');
+    for (const [index, rule] of bodyRules.entries()) {
+      const result = results[index];
+      if (!result) throw new CommsError('BAD_DATA', 'the Gmail materialiser returned no projection result');
+      if (result.state === 'pending') return 'pending';
+      if (result.state !== 'ready') continue;
+      // Gmail has sanitised this body already; no metadata-only projection sees it in memory or at rest.
+      if ((await this.#admitEvent(occurrence, stage, { ...event, body: result.message.body }, rule)) !== 'terminal')
+        return 'pending';
     }
     return 'terminal';
+  }
+
+  #needsLazyField(rule: GmailSourceRule, field: string): boolean {
+    return (rule.lazyFields ?? []).includes(field);
+  }
+
+  async #admitEvent(
+    occurrence: GmailHistoryOccurrence,
+    stage: StagedPage,
+    event: Record<string, unknown>,
+    rule: GmailSourceRule,
+  ): Promise<'terminal' | 'pending'> {
+    const definition = this.#definitionFor(String(event.type));
+    const dedupeKey = definition.dedupeKey(event as never, { historyRecordId: occurrence.historyRecordId } as never);
+    const identity = {
+      installationId: this.#store.installationId,
+      accountId: this.#mailbox.accountId,
+      eventType: definition.type,
+      typeVersion: definition.version,
+      dedupeKey,
+    };
+    const calculated = await this.#eventIdFor(identity);
+    const full = { ...event, id: calculated };
+    const checked = validateEvent(definition as never, full);
+    if (!checked.ok)
+      throw new CommsError('BAD_DATA', checked.issues[0]?.message ?? 'the Gmail occurrence is not a catalogue event');
+    const validated = checked.value as unknown as Record<string, unknown>;
+    this.#recordIdentity(calculated, identity, validated, String(validated.observedAt));
+    return this.#admit({
+      event: validated,
+      eventId: calculated,
+      preimage: eventIdPreimage(identity),
+      rule,
+      stageId: stage.id,
+      observedAt: String(validated.observedAt),
+    });
   }
 
   async #markOccurrenceComplete(stage: StagedPage, occurrence: GmailHistoryOccurrence): Promise<void> {
@@ -593,7 +662,7 @@ export class GmailSourceWorker {
   }
 
   async #persistStage(stage: StagedPage, value: StoredHistoryPage): Promise<void> {
-    const encrypted = await this.#encryptStage(value);
+    const encrypted = await this.#encryptStage(value, stage.id);
     const now = this.#now();
     this.#store.immediate(() => {
       this.#store.database

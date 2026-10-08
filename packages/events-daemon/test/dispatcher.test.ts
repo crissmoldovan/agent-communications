@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
-import { canonicalJson, type SecretStore, sha256Hex } from '@agentcomms/core';
+import { CommsError, canonicalJson, type SecretStore, sha256Hex } from '@agentcomms/core';
 import { DryRunDispatcher } from '../src/runtime/dispatcher.ts';
 import { EventExpiry } from '../src/runtime/expiry.ts';
+import { EventLifecycle } from '../src/runtime/lifecycle.ts';
 import { closeLocalResetBarrier, openLocalResetBarrier } from '../src/runtime/reset.ts';
+import { EventScheduler } from '../src/runtime/scheduler.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { openEventSecretStore, selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { EventRecordCipher, RecordStorageError } from '../src/store/records.ts';
@@ -231,6 +233,126 @@ test('DEL-B1: dispatch and read refuse at the fence before decrypting sender con
     assert.deepEqual(await setup.dispatcher().dispatch('fenced'), { state: 'delivered', deliveryId: 'fenced' });
     await assert.rejects(refusing.read('fenced'), /authority revoked/);
     assert.equal(decrypts, 0, 'the renderer path must not decrypt after its direct fence refuses');
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('P1-B1: an account-removed dispatch refusal terminalises the lease and atomically purges account payloads', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    setup.insert('removed');
+    setup.store.database.exec(
+      `INSERT INTO source_scan_state
+         (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at)
+       VALUES ('stage-removed', 'gmail', '${ACCOUNT}', 'mailbox', 1, 10000, X'01', 1);
+       INSERT INTO dryrun_log
+         (delivery_id, rule_id, rule_version, target_id, target_version, event_id, account_id, encrypted_record, delivered_at, expires_at)
+       VALUES ('removed', 'rule-dispatch', 1, 'target-dispatch', 1, 'event-removed', '${ACCOUNT}', X'01', 1, 2000)`,
+    );
+    const dispatcher = setup.dispatcher({
+      fence: async () => {
+        throw new CommsError('NOT_FOUND', 'the account was removed', {
+          details: { reason: 'ACCOUNT_REMOVED', accountId: ACCOUNT },
+        });
+      },
+    });
+    assert.deepEqual(await dispatcher.dispatch('removed'), { state: 'terminal', deliveryId: 'removed' });
+    const removed = setup.store.database
+      .prepare("SELECT state, encrypted_record, lease_until FROM deliveries WHERE id = 'removed'")
+      .get() as { state: string; encrypted_record: Uint8Array | null; lease_until: number | null };
+    assert.equal(removed.state, 'in-flight-at-account-removal');
+    assert.equal(removed.encrypted_record, null);
+    assert.equal(removed.lease_until, null);
+    assert.equal(count(setup.store, 'dryrun_log'), 0);
+    assert.equal(count(setup.store, 'source_scan_state'), 0);
+    assert.equal(count(setup.store, 'ingest_rules'), 0);
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('P1-B1: an account-removed dry-run read purges the retained row and its delivery ciphertext', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    setup.insert('removed-read');
+    assert.deepEqual(await setup.dispatcher().dispatch('removed-read'), {
+      state: 'delivered',
+      deliveryId: 'removed-read',
+    });
+    const removed = setup.dispatcher({
+      fence: async () => {
+        throw new CommsError('NOT_FOUND', 'the account was removed', {
+          details: { reason: 'ACCOUNT_REMOVED', accountId: ACCOUNT },
+        });
+      },
+    });
+    await assert.rejects(
+      removed.read('removed-read'),
+      (error: unknown) => error instanceof CommsError && error.details?.reason === 'ACCOUNT_REMOVED',
+    );
+    assert.equal(count(setup.store, 'dryrun_log'), 0);
+    assert.equal(
+      (
+        setup.store.database.prepare("SELECT encrypted_record FROM deliveries WHERE id = 'removed-read'").get() as {
+          encrypted_record: Uint8Array | null;
+        }
+      ).encrypted_record,
+      null,
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('P1-B1: a scheduler tick sees a removed config account and cancels queued work before it can be claimed', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    setup.insert('removed-on-tick');
+    setup.store.database.exec(
+      `INSERT INTO source_scan_state
+         (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at)
+       VALUES ('stage-removed-on-tick', 'gmail', '${ACCOUNT}', 'mailbox', 1, 10000, X'01', 1);
+       INSERT INTO dryrun_log
+         (delivery_id, rule_id, rule_version, target_id, target_version, event_id, account_id, encrypted_record, delivered_at, expires_at)
+       VALUES ('removed-on-tick', 'rule-dispatch', 1, 'target-dispatch', 1, 'event-removed-on-tick', '${ACCOUNT}', X'01', 1, 2000)`,
+    );
+    const scheduler = new EventScheduler({
+      store: setup.store,
+      lifecycle: new EventLifecycle(setup.store, () => clock),
+      activations: {} as never,
+      dispatcher: {} as never,
+      expiry: new EventExpiry(setup.store, () => clock),
+      cipher: {} as never,
+      approvals: {} as never,
+      config: { load: async () => ({ inboxes: {} }) } as never,
+      taint: {} as never,
+      gmailSourceFor: async () => {
+        throw new Error('a removed account must not poll');
+      },
+      mailboxLock: {} as never,
+      now: () => clock,
+    });
+    await scheduler.tick();
+    assert.equal(
+      (
+        setup.store.database.prepare("SELECT state FROM deliveries WHERE id = 'removed-on-tick'").get() as {
+          state: string;
+        }
+      ).state,
+      'cancelled',
+    );
+    assert.equal(count(setup.store, 'dryrun_log'), 0);
+    assert.equal(count(setup.store, 'source_scan_state'), 0);
   } finally {
     setup.store.close();
     await rm(setup.stateDir, { recursive: true, force: true });

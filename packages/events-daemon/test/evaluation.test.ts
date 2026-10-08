@@ -365,6 +365,45 @@ test('EVAL-B1: a refused shared fence leaves the projection encrypted and never 
   }
 });
 
+test('P1-B1: an account-removed evaluation refusal purges the projection and terminalises its occurrence', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const evaluator = new EventEvaluator({
+      store: setup.store,
+      cipher: setup.cipher,
+      now: () => 2_000,
+      fence: async () => {
+        throw new CommsError('NOT_FOUND', 'the account was removed', {
+          details: { reason: 'ACCOUNT_REMOVED', accountId: ACCOUNT },
+        });
+      },
+      taint: {
+        async record() {
+          throw new Error('a removed account cannot reach taint');
+        },
+      },
+    });
+    assert.equal(
+      await evaluator.admit({
+        event: setup.sourceEvent,
+        eventId: setup.sourceEvent.id,
+        ruleId: 'rule-evaluation',
+        ruleVersion: 1,
+        stagedAt: 1_000,
+      }),
+      'terminal',
+    );
+    assert.equal(count(setup, 'ingest_rules'), 0);
+    assert.equal(count(setup, 'decisions'), 0);
+    assert.equal(count(setup, 'deliveries'), 0);
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
 test('EVAL-B1: a taint flush failure leaves no decision or local outbox row', { skip: WINDOWS_SKIP }, async () => {
   const setup = await fixture();
   try {

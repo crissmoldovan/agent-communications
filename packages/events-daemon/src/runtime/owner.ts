@@ -37,6 +37,7 @@ import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPat
 import { recoverActivations } from './recovery.ts';
 import { replacementIntentSummary } from './replacements.ts';
 import { disableRule, removeTarget } from './revocations.ts';
+import { EventScheduler } from './scheduler.ts';
 
 export interface EventOwnerStatus extends EventLifecycleStatus {
   readonly owner: 'running';
@@ -49,6 +50,8 @@ export interface EventOwnerStatus extends EventLifecycleStatus {
 
 export interface EventOwner {
   status(): EventOwnerStatus;
+  /** Runs one serial owner tick; intended for deterministic local embedding and tests. */
+  tick(): Promise<void>;
   stop(): Promise<void>;
   readonly stopped: Promise<void>;
 }
@@ -69,6 +72,8 @@ export interface EventOwnerOptions {
   readonly gmailSourceFor?:
     | ((input: { readonly accountId: string; readonly alias: string }) => Promise<GmailEventSource>)
     | undefined;
+  readonly tickMs?: number | undefined;
+  readonly pollIntervalMs?: number | undefined;
 }
 
 export async function startEventOwner(options: EventOwnerOptions = {}): Promise<EventOwner> {
@@ -102,29 +107,32 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
     expiry,
   });
   const mailboxLock = new MailboxLock();
+  const gmailSourceFor = async (accountId: string): Promise<GmailEventSource> => {
+    const config = await core.config.load();
+    const alias = Object.entries(config.inboxes).find(
+      ([, inbox]) => inbox.id === accountId && inbox.provider === 'gmail',
+    )?.[0];
+    if (!alias)
+      throw new CommsError('NOT_FOUND', 'the Gmail account bound to this activation is no longer connected', {
+        details: { reason: 'ACCOUNT_REMOVED', accountId },
+      });
+    // Gmail opens its own context, and so its own core with Gmail's caller, for the same folders: the commands its
+    // errors tell a person to run are located from Gmail's installation. Handing it the daemon's core instead fails
+    // before the first provider call, since only a suite package may be a caller.
+    if (options.gmailSourceFor) return options.gmailSourceFor({ accountId, alias });
+    return createGmailEventSource({
+      alias,
+      pathOverrides: {
+        stateDir,
+        ...(options.configDir === undefined ? {} : { configDir: options.configDir }),
+      },
+    });
+  };
   const activations = new ActivationRuntime({
     store: database,
     approvals: core.approvals,
     config: core.config,
-    gmailSourceFor: async (accountId) => {
-      const config = await core.config.load();
-      const alias = Object.entries(config.inboxes).find(
-        ([, inbox]) => inbox.id === accountId && inbox.provider === 'gmail',
-      )?.[0];
-      if (!alias)
-        throw new CommsError('NOT_FOUND', 'the Gmail account bound to this activation is no longer connected');
-      // Gmail opens its own context, and so its own core with Gmail's caller, for the same folders: the commands its
-      // errors tell a person to run are located from Gmail's installation. Handing it the daemon's core instead fails
-      // before the first provider call, since only a suite package may be a caller.
-      if (options.gmailSourceFor) return options.gmailSourceFor({ accountId, alias });
-      return createGmailEventSource({
-        alias,
-        pathOverrides: {
-          stateDir,
-          ...(options.configDir === undefined ? {} : { configDir: options.configDir }),
-        },
-      });
-    },
+    gmailSourceFor,
     encryptBaseline: async (intentId, accountId, position) =>
       cipher.encrypt(
         {
@@ -139,7 +147,74 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
         },
         Buffer.from(JSON.stringify(position)),
       ),
+    decryptBaseline: async (intentId, accountId, stored) =>
+      JSON.parse(
+        (
+          await cipher.decrypt(
+            {
+              table: 'activation_baselines',
+              column: 'encryptedPosition',
+              key: [
+                { type: 'text', value: intentId },
+                { type: 'text', value: 'gmail' },
+                { type: 'text', value: accountId },
+                { type: 'text', value: 'mailbox' },
+              ],
+            },
+            stored,
+          )
+        ).toString('utf8'),
+      ) as { readonly historyId: string },
+    encryptPoint: async ({ activationId, ruleId, ruleVersion, accountId, positionScope, position }) =>
+      cipher.encrypt(
+        {
+          table: 'rule_activation_points',
+          column: 'encryptedPosition',
+          key: [
+            { type: 'text', value: activationId },
+            { type: 'text', value: ruleId },
+            { type: 'integer', value: ruleVersion },
+            { type: 'text', value: accountId },
+            { type: 'text', value: positionScope },
+          ],
+        },
+        Buffer.from(JSON.stringify(position)),
+      ),
+    decryptPoint: async ({ activationId, ruleId, ruleVersion, accountId, positionScope, stored }) =>
+      JSON.parse(
+        (
+          await cipher.decrypt(
+            {
+              table: 'rule_activation_points',
+              column: 'encryptedPosition',
+              key: [
+                { type: 'text', value: activationId },
+                { type: 'text', value: ruleId },
+                { type: 'integer', value: ruleVersion },
+                { type: 'text', value: accountId },
+                { type: 'text', value: positionScope },
+              ],
+            },
+            stored,
+          )
+        ).toString('utf8'),
+      ) as { readonly historyId: string },
     mailboxLock,
+  });
+  const scheduler = new EventScheduler({
+    store: database,
+    lifecycle,
+    activations,
+    dispatcher,
+    expiry,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    taint: core.taint,
+    gmailSourceFor,
+    mailboxLock,
+    ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
+    ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
   });
   const token = randomBytes(32).toString('hex');
   const instance = newInstanceRecord(controlEndpoint(paths), token);
@@ -159,10 +234,12 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
       activationIntents: replacementIntentSummary(database.database),
     }),
     stopped: stoppedPromise,
+    tick: () => scheduler.tick(),
     async stop(): Promise<void> {
       if (stopped) return;
       stopped = true;
       try {
+        await scheduler.stop();
         await control?.close();
       } finally {
         database.close();
@@ -190,6 +267,7 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
     await chmod(instance.endpoint, 0o600);
     await verifyControlSocket(instance.endpoint);
     await writeInstance(paths, instance);
+    scheduler.start();
     return owner;
   } catch (error) {
     await owner.stop();

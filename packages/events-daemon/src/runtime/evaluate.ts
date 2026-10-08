@@ -2,6 +2,7 @@ import { type ApprovalStore, CommsError, type ConfigStore } from '@agentcomms/co
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import type { EventDatabase } from '../store/database.ts';
 import { fixedDeadline } from '../store/retention.ts';
+import { isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
 import { commitDecisionOutbox, type DecisionFailpoint, StaleDecisionError } from './decisions.ts';
 import { prepareDeliveries } from './deliveries.ts';
 import type { ActiveDisclosableRequest, DisclosureSnapshot } from './disclosure-fence.ts';
@@ -163,6 +164,10 @@ export class EventEvaluator {
         authorised = snapshot;
       }
     } catch (error) {
+      if (isRemovedAccountError(error)) {
+        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, ingest.account_id, this.#now()));
+        return 'terminal';
+      }
       if (error instanceof CommsError) return 'pending';
       throw error;
     }

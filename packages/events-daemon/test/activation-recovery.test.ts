@@ -5,7 +5,10 @@ import { test } from 'node:test';
 import { ApprovalStore, ConfigStore, canonicalJson, emptyConfig } from '@agentcomms/core';
 import { ImmutableVersions } from '../src/domain/versions.ts';
 import { ActivationRuntime, type PreparedActivation } from '../src/runtime/activations.ts';
+import { EventExpiry } from '../src/runtime/expiry.ts';
+import { EventLifecycle } from '../src/runtime/lifecycle.ts';
 import { GmailReplacementDrains } from '../src/runtime/replacements.ts';
+import { EventScheduler } from '../src/runtime/scheduler.ts';
 import { MailboxLock } from '../src/sources/mailbox-lock.ts';
 import { type GmailSourceRule, GmailSourceWorker } from '../src/sources/source-worker.ts';
 import { openEventDatabase } from '../src/store/database.ts';
@@ -43,7 +46,27 @@ function clock(start = Date.parse('2026-10-08T10:00:00.000Z')) {
   return { now: () => value, advance: (milliseconds: number) => (value += milliseconds) };
 }
 
-async function fixture() {
+async function fixture(
+  options: {
+    readonly encryptBaseline?: (
+      intentId: string,
+      accountId: string,
+      position: { readonly historyId: string },
+    ) => Promise<Uint8Array>;
+    readonly decryptBaseline?: (
+      intentId: string,
+      accountId: string,
+      stored: Uint8Array,
+    ) => Promise<{ readonly historyId: string }>;
+    readonly encryptPoint?: (input: {
+      readonly activationId: string;
+      readonly ruleId: string;
+      readonly ruleVersion: number;
+      readonly accountId: string;
+      readonly position: { readonly historyId: string };
+    }) => Promise<Uint8Array>;
+  } = {},
+) {
   const root = await shortTempDir('events-act-');
   const stateDir = join(root, 'state');
   const configDir = join(root, 'config');
@@ -98,10 +121,16 @@ async function fixture() {
         throw new Error('activation baselines must not read message metadata');
       },
     }),
-    encryptBaseline: async (_intentId, _accountId, position) => Buffer.from(JSON.stringify(position)),
+    encryptBaseline:
+      options.encryptBaseline ?? (async (_intentId, _accountId, position) => Buffer.from(JSON.stringify(position))),
+    decryptBaseline:
+      options.decryptBaseline ??
+      (async (_intentId, _accountId, stored) => JSON.parse(Buffer.from(stored).toString('utf8'))),
+    encryptPoint: options.encryptPoint ?? (async (_input) => Buffer.from(JSON.stringify(_input.position))),
+    decryptPoint: async ({ stored }) => JSON.parse(Buffer.from(stored).toString('utf8')),
     mailboxLock,
   });
-  return { root, store, approvals, runtime, time, mailboxLock, profileCalls: () => profileCalls };
+  return { root, store, approvals, configStore, runtime, time, mailboxLock, profileCalls: () => profileCalls };
 }
 
 test('APR-B1: first Gmail activation creates and claims authority before one profile baseline and one pointer commit', {
@@ -135,6 +164,123 @@ test('APR-B1: first Gmail activation creates and claims authority before one pro
       .get(prepared.intentId) as { encrypted_position: Uint8Array } | undefined;
     assert.ok(point, 'finalisation writes an immutable per-rule point');
     assert.equal(Buffer.from(point.encrypted_position).toString('utf8'), '{"historyId":"202"}');
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('P1-B1: an activation decrypts its baseline and re-encrypts the rule point for its destination row', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture({
+    encryptBaseline: async (_intentId, _accountId, position) => Buffer.from(`baseline:${JSON.stringify(position)}`),
+    decryptBaseline: async (_intentId, _accountId, stored) =>
+      JSON.parse(Buffer.from(stored).toString('utf8').replace('baseline:', '')) as { readonly historyId: string },
+    encryptPoint: async ({ activationId, ruleId, ruleVersion, accountId, position }) =>
+      Buffer.from(`point:${activationId}:${ruleId}:${ruleVersion}:${accountId}:${JSON.stringify(position)}`),
+  });
+  try {
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createTarget(target);
+    versions.createRule(rule);
+    const prepared = (await setup.runtime.prepareRule({
+      ruleId: rule.ruleId,
+      version: rule.version,
+    })) as PreparedActivation;
+    const answer = await setup.approvals.issueDisclosureChallenge(prepared.approvalId);
+    await setup.runtime.approve({ approvalId: prepared.approvalId, answer });
+    const point = setup.store.database
+      .prepare('SELECT encrypted_position FROM rule_activation_points WHERE activation_id = ?')
+      .get(prepared.intentId) as { encrypted_position: Uint8Array };
+    assert.equal(
+      Buffer.from(point.encrypted_position).toString('utf8'),
+      `point:${prepared.intentId}:rule-1:1:ibx_AAAAAAAAAAAAAAAA:{"historyId":"202"}`,
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('P1-B1: one enabled scheduler tick polls an active Gmail rule, evaluates it, and dispatches its queued delivery', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createTarget(target);
+    versions.createRule(rule);
+    const prepared = (await setup.runtime.prepareRule({
+      ruleId: rule.ruleId,
+      version: rule.version,
+    })) as PreparedActivation;
+    const answer = await setup.approvals.issueDisclosureChallenge(prepared.approvalId);
+    await setup.runtime.approve({ approvalId: prepared.approvalId, answer });
+    setup.store.database.prepare('UPDATE event_settings SET enabled = 1').run();
+
+    const dispatched: string[] = [];
+    const cipher = {
+      encrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+      decrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+    };
+    const scheduler = new EventScheduler({
+      store: setup.store,
+      lifecycle: new EventLifecycle(setup.store),
+      activations: setup.runtime,
+      dispatcher: {
+        recoverLeases: async () => undefined,
+        dispatch: async (deliveryId: string) => {
+          dispatched.push(deliveryId);
+          return { state: 'delivered' as const, deliveryId };
+        },
+      } as never,
+      expiry: new EventExpiry(setup.store, setup.time.now),
+      cipher: cipher as never,
+      approvals: setup.approvals,
+      config: setup.configStore,
+      taint: { record: async () => undefined } as never,
+      gmailSourceFor: async () =>
+        ({
+          getProfile: async () => ({
+            emailAddress: 'events@example.test',
+            messagesTotal: 1,
+            threadsTotal: 1,
+            historyId: '202',
+          }),
+          listHistory: async () => ({
+            historyId: '203',
+            nextPageToken: undefined,
+            history: [
+              {
+                id: '203',
+                messagesAdded: [{ message: { id: 'message-203', threadId: 'thread-203' } }],
+                labelsAdded: [],
+                labelsRemoved: [],
+              },
+            ],
+          }),
+          getMessageMetadata: async () => ({
+            id: 'message-203',
+            threadId: 'thread-203',
+            labelIds: ['INBOX'],
+            internalDate: '1760000000000',
+            payload: { headers: [{ name: 'Subject', value: 'scheduled' }] },
+          }),
+        }) as never,
+      mailboxLock: setup.mailboxLock,
+      now: setup.time.now,
+    });
+
+    await scheduler.tick();
+    const queued = setup.store.database.prepare('SELECT id FROM deliveries').get() as { id: string } | undefined;
+    assert.ok(queued, 'the scheduler evaluates the acquired occurrence into a local delivery');
+    assert.deepEqual(dispatched, [queued.id], 'the same tick dispatches due queued local delivery work');
+    assert.equal(
+      (setup.store.database.prepare("SELECT cursor FROM cursors WHERE source = 'gmail'").get() as { cursor: string })
+        .cursor,
+      '203',
+    );
   } finally {
     setup.store.close();
     await rm(setup.root, { recursive: true, force: true });
@@ -250,7 +396,7 @@ test('APR-B1: an exact Gmail replacement fixes its old pointer and union scope b
   }
 });
 
-test('APR-B1: the claimed exact replacement stays on its old pointer until the real mailbox worker drains persisted P', {
+test('P1-B1: the next owner tick resumes a claimed replacement after the real mailbox worker drains P', {
   skip: WINDOWS_SKIP,
 }, async () => {
   const setup = await fixture();
@@ -262,6 +408,12 @@ test('APR-B1: the claimed exact replacement stays on its old pointer until the r
     setup.store.database.exec(
       "UPDATE rule_versions SET state = 'active', approval_id = 'ap_old', authorization_activation_id = 'act_old', activated_at = 1 WHERE id = 'rule-1@1'; INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-1', 1, 'act_old', 1); INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('gmail', 'ibx_AAAAAAAAAAAAAAAA', 'mailbox', '201', 1)",
     );
+    // A real activation always leaves its cut-over point; an active version without one admits nothing.
+    setup.store.database
+      .prepare(
+        "INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at) VALUES ('act_old', 'rule-1', 1, 'gmail', 'ibx_AAAAAAAAAAAAAAAA', 'mailbox', ?, 1)",
+      )
+      .run(Buffer.from(JSON.stringify({ historyId: '200' })));
     const prepared = (await setup.runtime.prepareRule({ ruleId: 'rule-1', version: 2 })) as PreparedActivation;
     const challenge = await setup.runtime.issueChallenge(prepared.approvalId);
     await assert.rejects(
@@ -322,14 +474,32 @@ test('APR-B1: the claimed exact replacement stays on its old pointer until the r
       decryptStage: async (value) => JSON.parse(Buffer.from(value).toString('utf8')),
       replacementDrains: new GmailReplacementDrains({
         database: setup.store.database,
-        decryptBaseline: async (value) => JSON.parse(Buffer.from(value).toString('utf8')),
+        decryptPosition: async ({ record }) => JSON.parse(Buffer.from(record).toString('utf8')),
         now: setup.time.now,
       }),
     });
 
     assert.deepEqual(await worker.scan(), { cursor: '202', pending: false });
     assert.deepEqual(admitted, ['1:message-202'], 'the old version owns P inclusively');
-    await setup.runtime.recover();
+    assert.deepEqual(await worker.scan(), { cursor: '202', pending: true });
+    assert.deepEqual(admitted, ['1:message-202'], 'post-P work remains encrypted in its stage before the swap');
+    const scheduler = new EventScheduler({
+      store: setup.store,
+      lifecycle: new EventLifecycle(setup.store),
+      activations: setup.runtime,
+      dispatcher: {} as never,
+      expiry: new EventExpiry(setup.store),
+      cipher: {} as never,
+      approvals: setup.approvals,
+      config: setup.configStore,
+      taint: {} as never,
+      gmailSourceFor: async () => {
+        throw new Error('a disabled scheduler must not start a source poll');
+      },
+      mailboxLock: setup.mailboxLock,
+      now: setup.time.now,
+    });
+    await scheduler.tick();
     assert.deepEqual(versions.activeVersion('rule', 'rule-1'), {
       version: 2,
       currentCutoverId: prepared.intentId,
@@ -544,6 +714,95 @@ test('APR-B1: a non-revoking pointer mutation is fenced while a used intent is c
       (error: unknown) =>
         (error as { code?: string; details?: { reason?: string } }).code === 'TRANSIENT' &&
         (error as { details?: { reason?: string } }).details?.reason === 'ACTIVATION_COMPLETING',
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('P1-B1: a mailbox cursor starts at the oldest active point, and each rule admits only what follows its own', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createTarget(target);
+    const second = { ...rule, ruleId: 'rule-2' };
+    versions.createRule(rule);
+    versions.createRule(second);
+    for (const each of [rule, second]) {
+      const prepared = (await setup.runtime.prepareRule({
+        ruleId: each.ruleId,
+        version: each.version,
+      })) as PreparedActivation;
+      const answer = await setup.approvals.issueDisclosureChallenge(prepared.approvalId);
+      await setup.runtime.approve({ approvalId: prepared.approvalId, answer });
+    }
+    // rule-1 was activated at history 202, rule-2 later at 210 (this fixture's cipher is a plaintext stand-in).
+    setup.store.database
+      .prepare("UPDATE rule_activation_points SET encrypted_position = ? WHERE rule_id = 'rule-2'")
+      .run(Buffer.from(JSON.stringify({ historyId: '210' })));
+    setup.store.database.prepare('UPDATE event_settings SET enabled = 1').run();
+    const listed: string[] = [];
+    const admitted: string[] = [];
+    const plain = {
+      encrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+      decrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+    };
+    const added = (id: string) => ({
+      id,
+      messagesAdded: [{ message: { id: `message-${id}`, threadId: 'thread' } }],
+      labelsAdded: [],
+      labelsRemoved: [],
+    });
+    const scheduler = new EventScheduler({
+      store: setup.store,
+      lifecycle: new EventLifecycle(setup.store),
+      activations: setup.runtime,
+      dispatcher: {
+        recoverLeases: async () => undefined,
+        dispatch: async (id: string) => ({ state: 'delivered' as const, deliveryId: id }),
+      } as never,
+      expiry: new EventExpiry(setup.store, setup.time.now),
+      cipher: plain as never,
+      approvals: setup.approvals,
+      config: setup.configStore,
+      taint: { record: async () => undefined } as never,
+      gmailSourceFor: async () =>
+        ({
+          getProfile: async () => ({
+            emailAddress: 'events@example.test',
+            messagesTotal: 1,
+            threadsTotal: 1,
+            historyId: '220',
+          }),
+          listHistory: async ({ historyId }: { historyId: string }) => {
+            listed.push(historyId);
+            return { historyId: '215', nextPageToken: undefined, history: [added('205'), added('215')] };
+          },
+          getMessageMetadata: async (id: string) => ({
+            id,
+            threadId: 'thread',
+            labelIds: ['INBOX'],
+            internalDate: '1760000000000',
+            payload: { headers: [{ name: 'Subject', value: 'seeded' }] },
+          }),
+        }) as never,
+      mailboxLock: setup.mailboxLock,
+      now: setup.time.now,
+    });
+    await scheduler.tick();
+    assert.deepEqual(listed, ['202'], 'the cursor starts at the oldest active point, never a later one');
+    for (const row of setup.store.database
+      .prepare('SELECT d.rule_id, i.dedupe_key FROM decisions d JOIN ingest i ON i.event_id = d.event_id ORDER BY 1, 2')
+      .all() as Array<{ rule_id: string; dedupe_key: string }>)
+      admitted.push(`${row.rule_id}:${row.dedupe_key}`);
+    assert.equal(admitted.filter((entry) => entry.startsWith('rule-1:')).length, 2, 'rule-1 admits 205 and 215');
+    assert.equal(
+      admitted.filter((entry) => entry.startsWith('rule-2:')).length,
+      1,
+      'rule-2 admits only 215, after its point',
     );
   } finally {
     setup.store.close();
