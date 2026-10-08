@@ -58,6 +58,8 @@ async function fixture(
       accountId: string,
       stored: Uint8Array,
     ) => Promise<{ readonly historyId: string }>;
+    /** Runs inside the baseline's profile call, between the authority check and the baseline write. */
+    readonly onProfile?: (store: Awaited<ReturnType<typeof openEventDatabase>>) => void;
     readonly encryptPoint?: (input: {
       readonly activationId: string;
       readonly ruleId: string;
@@ -112,6 +114,7 @@ async function fixture(
     gmailSourceFor: async () => ({
       getProfile: async () => {
         profileCalls += 1;
+        options.onProfile?.(store);
         return { emailAddress: 'events@example.test', messagesTotal: 1, threadsTotal: 1, historyId: '202' };
       },
       listHistory: async () => {
@@ -858,6 +861,33 @@ test('APR-B1: no rule-pointer mutation may move a pointer a claimed completion b
       'its drain no longer holds the mailbox',
     );
     await setup.runtime.recover();
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('APR-B1: a baseline that returns after a disable-all cancelled its activation recreates no baseline or drain', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture({
+    onProfile: (store) => void new EventLifecycle(store).disableAll(),
+  });
+  try {
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createTarget(target);
+    versions.createRule(rule);
+    const prepared = (await setup.runtime.prepareRule({
+      ruleId: rule.ruleId,
+      version: rule.version,
+    })) as PreparedActivation;
+    const answer = await setup.approvals.issueDisclosureChallenge(prepared.approvalId);
+    await assert.rejects(() => setup.runtime.approve({ approvalId: prepared.approvalId, answer }));
+    const count = (table: string) =>
+      (setup.store.database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
+    assert.equal(count('activation_baselines'), 0, 'the purged baseline is not recreated');
+    assert.equal(count('replacement_drains'), 0);
+    assert.equal(versions.activeVersion('rule', rule.ruleId), null, 'and no pointer is installed');
   } finally {
     setup.store.close();
     await rm(setup.root, { recursive: true, force: true });
