@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
+import { CommsError } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../src/domain/activation-documents.ts';
 import { ImmutableVersions } from '../src/domain/versions.ts';
 import { applyDerivedTightening, shortenRuleRetentionDeadlines } from '../src/runtime/replacements.ts';
@@ -179,5 +180,71 @@ test('APR-B1: a retention tightening moves every persisted B1 deadline only earl
   } finally {
     store.close();
     await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('APR-B1: a derived tightening copies no point an account removal purged or the configuration no longer names (D9)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  for (const change of ['point purged', 'account removed'] as const) {
+    const stateDir = await shortTempDir('events-tightening-removed-');
+    const store = await openEventDatabase({ stateDir });
+    try {
+      const versions = new ImmutableVersions(store.database);
+      versions.createTarget(target);
+      versions.createRule(base);
+      const child: CanonicalFullRuleDocument = {
+        ...base,
+        version: 2,
+        source: { ...base.source, options: { ...base.source.options, labels: ['Label_a'] } },
+      };
+      versions.createRule(child);
+      store.database.exec(
+        "UPDATE rule_versions SET state = 'active', approval_id = 'ap_root', authorization_activation_id = 'act_root', activated_at = 1 WHERE id = 'rule-tightening@1'; INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-tightening', 1, 'act_root', 1); INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at) VALUES ('act_root', 'rule-tightening', 1, 'gmail', 'account-1', 'mailbox', X'00', 1)",
+      );
+      let removed = false;
+      const run = applyDerivedTightening({
+        database: store.database,
+        parent: base,
+        child,
+        now: 2,
+        decryptPoint: async () => ({ historyId: '1' }),
+        encryptPoint: async ({ position }) => {
+          // The purge of one account's points, as a removal of one of a multi-account rule's accounts makes it.
+          if (change === 'point purged')
+            store.database.exec("DELETE FROM rule_activation_points WHERE account_id = 'account-1'");
+          else removed = true;
+          return Buffer.from(JSON.stringify(position));
+        },
+        accountLive: async (accountId) => {
+          if (removed)
+            throw new CommsError('NOT_FOUND', 'the Gmail account bound to this event work is no longer connected', {
+              details: { reason: 'ACCOUNT_REMOVED', accountId },
+            });
+        },
+      });
+      const points = () =>
+        (
+          store.database
+            .prepare('SELECT COUNT(*) AS count FROM rule_activation_points WHERE rule_version = 2')
+            .get() as {
+            count: number;
+          }
+        ).count;
+      if (change === 'point purged') {
+        await run;
+        assert.equal(points(), 0, 'the purged point is not recreated for the child');
+      } else {
+        await assert.rejects(
+          run,
+          (error: unknown) => error instanceof CommsError && error.details?.reason === 'ACCOUNT_REMOVED',
+        );
+        assert.equal(points(), 0, 'no point is copied for a removed account');
+        assert.equal(versions.activeVersion('rule', 'rule-tightening')?.version, 1, 'and the pointer did not move');
+      }
+    } finally {
+      store.close();
+      await rm(stateDir, { recursive: true, force: true });
+    }
   }
 });

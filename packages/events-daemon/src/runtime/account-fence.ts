@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { CommsError, type ConfigStore } from '@agentcomms/core';
+import { purgeRevokedRuleWork } from './replacements.ts';
 
 /** Reads the configuration for every boundary; event account identity is never cached by the daemon. */
 export async function assertLiveGmailAccount(config: Pick<ConfigStore, 'load'>, accountId: string): Promise<void> {
@@ -40,6 +41,37 @@ export function purgeRemovedAccountWork(database: DatabaseSync, accountId: strin
   database
     .prepare("UPDATE deliveries SET encrypted_record = NULL WHERE account_id = ? AND state = 'dead-lettered'")
     .run(accountId);
+  // D9: the account's activation points and source resolutions go too, so a later reconnect of the same stable id can
+  // never resume from a cut-over taken before the removal and backfill the mail that arrived meanwhile.
+  database.prepare('DELETE FROM rule_activation_points WHERE account_id = ?').run(accountId);
+  database.prepare('DELETE FROM source_occurrence_resolutions WHERE account_id = ?').run(accountId);
+  database.prepare('DELETE FROM source_projection_resolutions WHERE account_id = ?').run(accountId);
+  // Its ingest records go with its projections. One a terminal decision still names stays as that content-free
+  // decision's identity (the spec keeps the delivery's cancelled or in-flight outcome), and goes when the decision does.
+  database
+    .prepare(
+      `DELETE FROM ingest WHERE account_id = ?
+         AND NOT EXISTS (SELECT 1 FROM decisions WHERE decisions.event_id = ingest.event_id)
+         AND NOT EXISTS (SELECT 1 FROM dryrun_log WHERE dryrun_log.event_id = ingest.event_id)`,
+    )
+    .run(accountId);
+  // D9: every live rule version whose source scope names only that account is revoked, as a disable revokes it. A
+  // multi-account version stays live for its other ids; the account fence stops it polling or disclosing this one.
+  const versions = database
+    .prepare("SELECT rule_id, version, document FROM rule_versions WHERE state IN ('active', 'superseded')")
+    .all() as Array<{ rule_id: string; version: number; document: string }>;
+  for (const version of versions) {
+    const document = JSON.parse(version.document) as { source?: { accountIds?: unknown } };
+    const accountIds = document.source?.accountIds;
+    if (!Array.isArray(accountIds) || accountIds.length === 0 || !accountIds.every((id) => id === accountId)) continue;
+    database
+      .prepare("UPDATE rule_versions SET state = 'revoked', revoked_at = ? WHERE rule_id = ? AND version = ?")
+      .run(now, version.rule_id, version.version);
+    purgeRevokedRuleWork(database, version.rule_id, [version.version]);
+    database
+      .prepare("DELETE FROM active_versions WHERE kind = 'rule' AND object_id = ? AND version = ?")
+      .run(version.rule_id, version.version);
+  }
   database
     .prepare('INSERT OR REPLACE INTO account_revocations (account_id, revoked_at) VALUES (?, ?)')
     .run(accountId, now);

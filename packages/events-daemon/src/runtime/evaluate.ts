@@ -85,12 +85,21 @@ export class EventEvaluator {
       .get(input.eventId, input.ruleId, input.ruleVersion);
     if (terminal !== undefined) return 'terminal';
     const rule = ruleFor(this.#store, input.ruleId, input.ruleVersion);
+    const config = this.#config;
+    const accountId = (
+      this.#store.database.prepare('SELECT account_id FROM ingest WHERE event_id = ?').get(input.eventId) as
+        | { account_id: string }
+        | undefined
+    )?.account_id;
     const kept = await this.#projections.insert({
       eventId: input.eventId,
       rule,
       event: input.event,
       stagedAt: input.stagedAt,
       stageId: input.stageId,
+      // D9: a source commit loads the live registry; a removal during the encryption refuses (the scan purges).
+      accountLive:
+        config === undefined || accountId === undefined ? undefined : () => assertLiveGmailAccount(config, accountId),
     });
     // Purged while it was being encrypted: there is nothing left to decide for this rule version.
     if (!kept) return 'terminal';

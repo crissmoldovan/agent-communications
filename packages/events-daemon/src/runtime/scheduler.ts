@@ -201,6 +201,7 @@ export class EventScheduler {
       store: this.#store,
       accountId: account.accountId,
       guard: () => scanning?.assertScanLive(),
+      accountLive: () => assertLiveGmailAccount(this.#config, account.accountId),
       source,
       assertDisclosable: async () => undefined,
       encryptState: (value, stateId) =>

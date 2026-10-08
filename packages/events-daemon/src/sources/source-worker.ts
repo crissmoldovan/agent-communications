@@ -256,6 +256,15 @@ export class GmailSourceWorker {
     });
   }
 
+  /**
+   * Every write the scan makes follows some await, so it goes through here: D9's source commits load the live
+   * registry, and a removal throws the ACCOUNT_REMOVED refusal (which purges) before anything is written.
+   */
+  async #commit<T>(work: () => T): Promise<T> {
+    await this.#accountLive();
+    return this.#write(work);
+  }
+
   async #scanLocked(): Promise<{ readonly cursor: string | null; readonly pending: boolean }> {
     const settings = this.#store.database
       .prepare('SELECT enabled, switch_generation FROM event_settings WHERE singleton = 1')
@@ -288,13 +297,16 @@ export class GmailSourceWorker {
         // A page an interrupted scan already staged is resumed as it was: its content, its next page token and its
         // final cursor. Taking the cursor from a fresh listing instead would jump past mail that arrived meanwhile,
         // which no staged page holds.
-        const page =
-          (await this.#resumeStage(id)) ??
-          (await this.#stagePage(
+        let page = await this.#resumeStage(id);
+        if (page === null) {
+          // A removed account is never polled again (D9): the registry is read before each provider call.
+          await this.#accountLive();
+          page = await this.#stagePage(
             id,
             cursor,
             await this.#source.listHistory({ historyId: cursor, ...(pageToken ? { pageToken } : {}) }),
-          ));
+          );
+        }
         pages.push(page);
         finalCursor = page.value.page.historyId;
         pageIndex += 1;
@@ -318,8 +330,7 @@ export class GmailSourceWorker {
     }
     if (heldAfterPoint) return { cursor, pending: true };
     await this.#beforeCursorCommit?.();
-    await this.#accountLive();
-    this.#write(() => {
+    await this.#commit(() => {
       const remaining = this.#store.database
         .prepare(
           "SELECT 1 AS present FROM source_scan_state WHERE source = 'gmail' AND account_id = ? AND cursor_scope = 'mailbox'",
@@ -389,8 +400,7 @@ export class GmailSourceWorker {
     };
     const encrypted = await this.#encryptStage(value, id);
     const expiresAt = stagedAt + this.#shortestRetention();
-    await this.#accountLive();
-    this.#write(() => {
+    await this.#commit(() => {
       // A page is kept only for the rule versions still live when it is written: one revoked during the provider call
       // or the encryption owes it nothing, and a page no live version owes would have nothing to resume or purge it.
       // A revoked version keeps its immutable row as `revoked`, so a revocation during the await is visible here.
@@ -426,7 +436,7 @@ export class GmailSourceWorker {
 
   async #processPage(stage: StagedPage): Promise<'terminal' | 'pending' | 'held'> {
     if (this.#expired(stage.id)) {
-      this.#terminaliseExpired(stage);
+      await this.#terminaliseExpired(stage);
       return 'terminal';
     }
     const occurrences = occurrencesFromHistory(stage.value.page as Parameters<typeof occurrencesFromHistory>[0]);
@@ -446,7 +456,7 @@ export class GmailSourceWorker {
       historyId: stage.value.page.historyId,
     });
     if (held) return 'held';
-    this.#write(() => {
+    await this.#commit(() => {
       this.#store.database.prepare('DELETE FROM source_scan_state WHERE id = ?').run(stage.id);
     });
     return 'terminal';
@@ -459,9 +469,9 @@ export class GmailSourceWorker {
     return row?.stage_expires_at !== null && row?.stage_expires_at !== undefined && row.stage_expires_at <= this.#now();
   }
 
-  #terminaliseExpired(stage: StagedPage): void {
+  async #terminaliseExpired(stage: StagedPage): Promise<void> {
     const at = this.#now();
-    this.#write(() => {
+    await this.#commit(() => {
       for (const occurrence of occurrencesFromHistory(
         stage.value.page as Parameters<typeof occurrencesFromHistory>[0],
       )) {
@@ -477,12 +487,12 @@ export class GmailSourceWorker {
     });
   }
 
-  #terminaliseOccurrence(
+  async #terminaliseOccurrence(
     occurrence: GmailHistoryOccurrence,
     outcome: 'vanished' | 'retention-expired',
     code: string,
-  ): void {
-    this.#write(() => {
+  ): Promise<void> {
+    await this.#commit(() => {
       this.#store.database
         .prepare(
           `INSERT OR IGNORE INTO source_occurrence_resolutions
@@ -603,7 +613,7 @@ export class GmailSourceWorker {
     if (!checked.ok)
       throw new CommsError('BAD_DATA', checked.issues[0]?.message ?? 'the Gmail occurrence is not a catalogue event');
     const validated = checked.value as unknown as Record<string, unknown>;
-    this.#recordIdentity(calculated, identity, validated, String(validated.observedAt));
+    await this.#recordIdentity(calculated, identity, validated, String(validated.observedAt));
     return this.#admit({
       event: validated,
       eventId: calculated,
@@ -692,11 +702,12 @@ export class GmailSourceWorker {
       current.firstFailedAt === undefined ? Number.POSITIVE_INFINITY : current.firstFailedAt + MAX_RETRY_MS;
     const horizon = Math.min(stageExpiry, retryDeadline);
     if (now >= horizon) {
-      if (horizon === stageExpiry) this.#terminaliseOccurrence(occurrence, 'retention-expired', 'STAGE_EXPIRED');
-      else this.#terminaliseUnresolvableMetadata(occurrence, current.errorCode ?? 'METADATA_FAILED');
+      if (horizon === stageExpiry) await this.#terminaliseOccurrence(occurrence, 'retention-expired', 'STAGE_EXPIRED');
+      else await this.#terminaliseUnresolvableMetadata(occurrence, current.errorCode ?? 'METADATA_FAILED');
       return null;
     }
     if (current.nextRetryAt !== undefined && now < current.nextRetryAt) return undefined;
+    await this.#accountLive();
     try {
       const metadata = normaliseGmailEventMetadata(await this.#source.getMessageMetadata(occurrence.messageId));
       const next: StoredHistoryPage = {
@@ -712,8 +723,9 @@ export class GmailSourceWorker {
       await this.#persistStage(stage, next);
       return metadata;
     } catch (error) {
+      if (isRemovedAccountError(error)) throw error;
       if (error instanceof CommsError && error.code === 'NOT_FOUND') {
-        this.#terminaliseOccurrence(occurrence, 'vanished', 'NOT_FOUND');
+        await this.#terminaliseOccurrence(occurrence, 'vanished', 'NOT_FOUND');
         return null;
       }
       const firstFailedAt = current.firstFailedAt ?? now;
@@ -750,9 +762,8 @@ export class GmailSourceWorker {
 
   async #persistStage(stage: StagedPage, value: StoredHistoryPage): Promise<void> {
     const encrypted = await this.#encryptStage(value, stage.id);
-    await this.#accountLive();
     const now = this.#now();
-    this.#write(() => {
+    await this.#commit(() => {
       this.#store.database
         .prepare('UPDATE source_scan_state SET encrypted_record = ?, updated_at = ? WHERE id = ?')
         .run(encrypted, now, stage.id);
@@ -760,9 +771,9 @@ export class GmailSourceWorker {
     stage.value = value;
   }
 
-  #terminaliseUnresolvableMetadata(occurrence: GmailHistoryOccurrence, errorCode: string): void {
+  async #terminaliseUnresolvableMetadata(occurrence: GmailHistoryOccurrence, errorCode: string): Promise<void> {
     const now = this.#now();
-    this.#write(() => {
+    await this.#commit(() => {
       this.#store.database
         .prepare(
           `INSERT OR IGNORE INTO source_occurrence_resolutions
@@ -787,7 +798,7 @@ export class GmailSourceWorker {
     throw new CommsError('BAD_DATA', 'the Gmail worker produced an unknown catalogue type');
   }
 
-  #recordIdentity(
+  async #recordIdentity(
     id: string,
     identity: {
       readonly installationId: string;
@@ -798,12 +809,14 @@ export class GmailSourceWorker {
     },
     event: Record<string, unknown>,
     observedAt: string,
-  ): void {
+  ): Promise<void> {
     const existing = this.#identityRow(id);
     if (existing !== undefined) {
       if (!this.#sameIdentity(existing, identity)) this.#degradeForCollision(id);
       return;
     }
+    // The identity hash awaited: the registry is read again before the ingest record is written (D9).
+    await this.#accountLive();
     try {
       this.#write(() => {
         this.#store.database
@@ -882,10 +895,12 @@ export class GmailSourceWorker {
   async #rebaselineExpiredCursor(): Promise<{ readonly cursor: string; readonly pending: false }> {
     if (!this.#source.getProfile)
       throw new CommsError('CONFIG', 'the Gmail source cannot rebaseline an expired cursor');
-    const profile = await this.#source.getProfile();
+    // A removed account is never re-baselined: a plain Gmail 404 says nothing about the configuration, so the registry is
+    // read before the provider call and again before the cursor is written.
     await this.#accountLive();
+    const profile = await this.#source.getProfile();
     const now = this.#now();
-    this.#write(() => {
+    await this.#commit(() => {
       this.#store.database
         .prepare(
           `INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('gmail', ?, 'mailbox', ?, ?)

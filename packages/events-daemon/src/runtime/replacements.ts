@@ -430,6 +430,8 @@ export async function applyDerivedTightening(input: {
     readonly positionScope: 'mailbox';
     readonly position: BaselinePosition;
   }) => Promise<Uint8Array>;
+  /** D9: reads core's configuration for an account a copied point binds; throws ACCOUNT_REMOVED once it is gone. */
+  readonly accountLive?: ((accountId: string) => Promise<void>) | undefined;
 }): Promise<{ readonly editKind: TighteningKind; readonly versionId: string }> {
   const editKind = tighteningKind(input.parent, input.child);
   if (editKind === null) throw new CommsError('APPROVAL_VOID', 'the requested rule edit is not an allowed tightening');
@@ -479,6 +481,8 @@ export async function applyDerivedTightening(input: {
       }),
     })),
   );
+  // The decryption and encryption awaited: every account a copied point binds is read again from the configuration.
+  for (const accountId of new Set(preparedPoints.map((point) => point.accountId))) await input.accountLive?.(accountId);
   database.exec('BEGIN IMMEDIATE');
   try {
     const parent = database.prepare('SELECT state, approval_id FROM rule_versions WHERE id = ?').get(parentId) as
@@ -512,7 +516,22 @@ export async function applyDerivedTightening(input: {
          WHERE id = ? AND state IS NULL`,
       )
       .run(parent.approval_id, childId, input.now, childId);
+    const parentPoint = database.prepare(
+      `SELECT 1 AS present FROM rule_activation_points
+       WHERE activation_id = ? AND rule_id = ? AND rule_version = ? AND account_id = ? AND position_scope = ?`,
+    );
     for (const point of preparedPoints) {
+      // A point the parent no longer holds (an account removal purged it during the awaits) is not recreated.
+      if (
+        parentPoint.get(
+          parentActivationId ?? '',
+          input.parent.ruleId,
+          input.parent.version,
+          point.accountId,
+          point.positionScope,
+        ) === undefined
+      )
+        continue;
       database
         .prepare(
           `INSERT INTO rule_activation_points

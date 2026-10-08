@@ -53,6 +53,7 @@ export class GmailMaterialiser {
   readonly #decryptState: (stored: Uint8Array, stateId?: string) => Promise<GmailMaterialisationRetryState>;
   readonly #now: () => number;
   readonly #guard: () => void;
+  readonly #accountLive: () => Promise<void>;
 
   constructor(options: {
     readonly store: EventDatabase;
@@ -66,8 +67,14 @@ export class GmailMaterialiser {
     readonly now?: (() => number) | undefined;
     /** Runs inside each write transaction: the worker's scan snapshot, so a stale scan writes nothing (D12). */
     readonly guard?: (() => void) | undefined;
+    /**
+     * D9: reads core's configuration and throws the ACCOUNT_REMOVED refusal once the account is gone. Called before
+     * the provider read and before every write that follows an await.
+     */
+    readonly accountLive?: (() => Promise<void>) | undefined;
   }) {
     this.#guard = options.guard ?? (() => undefined);
+    this.#accountLive = options.accountLive ?? (async () => undefined);
     this.#store = options.store;
     this.#accountId = options.accountId;
     this.#source = options.source;
@@ -105,6 +112,8 @@ export class GmailMaterialiser {
         'one Gmail lazy materialisation batch must describe one occurrence and field set',
       );
     }
+    // The worker reaches here after its own awaits; the registry is read before anything below writes.
+    await this.#accountLive();
     const outcomes = requests.map((request) => this.#terminal(request));
     const unresolved = requests.filter((_, index) => outcomes[index] === null);
     if (unresolved.length === 0) return outcomes as GmailMaterialisationResult[];
@@ -113,6 +122,7 @@ export class GmailMaterialiser {
     if (now >= stageExpiresAt)
       return this.#replaceUnresolved(outcomes, this.#terminaliseAll(unresolved, 'retention-expired', 'STAGE_EXPIRED'));
     const retry = await this.#retry(first);
+    await this.#accountLive();
     const horizon = retry === null ? stageExpiresAt : Math.min(retry.first_failed_at + MAX_RETRY_MS, stageExpiresAt);
     if (now >= horizon) {
       return this.#replaceUnresolved(
@@ -139,6 +149,8 @@ export class GmailMaterialiser {
       const ready: GmailMaterialisationResult = { state: 'ready', message: normalised };
       return outcomes.map((outcome) => outcome ?? ready);
     } catch (error) {
+      // A Gmail 404 says nothing about the configuration; a removal found here refuses before any resolution is written.
+      await this.#accountLive();
       if (error instanceof CommsError && error.code === 'NOT_FOUND')
         return this.#replaceUnresolved(outcomes, this.#terminaliseAll(unresolved, 'vanished', 'NOT_FOUND'));
       const pending = await this.#recordRetry(first, retry, errorCode(error), stageExpiresAt);
@@ -245,6 +257,7 @@ export class GmailMaterialiser {
       error_code: code,
     };
     const encrypted = await this.#encryptState(state, this.#stateId(request));
+    await this.#accountLive();
     this.#store.immediate(() => {
       this.#guard();
       this.#store.database

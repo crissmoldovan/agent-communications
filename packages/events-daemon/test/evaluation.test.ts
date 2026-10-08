@@ -699,3 +699,37 @@ test('EVAL-B1: an account removed from the configuration before the commit write
     await rm(setup.stateDir, { recursive: true, force: true });
   }
 });
+
+test('EVAL-B1: an account removed from the configuration while its projection is encrypted keeps no projection (D9)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    let removed = false;
+    const evaluator = evaluatorFor(setup, {
+      now: 2_000,
+      onProjectionEncrypt: () => {
+        removed = true;
+      },
+      config: {
+        load: async () => ({ inboxes: removed ? {} : { 'events/gmail': { id: ACCOUNT, provider: 'gmail' } } }),
+      },
+    });
+    await assert.rejects(
+      () =>
+        evaluator.admit({
+          event: setup.sourceEvent,
+          eventId: setup.sourceEvent.id,
+          ruleId: 'rule-evaluation',
+          ruleVersion: 1,
+          stagedAt: 1_000,
+        }),
+      (error: unknown) => error instanceof CommsError && error.details?.reason === 'ACCOUNT_REMOVED',
+    );
+    assert.equal(count(setup, 'ingest_rules'), 0, 'no projection is written for a removed account');
+    assert.equal(count(setup, 'decisions'), 0);
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
