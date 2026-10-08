@@ -56,6 +56,8 @@ export const DROP: unique symbol = Symbol('drop the connection instead of answer
 export interface HttpReply {
   readonly status: number;
   readonly body: unknown;
+  /** Sent with it: `Retry-After` on a 429, as Slack sends it. */
+  readonly headers?: Record<string, string>;
 }
 
 export type Reply = (request: SlackRequest) => unknown | HttpReply | typeof DROP;
@@ -366,7 +368,10 @@ export async function startFakeSlack(script: Record<string, Reply> = {}): Promis
         typeof answer === 'object' && answer !== null && 'status' in answer && 'body' in answer
           ? (answer as HttpReply)
           : { status: 200, body: answer };
-      response.writeHead(selected.status, { 'content-type': 'application/json' });
+      response.writeHead(selected.status, {
+        'content-type': 'application/json',
+        ...('headers' in selected ? selected.headers : {}),
+      });
       response.end(JSON.stringify(selected.body));
     })();
   });

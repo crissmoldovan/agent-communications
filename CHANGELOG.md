@@ -3,6 +3,21 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**A Slack post, reaction, edit or deletion that Slack rate-limits waits and tries again, as Gmail and Resend sends do
+since 0.15.1.** A burst of posts or reactions could meet Slack's per-method rate limits, and the refusal — which proves
+nothing was posted — spent the approval. Now, when Slack answers `429` with `Retry-After` or `ratelimited`, the act
+waits the time Slack gives (or backs off from one second) and tries again: at most three more times, within 45 seconds.
+Before each attempt it repeats its checks — the claim still held, and for an edit or a deletion the message still the
+one that was approved — so nothing is posted twice and a message changed in Slack meanwhile is never overwritten. A file
+post's files, and an edit's new files, are not uploaded again. When the retries run out, the refusal says "Slack is
+rate-limiting this workspace (tried 4 times)", that nothing was posted, edited, deleted or changed, and when to try
+again (`details.limit`, `details.retryAt`). An answer that leaves the outcome uncertain is still never retried.
+
+**Upgrading.** Nothing to change. A Slack act that would have failed with a rate limit may now take up to 45 seconds
+longer and succeed.
+
 ## 0.15.1
 
 **A send that Gmail or Resend rate-limits waits and tries again, instead of costing you a new approval.** A burst of
