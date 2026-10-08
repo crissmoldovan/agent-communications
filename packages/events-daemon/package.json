@@ -48,7 +48,8 @@
     "@modelcontextprotocol/server": "^2.0.0",
     "commander": "^15.0.0",
     "tsdown": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "zod": "catalog:"
   },
   "agentcommsPackage": {
     "kind": "service",

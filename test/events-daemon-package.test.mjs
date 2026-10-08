@@ -93,3 +93,28 @@ test('PKG-B1-b: no bundle carries a native binary, and the service keeps its wor
     assert.match(external, new RegExp(`'${dependency.replace('/', '\\/')}'`), `${dependency} stays external`);
   }
 });
+
+test('PKG-B1-b: the built daemon imports nothing at runtime but Node, its declared dependencies and the optional keychain', () => {
+  // A bare import the bundle leaves behind must be installed for the consumer. `zod` once resolved only through a stale
+  // workspace link: a clean install left it unresolved, the bundle kept it external, and the packed daemon's MCP server
+  // would have failed to load. Third-party code is bundled; only the declared runtime dependencies stay external.
+  const manifest = JSON.parse(readFileSync(join(PACKAGE_DIR, 'package.json'), 'utf8'));
+  const allowed = new Set([...Object.keys(manifest.dependencies ?? {}), '@napi-rs/keyring']);
+  const dist = join(PACKAGE_DIR, 'dist');
+  assert.ok(existsSync(dist), 'the daemon is built before its package checks');
+  const stray = new Set();
+  for (const name of readdirSync(dist)) {
+    if (!/\.(m?js)$/.test(name)) continue;
+    // Documentation the bundled SDKs carry (an `import … from 'ajv/…'` example in a JSDoc block) is not an import.
+    const source = readFileSync(join(dist, name), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    for (const match of source.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)["']([^"'./][^"']*)["']/g)) {
+      const specifier = match[1];
+      if (specifier.startsWith('node:')) continue;
+      const bare = specifier.startsWith('@') ? specifier.split('/').slice(0, 2).join('/') : specifier.split('/')[0];
+      if (!allowed.has(bare)) stray.add(`${name}: ${specifier}`);
+    }
+  }
+  assert.deepEqual([...stray].sort(), [], 'every other package is bundled');
+});
