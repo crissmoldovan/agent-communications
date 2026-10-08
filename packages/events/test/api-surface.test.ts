@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
-import { dirname, join, posix, resolve } from 'node:path';
+import { join, posix, relative, sep } from 'node:path';
 import { test } from 'node:test';
 import * as ts from 'typescript/unstable/ast';
 import { createVirtualFileSystem } from 'typescript/unstable/fs';
@@ -24,11 +24,21 @@ function filesUnder(directory: string): SourceFile[] {
     .map((path) => ({ path: join(directory, path), text: readFileSync(join(directory, path), 'utf8') }));
 }
 
+const VIRTUAL_ROOT = '/agentcomms-events-api-surface';
+
+/**
+ * Where a file of this package sits in the virtual project: POSIX, whatever the platform. On Windows a path keeps its
+ * backslashes, so `src\catalogue\check.ts` joined as text is one name the program, which normalises them, never finds;
+ * and slicing `PACKAGE_ROOT.length + 1` off a root that ends in a separator drops a letter (`rc/index.ts`).
+ */
+function virtualPath(path: string): string {
+  return posix.join(VIRTUAL_ROOT, ...relative(PACKAGE_ROOT, path).split(sep));
+}
+
 /** Parse source and declarations without resolving them: this check needs their exported syntax, not their implementation. */
 function syntaxTrees(files: readonly SourceFile[]) {
-  const root = '/agentcomms-events-api-surface';
-  const config = posix.join(root, 'tsconfig.json');
-  const paths = files.map((file) => posix.join(root, file.path.slice(PACKAGE_ROOT.length + 1)));
+  const config = posix.join(VIRTUAL_ROOT, 'tsconfig.json');
+  const paths = files.map((file) => virtualPath(file.path));
   const api = new API({
     fs: createVirtualFileSystem({
       [config]: JSON.stringify({ compilerOptions: { noLib: true, noResolve: true }, files: paths }),
@@ -107,7 +117,7 @@ function exportsOf(
       if (statement.exportClause === undefined && statement.moduleSpecifier !== undefined) {
         const target = literalText(statement.moduleSpecifier);
         if (target?.startsWith('.')) {
-          for (const name of exportsOf(resolve(dirname(path), target), trees, seen)) names.add(name);
+          for (const name of exportsOf(posix.resolve(posix.dirname(path), target), trees, seen)) names.add(name);
         }
       } else if (statement.exportClause !== undefined && ts.isNamedExports(statement.exportClause)) {
         for (const element of statement.exportClause.elements) names.add(element.name.text);
@@ -122,9 +132,8 @@ function exportsOf(
 }
 
 function namesFrom(path: string, files: readonly SourceFile[]): string[] {
-  const root = '/agentcomms-events-api-surface';
   const trees = syntaxTrees(files);
-  return [...exportsOf(posix.join(root, path.slice(PACKAGE_ROOT.length + 1)), trees)].sort();
+  return [...exportsOf(virtualPath(path), trees)].sort();
 }
 
 test('the export list is frozen', () => {
