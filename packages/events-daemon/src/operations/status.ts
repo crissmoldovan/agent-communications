@@ -1,18 +1,21 @@
-import { loadSqlite } from '../runtime/sqlite.ts';
+import { isCommsError } from '@agentcomms/core';
+import { EventControlClient } from '../control/client.ts';
+import { requireSupportedNode } from '../runtime/sqlite.ts';
 
 export interface EventsDaemonStatus {
-  owner: 'not-running';
+  readonly owner: 'not-running' | 'running';
+  readonly enabled?: boolean;
+  readonly paused?: boolean;
+  readonly switchGeneration?: number;
 }
 
-/**
- * Reports the intentionally held service's ownership state.
- *
- * Task B1 only establishes the package and its public surfaces. Starting an
- * owner, opening the database and accepting event ingress are later work.
- */
-export async function status(): Promise<EventsDaemonStatus> {
-  // Keep the Node-owned SQLite contract observable without opening a database: a Node below the floor is refused here.
-  const { DatabaseSync } = await loadSqlite();
-  if (typeof DatabaseSync !== 'function') throw new Error('This Node runtime does not provide its built-in SQLite.');
-  return { owner: 'not-running' };
+/** Reports an owner through its authenticated control boundary, without opening its SQLite database in the client. */
+export async function status(options: { readonly stateDir?: string | undefined } = {}): Promise<EventsDaemonStatus> {
+  requireSupportedNode();
+  try {
+    return (await new EventControlClient({ stateDir: options.stateDir }).request('status')) as EventsDaemonStatus;
+  } catch (error) {
+    if (isCommsError(error) && error.code === 'NOT_FOUND') return { owner: 'not-running' };
+    throw error;
+  }
 }

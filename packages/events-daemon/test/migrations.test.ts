@@ -41,29 +41,35 @@ test('SEC-B1: an interruption at every migration statement leaves neither its sc
   }
 });
 
-test('SEC-B1: every statement in the real v1 authority migration is atomic with its ledger entry', () => {
-  const migration = EVENT_MIGRATIONS[0];
-  assert.ok(migration);
-  for (const failingStatement of migration.statements.keys()) {
-    const database = new DatabaseSync(':memory:');
-    try {
-      assert.throws(
-        () =>
-          applyMigrations(database, EVENT_MIGRATIONS, {
-            beforeStatement({ statementIndex }) {
-              if (statementIndex === failingStatement) throw new Error('injected v1 migration failure');
-            },
-          }),
-        /injected v1 migration failure/,
-      );
-      const meta = database
-        .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'meta'")
-        .get() as { count: number };
-      const ledger = database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get() as { count: number };
-      assert.equal(meta.count, 0, `statement ${failingStatement}`);
-      assert.equal(ledger.count, 0, `statement ${failingStatement}`);
-    } finally {
-      database.close();
+test('SEC-B1: every statement in each real authority migration is atomic with its ledger entry', () => {
+  for (const migration of EVENT_MIGRATIONS) {
+    for (const failingStatement of migration.statements.keys()) {
+      const database = new DatabaseSync(':memory:');
+      try {
+        applyMigrations(
+          database,
+          EVENT_MIGRATIONS.filter((candidate) => candidate.version < migration.version),
+        );
+        assert.throws(
+          () =>
+            applyMigrations(database, EVENT_MIGRATIONS, {
+              beforeStatement(context) {
+                if (context.migration.version === migration.version && context.statementIndex === failingStatement) {
+                  throw new Error('injected event migration failure');
+                }
+              },
+            }),
+          /injected event migration failure/,
+        );
+        const ledger = database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get() as { count: number };
+        assert.equal(
+          ledger.count,
+          migration.version - 1,
+          `migration ${migration.version}, statement ${failingStatement}`,
+        );
+      } finally {
+        database.close();
+      }
     }
   }
 });

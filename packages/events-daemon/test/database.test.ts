@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
-import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { ENCRYPTED_EVENT_COLUMNS } from '../src/store/aad.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { RECORD_LAYOUTS } from '../src/store/records.ts';
+import { WINDOWS_SKIP } from './support/short-temp.ts';
 
-test('SEC-B1: a fresh event database is one strict SQLite authority with durable identity and settings', async () => {
+test('SEC-B1: a fresh event database is one strict SQLite authority with durable identity and settings', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-database-'));
   const backupStateDir = await mkdtemp(join(tmpdir(), 'events-daemon-database-backup-'));
   try {
@@ -38,14 +41,16 @@ test('SEC-B1: a fresh event database is one strict SQLite authority with durable
         [],
         'a packed encrypted record has no sibling nonce or tag column',
       );
-      const settings = first.database.prepare('SELECT enabled, switch_generation FROM event_settings').get() as
+      const settings = first.database.prepare('SELECT enabled, paused, switch_generation FROM event_settings').get() as
         | {
             enabled: number;
+            paused: number;
             switch_generation: number;
           }
         | undefined;
       assert.ok(settings);
       assert.equal(settings.enabled, 0);
+      assert.equal(settings.paused, 0);
       assert.equal(settings.switch_generation, 0);
       const schemaMeta = first.database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
         | { value: string }
@@ -53,7 +58,7 @@ test('SEC-B1: a fresh event database is one strict SQLite authority with durable
       const resetMeta = first.database.prepare("SELECT value FROM meta WHERE key = 'reset_epoch'").get() as
         | { value: string }
         | undefined;
-      assert.equal(schemaMeta?.value, '1');
+      assert.equal(schemaMeta?.value, '2');
       assert.equal(resetMeta?.value, '0');
 
       first.immediate(() => {
@@ -97,7 +102,9 @@ test('SEC-B1: a fresh event database is one strict SQLite authority with durable
   }
 });
 
-test('CRY-B1: every encrypted column binds the primary key its table declares, in declared order, and is a BLOB', async () => {
+test('CRY-B1: every encrypted column binds the primary key its table declares, in declared order, and is a BLOB', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-aad-keys-'));
   try {
     const opened = await openEventDatabase({ stateDir });
@@ -119,6 +126,29 @@ test('CRY-B1: every encrypted column binds the primary key its table declares, i
         assert.equal(ENCRYPTED_EVENT_COLUMNS[`${layout.table}.${layout.column}`], declared.length);
         const encrypted = columns.find((column) => column.name === layout.sqlColumn);
         assert.equal(encrypted?.type, 'BLOB', `${layout.table}.${layout.sqlColumn} is a BLOB`);
+      }
+    } finally {
+      opened.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('SEC-B1: the database, its WAL and its shared-memory file are owner-only from their creation', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-database-modes-'));
+  try {
+    const opened = await openEventDatabase({ stateDir });
+    try {
+      opened.immediate(() => {
+        opened.database
+          .prepare("INSERT INTO operational_records (id, kind, created_at) VALUES ('op-mode', 'health', 1)")
+          .run();
+      });
+      for (const path of [opened.paths.database, opened.paths.databaseWal, opened.paths.databaseShm]) {
+        assert.equal((await stat(path)).mode & 0o777, 0o600, `${path} is 0600`);
       }
     } finally {
       opened.close();

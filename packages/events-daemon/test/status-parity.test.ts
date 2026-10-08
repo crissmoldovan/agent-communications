@@ -6,8 +6,11 @@ import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { run } from '../src/cli/program.ts';
 import { createEventsMcpServer } from '../src/mcp/server.ts';
 import { status } from '../src/operations/status.ts';
+import { WINDOWS_SKIP } from './support/short-temp.ts';
 
-test('PAR-B1: the status command and tool return the one content-free daemon status', async () => {
+test('PAR-B1: the status command and tool return the one content-free daemon status', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const expected = await status();
   assert.deepEqual(expected, { owner: 'not-running' });
 
@@ -31,7 +34,15 @@ test('PAR-B1: the status command and tool return the one content-free daemon sta
     const tools = await client.listTools();
     assert.deepEqual(
       tools.tools.map((tool) => tool.name),
-      ['events_status'],
+      [
+        'events_status',
+        'events_stop',
+        'events_pause',
+        'events_resume',
+        'events_disable_all',
+        'events_enable_all',
+        'events_doctor',
+      ],
     );
     const result = (await client.callTool({ name: 'events_status', arguments: {} })) as {
       isError?: boolean;

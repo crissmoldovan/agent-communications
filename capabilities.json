@@ -1516,6 +1516,62 @@
       "operation": "status"
     },
     {
+      "id": "events-daemon.run",
+      "package": "events-daemon",
+      "cli": "run",
+      "mcp": null,
+      "status": "exception",
+      "reason": "A tool cannot start the foreground owner and then use the control server it needs."
+    },
+    {
+      "id": "events-daemon.stop",
+      "package": "events-daemon",
+      "cli": "stop",
+      "mcp": "events_stop",
+      "status": "both",
+      "operation": "stop"
+    },
+    {
+      "id": "events-daemon.pause",
+      "package": "events-daemon",
+      "cli": "pause",
+      "mcp": "events_pause",
+      "status": "both",
+      "operation": "pause"
+    },
+    {
+      "id": "events-daemon.resume",
+      "package": "events-daemon",
+      "cli": "resume",
+      "mcp": "events_resume",
+      "status": "both",
+      "operation": "resume"
+    },
+    {
+      "id": "events-daemon.disable-all",
+      "package": "events-daemon",
+      "cli": "disable-all",
+      "mcp": "events_disable_all",
+      "status": "both",
+      "operation": "disableAll"
+    },
+    {
+      "id": "events-daemon.enable-all",
+      "package": "events-daemon",
+      "cli": "enable-all",
+      "mcp": "events_enable_all",
+      "status": "both",
+      "operation": "enableAll"
+    },
+    {
+      "id": "events-daemon.doctor",
+      "package": "events-daemon",
+      "cli": "doctor",
+      "mcp": "events_doctor",
+      "status": "both",
+      "operation": "doctor"
+    },
+    {
       "id": "events-daemon.mcp.serve",
       "package": "events-daemon",
       "cli": "mcp",

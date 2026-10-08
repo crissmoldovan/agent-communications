@@ -36,6 +36,13 @@ Scripts should read these rather than parse output.
 | Command | What it is for |
 |---|---|
 | [`status`](#agent-events-status) | report whether the local event service has an owner |
+| [`run`](#agent-events-run) | start the foreground local event owner until it receives a clean stop request |
+| [`stop`](#agent-events-stop) | ask the foreground owner to stop cleanly |
+| [`pause`](#agent-events-pause) | pause polling, evaluation and delivery claims without purging state |
+| [`resume`](#agent-events-resume) | resume operational work retained by pause |
+| [`disable-all`](#agent-events-disable-all) | disable collection, advance the global generation and purge B1 work |
+| [`enable-all`](#agent-events-enable-all) | report the standing approval required before collection can be enabled |
+| [`doctor`](#agent-events-doctor) | report content-free owner, protocol and global switch health |
 | [`mcp`](#agent-events-mcp) | serve the MCP interface over standard input and output |
 
 ### `agent-events status`
@@ -44,6 +51,62 @@ report whether the local event service has an owner
 
 ```
 agent-events status [options]
+```
+
+### `agent-events run`
+
+start the foreground local event owner until it receives a clean stop request
+
+```
+agent-events run [options]
+```
+
+### `agent-events stop`
+
+ask the foreground owner to stop cleanly
+
+```
+agent-events stop [options]
+```
+
+### `agent-events pause`
+
+pause polling, evaluation and delivery claims without purging state
+
+```
+agent-events pause [options]
+```
+
+### `agent-events resume`
+
+resume operational work retained by pause
+
+```
+agent-events resume [options]
+```
+
+### `agent-events disable-all`
+
+disable collection, advance the global generation and purge B1 work
+
+```
+agent-events disable-all [options]
+```
+
+### `agent-events enable-all`
+
+report the standing approval required before collection can be enabled
+
+```
+agent-events enable-all [options]
+```
+
+### `agent-events doctor`
+
+report content-free owner, protocol and global switch health
+
+```
+agent-events doctor [options]
 ```
 
 ### `agent-events mcp`
