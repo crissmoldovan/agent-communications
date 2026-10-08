@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/events-daemon",
-  "version": "0.14.1",
+  "version": "0.15.1",
   "description": "The held local event-emission service for agent-communications.",
   "type": "module",
   "license": "MIT",
