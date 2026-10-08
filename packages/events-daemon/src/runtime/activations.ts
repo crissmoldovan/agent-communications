@@ -10,6 +10,7 @@ import type { GmailEventSource } from '@agentcomms/gmail';
 import {
   type ActivationDocumentV1,
   activationDocumentDigest,
+  canonicalFullRuleDocument,
   disclosureBindingFor,
 } from '../domain/activation-documents.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
@@ -18,6 +19,12 @@ import type { EventDatabase } from '../store/database.ts';
 import { purgeRemovedAccountWork } from './account-fence.ts';
 import { persistGmailBaseline } from './baseline.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
+import {
+  applyDerivedTightening,
+  assertReplacementDrained,
+  type TighteningKind,
+  tighteningKind,
+} from './replacements.ts';
 
 type IntentKind = ActivationDocumentV1['kind'];
 
@@ -29,6 +36,7 @@ interface IntentRow {
   readonly effect: string;
   readonly status: 'pending' | 'pending-completion' | 'completed' | 'failed' | 'cancelled';
   readonly approval_id: string | null;
+  readonly replacement_of_version: string | null;
   readonly claimed_at: number | null;
   readonly completion_deadline: number | null;
 }
@@ -56,7 +64,19 @@ export interface PreparedActivation {
   readonly binding: DisclosureBinding;
   readonly kind: IntentKind;
   readonly status: 'pending';
+  readonly replacementOfVersion?: string | undefined;
 }
+
+/** A syntactically verified narrowing has no disclosure approval to issue or claim. */
+export interface DerivedTighteningCompletion {
+  readonly intentId: string;
+  readonly kind: 'rule';
+  readonly status: 'completed';
+  readonly derived: true;
+  readonly editKind: TighteningKind;
+}
+
+export type PreparedRuleActivation = PreparedActivation | DerivedTighteningCompletion;
 
 export interface ActivationCompletion {
   readonly intentId: string;
@@ -82,7 +102,7 @@ export interface ActivationRuntimeOptions {
   readonly newIntentId?: (() => string) | undefined;
 }
 
-/** D2/D12 recoverable standing-authority activation, deliberately limited to B1 Gmail first activation and enable-all. */
+/** D2/D12 recoverable standing-authority activation for Gmail first activations, exact replacements and enable-all. */
 export class ActivationRuntime {
   readonly #store: EventDatabase;
   readonly #approvals: ActivationRuntimeOptions['approvals'];
@@ -104,13 +124,44 @@ export class ActivationRuntime {
     this.#newIntentId = options.newIntentId ?? (() => `act_${randomBytes(16).toString('hex')}`);
   }
 
-  async prepareRule(input: { readonly ruleId: string; readonly version: number }): Promise<PreparedActivation> {
+  async prepareRule(input: { readonly ruleId: string; readonly version: number }): Promise<PreparedRuleActivation> {
     const versions = new ImmutableVersions(this.#store.database);
     const document = versions.prepareRule(input.ruleId, input.version);
-    if (versions.activeVersion('rule', input.ruleId) !== null) {
-      throw new CommsError('TRANSIENT', 'this rule already has an active version; replacement completion is pending', {
-        details: { reason: 'REPLACEMENT_PENDING' },
-      });
+    const active = versions.activeVersion('rule', input.ruleId);
+    if (active !== null) {
+      const parentRow = this.#store.database
+        .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
+        .get(input.ruleId, active.version) as { document: string } | undefined;
+      if (!parentRow) throw new CommsError('BAD_DATA', 'the active rule version is missing its immutable document');
+      const parent = canonicalFullRuleDocument(JSON.parse(parentRow.document));
+      if (tighteningKind(parent, document.rule) !== null) {
+        const derived = applyDerivedTightening({
+          database: this.#store.database,
+          parent,
+          child: document.rule,
+          now: this.#now(),
+        });
+        return {
+          intentId: derived.versionId,
+          kind: 'rule',
+          status: 'completed',
+          derived: true,
+          editKind: derived.editKind,
+        };
+      }
+      const oldId = `${input.ruleId}@${active.version}`;
+      const pending = this.#store.database
+        .prepare(
+          "SELECT 1 AS present FROM activation_intents WHERE replacement_of_version = ? AND status IN ('pending', 'pending-completion')",
+        )
+        .get(oldId) as { present: number } | undefined;
+      if (pending !== undefined) {
+        throw new CommsError('TRANSIENT', 'this rule already has a replacement completing', {
+          details: { reason: 'REPLACEMENT_PENDING' },
+        });
+      }
+      const points = unionReplacementPoints(parent, document.rule);
+      return this.#prepare(document, points, { switchGeneration: this.#switch().generation }, oldId);
     }
     const points = pointsForRule(document.rule);
     return this.#prepare(document, points, { switchGeneration: this.#switch().generation });
@@ -199,7 +250,7 @@ export class ActivationRuntime {
   async recover(): Promise<void> {
     const rows = this.#store.database
       .prepare(
-        "SELECT id, kind, document, digest, effect, status, approval_id, claimed_at, completion_deadline FROM activation_intents WHERE status IN ('pending', 'pending-completion')",
+        "SELECT id, kind, document, digest, effect, replacement_of_version, status, approval_id, claimed_at, completion_deadline FROM activation_intents WHERE status IN ('pending', 'pending-completion')",
       )
       .all() as unknown as IntentRow[];
     for (const storedIntent of rows) {
@@ -249,8 +300,14 @@ export class ActivationRuntime {
       try {
         await this.#claimAndComplete(intent, record.record.usedAt);
       } catch (error) {
-        // Expiry is terminal settlement, not a retryable recovery failure. The intent now carries its content-free code.
-        if (!(error instanceof CommsError) || error.code !== 'APPROVAL_VOID') throw error;
+        // Expiry is terminal settlement. A replacement drain is deliberately nonterminal: recovery runs before the
+        // worker, so it must leave the claimed old pointer live for that worker rather than preventing startup.
+        if (
+          error instanceof CommsError &&
+          (error.code === 'APPROVAL_VOID' || error.details?.reason === 'REPLACEMENT_DRAINING')
+        )
+          continue;
+        throw error;
       }
     }
   }
@@ -259,6 +316,7 @@ export class ActivationRuntime {
     document: ActivationDocumentV1,
     points: readonly PlannedPoint[],
     effect: ActivationEffect,
+    replacementOfVersion?: string,
   ): Promise<PreparedActivation> {
     const intentId = this.#newIntentId();
     const binding = disclosureBindingFor(intentId, document);
@@ -267,8 +325,8 @@ export class ActivationRuntime {
       this.#store.database
         .prepare(
           `INSERT INTO activation_intents
-            (id, kind, document, digest, effect, required_points, acquisition_scopes, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+            (id, kind, document, digest, effect, replacement_of_version, required_points, acquisition_scopes, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
         )
         .run(
           intentId,
@@ -276,6 +334,7 @@ export class ActivationRuntime {
           canonicalJson(document),
           binding.digest,
           canonicalJson(effect),
+          replacementOfVersion ?? null,
           canonicalJson(points),
           canonicalJson([...new Set(points.map((point) => `${point.accountId}:${point.positionScope}`))]),
           now,
@@ -288,7 +347,14 @@ export class ActivationRuntime {
         .prepare('UPDATE activation_intents SET approval_id = ?, updated_at = ? WHERE id = ? AND approval_id IS NULL')
         .run(approval.approvalId, this.#now(), intentId);
     });
-    return { intentId, approvalId: approval.approvalId, binding, kind: document.kind, status: 'pending' };
+    return {
+      intentId,
+      approvalId: approval.approvalId,
+      binding,
+      kind: document.kind,
+      status: 'pending',
+      ...(replacementOfVersion === undefined ? {} : { replacementOfVersion }),
+    };
   }
 
   async #claimAndComplete(intent: IntentRow, usedAt: string): Promise<ActivationCompletion> {
@@ -350,10 +416,26 @@ export class ActivationRuntime {
             this.#store.database
               .prepare(
                 `INSERT OR IGNORE INTO activation_baselines
-               (intent_id, source, account_id, position_scope, encrypted_position, response_at)
-               VALUES (?, 'gmail', ?, 'mailbox', ?, ?)`,
+                 (intent_id, source, account_id, position_scope, encrypted_position, response_at)
+                 VALUES (?, 'gmail', ?, 'mailbox', ?, ?)`,
               )
               .run(current.id, accountId, encrypted, this.#now());
+            if (current.replacement_of_version !== null) {
+              const oldRule = current.replacement_of_version;
+              const oldInScope = this.#replacementIncludesAccount(oldRule, accountId);
+              const newInScope = document.kind === 'rule' && document.rule.source.accountIds.includes(accountId);
+              // A new-only scope gets its own P activation point but owes no old-version occurrence, so it must not
+              // leave an impossible drain open waiting for a worker that never ran the old rule there.
+              if (oldInScope) {
+                this.#store.database
+                  .prepare(
+                    `INSERT OR IGNORE INTO replacement_drains
+                     (intent_id, source, account_id, position_scope, old_in_scope, new_in_scope)
+                     VALUES (?, 'gmail', ?, 'mailbox', ?, ?)`,
+                  )
+                  .run(current.id, accountId, 1, newInScope ? 1 : 0);
+              }
+            }
           });
         },
       );
@@ -388,7 +470,9 @@ export class ActivationRuntime {
           throw new CommsError('APPROVAL_VOID', 'an enabled rule pointer changed before global activation completed');
         }
       }
+      if (latest.replacement_of_version !== null) assertReplacementDrained(this.#store.database, latest.id);
       for (const point of points) {
+        if (document.kind === 'rule' && point.ruleVersion !== document.rule.version) continue;
         const baseline = this.#store.database
           .prepare(
             'SELECT encrypted_position FROM activation_baselines WHERE intent_id = ? AND source = ? AND account_id = ? AND position_scope = ?',
@@ -416,20 +500,42 @@ export class ActivationRuntime {
       }
       if (document.kind === 'rule') {
         const active = new ImmutableVersions(this.#store.database).activeVersion('rule', document.rule.ruleId);
-        if (active !== null)
+        if (latest.replacement_of_version === null && active !== null)
           throw new CommsError('TRANSIENT', 'the active rule pointer changed during activation', {
             details: { reason: 'ACTIVATION_COMPLETING' },
           });
+        if (
+          latest.replacement_of_version !== null &&
+          (active === null || `${document.rule.ruleId}@${active.version}` !== latest.replacement_of_version)
+        ) {
+          this.#cancel(intent.id, 'STALE_POINTER');
+          throw new CommsError('APPROVAL_VOID', 'the old rule pointer changed before replacement finalisation');
+        }
+        if (latest.replacement_of_version !== null) {
+          this.#store.database
+            .prepare(
+              "UPDATE rule_versions SET state = 'superseded', superseded_at = ? WHERE id = ? AND state = 'active'",
+            )
+            .run(this.#now(), latest.replacement_of_version);
+        }
         this.#store.database
           .prepare(
             "UPDATE rule_versions SET state = 'active', approval_id = ?, authorization_activation_id = ?, activated_at = ? WHERE rule_id = ? AND version = ?",
           )
           .run(intent.approval_id, intent.id, Date.parse(usedAt), document.rule.ruleId, document.rule.version);
-        this.#store.database
-          .prepare(
-            "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', ?, ?, ?, ?)",
-          )
-          .run(document.rule.ruleId, document.rule.version, intent.id, Date.parse(usedAt));
+        if (latest.replacement_of_version === null) {
+          this.#store.database
+            .prepare(
+              "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', ?, ?, ?, ?)",
+            )
+            .run(document.rule.ruleId, document.rule.version, intent.id, Date.parse(usedAt));
+        } else {
+          this.#store.database
+            .prepare(
+              "UPDATE active_versions SET version = ?, current_cutover_id = ?, activated_at = ? WHERE kind = 'rule' AND object_id = ?",
+            )
+            .run(document.rule.version, intent.id, Date.parse(usedAt), document.rule.ruleId);
+        }
       } else if (document.kind === 'enable-all') {
         if (settings.enabled)
           throw new CommsError('CONFIG', 'collection became enabled before this approval completed');
@@ -447,6 +553,7 @@ export class ActivationRuntime {
         throw new CommsError('CONFIG', 'this activation kind is not enabled in B1');
       }
       this.#store.database.prepare('DELETE FROM activation_baselines WHERE intent_id = ?').run(intent.id);
+      this.#store.database.prepare('DELETE FROM replacement_drains WHERE intent_id = ?').run(intent.id);
       this.#store.database
         .prepare("UPDATE activation_intents SET status = 'completed', updated_at = ? WHERE id = ?")
         .run(this.#now(), intent.id);
@@ -456,7 +563,7 @@ export class ActivationRuntime {
   #intentForApproval(approvalId: string): IntentRow {
     const row = this.#store.database
       .prepare(
-        'SELECT id, kind, document, digest, effect, status, approval_id, claimed_at, completion_deadline FROM activation_intents WHERE approval_id = ?',
+        'SELECT id, kind, document, digest, effect, replacement_of_version, status, approval_id, claimed_at, completion_deadline FROM activation_intents WHERE approval_id = ?',
       )
       .get(approvalId) as IntentRow | undefined;
     if (!row) throw new CommsError('NOT_FOUND', 'no event activation has this disclosure approval');
@@ -466,7 +573,7 @@ export class ActivationRuntime {
   #intent(id: string): IntentRow {
     const row = this.#store.database
       .prepare(
-        'SELECT id, kind, document, digest, effect, status, approval_id, claimed_at, completion_deadline FROM activation_intents WHERE id = ?',
+        'SELECT id, kind, document, digest, effect, replacement_of_version, status, approval_id, claimed_at, completion_deadline FROM activation_intents WHERE id = ?',
       )
       .get(id) as IntentRow | undefined;
     if (!row) throw new CommsError('NOT_FOUND', 'the activation intent no longer exists');
@@ -481,7 +588,12 @@ export class ActivationRuntime {
     }
     if (document.kind === 'rule') {
       const versions = new ImmutableVersions(this.#store.database);
-      if (versions.activeVersion('rule', document.rule.ruleId) !== null)
+      const active = versions.activeVersion('rule', document.rule.ruleId);
+      if (
+        active !== null &&
+        (intent.replacement_of_version === null ||
+          `${document.rule.ruleId}@${active.version}` !== intent.replacement_of_version)
+      )
         throw new CommsError('APPROVAL_VOID', 'the rule gained an active pointer after preparation');
       const live = versions.prepareRule(document.rule.ruleId, document.rule.version);
       if (canonicalJson(live) !== canonicalJson(document))
@@ -518,6 +630,14 @@ export class ActivationRuntime {
       .prepare('SELECT required_points FROM activation_intents WHERE id = ?')
       .get(intent.id) as { required_points: string } | undefined;
     return row ? (JSON.parse(row.required_points) as PlannedPoint[]) : [];
+  }
+
+  #replacementIncludesAccount(versionId: string, accountId: string): boolean {
+    const row = this.#store.database.prepare('SELECT document FROM rule_versions WHERE id = ?').get(versionId) as
+      | { document: string }
+      | undefined;
+    if (!row) throw new CommsError('BAD_DATA', 'the exact replacement predecessor no longer exists');
+    return canonicalFullRuleDocument(JSON.parse(row.document)).source.accountIds.includes(accountId);
   }
 
   #isRevokedBinding(
@@ -557,6 +677,7 @@ export class ActivationRuntime {
       .prepare("UPDATE activation_intents SET status = 'cancelled', failure_code = ?, updated_at = ? WHERE id = ?")
       .run(code, this.#now(), intentId);
     this.#store.database.prepare('DELETE FROM activation_baselines WHERE intent_id = ?').run(intentId);
+    this.#store.database.prepare('DELETE FROM replacement_drains WHERE intent_id = ?').run(intentId);
   }
 
   #fail(intentId: string, code: string): void {
@@ -565,6 +686,7 @@ export class ActivationRuntime {
         .prepare("UPDATE activation_intents SET status = 'failed', failure_code = ?, updated_at = ? WHERE id = ?")
         .run(code, this.#now(), intentId);
       this.#store.database.prepare('DELETE FROM activation_baselines WHERE intent_id = ?').run(intentId);
+      this.#store.database.prepare('DELETE FROM replacement_drains WHERE intent_id = ?').run(intentId);
     });
   }
 }
@@ -577,4 +699,18 @@ function pointsForRule(rule: Extract<ActivationDocumentV1, { kind: 'rule' }>['ru
     source: 'gmail',
     positionScope: 'mailbox',
   }));
+}
+
+function unionReplacementPoints(
+  oldRule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule'],
+  newRule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule'],
+): readonly PlannedPoint[] {
+  const points = [...pointsForRule(oldRule), ...pointsForRule(newRule)];
+  const seen = new Set<string>();
+  return points.filter((point) => {
+    const key = `${point.ruleId}@${point.ruleVersion}:${point.accountId}:${point.positionScope}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

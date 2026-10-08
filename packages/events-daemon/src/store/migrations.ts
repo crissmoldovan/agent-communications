@@ -48,6 +48,19 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '4' WHERE key = 'schema_version'",
     ],
   },
+  {
+    version: 5,
+    name: 'event-source-stage-rule-debts-v1',
+    statements: [
+      `CREATE TABLE source_stage_rule_debts (
+        stage_id TEXT NOT NULL REFERENCES source_scan_state(id) ON DELETE CASCADE,
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL,
+        PRIMARY KEY (stage_id, rule_id, rule_version)
+      ) STRICT`,
+      "UPDATE meta SET value = '5' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {
