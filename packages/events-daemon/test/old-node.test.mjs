@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const CLI = join(ROOT, 'packages', 'events-daemon', 'dist', 'cli.mjs');
+const PRELOAD = fileURLToPath(new URL('../../../test/helpers/loopback-seal-preload.mjs', import.meta.url));
 const FLOOR = [22, 16, 0];
 
 /** Whether this Node is at or above the daemon's floor (plan amendment B1-F): Node SQLite unflagged and complete. */
@@ -20,14 +21,14 @@ function atFloor() {
 }
 
 test(`the built held service command answers --help on Node ${process.versions.node}, whatever its SQLite`, () => {
-  const help = spawnSync(process.execPath, [CLI, '--help'], { encoding: 'utf8' });
+  const help = spawnSync(process.execPath, ['--import', PRELOAD, CLI, '--help'], { encoding: 'utf8' });
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /Usage: agent-events/);
   assert.doesNotMatch(help.stderr, /ERR_UNKNOWN_BUILTIN_MODULE|ExperimentalWarning/);
 });
 
 test(`the built held service command reaches Node SQLite on Node ${process.versions.node}, or refuses below 22.16.0`, () => {
-  const status = spawnSync(process.execPath, [CLI, '--json', 'status'], { encoding: 'utf8' });
+  const status = spawnSync(process.execPath, ['--import', PRELOAD, CLI, '--json', 'status'], { encoding: 'utf8' });
   if (atFloor()) {
     assert.equal(status.status, 0, status.stderr);
     assert.equal(status.stdout, '{"owner":"not-running"}\n');
@@ -49,7 +50,9 @@ test(`Node ${process.versions.node} opens a WAL, STRICT database with immediate 
   const dir = mkdtempSync(join(process.platform === 'win32' ? tmpdir() : '/tmp', 'aev-old-node-'));
   let child;
   try {
-    child = spawn(process.execPath, [CLI, '--state-dir', dir, 'run'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    child = spawn(process.execPath, ['--import', PRELOAD, CLI, '--state-dir', dir, 'run'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
     let stderr = '';
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk) => {
@@ -57,7 +60,9 @@ test(`Node ${process.versions.node} opens a WAL, STRICT database with immediate 
     });
     let status;
     for (let attempt = 0; attempt < 40; attempt += 1) {
-      status = spawnSync(process.execPath, [CLI, '--state-dir', dir, '--json', 'status'], { encoding: 'utf8' });
+      status = spawnSync(process.execPath, ['--import', PRELOAD, CLI, '--state-dir', dir, '--json', 'status'], {
+        encoding: 'utf8',
+      });
       if (status.status === 0 && /"owner":"running"/.test(status.stdout)) break;
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
@@ -67,7 +72,9 @@ test(`Node ${process.versions.node} opens a WAL, STRICT database with immediate 
     const database = join(dir, 'events', 'events.sqlite');
     assert.ok(existsSync(database), 'run opens and migrates the owner database before it serves status');
     assert.ok(statSync(database).size > 0);
-    const stop = spawnSync(process.execPath, [CLI, '--state-dir', dir, '--json', 'stop'], { encoding: 'utf8' });
+    const stop = spawnSync(process.execPath, ['--import', PRELOAD, CLI, '--state-dir', dir, '--json', 'stop'], {
+      encoding: 'utf8',
+    });
     assert.equal(stop.status, 0, stop.stderr);
     const exit = await new Promise((resolve) => child.once('exit', resolve));
     assert.equal(exit, 0, stderr);

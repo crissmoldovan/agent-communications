@@ -17,7 +17,7 @@
     "prepare": "git config core.hooksPath .githooks || true",
     "build": "pnpm -r --filter \"./packages/**\" run build",
     "typecheck": "pnpm -r --filter \"./packages/**\" run typecheck",
-    "test": "node --test \"test/**/*.test.mjs\" && pnpm -r --filter \"./packages/**\" run test",
+    "test": "node --import ./test/helpers/loopback-seal-preload.mjs --test \"test/**/*.test.mjs\" && pnpm -r --filter \"./packages/**\" run test",
     "lint": "biome ci .",
     "format": "biome format --write .",
     "verify:skills": "node scripts/sync-skills.mjs --check && node scripts/verify-skills.mjs",
