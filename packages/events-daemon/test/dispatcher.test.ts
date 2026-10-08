@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
 import { CommsError, canonicalJson, type SecretStore, sha256Hex } from '@agentcomms/core';
-import { DryRunDispatcher } from '../src/runtime/dispatcher.ts';
+import { DeliveryDispatcher, type DispatchResult, DryRunDispatcher } from '../src/runtime/dispatcher.ts';
 import { EventExpiry } from '../src/runtime/expiry.ts';
 import { EventLifecycle } from '../src/runtime/lifecycle.ts';
 import { closeLocalResetBarrier, openLocalResetBarrier } from '../src/runtime/reset.ts';
@@ -122,6 +122,37 @@ async function fixture() {
 function count(store: Awaited<ReturnType<typeof openEventDatabase>>, table: string): number {
   return (store.database.prepare(`SELECT count(*) AS count FROM ${table}`).get() as { count: number }).count;
 }
+
+test('DEL-B2: the generic facade selects the injected target handler without opening a payload', async () => {
+  const rows = new Map([
+    ['dryrun', 'dryrun:target:1'],
+    ['webhook', 'webhook:target:1'],
+    ['sse', 'sse:target:1:subscriber:1'],
+  ]);
+  const calls: string[] = [];
+  const handler = (kind: string) => ({
+    async dispatch(deliveryId: string): Promise<DispatchResult> {
+      calls.push(`${kind}:${deliveryId}`);
+      return { state: 'terminal', deliveryId };
+    },
+  });
+  const dispatcher = new DeliveryDispatcher({
+    store: {
+      database: {
+        prepare: () => ({ get: (id: string) => (rows.has(id) ? { target_key: rows.get(id) } : undefined) }),
+      },
+    } as never,
+    dryrun: handler('dryrun'),
+    webhook: handler('webhook'),
+    sse: handler('sse'),
+  });
+
+  await dispatcher.dispatch('dryrun');
+  await dispatcher.dispatch('webhook');
+  await dispatcher.dispatch('sse');
+  assert.deepEqual(calls, ['dryrun:dryrun', 'webhook:webhook', 'sse:sse']);
+  assert.deepEqual(await dispatcher.dispatch('missing'), { state: 'missing', deliveryId: 'missing' });
+});
 
 test('DEL-B1: one immediate boundary appends encrypted local work, charges its rolling cap, and settles delivery', {
   skip: WINDOWS_SKIP,

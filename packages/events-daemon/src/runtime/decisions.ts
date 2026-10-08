@@ -78,7 +78,7 @@ export function commitDecisionOutbox(
           input.ruleVersion,
           delivery.targetKey,
           delivery.target.targetId,
-          delivery.target.version,
+          delivery.target.targetVersion,
           delivery.encryptedRecord,
           delivery.expiresAt,
           input.switchGeneration,

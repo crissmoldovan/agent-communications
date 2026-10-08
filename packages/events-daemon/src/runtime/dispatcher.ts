@@ -63,6 +63,62 @@ export type DispatchResult =
       readonly deliveryId: string;
     };
 
+/** One target-kind handler; each adapter owns its own boundary and may return the common delivery state. */
+export interface DeliveryDispatchHandler {
+  dispatch(deliveryId: string): Promise<DispatchResult>;
+}
+
+export interface DeliveryDispatcherOptions {
+  readonly store: EventDatabase;
+  readonly dryrun: DeliveryDispatchHandler;
+  readonly webhook: DeliveryDispatchHandler;
+  readonly sse: DeliveryDispatchHandler;
+  readonly now?: (() => number) | undefined;
+}
+
+/**
+ * The owner/scheduler-facing routing facade. It selects only from the closed B2 target-kind set and leaves every
+ * target representation opaque to the selected adapter, so dispatch can never rebuild a prepared CloudEvent.
+ */
+export class DeliveryDispatcher {
+  readonly #store: EventDatabase;
+  readonly #dryrun: DeliveryDispatchHandler;
+  readonly #webhook: DeliveryDispatchHandler;
+  readonly #sse: DeliveryDispatchHandler;
+  readonly #now: () => number;
+
+  constructor(options: DeliveryDispatcherOptions) {
+    this.#store = options.store;
+    this.#dryrun = options.dryrun;
+    this.#webhook = options.webhook;
+    this.#sse = options.sse;
+    this.#now = options.now ?? Date.now;
+  }
+
+  async dispatch(deliveryId: string): Promise<DispatchResult> {
+    const row = this.#store.database.prepare('SELECT target_key FROM deliveries WHERE id = ?').get(deliveryId) as
+      | { target_key: string }
+      | undefined;
+    if (row === undefined) return { state: 'missing', deliveryId };
+    return this.#handler(row.target_key).dispatch(deliveryId);
+  }
+
+  /** Recovery uses the same kind router, so a later adapter cannot be claimed by the dry-run path. */
+  async recoverLeases(): Promise<readonly DispatchResult[]> {
+    const ids = this.#store.database
+      .prepare("SELECT id FROM deliveries WHERE state = 'disclosing' AND lease_until <= ? ORDER BY id")
+      .all(this.#now()) as Array<{ id: string }>;
+    return Promise.all(ids.map(({ id }) => this.dispatch(id)));
+  }
+
+  #handler(targetKey: string): DeliveryDispatchHandler {
+    if (targetKey.startsWith('dryrun:')) return this.#dryrun;
+    if (targetKey.startsWith('webhook:')) return this.#webhook;
+    if (targetKey.startsWith('sse:')) return this.#sse;
+    throw new CommsError('BAD_DATA', 'the persisted delivery has an unknown target kind');
+  }
+}
+
 export interface DryRunDispatcherOptions {
   readonly store: EventDatabase;
   readonly cipher: Pick<EventRecordCipher, 'encrypt' | 'decrypt'>;

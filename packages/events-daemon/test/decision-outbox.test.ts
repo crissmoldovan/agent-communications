@@ -43,7 +43,9 @@ function input(deliveries: readonly PreparedDelivery[]) {
 const delivery: PreparedDelivery = {
   id: 'delivery-1',
   targetKey: 'dryrun:target-1:1',
-  target: { targetId: 'target-1', version: 1, kind: 'dry-run', retentionMs: 60_000 },
+  target: { targetId: 'target-1', targetVersion: 1, kind: 'dry-run', representation: 'plain' },
+  representation: 'plain',
+  cloudEventBytes: '{"id":"delivery-1"}',
   encryptedRecord: Buffer.from('encrypted'),
   expiresAt: 60_000,
 };
