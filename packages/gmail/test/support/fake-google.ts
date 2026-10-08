@@ -23,6 +23,8 @@ export interface FakeAccount {
   /** Scopes this account grants back. Defaults to whatever was asked for — set it to model a user unticking a box. */
   grantScopes?: string[];
   profile?: { messagesTotal?: number; threadsTotal?: number; historyId?: string };
+  /** Pages returned by the unfiltered history route; the first page is keyed by `first`. */
+  history?: { pages: Record<string, FakeHistoryPage> };
   labels?: Array<{
     id: string;
     name: string;
@@ -58,6 +60,17 @@ export interface FakeMessage {
   snippet?: string;
   internalDate?: string;
   payload?: unknown;
+}
+
+export interface FakeHistoryPage {
+  historyId: string;
+  nextPageToken?: string;
+  history: Array<{
+    id: string;
+    messagesAdded?: Array<{ message: { id: string; threadId?: string } }>;
+    labelsAdded?: Array<{ message: { id: string; threadId?: string }; labelIds: string[] }>;
+    labelsRemoved?: Array<{ message: { id: string; threadId?: string }; labelIds: string[] }>;
+  }>;
 }
 
 /**
@@ -386,6 +399,23 @@ function labelsOf(account: FakeAccount | undefined): NonNullable<FakeAccount['la
   );
 }
 
+function withoutMetadataBodyBytes(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutMetadataBodyBytes);
+  if (typeof value !== 'object' || value === null) return value;
+  const object = value as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.entries(object).flatMap(([key, child]) => {
+      if (key === 'body' && typeof child === 'object' && child !== null && !Array.isArray(child)) {
+        const body = Object.fromEntries(
+          Object.entries(child as Record<string, unknown>).filter(([name]) => name !== 'data'),
+        );
+        return [[key, body]];
+      }
+      return [[key, withoutMetadataBodyBytes(child)]];
+    }),
+  );
+}
+
 function readBody(request: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -588,6 +618,17 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
         });
         return;
       }
+      if (url.pathname === '/gmail/v1/users/me/history' && request.method === 'GET') {
+        const page = account?.history?.pages[params.pageToken ?? 'first'];
+        if (!page) {
+          json(response, 404, {
+            error: { code: 404, message: 'Requested entity was not found.', errors: [{ reason: 'notFound' }] },
+          });
+          return;
+        }
+        json(response, 200, page);
+        return;
+      }
       if (url.pathname === '/gmail/v1/users/me/labels' && request.method === 'GET') {
         json(response, 200, { labels: labelsOf(account) });
         return;
@@ -672,7 +713,11 @@ export async function startFakeGoogle(options: FakeGoogleOptions = {}): Promise<
           json(response, 200, { id, threadId: found.threadId, raw: Buffer.from(raw).toString('base64url') });
           return;
         }
-        json(response, 200, { id, ...found });
+        json(
+          response,
+          200,
+          params.fields === undefined ? { id, ...found } : { id, ...(withoutMetadataBodyBytes(found) as object) },
+        );
         return;
       }
 
