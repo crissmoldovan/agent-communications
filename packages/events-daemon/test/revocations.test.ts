@@ -114,3 +114,54 @@ test('TGT-B1: removing a target revokes it and every live rule version bound to 
     await rm(world.stateDir, { recursive: true, force: true });
   }
 });
+
+test('TGT-B1: a revocation purges only the versions it revokes; another live version keeps its authorised work', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('aev-revoke-scope-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const versions = new ImmutableVersions(store.database);
+    const other = { ...target, targetId: 'target-s' };
+    versions.createTarget(target);
+    versions.createTarget(other);
+    versions.createRule(rule(1));
+    versions.createRule({ ...rule(2), targets: [other] });
+    store.database.exec(
+      "UPDATE rule_versions SET state = 'superseded', approval_id = 'ap_1', authorization_activation_id = 'act_1', activated_at = 1, superseded_at = 2 WHERE rule_id = 'rule-r' AND version = 1",
+    );
+    store.database.exec(
+      "UPDATE rule_versions SET state = 'active', approval_id = 'ap_2', authorization_activation_id = 'act_r', activated_at = 2 WHERE rule_id = 'rule-r' AND version = 2",
+    );
+    store.database.exec(
+      "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-r', 2, 'act_r', 1)",
+    );
+    store.database.exec(
+      "INSERT INTO ingest (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at) VALUES ('event-1', 'i', 'gmail.message.received', 1, 'account-1', 'd', 1, 1, 1)",
+    );
+    for (const version of [1, 2]) {
+      store.database
+        .prepare(
+          "INSERT INTO ingest_rules (event_id, rule_id, rule_version, decision_deadline, encrypted_projection) VALUES ('event-1', 'rule-r', ?, 99, ?)",
+        )
+        .run(version, new Uint8Array([version]));
+    }
+    await removeTarget(store, { cancelForRevocation: async () => undefined }, 'target-r');
+    const left = store.database
+      .prepare("SELECT rule_version FROM ingest_rules WHERE rule_id = 'rule-r' ORDER BY rule_version")
+      .all()
+      .map((row) => (row as { rule_version: number }).rule_version);
+    assert.deepEqual(left, [2], 'only the revoked version 1 lost its projection');
+    const states = store.database
+      .prepare("SELECT version, state FROM rule_versions WHERE rule_id = 'rule-r' ORDER BY version")
+      .all()
+      .map((row) => ({ ...(row as object) }));
+    assert.deepEqual(states, [
+      { version: 1, state: 'revoked' },
+      { version: 2, state: 'active' },
+    ]);
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});

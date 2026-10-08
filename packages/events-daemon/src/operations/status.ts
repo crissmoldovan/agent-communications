@@ -2,11 +2,18 @@ import { isCommsError } from '@agentcomms/core';
 import { EventControlClient } from '../control/client.ts';
 import { requireSupportedNode } from '../runtime/sqlite.ts';
 
+export interface ActivationIntentStatusSummary {
+  readonly status: string;
+  readonly failureCode: string | null;
+  readonly count: number;
+}
+
 export interface EventsDaemonStatus {
   readonly owner: 'not-running' | 'running';
   readonly enabled?: boolean;
   readonly paused?: boolean;
   readonly switchGeneration?: number;
+  readonly activationIntents?: readonly ActivationIntentStatusSummary[];
 }
 
 /** Reports an owner through its authenticated control boundary, without opening its SQLite database in the client. */

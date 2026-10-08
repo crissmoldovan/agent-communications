@@ -71,6 +71,7 @@ interface IntentRow {
   readonly status: string;
   readonly effect: string;
   readonly required_points: string;
+  readonly replacement_of_version: string | null;
 }
 
 function refuse(reason: string, message: string): never {
@@ -92,7 +93,7 @@ function settings(database: DatabaseSync): { enabled: boolean; generation: numbe
 function intent(database: DatabaseSync, id: string): IntentRow {
   const row = database
     .prepare(
-      'SELECT id, document, digest, kind, approval_id, status, effect, required_points FROM activation_intents WHERE id = ?',
+      'SELECT id, document, digest, kind, approval_id, status, effect, required_points, replacement_of_version FROM activation_intents WHERE id = ?',
     )
     .get(id) as IntentRow | undefined;
   if (!row) return refuse('ACTIVATION_LINEAGE_MISSING', 'the immutable activation record is missing');
@@ -207,7 +208,7 @@ function completedIntent(database: DatabaseSync, row: RuleRow): IntentRow | null
   if (!row.authorization_activation_id || !row.approval_id) return null;
   const activation = database
     .prepare(
-      'SELECT id, document, digest, kind, approval_id, status, effect, required_points FROM activation_intents WHERE id = ?',
+      'SELECT id, document, digest, kind, approval_id, status, effect, required_points, replacement_of_version FROM activation_intents WHERE id = ?',
     )
     .get(row.authorization_activation_id) as IntentRow | undefined;
   if (!activation) return null;
@@ -389,8 +390,21 @@ export async function assertDisclosable(request: DisclosableRequest): Promise<Di
     if (effect.switchGeneration !== live.generation || !accountIsPlanned)
       return refuse('STALE_GENERATION', 'the activation is no longer at its prepared global generation');
     if (used.document.kind === 'rule') {
-      if (!used.document.rule.source.accountIds.includes(request.accountId))
-        return refuse('ACCOUNT_NOT_BOUND', 'the account is not bound into this exact rule version');
+      if (!used.document.rule.source.accountIds.includes(request.accountId)) {
+        if (!pending.replacement_of_version)
+          return refuse('ACCOUNT_NOT_BOUND', 'the account is not bound into this exact rule version');
+        const old = request.database
+          .prepare(
+            `SELECT id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, revoked_at
+             FROM rule_versions WHERE id = ?`,
+          )
+          .get(pending.replacement_of_version) as RuleRow | undefined;
+        if (old?.state !== 'active' || old.revoked_at !== null)
+          return refuse('REPLACEMENT_PARENT_INVALID', 'the old replacement rule is no longer eligible to drain');
+        const oldLineage = await resolveLineage(request.database, request.approvals, old);
+        if (!oldLineage.rule.source.accountIds.includes(request.accountId))
+          return refuse('ACCOUNT_NOT_BOUND', 'the account is not bound into the old replacement rule');
+      }
       verifyRuleVersions(request.database, used.document.rule);
     } else if (used.document.kind === 'enable-all') {
       // Each rule enable-all names must still be a live version whose own lineage ends at its own used approval.

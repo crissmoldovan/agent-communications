@@ -33,10 +33,16 @@ import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
 import { recoverActivations } from './recovery.ts';
+import { replacementIntentSummary } from './replacements.ts';
 import { disableRule, removeTarget } from './revocations.ts';
 
 export interface EventOwnerStatus extends EventLifecycleStatus {
   readonly owner: 'running';
+  readonly activationIntents: readonly {
+    readonly status: string;
+    readonly failureCode: string | null;
+    readonly count: number;
+  }[];
 }
 
 export interface EventOwner {
@@ -118,7 +124,11 @@ export async function startEventOwner(
   const owner: StartedOwner = {
     paths,
     instance,
-    status: () => ({ owner: 'running', ...lifecycle.status() }),
+    status: () => ({
+      owner: 'running',
+      ...lifecycle.status(),
+      activationIntents: replacementIntentSummary(database.database),
+    }),
     stopped: stoppedPromise,
     async stop(): Promise<void> {
       if (stopped) return;

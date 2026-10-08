@@ -9,6 +9,7 @@ import {
 } from '@agentcomms/events';
 import { type GmailEventMessageMetadata, type GmailEventSource, normaliseGmailEventMetadata } from '@agentcomms/gmail';
 import type { GmailSourceOptions } from '../domain/source-options.ts';
+import type { GmailReplacementDrains } from '../runtime/replacements.ts';
 import type { EventDatabase } from '../store/database.ts';
 import {
   classifyGmailLabelChange,
@@ -57,6 +58,10 @@ export interface GmailSourceWorkerOptions {
   /** Deterministic test failpoints for the mailbox-lock interleaving contract. */
   readonly onPageStaged?: ((stageId: string) => Promise<void> | void) | undefined;
   readonly beforeCursorCommit?: (() => Promise<void> | void) | undefined;
+  /** The real replacement fence holds post-P content inside its encrypted source stage until the pointer swap. */
+  readonly replacementDrains?:
+    | Pick<GmailReplacementDrains, 'shouldWithhold' | 'isAfterActivePoint' | 'markPageDrained'>
+    | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -83,6 +88,8 @@ interface StoredHistoryPage {
   /** Raw history is durable before metadata classification. A message gets observedAt only after that read succeeds. */
   readonly stagedObservedAt: string;
   readonly messageStates: Readonly<Record<string, StoredMessageState>>;
+  /** Terminal siblings of a held post-P occurrence must not be admitted again when the staged page resumes. */
+  readonly completedOccurrenceKeys?: readonly string[] | undefined;
 }
 
 interface StoredMessageState {
@@ -143,6 +150,7 @@ export class GmailSourceWorker {
   readonly #eventIdFor: NonNullable<GmailSourceWorkerOptions['eventIdFor']>;
   readonly #onPageStaged: GmailSourceWorkerOptions['onPageStaged'];
   readonly #beforeCursorCommit: GmailSourceWorkerOptions['beforeCursorCommit'];
+  readonly #replacementDrains: GmailSourceWorkerOptions['replacementDrains'];
   readonly #now: () => number;
 
   constructor(options: GmailSourceWorkerOptions) {
@@ -158,6 +166,7 @@ export class GmailSourceWorker {
     this.#eventIdFor = options.eventIdFor ?? eventId;
     this.#onPageStaged = options.onPageStaged;
     this.#beforeCursorCommit = options.beforeCursorCommit;
+    this.#replacementDrains = options.replacementDrains;
     this.#now = options.now ?? Date.now;
   }
 
@@ -198,9 +207,13 @@ export class GmailSourceWorker {
       if (!(await this.#resumeStagedPages())) return { cursor, pending: true };
       return this.#rebaselineExpiredCursor();
     }
+    let heldAfterPoint = false;
     for (const page of pages) {
-      if (!(await this.#processPage(page))) return { cursor, pending: true };
+      const outcome = await this.#processPage(page);
+      if (outcome === 'pending') return { cursor, pending: true };
+      if (outcome === 'held') heldAfterPoint = true;
     }
+    if (heldAfterPoint) return { cursor, pending: true };
     await this.#beforeCursorCommit?.();
     this.#store.immediate(() => {
       const remaining = this.#store.database
@@ -239,8 +252,8 @@ export class GmailSourceWorker {
       throw new CommsError('CONFIG', 'the Gmail source worker needs its stage decryptor to resume a durable page');
     await this.#assertAllRules();
     for (const row of rows) {
-      if (!(await this.#processPage({ id: row.id, value: await this.#decryptStage(row.encrypted_record) })))
-        return false;
+      const outcome = await this.#processPage({ id: row.id, value: await this.#decryptStage(row.encrypted_record) });
+      if (outcome !== 'terminal') return false;
     }
     return true;
   }
@@ -277,6 +290,14 @@ export class GmailSourceWorker {
            VALUES (?, 'gmail', ?, 'mailbox', ?, ?, ?, ?)`,
         )
         .run(id, this.#mailbox.accountId, stagedAt, expiresAt, encrypted, stagedAt);
+      for (const rule of this.#rules()) {
+        this.#store.database
+          .prepare(
+            `INSERT OR IGNORE INTO source_stage_rule_debts (stage_id, rule_id, rule_version)
+             VALUES (?, ?, ?)`,
+          )
+          .run(id, rule.ruleId, rule.ruleVersion);
+      }
     });
     await this.#onPageStaged?.(id);
     return { id, value };
@@ -290,20 +311,32 @@ export class GmailSourceWorker {
     return Math.min(...durations);
   }
 
-  async #processPage(stage: StagedPage): Promise<boolean> {
+  async #processPage(stage: StagedPage): Promise<'terminal' | 'pending' | 'held'> {
     if (this.#expired(stage.id)) {
       this.#terminaliseExpired(stage);
-      return true;
+      return 'terminal';
     }
     const occurrences = occurrencesFromHistory(stage.value.page as Parameters<typeof occurrencesFromHistory>[0]);
+    let held = false;
     for (const occurrence of occurrences) {
-      const terminal = await this.#processOccurrence(occurrence, stage);
-      if (!terminal) return false;
+      if (stage.value.completedOccurrenceKeys?.includes(this.#occurrenceKey(occurrence))) continue;
+      const outcome = await this.#processOccurrence(occurrence, stage);
+      if (outcome === 'pending') return 'pending';
+      if (outcome === 'held') {
+        held = true;
+        continue;
+      }
+      await this.#markOccurrenceComplete(stage, occurrence);
     }
+    await this.#replacementDrains?.markPageDrained({
+      accountId: this.#mailbox.accountId,
+      historyId: stage.value.page.historyId,
+    });
+    if (held) return 'held';
     this.#store.immediate(() => {
       this.#store.database.prepare('DELETE FROM source_scan_state WHERE id = ?').run(stage.id);
     });
-    return true;
+    return 'terminal';
   }
 
   #expired(stageId: string): boolean {
@@ -347,20 +380,49 @@ export class GmailSourceWorker {
     });
   }
 
-  async #processOccurrence(occurrence: GmailHistoryOccurrence, stage: StagedPage): Promise<boolean> {
+  async #processOccurrence(
+    occurrence: GmailHistoryOccurrence,
+    stage: StagedPage,
+  ): Promise<'terminal' | 'pending' | 'held'> {
     const candidates = this.#rules().filter((rule) =>
       occurrence.kind === 'labelled'
         ? rule.eventType === 'gmail.message.labelled'
         : rule.eventType === 'gmail.message.received' || rule.eventType === 'gmail.message.sent',
     );
-    if (candidates.length === 0) return true;
+    if (candidates.length === 0) return 'terminal';
+    const eligibleCandidates: GmailSourceRule[] = [];
+    for (const candidate of candidates) {
+      if (
+        await this.#replacementDrains?.shouldWithhold({
+          accountId: this.#mailbox.accountId,
+          ruleId: candidate.ruleId,
+          ruleVersion: candidate.ruleVersion,
+          historyRecordId: occurrence.historyRecordId,
+        })
+      ) {
+        return 'held';
+      }
+      if (
+        this.#replacementDrains !== undefined &&
+        !(await this.#replacementDrains.isAfterActivePoint({
+          accountId: this.#mailbox.accountId,
+          ruleId: candidate.ruleId,
+          ruleVersion: candidate.ruleVersion,
+          historyRecordId: occurrence.historyRecordId,
+        }))
+      ) {
+        continue;
+      }
+      eligibleCandidates.push(candidate);
+    }
+    if (eligibleCandidates.length === 0) return 'terminal';
     // Metadata determines whether this is sent or received. Until it does, every active candidate can be owed the
     // occurrence, so all of their exact lineages must pass before the provider's sender-controlled metadata is read.
-    for (const candidate of candidates) await this.#assertDisclosable(candidate);
-    const event = await this.#eventFor(occurrence, stage, candidates);
-    if (event === undefined) return false;
-    if (event === null) return true;
-    for (const rule of candidates) {
+    for (const candidate of eligibleCandidates) await this.#assertDisclosable(candidate);
+    const event = await this.#eventFor(occurrence, stage, eligibleCandidates);
+    if (event === undefined) return 'pending';
+    if (event === null) return 'terminal';
+    for (const rule of eligibleCandidates) {
       if (rule.eventType !== event.type) continue;
       const selection =
         occurrence.kind === 'message'
@@ -391,9 +453,14 @@ export class GmailSourceWorker {
         stageId: stage.id,
         observedAt: String(validated.observedAt),
       });
-      if (outcome !== 'terminal') return false;
+      if (outcome !== 'terminal') return 'pending';
     }
-    return true;
+    return 'terminal';
+  }
+
+  async #markOccurrenceComplete(stage: StagedPage, occurrence: GmailHistoryOccurrence): Promise<void> {
+    const completedOccurrenceKeys = [...(stage.value.completedOccurrenceKeys ?? []), this.#occurrenceKey(occurrence)];
+    await this.#persistStage(stage, { ...stage.value, completedOccurrenceKeys });
   }
 
   async #assertAllRules(): Promise<void> {

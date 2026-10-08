@@ -81,7 +81,10 @@ async function setup() {
   });
   // The rule is made active the only way a real one is: an approved, claimed, completed exact activation, whose
   // lineage the shared fence then proves. A row merely marked active would be refused at every boundary.
-  const first = await runtime.prepareRule({ ruleId: rule.ruleId, version: rule.version });
+  const first = (await runtime.prepareRule({
+    ruleId: rule.ruleId,
+    version: rule.version,
+  })) as import('../src/runtime/activations.ts').PreparedActivation;
   const answer = await approvals.issueDisclosureChallenge(first.approvalId);
   assert.equal((await runtime.approve({ approvalId: first.approvalId, answer })).status, 'completed');
   profileCalls = 0;

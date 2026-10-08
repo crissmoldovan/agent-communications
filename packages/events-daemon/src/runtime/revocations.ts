@@ -2,6 +2,7 @@ import { CommsError } from '@agentcomms/core';
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { ActivationRuntime } from './activations.ts';
+import { purgeRevokedRuleWork } from './replacements.ts';
 
 /** The revoking pointer mutations: they cancel any claimed completion they bind, then revoke in one transaction. */
 type Revoker = Pick<ActivationRuntime, 'cancelForRevocation'>;
@@ -17,11 +18,17 @@ export async function disableRule(
     if (!active) throw new CommsError('NOT_FOUND', 'the rule has no active version to disable');
     // D2: disabling a rule revokes its standing authorisation, so a superseded version still holding retained work is
     // revoked with the active one; neither may cross another disclosure boundary.
+    const live = (
+      database.database
+        .prepare("SELECT version FROM rule_versions WHERE rule_id = ? AND state IN ('active', 'superseded')")
+        .all(ruleId) as Array<{ version: number }>
+    ).map((row) => row.version);
     database.database
       .prepare(
         "UPDATE rule_versions SET state = 'revoked', revoked_at = ? WHERE rule_id = ? AND state IN ('active', 'superseded')",
       )
       .run(Date.now(), ruleId);
+    purgeRevokedRuleWork(database.database, ruleId, live);
     database.database.prepare("DELETE FROM active_versions WHERE kind = 'rule' AND object_id = ?").run(ruleId);
   });
   return { ruleId, disabled: true };
@@ -56,6 +63,7 @@ export async function removeTarget(
       database.database
         .prepare("UPDATE rule_versions SET state = 'revoked', revoked_at = ? WHERE rule_id = ? AND version = ?")
         .run(revokedAt, rule.rule_id, rule.version);
+      purgeRevokedRuleWork(database.database, rule.rule_id, [rule.version]);
       database.database
         .prepare("DELETE FROM active_versions WHERE kind = 'rule' AND object_id = ? AND version = ?")
         .run(rule.rule_id, rule.version);
