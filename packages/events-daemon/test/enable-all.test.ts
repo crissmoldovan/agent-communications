@@ -77,6 +77,9 @@ async function setup() {
       },
     }),
     encryptBaseline: async (_intent, _account, position) => Buffer.from(JSON.stringify(position)),
+    decryptBaseline: async (_intent, _account, stored) => JSON.parse(Buffer.from(stored).toString('utf8')),
+    encryptPoint: async ({ position }) => Buffer.from(JSON.stringify(position)),
+    decryptPoint: async ({ stored }) => JSON.parse(Buffer.from(stored).toString('utf8')),
     mailboxLock: new MailboxLock(),
   });
   // The rule is made active the only way a real one is: an approved, claimed, completed exact activation, whose

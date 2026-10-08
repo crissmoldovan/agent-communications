@@ -53,7 +53,14 @@ test('APR-B1: a verified Gmail source narrowing atomically inherits points, reco
       "UPDATE rule_versions SET state = 'active', approval_id = 'ap_root', authorization_activation_id = 'act_root', activated_at = 1 WHERE id = 'rule-tightening@1'; INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-tightening', 1, 'act_root', 1); INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at) VALUES ('act_root', 'rule-tightening', 1, 'gmail', 'account-1', 'mailbox', X'00', 1)",
     );
 
-    applyDerivedTightening({ database: store.database, parent: base, child, now: 2 });
+    await applyDerivedTightening({
+      database: store.database,
+      parent: base,
+      child,
+      now: 2,
+      decryptPoint: async () => ({ historyId: '1' }),
+      encryptPoint: async ({ position }) => Buffer.from(JSON.stringify(position)),
+    });
 
     assert.deepEqual(
       store.database
@@ -96,14 +103,16 @@ test('APR-B1: a verified Gmail source narrowing atomically inherits points, reco
   }
 });
 
-test('APR-B1: a disguised loosening cannot create a derived authorisation', () => {
-  assert.throws(
+test('APR-B1: a disguised loosening cannot create a derived authorisation', async () => {
+  await assert.rejects(
     () =>
       applyDerivedTightening({
         database: {} as never,
         parent: base,
         child: { ...base, version: 2, deliveryRateCap: 61 },
         now: 2,
+        decryptPoint: async () => ({ historyId: '1' }),
+        encryptPoint: async () => Buffer.from('point'),
       }),
     /not an allowed tightening/u,
   );

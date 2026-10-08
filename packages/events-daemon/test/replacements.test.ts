@@ -72,7 +72,7 @@ test('APR-B1: a real Gmail worker drains old work through persisted P and releas
       "UPDATE rule_versions SET state = 'active', approval_id = 'ap_root', authorization_activation_id = 'act_old', activated_at = 1 WHERE id = 'rule-replacement@1'",
     );
     store.database.exec(
-      "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-replacement', 1, 'act_old', 1)",
+      "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-replacement', 1, 'act_old', 1); INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at) VALUES ('act_old', 'rule-replacement', 1, 'gmail', 'ibx_ABCDEFGHIJKLMNOP', 'mailbox', X'7B22686973746F72794964223A22313030227D', 1)",
     );
     store.database
       .prepare(
@@ -101,7 +101,7 @@ test('APR-B1: a real Gmail worker drains old work through persisted P and releas
 
     const drains = new GmailReplacementDrains({
       database: store.database,
-      decryptBaseline: async (value) => JSON.parse(Buffer.from(value).toString('utf8')),
+      decryptPosition: async ({ record }) => JSON.parse(Buffer.from(record).toString('utf8')),
       now: () => 10,
     });
     const admitted: string[] = [];
@@ -157,6 +157,31 @@ test('APR-B1: a real Gmail worker drains old work through persisted P and releas
     });
     assert.deepEqual(await worker(() => [sourceRule(2)]).scan(), { cursor: '102', pending: false });
     assert.deepEqual(admitted, ['1:message-101', '2:message-102']);
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('APR-B1: an active version with no cut-over point admits nothing, rather than everything', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('aev-nopoint-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const drains = new GmailReplacementDrains({
+      database: store.database,
+      decryptPosition: async ({ record }) => JSON.parse(Buffer.from(record).toString('utf8')),
+    });
+    assert.equal(
+      await drains.isAfterActivePoint({
+        accountId: 'ibx_ABCDEFGHIJKLMNOP',
+        ruleId: 'rule-none',
+        ruleVersion: 1,
+        historyRecordId: '999',
+      }),
+      false,
+    );
   } finally {
     store.close();
     await rm(stateDir, { recursive: true, force: true });

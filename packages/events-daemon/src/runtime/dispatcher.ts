@@ -3,6 +3,7 @@ import type { CanonicalFullRuleDocument, DryRunTargetDocument } from '../domain/
 import type { EventDatabase } from '../store/database.ts';
 import { type EventRecordCipher, RecordStorageError } from '../store/records.ts';
 import { dryrunDeadline } from '../store/retention.ts';
+import { isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
 import type { DeliveryRecord } from './deliveries.ts';
 import { type ActiveDisclosableRequest, assertDisclosable } from './disclosure-fence.ts';
 import { EventExpiry } from './expiry.ts';
@@ -110,6 +111,10 @@ export class DryRunDispatcher {
       target = dryRunTarget(rule, claimed.row.target_id, claimed.row.target_version);
       await this.#fence(this.#fenceRequest(claimed.row));
     } catch (error) {
+      if (isRemovedAccountError(error)) {
+        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, claimed.row.account_id, this.#now()));
+        return { state: 'terminal', deliveryId };
+      }
       this.#release(claimed.row);
       throw error;
     }
@@ -177,18 +182,24 @@ export class DryRunDispatcher {
     }
     const rule = ruleFor(this.#store, String(row.rule_id), Number(row.rule_version));
     dryRunTarget(rule, String(row.target_id), Number(row.target_version));
-    await this.#fence({
-      database: this.#store.database,
-      approvals: this.#approvals,
-      config: this.#config,
-      accountId: String(row.account_id),
-      boundary: 'read',
-      ruleId: String(row.rule_id),
-      ruleVersion: Number(row.rule_version),
-      targetId: String(row.target_id),
-      targetVersion: Number(row.target_version),
-      switchGeneration: Number(row.switch_generation),
-    });
+    try {
+      await this.#fence({
+        database: this.#store.database,
+        approvals: this.#approvals,
+        config: this.#config,
+        accountId: String(row.account_id),
+        boundary: 'read',
+        ruleId: String(row.rule_id),
+        ruleVersion: Number(row.rule_version),
+        targetId: String(row.target_id),
+        targetVersion: Number(row.target_version),
+        switchGeneration: Number(row.switch_generation),
+      });
+    } catch (error) {
+      if (isRemovedAccountError(error))
+        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, String(row.account_id), this.#now()));
+      throw error;
+    }
     let plaintext: Buffer;
     try {
       plaintext = await this.#cipher.decrypt(dryRunLocation(deliveryId), row.encrypted_record);

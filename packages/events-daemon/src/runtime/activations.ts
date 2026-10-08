@@ -16,7 +16,7 @@ import {
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { MailboxLock } from '../sources/mailbox-lock.ts';
 import type { EventDatabase } from '../store/database.ts';
-import { purgeRemovedAccountWork } from './account-fence.ts';
+import { isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
 import { persistGmailBaseline } from './baseline.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import {
@@ -47,6 +47,10 @@ interface PlannedPoint {
   readonly accountId: string;
   readonly source: 'gmail';
   readonly positionScope: 'mailbox';
+}
+
+interface PreparedPoint extends PlannedPoint {
+  readonly encryptedPosition: Uint8Array;
 }
 
 interface ActivationEffect {
@@ -97,6 +101,18 @@ export interface ActivationRuntimeOptions {
     accountId: string,
     value: { readonly historyId: string },
   ) => Promise<Uint8Array>;
+  /** Baseline and activation-point rows have distinct D8 AAD locations and cannot share ciphertext. */
+  readonly decryptBaseline: (
+    intentId: string,
+    accountId: string,
+    stored: Uint8Array,
+  ) => Promise<{ readonly historyId: string }>;
+  readonly encryptPoint: (
+    input: PlannedPoint & { readonly activationId: string; readonly position: { readonly historyId: string } },
+  ) => Promise<Uint8Array>;
+  readonly decryptPoint: (
+    input: PlannedPoint & { readonly activationId: string; readonly stored: Uint8Array },
+  ) => Promise<{ readonly historyId: string }>;
   readonly mailboxLock: MailboxLock;
   readonly now?: (() => number) | undefined;
   readonly newIntentId?: (() => string) | undefined;
@@ -109,6 +125,9 @@ export class ActivationRuntime {
   readonly #config: ActivationRuntimeOptions['config'];
   readonly #gmailSourceFor: ActivationRuntimeOptions['gmailSourceFor'];
   readonly #encryptBaseline: ActivationRuntimeOptions['encryptBaseline'];
+  readonly #decryptBaseline: ActivationRuntimeOptions['decryptBaseline'];
+  readonly #encryptPoint: ActivationRuntimeOptions['encryptPoint'];
+  readonly #decryptPoint: ActivationRuntimeOptions['decryptPoint'];
   readonly #mailboxLock: MailboxLock;
   readonly #now: () => number;
   readonly #newIntentId: () => string;
@@ -119,6 +138,9 @@ export class ActivationRuntime {
     this.#config = options.config;
     this.#gmailSourceFor = options.gmailSourceFor;
     this.#encryptBaseline = options.encryptBaseline;
+    this.#decryptBaseline = options.decryptBaseline;
+    this.#encryptPoint = options.encryptPoint;
+    this.#decryptPoint = options.decryptPoint;
     this.#mailboxLock = options.mailboxLock;
     this.#now = options.now ?? Date.now;
     this.#newIntentId = options.newIntentId ?? (() => `act_${randomBytes(16).toString('hex')}`);
@@ -135,11 +157,31 @@ export class ActivationRuntime {
       if (!parentRow) throw new CommsError('BAD_DATA', 'the active rule version is missing its immutable document');
       const parent = canonicalFullRuleDocument(JSON.parse(parentRow.document));
       if (tighteningKind(parent, document.rule) !== null) {
-        const derived = applyDerivedTightening({
+        const derived = await applyDerivedTightening({
           database: this.#store.database,
           parent,
           child: document.rule,
           now: this.#now(),
+          decryptPoint: ({ activationId, ruleId, ruleVersion, accountId, positionScope, encryptedPosition }) =>
+            this.#decryptPoint({
+              activationId,
+              ruleId,
+              ruleVersion,
+              accountId,
+              positionScope,
+              source: 'gmail',
+              stored: encryptedPosition,
+            }),
+          encryptPoint: ({ activationId, ruleId, ruleVersion, accountId, positionScope, position }) =>
+            this.#encryptPoint({
+              activationId,
+              ruleId,
+              ruleVersion,
+              accountId,
+              positionScope,
+              source: 'gmail',
+              position,
+            }),
         });
         return {
           intentId: derived.versionId,
@@ -312,6 +354,35 @@ export class ActivationRuntime {
     }
   }
 
+  /**
+   * A live owner retries only work that core has already marked used. Unlike startup recovery this never claims an
+   * approved disclosure and it always carries the immutable usedAt back through the ordinary completion path.
+   */
+  async resumeClaimedCompletions(): Promise<void> {
+    const rows = this.#store.database
+      .prepare(
+        "SELECT id, kind, document, digest, effect, replacement_of_version, status, approval_id, claimed_at, completion_deadline FROM activation_intents WHERE status = 'pending-completion' ORDER BY id",
+      )
+      .all() as unknown as IntentRow[];
+    for (const intent of rows) {
+      if (!intent.approval_id) {
+        this.#cancel(intent.id, 'APPROVAL_ABSENT');
+        continue;
+      }
+      const record = await this.#approvals.get(intent.approval_id);
+      if (record?.form !== 'v2' || record.record.kind !== 'disclosure' || record.record.state !== 'used') {
+        this.#cancel(intent.id, 'APPROVAL_ABSENT');
+        continue;
+      }
+      const binding = this.#liveBinding(intent);
+      if (record.record.usedAt === undefined || canonicalJson(record.record.disclosure) !== canonicalJson(binding)) {
+        this.#cancel(intent.id, 'APPROVAL_BINDING_DRIFT');
+        continue;
+      }
+      await this.#claimAndComplete(intent, record.record.usedAt);
+    }
+  }
+
   async #prepare(
     document: ActivationDocumentV1,
     points: readonly PlannedPoint[],
@@ -399,7 +470,7 @@ export class ActivationRuntime {
           boundary: 'recovery',
         });
       } catch (error) {
-        if (error instanceof CommsError && error.code === 'NOT_FOUND') {
+        if (isRemovedAccountError(error)) {
           this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, accountId, this.#now()));
           this.#cancel(current.id, 'ACCOUNT_REMOVED');
         }
@@ -440,11 +511,34 @@ export class ActivationRuntime {
         },
       );
     }
-    this.#finalise(current, document, points, usedAt);
+    const preparedPoints = await Promise.all(
+      points
+        .filter((point) => document.kind !== 'rule' || point.ruleVersion === document.rule.version)
+        .map(async (point): Promise<PreparedPoint> => {
+          const baseline = this.#store.database
+            .prepare(
+              'SELECT encrypted_position FROM activation_baselines WHERE intent_id = ? AND source = ? AND account_id = ? AND position_scope = ?',
+            )
+            .get(current.id, point.source, point.accountId, point.positionScope) as
+            | { encrypted_position: Uint8Array }
+            | undefined;
+          if (!baseline) throw new CommsError('TRANSIENT', 'the activation is waiting for a Gmail baseline');
+          const position = await this.#decryptBaseline(current.id, point.accountId, baseline.encrypted_position);
+          // EventRecordCipher reserves its nonce in its own BEGIN IMMEDIATE transaction. Prepare each destination
+          // record before the synchronous pointer transaction below; ciphertext remains bound to this exact point row.
+          const encryptedPosition = await this.#encryptPoint({
+            ...point,
+            activationId: current.id,
+            position,
+          });
+          return { ...point, encryptedPosition };
+        }),
+    );
+    this.#finalise(current, document, preparedPoints, usedAt);
     return { intentId: current.id, status: 'completed', usedAt };
   }
 
-  #finalise(intent: IntentRow, document: ActivationDocumentV1, points: readonly PlannedPoint[], usedAt: string): void {
+  #finalise(intent: IntentRow, document: ActivationDocumentV1, points: readonly PreparedPoint[], usedAt: string): void {
     this.#store.immediate(() => {
       const latest = this.#intent(intent.id);
       if (latest.status !== 'pending-completion')
@@ -472,15 +566,6 @@ export class ActivationRuntime {
       }
       if (latest.replacement_of_version !== null) assertReplacementDrained(this.#store.database, latest.id);
       for (const point of points) {
-        if (document.kind === 'rule' && point.ruleVersion !== document.rule.version) continue;
-        const baseline = this.#store.database
-          .prepare(
-            'SELECT encrypted_position FROM activation_baselines WHERE intent_id = ? AND source = ? AND account_id = ? AND position_scope = ?',
-          )
-          .get(intent.id, point.source, point.accountId, point.positionScope) as
-          | { encrypted_position: Uint8Array }
-          | undefined;
-        if (!baseline) throw new CommsError('TRANSIENT', 'the activation is waiting for a Gmail baseline');
         this.#store.database
           .prepare(
             `INSERT INTO rule_activation_points
@@ -494,7 +579,7 @@ export class ActivationRuntime {
             point.source,
             point.accountId,
             point.positionScope,
-            baseline.encrypted_position,
+            point.encryptedPosition,
             this.#now(),
           );
       }

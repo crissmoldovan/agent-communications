@@ -182,6 +182,85 @@ test('GML-B1: one mailbox cursor follows every history page and commits only aft
   }
 });
 
+test('P1-B1: a source account-removal refusal purges its staged page and mailbox cursor', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-gmail-removed-'));
+  try {
+    const store = await openEventDatabase({ stateDir });
+    try {
+      store.database
+        .prepare(
+          "INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('gmail', 'ibx_ABCDEFGHIJKLMNOP', 'mailbox', '100', 0)",
+        )
+        .run();
+      const worker = new GmailSourceWorker({
+        store,
+        source: {
+          async listHistory() {
+            return {
+              historyId: '101',
+              nextPageToken: undefined,
+              history: [
+                {
+                  id: '101',
+                  messagesAdded: [{ message: { id: 'message', threadId: 'thread' } }],
+                  labelsAdded: [],
+                  labelsRemoved: [],
+                },
+              ],
+            };
+          },
+          async getMessageMetadata() {
+            throw new Error('the source fence must refuse before a metadata read');
+          },
+        },
+        mailbox: { accountId: 'ibx_ABCDEFGHIJKLMNOP', name: 'Events inbox' },
+        mailboxLock: new MailboxLock(),
+        rules: () => [
+          {
+            ruleId: 'rule-removed',
+            ruleVersion: 1,
+            eventType: 'gmail.message.received' as const,
+            options: { channel: 'gmail' as const, labels: 'inbox' as const, includeSpamTrash: false },
+            ingestRetentionMs: 60_000,
+          },
+        ],
+        assertDisclosable: async () => {
+          throw new CommsError('NOT_FOUND', 'the account was removed', {
+            details: { reason: 'ACCOUNT_REMOVED', accountId: 'ibx_ABCDEFGHIJKLMNOP' },
+          });
+        },
+        admit: async () => 'terminal' as const,
+        encryptStage: async (value) => Buffer.from(JSON.stringify(value)),
+        decryptStage: async (stored) => JSON.parse(Buffer.from(stored).toString('utf8')),
+        now: () => 1_760_000_000_000,
+      });
+
+      await assert.rejects(
+        worker.scan(),
+        (error: unknown) => error instanceof CommsError && error.details?.reason === 'ACCOUNT_REMOVED',
+      );
+      assert.equal(
+        (store.database.prepare('SELECT COUNT(*) AS count FROM source_scan_state').get() as { count: number }).count,
+        0,
+      );
+      assert.equal(
+        (
+          store.database.prepare("SELECT COUNT(*) AS count FROM cursors WHERE source = 'gmail'").get() as {
+            count: number;
+          }
+        ).count,
+        0,
+      );
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('GML-B1: a Gmail label change has its own observed-time event without a classification or body read', {
   skip: WINDOWS_SKIP,
 }, async () => {
@@ -632,6 +711,269 @@ test('SEC-B1: the Gmail source fence refuses before metadata read, admission, or
           .cursor,
         '100',
       );
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('P1-B1: a body projection materialises once while a metadata projection over the same occurrence remains independent', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-gmail-lazy-union-'));
+  try {
+    const store = await openEventDatabase({ stateDir });
+    try {
+      store.database
+        .prepare(
+          "INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('gmail', 'ibx_ABCDEFGHIJKLMNOP', 'mailbox', '100', 0)",
+        )
+        .run();
+      const admitted: string[] = [];
+      let materialisations = 0;
+      const worker = new GmailSourceWorker({
+        store,
+        source: {
+          async listHistory() {
+            return {
+              historyId: '101',
+              nextPageToken: undefined,
+              history: [
+                {
+                  id: '101',
+                  messagesAdded: [{ message: { id: 'message', threadId: 'thread' } }],
+                  labelsAdded: [],
+                  labelsRemoved: [],
+                },
+              ],
+            };
+          },
+          async getMessageMetadata() {
+            return {
+              id: 'message',
+              threadId: 'thread',
+              labelIds: ['INBOX'],
+              internalDate: '1760000000000',
+              payload: { headers: [{ name: 'Subject', value: 'subject' }] },
+            };
+          },
+        },
+        mailbox: { accountId: 'ibx_ABCDEFGHIJKLMNOP', name: 'Events inbox' },
+        mailboxLock: new MailboxLock(),
+        rules: () => [
+          {
+            ruleId: 'metadata',
+            ruleVersion: 1,
+            eventType: 'gmail.message.received' as const,
+            options: { channel: 'gmail' as const, labels: 'inbox' as const, includeSpamTrash: false },
+            ingestRetentionMs: 60_000,
+          },
+          {
+            ruleId: 'body',
+            ruleVersion: 1,
+            eventType: 'gmail.message.received' as const,
+            options: { channel: 'gmail' as const, labels: 'inbox' as const, includeSpamTrash: false },
+            ingestRetentionMs: 60_000,
+            lazyFields: ['body'],
+          },
+        ],
+        assertDisclosable: async () => undefined,
+        admit: async (occurrence) => {
+          admitted.push(`${occurrence.rule.ruleId}:${String(occurrence.event.body ?? '')}`);
+          return 'terminal';
+        },
+        encryptStage: async (value) => Buffer.from(JSON.stringify(value)),
+        decryptStage: async (stored) => JSON.parse(Buffer.from(stored).toString('utf8')),
+        materialise: async (requests) => {
+          materialisations += 1;
+          assert.equal(requests.length, 1);
+          assert.match(requests[0]?.materializationKey ?? '', /^[0-9a-f]{64}$/u);
+          return [
+            {
+              state: 'ready' as const,
+              message: {
+                messageId: 'message',
+                threadId: 'thread',
+                labels: ['INBOX'],
+                snippet: '',
+                date: '2025-10-09T08:53:20.000Z',
+                unread: false,
+                from: null,
+                replyTo: [],
+                to: [],
+                cc: [],
+                subject: 'subject',
+                authentication: { dkim: [], spf: null, dmarc: null },
+                warnings: { replyToMismatch: false, replyToDomains: [] },
+                hasAttachments: false,
+                attachments: [],
+                body: 'sanitised body',
+              } as never,
+            },
+          ];
+        },
+      });
+      assert.deepEqual(await worker.scan(), { cursor: '101', pending: false });
+      assert.equal(materialisations, 1);
+      assert.deepEqual(admitted, ['metadata:', 'body:sanitised body']);
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('P1-B1: a pending lazy body keeps the cursor while an independent metadata projection is admitted', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-gmail-lazy-pending-'));
+  try {
+    const store = await openEventDatabase({ stateDir });
+    try {
+      store.database
+        .prepare(
+          "INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('gmail', 'ibx_ABCDEFGHIJKLMNOP', 'mailbox', '100', 0)",
+        )
+        .run();
+      const admitted: string[] = [];
+      const worker = new GmailSourceWorker({
+        store,
+        source: {
+          async listHistory() {
+            return {
+              historyId: '101',
+              nextPageToken: undefined,
+              history: [
+                {
+                  id: '101',
+                  messagesAdded: [{ message: { id: 'message', threadId: 'thread' } }],
+                  labelsAdded: [],
+                  labelsRemoved: [],
+                },
+              ],
+            };
+          },
+          async getMessageMetadata() {
+            return {
+              id: 'message',
+              threadId: 'thread',
+              labelIds: ['INBOX'],
+              internalDate: '1760000000000',
+              payload: { headers: [] },
+            };
+          },
+        },
+        mailbox: { accountId: 'ibx_ABCDEFGHIJKLMNOP', name: 'Events inbox' },
+        mailboxLock: new MailboxLock(),
+        rules: () => [
+          {
+            ruleId: 'metadata',
+            ruleVersion: 1,
+            eventType: 'gmail.message.received' as const,
+            options: { channel: 'gmail' as const, labels: 'inbox' as const, includeSpamTrash: false },
+            ingestRetentionMs: 60_000,
+          },
+          {
+            ruleId: 'body',
+            ruleVersion: 1,
+            eventType: 'gmail.message.received' as const,
+            options: { channel: 'gmail' as const, labels: 'inbox' as const, includeSpamTrash: false },
+            ingestRetentionMs: 60_000,
+            lazyFields: ['body'],
+          },
+        ],
+        assertDisclosable: async () => undefined,
+        admit: async (occurrence) => {
+          admitted.push(occurrence.rule.ruleId);
+          return 'terminal';
+        },
+        encryptStage: async (value) => Buffer.from(JSON.stringify(value)),
+        decryptStage: async (stored) => JSON.parse(Buffer.from(stored).toString('utf8')),
+        materialise: async () => [{ state: 'pending' as const, retryAt: 1_760_000_001_000 }],
+      });
+      assert.deepEqual(await worker.scan(), { cursor: '100', pending: true });
+      assert.deepEqual(admitted, ['metadata']);
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('P1-B1: a vanished lazy body terminalises only its projection while metadata still advances', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-gmail-lazy-vanished-'));
+  try {
+    const store = await openEventDatabase({ stateDir });
+    try {
+      store.database
+        .prepare(
+          "INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('gmail', 'ibx_ABCDEFGHIJKLMNOP', 'mailbox', '100', 0)",
+        )
+        .run();
+      const admitted: string[] = [];
+      const worker = new GmailSourceWorker({
+        store,
+        source: {
+          async listHistory() {
+            return {
+              historyId: '101',
+              nextPageToken: undefined,
+              history: [
+                {
+                  id: '101',
+                  messagesAdded: [{ message: { id: 'message', threadId: 'thread' } }],
+                  labelsAdded: [],
+                  labelsRemoved: [],
+                },
+              ],
+            };
+          },
+          async getMessageMetadata() {
+            return {
+              id: 'message',
+              threadId: 'thread',
+              labelIds: ['INBOX'],
+              internalDate: '1760000000000',
+              payload: { headers: [] },
+            };
+          },
+        },
+        mailbox: { accountId: 'ibx_ABCDEFGHIJKLMNOP', name: 'Events inbox' },
+        mailboxLock: new MailboxLock(),
+        rules: () => [
+          {
+            ruleId: 'metadata',
+            ruleVersion: 1,
+            eventType: 'gmail.message.received' as const,
+            options: { channel: 'gmail' as const, labels: 'inbox' as const, includeSpamTrash: false },
+            ingestRetentionMs: 60_000,
+          },
+          {
+            ruleId: 'body',
+            ruleVersion: 1,
+            eventType: 'gmail.message.received' as const,
+            options: { channel: 'gmail' as const, labels: 'inbox' as const, includeSpamTrash: false },
+            ingestRetentionMs: 60_000,
+            lazyFields: ['body'],
+          },
+        ],
+        assertDisclosable: async () => undefined,
+        admit: async (occurrence) => {
+          admitted.push(occurrence.rule.ruleId);
+          return 'terminal';
+        },
+        encryptStage: async (value) => Buffer.from(JSON.stringify(value)),
+        decryptStage: async (stored) => JSON.parse(Buffer.from(stored).toString('utf8')),
+        materialise: async () => [{ state: 'vanished' as const }],
+      });
+      assert.deepEqual(await worker.scan(), { cursor: '101', pending: false });
+      assert.deepEqual(admitted, ['metadata']);
     } finally {
       store.close();
     }

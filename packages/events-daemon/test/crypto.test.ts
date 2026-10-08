@@ -207,6 +207,57 @@ test('CRY-B1: durable nonce counters and BLOB-only records prevent plaintext and
   }
 });
 
+test('P1-B1: real record cipher encrypts an activation point for its own row and rejects copied baseline bytes', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-point-aad-'));
+  try {
+    const opened = await openEventDatabase({ stateDir });
+    try {
+      await selectEventSecretStore(opened.database, 'file');
+      const cipher = new EventRecordCipher(
+        opened.database,
+        await openEventSecretStore({
+          database: opened.database,
+          paths: opened.paths,
+          configDir: '/srv/config',
+          stores: { file: new MemorySecretStore() },
+        }),
+      );
+      const baseline = {
+        table: 'activation_baselines',
+        column: 'encryptedPosition',
+        key: [
+          { type: 'text' as const, value: 'activation-1' },
+          { type: 'text' as const, value: 'gmail' },
+          { type: 'text' as const, value: 'account-1' },
+          { type: 'text' as const, value: 'mailbox' },
+        ],
+      };
+      const point = {
+        table: 'rule_activation_points',
+        column: 'encryptedPosition',
+        key: [
+          { type: 'text' as const, value: 'activation-1' },
+          { type: 'text' as const, value: 'rule-1' },
+          { type: 'integer' as const, value: 1 },
+          { type: 'text' as const, value: 'account-1' },
+          { type: 'text' as const, value: 'mailbox' },
+        ],
+      };
+      const plaintext = Buffer.from('{"historyId":"42"}');
+      const encryptedBaseline = await cipher.encrypt(baseline, plaintext);
+      const encryptedPoint = await cipher.encrypt(point, await cipher.decrypt(baseline, encryptedBaseline));
+      assert.deepEqual(await cipher.decrypt(point, encryptedPoint), plaintext);
+      await assert.rejects(cipher.decrypt(point, encryptedBaseline), RecordStorageError);
+    } finally {
+      opened.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('CRY-B1: rotation never writes an older record back over a row a worker replaced while it was re-encrypting', {
   skip: WINDOWS_SKIP,
 }, async () => {
