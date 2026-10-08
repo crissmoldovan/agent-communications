@@ -1,0 +1,86 @@
+[
+  {
+    "name": "rule",
+    "intentId": "intent-rule-1",
+    "document": {
+      "documentVersion": 1,
+      "kind": "rule",
+      "rule": {
+        "ruleId": "rule-1",
+        "version": 2,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["account-1", "account-2"],
+          "options": { "channel": "gmail", "labels": ["label-a", "label-z"], "includeSpamTrash": false }
+        },
+        "event": { "type": "gmail.message.received", "version": 1 },
+        "condition": { "path": "/subject", "op": "exists" },
+        "mapping": { "constant": "safe" },
+        "targets": [{ "targetId": "target-1", "version": 3, "kind": "dry-run", "retentionMs": 86400000 }],
+        "subscribers": [],
+        "judges": [{ "judgeId": "judge-1", "version": 2, "kind": "typesafe", "provider": "local", "model": "fixture" }],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      }
+    },
+    "canonical": "{\"documentVersion\":1,\"kind\":\"rule\",\"rule\":{\"condition\":{\"op\":\"exists\",\"path\":\"/subject\"},\"deliveryRateCap\":60,\"event\":{\"type\":\"gmail.message.received\",\"version\":1},\"judges\":[{\"judgeId\":\"judge-1\",\"kind\":\"typesafe\",\"model\":\"fixture\",\"provider\":\"local\",\"version\":2}],\"mapping\":{\"constant\":\"safe\"},\"retention\":{\"deadLetterMs\":604800000,\"decisionMetadataMs\":7776000000,\"deliveryMs\":604800000,\"dryrunMs\":86400000,\"holdMs\":604800000,\"ingestMs\":604800000,\"sseReplayMs\":604800000},\"ruleId\":\"rule-1\",\"source\":{\"accountIds\":[\"account-1\",\"account-2\"],\"channel\":\"gmail\",\"options\":{\"channel\":\"gmail\",\"includeSpamTrash\":false,\"labels\":[\"label-a\",\"label-z\"]}},\"subscribers\":[],\"targets\":[{\"kind\":\"dry-run\",\"retentionMs\":86400000,\"targetId\":\"target-1\",\"version\":3}],\"version\":2}}",
+    "digest": "39bcf243c2d2ed10f008d9a78038cb3b48f608d1163d708d5a05a35a6ee0898e",
+    "versions": [
+      { "kind": "judge", "id": "judge-1", "version": 2 },
+      { "kind": "rule", "id": "rule-1", "version": 2 },
+      { "kind": "target", "id": "target-1", "version": 3 }
+    ]
+  },
+  {
+    "name": "judge-budget",
+    "intentId": "intent-budget-1",
+    "document": {
+      "documentVersion": 1,
+      "kind": "judge-budget",
+      "budget": {
+        "budgetId": "default",
+        "version": 1,
+        "global": { "callsPerRollingHour": 20, "inputTokensPerRolling30Days": 100000, "concurrency": 2 },
+        "providers": [
+          { "provider": "local", "callsPerRollingHour": 10, "inputTokensPerRolling30Days": 50000, "concurrency": 1 }
+        ]
+      }
+    },
+    "canonical": "{\"budget\":{\"budgetId\":\"default\",\"global\":{\"callsPerRollingHour\":20,\"concurrency\":2,\"inputTokensPerRolling30Days\":100000},\"providers\":[{\"callsPerRollingHour\":10,\"concurrency\":1,\"inputTokensPerRolling30Days\":50000,\"provider\":\"local\"}],\"version\":1},\"documentVersion\":1,\"kind\":\"judge-budget\"}",
+    "digest": "eb43875c6773e2c21efa7bec3d6080cf95e0830f1600792476ae47a9bcd85c6b",
+    "versions": [{ "kind": "judge-budget", "id": "default", "version": 1 }]
+  },
+  {
+    "name": "judge-kind",
+    "intentId": "intent-kind-1",
+    "document": {
+      "documentVersion": 1,
+      "kind": "judge-kind",
+      "enablement": { "kind": "typesafe", "version": 1, "endpoint": "http://127.0.0.1:11434" }
+    },
+    "canonical": "{\"documentVersion\":1,\"enablement\":{\"endpoint\":\"http://127.0.0.1:11434\",\"kind\":\"typesafe\",\"version\":1},\"kind\":\"judge-kind\"}",
+    "digest": "ac47b745d8532e50ea68b7d7fb168660a7fe859c8144e2960d0e205f5ffdd90a",
+    "versions": [{ "kind": "judge-kind", "id": "typesafe", "version": 1 }]
+  },
+  {
+    "name": "enable-all",
+    "intentId": "intent-enable-1",
+    "document": {
+      "documentVersion": 1,
+      "kind": "enable-all",
+      "switchGeneration": 7,
+      "ruleVersions": [{ "ruleId": "rule-a", "ruleVersion": 3 }, { "ruleId": "rule-b", "ruleVersion": 1 }]
+    },
+    "canonical": "{\"documentVersion\":1,\"kind\":\"enable-all\",\"ruleVersions\":[{\"ruleId\":\"rule-a\",\"ruleVersion\":3},{\"ruleId\":\"rule-b\",\"ruleVersion\":1}],\"switchGeneration\":7}",
+    "digest": "e474d67f94c2da96a856d1858aa9010df028471e82d5a4182835950d7ce9e113",
+    "versions": [{ "kind": "rule", "id": "rule-a", "version": 3 }, { "kind": "rule", "id": "rule-b", "version": 1 }]
+  }
+]
