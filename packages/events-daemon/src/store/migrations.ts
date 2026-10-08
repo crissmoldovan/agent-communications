@@ -39,6 +39,15 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '3' WHERE key = 'schema_version'",
     ],
   },
+  {
+    version: 4,
+    name: 'event-activation-approval-link-v1',
+    statements: [
+      'ALTER TABLE activation_intents ADD COLUMN approval_id TEXT',
+      'CREATE UNIQUE INDEX activation_intents_approval_id ON activation_intents(approval_id) WHERE approval_id IS NOT NULL',
+      "UPDATE meta SET value = '4' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

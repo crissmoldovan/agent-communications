@@ -43,6 +43,14 @@ Scripts should read these rather than parse output.
 | [`disable-all`](#agent-events-disable-all) | disable collection, advance the global generation and purge B1 work |
 | [`enable-all`](#agent-events-enable-all) | report the standing approval required before collection can be enabled |
 | [`doctor`](#agent-events-doctor) | report content-free owner, protocol and global switch health |
+| [`catalogue`](#agent-events-catalogue) | inspect the held local event catalogue |
+| [`sources`](#agent-events-sources) | inspect configured event sources |
+| [`source`](#agent-events-source) | inspect one configured event source |
+| [`rules`](#agent-events-rules) | inspect immutable local event rule versions |
+| [`rule`](#agent-events-rule) | create, inspect and control immutable event rules |
+| [`targets`](#agent-events-targets) | inspect immutable local event target versions |
+| [`target`](#agent-events-target) | create, inspect and revoke immutable dry-run targets |
+| [`approve`](#agent-events-approve) | approve a standing disclosure by typing its challenge at this terminal |
 | [`mcp`](#agent-events-mcp) | serve the MCP interface over standard input and output |
 
 ### `agent-events status`
@@ -107,6 +115,160 @@ report content-free owner, protocol and global switch health
 
 ```
 agent-events doctor [options]
+```
+
+### `agent-events catalogue`
+
+inspect the held local event catalogue
+
+```
+agent-events catalogue [options] [command]
+```
+
+### `agent-events catalogue list`
+
+```
+agent-events catalogue list [options]
+```
+
+### `agent-events catalogue show`
+
+```
+agent-events catalogue show [options] <type>
+```
+
+### `agent-events sources`
+
+inspect configured event sources
+
+```
+agent-events sources [options] [command]
+```
+
+### `agent-events sources list`
+
+```
+agent-events sources list [options]
+```
+
+### `agent-events source`
+
+inspect one configured event source
+
+```
+agent-events source [options] [command]
+```
+
+### `agent-events source show`
+
+```
+agent-events source show [options] <source>
+```
+
+### `agent-events rules`
+
+inspect immutable local event rule versions
+
+```
+agent-events rules [options] [command]
+```
+
+### `agent-events rules list`
+
+```
+agent-events rules list [options]
+```
+
+### `agent-events rule`
+
+create, inspect and control immutable event rules
+
+```
+agent-events rule [options] [command]
+```
+
+### `agent-events rule show`
+
+```
+agent-events rule show [options] <rule-id>
+```
+
+### `agent-events rule create`
+
+```
+agent-events rule create [options] <document>
+```
+
+### `agent-events rule update`
+
+```
+agent-events rule update [options] <document>
+```
+
+### `agent-events rule enable`
+
+```
+agent-events rule enable [options] <rule-id> <version>
+```
+
+### `agent-events rule disable`
+
+```
+agent-events rule disable [options] <rule-id>
+```
+
+### `agent-events rule remove`
+
+```
+agent-events rule remove [options] <rule-id>
+```
+
+### `agent-events targets`
+
+inspect immutable local event target versions
+
+```
+agent-events targets [options] [command]
+```
+
+### `agent-events targets list`
+
+```
+agent-events targets list [options]
+```
+
+### `agent-events target`
+
+create, inspect and revoke immutable dry-run targets
+
+```
+agent-events target [options] [command]
+```
+
+### `agent-events target add`
+
+```
+agent-events target add [options] <document>
+```
+
+### `agent-events target update`
+
+```
+agent-events target update [options] <document>
+```
+
+### `agent-events target remove`
+
+```
+agent-events target remove [options] <target-id>
+```
+
+### `agent-events approve`
+
+approve a standing disclosure by typing its challenge at this terminal
+
+```
+agent-events approve [options] <approval-id>
 ```
 
 ### `agent-events mcp`

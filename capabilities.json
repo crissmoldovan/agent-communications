@@ -1572,6 +1572,156 @@
       "operation": "doctor"
     },
     {
+      "id": "events-daemon.catalogue.list",
+      "package": "events-daemon",
+      "cli": "catalogue list",
+      "mcp": "events_catalogue_list",
+      "status": "both",
+      "operation": "catalogueList"
+    },
+    {
+      "id": "events-daemon.catalogue.show",
+      "package": "events-daemon",
+      "cli": "catalogue show",
+      "mcp": "events_catalogue_show",
+      "status": "both",
+      "operation": "catalogueShow",
+      "argv": ["gmail.message.received"],
+      "args": { "type": "gmail.message.received" }
+    },
+    {
+      "id": "events-daemon.sources.list",
+      "package": "events-daemon",
+      "cli": "sources list",
+      "mcp": "events_sources_list",
+      "status": "both",
+      "operation": "sourcesList"
+    },
+    {
+      "id": "events-daemon.source.show",
+      "package": "events-daemon",
+      "cli": "source show",
+      "mcp": "events_source_show",
+      "status": "both",
+      "operation": "sourceShow",
+      "argv": ["gmail"],
+      "args": { "source": "gmail" }
+    },
+    {
+      "id": "events-daemon.rules.list",
+      "package": "events-daemon",
+      "cli": "rules list",
+      "mcp": "events_rules_list",
+      "status": "both",
+      "operation": "rulesList"
+    },
+    {
+      "id": "events-daemon.rule.show",
+      "package": "events-daemon",
+      "cli": "rule show",
+      "mcp": "events_rule_show",
+      "status": "both",
+      "operation": "ruleShow",
+      "argv": ["rule-1"],
+      "args": { "ruleId": "rule-1" }
+    },
+    {
+      "id": "events-daemon.rule.create",
+      "package": "events-daemon",
+      "cli": "rule create",
+      "mcp": "events_rule_create",
+      "status": "both",
+      "operation": "createRule",
+      "argv": ["{}"],
+      "args": { "document": {} }
+    },
+    {
+      "id": "events-daemon.rule.update",
+      "package": "events-daemon",
+      "cli": "rule update",
+      "mcp": "events_rule_update",
+      "status": "both",
+      "operation": "updateRule",
+      "argv": ["{}"],
+      "args": { "document": {} }
+    },
+    {
+      "id": "events-daemon.rule.enable",
+      "package": "events-daemon",
+      "cli": "rule enable",
+      "mcp": "events_rule_enable",
+      "status": "both",
+      "operation": "enableRule",
+      "argv": ["rule-1", "1"],
+      "args": { "ruleId": "rule-1", "version": 1 }
+    },
+    {
+      "id": "events-daemon.rule.disable",
+      "package": "events-daemon",
+      "cli": "rule disable",
+      "mcp": "events_rule_disable",
+      "status": "both",
+      "operation": "disableRule",
+      "argv": ["rule-1"],
+      "args": { "ruleId": "rule-1" }
+    },
+    {
+      "id": "events-daemon.rule.remove",
+      "package": "events-daemon",
+      "cli": "rule remove",
+      "mcp": "events_rule_remove",
+      "status": "both",
+      "operation": "removeRule",
+      "argv": ["rule-1"],
+      "args": { "ruleId": "rule-1" }
+    },
+    {
+      "id": "events-daemon.targets.list",
+      "package": "events-daemon",
+      "cli": "targets list",
+      "mcp": "events_targets_list",
+      "status": "both",
+      "operation": "targetsList"
+    },
+    {
+      "id": "events-daemon.target.add",
+      "package": "events-daemon",
+      "cli": "target add",
+      "mcp": "events_target_add",
+      "status": "both",
+      "operation": "addTarget",
+      "argv": ["{}"],
+      "args": { "document": {} }
+    },
+    {
+      "id": "events-daemon.target.update",
+      "package": "events-daemon",
+      "cli": "target update",
+      "mcp": "events_target_update",
+      "status": "both",
+      "operation": "updateTarget",
+      "argv": ["{}"],
+      "args": { "document": {} }
+    },
+    {
+      "id": "events-daemon.target.remove",
+      "package": "events-daemon",
+      "cli": "target remove",
+      "mcp": "events_target_remove",
+      "status": "both",
+      "operation": "removeTarget",
+      "argv": ["target-1"],
+      "args": { "targetId": "target-1" }
+    },
+    {
+      "id": "events-daemon.approve",
+      "package": "events-daemon",
+      "cli": "approve",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Standing disclosure can be approved only by a person typing the challenge at an interactive terminal."
+    },
+    {
       "id": "events-daemon.mcp.serve",
       "package": "events-daemon",
       "cli": "mcp",

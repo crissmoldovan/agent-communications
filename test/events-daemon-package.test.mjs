@@ -68,3 +68,28 @@ test('PKG-B1-b: nothing but the lazy loader imports Node SQLite at runtime, so a
   walk(join(PACKAGE_DIR, 'src'));
   assert.deepEqual(offenders, []);
 });
+
+test('PKG-B1-b: no bundle carries a native binary, and the service keeps its workspace dependencies installed, not inlined', () => {
+  // A `.node` file inlined into a bundle is one platform's binary shipped to every platform: the daemon briefly
+  // carried the macOS arm64 keychain binary this way when it bundled core and Gmail whole.
+  const natives = [];
+  for (const name of readdirSync(join(ROOT, 'packages'))) {
+    const dist = join(ROOT, 'packages', name, 'dist');
+    if (!existsSync(dist)) continue;
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else if (entry.name.endsWith('.node')) natives.push(path);
+      }
+    };
+    walk(dist);
+  }
+  assert.deepEqual(natives, []);
+  const config = readFileSync(join(PACKAGE_DIR, 'tsdown.config.ts'), 'utf8');
+  const manifest = JSON.parse(readFileSync(join(PACKAGE_DIR, 'package.json'), 'utf8'));
+  const external = /external: \[([^\]]*)\]/.exec(config)?.[1] ?? '';
+  for (const dependency of [...Object.keys(manifest.dependencies), '@napi-rs/keyring']) {
+    assert.match(external, new RegExp(`'${dependency.replace('/', '\\/')}'`), `${dependency} stays external`);
+  }
+});

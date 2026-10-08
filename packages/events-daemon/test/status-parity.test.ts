@@ -32,18 +32,10 @@ test('PAR-B1: the status command and tool return the one content-free daemon sta
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
   try {
     const tools = await client.listTools();
-    assert.deepEqual(
-      tools.tools.map((tool) => tool.name),
-      [
-        'events_status',
-        'events_stop',
-        'events_pause',
-        'events_resume',
-        'events_disable_all',
-        'events_enable_all',
-        'events_doctor',
-      ],
-    );
+    const names = tools.tools.map((tool) => tool.name);
+    assert.ok(names.includes('events_status'));
+    assert.ok(names.includes('events_catalogue_list'));
+    assert.ok(!names.includes('events_approve'));
     const result = (await client.callTool({ name: 'events_status', arguments: {} })) as {
       isError?: boolean;
       structuredContent: unknown;
