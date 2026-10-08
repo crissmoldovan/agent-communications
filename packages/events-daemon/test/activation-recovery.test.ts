@@ -344,6 +344,8 @@ test('APR-B1: an exact Gmail replacement fixes its old pointer and union scope b
     const originalChallenge = await setup.runtime.issueChallenge(original.approvalId);
     await setup.runtime.approve({ approvalId: original.approvalId, answer: originalChallenge });
 
+    // An enabled replacement drains its old version through P; a disabled one is drained at P at once (D4).
+    setup.store.database.exec('UPDATE event_settings SET enabled = 1');
     const prepared = (await setup.runtime.prepareRule({ ruleId: 'rule-1', version: 2 })) as PreparedActivation;
     assert.equal(prepared.replacementOfVersion, 'rule-1@1');
     assert.deepEqual(
@@ -417,6 +419,8 @@ test('P1-B1: the next owner tick resumes a claimed replacement after the real ma
         "INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at) VALUES ('act_old', 'rule-1', 1, 'gmail', 'ibx_AAAAAAAAAAAAAAAA', 'mailbox', ?, 1)",
       )
       .run(Buffer.from(JSON.stringify({ historyId: '200' })));
+    // An enabled replacement drains its old version through P; a disabled one is drained at P at once (D4).
+    setup.store.database.exec('UPDATE event_settings SET enabled = 1');
     const prepared = (await setup.runtime.prepareRule({ ruleId: 'rule-1', version: 2 })) as PreparedActivation;
     const challenge = await setup.runtime.issueChallenge(prepared.approvalId);
     await assert.rejects(
@@ -530,6 +534,8 @@ test('APR-B1: only one exact replacement may drain, and its one-hour failure lea
     setup.store.database.exec(
       "UPDATE rule_versions SET state = 'active', approval_id = 'ap_old', authorization_activation_id = 'act_old', activated_at = 1 WHERE id = 'rule-1@1'; INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-1', 1, 'act_old', 1); INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at) VALUES ('act_old', 'rule-1', 1, 'gmail', 'ibx_AAAAAAAAAAAAAAAA', 'mailbox', CAST('{\"historyId\":\"100\"}' AS BLOB), 1)",
     );
+    // An enabled replacement drains its old version through P; a disabled one is drained at P at once (D4).
+    setup.store.database.exec('UPDATE event_settings SET enabled = 1');
     const first = (await setup.runtime.prepareRule({ ruleId: 'rule-1', version: 2 })) as PreparedActivation;
     await assert.rejects(
       () => setup.runtime.prepareRule({ ruleId: 'rule-1', version: 3 }),
@@ -569,6 +575,8 @@ test('APR-B1: a revocation cancels a draining replacement before it can move its
     setup.store.database.exec(
       "UPDATE rule_versions SET state = 'active', approval_id = 'ap_old', authorization_activation_id = 'act_old', activated_at = 1 WHERE id = 'rule-1@1'; INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-1', 1, 'act_old', 1); INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at) VALUES ('act_old', 'rule-1', 1, 'gmail', 'ibx_AAAAAAAAAAAAAAAA', 'mailbox', CAST('{\"historyId\":\"100\"}' AS BLOB), 1)",
     );
+    // An enabled replacement drains its old version through P; a disabled one is drained at P at once (D4).
+    setup.store.database.exec('UPDATE event_settings SET enabled = 1');
     const prepared = (await setup.runtime.prepareRule({ ruleId: 'rule-1', version: 2 })) as PreparedActivation;
     const challenge = await setup.runtime.issueChallenge(prepared.approvalId);
     await assert.rejects(
@@ -832,6 +840,8 @@ test('APR-B1: no rule-pointer mutation may move a pointer a claimed completion b
       )
       .run(Buffer.from(JSON.stringify({ historyId: '200' })));
     // An exact replacement (v2) is claimed and left draining.
+    // An enabled replacement drains its old version through P; a disabled one is drained at P at once (D4).
+    setup.store.database.exec('UPDATE event_settings SET enabled = 1');
     const replacement = (await setup.runtime.prepareRule({ ruleId: 'rule-1', version: 2 })) as PreparedActivation;
     const challenge = await setup.runtime.issueChallenge(replacement.approvalId);
     await assert.rejects(
@@ -1128,6 +1138,8 @@ test('K6: a replacement opens no drain for an account its old version holds no p
     const { versions, inbox } = await multiWithARemoved(setup, sources);
     await readdAccount(setup.root, inbox);
     versions.createRule({ ...multi, version: 2, mapping: { constant: 'safer' } });
+    // An enabled replacement drains its old version through P; a disabled one is drained at P at once (D4).
+    setup.store.database.exec('UPDATE event_settings SET enabled = 1');
     const prepared = (await setup.runtime.prepareRule({ ruleId: multi.ruleId, version: 2 })) as PreparedActivation;
     await assert.rejects(
       () =>
@@ -1184,6 +1196,8 @@ test('K6: a replacement while an account is out of the configuration plans nothi
     // A leaves the configuration; no tick has purged it yet, so the old version still holds its point.
     await removeAccount(setup.root);
     versions.createRule({ ...multi, version: 2, source: { ...multi.source, accountIds: [B] } });
+    // An enabled replacement drains its old version through P; a disabled one is drained at P at once (D4).
+    setup.store.database.exec('UPDATE event_settings SET enabled = 1');
     const prepared = (await setup.runtime.prepareRule({ ruleId: multi.ruleId, version: 2 })) as PreparedActivation;
     await assert.rejects(
       () =>
@@ -1258,6 +1272,8 @@ test('K6: a replacement samples no account its old version went dark for and its
     const { versions, inbox } = await multiWithARemoved(setup, sources);
     await readdAccount(setup.root, inbox);
     versions.createRule({ ...multi, version: 2, source: { ...multi.source, accountIds: [B] } });
+    // An enabled replacement drains its old version through P; a disabled one is drained at P at once (D4).
+    setup.store.database.exec('UPDATE event_settings SET enabled = 1');
     const prepared = (await setup.runtime.prepareRule({ ruleId: multi.ruleId, version: 2 })) as PreparedActivation;
     await assert.rejects(
       () =>
@@ -1276,5 +1292,77 @@ test('K6: a replacement samples no account its old version went dark for and its
   } finally {
     setup.store.close();
     await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('APR-B1: a replacement approved while collection is disabled re-baselines every union scope to P and completes at once (D4)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createTarget(target);
+    versions.createRule(rule);
+    const first = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 1 })) as PreparedActivation;
+    await setup.runtime.approve({
+      approvalId: first.approvalId,
+      answer: await setup.approvals.issueDisclosureChallenge(first.approvalId),
+    });
+    // A cursor left behind P by work before the disable.
+    setup.store.database
+      .prepare(
+        "INSERT OR REPLACE INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('gmail', ?, 'mailbox', '100', 1)",
+      )
+      .run(A);
+    assert.equal(new EventLifecycle(setup.store).status().enabled, false, 'collection is disabled');
+    versions.createRule({ ...rule, version: 2, mapping: { constant: 'safer' } });
+    const prepared = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 2 })) as PreparedActivation;
+    const completion = await setup.runtime.approve({
+      approvalId: prepared.approvalId,
+      answer: await setup.approvals.issueDisclosureChallenge(prepared.approvalId),
+    });
+    assert.equal(completion.status, 'completed', 'no drain waits on source work that cannot run while disabled');
+    assert.equal(versions.activeVersion('rule', rule.ruleId)?.version, 2);
+    assert.equal(
+      (setup.store.database.prepare('SELECT cursor FROM cursors WHERE account_id = ?').get(A) as { cursor: string })
+        .cursor,
+      '202',
+      'the scope is re-baselined to P',
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('K6: a version naming an account outside the configuration is refused before any approval exists', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  for (const kind of ['first activation', 'replacement'] as const) {
+    const setup = await fixture();
+    try {
+      const versions = new ImmutableVersions(setup.store.database);
+      versions.createTarget(target);
+      versions.createRule(multi);
+      if (kind === 'replacement') {
+        const first = (await setup.runtime.prepareRule({ ruleId: multi.ruleId, version: 1 })) as PreparedActivation;
+        await setup.runtime.approve({
+          approvalId: first.approvalId,
+          answer: await setup.approvals.issueDisclosureChallenge(first.approvalId),
+        });
+        versions.createRule({ ...multi, version: 2, mapping: { constant: 'safer' } });
+      }
+      await removeAccount(setup.root);
+      const intents = count(setup, 'activation_intents');
+      await assert.rejects(
+        () => setup.runtime.prepareRule({ ruleId: multi.ruleId, version: kind === 'replacement' ? 2 : 1 }),
+        (error: unknown) => error instanceof CommsError && error.details?.reason === 'ACCOUNT_REMOVED',
+        `${kind}: refused`,
+      );
+      assert.equal(count(setup, 'activation_intents'), intents, `${kind}: no intent or approval is created`);
+    } finally {
+      setup.store.close();
+      await rm(setup.root, { recursive: true, force: true });
+    }
   }
 });
