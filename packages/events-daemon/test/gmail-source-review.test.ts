@@ -17,7 +17,10 @@ function added(id: string) {
   };
 }
 
-async function world(rules: readonly GmailSourceRule[]) {
+async function world(
+  rules: readonly GmailSourceRule[],
+  hooks: { onList?: (store: Awaited<ReturnType<typeof openEventDatabase>>) => void } = {},
+) {
   const stateDir = await shortTempDir('aev-gmail-review-');
   const store = await openEventDatabase({ stateDir });
   store.database
@@ -32,6 +35,7 @@ async function world(rules: readonly GmailSourceRule[]) {
     store,
     source: {
       async listHistory({ historyId }: { historyId: string }) {
+        hooks.onList?.(store);
         const after = (mailbox.history as Array<{ id: string }>).filter(
           (record) => Number(record.id) > Number(historyId),
         );
@@ -157,5 +161,39 @@ test('GML-B1: a label change matches a rule only through its own added and remov
   } finally {
     w.store.close();
     await rm(w.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('GML-B1: a history response that returns after a disable-all or an account removal recreates nothing (D12)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  for (const [name, change] of [
+    [
+      'disable-all',
+      (store: Awaited<ReturnType<typeof openEventDatabase>>) =>
+        store.database.exec('UPDATE event_settings SET enabled = 0, switch_generation = switch_generation + 1'),
+    ],
+    [
+      'account removal',
+      (store: Awaited<ReturnType<typeof openEventDatabase>>) =>
+        store.database
+          .prepare('INSERT OR REPLACE INTO account_revocations (account_id, revoked_at) VALUES (?, ?)')
+          .run(ACCOUNT, Date.now() + 1),
+    ],
+  ] as const) {
+    const w = await world([received], { onList: change });
+    try {
+      w.store.database.exec('UPDATE event_settings SET enabled = 1');
+      w.mailbox.history = [added('101')];
+      assert.deepEqual(await w.worker.scan(), { cursor: '100', pending: true }, `${name}: the stale scan stops`);
+      const staged = (
+        w.store.database.prepare('SELECT COUNT(*) AS count FROM source_scan_state').get() as { count: number }
+      ).count;
+      assert.equal(staged, 0, `${name}: no purged staging is recreated`);
+      assert.deepEqual(w.admitted, [], `${name}: nothing is admitted`);
+    } finally {
+      w.store.close();
+      await rm(w.stateDir, { recursive: true, force: true });
+    }
   }
 });

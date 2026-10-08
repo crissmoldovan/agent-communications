@@ -195,9 +195,12 @@ export class EventScheduler {
         switchGeneration: this.#lifecycle.status().switchGeneration,
       });
     };
+    // The materialiser writes inside the worker's scan, so it checks the same scan snapshot (set once both exist).
+    let scanning: GmailSourceWorker | undefined;
     const materialiser = new GmailMaterialiser({
       store: this.#store,
       accountId: account.accountId,
+      guard: () => scanning?.assertScanLive(),
       source,
       assertDisclosable: async () => undefined,
       encryptState: (value, stateId) =>
@@ -253,6 +256,7 @@ export class EventScheduler {
         return materialiser.materialiseAll(requests);
       },
     });
+    scanning = worker;
     await worker.scan();
   }
 

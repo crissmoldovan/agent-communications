@@ -52,6 +52,7 @@ export class GmailMaterialiser {
   readonly #encryptState: (value: GmailMaterialisationRetryState, stateId?: string) => Promise<Uint8Array>;
   readonly #decryptState: (stored: Uint8Array, stateId?: string) => Promise<GmailMaterialisationRetryState>;
   readonly #now: () => number;
+  readonly #guard: () => void;
 
   constructor(options: {
     readonly store: EventDatabase;
@@ -63,7 +64,10 @@ export class GmailMaterialiser {
     readonly encryptState: (value: GmailMaterialisationRetryState, stateId?: string) => Promise<Uint8Array>;
     readonly decryptState: (stored: Uint8Array, stateId?: string) => Promise<GmailMaterialisationRetryState>;
     readonly now?: (() => number) | undefined;
+    /** Runs inside each write transaction: the worker's scan snapshot, so a stale scan writes nothing (D12). */
+    readonly guard?: (() => void) | undefined;
   }) {
+    this.#guard = options.guard ?? (() => undefined);
     this.#store = options.store;
     this.#accountId = options.accountId;
     this.#source = options.source;
@@ -129,6 +133,7 @@ export class GmailMaterialiser {
       const message = await this.#source.getMessage(first.messageId);
       const normalised = normaliseGmailEventMetadata(message, { includeBody: true });
       this.#store.immediate(() => {
+      this.#guard();
         this.#store.database.prepare('DELETE FROM source_scan_state WHERE id = ?').run(this.#stateId(first));
       });
       const ready: GmailMaterialisationResult = { state: 'ready', message: normalised };
@@ -187,6 +192,7 @@ export class GmailMaterialiser {
     if (!first) throw new Error('a terminal Gmail materialisation needs one projection');
     const now = this.#now();
     this.#store.immediate(() => {
+      this.#guard();
       const insert = this.#store.database.prepare(
         `INSERT OR IGNORE INTO source_projection_resolutions
          (source, account_id, occurrence_key, rule_id, rule_version, materialization_key, outcome, resolved_at, error_code)
@@ -240,6 +246,7 @@ export class GmailMaterialiser {
     };
     const encrypted = await this.#encryptState(state, this.#stateId(request));
     this.#store.immediate(() => {
+      this.#guard();
       this.#store.database
         .prepare(
           `INSERT INTO source_scan_state

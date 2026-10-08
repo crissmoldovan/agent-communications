@@ -144,6 +144,15 @@ function retryJitter(occurrenceKey: string, attempts: number): number {
   return hash % 251;
 }
 
+/** A scan whose switch or account moved under it: it stops and writes nothing more. */
+export class StaleScanError extends CommsError {
+  constructor() {
+    super('APPROVAL_VOID', 'the event switch or account changed during this mailbox scan', {
+      details: { reason: 'STALE_SCAN' },
+    });
+  }
+}
+
 /** One durable, account-scoped Gmail acquisition cursor. It never owns a per-rule cursor. */
 export class GmailSourceWorker {
   readonly #store: EventDatabase;
@@ -197,7 +206,61 @@ export class GmailSourceWorker {
     });
   }
 
+  /**
+   * The switch and account as they were when this scan started. Provider calls, metadata reads and encryption all
+   * await, so a disable-all or an account removal can purge this mailbox's work in between; every write the scan makes
+   * re-checks this snapshot inside its own transaction and writes nothing once it has moved (D12's post-provider
+   * generation fence) — a stale scan can never recreate purged staging, resolutions or a cursor.
+   */
+  #snapshot: { readonly generation: number; readonly enabled: number; readonly startedAt: number } | undefined;
+
+  /** For the materialiser and any other writer working inside this scan: throws once the snapshot has moved. */
+  assertScanLive(): void {
+    const snapshot = this.#snapshot;
+    if (snapshot === undefined) return;
+    const settings = this.#store.database
+      .prepare('SELECT enabled, switch_generation FROM event_settings WHERE singleton = 1')
+      .get() as { enabled: number; switch_generation: number } | undefined;
+    const revoked = this.#store.database
+      .prepare('SELECT 1 AS present FROM account_revocations WHERE account_id = ? AND revoked_at >= ?')
+      .get(this.#mailbox.accountId, snapshot.startedAt);
+    if (
+      settings === undefined ||
+      settings.enabled !== snapshot.enabled ||
+      settings.switch_generation !== snapshot.generation ||
+      revoked !== undefined
+    ) {
+      throw new StaleScanError();
+    }
+  }
+
+  #write<T>(work: () => T): T {
+    return this.#store.immediate(() => {
+      this.assertScanLive();
+      return work();
+    });
+  }
+
   async #scanLocked(): Promise<{ readonly cursor: string | null; readonly pending: boolean }> {
+    const settings = this.#store.database
+      .prepare('SELECT enabled, switch_generation FROM event_settings WHERE singleton = 1')
+      .get() as { enabled: number; switch_generation: number } | undefined;
+    this.#snapshot = {
+      generation: settings?.switch_generation ?? 0,
+      enabled: settings?.enabled ?? 0,
+      startedAt: this.#now(),
+    };
+    try {
+      return await this.#scanFromSnapshot();
+    } catch (error) {
+      if (error instanceof StaleScanError) return { cursor: this.#cursor(), pending: true };
+      throw error;
+    } finally {
+      this.#snapshot = undefined;
+    }
+  }
+
+  async #scanFromSnapshot(): Promise<{ readonly cursor: string | null; readonly pending: boolean }> {
     const cursor = this.#cursor();
     if (cursor === null) return { cursor: null, pending: false };
     let pageToken: string | undefined;
@@ -238,7 +301,7 @@ export class GmailSourceWorker {
     }
     if (heldAfterPoint) return { cursor, pending: true };
     await this.#beforeCursorCommit?.();
-    this.#store.immediate(() => {
+    this.#write(() => {
       const remaining = this.#store.database
         .prepare(
           "SELECT 1 AS present FROM source_scan_state WHERE source = 'gmail' AND account_id = ? AND cursor_scope = 'mailbox'",
@@ -308,7 +371,7 @@ export class GmailSourceWorker {
     };
     const encrypted = await this.#encryptStage(value, id);
     const expiresAt = stagedAt + this.#shortestRetention();
-    this.#store.immediate(() => {
+    this.#write(() => {
       this.#store.database
         .prepare(
           `INSERT OR IGNORE INTO source_scan_state
@@ -359,7 +422,7 @@ export class GmailSourceWorker {
       historyId: stage.value.page.historyId,
     });
     if (held) return 'held';
-    this.#store.immediate(() => {
+    this.#write(() => {
       this.#store.database.prepare('DELETE FROM source_scan_state WHERE id = ?').run(stage.id);
     });
     return 'terminal';
@@ -374,7 +437,7 @@ export class GmailSourceWorker {
 
   #terminaliseExpired(stage: StagedPage): void {
     const at = this.#now();
-    this.#store.immediate(() => {
+    this.#write(() => {
       for (const occurrence of occurrencesFromHistory(
         stage.value.page as Parameters<typeof occurrencesFromHistory>[0],
       )) {
@@ -395,7 +458,7 @@ export class GmailSourceWorker {
     outcome: 'vanished' | 'retention-expired',
     code: string,
   ): void {
-    this.#store.immediate(() => {
+    this.#write(() => {
       this.#store.database
         .prepare(
           `INSERT OR IGNORE INTO source_occurrence_resolutions
@@ -664,7 +727,7 @@ export class GmailSourceWorker {
   async #persistStage(stage: StagedPage, value: StoredHistoryPage): Promise<void> {
     const encrypted = await this.#encryptStage(value, stage.id);
     const now = this.#now();
-    this.#store.immediate(() => {
+    this.#write(() => {
       this.#store.database
         .prepare('UPDATE source_scan_state SET encrypted_record = ?, updated_at = ? WHERE id = ?')
         .run(encrypted, now, stage.id);
@@ -674,7 +737,7 @@ export class GmailSourceWorker {
 
   #terminaliseUnresolvableMetadata(occurrence: GmailHistoryOccurrence, errorCode: string): void {
     const now = this.#now();
-    this.#store.immediate(() => {
+    this.#write(() => {
       this.#store.database
         .prepare(
           `INSERT OR IGNORE INTO source_occurrence_resolutions
@@ -717,7 +780,7 @@ export class GmailSourceWorker {
       return;
     }
     try {
-      this.#store.immediate(() => {
+      this.#write(() => {
         this.#store.database
           .prepare(
             `INSERT INTO ingest
@@ -781,7 +844,7 @@ export class GmailSourceWorker {
   }
 
   #degradeForCollision(id: string): never {
-    this.#store.immediate(() => {
+    this.#write(() => {
       this.#store.database
         .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
         .run(`gmail-collision:${this.#mailbox.accountId}`, 'source-degraded-event-id-collision', this.#now());
@@ -796,7 +859,7 @@ export class GmailSourceWorker {
       throw new CommsError('CONFIG', 'the Gmail source cannot rebaseline an expired cursor');
     const profile = await this.#source.getProfile();
     const now = this.#now();
-    this.#store.immediate(() => {
+    this.#write(() => {
       this.#store.database
         .prepare(
           `INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('gmail', ?, 'mailbox', ?, ?)

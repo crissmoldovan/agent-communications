@@ -523,6 +523,14 @@ export class ActivationRuntime {
           // Encryption (in production EventRecordCipher) completes before this write transaction reserves its own nonce.
           const encrypted = await this.#encryptBaseline(current.id, accountId, position);
           this.#store.immediate(() => {
+            // The provider call and encryption awaited: a disable-all or revocation may have cancelled this intent
+            // and purged its baselines meanwhile. Write only while it is still the claimed work it was, at the same
+            // switch generation — never recreate a purged baseline or drain that nothing would ever clean up.
+            const live = this.#store.database
+              .prepare('SELECT status, effect FROM activation_intents WHERE id = ?')
+              .get(current.id) as { status: string; effect: string } | undefined;
+            const planned = live === undefined ? null : (JSON.parse(live.effect) as ActivationEffect).switchGeneration;
+            if (live?.status !== 'pending-completion' || planned !== this.#switch().generation) return;
             this.#store.database
               .prepare(
                 `INSERT OR IGNORE INTO activation_baselines
