@@ -106,6 +106,8 @@ export class EventProjectionStore {
     readonly stagedAt: number;
     /** The source stage this projection is built from; a stage purged during the encryption is not recreated. */
     readonly stageId?: string | undefined;
+    /** D9: reads core's configuration for the event's account after the encryption; throws once it is gone. */
+    readonly accountLive?: (() => Promise<void>) | undefined;
   }): Promise<boolean> {
     const exists = this.#store.database
       .prepare('SELECT 1 AS present FROM ingest_rules WHERE event_id = ? AND rule_id = ? AND rule_version = ?')
@@ -129,6 +131,7 @@ export class EventProjectionStore {
       Buffer.from(canonicalJson(minimiseProjection(input.rule, sanitised))),
     );
     const deadline = fixedDeadline(input.stagedAt, input.rule.retention.ingestMs);
+    await input.accountLive?.();
     // The encryption awaited: a disable-all, a revocation or an account purge may have removed this work meanwhile.
     // Insert only while its stage (when it has one), its rule version and the switch are all still live; otherwise
     // there is nothing to keep, and a purged projection is never recreated (D12).

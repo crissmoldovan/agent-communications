@@ -265,3 +265,152 @@ test('STG-B1: a lazy Gmail read reaches retention-expired at the original stage 
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+test('ING-B1: an account removed during a lazy read or its retry encryption writes no resolution or retry state (D9)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  for (const failure of ['not-found', 'transient', 'during-retry-encryption'] as const) {
+    const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-gmail-materialise-removed-'));
+    try {
+      const store = await openEventDatabase({ stateDir });
+      try {
+        let removed = false;
+        const materialiser = new GmailMaterialiser({
+          store,
+          accountId: 'ibx_ABCDEFGHIJKLMNOP',
+          source: {
+            getMessage: async () => {
+              if (failure !== 'during-retry-encryption') removed = true;
+              throw failure === 'not-found'
+                ? new CommsError('NOT_FOUND', 'not found')
+                : new CommsError('TRANSIENT', 'temporarily unavailable');
+            },
+          },
+          assertDisclosable: async () => undefined,
+          encryptState: async (value) => {
+            removed = true;
+            return Buffer.from(JSON.stringify(value));
+          },
+          decryptState: async (stored) => JSON.parse(Buffer.from(stored).toString('utf8')),
+          accountLive: async () => {
+            if (removed)
+              throw new CommsError('NOT_FOUND', 'the Gmail account bound to this event work is no longer connected', {
+                details: { reason: 'ACCOUNT_REMOVED', accountId: 'ibx_ABCDEFGHIJKLMNOP' },
+              });
+          },
+          now: () => 1_760_000_000_000,
+        });
+        await assert.rejects(
+          () =>
+            materialiser.materialise({
+              occurrenceKey: '101:message:gone',
+              messageId: 'gone',
+              ruleId: 'rule-1',
+              ruleVersion: 1,
+              materializationKey: 'body',
+              stageExpiresAt: 1_760_000_060_000,
+            }),
+          (error: unknown) => error instanceof CommsError && error.details?.reason === 'ACCOUNT_REMOVED',
+          `${failure}: the removal refuses`,
+        );
+        const count = (table: string) =>
+          (store.database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
+        assert.equal(count('source_projection_resolutions'), 0, `${failure}: no resolution is written`);
+        assert.equal(count('source_scan_state'), 0, `${failure}: no retry state is written`);
+      } finally {
+        store.close();
+      }
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('ING-B1: a removed account gets no expiry or retry-exhausted resolution from a lazy read (D9)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const accountId = 'ibx_ABCDEFGHIJKLMNOP';
+  const now = 1_760_000_000_000;
+  for (const path of ['stage expired', 'retry exhausted'] as const) {
+    const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-gmail-materialise-expired-'));
+    try {
+      const store = await openEventDatabase({ stateDir });
+      try {
+        let removed = path === 'stage expired';
+        const request = {
+          occurrenceKey: '101:message:old',
+          messageId: 'old',
+          ruleId: 'rule-1',
+          ruleVersion: 1,
+          materializationKey: 'body',
+          // Already past for the expiry path; still open for the retry path, whose own retry window has closed.
+          stageExpiresAt: path === 'stage expired' ? now - 1 : now + 60_000,
+        } as const;
+        if (path === 'retry exhausted') {
+          store.database
+            .prepare(
+              `INSERT INTO source_scan_state
+               (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at)
+               VALUES (?, 'gmail', ?, 'materialisation', NULL, NULL, ?, 1)`,
+            )
+            .run(
+              `gmail-materialisation:${accountId}:${request.occurrenceKey}:${request.materializationKey}`,
+              accountId,
+              Buffer.from(
+                JSON.stringify({
+                  first_failed_at: now - 86_400_001,
+                  next_retry_at: now - 1,
+                  attempts: 9,
+                  error_code: 'X',
+                }),
+              ),
+            );
+        }
+        let reads = 0;
+        const materialiser = new GmailMaterialiser({
+          store,
+          accountId,
+          source: {
+            getMessage: async () => {
+              reads += 1;
+              throw new Error('no provider read is expected');
+            },
+          },
+          assertDisclosable: async () => undefined,
+          encryptState: async (value) => Buffer.from(JSON.stringify(value)),
+          // The removal lands while the retry continuation is decrypted.
+          decryptState: async (stored) => {
+            removed = true;
+            return JSON.parse(Buffer.from(stored).toString('utf8'));
+          },
+          accountLive: async () => {
+            if (removed)
+              throw new CommsError('NOT_FOUND', 'the Gmail account bound to this event work is no longer connected', {
+                details: { reason: 'ACCOUNT_REMOVED', accountId },
+              });
+          },
+          now: () => now,
+        });
+        await assert.rejects(
+          () => materialiser.materialise(request),
+          (error: unknown) => error instanceof CommsError && error.details?.reason === 'ACCOUNT_REMOVED',
+          `${path}: the removal refuses`,
+        );
+        assert.equal(
+          (
+            store.database.prepare('SELECT COUNT(*) AS count FROM source_projection_resolutions').get() as {
+              count: number;
+            }
+          ).count,
+          0,
+          `${path}: no resolution is written for a removed account`,
+        );
+        assert.equal(reads, 0);
+      } finally {
+        store.close();
+      }
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  }
+});

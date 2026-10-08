@@ -23,6 +23,8 @@ async function world(
   hooks: {
     onList?: (store: Awaited<ReturnType<typeof openEventDatabase>>) => void;
     accountLive?: () => Promise<void>;
+    eventIdFor?: () => Promise<string>;
+    onDisclosable?: () => void;
   } = {},
 ) {
   const stateDir = await shortTempDir('aev-gmail-review-');
@@ -35,11 +37,15 @@ async function world(
   const mailbox: { history: ReturnType<typeof added>[] | Array<Record<string, unknown>> } = { history: [] };
   const admitted: string[] = [];
   const metadataReads: string[] = [];
+  let profileReads = 0;
+  let listCalls = 0;
+  let pagesStaged = 0;
   let admitPending = false;
   const worker = new GmailSourceWorker({
     store,
     source: {
       async listHistory({ historyId }: { historyId: string }) {
+        listCalls += 1;
         hooks.onList?.(store);
         const after = (mailbox.history as Array<{ id: string }>).filter(
           (record) => Number(record.id) > Number(historyId),
@@ -49,6 +55,10 @@ async function world(
           nextPageToken: undefined,
           history: after as never,
         };
+      },
+      async getProfile() {
+        profileReads += 1;
+        return { emailAddress: 'events@example.test', messagesTotal: 1, threadsTotal: 1, historyId: '500' };
       },
       async getMessageMetadata(messageId: string) {
         metadataReads.push(messageId);
@@ -65,7 +75,11 @@ async function world(
     mailboxLock: new MailboxLock(),
     rules: () => rules,
     accountLive: hooks.accountLive,
-    assertDisclosable: async () => undefined,
+    ...(hooks.eventIdFor ? { eventIdFor: hooks.eventIdFor } : {}),
+    onPageStaged: async () => {
+      pagesStaged += 1;
+    },
+    assertDisclosable: async () => hooks.onDisclosable?.(),
     admit: async (occurrence) => {
       if (admitPending) return 'pending';
       admitted.push(`${occurrence.rule.ruleId}:${String(occurrence.event.messageId)}`);
@@ -81,6 +95,9 @@ async function world(
     mailbox,
     admitted,
     metadataReads,
+    profileReads: () => profileReads,
+    listCalls: () => listCalls,
+    pagesStaged: () => pagesStaged,
     setPending: (value: boolean) => {
       admitPending = value;
     },
@@ -232,6 +249,7 @@ test('GML-B1: a history response that returns after the account left the configu
     const count = (table: string) =>
       (w.store.database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
     assert.equal(count('source_scan_state'), 0, 'no page is staged for a removed account');
+    assert.equal(w.pagesStaged(), 0, 'and none was staged and purged afterwards');
     assert.equal(count('source_stage_rule_debts'), 0);
     assert.equal(count('cursors'), 0, 'the removed account keeps no cursor');
     assert.deepEqual(w.metadataReads, [], 'no further provider read is made for a removed account');
@@ -287,6 +305,121 @@ test('GML-B1: a page is staged only for rule versions still live when it is writ
         }>
       ).map((row) => row.rule_id);
       assert.deepEqual(staged, ['rule-other'], 'the revoked version is owed nothing');
+    } finally {
+      w.store.close();
+      await rm(w.stateDir, { recursive: true, force: true });
+    }
+  }
+});
+
+function removable() {
+  let removed = false;
+  return {
+    remove: () => {
+      removed = true;
+    },
+    accountLive: async () => {
+      if (removed)
+        throw new CommsError('NOT_FOUND', 'the Gmail account bound to this event work is no longer connected', {
+          details: { reason: 'ACCOUNT_REMOVED', accountId: ACCOUNT },
+        });
+    },
+  };
+}
+
+test('GML-B1: a Gmail 404 that meets an account removal is never re-baselined with a provider call (D9)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const account = removable();
+  const w = await world([received], {
+    onList: () => {
+      account.remove();
+      // Gmail's own 404 carries no removal reason: only the configuration can say the account is gone.
+      throw new CommsError('NOT_FOUND', 'Requested entity was not found.');
+    },
+    accountLive: account.accountLive,
+  });
+  try {
+    w.store.database.exec('UPDATE event_settings SET enabled = 1');
+    await assert.rejects(
+      () => w.worker.scan(),
+      (error: unknown) => error instanceof CommsError && error.details?.reason === 'ACCOUNT_REMOVED',
+    );
+    assert.equal(w.profileReads(), 0, 'a removed account gets no getProfile call');
+    assert.equal(
+      (w.store.database.prepare('SELECT COUNT(*) AS count FROM cursors').get() as { count: number }).count,
+      0,
+      'and no re-baselined cursor',
+    );
+  } finally {
+    w.store.close();
+    await rm(w.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('GML-B1: an account removed while an event identity is hashed gets no ingest record and no admission (D9)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const account = removable();
+  const w = await world([received], {
+    accountLive: account.accountLive,
+    eventIdFor: async () => {
+      account.remove();
+      return '11111111111111111111111111111111';
+    },
+  });
+  try {
+    w.store.database.exec('UPDATE event_settings SET enabled = 1');
+    w.mailbox.history = [added('101')];
+    await assert.rejects(
+      () => w.worker.scan(),
+      (error: unknown) => error instanceof CommsError && error.details?.reason === 'ACCOUNT_REMOVED',
+    );
+    assert.equal(
+      (w.store.database.prepare('SELECT COUNT(*) AS count FROM ingest').get() as { count: number }).count,
+      0,
+      'no ingest record is written for a removed account',
+    );
+    assert.deepEqual(w.admitted, [], 'and nothing is admitted');
+  } finally {
+    w.store.close();
+    await rm(w.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('GML-B1: a removed account is not polled, and a removal before a metadata read stops that read (D9)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  // Removed before the scan: no history call is made at all.
+  {
+    const account = removable();
+    account.remove();
+    const w = await world([received], { accountLive: account.accountLive });
+    try {
+      w.store.database.exec('UPDATE event_settings SET enabled = 1');
+      w.mailbox.history = [added('101')];
+      await assert.rejects(
+        () => w.worker.scan(),
+        (error: unknown) => error instanceof CommsError && error.details?.reason === 'ACCOUNT_REMOVED',
+      );
+      assert.equal(w.listCalls(), 0, 'a removed account gets no history call');
+    } finally {
+      w.store.close();
+      await rm(w.stateDir, { recursive: true, force: true });
+    }
+  }
+  // Removed after the page is staged, at the source fence: no metadata call is made.
+  {
+    const account = removable();
+    const w = await world([received], { accountLive: account.accountLive, onDisclosable: account.remove });
+    try {
+      w.store.database.exec('UPDATE event_settings SET enabled = 1');
+      w.mailbox.history = [added('101')];
+      await assert.rejects(
+        () => w.worker.scan(),
+        (error: unknown) => error instanceof CommsError && error.details?.reason === 'ACCOUNT_REMOVED',
+      );
+      assert.deepEqual(w.metadataReads, [], 'a removed account gets no metadata call');
     } finally {
       w.store.close();
       await rm(w.stateDir, { recursive: true, force: true });

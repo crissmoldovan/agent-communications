@@ -165,6 +165,15 @@ export class ActivationRuntime {
           parent,
           child: document.rule,
           now: this.#now(),
+          accountLive: async (accountId) => {
+            try {
+              await assertLiveGmailAccount(this.#config, accountId);
+            } catch (error) {
+              if (isRemovedAccountError(error))
+                this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, accountId, this.#now()));
+              throw error;
+            }
+          },
           decryptPoint: ({ activationId, ruleId, ruleVersion, accountId, positionScope, encryptedPosition }) =>
             this.#decryptPoint({
               activationId,
