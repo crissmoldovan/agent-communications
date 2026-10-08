@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/whatsapp",
-  "version": "0.14.1",
+  "version": "0.15.0",
   "description": "WhatsApp for coding agents, read-only: list, read and search the chats WhatsApp for Mac keeps on this Mac, and draft replies as links the person sends. No network client; it never sends.",
   "type": "module",
   "license": "MIT",

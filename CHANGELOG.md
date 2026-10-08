@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.15.0
 
 **Slack: edit or delete a message this account posted — its words, its files, or the whole message — through the
 gate a post goes through.** An agent that posted a typo, the wrong figure, the wrong chart or to the wrong thread could
@@ -23,10 +23,27 @@ only ask you to fix it in Slack. Now:
 - **What you approved is what happens.** The approval binds the message as it was read: one edited in Slack after the
   preview, or a deletion's thread that gained a reply, voids it. `approve` shows an edit's and a deletion's preview
   and reads the message again first. Outcomes are recorded as a post's are; a deletion Slack answers
-  `message_not_found` is done, with a note saying there was nothing left to delete.
+  `message_not_found` is done, with a note saying there was nothing left to delete. Slack is read once more just
+  before the act, after any uploads: a message changed in the meantime is never overwritten, and a deletion never
+  reports a success it cannot see — a channel archived or out of reach at that moment refuses instead. An `@channel`
+  or `@here` edit whose room cannot be counted is never approved at a terminal, as a post's is not.
 - What `chat.update` does with files is not in Slack's reference, so it was observed against a real workspace first:
   the list it is given replaces the message's files. Both acts use `chat:write`, which `send` mode already has;
   changing files also needs `files:write`, which it has too.
+
+Contributed by Omar Abu Hijleh (#52).
+
+**Upgrading.** Nothing to change: every existing tool, command and approval works as before, and no configuration
+moves. Restart your MCP client to see the four new tools, and update the skills
+(`npx skills add crissmoldovan/agent-communications --skill '*'`) for `slack-posting`'s guidance on editing and
+deleting. Editing and deleting need a workspace in `send` mode, as posting does. One answer changes: reading a Slack
+conversation that is frozen, archived or deleted (Slack's `is_inactive`) is now `NOT_FOUND`, exit 66 and not retried,
+where it was `PROVIDER_UNAVAILABLE`, exit 69 and retryable.
+
+**For contributors.** Every pull request now proposes a version — `X.Y.Z-<branch-slug>`, one semver step on from
+`main`, with the reason for that step — and carries tests, documentation, a changelog entry and its provenance; a check
+on each pull request comments with what is missing. [CONTRIBUTING.md](CONTRIBUTING.md#what-every-pull-request-carries)
+has the rules.
 
 ## 0.14.1
 
