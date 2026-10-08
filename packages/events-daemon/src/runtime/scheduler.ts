@@ -169,7 +169,7 @@ export class EventScheduler {
     // fences the mailbox: installing it from the points already published could start past that P.
     await this.#mailboxLock.withMailbox(account.accountId, async () => {
       if (isMailboxFenced(this.#store.database, account.accountId)) return;
-      await this.#installInitialCursor(account.accountId, bound);
+      await this.#installInitialCursor(account.accountId);
     });
     const source = await this.#gmailSourceFor(account.accountId);
     const evaluator = new EventEvaluator({
@@ -275,7 +275,40 @@ export class EventScheduler {
     return row === undefined || row.updated_at + this.#pollIntervalMs <= this.#now();
   }
 
-  async #installInitialCursor(accountId: string, rules: readonly GmailSourceRule[]): Promise<void> {
+  /** The published cut-over points of the versions that poll this account now, in a stable order. */
+  #publishedPoints(accountId: string): Array<{
+    activation_id: string;
+    rule_id: string;
+    rule_version: number;
+    account_id: string;
+    position_scope: 'mailbox';
+    encrypted_position: Uint8Array;
+  }> {
+    const rules = this.#rulesForAccount(accountId);
+    return (
+      this.#store.database
+        .prepare(
+          `SELECT points.activation_id, points.rule_id, points.rule_version, points.account_id, points.position_scope,
+                  points.encrypted_position
+           FROM rule_activation_points AS points
+           JOIN active_versions AS active
+             ON active.kind = 'rule' AND active.object_id = points.rule_id AND active.version = points.rule_version
+            AND active.current_cutover_id = points.activation_id
+           WHERE points.source = 'gmail' AND points.account_id = ? AND points.position_scope = 'mailbox'
+           ORDER BY points.rule_id, points.rule_version, points.activation_id`,
+        )
+        .all(accountId) as Array<{
+        activation_id: string;
+        rule_id: string;
+        rule_version: number;
+        account_id: string;
+        position_scope: 'mailbox';
+        encrypted_position: Uint8Array;
+      }>
+    ).filter((point) => rules.some((rule) => rule.ruleId === point.rule_id && rule.ruleVersion === point.rule_version));
+  }
+
+  async #installInitialCursor(accountId: string): Promise<void> {
     const exists = this.#store.database
       .prepare(
         "SELECT 1 AS present FROM cursors WHERE source = 'gmail' AND account_id = ? AND cursor_scope = 'mailbox'",
@@ -285,27 +318,12 @@ export class EventScheduler {
     // The mailbox cursor starts at the OLDEST active cut-over point for the account: each rule then admits only what
     // follows its own point, so a rule activated earlier never loses the occurrences between its point and a later
     // rule's, and a later rule is never backfilled.
-    const points = this.#store.database
-      .prepare(
-        `SELECT points.activation_id, points.rule_id, points.rule_version, points.account_id, points.position_scope,
-                points.encrypted_position
-         FROM rule_activation_points AS points
-         JOIN active_versions AS active
-           ON active.kind = 'rule' AND active.object_id = points.rule_id AND active.version = points.rule_version
-          AND active.current_cutover_id = points.activation_id
-         WHERE points.source = 'gmail' AND points.account_id = ? AND points.position_scope = 'mailbox'`,
-      )
-      .all(accountId) as Array<{
-      activation_id: string;
-      rule_id: string;
-      rule_version: number;
-      account_id: string;
-      position_scope: 'mailbox';
-      encrypted_position: Uint8Array;
-    }>;
+    const points = this.#publishedPoints(accountId);
+    const keyOf = (rows: ReadonlyArray<{ activation_id: string; rule_id: string; rule_version: number }>) =>
+      rows.map((row) => `${row.activation_id}:${row.rule_id}@${row.rule_version}`).join(',');
+    const read = keyOf(points);
     let historyId: string | undefined;
     for (const point of points) {
-      if (!rules.some((rule) => rule.ruleId === point.rule_id && rule.ruleVersion === point.rule_version)) continue;
       const position = JSON.parse(
         (
           await this.#cipher.decrypt(
@@ -327,6 +345,10 @@ export class EventScheduler {
     if (historyId === undefined) return;
     await assertLiveGmailAccount(this.#config, accountId);
     this.#store.immediate(() => {
+      // The decryption awaited, and finalisation does not take the mailbox lock: a point published meanwhile (perhaps
+      // lower than every point read) or a new fence means this minimum is stale. Install nothing; the next tick
+      // recomputes it from the points published then.
+      if (isMailboxFenced(this.#store.database, accountId) || keyOf(this.#publishedPoints(accountId)) !== read) return;
       const insert = this.#store.database.prepare(
         `INSERT OR IGNORE INTO cursors (source, account_id, cursor_scope, cursor, updated_at)
            VALUES ('gmail', ?, 'mailbox', ?, ?)`,

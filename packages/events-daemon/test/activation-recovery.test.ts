@@ -1718,3 +1718,90 @@ test('APR-B1: a settlement found at finalisation commits rather than rolling bac
     await rm(setup.root, { recursive: true, force: true });
   }
 });
+
+test('APR-B1: a point published while the initial cursor is being computed makes that cursor stale; the next tick uses it (D12)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const db = setup.store.database;
+    const doc = (ruleId: string) => canonicalJson({ ...rule, ruleId });
+    db.prepare(
+      `INSERT INTO rule_versions (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+       VALUES ('rule-1@1', 'rule-1', 1, ?, 'digest', 'active', 'approval', 'act_c', 1)`,
+    ).run(doc('rule-1'));
+    db.prepare(
+      "INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES ('rule-2@1', 'rule-2', 1, ?, 'digest')",
+    ).run(doc('rule-2'));
+    db.exec(
+      "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-1', 1, 'act_c', 1)",
+    );
+    db.prepare(
+      `INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at)
+       VALUES ('act_c', 'rule-1', 1, 'gmail', ?, 'mailbox', CAST('{"historyId":"300"}' AS BLOB), 1)`,
+    ).run(A);
+    db.exec('UPDATE event_settings SET enabled = 1');
+    // Finalisation takes no mailbox lock: rule-2 publishes P = 250 while the scheduler decrypts rule-1's point.
+    let publish: (() => void) | undefined = () =>
+      setup.store.immediate(() => {
+        db.exec(
+          "UPDATE rule_versions SET state = 'active', approval_id = 'approval', authorization_activation_id = 'act_b', activated_at = 2 WHERE id = 'rule-2@1'; INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-2', 1, 'act_b', 2)",
+        );
+        db.prepare(
+          `INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at)
+           VALUES ('act_b', 'rule-2', 1, 'gmail', ?, 'mailbox', CAST('{"historyId":"250"}' AS BLOB), 2)`,
+        ).run(A);
+      });
+    const sources: string[] = [];
+    const scheduler = new EventScheduler({
+      store: setup.store,
+      lifecycle: new EventLifecycle(setup.store),
+      activations: { resumeClaimedCompletions: async () => undefined } as never,
+      dispatcher: { recoverLeases: async () => undefined, dispatch: async () => undefined } as never,
+      expiry: new EventExpiry(setup.store, setup.time.now),
+      cipher: {
+        encrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+        decrypt: async (_location: unknown, value: Uint8Array) => {
+          const run = publish;
+          publish = undefined;
+          run?.();
+          return Buffer.from(value);
+        },
+      } as never,
+      approvals: setup.approvals,
+      config: setup.configStore,
+      taint: { record: async () => undefined } as never,
+      gmailSourceFor: async (accountId: string) => {
+        sources.push(accountId);
+        return {
+          listHistory: async ({ historyId }: { historyId: string }) => ({
+            historyId,
+            nextPageToken: undefined,
+            history: [],
+          }),
+          getMessageMetadata: async () => {
+            throw new Error('no metadata read is expected');
+          },
+        } as never;
+      },
+      mailboxLock: setup.mailboxLock,
+      now: setup.time.now,
+    });
+    await scheduler.tick();
+    assert.equal(
+      count(setup, 'cursors WHERE account_id = ?', A),
+      0,
+      'the minimum computed before the publish is not installed',
+    );
+    setup.time.advance(120_000);
+    await scheduler.tick();
+    assert.equal(
+      (db.prepare('SELECT cursor FROM cursors WHERE account_id = ?').get(A) as { cursor: string }).cursor,
+      '250',
+      'the next tick starts the cursor at the lowest published point',
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
