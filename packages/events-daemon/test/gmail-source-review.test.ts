@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
+import { CommsError } from '@agentcomms/core';
 import { MailboxLock } from '../src/sources/mailbox-lock.ts';
 import { type GmailSourceRule, GmailSourceWorker } from '../src/sources/source-worker.ts';
 import { openEventDatabase } from '../src/store/database.ts';
@@ -19,7 +20,10 @@ function added(id: string) {
 
 async function world(
   rules: readonly GmailSourceRule[],
-  hooks: { onList?: (store: Awaited<ReturnType<typeof openEventDatabase>>) => void } = {},
+  hooks: {
+    onList?: (store: Awaited<ReturnType<typeof openEventDatabase>>) => void;
+    accountLive?: () => Promise<void>;
+  } = {},
 ) {
   const stateDir = await shortTempDir('aev-gmail-review-');
   const store = await openEventDatabase({ stateDir });
@@ -30,6 +34,7 @@ async function world(
     .run(ACCOUNT);
   const mailbox: { history: ReturnType<typeof added>[] | Array<Record<string, unknown>> } = { history: [] };
   const admitted: string[] = [];
+  const metadataReads: string[] = [];
   let admitPending = false;
   const worker = new GmailSourceWorker({
     store,
@@ -46,6 +51,7 @@ async function world(
         };
       },
       async getMessageMetadata(messageId: string) {
+        metadataReads.push(messageId);
         return {
           id: messageId,
           threadId: 'thread',
@@ -58,6 +64,7 @@ async function world(
     mailbox: { accountId: ACCOUNT, name: 'Events inbox' },
     mailboxLock: new MailboxLock(),
     rules: () => rules,
+    accountLive: hooks.accountLive,
     assertDisclosable: async () => undefined,
     admit: async (occurrence) => {
       if (admitPending) return 'pending';
@@ -73,6 +80,7 @@ async function world(
     worker,
     mailbox,
     admitted,
+    metadataReads,
     setPending: (value: boolean) => {
       admitPending = value;
     },
@@ -191,6 +199,94 @@ test('GML-B1: a history response that returns after a disable-all or an account 
       ).count;
       assert.equal(staged, 0, `${name}: no purged staging is recreated`);
       assert.deepEqual(w.admitted, [], `${name}: nothing is admitted`);
+    } finally {
+      w.store.close();
+      await rm(w.stateDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('GML-B1: a history response that returns after the account left the configuration stages nothing (D9)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  // The configuration is the authority: no tombstone exists yet, since only a later tick records the removal.
+  let removed = false;
+  const w = await world([received], {
+    onList: () => {
+      removed = true;
+    },
+    accountLive: async () => {
+      if (removed)
+        throw new CommsError('NOT_FOUND', 'the Gmail account bound to this event work is no longer connected', {
+          details: { reason: 'ACCOUNT_REMOVED', accountId: ACCOUNT },
+        });
+    },
+  });
+  try {
+    w.store.database.exec('UPDATE event_settings SET enabled = 1');
+    w.mailbox.history = [added('101')];
+    await assert.rejects(
+      () => w.worker.scan(),
+      (error: unknown) => error instanceof CommsError && error.details?.reason === 'ACCOUNT_REMOVED',
+    );
+    const count = (table: string) =>
+      (w.store.database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
+    assert.equal(count('source_scan_state'), 0, 'no page is staged for a removed account');
+    assert.equal(count('source_stage_rule_debts'), 0);
+    assert.equal(count('cursors'), 0, 'the removed account keeps no cursor');
+    assert.deepEqual(w.metadataReads, [], 'no further provider read is made for a removed account');
+    assert.deepEqual(w.admitted, []);
+  } finally {
+    w.store.close();
+    await rm(w.stateDir, { recursive: true, force: true });
+  }
+});
+
+function revoke(store: Awaited<ReturnType<typeof openEventDatabase>>, rule: GmailSourceRule): void {
+  store.database
+    .prepare(
+      `INSERT INTO rule_versions
+       (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at, revoked_at)
+       VALUES (?, ?, ?, '{}', 'digest', 'revoked', 'approval', 'activation', 1, 2)`,
+    )
+    .run(`${rule.ruleId}@${rule.ruleVersion}`, rule.ruleId, rule.ruleVersion);
+}
+
+test('GML-B1: a page is staged only for rule versions still live when it is written, never as an orphan', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const other: GmailSourceRule = { ...received, ruleId: 'rule-other' };
+  // The only rule revoked during the provider call: the page is owed to nobody and is not written.
+  {
+    const w = await world([received], { onList: (store) => revoke(store, received) });
+    try {
+      w.store.database.exec('UPDATE event_settings SET enabled = 1');
+      w.mailbox.history = [added('101')];
+      assert.deepEqual(await w.worker.scan(), { cursor: '100', pending: true }, 'the scan stops');
+      const count = (table: string) =>
+        (w.store.database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
+      assert.equal(count('source_scan_state'), 0, 'no orphan page is staged');
+      assert.equal(count('source_stage_rule_debts'), 0);
+      assert.deepEqual(w.admitted, []);
+    } finally {
+      w.store.close();
+      await rm(w.stateDir, { recursive: true, force: true });
+    }
+  }
+  // One of two revoked: the page is staged, and owes only the live version.
+  {
+    const w = await world([received, other], { onList: (store) => revoke(store, received) });
+    try {
+      w.store.database.exec('UPDATE event_settings SET enabled = 1');
+      w.setPending(true);
+      w.mailbox.history = [added('101')];
+      await w.worker.scan();
+      const staged = (
+        w.store.database.prepare('SELECT rule_id FROM source_stage_rule_debts ORDER BY rule_id').all() as Array<{
+          rule_id: string;
+        }>
+      ).map((row) => row.rule_id);
+      assert.deepEqual(staged, ['rule-other'], 'the revoked version is owed nothing');
     } finally {
       w.store.close();
       await rm(w.stateDir, { recursive: true, force: true });

@@ -111,7 +111,7 @@ async function fixture() {
       store,
       cipher,
       approvals: { get: async () => null },
-      config: { load: async () => ({ inboxes: {} }) },
+      config: { load: async () => ({ inboxes: { 'events/gmail': { id: ACCOUNT, provider: 'gmail' } } }) },
       now: () => clock,
       fence: async () => ({ switchGeneration: 7 }),
       ...options,
@@ -567,5 +567,87 @@ test('DEL-B1: a pause stops delivery claims — before a claim, and after one wh
   } finally {
     setup.store.close();
     await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('DEL-B1: an account removed from the configuration during encryption appends nothing and purges its work (D9)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    setup.insert('late-removal');
+    // No tombstone: the configuration itself is read again immediately before the append.
+    let removed = false;
+    const dispatcher = setup.dispatcher({
+      cipher: {
+        async encrypt(_: unknown, bytes: Uint8Array) {
+          removed = true;
+          return Buffer.from(bytes);
+        },
+        async decrypt(_: unknown, bytes: Uint8Array) {
+          return Buffer.from(bytes);
+        },
+      },
+      config: {
+        load: async () => ({ inboxes: removed ? {} : { 'events/gmail': { id: ACCOUNT, provider: 'gmail' } } }),
+      },
+    });
+    assert.deepEqual(await dispatcher.dispatch('late-removal'), { state: 'terminal', deliveryId: 'late-removal' });
+    assert.equal(count(setup.store, 'dryrun_log'), 0, 'nothing is appended for a removed account');
+    assert.equal(count(setup.store, 'delivery_cap_charges'), 0, 'no cap is charged for it');
+    const row = setup.store.database
+      .prepare("SELECT state, encrypted_record FROM deliveries WHERE id = 'late-removal'")
+      .get() as { state: string; encrypted_record: Uint8Array | null };
+    assert.equal(row.encrypted_record, null, 'its payload is purged');
+    assert.notEqual(row.state, 'delivered');
+    assert.equal(count(setup.store, 'account_revocations'), 1);
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('DEL-B1: a dry-run read re-fences after decryption and returns nothing a revocation or purge overtook', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  for (const name of ['revocation', 'purge'] as const) {
+    const setup = await fixture();
+    try {
+      setup.insert('overtaken');
+      assert.deepEqual(await setup.dispatcher().dispatch('overtaken'), {
+        state: 'delivered',
+        deliveryId: 'overtaken',
+      });
+      let fences = 0;
+      let decrypting = false;
+      const reader = setup.dispatcher({
+        cipher: {
+          async encrypt(_: unknown, bytes: Uint8Array) {
+            return Buffer.from(bytes);
+          },
+          async decrypt(_: unknown, bytes: Uint8Array) {
+            decrypting = true;
+            if (name === 'purge')
+              setup.store.database.prepare("DELETE FROM dryrun_log WHERE delivery_id = 'overtaken'").run();
+            return Buffer.from(bytes);
+          },
+        },
+        fence: async () => {
+          fences += 1;
+          if (name === 'revocation' && decrypting) throw new Error('authority revoked');
+          return { switchGeneration: 7 };
+        },
+      });
+      if (name === 'revocation') await assert.rejects(reader.read('overtaken'), /authority revoked/);
+      else
+        await assert.rejects(
+          reader.read('overtaken'),
+          (error: unknown) => error instanceof CommsError && error.code === 'NOT_FOUND',
+        );
+      assert.equal(fences, 2, `${name}: the read fence runs before and after decryption`);
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
   }
 });

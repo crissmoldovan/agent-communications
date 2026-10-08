@@ -8,7 +8,7 @@ import { GmailMaterialiser } from '../sources/materialise.ts';
 import { type GmailSourceRule, GmailSourceWorker } from '../sources/source-worker.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { EventRecordCipher } from '../store/records.ts';
-import { isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
+import { assertLiveGmailAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
 import type { ActivationRuntime } from './activations.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import type { DryRunDispatcher } from './dispatcher.ts';
@@ -245,6 +245,7 @@ export class EventScheduler {
           (await this.#cipher.decrypt(sourceStateLocation(requiredStateId(stageId)), stored)).toString('utf8'),
         ),
       replacementDrains: drains,
+      accountLive: () => assertLiveGmailAccount(this.#config, account.accountId),
       materialise: async (requests) => {
         for (const request of requests) {
           const rule = rules().find(
@@ -317,6 +318,7 @@ export class EventScheduler {
       if (historyId === undefined || BigInt(position.historyId) < BigInt(historyId)) historyId = position.historyId;
     }
     if (historyId === undefined) return;
+    await assertLiveGmailAccount(this.#config, accountId);
     this.#store.immediate(() => {
       const insert = this.#store.database.prepare(
         `INSERT OR IGNORE INTO cursors (source, account_id, cursor_scope, cursor, updated_at)

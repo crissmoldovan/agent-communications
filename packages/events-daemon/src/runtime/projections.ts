@@ -104,11 +104,13 @@ export class EventProjectionStore {
     readonly rule: CanonicalFullRuleDocument;
     readonly event: Record<string, unknown>;
     readonly stagedAt: number;
-  }): Promise<void> {
+    /** The source stage this projection is built from; a stage purged during the encryption is not recreated. */
+    readonly stageId?: string | undefined;
+  }): Promise<boolean> {
     const exists = this.#store.database
       .prepare('SELECT 1 AS present FROM ingest_rules WHERE event_id = ? AND rule_id = ? AND rule_version = ?')
       .get(input.eventId, input.rule.ruleId, input.rule.version);
-    if (exists !== undefined) return;
+    if (exists !== undefined) return true;
     const location = {
       table: 'ingest_rules',
       column: 'encryptedProjection',
@@ -127,13 +129,31 @@ export class EventProjectionStore {
       Buffer.from(canonicalJson(minimiseProjection(input.rule, sanitised))),
     );
     const deadline = fixedDeadline(input.stagedAt, input.rule.retention.ingestMs);
-    this.#store.immediate(() => {
-      this.#store.database
+    // The encryption awaited: a disable-all, a revocation or an account purge may have removed this work meanwhile.
+    // Insert only while its stage (when it has one), its rule version and the switch are all still live; otherwise
+    // there is nothing to keep, and a purged projection is never recreated (D12).
+    return this.#store.immediate(() => {
+      const database = this.#store.database;
+      if (input.stageId !== undefined) {
+        const stage = database.prepare('SELECT 1 AS present FROM source_scan_state WHERE id = ?').get(input.stageId);
+        if (stage === undefined) return false;
+      }
+      // A revoked version keeps its immutable row as `revoked`, so a revocation during the encryption is visible here.
+      const rule = database
+        .prepare('SELECT state, revoked_at FROM rule_versions WHERE rule_id = ? AND version = ?')
+        .get(input.rule.ruleId, input.rule.version) as { state: string | null; revoked_at: number | null } | undefined;
+      if (rule !== undefined && (rule.revoked_at !== null || rule.state === 'revoked')) return false;
+      const settings = database.prepare('SELECT enabled FROM event_settings WHERE singleton = 1').get() as
+        | { enabled: number }
+        | undefined;
+      if (settings?.enabled !== 1) return false;
+      database
         .prepare(
           `INSERT OR IGNORE INTO ingest_rules (event_id, rule_id, rule_version, decision_deadline, encrypted_projection)
            VALUES (?, ?, ?, ?, ?)`,
         )
         .run(input.eventId, input.rule.ruleId, input.rule.version, deadline, encrypted);
+      return true;
     });
   }
 

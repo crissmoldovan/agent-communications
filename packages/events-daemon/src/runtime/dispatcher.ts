@@ -3,7 +3,7 @@ import type { CanonicalFullRuleDocument, DryRunTargetDocument } from '../domain/
 import type { EventDatabase } from '../store/database.ts';
 import { type EventRecordCipher, RecordStorageError } from '../store/records.ts';
 import { dryrunDeadline } from '../store/retention.ts';
-import { isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
+import { assertLiveGmailAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
 import type { DeliveryRecord } from './deliveries.ts';
 import { type ActiveDisclosableRequest, assertDisclosable } from './disclosure-fence.ts';
 import { EventExpiry } from './expiry.ts';
@@ -145,6 +145,15 @@ export class DryRunDispatcher {
 
     // encrypt opens its own nonce reservation transaction.  It must precede this boundary's immediate transaction.
     const localRecord = await this.#cipher.encrypt(dryRunLocation(claimed.row.id), plaintext);
+    // D9: the account is read again immediately before the append; one removed during decryption or encryption is
+    // purged here, and nothing is appended for it.
+    try {
+      await assertLiveGmailAccount(this.#config, claimed.row.account_id);
+    } catch (error) {
+      if (!isRemovedAccountError(error)) throw error;
+      this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, claimed.row.account_id, this.#now()));
+      return { state: 'terminal', deliveryId };
+    }
     return this.#append(claimed.row, target, localRecord);
   }
 
@@ -190,24 +199,30 @@ export class DryRunDispatcher {
     }
     const rule = ruleFor(this.#store, String(row.rule_id), Number(row.rule_version));
     dryRunTarget(rule, String(row.target_id), Number(row.target_version));
-    try {
-      await this.#fence({
-        database: this.#store.database,
-        approvals: this.#approvals,
-        config: this.#config,
-        accountId: String(row.account_id),
-        boundary: 'read',
-        ruleId: String(row.rule_id),
-        ruleVersion: Number(row.rule_version),
-        targetId: String(row.target_id),
-        targetVersion: Number(row.target_version),
-        switchGeneration: Number(row.switch_generation),
-      });
-    } catch (error) {
-      if (isRemovedAccountError(error))
-        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, String(row.account_id), this.#now()));
-      throw error;
-    }
+    const readFence: ActiveDisclosableRequest = {
+      database: this.#store.database,
+      approvals: this.#approvals,
+      config: this.#config,
+      accountId: String(row.account_id),
+      boundary: 'read',
+      ruleId: String(row.rule_id),
+      ruleVersion: Number(row.rule_version),
+      targetId: String(row.target_id),
+      targetVersion: Number(row.target_version),
+      switchGeneration: Number(row.switch_generation),
+    };
+    const fenced = async (): Promise<void> => {
+      try {
+        await this.#fence(readFence);
+      } catch (error) {
+        if (isRemovedAccountError(error))
+          this.#store.immediate(() =>
+            purgeRemovedAccountWork(this.#store.database, String(row.account_id), this.#now()),
+          );
+        throw error;
+      }
+    };
+    await fenced();
     let plaintext: Buffer;
     try {
       plaintext = await this.#cipher.decrypt(dryRunLocation(deliveryId), row.encrypted_record);
@@ -227,6 +242,13 @@ export class DryRunDispatcher {
       });
       throw new CommsError('BAD_DATA', 'the retained local record is malformed and was purged');
     }
+    // The decryption awaited: a disable, a revocation or an account removal may have purged this record meanwhile.
+    // The fence runs again and the record must still be there before any of its content is returned.
+    await fenced();
+    const still = this.#store.database
+      .prepare('SELECT 1 AS present FROM dryrun_log WHERE delivery_id = ?')
+      .get(deliveryId);
+    if (still === undefined) throw new CommsError('NOT_FOUND', 'the retained local record no longer exists');
     return { ...entry(row), record: JSON.parse(plaintext.toString('utf8')) as DeliveryRecord };
   }
 

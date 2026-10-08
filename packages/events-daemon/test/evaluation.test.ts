@@ -448,12 +448,28 @@ test('EVAL-B1: a taint flush failure leaves no decision or local outbox row', { 
 
 function evaluatorFor(
   setup: Awaited<ReturnType<typeof fixture>>,
-  options: { now: number; fence?: () => Promise<unknown>; onTaint?: () => Promise<void> | void },
+  options: {
+    now: number;
+    fence?: () => Promise<unknown>;
+    onTaint?: () => Promise<void> | void;
+    /** Runs while a projection is being encrypted, before its write transaction. */
+    onProjectionEncrypt?: () => Promise<void> | void;
+    config?: { load(): Promise<unknown> };
+  },
 ) {
   let index = 0;
+  const cipher = {
+    encrypt: async (location: { table: string }, plaintext: Uint8Array) => {
+      const encrypted = await setup.cipher.encrypt(location as never, plaintext);
+      if (location.table === 'ingest_rules') await options.onProjectionEncrypt?.();
+      return encrypted;
+    },
+    decrypt: (location: unknown, stored: Uint8Array) => setup.cipher.decrypt(location as never, stored),
+  };
   return new EventEvaluator({
     store: setup.store,
-    cipher: setup.cipher,
+    cipher: cipher as never,
+    ...(options.config ? { config: options.config as never } : {}),
     now: () => options.now,
     fence: (options.fence ??
       (async () => ({
@@ -602,6 +618,82 @@ test('EVAL-B1: a mapping that rejects an event is one terminal content-free deci
     assert.equal(count(setup, 'deliveries'), 0);
     assert.equal(tainted, 0, 'nothing is disclosed, so nothing is tainted');
     assert.equal(count(setup, 'ingest_rules'), 0);
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('EVAL-B1: a projection purged while it was being encrypted is never recreated (D12)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const cases: Array<[string, (setup: Awaited<ReturnType<typeof fixture>>) => Promise<void> | void, string?]> = [
+    ['disable-all', async (setup) => void (await new EventLifecycle(setup.store).disableAll())],
+    [
+      'rule revocation',
+      (setup) =>
+        void setup.store.database
+          .prepare(
+            `UPDATE rule_versions SET state = 'revoked', approval_id = 'approval',
+             authorization_activation_id = 'activation', activated_at = 1, revoked_at = 2
+             WHERE rule_id = 'rule-evaluation' AND version = 1`,
+          )
+          .run(),
+    ],
+    // The source stage the occurrence came from was purged (an account removal or an expiry) meanwhile.
+    ['stage purge', () => undefined, 'stage-gone'],
+  ];
+  for (const [name, change, stageId] of cases) {
+    const setup = await fixture();
+    try {
+      const evaluator = evaluatorFor(setup, { now: 2_000, onProjectionEncrypt: () => change(setup) });
+      const outcome = await evaluator.admit({
+        event: setup.sourceEvent,
+        eventId: setup.sourceEvent.id,
+        ruleId: 'rule-evaluation',
+        ruleVersion: 1,
+        stagedAt: 1_000,
+        ...(stageId ? { stageId } : {}),
+      });
+      assert.equal(outcome, 'terminal', `${name}: nothing is left to decide`);
+      assert.equal(count(setup, 'ingest_rules'), 0, `${name}: no projection is recreated`);
+      assert.equal(count(setup, 'decisions'), 0, `${name}`);
+      assert.equal(count(setup, 'deliveries'), 0, `${name}`);
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('EVAL-B1: an account removed from the configuration before the commit writes no decision or delivery (D9)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    // No tombstone exists: the configuration is read again immediately before the commit.
+    let removed = false;
+    const evaluator = evaluatorFor(setup, {
+      now: 2_000,
+      onTaint: () => {
+        removed = true;
+      },
+      config: {
+        load: async () => ({ inboxes: removed ? {} : { 'events/gmail': { id: ACCOUNT, provider: 'gmail' } } }),
+      },
+    });
+    const outcome = await evaluator.admit({
+      event: setup.sourceEvent,
+      eventId: setup.sourceEvent.id,
+      ruleId: 'rule-evaluation',
+      ruleVersion: 1,
+      stagedAt: 1_000,
+    });
+    assert.equal(outcome, 'terminal');
+    assert.equal(count(setup, 'decisions'), 0, 'no decision is written for a removed account');
+    assert.equal(count(setup, 'deliveries'), 0, 'no delivery is written for a removed account');
+    assert.equal(count(setup, 'ingest_rules'), 0, 'the projection is purged');
+    assert.equal(count(setup, 'account_revocations'), 1, 'the removal is recorded');
   } finally {
     setup.store.close();
     await rm(setup.stateDir, { recursive: true, force: true });

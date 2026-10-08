@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { ApprovalStore, ConfigStore, canonicalJson, emptyConfig } from '@agentcomms/core';
+import { ApprovalStore, CommsError, ConfigStore, canonicalJson, emptyConfig } from '@agentcomms/core';
 import { ImmutableVersions } from '../src/domain/versions.ts';
 import { ActivationRuntime, type PreparedActivation } from '../src/runtime/activations.ts';
 import { EventExpiry } from '../src/runtime/expiry.ts';
@@ -888,6 +888,134 @@ test('APR-B1: a baseline that returns after a disable-all cancelled its activati
     assert.equal(count('activation_baselines'), 0, 'the purged baseline is not recreated');
     assert.equal(count('replacement_drains'), 0);
     assert.equal(versions.activeVersion('rule', rule.ruleId), null, 'and no pointer is installed');
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+/** Removes the primary events mailbox from core's configuration on disk, as `inbox remove` would. */
+async function removeAccount(root: string): Promise<void> {
+  const path = join(root, 'config', 'config.json');
+  const config = JSON.parse(await readFile(path, 'utf8')) as { inboxes: Record<string, unknown> };
+  delete config.inboxes['events/gmail'];
+  await writeFile(path, `${JSON.stringify(config)}\n`);
+}
+
+test('APR-B1: an account removed from the configuration during the baseline or the point encryption installs nothing (D9)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  for (const stage of ['baseline', 'point'] as const) {
+    let root = '';
+    let pointEncrypts = 0;
+    const setup = await fixture(
+      stage === 'baseline'
+        ? {
+            encryptBaseline: async (_intentId, _accountId, position) => {
+              await removeAccount(root);
+              return Buffer.from(JSON.stringify(position));
+            },
+            encryptPoint: async (input) => {
+              pointEncrypts += 1;
+              return Buffer.from(JSON.stringify(input.position));
+            },
+          }
+        : {
+            encryptPoint: async (input) => {
+              await removeAccount(root);
+              return Buffer.from(JSON.stringify(input.position));
+            },
+          },
+    );
+    root = setup.root;
+    try {
+      const versions = new ImmutableVersions(setup.store.database);
+      versions.createTarget(target);
+      versions.createRule(rule);
+      const prepared = (await setup.runtime.prepareRule({
+        ruleId: rule.ruleId,
+        version: rule.version,
+      })) as PreparedActivation;
+      const answer = await setup.approvals.issueDisclosureChallenge(prepared.approvalId);
+      await assert.rejects(
+        () => setup.runtime.approve({ approvalId: prepared.approvalId, answer }),
+        (error: unknown) => error instanceof CommsError && error.details?.reason === 'ACCOUNT_REMOVED',
+        `${stage}: the removal refuses the activation`,
+      );
+      const count = (table: string) =>
+        (setup.store.database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
+      assert.equal(count('activation_baselines'), 0, `${stage}: no baseline is kept for a removed account`);
+      assert.equal(count('rule_activation_points'), 0, `${stage}: no activation point is installed`);
+      assert.equal(count('cursors'), 0, `${stage}: no cursor is installed`);
+      assert.equal(versions.activeVersion('rule', rule.ruleId), null, `${stage}: and no pointer`);
+      assert.equal(
+        (
+          setup.store.database.prepare('SELECT status FROM activation_intents WHERE id = ?').get(prepared.intentId) as {
+            status: string;
+          }
+        ).status,
+        'cancelled',
+        `${stage}: the intent is cancelled, never retried`,
+      );
+      assert.equal(count('account_revocations'), 1, `${stage}: the removal is recorded`);
+      if (stage === 'baseline') assert.equal(pointEncrypts, 0, 'the baseline refuses before any point is prepared');
+    } finally {
+      setup.store.close();
+      await rm(setup.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('P1-B1: an account removed from the configuration while its activation point decrypts gets no initial cursor (D9)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createTarget(target);
+    versions.createRule(rule);
+    const prepared = (await setup.runtime.prepareRule({
+      ruleId: rule.ruleId,
+      version: rule.version,
+    })) as PreparedActivation;
+    const answer = await setup.approvals.issueDisclosureChallenge(prepared.approvalId);
+    await setup.runtime.approve({ approvalId: prepared.approvalId, answer });
+    setup.store.database.prepare('UPDATE event_settings SET enabled = 1').run();
+    let removed = false;
+    let sources = 0;
+    const scheduler = new EventScheduler({
+      store: setup.store,
+      lifecycle: new EventLifecycle(setup.store),
+      activations: setup.runtime,
+      dispatcher: { recoverLeases: async () => undefined, dispatch: async () => undefined } as never,
+      expiry: new EventExpiry(setup.store, setup.time.now),
+      cipher: {
+        encrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+        decrypt: async (_location: unknown, value: Uint8Array) => {
+          if (!removed) {
+            removed = true;
+            await removeAccount(setup.root);
+          }
+          return Buffer.from(value);
+        },
+      } as never,
+      approvals: setup.approvals,
+      config: setup.configStore,
+      taint: { record: async () => undefined } as never,
+      gmailSourceFor: async () => {
+        sources += 1;
+        throw new Error('a removed account must not reach its provider');
+      },
+      mailboxLock: setup.mailboxLock,
+      now: setup.time.now,
+    });
+    await scheduler.tick();
+    const count = (table: string) =>
+      (setup.store.database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
+    assert.equal(removed, true, 'the point was decrypted');
+    assert.equal(count('cursors'), 0, 'no cursor is installed for the removed account');
+    assert.equal(sources, 0, 'and its provider is never opened');
+    assert.equal(count('account_revocations'), 1, 'the removal is recorded');
   } finally {
     setup.store.close();
     await rm(setup.root, { recursive: true, force: true });

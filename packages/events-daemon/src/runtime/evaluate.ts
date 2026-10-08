@@ -2,7 +2,7 @@ import { type ApprovalStore, CommsError, type ConfigStore } from '@agentcomms/co
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import type { EventDatabase } from '../store/database.ts';
 import { fixedDeadline } from '../store/retention.ts';
-import { isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
+import { assertLiveGmailAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
 import { commitDecisionOutbox, type DecisionFailpoint, StaleDecisionError } from './decisions.ts';
 import { prepareDeliveries } from './deliveries.ts';
 import type { ActiveDisclosableRequest, DisclosureSnapshot } from './disclosure-fence.ts';
@@ -48,6 +48,7 @@ export class EventEvaluator {
   readonly #newId: () => string;
   readonly #failpoint: EventEvaluatorOptions['failpoint'];
   readonly #fence: NonNullable<EventEvaluatorOptions['fence']>;
+  readonly #config: Pick<ConfigStore, 'load'> | undefined;
 
   constructor(options: EventEvaluatorOptions) {
     this.#store = options.store;
@@ -57,6 +58,7 @@ export class EventEvaluator {
     this.#now = options.now ?? Date.now;
     this.#newId = options.newId ?? (() => crypto.randomUUID());
     this.#failpoint = options.failpoint;
+    this.#config = options.config;
     if (options.fence) this.#fence = options.fence;
     else {
       if (!options.approvals || !options.config)
@@ -76,13 +78,22 @@ export class EventEvaluator {
     readonly ruleId: string;
     readonly ruleVersion: number;
     readonly stagedAt: number;
+    readonly stageId?: string | undefined;
   }): Promise<'terminal' | 'pending'> {
     const terminal = this.#store.database
       .prepare('SELECT 1 AS present FROM decisions WHERE event_id = ? AND rule_id = ? AND rule_version = ?')
       .get(input.eventId, input.ruleId, input.ruleVersion);
     if (terminal !== undefined) return 'terminal';
     const rule = ruleFor(this.#store, input.ruleId, input.ruleVersion);
-    await this.#projections.insert({ eventId: input.eventId, rule, event: input.event, stagedAt: input.stagedAt });
+    const kept = await this.#projections.insert({
+      eventId: input.eventId,
+      rule,
+      event: input.event,
+      stagedAt: input.stagedAt,
+      stageId: input.stageId,
+    });
+    // Purged while it was being encrypted: there is nothing left to decide for this rule version.
+    if (!kept) return 'terminal';
     return this.evaluate({ eventId: input.eventId, ruleId: input.ruleId, ruleVersion: input.ruleVersion });
   }
 
@@ -105,6 +116,7 @@ export class EventEvaluator {
       ruleId: input.rule.ruleId,
       ruleVersion: input.rule.ruleVersion,
       stagedAt: stage.staged_at,
+      stageId: input.stageId,
     });
   }
 
@@ -198,6 +210,17 @@ export class EventEvaluator {
         accountId: ingest.account_id,
         classification: evaluated.classification,
       });
+    // D9: the account is read again immediately before the commit; one removed during the decryption, encryption or
+    // taint flush is purged here, and its decision and deliveries are never written.
+    if (this.#config !== undefined) {
+      try {
+        await assertLiveGmailAccount(this.#config, ingest.account_id);
+      } catch (error) {
+        if (!isRemovedAccountError(error)) throw error;
+        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, ingest.account_id, this.#now()));
+        return 'terminal';
+      }
+    }
     return this.#commit(() =>
       commitDecisionOutbox(
         this.#store,
