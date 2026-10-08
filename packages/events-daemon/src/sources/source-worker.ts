@@ -249,6 +249,21 @@ export class GmailSourceWorker {
     }
   }
 
+  #firstActivationFenced(): boolean {
+    return (
+      this.#store.database
+        .prepare(
+          `SELECT 1 AS present
+           FROM activation_baselines JOIN activation_intents ON activation_intents.id = activation_baselines.intent_id
+           WHERE activation_baselines.source = 'gmail' AND activation_baselines.account_id = ?
+             AND activation_baselines.position_scope = 'mailbox'
+             AND activation_intents.status = 'pending-completion'
+             AND activation_intents.replacement_of_version IS NULL`,
+        )
+        .get(this.#mailbox.accountId) !== undefined
+    );
+  }
+
   #write<T>(work: () => T): T {
     return this.#store.immediate(() => {
       this.assertScanLive();
@@ -275,6 +290,11 @@ export class GmailSourceWorker {
       startedAt: this.#now(),
     };
     try {
+      // D12's activation-completion scope fence: a claimed first activation pauses every commit on this mailbox from
+      // before its getProfile (the mailbox lock covers that call) until its finalisation installs the point and drops
+      // the baseline. Otherwise an active rule could move the shared cursor past P meanwhile, and the new version —
+      // starting at P — would never see what it consumed. A stuck claim fails at its deadline, which lifts the fence.
+      if (this.#firstActivationFenced()) return { cursor: this.#cursor(), pending: true };
       return await this.#scanFromSnapshot();
     } catch (error) {
       if (error instanceof StaleScanError) return { cursor: this.#cursor(), pending: true };
