@@ -531,3 +531,41 @@ test('RET-B1: the sweep purges an expired projection with its content-free reten
     await rm(setup.stateDir, { recursive: true, force: true });
   }
 });
+
+test('DEL-B1: a pause stops delivery claims — before a claim, and after one when the pause comes first to the append (D12)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    setup.insert('paused-before');
+    setup.store.database.exec('UPDATE event_settings SET paused = 1');
+    assert.deepEqual(await setup.dispatcher().dispatch('paused-before'), {
+      state: 'paused',
+      deliveryId: 'paused-before',
+    });
+    assert.equal(count(setup.store, 'dryrun_log'), 0);
+    assert.equal(count(setup.store, 'delivery_cap_charges'), 0);
+    setup.store.database.exec('UPDATE event_settings SET paused = 0');
+
+    setup.insert('paused-during');
+    const pausing = setup.dispatcher({
+      fence: async () => {
+        setup.store.database.exec('UPDATE event_settings SET paused = 1');
+        return { switchGeneration: 7 };
+      },
+    });
+    assert.deepEqual(await pausing.dispatch('paused-during'), { state: 'paused', deliveryId: 'paused-during' });
+    const row = setup.store.database
+      .prepare("SELECT state, lease_until FROM deliveries WHERE id = 'paused-during'")
+      .get() as {
+      state: string;
+      lease_until: number | null;
+    };
+    assert.deepEqual({ ...row }, { state: 'queued', lease_until: null }, 'the work waits, released, for a resume');
+    assert.equal(count(setup.store, 'dryrun_log'), 0);
+    assert.equal(count(setup.store, 'delivery_cap_charges'), 0);
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});

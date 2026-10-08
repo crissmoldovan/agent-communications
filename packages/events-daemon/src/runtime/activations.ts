@@ -147,6 +147,9 @@ export class ActivationRuntime {
   }
 
   async prepareRule(input: { readonly ruleId: string; readonly version: number }): Promise<PreparedRuleActivation> {
+    // A tightening swaps the pointer at once and an exact replacement plans against it: neither may move a pointer a
+    // claimed completion is still working against (it would wedge that completion and its drain for good).
+    await this.assertNoCompletingMutation(input.ruleId);
     const versions = new ImmutableVersions(this.#store.database);
     const document = versions.prepareRule(input.ruleId, input.version);
     const active = versions.activeVersion('rule', input.ruleId);
@@ -253,14 +256,22 @@ export class ActivationRuntime {
     return this.#approvals.issueDisclosureChallenge(approvalId);
   }
 
-  /** Every pointer mutation joins claimed completion work before it makes a concurrent mutation. */
-  async assertNoCompletingMutation(): Promise<void> {
+  /**
+   * Every rule-pointer mutation joins claimed completion work first (D12). With a rule id it is refused only while a
+   * completing activation binds that rule (its first activation or replacement) or while an enable-all completes,
+   * which fences every rule pointer; without one, while anything completes. Only revoking actions cancel instead.
+   */
+  async assertNoCompletingMutation(ruleId?: string): Promise<void> {
     const rows = this.#store.database
       .prepare(
-        "SELECT approval_id FROM activation_intents WHERE status = 'pending-completion' AND approval_id IS NOT NULL",
+        "SELECT approval_id, kind, document FROM activation_intents WHERE status = 'pending-completion' AND approval_id IS NOT NULL",
       )
-      .all() as Array<{ approval_id: string }>;
+      .all() as Array<{ approval_id: string; kind: string; document: string }>;
     for (const row of rows) {
+      if (ruleId !== undefined && row.kind !== 'enable-all') {
+        const bound = (JSON.parse(row.document) as { rule?: { ruleId?: unknown } }).rule?.ruleId;
+        if (bound !== ruleId) continue;
+      }
       const record = await this.#approvals.get(row.approval_id);
       if (record?.form === 'v2' && record.record.kind === 'disclosure' && record.record.state === 'used') {
         throw new CommsError('TRANSIENT', 'a claimed activation is completing; retry this mutation shortly', {
@@ -326,7 +337,8 @@ export class ActivationRuntime {
         continue;
       }
       if (record.record.state === 'approved') {
-        const binding = this.#liveBinding(intent);
+        const binding = this.#settleOnDrift(intent);
+        if (binding === null) continue;
         const used = await this.#approvals.claimForDisclosure(intent.approval_id, binding);
         if (used.usedAt === undefined)
           throw new CommsError('BAD_DATA', 'the used disclosure approval has no usedAt value');
@@ -334,7 +346,8 @@ export class ActivationRuntime {
         continue;
       }
       if (record.record.state !== 'used' || record.record.usedAt === undefined) continue;
-      const binding = this.#liveBinding(intent);
+      const binding = this.#settleOnDrift(intent);
+      if (binding === null) continue;
       if (canonicalJson(record.record.disclosure) !== canonicalJson(binding)) {
         this.#cancel(intent.id, 'APPROVAL_BINDING_DRIFT');
         continue;
@@ -374,12 +387,38 @@ export class ActivationRuntime {
         this.#cancel(intent.id, 'APPROVAL_ABSENT');
         continue;
       }
-      const binding = this.#liveBinding(intent);
+      const binding = this.#settleOnDrift(intent);
+      if (binding === null) continue;
       if (record.record.usedAt === undefined || canonicalJson(record.record.disclosure) !== canonicalJson(binding)) {
         this.#cancel(intent.id, 'APPROVAL_BINDING_DRIFT');
         continue;
       }
-      await this.#claimAndComplete(intent, record.record.usedAt);
+      try {
+        await this.#claimAndComplete(intent, record.record.usedAt);
+      } catch (error) {
+        // One intent still draining, or settled as void, never holds back the others in this pass.
+        if (
+          error instanceof CommsError &&
+          (error.code === 'APPROVAL_VOID' || error.details?.reason === 'REPLACEMENT_DRAINING')
+        )
+          continue;
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * The live binding of a claimed intent, or null after settling it: a binding that no longer holds (its pointer or
+   * plan moved) can never complete, so it is cancelled — baselines and drain rows with it — rather than thrown on
+   * every tick and at every startup, where it would hold its drain's mailbox and keep the owner from starting.
+   */
+  #settleOnDrift(intent: IntentRow): DisclosureBinding | null {
+    try {
+      return this.#liveBinding(intent);
+    } catch (error) {
+      if (!(error instanceof CommsError) || error.code !== 'APPROVAL_VOID') throw error;
+      this.#store.immediate(() => this.#cancel(intent.id, 'APPROVAL_BINDING_DRIFT'));
+      return null;
     }
   }
 

@@ -254,7 +254,7 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
 
   try {
     expiry.sweep();
-    await dispatcher.recoverLeases();
+    // Expired delivery leases are recovered by the scheduler's ticks, which claim nothing while paused or disabled.
     await recoverActivations(activations);
     await writeToken(paths, token);
     control = await startControlServer({

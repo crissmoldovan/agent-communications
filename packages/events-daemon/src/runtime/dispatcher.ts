@@ -51,7 +51,15 @@ export interface DryRunSummary {
 export type DispatchResult =
   | { readonly state: 'delivered'; readonly deliveryId: string }
   | {
-      readonly state: 'waiting-cap' | 'waiting-reset' | 'busy' | 'missing' | 'terminal' | 'expired' | 'unreadable';
+      readonly state:
+        | 'waiting-cap'
+        | 'waiting-reset'
+        | 'paused'
+        | 'busy'
+        | 'missing'
+        | 'terminal'
+        | 'expired'
+        | 'unreadable';
       readonly deliveryId: string;
     };
 
@@ -252,6 +260,8 @@ export class DryRunDispatcher {
     | { readonly kind: Exclude<DispatchResult['state'], 'delivered' | 'unreadable'> }
     | { readonly kind: 'claimed'; readonly row: DeliveryRow } {
     return this.#store.immediate(() => {
+      // D12: an operational pause stops delivery claims — startup lease recovery included.
+      if (this.#paused()) return { kind: 'paused' };
       const row = deliveryById(this.#store, deliveryId);
       if (!row) return { kind: 'missing' };
       const now = this.#now();
@@ -282,11 +292,16 @@ export class DryRunDispatcher {
         return { state: 'expired', deliveryId: row.id };
       }
       const setting = this.#store.database
-        .prepare('SELECT enabled, switch_generation FROM event_settings WHERE singleton = 1')
-        .get() as { enabled: number; switch_generation: number } | undefined;
+        .prepare('SELECT enabled, paused, switch_generation FROM event_settings WHERE singleton = 1')
+        .get() as { enabled: number; paused: number; switch_generation: number } | undefined;
       if (setting?.enabled !== 1 || setting.switch_generation !== current.switch_generation) {
         this.#cancel(current.id);
         return { state: 'terminal', deliveryId: row.id };
+      }
+      // A pause that began after the claim still wins: the work waits, encrypted, for a resume.
+      if (setting.paused === 1) {
+        this.#release(current);
+        return { state: 'paused', deliveryId: row.id };
       }
       const barrier = this.#store.database
         .prepare(
@@ -340,6 +355,13 @@ export class DryRunDispatcher {
         .run(now, current.id);
       return { state: 'delivered', deliveryId: row.id };
     });
+  }
+
+  #paused(): boolean {
+    const row = this.#store.database.prepare('SELECT paused FROM event_settings WHERE singleton = 1').get() as
+      | { paused: number }
+      | undefined;
+    return row?.paused === 1;
   }
 
   #release(row: DeliveryRow): void {
