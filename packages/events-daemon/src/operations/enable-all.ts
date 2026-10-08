@@ -1,8 +1,9 @@
 import { EventControlClient } from '../control/client.ts';
-import type { PauseResult } from './pause.ts';
-
-export interface EnableAllResult extends PauseResult {
-  readonly standingApprovalRequired: true;
+export interface EnableAllResult {
+  readonly intentId: string;
+  readonly approvalId: string;
+  readonly kind: 'enable-all';
+  readonly status: 'pending';
 }
 
 /** The disclosure approval/activation route lands with the immutable activation work in Batch 3. */

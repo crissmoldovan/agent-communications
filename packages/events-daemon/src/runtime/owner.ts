@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { chmod, lstat, readFile, rm, writeFile } from 'node:fs/promises';
-import { CommsError, resolvePaths } from '@agentcomms/core';
+import { CommsError, openCore, resolvePaths } from '@agentcomms/core';
+import { CATALOGUE } from '@agentcomms/events';
+import { createGmailEventSource } from '@agentcomms/gmail';
 import { probeControl } from '../control/client.ts';
 import {
   assertControlSupported,
@@ -20,10 +22,17 @@ import {
 } from '../control/instance.ts';
 import type { ControlRequest } from '../control/protocol.ts';
 import { type RunningControlServer, startControlServer } from '../control/server.ts';
+import { EventDomainError } from '../domain/lifecycle.ts';
+import { ImmutableVersions } from '../domain/versions.ts';
 import { openEventDatabase } from '../store/database.ts';
+import { openEventSecretStore } from '../store/event-secrets.ts';
+import { EventRecordCipher } from '../store/records.ts';
+import { ActivationRuntime } from './activations.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
+import { recoverActivations } from './recovery.ts';
+import { disableRule, removeTarget } from './revocations.ts';
 
 export interface EventOwnerStatus extends EventLifecycleStatus {
   readonly owner: 'running';
@@ -40,7 +49,9 @@ interface StartedOwner extends EventOwner {
   readonly instance: EventInstanceRecord;
 }
 
-export async function startEventOwner(options: { readonly stateDir?: string | undefined } = {}): Promise<EventOwner> {
+export async function startEventOwner(
+  options: { readonly stateDir?: string | undefined; readonly configDir?: string | undefined } = {},
+): Promise<EventOwner> {
   assertControlSupported();
   const stateDir = options.stateDir ?? resolvePaths().stateDir;
   const paths = await ensureEventPaths(eventPaths(stateDir));
@@ -50,6 +61,48 @@ export async function startEventOwner(options: { readonly stateDir?: string | un
   const lock = await acquireWithStaleRecovery(paths);
   const database = await openEventDatabase({ stateDir });
   const lifecycle = new EventLifecycle(database);
+  const core = openCore({
+    pathOverrides: {
+      stateDir,
+      ...(options.configDir === undefined ? {} : { configDir: options.configDir }),
+    },
+  });
+  const eventSecrets = await openEventSecretStore({
+    database: database.database,
+    paths: database.paths,
+    configDir: core.paths.configDir,
+  });
+  const cipher = new EventRecordCipher(database.database, eventSecrets);
+  const activations = new ActivationRuntime({
+    store: database,
+    approvals: core.approvals,
+    config: core.config,
+    gmailSourceFor: async (accountId) => {
+      const config = await core.config.load();
+      const alias = Object.entries(config.inboxes).find(
+        ([, inbox]) => inbox.id === accountId && inbox.provider === 'gmail',
+      )?.[0];
+      if (!alias)
+        throw new CommsError('NOT_FOUND', 'the Gmail account bound to this activation is no longer connected');
+      // `openCore` is bundled through the package boundary while the adapter uses its source declaration; their
+      // private ConfigStore types are nominally distinct but this is the exact core instance created above.
+      return createGmailEventSource({ alias, core: core as never });
+    },
+    encryptBaseline: async (intentId, accountId, position) =>
+      cipher.encrypt(
+        {
+          table: 'activation_baselines',
+          column: 'encryptedPosition',
+          key: [
+            { type: 'text', value: intentId },
+            { type: 'text', value: 'gmail' },
+            { type: 'text', value: accountId },
+            { type: 'text', value: 'mailbox' },
+          ],
+        },
+        Buffer.from(JSON.stringify(position)),
+      ),
+  });
   const token = randomBytes(32).toString('hex');
   const instance = newInstanceRecord(controlEndpoint(paths), token);
   let control: RunningControlServer | undefined;
@@ -81,11 +134,13 @@ export async function startEventOwner(options: { readonly stateDir?: string | un
   };
 
   try {
+    await recoverActivations(activations);
     await writeToken(paths, token);
     control = await startControlServer({
       endpoint: instance.endpoint,
       token,
-      handle: async (request) => handleControl(owner, lifecycle, database.installationId, request),
+      handle: async (request) =>
+        handleControl(owner, lifecycle, database.installationId, database, activations, request),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
     await chmod(instance.endpoint, 0o600);
@@ -99,7 +154,9 @@ export async function startEventOwner(options: { readonly stateDir?: string | un
 }
 
 /** Runs the owner until a local stop request or a terminal signal closes it cleanly. */
-export async function runEventOwner(options: { readonly stateDir?: string | undefined } = {}): Promise<void> {
+export async function runEventOwner(
+  options: { readonly stateDir?: string | undefined; readonly configDir?: string | undefined } = {},
+): Promise<void> {
   const owner = await startEventOwner(options);
   const stop = () => {
     void owner.stop();
@@ -119,6 +176,8 @@ async function handleControl(
   owner: EventOwner,
   lifecycle: EventLifecycle,
   installationId: string,
+  database: Awaited<ReturnType<typeof openEventDatabase>>,
+  activations: ActivationRuntime,
   request: ControlRequest,
 ): Promise<unknown> {
   switch (request.operation) {
@@ -136,12 +195,130 @@ async function handleControl(
     case 'disable-all':
       return lifecycle.disableAll();
     case 'enable-all':
-      return lifecycle.enableAll();
+      return activations.prepareEnableAll();
     case 'doctor':
       return { ...owner.status(), protocolVersions: [1], installationId };
+    case 'catalogue-list':
+      return CATALOGUE.map((definition) => ({ type: definition.type, version: definition.version }));
+    case 'catalogue-show': {
+      const type = requiredText(request.args.type, 'catalogue type');
+      const definition = CATALOGUE.find((candidate) => candidate.type === type);
+      if (!definition) throw new CommsError('NOT_FOUND', 'the requested event type is not in the local catalogue');
+      return { type: definition.type, version: definition.version, channel: definition.type.split('.')[0] };
+    }
+    case 'sources-list':
+      return sourceRows(database);
+    case 'source-show':
+      return sourceShow(database, requiredText(request.args.source, 'source'));
+    case 'rules-list':
+      return ruleRows(database);
+    case 'rule-show':
+      return ruleShow(database, requiredText(request.args.ruleId, 'rule id'));
+    case 'rule-create':
+    case 'rule-update':
+      return createRule(database, request.args.document);
+    case 'rule-enable':
+      return activations.prepareRule({
+        ruleId: requiredText(request.args.ruleId, 'rule id'),
+        version: requiredVersion(request.args.version, 'rule version'),
+      });
+    case 'rule-disable':
+    case 'rule-remove':
+      return disableRule(database, activations, requiredText(request.args.ruleId, 'rule id'));
+    case 'targets-list':
+      return targetRows(database);
+    case 'target-add':
+    case 'target-update':
+      return createTarget(database, request.args.document);
+    case 'target-remove':
+      return removeTarget(database, activations, requiredText(request.args.targetId, 'target id'));
+    case 'approve-challenge':
+      return activations.issueChallenge(requiredText(request.args.approvalId, 'approval id'));
+    case 'approve':
+      return activations.approve({
+        approvalId: requiredText(request.args.approvalId, 'approval id'),
+        answer: requiredText(request.args.answer, 'approval answer'),
+      });
     default:
       throw new CommsError('USAGE', 'the local event control operation is not recognised');
   }
+}
+
+function requiredText(value: unknown, name: string): string {
+  if (typeof value !== 'string' || value.length === 0) throw new CommsError('USAGE', `${name} is required`);
+  return value;
+}
+
+function requiredVersion(value: unknown, name: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1)
+    throw new CommsError('USAGE', `${name} is a positive integer`);
+  return value as number;
+}
+
+function domain<T>(work: () => T): T {
+  try {
+    return work();
+  } catch (error) {
+    if (error instanceof EventDomainError)
+      throw new CommsError('BAD_DATA', error.message, { details: { reason: error.code } });
+    throw error;
+  }
+}
+
+function ruleRows(database: Awaited<ReturnType<typeof openEventDatabase>>): unknown[] {
+  return database.database
+    .prepare(
+      'SELECT rule_id, version, digest, state, approval_id, authorization_activation_id FROM rule_versions ORDER BY rule_id, version',
+    )
+    .all();
+}
+
+function ruleShow(database: Awaited<ReturnType<typeof openEventDatabase>>, ruleId: string): unknown[] {
+  const rows = database.database
+    .prepare(
+      'SELECT document, digest, state, approval_id, authorization_activation_id FROM rule_versions WHERE rule_id = ? ORDER BY version',
+    )
+    .all(ruleId) as Array<{
+    document: string;
+    digest: string;
+    state: string | null;
+    approval_id: string | null;
+    authorization_activation_id: string | null;
+  }>;
+  if (rows.length === 0) throw new CommsError('NOT_FOUND', 'the requested rule does not exist');
+  return rows.map((row) => ({ ...row, document: JSON.parse(row.document) }));
+}
+
+function createRule(database: Awaited<ReturnType<typeof openEventDatabase>>, document: unknown): unknown {
+  return domain(() => new ImmutableVersions(database.database).createRule(document));
+}
+
+function targetRows(database: Awaited<ReturnType<typeof openEventDatabase>>): unknown[] {
+  return database.database
+    .prepare('SELECT target_id, version, digest, revoked_at FROM target_versions ORDER BY target_id, version')
+    .all();
+}
+
+function createTarget(database: Awaited<ReturnType<typeof openEventDatabase>>, document: unknown): unknown {
+  return domain(() => new ImmutableVersions(database.database).createTarget(document as never));
+}
+
+function sourceRows(database: Awaited<ReturnType<typeof openEventDatabase>>): unknown[] {
+  const rows = database.database
+    .prepare("SELECT document FROM rule_versions WHERE state IN ('active', 'superseded')")
+    .all() as Array<{ document: string }>;
+  const accounts = new Set<string>();
+  for (const row of rows) {
+    const document = JSON.parse(row.document) as { source?: { channel?: string; accountIds?: unknown } };
+    if (document.source?.channel !== 'gmail' || !Array.isArray(document.source.accountIds)) continue;
+    for (const accountId of document.source.accountIds) if (typeof accountId === 'string') accounts.add(accountId);
+  }
+  return [...accounts].sort().map((accountId) => ({ source: 'gmail', accountId, cursorScope: 'mailbox' }));
+}
+
+function sourceShow(database: Awaited<ReturnType<typeof openEventDatabase>>, source: string): unknown {
+  if (source !== 'gmail') throw new CommsError('NOT_FOUND', 'the requested source is not configured');
+  return { source, accounts: sourceRows(database) };
 }
 
 async function acquireWithStaleRecovery(paths: EventPaths): Promise<EventOwnerLock> {
