@@ -130,7 +130,15 @@ export class EventRecordCipher {
     }
   }
 
-  /** Re-encrypts every B1 packed column in small SQLite write batches under a newly generated master. */
+  /**
+   * Re-encrypts every B1 packed column in small SQLite write batches under a newly generated master.
+   *
+   * Precondition, owed by its caller: no writer may hold ciphertext between `encrypt()` and its own write across the
+   * rotation. A record a worker encrypted under the old master before `rotateMaster()` and wrote after the last pass
+   * would stay under the retired key (still readable: retired masters are kept). B1 exposes no caller; the B3 operation
+   * that does must stop the owner's writers and await their in-flight work first, and destroying a retired master must
+   * refuse while any record still names it (plan, "PR #59 review (Blocks)" row).
+   */
   async rotateAndReencrypt(options: { readonly batchSize?: number | undefined } = {}): Promise<RotationResult> {
     const batchSize = options.batchSize ?? 100;
     if (!Number.isSafeInteger(batchSize) || batchSize < 1)
