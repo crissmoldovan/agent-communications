@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   CATALOGUE,
   canonicalJson,
@@ -26,7 +27,8 @@ import {
 } from './appendix/records.ts';
 import { ajvOracle, mutationCorpus } from './support/schema-oracle.ts';
 
-const PACKAGE_ROOT = new URL('..', import.meta.url).pathname;
+// A path, not a URL's pathname: on Windows the pathname is `/D:/…`, which `join` turns into `D:\D:\…`.
+const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const transcription = JSON.parse(
   readFileSync(join(PACKAGE_ROOT, 'test/fixtures/catalogue-v1.json'), 'utf8'),
 ) as Transcription;
