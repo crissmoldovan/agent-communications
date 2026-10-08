@@ -229,8 +229,10 @@ export class ActivationRuntime {
           point.ruleVersion !== parent.version ||
           (live.has(point.accountId) && this.#holdsActivePoint(parent.ruleId, parent.version, point.accountId)),
       );
+      await this.#assertScopeConfigured(document.rule.source.accountIds);
       return this.#prepare(document, points, { switchGeneration: this.#switch().generation }, oldId);
     }
+    await this.#assertScopeConfigured(document.rule.source.accountIds);
     const points = pointsForRule(document.rule);
     return this.#prepare(document, points, { switchGeneration: this.#switch().generation });
   }
@@ -573,16 +575,30 @@ export class ActivationRuntime {
                 const oldRule = current.replacement_of_version;
                 const oldInScope = this.#replacementIncludesAccount(oldRule, accountId);
                 const newInScope = document.kind === 'rule' && document.rule.source.accountIds.includes(accountId);
+                // D4 step 2: with the global switch disabled no source work runs to drain the old version, and
+                // `disable-all` already terminalised its old work — so every union scope is re-baselined to P and its
+                // drain is recorded drained in this same transaction.
+                const disabled = !this.#switch().enabled;
                 // A new-only scope gets its own P activation point but owes no old-version occurrence, so it must not
                 // leave an impossible drain open waiting for a worker that never ran the old rule there.
                 if (oldInScope) {
                   this.#store.database
                     .prepare(
                       `INSERT OR IGNORE INTO replacement_drains
-                       (intent_id, source, account_id, position_scope, old_in_scope, new_in_scope)
-                       VALUES (?, 'gmail', ?, 'mailbox', ?, ?)`,
+                       (intent_id, source, account_id, position_scope, old_in_scope, new_in_scope, drained_at)
+                       VALUES (?, 'gmail', ?, 'mailbox', ?, ?, ?)`,
                     )
-                    .run(current.id, accountId, 1, newInScope ? 1 : 0);
+                    .run(current.id, accountId, 1, newInScope ? 1 : 0, disabled ? this.#now() : null);
+                }
+                if (disabled) {
+                  this.#store.database
+                    .prepare(
+                      `INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at)
+                       VALUES ('gmail', ?, 'mailbox', ?, ?)
+                       ON CONFLICT(source, account_id, cursor_scope)
+                       DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at`,
+                    )
+                    .run(accountId, position.historyId, this.#now());
                 }
               }
             });
@@ -828,6 +844,20 @@ export class ActivationRuntime {
       canonicalFullRuleDocument(JSON.parse(row.document)).source.accountIds.includes(accountId) &&
       this.#holdsActivePoint(row.rule_id, row.version, accountId)
     );
+  }
+
+  /**
+   * K6: nothing is planned for an account outside core's configuration. A version naming one is refused before any
+   * approval exists, rather than approved, claimed and then cancelled at its baseline.
+   */
+  async #assertScopeConfigured(accountIds: readonly string[]): Promise<void> {
+    const live = await liveGmailAccountIds(this.#config);
+    const missing = accountIds.find((accountId) => !live.has(accountId));
+    if (missing !== undefined) {
+      throw new CommsError('NOT_FOUND', 'the rule names a Gmail account that is not connected', {
+        details: { reason: 'ACCOUNT_REMOVED', accountId: missing },
+      });
+    }
   }
 
   /** Whether a version is the active one and holds a cut-over point for an account at its current cut-over. */
