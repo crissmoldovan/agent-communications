@@ -6,15 +6,26 @@ design.  It deliberately does not implement B2 delivery, open an outbound
 network connection in tests, create a send path, or release either
 `@agentcomms/events` or `@agentcomms/events-daemon`.
 
-This plan is based on the completed Phase A library and Phase B1 daemon in
-`feat/events-b1`, and adopts every B1 amendment (B1-A through B1-G) and every
-committee decision through code-review round 8 and K6.  In particular: SQLite
-is owned by the daemon on Node >= 22.16; activation is a durable,
-generation-fenced protocol; disabled work remains content-free; account
-removal purges immediately; a re-added account is dark until a new approved
-activation; an encryption operation reserves its counter before the caller's
-write transaction; and the sealed fakes, rather than real services, are the
-only test transports.
+This plan is rebased on final Phase B1 head `7f2804e1` and main `0.15.1`.
+It adopts every B1 amendment (B1-A through B1-G), K6, and every committee
+decision through **code-review round 10**.  In particular: SQLite is owned by
+the daemon on Node >= 22.16; activation is a durable, generation-fenced
+protocol; disabled work remains content-free; account removal purges
+immediately; a re-added account is dark until a new approved activation; an
+encryption operation reserves its counter before the caller's write
+transaction; and the sealed fakes, rather than real services, are the only
+test transports.
+
+Rounds 9 and 10 bind every Phase-D source, not only Gmail.  A claimed,
+unpublished baseline for a scope with no old-version drain fences its worker
+and first-cursor scheduler install; tightening transfers every staged debt and
+makes an in-flight scan stale; a swap settles old-only debts; and completion
+checks its deadline in the baseline transaction, immediately after baseline,
+and before finalisation writes or settlement.  The scheduler's initial cursor
+also re-reads the published point set inside its insert transaction and does
+nothing if it changed or the scope became fenced.  Tasks 3 and 8 make those
+rules source-neutral and mutation-tested for Slack, both Resend scopes, and
+WhatsApp.
 
 Phase D is one PR-sized body of work, but the implementation commits below are
 deliberately small and independently reviewable.  A source task may not start
@@ -44,6 +55,15 @@ It returns plain candidate data; the daemon alone encrypts/stages, applies
 rules, creates projections, runs taint, and handles dry-run disclosure.  This
 preserves the B1 Gmail trust boundary and ensures no Phase-D source can send.
 
+The dependency direction is strictly **daemon -> channel package**.  A channel
+operation exports only its own read-side structural request/result types and
+does not import, type-import, reference in a manifest, or declare a dependency
+on `@agentcomms/events-daemon`.  The daemon adapts those structural operation
+objects in `sources/contracts.ts`; if a shared data-only type becomes useful,
+it belongs in `@agentcomms/events`, never in the daemon.  This keeps released
+channels installable while the daemon is held and keeps `verify-package.mjs`'s
+cycle/packed-consumer proof meaningful.
+
 The registry is explicit, not discovery-based: Gmail, Slack, Resend, and
 WhatsApp are registered by `runtime/owner.ts`.  An unregistered source option
 is rejected with a stable `SOURCE_UNAVAILABLE` error during the transitional
@@ -70,6 +90,43 @@ SQLite primary keys, `Z_PK`, and pagination positions are never event
 identities.  This chooses a separate source-state table over a polymorphic JSON
 cursor because the transition predicates are safety critical, indexed, and
 need SQL conditional updates.
+
+Every adapter scope uses the shared
+`isSourceScopeFenced(database, source, accountId, scopeId)` predicate.  It is
+true for any claimed activation whose durable baseline covers that scope and
+has no old-version drain, whether the scope is a Gmail mailbox, Slack
+conversation, Resend received/status stream, or WhatsApp chat.  The worker
+checks it before a provider call; the scheduler holds that same scope lock for
+initial-cursor installation and checks it again inside the insert transaction.
+That transaction re-reads the encrypted points published for every currently
+polling version and abandons its insert if their canonical set changed while a
+point was decrypted, or if the scope has become fenced.  A drain-bearing
+replacement remains unfenced so its old version can reach P.
+
+### D-2a — exact source-option subset relation for derived tightening
+
+`classifySourceOptionChange` accepts only two canonical options with the same
+channel and treats a change as `same`, `tightening`, or `loosening`; invalid
+options fail closed.  Arrays are nonempty, duplicate-free, and raw-UTF-8-byte
+sorted before comparison.  The four subset relations are deliberately
+field-by-field:
+
+- Gmail keeps B1's rule: a label-set removal, `any -> inbox|explicit`, or
+  `includeSpamTrash: true -> false` narrows; any added label, inverse selector,
+  or `false -> true` loosens.
+- Slack has `conversationIds`; only a strict subset narrows.  Adding any
+  conversation or replacing a removal with an add/remove mixture loosens.
+- Resend has `kinds`, the nonempty subset of `received|status`; only removing
+  one or more kinds narrows and adding one loosens.
+- WhatsApp has `chatJids: 'all-allowed' | readonly string[]`; `all-allowed`
+  to a nonempty explicit set, or a strict explicit subset, narrows.  An
+  explicit set to `all-allowed`, or adding a chat, loosens.
+
+The classifier cannot waive a source/account mismatch and cannot classify a
+different field, channel, or account set as a derived edit.  A derived
+tightening has a new document digest but inherits byte-identical points, moves
+stage debts to the child, invalidates the parent's snapshot, and makes no
+provider call.  A loosening enters the ordinary approved activation path.
 
 ### D-3 — Slack scan and aggregate reply barrier
 
@@ -174,13 +231,17 @@ first representations, projections, undecided ingest holds, queued/retryable
 pre-disclosure deliveries, dry-run records, future stream records, snapshots,
 and unnecessary future admissions.  Widening produces no backfill.
 
-Phase D defines a `SseFrameVisibilityGate` interface and gives it the exact
-same `assertCurrent` callback used by dry-run.  It ships no transport and no
-SSE record writer.  When B2 lands, its live and replay frame writer must call
-this interface immediately before every frame, under the same list gate.  The
-Phase-D tests exercise the callback with a sealed in-memory frame sink; that
-makes the required every-frame property testable now without taking a B2
-dependency.
+Phase D defines `WhatsAppVisibilityFence.withCurrentSseFrameVisibility(input,
+writeFrame)`.  It acquires the channel operation
+`withCurrentEventVisibility`, applies the durable digest journal, checks the
+raw tuple for `input`, and calls the synchronous `writeFrame` only while that
+same list lock remains held.  It is the only implementation of the structural
+`SseFrameVisibilityGate` interface.  Phase D ships neither a transport nor an
+SSE record writer.  B2's live and replay writers must call this named method
+immediately before **every** frame; no await may sit between its final check
+and the write.  The Phase-D sealed-sink test proves the callback contract now;
+Task 10 proves B2's actual writers obey it after the branches converge, without
+giving Phase D a B2 runtime dependency.
 
 This is stricter than checking the list only during polling.  It is necessary
 because a list may change between discovery and disclosure.
@@ -205,6 +266,26 @@ provider `Retry-After`; a hot Slack reply drain, a Resend detail retry, or a
 large WhatsApp account cannot monopolise the owner.  Resend's throttle rule in
 D-4 is an additional cross-client fairness boundary.
 
+### D-7a — fixed stage deadlines precede every adapter
+
+Every source representation has one immutable `stagedAt` and
+`stageExpiresAt = stagedAt + shortest ingest retention among every rule version
+then owed`; the deadline is never extended.  The common expiry worker runs on
+start-up before a source/worker can inspect or call a provider and on every
+tick.  On restart or downtime past the deadline it atomically purges the
+ciphertext and records only the source's content-free terminal outcome
+(`retention-expired`, or WhatsApp's `expired`).  A provider-materialisation
+retry has its own 24-hour deadline; the earlier deadline wins and an equality
+is retention expiry, so no retry, gap, or provider call follows it.
+
+A no-approval retention tightening runs one transaction that shortens, never
+extends, every derived D-source deadline to `min(current, start + new
+retention)`: shared/staged source rows and their debts, D-source occurrence or
+admission rows, projections, holds, deliveries, dry-run rows, and retained
+metadata.  Rows already due terminate and purge in that transaction.  Task 4a
+owns this common contract and its restart/shortening matrix; Tasks 4–6 supply
+their source-specific fixtures rather than creating separate deadline rules.
+
 ### D-8 — parity rows D owns
 
 Phase D adds no new user command or MCP tool.  It extends the existing
@@ -227,9 +308,10 @@ parity for every newly selectable value.
 
 ### D-9 — schema and package boundaries
 
-The daemon receives one additive migration, `v6_phase_d_local_sources`.  It
-adds the D-owned tables and nullable foreign-key columns without rewriting B1
-rows:
+The coordinator allocates Phase D's one additive migration from the migration
+registry **after rebasing**, rather than naming a number in this plan.  It adds
+the D-owned tables and nullable foreign-key columns to B1-present tables
+without rewriting B1 rows:
 
 - `slack_reply_drains`;
 - `resend_status_state` with its seven-day retention index;
@@ -238,33 +320,67 @@ rows:
   `whatsapp_rule_admissions`;
 - explicit source scan/reset/gap metadata where the generic B1 scan table
   cannot represent the durable boundary; and
-- the nullable WhatsApp identity/visibility references required by D8 on
-  existing ingest, decision, delivery, dry-run, and future stream-log rows.
+- the nullable WhatsApp identity/visibility references required by D8 on the
+  existing ingest, decision, delivery, and dry-run rows.
 
 The migration uses `CHECK`s and uniqueness constraints for source kinds,
 generation/head state, and raw canonical keys.  It is idempotent under the
-existing migration ledger and is covered by an upgrade fixture from B1 v5.
-No table is repurposed for a provider's opaque cursor.  Source packages add an
-explicit workspace dependency to the daemon; `tsdown` keeps all four channel
-packages external, as it already does Gmail, and never bundles a provider or
-native database binary.
+existing migration ledger and is covered by an upgrade fixture from the final
+B1 schema.  No table is repurposed for a provider's opaque cursor.  The daemon
+declares the exact workspace runtime dependencies on Slack, Resend, and
+WhatsApp and externalises them; no channel package imports or depends on the
+daemon.  `tsdown` keeps channel packages external and never bundles a provider
+or native database binary.
 
 ### D-10 — held release contract
 
-The Phase-D PR proposes version `0.14.2-events-d` for release planning only;
-it does not publish or unhold anything.  Its release note is:
+At the time the Phase-D PR is opened, its release owner reads the lockstep
+version from the PR's post-merge target main (for example with
+`git show <target-main>:package.json`), records that source version and date,
+and proposes `MAJOR.(MINOR + 1).0-events-d` for a target version
+`MAJOR.MINOR.PATCH`: a minor prerelease because this is the first held release
+candidate to add three event-source families.  If a different post-merge main
+or semver reason applies, the owner records the new base and reason in the PR
+before proposing the corresponding prerelease.  The plan intentionally
+contains no frozen version literal.  The PR does not publish or unhold
+anything.  Its release note is:
 
 > No changelog: Phase D only adds internal source support to the held local
 > event daemon; no released CLI, MCP, or event package behaviour is available
 > to users.
 
 The PR carries focused synthetic tests, `pnpm verify:parity --strict`,
-`pnpm verify:browser`, `pnpm verify`, source/manifest/reference documentation,
-and provenance describing the branch, exact workspace package versions, and
-the sealed-fake test run.  It contains no real token, API key, address,
-message, workspace, local-store copy, or provider request/response.  Release
-provenance and an actual version bump are deferred until the hold is lifted by
-the release owner.
+`pnpm verify:browser`, `pnpm verify:packages`, and `pnpm verify`, source/
+manifest/reference documentation, and provenance describing the branch, exact
+workspace package versions, and the sealed-fake test run.  It contains no real
+token, API key, address, message, workspace, local-store copy, or provider
+request/response.  Release provenance and an actual version bump are deferred
+until the hold is lifted by the release owner.
+
+### D-11 — Phase D / B2 merge contract
+
+Phase D and B2 may develop in parallel but neither obtains a runtime dependency
+on the other branch.  The coordinator lands Phase D's migration-registry commit
+first.  B2 then rebases onto it, takes the next free migration number/name in
+the rebased registry (never an in-place edit or duplicate number), and owns
+creating `stream_log` with its nullable `whatsapp_message_id` column and its
+foreign-key/index/retention shape.  Phase D owns every D table and WhatsApp
+column in B1-present tables; it must not create a placeholder stream table.  If
+the coordinator exceptionally has to land B2 first, Phase D is rebased and
+renumbered to the next free migration before merge, and B2 adds the named
+stream column in its own forward migration before it reaches main.
+
+When both changes are on one branch, B2's `stream-replay.ts` and
+`sse-dispatcher.ts` call
+`WhatsAppVisibilityFence.withCurrentSseFrameVisibility` for every live and
+`Last-Event-ID` replay frame under the list lock.  The joint
+`phase-d-b2-sse-visibility-contract.test.ts` starts a live writer and a replay
+writer, pauses each after preparation and before the frame write, changes the
+list through real `ChatListStore.update`, then releases it.  It proves no
+hidden tuple reaches either sealed sink, its stream row is purged or refused,
+and an allowed tuple still writes once.  Mutating either B2 writer to bypass
+the named gate must fail this test.  Task 10 is the sole D-plan owner of that
+convergence test.
 
 ## Spec amendments to raise with the owner
 
@@ -276,8 +392,8 @@ until the owner changes the normative text.
 | D-A | D4 requires an `agentcomms` manifest `events` declaration with types, minimum interval, and scopes/key kind, but does not define its strict JSON shape, property names, permitted credential kinds, or interval units. | 993–998 | Use the strict discriminated `events` object in D-1/D-9: `types`, `minimumIntervalMs`, and `access` (`oauth-user` + nonempty `requiredScopes`, `resend-full-access`, or `local-store`). Reject unknown fields. |
 | D-B | The Slack aggregate barrier says replies must be “covered through P”, but does not specify the fixed request upper-bound or how an API whose reply ordering differs from history proves it. | 721 | Persist the parent, fixed `P`, cursor, and exact returned timestamp range; request/paginate until the adapter proves no reply <= `P` remains. If it cannot prove that, preserve the drain and do not finalise. |
 | D-C | Resend status asks for a durable local start time but does not state its storage representation or how a local clock rollback is classified. | 959–965 and 985–990 | Store an ISO-8601 UTC instant plus monotonic scan generation; wall-clock rollback retains the prior high-water start and emits no backfill or gap. |
-| D-D | D9 assigns every SSE-frame list check to Phase D even though B2 owns network delivery and stream-log writing. | 1901–1911 and 2824–2827 | Phase D supplies and tests the mandatory gate interface with a sealed sink; B2 must call it for every live/replay frame. No B2 code or dependency is added here. |
-| D-E | D8 specifies `stream_log` WhatsApp columns although this B1-based branch has no B2 stream table; the parallel B2 migration must not be guessed or made to collide. | 1502–1507 and 1547–1552 | Add D columns only to B1-present tables; reserve the exact WhatsApp column contract in a shared migration/schema helper so B2 creates it in its own forward migration. Do not create a pretend stream table. |
+| D-D | D9 assigns every SSE-frame list check to Phase D even though B2 owns network delivery and stream-log writing. | 1901–1911 and 2824–2827 | Adopt D-11.  Phase D provides `WhatsAppVisibilityFence.withCurrentSseFrameVisibility`; B2's actual live and replay writers call it under the list lock immediately before every frame, and the two branches add the joint list-change-between-preparation-and-write proof after convergence. No D-to-B2 runtime dependency is added. **Coordinator amendment for the B2 plan:** add this exact named call to B2 Tasks 8 and 9, add the joint test and bypass mutations to its Task 10 gate, and assign that B2-side work once. |
+| D-E | D8 specifies `stream_log` WhatsApp columns although this B1-based branch has no B2 stream table; the parallel B2 migration must not be guessed or made to collide. | 1502–1507 and 1547–1552 | Adopt D-11.  Phase D lands the registry first and owns only D tables/B1-present columns; B2 rebases, renumbers to the next free migration, and owns creating `stream_log.whatsapp_message_id` with its D8 constraints. Do not create a pretend stream table. **Coordinator amendment for the B2 plan:** state that rebase/order rule, name B2 as stream-column owner, and make its migration test assert the D column after a final-Phase-D upgrade fixture. |
 | D-F | D9 says a missing list-file account is represented canonically as no entry (`{allow: [], deny: []}`), but does not restate the established channel `Visibility` behaviour for that empty value. | 1864–1873 | Preserve the channel's established empty-list behaviour (no restriction); a read/parse failure—not a missing entry—is hide-all. This avoids silently changing existing list semantics. |
 
 ## The two defect classes designed out up front
@@ -307,15 +423,16 @@ rule removal where applicable.
 
 | New write after await | Required in-transaction re-check | Test that bites it |
 | --- | --- | --- |
-| Generic first-activation baseline, encrypted point, pointer installation, and completion claim | switch/gen, pause, current core account, live version, intent claim, previous pointer | `activation-write-fence.test.ts :: baseline completion loses account/switch/claim` (Task 3) |
-| Generic replacement drain creation/finalisation, derived tightening point, and timeout/recovery transition | switch/gen, live old/new versions, enabled state, exact drain token/row, core account | `replacement-write-fence.test.ts :: stale drain cannot move pointer` (Task 3) |
+| Generic first-activation/new-only baseline, encrypted point, pointer installation, scope-fence removal, and completion claim | switch/gen, pause, current core account, live version, intent claim, previous pointer, exact source/account/scope fence, and deadline before any write | `source-scope-fence.test.ts :: unpublished baseline blocks worker and scheduler` and `activation-write-fence.test.ts :: baseline completion loses account/switch/claim` (Task 3) |
+| Initial-cursor point decryption -> cursor insert | current source/account/scope lock and scope fence, plus an in-transaction re-read of the canonical published-point set | `initial-cursor-fence.test.ts :: changed points or fence abandons insert` (Task 3) |
+| Generic replacement drain creation/finalisation, derived tightening point/debt transfer, old-only debt settlement, and timeout/recovery transition | switch/gen, live old/new versions, enabled state, exact drain token/row, source scope, core account, rule-set generation, and deadline before finalisation writes or settlement | `replacement-write-fence.test.ts :: stale drain cannot move pointer` and `derived-tightening-source-race.test.ts :: stale scan cannot settle transferred debt` (Task 3) |
 | Slack session open, history/replies page, and staged first representation -> occurrence/projection/scan/reply-drain/gap/watermark writes | all common checks, exact `(conversationId,ts)` row, scan generation/cursor, parent drain token | `slack-write-fence.test.ts :: page or reply result loses each boundary` (Task 4; adversarial audit in Task 9) |
 | Resend throttle reservation, list/detail/body read, and encryption -> received scan, anchor, status state, terminal resolution, stage, and gap writes | all common checks, exact `anchorId/cycleHeadId`, status observation row, resolution lease | `resend-write-fence.test.ts :: stale detail result cannot advance anchor` (Task 5; adversarial audit in Task 9) |
 | WhatsApp checked-copy/sync, list read, candidate read, visibility re-read, and encryption -> candidate, snapshot head/key, occurrence/admission, stage, baseline, and list-purge writes | all common checks plus list gate/version/digest, exact head generation, raw key, candidate token | `whatsapp-write-fence.test.ts :: visibility/head/account changes abandon candidate` (Task 6; list recovery audit in Task 9) |
 | Scheduler provider-result health/backoff/next-slot update | current core account and scope ownership, active intent/scan generation, row version | `source-scheduler-fence.test.ts :: removed scope cannot be rescheduled` (Task 7) |
 | Shared evaluator encryption/taint flush -> ingest rule/decision/delivery write for a D candidate | current account, switch/gen, live rule/target, claim and projection version | `d-source-taint-fence.test.ts :: taint flush loses rule or target` (Task 7) |
 | Dry-run decrypt/taint/visibility read -> append, display transition, or purge | pause/switch/gen, core account/revocation, live rule/target, delivery row version; WhatsApp gate/version/digest | `whatsapp-dryrun-live-list.test.ts :: changed list before append/show purges` (Task 9) |
-| Future B2 sealed-frame-gate callback -> frame append | same disclosure checks plus current WhatsApp visibility gate | `sse-frame-visibility-gate.test.ts :: every synthetic frame rechecks` (Task 6, hardened in Task 9) |
+| Future B2 sealed-frame-gate callback -> frame append | same disclosure checks plus current WhatsApp visibility gate under the list lock | `sse-frame-visibility-gate.test.ts :: every synthetic frame rechecks` (Task 6, hardened in Task 9; actual B2 writer proof in Task 10) |
 
 Every listed test has a mutation counterpart: remove the named re-check or
 replace its conditional `UPDATE ... WHERE version = ?` with an unconditional
@@ -349,25 +466,39 @@ Task 8 adds to `slack-cutover.test.ts`, `resend-cutover.test.ts`, and
 | Claimed-completion recovery and restart | `S:claim-recovery-resumes-same-drain` | `R:claim-recovery-resumes-same-cycle` | `W:claim-recovery-keeps-authoritative-head` |
 | Completion timeout | `S:timeout-keeps-watermark-and-retries` | `R:timeout-keeps-anchor-and-retries` | `W:timeout-discards-candidate-not-head` |
 | Initial cursor installation | `S:initial-cursor-is-after-baseline` | `R:initial-anchor-and-status-start-atomic` | `W:initial-baseline-generation-and-identities-atomic` |
+| Claimed new-only baseline fence before publication | `S:claimed-P-fences-history-and-reply-worker` | `R:claimed-P-fences-received-and-status-worker` | `W:claimed-P-fences-snapshot-worker` |
+| First-cursor lock/fence and published-point re-read after async point work | `S:initial-cursor-rechecks-points-under-conversation-lock` | `R:initial-cursor-rechecks-points-under-received-and-status-locks` | `W:initial-cursor-rechecks-generation-under-chat-lock` |
+| Derived tightening transfers shared debts and invalidates the in-flight scan | `S:tighten-transfers-page-and-reply-debts-stale-scan-writes-nothing` | `R:tighten-transfers-received-and-status-debts-stale-scan-writes-nothing` | `W:tighten-transfers-first-representation-admissions-stale-snapshot-writes-nothing` |
+| Swap settles old-only staged debt and deletes an unowed stage | `S:swap-drops-old-only-history-and-reply-debts` | `R:swap-drops-old-only-received-and-status-debts` | `W:swap-drops-old-only-first-representation-debt` |
+| Deadline at baseline transaction, immediately after baseline, and before finalisation | `S:deadline-at-P-after-P-and-finalise-settles-without-write` | `R:deadline-at-P-after-P-and-finalise-settles-without-write` | `W:deadline-at-P-after-P-and-finalise-settles-without-head-write` |
 
 For all rows, Task 8 also runs the three destructive mutations: advance the
 pointer/cursor/head before staging, omit the conditional generation predicate,
-and finalise an aggregate Slack drain after top-level coverage alone.  At least
-the corresponding row must fail.  WhatsApp has two additional mutations:
-switch the head before first-representation staging, and derive a raw key from
-`Z_PK`; its first-enabled and shared-replacement proofs must fail.
+and finalise an aggregate Slack drain after top-level coverage alone.  It also
+mutates each round-9/10 guard: omit the source-scope fence, move the initial
+cursor outside the scope lock or skip its point-set re-read, leave a transferred
+debt on the parent or let its stale scan commit, retain an old-only debt at the
+swap, and remove each baseline/after-baseline/finalisation deadline check.  At
+least the corresponding S/R/W cell must fail.  WhatsApp has two additional
+mutations: switch the head before first-representation staging, and derive a
+raw key from `Z_PK`; its first-enabled and shared-replacement proofs must fail.
 
 ## Execution map
 
 | Batch | Tasks | Dependency and worktree rule |
 | --- | --- | --- |
-| 1 — safety substrate | 1, then 2, then 3 | Sequential in one integration worktree.  It lands durable schema, source contracts, liveness fences, and generic cut-over machinery before a source is written. |
-| 2 — independent adapters | 4 Slack, 5 Resend, 6 WhatsApp | These three tasks run in parallel in separate worktrees after Batch 1.  Each owns only its channel package, its daemon source file(s), and source-specific tests. |
+| 1 — safety substrate | 1, then 2, then 3, then 4a | Sequential in one integration worktree.  It lands durable schema, source contracts, the per-scope liveness fence, and the common deadline contract before a source is written. |
+| 2 — independent adapters | 4 Slack, 5 Resend, 6 WhatsApp | These three tasks run in parallel in separate worktrees after Batch 1.  Each owns only its channel package, its daemon source file(s), and source-specific fixtures/tests. |
 | 3 — assemble and attack invariants | 7, then 8, then 9 | Rebase/merge the three source worktrees first.  Integration precedes the full cut-over matrix; the matrix precedes the post-await/list-change adversarial audit. |
-| 4 — release-facing audit | 10 | Starts only after all behaviour and matrix tests are green. |
+| 4 — convergence, parity, and held-release audit | 10 | Starts only after all behaviour and matrix tests are green; its D/B2 convergence sub-gate runs only once both changes share one branch. |
 
 Every batch ends with a clean `pnpm verify`.  The focused commands below are
 diagnostic; passing them is not a substitute for that final batch command.
+
+This is 11 implementation tasks: Task 4a is deliberately inserted before the
+three adapters so the reviewed Task 4–10 identities—including Task 8's
+per-source crash matrix—remain stable.  It is a common pre-adapter gate, not a
+fourth parallel adapter.
 
 ### Batch 1 — safety substrate
 
@@ -382,18 +513,27 @@ diagnostic; passing them is not a substitute for that final batch command.
 - Modify `packages/gmail/package.json`, `packages/slack/package.json`,
   `packages/resend/package.json`, and `packages/whatsapp/package.json`.
 - Modify `packages/events-daemon/src/domain/source-options.ts` and
-  `packages/events-daemon/src/domain/activation-documents.ts`.
+  `packages/events-daemon/src/domain/activation-documents.ts`, and
+  `packages/events-daemon/src/runtime/disclosure-fence.ts`.
 - Add/modify `packages/events-daemon/test/source-options.test.ts`,
-  `packages/events-daemon/test/activation-documents.test.ts`, and
+  `packages/events-daemon/test/activation-documents.test.ts`,
+  `packages/events-daemon/test/disclosure-fence.test.ts`, and
+  `packages/events-daemon/test/tightening.test.ts`, and
   `packages/core/test/channel-manifest.test.ts`.
 
 **Steps (tests first)**
 
-1. Add red table-driven vectors for all four source variants: empty and
-   duplicate arrays; UTF-8 ordering; malformed IDs; bad Resend kinds; invalid
-   `all-allowed`; and source options that do not match the channel account.
-   Add manifest vectors that reject unknown keys, zero/non-integer intervals,
-   empty types/scopes, and incompatible access kinds.
+1. Add red table-driven normalisation and classifier vectors for all four source
+   variants: empty and duplicate arrays; UTF-8 ordering; malformed IDs; bad
+   Resend kinds; invalid `all-allowed`; and source options that do not match
+   the channel account.  For every channel test exactly one-field strict
+   narrowing and its inverse loosening: Gmail label removal/`any` narrowing and
+   `includeSpamTrash: true -> false`; Slack `conversationIds` strict subset and
+   addition; Resend `kinds` (`received`/`status`) strict subset and addition;
+   WhatsApp explicit `chatJids` strict subset and addition plus
+   `all-allowed -> explicit subset` and the inverse.  A mixed add/remove is a
+   loosening.  Add manifest vectors that reject unknown keys, zero/non-integer
+   intervals, empty types/scopes, and incompatible access kinds.
 2. Run the focused tests and confirm the pre-change tree cannot represent
    Slack/Resend/WhatsApp or an `events` manifest declaration.
 3. Add the strict manifest discriminated union from D-A, including event types,
@@ -403,24 +543,33 @@ diagnostic; passing them is not a substitute for that final batch command.
    and local-store kind.  Keep the package JSON `agentcomms` object strict.
 4. Expand canonical source options and activation documents to the exact
    Phase-D variants.  Deduplicate and byte-sort permitted arrays before signing
-   or comparing a document; preserve raw WhatsApp JIDs as raw strings.
-5. Regenerate the checked-in manifest artifact, rerun the tests, and run the
+   or comparing a document; preserve raw WhatsApp JIDs as raw strings.  Export
+   one `classifySourceOptionChange` dispatcher that validates matching channel
+   variants then delegates all four field-by-field subset classifiers; replace
+   Gmail-only use in `isWhitelistedTightening` with it.
+5. Add derived-authorisation vectors: every accepted D-source narrowing changes
+   the immutable document digest, copies byte-identical inherited points,
+   transfers debt to the child, and makes **no provider call**; every loosening
+   is refused from the no-approval path and requires an ordinary activation.
+6. Regenerate the checked-in manifest artifact, rerun the tests, and run the
    package type checks.
 
 **Commands and passing result**
 
 ```sh
 pnpm --filter @agentcomms/core test -- channel-manifest
-pnpm --filter @agentcomms/events-daemon test -- source-options activation-documents
+pnpm --filter @agentcomms/events-daemon test -- source-options activation-documents disclosure-fence tightening
 pnpm sync:channels
 pnpm --filter @agentcomms/core typecheck
 pnpm --filter @agentcomms/events-daemon typecheck
 ```
 
 The focused suites pass; regeneration is either the expected reviewed
-manifest/type diff or clean on a rerun.  Mutate the canonicaliser to skip
-sorting, accept an unknown manifest key, or accept a source/account mismatch:
-the named vectors must fail.
+manifest/type diff or clean on a rerun.  Mutate a D subset classifier to treat
+an addition as tightening, keep the Gmail-only classifier in the authority
+fence, skip sorting, accept an unknown manifest key, or accept a source/account
+mismatch: the named vectors fail.  Mutating derived tightening to call a D
+provider, alter an inherited point, or keep a parent debt also fails.
 
 **Commit:** `feat(core): declare event source metadata (events phase D, task 1)`
 
@@ -429,47 +578,46 @@ the named vectors must fail.
 **Files**
 
 - Modify `packages/events-daemon/src/store/migrations.ts`,
-  `packages/events-daemon/src/store/records.ts`,
-  `packages/events-daemon/src/store/retention.ts`, and any migration fixture
-  builder.
+  `packages/events-daemon/src/store/records.ts`, and any migration fixture
+  builder; do not edit a B2-only stream migration.
 - Modify `packages/events-daemon/src/runtime/account-fence.ts`,
   `packages/events-daemon/src/runtime/revocations.ts`,
   `packages/events-daemon/src/runtime/disclosure-fence.ts`, and
   `packages/events-daemon/src/runtime/dispatcher.ts` only to make account and
   source cleanup generic; do not add a source driver here.
 - Add/modify `packages/events-daemon/test/migrations-phase-d.test.ts`,
-  `packages/events-daemon/test/account-fence-phase-d.test.ts`, and
-  `packages/events-daemon/test/retention-phase-d.test.ts`.
+  `packages/events-daemon/test/account-fence-phase-d.test.ts`.
 
 **Steps (tests first)**
 
-1. Write an upgrade test from a real v5/B1 fixture.  Assert the exact v6 table,
-   index, foreign-key, `CHECK`, and nullable-column shape; assert a second open
-   is a no-op and a B1 Gmail record remains readable.
+1. Write an upgrade test from the final B1 fixture.  Assert the exact
+   rebased-registry D table, index, foreign-key, `CHECK`, and nullable-column
+   shape; assert a second open is a no-op and a B1 Gmail record remains
+   readable.  Assert no `stream_log` table or stream column is created here.
 2. Write account/rule/target-removal tests that seed each new D table and prove
    a removal purges its account/version rows immediately while preserving
    another account.  Include retention of a content-free terminal/gap audit
    decision where the spec requires it.
-3. Add `v6_phase_d_local_sources` as the one forward migration described in
-   D-9.  Do not alter `schema-v1.ts`, recreate old tables, or create B2's
-   absent stream table.
+3. Add the one forward migration allocated from the rebased registry as D-9
+   specifies.  Do not alter `schema-v1.ts`, recreate old tables, hard-code a
+   branch-local migration number, or create B2's absent stream table.
 4. Generalise the B1 purge/query helpers by explicit source/account predicates;
    make every removal path call them in the same transaction.  Add typed record
    helpers rather than passing opaque provider JSON through the store.
-5. Run migration, foreign-key, and retention checks against a fresh DB and the
-   v5 fixture.
+5. Run migration, foreign-key, and purge checks against a fresh DB and the
+   final-B1 fixture.
 
 **Commands and passing result**
 
 ```sh
-pnpm --filter @agentcomms/events-daemon test -- migrations-phase-d account-fence-phase-d retention-phase-d
+pnpm --filter @agentcomms/events-daemon test -- migrations-phase-d account-fence-phase-d
 pnpm --filter @agentcomms/events-daemon typecheck
 ```
 
-The v5 fixture upgrades once, all D tables are constrained, and removal purges
-only the affected account.  Mutate the migration ledger version, remove a raw
-key uniqueness constraint, or omit one D table from account purge: the named
-test must fail.
+The final-B1 fixture upgrades once, all D tables are constrained, and removal
+purges only the affected account.  Mutate the allocated migration ledger
+version, create a placeholder stream table, remove a raw-key uniqueness
+constraint, or omit one D table from account purge: the named test must fail.
 
 **Commit:** `feat(events): add durable multi-source authority (events phase D, task 2)`
 
@@ -479,7 +627,10 @@ test must fail.
 
 - Add `packages/events-daemon/src/sources/contracts.ts`,
   `packages/events-daemon/src/sources/registry.ts`, and
-  `packages/events-daemon/src/sources/scope-lock.ts`.
+  `packages/events-daemon/src/sources/scope-lock.ts` and
+  `packages/events-daemon/src/sources/source-scope-fence.ts`; refactor
+  `packages/events-daemon/src/sources/mailbox-fence.ts` to the Gmail wrapper
+  of that shared predicate.
 - Modify `packages/events-daemon/src/runtime/activations.ts`,
   `packages/events-daemon/src/runtime/baseline.ts`,
   `packages/events-daemon/src/runtime/replacements.ts`,
@@ -487,6 +638,9 @@ test must fail.
   `packages/events-daemon/src/runtime/account-fence.ts`, and
   `packages/events-daemon/src/runtime/owner.ts`.
 - Add/modify `packages/events-daemon/test/source-contracts.test.ts`,
+  `packages/events-daemon/test/source-scope-fence.test.ts`,
+  `packages/events-daemon/test/initial-cursor-fence.test.ts`,
+  `packages/events-daemon/test/derived-tightening-source-race.test.ts`,
   `packages/events-daemon/test/activation-write-fence.test.ts`,
   `packages/events-daemon/test/replacement-write-fence.test.ts`,
   `packages/events-daemon/test/source-scheduler-contract.test.ts`, and the
@@ -494,39 +648,121 @@ test must fail.
 
 **Steps (tests first)**
 
-1. Build a fake ordered source adapter in tests.  Its operations deliberately
-   pause after baseline sampling, candidate staging, drain completion, and
-   before each conditional update.  Port the B1 Gmail cases through it without
-   changing their Gmail semantics.
+1. Build a fake ordered source adapter in tests for a Slack conversation, both
+   Resend scopes, and a WhatsApp chat.  Its operations deliberately pause after
+   baseline sampling, point encryption, candidate staging, drain completion,
+   and before each conditional update.  Port the B1 Gmail cases through it
+   without changing their Gmail semantics.
 2. Add red tests for `SOURCE_UNAVAILABLE`, ordered scope locking, round-robin
    ready work, pause before recovery, K6 re-add darkness, and every generic
-   post-await write in the write-after-await table.
+   post-await write in the write-after-await table.  For every D scope, prove
+   a claimed new-only baseline blocks its worker and the scheduler's first
+   cursor; prove that an old-version drain does not block it.
 3. Introduce the closed adapter/registry and scope-lock contracts.  Refactor
    activation, baseline, replacement, and scheduler code to use typed source
    points rather than Gmail-only mailbox types.  Keep the Gmail adapter as the
    reference implementation and ensure it remains the only registered source
    until the Batch-2 worktrees merge.
-4. Implement `assertWriteStillLive` and use conditional insert/update/delete
+4. Implement `isSourceScopeFenced` and use it in every source worker and the
+   scheduler.  Initial-cursor installation holds the same source scope lock,
+   reads/decrypts candidate published points outside its write transaction, then
+   re-reads the canonical point set and the fence inside that transaction before
+   it inserts.  A changed set or fence inserts nothing and the next tick
+   recomputes it.
+5. Implement `assertWriteStillLive` and use conditional insert/update/delete
    predicates at each generic durable edge.  It must reload core config inside
    the transaction and invoke immediate purge on removal.  Do not await
    encryption, a config load, or a provider operation while a write transaction
    is open.
-5. Make activation completion, replacement drains, timeout/recovery, and
-   scheduler state source-neutral.  Preserve B1's first-activation lock,
+6. Make activation completion, replacement drains, timeout/recovery, and
+   scheduler state source-neutral.  A derived tightening atomically transfers
+   all parent stage debts to the child before parent purge and increments the
+   rule-set generation so an in-flight scan writes nothing; swap atomically
+   drops old-only debts and deletes an unowed stage.  Check the deadline in the
+   baseline transaction, directly after baseline, and before finalisation does
+   any write or settlement; finalisation commits its content-free failure
+   settlement before refusing.  Preserve B1's first-activation lock,
    disabled-replacement, and aggregate-finalisation rules.
 
 **Commands and passing result**
 
 ```sh
-pnpm --filter @agentcomms/events-daemon test -- source-contracts activation-write-fence replacement-write-fence source-scheduler-contract activations replacements scheduler
+pnpm --filter @agentcomms/events-daemon test -- source-contracts source-scope-fence initial-cursor-fence derived-tightening-source-race activation-write-fence replacement-write-fence source-scheduler-contract activations replacements scheduler
 pnpm --filter @agentcomms/events-daemon typecheck
 ```
 
 All existing Gmail lifecycle tests and the fake-source race tests pass.  Delete
-the switch/config/claim re-check, make a pointer update unconditional, or let
-two scope locks overlap: the named fence/contract test fails.
+the switch/config/claim re-check, the source-scope fence, the in-transaction
+point re-read, a debt transfer/old-only settlement, any of the three deadline
+checks, make a pointer update unconditional, or let two scope locks overlap:
+the named fence/contract test fails.
 
 **Commit:** `feat(events): generalise source activation fences (events phase D, task 3)`
+
+### Task 4a — enforce stage deadlines and retention tightening before adapters **(risky)**
+
+**Files**
+
+- Modify `packages/events-daemon/src/store/retention.ts`,
+  `packages/events-daemon/src/runtime/expiry.ts`,
+  `packages/events-daemon/src/runtime/replacements.ts`, and the generic source
+  contracts/records from Tasks 2–3 only to carry immutable `stagedAt`,
+  `stageExpiresAt`, owed-version debts, and source-terminal outcomes.
+- Add/modify `packages/events-daemon/test/stage-deadline-contract.test.ts`,
+  `packages/events-daemon/test/stage-deadline-recovery.test.ts`,
+  `packages/events-daemon/test/retention-tightening-phase-d.test.ts`, and
+  common fake-clock/source-stage helpers under
+  `packages/events-daemon/test/support/`.
+- Task 4 supplies Slack's fixture cases in `slack-source.test.ts` and
+  `slack-reply-drains.test.ts`; Task 5 supplies Resend's in
+  `resend-source.test.ts` and `resend-status.test.ts`; Task 6 supplies
+  WhatsApp's in `whatsapp-source.test.ts` and `whatsapp-visibility.test.ts`.
+  Those fixtures exercise this task's common suite; they do not own a second
+  deadline policy.
+
+**Steps (tests first)**
+
+1. Write a generic four-source fixture matrix that stages shared work for two
+   owed versions with unequal ingest retentions.  Assert fixed `stagedAt`, the
+   shortest `stageExpiresAt`, no extension after a later/looser version, and
+   content-free expiry outcomes.  Test one tick before, exactly at, and after
+   expiry before admission, between admission and projection, and after one
+   projection; inspect database, WAL, and free pages for no surviving payload.
+2. Add restart/start-up tests that stop before/during/after the expiry
+   transaction and start the daemon after its deadline.  The start-up recovery
+   must expire before any source worker/provider call.  Add an after-P
+   replacement-drain case: an owed staged item that expires settles the drain
+   without an event or delivery.
+3. Add retry-composition vectors for every source that materialises/retries:
+   retry deadline first produces one `unresolvable` gap, stage deadline first
+   produces `retention-expired`/WhatsApp `expired` and no gap, and an equal
+   deadline chooses retention expiry.  Assert no retry/provider request occurs
+   after that terminal transaction.
+4. Add retention-tightening fixtures that seed each affected D shared/staged
+   row and retained row—stage/debt, occurrence/admission, projection, hold,
+   queued/retryable/disclosing delivery, dry-run, and metadata.  A shortening
+   atomically applies `min(current, start + newRetention)` to every affected
+   row and terminates/purges already due content in that same transaction.
+5. Implement the common calculator, start-up/tick expiry, retry arbitration,
+   and one-transaction shortening.  Keep source adapters unable to choose a
+   longer deadline or invent a terminal outcome.  Incorporate the named Slack,
+   Resend, and WhatsApp fixture cases when their parallel tasks merge.
+
+**Commands and passing result**
+
+```sh
+pnpm --filter @agentcomms/events-daemon test -- stage-deadline-contract stage-deadline-recovery retention-tightening-phase-d gmail-stage-deadline
+pnpm --filter @agentcomms/events-daemon typecheck
+```
+
+Every source fixture observes a fixed shortest deadline, start-up expires
+before a provider call, retries choose the earlier bound, and a tightening
+shortens every seeded shared/staged and retained row atomically.  Mutate
+`stagedAt` on restart, use a longest/later deadline, let a retry win an equal
+deadline, skip start-up expiry, leave any listed row unshortened, or split
+shorten/purge into transactions: the named suite fails.
+
+**Commit:** `feat(events): enforce source stage deadlines (events phase D, task 4a)`
 
 **Batch 1 exit gate**
 
@@ -565,8 +801,10 @@ Only then may the three source worktrees begin.
    fetch or invokes any send method.
 2. Add failing daemon tests for exact decimal timestamp order; persisted
    `[oldest, latest, cursor]`; page restart; budget/429 continuation; one gap
-   only at an explicit boundary; top-level/reply aggregate barriers; and each
-   staged-result race in the write-fence table.
+   only at an explicit boundary; top-level/reply aggregate barriers; each
+   staged-result race in the write-fence table; and Task 4a's fixed-shortest
+   stage deadline/restart/start-up expiry, after-P drain expiry, and atomic
+   retention-tightening fixtures for both history and reply staging.
 3. Add the narrow Slack event operation using the existing session/read call
    boundary and `conversations.history`/`conversations.replies` only.  Return
    typed page/result/error facts, not raw API objects, and normalise sender
@@ -578,6 +816,8 @@ Only then may the three source worktrees begin.
 5. Add source-local reset/backoff/fairness and taint cases.  A stuck reply
    drain yields fairly to another scope; its state survives restart.  No edit
    or reply outside the specified seven-day eligibility is inferred as new.
+   Register the Slack fixtures in Task 4a's common deadline suite rather than
+   duplicating expiry policy.
 
 **Commands and passing result**
 
@@ -620,9 +860,12 @@ Slack tests fail.
    synthetic addresses only; assert no send endpoint is registered.
 2. Add Unicode scalar and 20,000-code-point vectors, including a boundary high
    surrogate and invalid unpaired surrogate.  Add failing tests for detail
-   `404`, 24-hour retry exhaustion, stage expiry, ten-page anchor loss, status
-   seed/no-event, seven-day pruning, and interactive-versus-event throttle
-   ordering.
+   `404`, 24-hour retry exhaustion, fixed-shortest stage expiry, tie-breaking
+   retry versus stage deadline, restart/start-up and after-P expiry,
+   retention-tightening of received/status shared rows, ten-page anchor loss,
+   status seed/no-event, seven-day pruning, and interactive-versus-event
+   throttle ordering.  Register these as Resend's fixtures in Task 4a's common
+   deadline suite.
 3. Add the narrow event operation.  It obtains a guarded read transport,
    labels every reservation `background-event`, resolves required details,
    performs the Unicode normalisation, and exposes closed terminal facts.
@@ -681,20 +924,26 @@ fail.
    representation is observable.
 2. Add failing tests for candidate/head crash edges, list changes while waiting
    at every gate, unreadable-list hide-all, newly hidden purge, widening with
-   no backfill, raw-key rule admissions, disabled activation, and every
-   synthetic frame invoking the visibility callback.
+   no backfill, raw-key rule admissions, disabled activation, every synthetic
+   frame invoking the visibility callback, and Task 4a's fixed-shortest first-
+   representation deadline/restart/start-up expiry, after-P expiry, and atomic
+   retention-tightening fixtures.  Register the last group in Task 4a's common
+   deadline suite.
 3. Factor the channel's checked-copy routine so both ordinary sync and the
    event adapter rebuild the index before disposal.  Add a raw event reader
    with tri-state `fromMe`; preserve the existing presentation reader's public
-   behaviour.  Expose `withCurrentEventVisibility` under the list lock.
+   behaviour.  Expose `withCurrentEventVisibility` under the list lock.  Its
+   request/result/callback types are structural and it declares no daemon
+   dependency or import.
 4. Implement candidate generation, second visibility read, conditional
    head-switch transaction, raw occurrence/admission ledgers, baseline tuple,
    and immediate hidden-data purge.  Stage every owed first representation
    while the checked copy remains open; on any failure discard the candidate,
    not the previous head.
-5. Add the dry-run/future-SSE visibility-gate interface and sealed sink tests.
-   It is a callback seam only: do not add an SSE client, HTTP transport, B2
-   dependency, or send path.  Add source fairness and taint cases.
+5. Add `WhatsAppVisibilityFence.withCurrentSseFrameVisibility` and sealed sink
+   tests.  It is a callback seam only: do not add an SSE client, HTTP
+   transport, B2 dependency, or send path.  Add source fairness and taint
+   cases.
 
 **Commands and passing result**
 
@@ -742,7 +991,8 @@ access only—never email, Slack, Resend, or WhatsApp sends.
   `packages/events-daemon/test/capability-audit.test.ts`.
 - Add/modify `packages/events-daemon/test/phase-d-owner-e2e.test.ts`,
   `packages/events-daemon/test/source-scheduler-fence.test.ts`,
-  `packages/events-daemon/test/d-source-taint-fence.test.ts`, and existing
+  `packages/events-daemon/test/d-source-taint-fence.test.ts`,
+  `packages/events-daemon/test/channel-package-boundary.test.ts`, and existing
   CLI/MCP stand-in fixtures.
 - Modify generated command/tool reference files only if `pnpm sync:reference`
   produces a semantic D-source result; otherwise record a clean generation.
@@ -757,8 +1007,11 @@ access only—never email, Slack, Resend, or WhatsApp sends.
    `sources list` assertion that all four registry entries are visible without
    adding a duplicate capability.
 3. Add explicit workspace runtime dependencies and externalisation for Slack,
-   Resend, and WhatsApp.  Register all adapters once in the owner and inject
-   fakes in tests; no source reaches a provider constructor directly.
+   Resend, and WhatsApp **to `@agentcomms/events-daemon` only**.  Channel
+   `package.json` files retain no daemon dependency and their `events.ts`
+   operations retain no daemon import, including type-only imports.  Register
+   all adapters once in the owner and inject fakes in tests; no source reaches a
+   provider constructor directly.
 4. Merge source scheduling with persisted fair ready-work selection, manifest
    minimums, provider backoff, and source-specific locks.  Ensure every
    provider call and provider-result write observes fresh core config; update
@@ -769,7 +1022,7 @@ access only—never email, Slack, Resend, or WhatsApp sends.
 **Commands and passing result**
 
 ```sh
-pnpm --filter @agentcomms/events-daemon test -- phase-d-owner-e2e source-scheduler-fence d-source-taint-fence capability-audit
+pnpm --filter @agentcomms/events-daemon test -- phase-d-owner-e2e source-scheduler-fence d-source-taint-fence channel-package-boundary capability-audit
 pnpm verify:parity --strict
 pnpm sync:reference
 pnpm --filter @agentcomms/events-daemon typecheck
@@ -778,8 +1031,9 @@ pnpm --filter @agentcomms/events-daemon typecheck
 Every source is selected through one owner, each added source-show invocation
 has CLI/MCP parity, and a removed account cannot be rescheduled or disclosed.
 Mutate a parity row to a different operation, register an adapter twice, cache
-core config across the provider await, or bypass taint: the named test or
-strict parity check fails.
+core config across the provider await, add a daemon dependency/import to a
+channel, or bypass taint: the named test, package-boundary test, or strict
+parity check fails.
 
 **Commit:** `feat(events): schedule Phase D sources through one owner (events phase D, task 7)`
 
@@ -803,12 +1057,18 @@ strict parity check fails.
    in-memory model.
 2. Encode every named S/R/W test in the cut-over table, including old-only,
    new-only, and shared replacement scopes; disabled variants; K6 re-add;
-   initial cursor; timeout; and recovery.  Assert exact version admission and
-   exact raw key/Slack timestamp/Resend ID counts.
+   initial cursor; timeout; and recovery.  For every source add the five new
+   round-9/10 matrix rows, covering six guards: unpublished new-only P fences
+   its worker, the scheduler's locked first-cursor fence plus point-set re-read,
+   derived debt transfer plus stale-scan loss, old-only debt settlement/deletion
+   at swap, and all three deadline moments.  Assert exact version admission and
+   exact raw key/Slack timestamp/Resend ID counts, provider-call count zero
+   while fenced, and content-free settlement on deadline failure.
 3. Add the required destructive mutations as test-local toggles or mutation
    patches: stage-after-pointer, unconditional pointer/head/cursor update,
-   Slack top-level-only finalisation, WhatsApp early head, and WhatsApp
-   `Z_PK` identity.  Confirm each produces a failing oracle before accepting
+   Slack top-level-only finalisation, WhatsApp early head, WhatsApp `Z_PK`
+   identity, each round-9/10 guard named below the matrix, and all three
+   deadline checks.  Confirm each produces a failing oracle before accepting
    the unmutated implementation.
 4. Correct implementation defects exposed by the matrix without broadening
    scope or weakening a point/drain invariant.  Re-run B1 Gmail cut-over tests
@@ -882,9 +1142,9 @@ pnpm verify
 It passes after the full matrix and adversarial suite.  Reviewers must inspect
 the fake request journals and the mutation results, not just the green summary.
 
-### Batch 4 — parity, documentation, and held-release handoff
+### Batch 4 — D/B2 convergence, parity, documentation, and held-release handoff
 
-### Task 10 — audit the public surface and prepare the held-release evidence
+### Task 10 — converge B2, audit the public surface, and prepare the held-release evidence
 
 **Files**
 
@@ -897,22 +1157,47 @@ the fake request journals and the mutation results, not just the green summary.
 - Add/modify a release/PR evidence note under `docs/superpowers/` if the
   repository's normal PR template does not carry the required held-release
   evidence.  Do not change held package versions or publish configuration.
+- On the converged D+B2 branch only, add
+  `packages/events-daemon/test/phase-d-b2-sse-visibility-contract.test.ts` and
+  modify `packages/events-daemon/src/runtime/sse-dispatcher.ts` and
+  `packages/events-daemon/src/runtime/stream-replay.ts` only to make their
+  actual writers call `WhatsAppVisibilityFence.withCurrentSseFrameVisibility`.
+- Modify `test/release-packages.test.mjs` only if a focused assertion is needed
+  to reject a channel -> held-daemon edge; inspect `scripts/packages.mjs`, the
+  packed-consumer verifier, and held-release wiring rather than duplicating
+  their package graph.
 - Modify `capabilities.json`/parity/reference output only if Task 7's strict
   audit identifies a missing expected artifact.
 
 **Steps (tests first)**
 
-1. Run the capability audit with a deliberately missing/misnamed D row and
+1. Once D and B2 share one branch, first write the D-11 joint test for both the
+   real live writer and real `Last-Event-ID` replay writer.  Pause each after
+   frame preparation, change a WhatsApp list through `ChatListStore.update`,
+   then release it; assert no hidden tuple reaches either sealed sink and its
+   stream row is purged/refused.  Mutate each writer separately to bypass
+   `withCurrentSseFrameVisibility`; each mutation must fail.  This gate does
+   not block Phase-D-only work while B2 is still separate.
+2. Run the capability audit with a deliberately missing/misnamed D row and
    confirm it fails before restoring the correct table.  Check every command
    and tool remains mapped to exactly one shared operation for each invocation.
-2. Document the four-source local-only boundary, source constraints, fake-only
+3. Prove packaging direction twice: the structural boundary test rejects every
+   channel package's daemon dependency/import, then `pnpm verify:packages`
+   packs and installs each consumer closure against its refusing registry.
+   Inspect `scripts/packages.mjs`/held wiring and the release-package test to
+   confirm the daemon remains held, is nevertheless consumer-checked, and no
+   released channel depends on it.
+4. Document the four-source local-only boundary, source constraints, fake-only
    testing, Slack reply barrier, Resend detail/Unicode semantics, WhatsApp
    live-list/SSE seam, and held-release status.  Do not expose raw identities,
    cursor contents, or test fixtures as examples.
-3. Prepare the PR checklist: proposed `0.14.2-events-d`, the No-changelog
-   sentence from D-10, test commands/results, branch/workspace provenance,
-   and an explicit “no real data, no real transport, no send path” attestation.
-4. Run reference generation twice to prove it is stable; inspect the diff,
+5. Prepare the PR checklist from the target main checked at PR-open time:
+   record its lockstep version, the next-minor prerelease derived by D-10 and
+   the semver reason, then include the No-changelog sentence, test
+   commands/results, branch/workspace provenance, and an explicit “no real
+   data, no real transport, no send path” attestation.  Do not reuse a version
+   literal from an earlier branch.
+6. Run reference generation twice to prove it is stable; inspect the diff,
    package dependency graph, and secret scanner output before handoff.
 
 **Commands and passing result**
@@ -922,17 +1207,21 @@ pnpm verify:parity --strict
 pnpm sync:reference
 pnpm sync:reference
 pnpm verify:browser
+pnpm verify:packages
 pnpm verify
 git diff --check
 git status --short
 ```
 
-Strict parity, reference stability, browser verification, and the full verify
-pass.  The final diff contains only source, tests, documentation, and generated
-artifacts; no credentials or realistic provider data.  Remove a D parity row,
-change its operation, or add an undocumented command/tool: audit/parity fails.
+Strict parity, reference stability, browser verification, packed-consumer and
+held-release checks, and the full verify pass.  On the converged branch both
+actual B2 writer paths pass the list-change gate.  The final diff contains only
+source, tests, documentation, and generated artifacts; no credentials or
+realistic provider data.  Remove a D parity row, change its operation, add a
+channel -> daemon edge, bypass either B2 writer gate, or add an undocumented
+command/tool: its audit fails.
 
-**Commit:** `docs(events): audit Phase D parity and held release (events phase D, task 10)`
+**Commit:** `docs(events): audit Phase D convergence and held release (events phase D, task 10)`
 
 ## §5 coverage ownership
 
@@ -941,26 +1230,29 @@ may exercise a case incidentally, but it is not a second owner.
 
 | §5 coverage row D owns | Primary task |
 | --- | --- |
+| Four-variant source-option validation, exact field-by-field subset classifier, derived digest/point/debt transfer, and no-provider-call narrowing proof | Task 1 |
 | Slack history pagination: empty/short pages with cursors, invalid-cursor restart, retained-history gap, decimal timestamps, persisted budget/429 continuation | Task 4 |
 | Slack reply pagination and aggregate top-level/reply drain barrier, including restart and fairness | Task 4 |
 | Resend received newest-first anchor/cycle, required detail terminal outcomes, 10-page bounded reset, and received source gaps | Task 5 |
 | Resend body Unicode-code-point vectors, attachment facts, status seeding/deltas, seven-day state, and shared-throttle interactive priority | Task 5 |
 | WhatsApp checked-copy/index lifecycle, raw protocol key, tri-state `fromMe`, snapshot generation diff, first representation, and raw admission ledger | Task 6 |
-| WhatsApp list digest/version application, hide-all read failure, newly-hidden purge, no widening backfill, dry-run reads, and sealed every-frame gate | Task 6 |
+| WhatsApp list digest/version application, hide-all read failure, newly-hidden purge, no widening backfill, dry-run reads, and sealed synthetic every-frame gate | Task 6 |
+| Fixed shortest stage deadline, restart/start-up expiry, retry-deadline composition, after-P expiry, and atomic retention shortening of every affected D shared/staged and retained row | Task 4a |
 | Per-source untrusted-content envelope and taint before dry-run disclosure | Task 7 |
-| D-owned CLI/MCP parity: Slack, Resend, and WhatsApp `source show`, plus complete `sources list` | Task 7 |
-| First activation/disabled activation, exact replacement (old-only/new-only/shared), enable-all, derived tightening, and initial cursor point for all D sources | Task 8 |
+| D-owned CLI/MCP parity: Slack, Resend, and WhatsApp `source show`, complete `sources list`, and one-way daemon -> channel package boundary | Task 7 |
+| First activation/disabled activation, exact replacement (old-only/new-only/shared), enable-all, derived tightening, initial cursor, and every round-9/10 fence/debt/deadline crash race for all D sources | Task 8 |
 | Disable-all, rule/target removal, account removal and K6 re-add, claimed recovery/restart, timeout, and crash at every D-source durable edge | Task 8 |
-| Every post-await transaction fence, live core-config reread, stale-row conditional write, and immediate removal purge | Task 9 |
-| WhatsApp D9 list-change recovery at every durable edge; live-list check before baseline, candidate commit, dry-run append/show, and each future-frame seam | Task 9 |
-| Phase-D documentation, strict capability audit, generated-reference stability, held-release/provenance/no-real-data evidence | Task 10 |
+| Every post-await transaction fence, live core-config reread, stale-row conditional write, immediate removal purge, and WhatsApp D9 list-change recovery at every durable edge | Task 9 |
+| Actual B2 live/replay every-frame gate convergence, migration/stream-column contract, packed-consumer/release-held checks, documentation, strict capability audit, generated-reference stability, and held-release/provenance/no-real-data evidence | Task 10 |
 
 ## Pull-request handoff checklist
 
 - The daemon and `@agentcomms/events` remain held.  No publish, tag, release
   PR, or version unhold is part of this work.
-- The PR title/body proposes `0.14.2-events-d` only as a future release target,
-  includes the D-10 No-changelog line, and records full verification results.
+- At PR creation, the release owner records the post-merge target-main version,
+  derives the D-10 next-minor prerelease and its semver reason, includes the
+  No-changelog line, and records full verification results; it does not reuse a
+  stale literal from another branch.
 - It includes source, migration, fake, race, mutation, parity, and docs tests;
   no test invokes a real Slack, Resend, WhatsApp, Gmail, or B2 endpoint.
 - It contains no real mail, phone/JID, workspace, address, token, API key,
@@ -972,3 +1264,7 @@ may exercise a case incidentally, but it is not a second owner.
 - Owner decisions on D-A through D-F are linked in the PR.  Accepted amendments
   get a separate normative-spec commit; rejected amendments remain documented
   plan assumptions rather than silent behaviour changes.
+
+Commit this plan with:
+
+`docs(plan): local event emission — phase D, review round 1`
