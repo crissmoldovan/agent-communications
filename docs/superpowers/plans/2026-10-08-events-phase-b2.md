@@ -1,815 +1,755 @@
 # Local event emission — Phase B2 implementation plan
 
-> **For the implementation team:** B2 is a held-package implementation plan. Do not
-> publish `@agentcomms/events` or `@agentcomms/events-daemon`, add a release tag, or
-> contact a non-loopback service while carrying it out. Every batch below ends in
-> `pnpm verify` before its commit.
+> **For the implementation team:** B2 is held-package work. Do not publish either
+> events package, tag a release, or contact a non-loopback service. Every task and
+> batch ends in full pnpm verify before its commit.
 
 ## Scope and inherited decisions
 
-B1 is the baseline: `@agentcomms/events` and `@agentcomms/events-daemon` exist,
-are held from release, and use Node **22.16.0 or later** with B1-F's lazy
-`node:sqlite` loader. B1-G's control boundary remains unchanged: Unix control
-directories/socket permissions are private, and Windows refuses control rather
-than introducing a token-bearing network control plane.
+B1 is the baseline: the packages are held and use Node 22.16.0 or later with B1-F's
+lazy node:sqlite loader. B1-G's private Unix control boundary and Windows
+WINDOWS_CONTROL_UNAVAILABLE refusal remain unchanged.
 
-B2 implements only the B2 row in §4: safe webhook/SSE transport and persistence,
-the underlying network reset/degraded-recovery machinery, and the CLI/MCP rows
-listed below. It does **not** make a judge kind callable, add a network listener
-other than the local SSE listener, expose a full secret operation, add `target
-test`/`target resume`, change the core change policy, lift either package hold, or
-publish anything. The local-endpoint transport work in this phase is a validated,
-unreachable transport primitive for Phase E; no scheduler, operation, CLI command,
-or MCP tool may invoke it before E.
+B2 implements only its §4 row: safe webhook/SSE transport and persistence, network
+reset/degraded-recovery machinery, and private seams for later B3 controls. It does
+not add delivery command/tool/hold/drop/retry controls, subscriber CRUD, target test,
+target resume, secret operations, a judge kind, full doctor extension, or a listener
+besides the loopback SSE listener. It does not alter core policy, lift a package hold,
+or publish.
 
-This plan preserves the B1 rule that a convenience in-memory cache is never an
-authority source. At every disclosure boundary, load the account from core's
-`ConfigStore` afresh, and treat the current switch generation, enablement, pause
-state where it gates a claim, exact rule/target/subscriber versions, and current
-delivery row as authoritative only when re-read in the transaction that changes
-the row.
+The existing B1 targets CLI/MCP capability remains the target-version surface. B2 may
+extend its existing shared target-document validation for a non-secret webhook
+descriptor, but adds no command, tool, capability row, reference page, or separately
+callable operation. Secret URL/signing/bearer slots are internal test/runtime seams.
+events-daemon.doctor remains the B1 CLI/MCP/capability/reference operation: tests
+assert only that B3 doctor extensions are absent, never that doctor is absent.
+
+A cache is never authority. Reload ConfigStore at every disclosure boundary; accept
+switch generation/enablement/pause, exact rule/target/subscriber versions, and outbox
+state only when reread in the transaction that changes the row.
 
 ### Binding B1 amendments and committee decisions
 
-The whole B1 plan, including amendments B1-A through B1-G and its complete
-“Decisions made during the build (committee)” table, remains binding. B2 does not
-silently reopen any of them. The following is the operative carry-forward checklist
-for work that can otherwise look local to B2:
+The entire B1 plan, including B1-A through B1-G and its committee table, is binding.
 
 | Binding B1 decision | B2 consequence |
 | --- | --- |
-| B1-A | Existing terminal-only safe dry-run reads stay as they are; B2 does not use B3's broad exception allocation as a reason to move or widen them. |
-| B1-B | B1's local dry-run reset append barrier remains. B2 adds only network target-version barriers/degraded behaviour; `target resume` remains terminal/app-only in B3 and excluded from MCP. |
-| B1-C | Add only forward B2 migrations with explicit AAD contracts for B2 tables; never rewrite v1 or pre-create E/D future schemas. |
-| B1-D | Gmail alone is runnable before D. Network delivery consumes established events; it does not make another source/baseline callable. |
-| B1-E | Reuse the independent event-secret backend and fail closed. B2 adds backing slots, not a model-facing secret operation. |
-| B1-F / K4 | Keep `engines.node >=22.16.0`, one lazy `node:sqlite` loader and the 22.12 named-refusal/22.16 SQLite release legs. No experimental flag, native driver, install script or static SQLite import. |
-| B1-G / K5 | Do not weaken the Unix 0700-directory/0600-socket re-proof plus token boundary; Windows still refuses `WINDOWS_CONTROL_UNAVAILABLE`. The SSE listener is a disclosure endpoint, never a replacement control plane. |
-| Committee: canonical documents, exact-version purge, disable-all and pause | Preserve every canonical rule leaf/embedded exact version; purge by exact revoked version rather than rule id; disable retains only the B1-specified content-free records/cap charges and leaves pause unchanged; pause blocks claims/recovery. |
-| Committee: post-await writes and D9 | `EventRecordCipher.encrypt()` remains outside caller write transactions. Every B2 post-await write re-reads fresh core account configuration, switch/generation, exact row/version/lease and retention facts in its own transaction; a lost race writes nothing or only the existing content-free attempt marker. |
-| Committee: packaging/E2E | Keep runtime workspace dependencies external as B1 established, retain the no-native-bundle proof, and install the loopback seal before any daemon/provider import. |
+| B1-A | Terminal-only dry-run reads remain as shipped. |
+| B1-B | B1 local reset append barrier remains; B2 adds private network barriers/degraded recovery. Terminal/app-only target resume remains B3 and MCP is excluded. |
+| B1-C | Add only forward B2 migrations and explicit AAD; never rewrite v1 or pre-create later-phase schemas. |
+| B1-D | Gmail alone is runnable before D; network work consumes established events and enables no source/baseline. |
+| B1-E | Reuse independent event-secret backend fail-closed; add backing slots, not model-facing secret operations. |
+| B1-F / K4 | Preserve Node >=22.16.0, lazy SQLite, and 22.12-refusal/22.16-SQLite release legs. |
+| B1-G / K5 | Preserve Unix 0700/0600 re-proof/token boundary and Windows refusal. SSE is disclosure, never control. |
+| B1 decision 6 | Preserve doctor and its B1 CLI/MCP/capability/reference row. Subscribers, delivery controls, named secret operations, target test/resume, and remaining doctor surface are B3. |
+| Committee: canonical docs, purge, disable, pause | Preserve exact immutable versions; purge exact revoked versions; preserve B1 disable records and pause blocks claims/recovery. |
+| Committee: post-await/D9 | Encrypt outside caller writes. Each B2 post-await write rechecks fresh account, switch/generation, row/version/lease and retention; a loser writes nothing except an existing content-free attempt marker. |
+| Committee: packaging/E2E | Keep workspace externals/no-native proof and install a preload seal before any daemon/transport import in every network-capable Node test process. |
 
 ### Decisions the spec leaves to the plan
 
-1. **Use Node built-ins and a deliberately small pinned transport.** Use
-   `node:net`, `node:tls`, `node:http`, `node:crypto`, and an injected resolver;
-   do not add an HTTP server/client, DNS, proxy, TLS, or native dependency. This
-   avoids install scripts, new licence/provenance surface, bundle externals, and
-   the native-module problems B1 avoided. The webhook client owns a raw connected
-   socket, does not call `fetch`, `http(s).request`, an agent, or a proxy-aware
-   library, always sets `agent: false` where a test helper uses Node HTTP, and
-   never reads proxy environment variables. Redirects are disabled by construction:
-   one request yields one response and a 3xx is retryable/non-2xx, never followed.
+1. **Pinned transport, recursive address validation, pre-import seal.** Use only
+   node:net, node:tls, node:http, node:crypto, and injected resolver/connector
+   interfaces; add no HTTP/DNS/proxy/TLS/native dependency. The client owns raw
+   sockets, never calls fetch, http(s).request, agents or proxy-aware code, never
+   reads proxy variables, and never follows 3xx.
 
-   The resolver returns all candidate answers to an injected interface. Canonical
-   IP parsing unwraps IPv4-mapped IPv6, NAT64, 6to4 and Teredo outer/embedded
-   representations; an ambiguous or disallowed representation rejects before a
-   connect. Every returned answer must be in the target's sorted approved CIDR set.
-   The client connects only to a vetted literal address while preserving the
-   canonical URL hostname for TLS SNI, certificate hostname verification, and
-   `Host`. `rejectUnauthorized` stays true; tests inject only a throwaway local CA
-   into the client test seam. Literal IP HTTPS performs IP certificate checking and
-   sends no hostname SNI. HTTP is accepted only when the URL host is exactly the
-   canonical literal `127.0.0.1` or `::1` and the sole approved address is that
-   literal; hostname-to-loopback, IPv4-mapped spellings, all other private HTTP,
-   redirects, and proxy configuration cannot widen this exception.
+   packages/events-daemon/test/fixtures/iana-special-purpose-2026-10-08.json is
+   checked-in policy. Its snapshotVersion is iana-special-purpose-2026-10-08; for
+   IPv4 and IPv6 registries it records IANA title, canonical URL, IANA Last Updated,
+   raw-source SHA-256, and every prefix plus globallyReachable. The matching
+   src/network/iana-special-purpose.ts exports only this data—no runtime lookup.
+   Tests derive an inside and boundary literal from **every** globallyReachable:false
+   prefix, fail if version/source metadata/hash changes without reviewed snapshot
+   update, and deny each vector including metadata/link-local ranges.
 
-   The IANA special-purpose classification will be a checked-in, reviewed policy
-   snapshot with its source date/version in a comment and tests for the mandatory
-   metadata/link-local cases. It is data, not a runtime network lookup. A later
-   policy update is a visible reviewable source change rather than a DNS/library
-   update changing egress silently. A reasonable alternative is a maintained IP
-   library; reject it because it adds an update/licence/install surface and hides
-   the normative classification behind dependency behaviour.
+   Normalisation validates outer and every recursively embedded address: IPv4-mapped/
+   compatible IPv6, NAT64, 6to4, and both Teredo server and obfuscated client. B2
+   production ActiveNat64Prefix is null because no trusted owner-approved local
+   prefix-provisioning surface exists. Null, multiple, malformed or ambiguous prefix
+   rejects NAT64 rather than guessing. A test-only injected trusted /96 exercises
+   active NAT64 and proves forbidden outer **or** embedded values reject. Every
+   resolver answer must pass this policy and be in sorted approved CIDRs before socket
+   construction.
 
-2. **Target versions are immutable, and secrets have no document reference.** A
-   plain webhook document stores its canonical public URL (no userinfo, query, or
-   fragment). A secret-URL document stores only
-   `{ scheme, host, port, sha256 }`; its complete canonical URL, including any
-   sensitive path/query/userinfo, is in the independent daemon secret store. The
-   SQLite secret-slot tables join an opaque slot to a target/version, but neither
-   public documents, previews, canonical-rule bytes, control responses, MCP
-   results, logs, audits, nor errors contain the opaque slot or complete URL. A
-   SHA-256 fingerprint is recomputed after every secret read and before resolution.
-   A byte change to either form of URL creates a new target version and requires a
-   new rule activation; it never edits a live version in place.
+   Connect only to vetted literal address while retaining canonical URL hostname for
+   SNI, certificate hostname checking and Host. rejectUnauthorized remains true.
+   Literal HTTPS uses IP certificate checking/no hostname SNI. HTTP is only literal
+   127.0.0.1 or ::1 with that sole approved literal; hostname-to-loopback, mapped
+   spellings and other private HTTP refuse.
 
-   A webhook target has an explicit Standard Webhooks signing mode, approved
-   address set, retry limit (integer 1–20, default 20), and
-   `deliveryOrdering: "per-rule-account-target"`. The latter is serial only for
-   that tuple, matching D8's ordering key, rather than globally serialising an
-   unrelated target. An alternative default of unordered delivery is unsafe and
-   would make the D8 ordering clause untestable. Signing keys and SSE bearer
-   tokens are generation records in the same independent secret store. Rotation
-   keeps current plus previous for a **five-minute** bounded overlap, matching the
-   consumer timestamp tolerance; the previous generation is then erased through
-   the normal secret/reconciliation path. Five minutes is a plan choice, not an
-   implied unbounded grace period.
+   Every B2 network-capable Node process begins with:
+       node --import test/helpers/loopback-seal-preload.mjs
+   (or equivalent NODE_OPTIONS) before evaluation. The preload imports Node built-ins
+   only and patches callback/promise lookup and resolve*, dns.Resolver variants,
+   net.connect/net.createConnection/net.Socket.prototype.connect, tls.connect, and
+   http/https request entries. It allows Unix sockets and literal 127.0.0.1/::1 only;
+   hostnames/DNS/non-loopback throw before import-time code acts. ESM daemon/provider/
+   transport fixtures dynamically import after installed-marker check. The browser
+   case uses a Playwright route installed before navigation allowing only exact
+   literal-loopback fixture/SSE URLs.
 
-   B2 builds the slot/rotation state and exercises it through daemon-internal test
-   seams. It intentionally does not offer a terminal, app, or MCP command that
-   creates/displays/rotates a secret: those named exception operations remain B3.
-   An agent can create or inspect only non-secret target/subscriber descriptors and
-   delivery summaries; it cannot read a secret URL, signing key, bearer token,
-   prior token, secret slot, complete query, or a body. An MCP caller has the same
-   limitation.
+2. **Immutable documents; all B2 secret refs migrate through the real module.**
+   Plain webhook docs have canonical public URL without userinfo/query/fragment.
+   Secret docs store only scheme/host/port/sha256; complete URL lives in independent
+   event store. Public docs/previews/canonical bytes/control/MCP/log/audit/errors
+   contain neither slot nor complete URL. Recompute fingerprint after secret read and
+   before resolution. URL byte changes make a target version/new activation.
 
-3. **Webhook outbox state is fenced at the attempt, not merely at the job.** Add a
-   single generic delivery dispatcher on top of B1's encrypted outbox. A webhook
-   is `queued`/`retryable` → leased `disclosing` → `delivered`, `retryable`, or
-   `dead-lettered`; expiry/revocation/disable can instead make it terminal. The
-   first claimed webhook attempt performs one cap charge; retries do not charge a
-   cap. Attempts use capped exponential backoff with deterministic test-injected
-   jitter, never exceed 20 or the target limit, and never run after the fixed
-   deadline. A 2xx is success; everything else is classified without accepting a
-   redirect. Every attempt has the stable delivery ID, a timestamp sampled at its
-   start, and a newly calculated `v1,<base64>` HMAC-SHA-256 over
-   `id + "." + timestamp + "." + exactBody`. During overlap it emits two
-   space-separated signatures. The body and ID are unchanged across retries.
+   The module is packages/events-daemon/src/store/event-secrets.ts.
+   event_secret_generations owns secret-url, webhook-signing, and sse-bearer refs,
+   each bound to exact target/subscriber version, purpose, generation, current/
+   overlap/retired state and expiry. Under events/secrets.lock enumerate masters plus
+   all current/overlap generations. Creation/rotation writes, reads back, then in new
+   BEGIN IMMEDIATE verifies exact version/digest/lifecycle/prior generation before
+   opaque-ref insert. Migration locks, enumerates complete union, copies/writes,
+   verifies all, commits event selector, then retires/deletes source; failure leaves
+   old selector usable and cleans destination copies. Mark retired before deletion;
+   reconciliation deletes only unreferenced retired refs. Core migration must not
+   enumerate/change event refs.
 
-   `delivery retry` only changes a webhook already in `retryable`; after its
-   complete fence succeeds it sets `nextAt=now`. It never remaps, re-judges,
-   creates a new delivery, extends a deadline, or mutates a terminal/non-webhook
-   row. It refuses with no mutation for attempts/expiry/revocation/lifecycle/live
-   account/generation failures. The alternative “clone for manual retry” breaks
-   stable IDs, cap accounting and the stipulated deadline.
+3. **Two outboxes; never invent identities.** Ordinary webhooks use existing
+   decision/account/rule deliveries. Reset uses encrypted system_reset_outbox with
+   its own id, reset epoch, target id/version, state, fixed bytes, attempts, lease
+   token/fence/deadline and content-free attempts. It has no decision/account/rule/
+   cap charge or fake ordinary row. Add system_outbox_id to barrier while retaining
+   B1 local-notice field. Add exact AAD layouts for system reset and stream records.
 
-4. **Network reset barriers are durable target-version state.** Generalise B1's
-   local reset records into encrypted reset deliveries plus a barrier keyed by
-   `(resetEpoch, targetId, targetVersion)`. Ordinary deliveries wait behind the
-   closed barrier; a successful reset opens it; reset failure/expiry/dead-letter
-   makes it degraded. Reset work has a fixed 20 attempts/24 hours and no cap.
-   The B2 runtime exposes an internal, owner-session-only recovery function for
-   the daemon's future B3 operation: it verifies the retained target version and
-   creates a new reset delivery, never retries an old one. The CLI/MCP `target
-   resume` exception remains B3. Revoke/purge deletes the reset payload and closes
-   no later work behind a removed target.
+   target_version_references is authoritative. Activation writes active-rule ref for
+   each exact target version. Real retained delivery writes retained-delivery ref and
+   deletes it atomically with bytes/authority. In cleanup transaction,
+   hasLiveSystemTargetReference(epoch,targetId,targetVersion) joins refs to exact
+   rule/delivery/target and returns true only for non-revoked active rule, or queued/
+   retryable/disclosing/authorised retained superseded delivery with unrevoked exact
+   lineage/live deadline. Revocation makes false and purges barrier/outbox atomically.
+   One removal/replacement never cancels if another reference exists; final empty
+   query alone cleans it.
 
-5. **SSE is a loopback server with bearer generations, not EventSource.** The
-   daemon owns a loopback-only HTTP listener and serves only
-   `GET /v1/streams/<subscriber-id>` with a fixed configured listener authority.
-   Subscriber documents contain an exact stream identity and an exact origin set;
-   they never contain a bearer token. A request must use `Authorization: Bearer`,
-   has no query/cookie authentication, and is rejected if `Host` is not byte-for-
-   byte the configured listener authority. CORS reflects an exact allowed Origin
-   only, supplies the exact preflight headers `Authorization, Last-Event-ID`,
-   uses `Vary: Origin`, has no credentials and no wildcard. Rotation commits the
-   new token generation and invalidates old streams inside the subscriber mutex;
-   it aborts their sockets before returning. Disable-all, revocation, pause where
-   it gates work, and account removal all prevent later frames; revocation/account
-   removal also purge retained replay bytes. A stream replay is a normal disclosure
-   boundary and rechecks authority before each frame.
+4. **Atomic claim and order.** Decision insert allocates immutable ordering_sequence
+   from delivery_order_counters keyed by exact rule/version/account/target/version.
+   Claim waits while earlier sequence is queued, retryable or unexpired disclosing.
+   One BEGIN IMMEDIATE checks exact row/lineage, deadline, switch/enablement/pause,
+   cap window/unique first charge and open current barrier **before** lease/attempt.
+   Cap/barrier block changes no attempt, lease, work attempt, charge, append or
+   ciphertext. Success writes first charge, attempt id, random lease token and lease
+   together; retries reuse charge. System reset is cap-free but has same token/
+   lineage semantics.
 
-   The listener's `host` (`127.0.0.1` or `::1`) and non-zero port are daemon
-   configuration captured as the subscriber's public `listenerAuthority`; active
-   subscribers must agree on it, otherwise creation refuses. This makes `Host`
-   validation unambiguous and permits IPv4/IPv6 test coverage. A reasonable
-   alternative is an ambient daemon port chosen at startup; reject it because it
-   cannot make the subscriber version's stream identity/digest stable.
+5. **Five separate final byte fences.** Final transactions run immediately before
+   DNS resolver invocation, TCP net.connect/SYN, tls.connect({socket})/ClientHello
+   after TCP completes, raw socket.write(requestBytes), and every SSE
+   ServerResponse.write(frame). SSE frame gate is distinct from header gate and under
+   subscriber mutex. No await/callback/config/secret/approval/taint/encrypt/telemetry
+   occurs between gate and named call. Hooks run before gate, proving revocation after
+   TCP but before ClientHello loses at TLS.
 
-6. **Every outbound phase has a just-before-I/O authority gate.** “Immediately
-   before a byte leaves” means no asynchronous boundary separates the final
-   transaction gate and the call that initiates that outbound phase. A webhook
-   has three gates: immediately before resolver invocation, immediately before
-   `net.connect`/`tls.connect` (before a SYN/ClientHello), and immediately before
-   raw `socket.write(requestBytes)`. The last transaction creates/updates the
-   attempt record and is followed synchronously by one write of the prepared
-   request bytes. SSE has one gate before response headers and, under the
-   per-subscriber mutex, another immediately before each `ServerResponse.write`
-   of an event frame. No `await`, encryption/decryption, secret read, config load,
-   approval read, taint flush, resolver call, or callback is permitted between a
-   gate and its byte-emitting call. Test-only hooks run *before* each final gate so
-   disable/revoke races prove the gate, rather than creating an artificial gap
-   after it.
+6. **Crash recovery ownership.** Content-free attempt owns outbox id, attempt id,
+   lease token, generation and bound lineage. Recover expired lease only if exact
+   current lineage remains live; late owner cannot settle newer lease/cancel/purge.
+   Post-write crash may repeat external request (bounded at-least-once), but cannot
+   double-charge, duplicate state, resurrect secret/ciphertext, or recreate purge.
+   Task 6 crash matrix is normative.
+
+7. **Internal loopback SSE bearer listener.** Serve only GET
+   /v1/streams/<subscriber-id> at persisted literal authority. Subscriber docs bind
+   stream identity/origins, never token. Require Authorization bearer; reject query/
+   cookie auth/wrong Host. CORS reflects exact allowed Origin only, permits exactly
+   Authorization and Last-Event-ID, sets Vary: Origin, emits no credentials/wildcard.
+   Rotation invalidates old sockets in subscriber mutex before return. No B2
+   subscriber CLI/MCP CRUD: internal fixtures only.
 
 ### Await-to-write fence ledger (binding implementation checklist)
 
-The following is deliberately more specific than a helper name. A helper may
-factor code, but it must not weaken any listed re-read or move it outside the
-transaction that writes the named state.
-
-| Write after an await | Transactional re-check immediately before the write | Bite test(s) |
+| Write after an await | Transactional re-check immediately before write | Bite test(s) |
 | --- | --- | --- |
-| Persist a secret URL/key/token generation after secret-store I/O | Exact pending target/subscriber version still exists, is the same canonical digest, has not been revoked/superseded in the requested role, and the expected prior slot generation is still current; record an opaque reference only. | `secret-slot-race.test.ts`: rotate/revoke/version-replace while the fake store is paused; `target-documents.test.ts`: no slot/full URL in every result. |
-| Create/queue/release/drop/manual-retry a delivery after approvals, config, cipher, taint or fence reads | The new queue insert still has a live projection/stage and exact rule/target/subscriber binding; for an existing row its id/state/version/lease is still the row read. In both cases switch enabled/generation matches; pause permits this transition; direct fresh core account exists and is unrevoked; exact lineage is live; deadline/attempt limit/barrier and cap conditions still hold. | `delivery-fences.test.ts` cases “each await”; `manual-retry.test.ts` cases “no mutation”; B1 projection-to-outbox regression cases remain green. |
-| Start DNS, TCP/TLS, and request write after resolver/key/taint/config work | All preceding delivery checks, plus exact attempt/lease, URL-secret fingerprint, key generation, approved address set, target version, and reset barrier. DNS occurs only after its first gate; connect only after address-set revalidation; request bytes only after the final gate. | `pinned-webhook.test.ts` and `webhook-races.test.ts` pause each pre-I/O hook and disable/revoke/remove/expire/replace. |
-| Record an HTTP outcome after request/TLS/response awaits | Delivery still has the exact id, `disclosing` state, lease token and attempt id; its rule/object versions, generation, account and retention deadline are still valid. If not, do not recreate or update the delivery/ciphertext. | `webhook-races.test.ts` “outcome after each terminal cause”; `lifecycle-webhook.test.ts`. |
-| Create/update reset delivery/barrier after cipher/secret/config work | Exact target version remains retained and unrevoked, epoch and barrier state are the expected pair, direct account/rule authority is live, no newer barrier exists, and the new delivery id is still unique. | `reset-network.test.ts` races with target revoke, epoch replacement, account removal and expiry. |
-| Append stream log / mark SSE delivery after decrypt/encrypt/taint/config reads | Exact leased delivery, switch generation, account, rule/target/subscriber versions, subscriber non-revocation, barrier, expiry, cap and log identity remain current; append and delivery transition share one transaction. | `sse-fences.test.ts` races each await; `sse-replay.test.ts` validates no orphan log. |
-| Accept/rotate/close an SSE stream after secret comparison or socket setup | Exact subscriber/version and listener authority are live; token generation is active; rotation expected generation still matches. Rotation commits invalidation then closes registry sockets while holding the subscriber mutex. | `sse-auth-rotation.test.ts` pauses token read/handshake; old stream gets no post-rotation frame. |
-| Replay a stored stream event after decrypt/config/fence reads | Stream-log row still exists and has not expired/purged; direct account/rule/subscriber authority and current token generation are live; the same connected stream is still registered. Under its mutex, repeat the generation check immediately before `write`. | `sse-replay.test.ts` races disable/pause/revoke/account removal/rotation at every frame. |
-| Expire/purge/dead-letter after a lease/cleanup read | Exact current row and reason still match; never change a newer state or recreate encrypted content. | `retention-network.test.ts`, `webhook-races.test.ts`, and `reset-network.test.ts`. |
+| Persist URL/key/token generation after store I/O | Exact target/subscriber version, digest, lifecycle and expected prior generation match; write opaque ref only. | secret-slot-race, network-documents |
+| Create webhook/system-reset outbox after cipher/config/fence work | Projection/reference, target, epoch, uniqueness, account/switch/lineage/deadline remain live. | outbox-persistence, system-reset-references |
+| Claim/release/recover after config/fence/cap/barrier read | Exact row/state/sequence/lease, deadline, generation, lineage, cap/barrier match; blocked writes no attempt/lease/charge/append. | claim-cap-barrier, claim-ordering |
+| Start DNS | Leased row, lineage, address digest, secret fingerprint/key generation and barrier remain valid. | webhook-fences DNS |
+| Start TCP | DNS facts plus complete vetted answers/selected literal remain valid. | webhook-fences TCP |
+| Start TLS ClientHello | TCP facts and exact lease/token reread after TCP completes. | webhook-fences TCP-to-TLS |
+| Write HTTP bytes | Preceding facts plus exact attempt/timestamp/key generation; synchronous raw write follows. | webhook-fences write |
+| Record HTTP outcome | Exact disclosing state/lease token/attempt/live authority; otherwise only existing content-free discarded marker. | webhook-crash-recovery |
+| Append stream log / settle SSE delivery | Leased delivery/account/switch/rule/target/subscriber/barrier/expiry/cap/log identity remain; append+settle one transaction. | sse-persistence-auth |
+| Accept/rotate/close SSE stream | Exact subscriber/authority/token generation live; rotate commits invalidation then closes under mutex. | sse-persistence-auth |
+| Write each live/replay frame | Row/token/account/rule/subscriber/stream registration live; mutex repeats check immediately before write. | sse-frame-fences, browser listener |
+| Expire/purge/dead-letter | Exact current row/reason; never mutate newer state or recreate encrypted content. | retention/crash/reset |
 
-An HTTP request already issued cannot be recalled. If disable, revocation, target
-purge, account removal, expiry, or a generation change wins while it is in flight,
-the completion transaction must leave the terminal row selected by that winner
-(`cancelled` or the applicable `in-flight-at-disable`/`in-flight-account-removal`)
-untouched, must not schedule a retry or restore ciphertext, and may update only
-the pre-existing content-free `work_attempts` row with an
-`outcome-discarded-after-<reason>` marker plus safe status class. Operator output
-reports `externalOutcome: "unrecalled; discarded"`, never a body, URL, key,
-response text, or authority it no longer has. Pause does not recall an issued
-request: a valid completion may be recorded, but no next claim occurs until
-resume; a subsequently lost non-pause authority wins and discards the outcome.
+Issued HTTP cannot be recalled. If disable/revocation/purge/account removal/expiry/
+generation change wins, completion leaves winner terminal state untouched, schedules
+no retry/restoration, and adds only outcome-discarded-after-reason plus safe status to
+existing content-free attempt. Pause permits only issued completion; later non-pause
+loss wins.
 
 ### Spec amendments to raise with the owner
 
-These are not blockers and do not change the B2 build choices above.
-
 | ID | Lines | Ambiguity / contradiction | B2 plan resolution |
 | --- | --- | --- | --- |
-| B2-A | §4 lines 2824–2825; D2 lines 471–500 | B2 requires secret URLs and signing rotation, while B3 reserves the complete named terminal/app secret operations and exception rows. | Build opaque slots, rotation and internal tests in B2; expose no named secret command/tool until B3. Ask whether secret creation/rotation should be explicitly split into backing state (B2) and human operation (B3). |
-| B2-B | §4 lines 2824–2825; D7 lines 1267–1295; D10 line 2011 | B2 says durable reset barriers/degraded resume; B3 assigns `target resume` the human-only surface. | Implement the durable recovery primitive and tests in B2, defer CLI/MCP `target resume` and its exception row to B3. Ask whether B2 should instead own that surface. |
-| B2-C | §4 lines 2823–2824; D11 lines 2092–2148 | B2 names HTTP-only literal-loopback local judges, but no judge kind may be callable before E. | Ship a non-reachable validator/connector primitive and transport tests only; no judge target, scheduler branch, operation, command, or tool. Ask for phase wording that says “transport substrate”, not callable judge. |
-| B2-D | D2 lines 260–267; D8 lines 1759–1761 | Target documents name delivery ordering/retry policy but do not define the public enum/default. | Use `per-rule-account-target`, default retry limit 20, range 1–20, because D8 supplies that ordering key and retry cap. Ask owner to normatively name these document values. |
-| B2-E | D6 lines 1152–1157; D7 lines 1378–1395 | “Fixed listener authority” and “stream identity” have no persisted subscriber schema or port ownership rule. | Persist literal host/port authority in the subscriber version; require all active subscribers to agree. Ask owner to approve the exact document fields and multi-listener policy. |
-| B2-F | D6 lines 1168–1174 | Signing-key overlap is “bounded” but no duration is specified. | Five minutes, aligned to consumer timestamp tolerance, with exactly two active generations. Ask owner to make duration normative. |
-| B2-G | D7 lines 1340–1368 | “IANA globally reachable” has no snapshot/update source. | Checked-in reviewed policy snapshot, no runtime lookup/dependency. Ask owner to name the desired source/update cadence. |
+| B2-A | §4 2824–2825; D2 471–500 | B2 needs secret URLs/rotation; B3 reserves named terminal/app secret operations. | Opaque backing/internal tests in B2; no named operation until B3. Ask owner to state split. |
+| B2-B | §4; D7; D10 | B2 reset recovery but B3 human-only resume. | Private recovery seam B2; terminal/app target resume exception B3. |
+| B2-C | §4; D11 | Local-endpoint named B2 but no judge before E. | Non-reachable validator/connector only; no scheduler/operation/CLI/MCP judge path. |
+| B2-D | D2; D8 | Ordering/retry enum/default unstated. | per-rule-account-target, default 20/range 1–20 and Task 4 fence; ask owner to name normatively. |
+| B2-E | D6; D7 | Listener authority/identity schema incomplete. | Persist literal authority/require agreement; ask owner to approve fields/multi-listener policy. |
+| B2-F | D6 | Bounded overlap duration unspecified. | Five minutes/current+previous only; ask owner to make normative. |
+| B2-G | D7 | IANA source/update cadence unspecified. | Versioned checked-in snapshot with source metadata/hashes/exhaustive vectors; ask owner for cadence. |
 
 ## Batch map and safe parallelism
 
-There are **six tasks in four batches**. Tasks 1 and 2 may run in separate
-worktrees after copying this plan; they touch distinct network-test/substrate and
-document/store files. After they land, Tasks 3 and 4 are deliberately serial: they
-both establish delivery/retention terminal-state semantics. Task 5 follows their
-merged state machine. Task 6 is the final integration, parity, generated-reference,
-release-hold and full-suite task. Do not run concurrent edits in the shared
-worktree.
+There are **nine tasks in five batches**. Tasks 1/2 may run in separate worktrees.
+Later tasks are serial because each owns state the next uses; one builder completes
+one task, including full verification, in one sitting.
 
 | Batch | Tasks | Can run in parallel | Why / dependency |
 | --- | --- | --- | --- |
-| 1 — isolated safety substrate | 1, 2 | 1 and 2 in separate worktrees | Network primitives/seal and document/secret schema do not overlap. |
-| 2 — disclosure state machine | 3, 4 | No | Webhook attempts establish the generic terminal semantics used by reset/retention. |
-| 3 — streaming boundary | 5 | No | SSE uses the B2 schema, generic dispatcher, and lifecycle/expiry hooks. |
-| 4 — integration gate | 6 | No | It validates all public surfaces and held-release evidence after every preceding batch. |
+| 1 — safety/model substrate | 1, 2 | 1 and 2 separate worktrees | Seal/address and document/secret files do not overlap. |
+| 2 — persistence/eligibility | 3, 4 | No | Task 3 defines storage/references; Task 4 claims them. |
+| 3 — webhook transport/recovery | 5, 6 | No | Task 5 transport; Task 6 its crashes. |
+| 4 — SSE boundary | 7, 8 | No | Task 7 persistence/auth; Task 8 listener/browser. |
+| 5 — held integration | 9 | No | Audits public boundary/E2E/release after runtime work. |
 
-## Batch 1 — isolated safety substrate
+## Batch 1 — safety/model substrate
 
-### Task 1 — pinned loopback-only transport and hostile-network test harness **(high risk)**
-
-**Files**
-
-- Add `packages/events-daemon/src/network/address-policy.ts`,
-  `packages/events-daemon/src/network/resolver.ts`,
-  `packages/events-daemon/src/network/pinned-connection.ts`, and
-  `packages/events-daemon/src/network/local-endpoint.ts`.
-- Add `packages/events-daemon/test/network/address-policy.test.ts`,
-  `packages/events-daemon/test/network/pinned-connection.test.ts`, and
-  `packages/events-daemon/test/network/local-endpoint.test.ts`.
-- Add `packages/events-daemon/test/support/loopback-receiver.ts` and
-  `packages/events-daemon/test/support/test-tls.ts`; add
-  `packages/events-daemon/test/support/sse-client.ts` as a loopback-only raw SSE
-  client (it is used by Task 5).
-- Update `test/helpers/loopback-seal.mjs`; add
-  `test/helpers/loopback-seal.test.mjs` and update
-  `test/events-daemon-e2e.test.mjs` to install the stricter seal before daemon
-  import.
-
-**Tests first**
-
-1. Write table-driven policy tests for canonical literal parsing, CIDR membership,
-   every answer required to match, IPv4-mapped/NAT64/6to4/Teredo handling,
-   ambiguity rejection, private/default rejection, explicit-private acceptance,
-   metadata/link-local unconditional rejection, and sorted non-empty address sets.
-2. Write pinned-connection tests using an injected resolver and the fake receiver:
-   successful HTTPS to loopback with an injected throwaway test CA; bad certificate;
-   original-host SNI/certificate/Host preservation; one vetted address only;
-   all-answer enforcement; no redirects; no proxy use; secret-fingerprint mismatch
-   before resolver; literal-loopback HTTP acceptance; hostname-loopback, mapped
-   literal, private HTTP, and non-loopback HTTP rejection. The fake receiver binds
-   only `127.0.0.1`/`::1` and records byte-safe request metadata, never a real URL.
-3. Write seal tests that an attempted non-loopback socket/TLS connection and every
-   hostname/DNS lookup fail, including `dns.lookup`, `dns.promises.lookup`,
-   resolver APIs, and `net.Socket.connect`; a literal loopback connection remains
-   permitted. All tests use injected resolver answers, so no DNS lookup is a
-   success path.
-4. Write local-endpoint validator tests that only literal `127.0.0.1`/`::1` with a
-   matching singleton approved set and HTTP are accepted; HTTPS, hostname,
-   `localhost`, mapped spellings, proxy forms, and all non-loopback values reject.
-   Assert the module has no operation/dispatcher import and no actual judge call.
-
-**Implementation, in order**
-
-1. Define a resolver interface returning canonical answer candidates and provide a
-   production implementation only as an injected dependency; it never caches an
-   answer across an attempt. Implement checked-in special-address policy and
-   canonical CIDR/IP comparison before any socket construction.
-2. Implement the raw pinned connector. It samples no proxy variables and exposes
-   three explicit, synchronous-after-gate starts: `resolve`, TCP/TLS start, and
-   request-byte write. It connects a vetted literal while retaining the original
-   hostname for TLS verification/SNI and `Host`, with redirects impossible.
-3. Build the in-process fake HTTP/HTTPS receiver and synthetic, throwaway test TLS
-   material. The test certificate/key is non-production fixture material, exists
-   only for loopback test setup, is never logged or committed as a credential, and
-   is trusted solely through the client test seam. Build the raw SSE client without
-   `EventSource`.
-4. Strengthen the root seal to reject all hostname/DNS paths and every nonliteral,
-   non-loopback connect. Keep it test-only; install it before imports in the E2E
-   entrypoint so a future dependency cannot open a connection first.
-5. Keep `local-endpoint.ts` a pure validator/connector substrate with no export
-   reachable from daemon operations. Add a regression import-graph test for that
-   negative guarantee.
-
-**Required mutations**
-
-- Change any approved answer, special-address decision, canonical hostname, or
-  pinned literal: named address-policy/pinned-connection tests fail.
-- Permit a redirect, read `HTTP_PROXY`, use a hostname in the HTTP exception, skip
-  certificate verification, or connect before checking every answer: the pinned
-  tests fail.
-- Remove a patched resolver/socket path or allow a hostname lookup: the seal test
-  and daemon E2E fail.
-- Route the local-endpoint primitive through an operation: the negative import
-  graph test fails.
-
-**Run**
-
-```sh
-pnpm --filter @agentcomms/events-daemon exec node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/network/address-policy.test.ts test/network/pinned-connection.test.ts test/network/local-endpoint.test.ts
-node --test test/helpers/loopback-seal.test.mjs test/events-daemon-e2e.test.mjs
-pnpm verify
-```
-
-Passing means all transport test traffic is provably literal loopback, no resolver
-reaches DNS, and a release-mode connector cannot reach an unpinned address. Commit:
-`feat(events): add pinned local network transport`.
-
-### Task 2 — immutable B2 target/subscriber documents and independent secret slots **(high risk)**
+### Task 1 — registry-derived address policy and pre-import loopback seal **(high risk)**
 
 **Files**
 
-- Update `packages/events-daemon/src/domain/activation-documents.ts`,
-  `packages/events-daemon/src/domain/versions.ts`,
-  `packages/events-daemon/src/store/migrations.ts`,
-  `packages/events-daemon/src/store/records.ts`,
-  `packages/events-daemon/src/store/event-secret-store.ts`, and
-  `packages/events-daemon/src/store/owner.ts`.
-- Add `packages/events-daemon/src/domain/webhook-target.ts` and
-  `packages/events-daemon/src/domain/sse-subscriber.ts`.
-- Add/update `packages/events-daemon/test/domain/webhook-target.test.ts`,
-  `packages/events-daemon/test/domain/sse-subscriber.test.ts`,
-  `packages/events-daemon/test/store/network-migration.test.ts`, and
-  `packages/events-daemon/test/store/secret-slot-race.test.ts`.
+- Add packages/events-daemon/src/network/address-policy.ts,
+  packages/events-daemon/src/network/iana-special-purpose.ts,
+  packages/events-daemon/src/network/resolver.ts,
+  packages/events-daemon/src/network/pinned-connection.ts, and
+  packages/events-daemon/src/network/local-endpoint.ts.
+- Add packages/events-daemon/test/fixtures/iana-special-purpose-2026-10-08.json,
+  packages/events-daemon/test/network/address-policy.test.ts,
+  packages/events-daemon/test/network/iana-snapshot.test.ts,
+  packages/events-daemon/test/network/pinned-connection.test.ts, and
+  packages/events-daemon/test/network/local-endpoint.test.ts.
+- Add packages/events-daemon/test/support/loopback-receiver.ts,
+  packages/events-daemon/test/support/test-tls.ts, and
+  test/helpers/loopback-seal-preload.mjs; update test/helpers/loopback-seal.mjs,
+  test/helpers/loopback-seal.test.mjs, and test/events-daemon-e2e.test.mjs.
 
 **Tests first**
 
-1. Specify canonical plain and secret webhook documents: lower-case/IDNA host,
-   explicit normalised port, exact encoded path/query, no fragment; plain rejects
-   userinfo/query/fragment; secret output contains only scheme/host/port/SHA-256.
-   Verify every byte URL change yields a new target version and that replacement
-   does not mutate the old version. Scan all public serialisations, logs, preview
-   values and thrown errors for a synthetic secret path/query/fingerprint input.
-2. Specify canonical webhook retry/signing/address/ordering fields and canonical
-   local-SSE subscriber identity, exact origins, listener authority, and embedded
-   target-to-subscriber version binding. Assert stale/mismatched listener
-   authorities and multiple active authorities refuse.
-3. Test migration from a B1 fixture: B2 creates only B2 tables/columns—secret
-   slots/generations, attempt metadata/dead-letter expiry, stream log and durable
-   network reset fields—without rewriting B1 migration text. Verify all encrypted
-   layouts have explicit AAD and secret-store reference reconciliation retains live
-   current/overlap generations but collects retired ones.
-4. With a pausable fake secret store, test create/rotate races against version
-   replacement and revocation. The final write must refuse or write only the exact
-   expected slot generation; it must never attach a secret to a changed version.
+1. Generate inside/boundary vectors for every non-global snapshot prefix; assert
+   version/source metadata/hash and unconditional metadata/link-local denial.
+2. Table-test outer/embedded mapped/compatible/NAT64/6to4/Teredo, including forbidden
+   outer/safe embedded and inverse; null/multiple/ambiguous NAT64 rejects while
+   injected trusted /96 proves recursion.
+3. Inject resolver/literal fake to test TLS/SNI/Host/all answers/cert/no redirect/no
+   proxy/fingerprint-before-resolver/exact HTTP matrix.
+4. Fresh preloaded child statically imports transport and tests patched DNS/resolver/
+   net/tls/http entry refusal; Unix/literal loopback succeeds. E2E dynamic imports
+   modules only after marker assertion.
+5. Local-endpoint accepts literal-loopback HTTP singleton only and no operation/
+   dispatcher import or judge call.
 
 **Implementation, in order**
 
-1. Add one append-only B2 migration (and exact AAD layouts) rather than altering
-   B1 schema. Keep the complete secret URL/key/token only in encrypted independent
-   secret-store entries; rows contain opaque internal references and no public
-   document contains even the reference.
-2. Add canonical immutable target/subscriber document types, including default
-   retry limit 20 and fixed `per-rule-account-target` ordering. Update rule
-   canonicalisation, version insert/read paths, preview/redaction functions and
-   activation validation to bind exact target/subscriber versions.
-3. Extend secret reference reconciliation so signing-key/token/URL generations
-   participate in the same lock/retention deletion discipline as B1 master refs.
-   Read/encrypt/decrypt outside a SQLite write transaction; after each await,
-   start a fresh transaction and perform the exact slot/version/generation checks
-   in the fence ledger before committing a reference.
-4. Add B2-only internal factories for tests and later daemon control wiring. They
-   accept synthetic opaque values but have no CLI/MCP entrypoint and no method that
-   returns a complete secret.
+1. Check in/import static snapshot; implement CIDR and recursive address validation.
+2. Implement injected resolver/raw connector without cache/proxy/redirect.
+3. Build loopback receiver and fixture-only throwaway TLS material.
+4. Implement pre-import seal and all named resolver/socket/request patches.
+5. Keep local endpoint unreachable from operations and add graph assertion.
 
 **Required mutations**
 
-- Make a target URL update in place, expose a slot/full secret, omit a canonical
-  component, or accept a conflicting listener: the domain/redaction tests fail.
-- Alter an AAD layout/table without its migration/reference update: migration and
-  secret reconciliation tests fail.
-- Remove the after-await version/generation re-read: `secret-slot-race.test.ts`
-  fails.
+- Missing/changed non-global registry vector/metadata/version: snapshot test fails.
+- Outer-only/embedded-only validation or guessed NAT64: address test fails.
+- Hostname HTTP/proxy/redirect/missing answer or cert check: connector test fails.
+- Import before preload/missing patch: fresh-process seal/E2E fails.
+- Local endpoint operation import: graph test fails.
 
 **Run**
 
-```sh
-pnpm --filter @agentcomms/events-daemon exec node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/domain/webhook-target.test.ts test/domain/sse-subscriber.test.ts test/store/network-migration.test.ts test/store/secret-slot-race.test.ts
-pnpm verify
-```
+    pnpm --filter @agentcomms/events-daemon exec node --import ../../test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test test/network/address-policy.test.ts test/network/iana-snapshot.test.ts test/network/pinned-connection.test.ts test/network/local-endpoint.test.ts
+    node --import test/helpers/loopback-seal-preload.mjs --test test/helpers/loopback-seal.test.mjs test/events-daemon-e2e.test.mjs
+    pnpm verify
 
-Passing means B1 stores migrate deterministically, every public representation is
-safe to expose, and B2 secrets cannot be rebound by a race. Commit:
-`feat(events): model versioned network targets and secret slots`.
+Passing: literal loopback only, zero DNS, every snapshot non-global range refused.
+Commit: feat(events): seal and validate pinned network transport.
 
-**Batch 1 close.** After both worktrees are integrated, run `pnpm verify` once more
-from the combined tree; passing means Task 1's seal/substrate and Task 2's migrated
-store work together before any dispatcher can use either.
-
-## Batch 2 — disclosure state machine
-
-### Task 3 — fenced Standard Webhooks, delivery attempts, and manual retry **(highest risk)**
+### Task 2 — immutable B2 documents and complete event-secret reconciliation **(high risk)**
 
 **Files**
 
-- Update `packages/events-daemon/src/runtime/dispatcher.ts`,
-  `packages/events-daemon/src/runtime/deliveries.ts`,
-  `packages/events-daemon/src/runtime/decisions.ts`,
-  `packages/events-daemon/src/runtime/disclosure-fence.ts`,
-  `packages/events-daemon/src/runtime/scheduler.ts`,
-  `packages/events-daemon/src/runtime/lifecycle.ts`, and
-  `packages/events-daemon/src/store/owner.ts`.
-- Add `packages/events-daemon/src/runtime/webhook-dispatcher.ts` and
-  `packages/events-daemon/src/runtime/webhook-signing.ts`.
-- Add `packages/events-daemon/src/operations/deliveries.ts`; update
-  `packages/events-daemon/src/cli/program.ts`,
-  `packages/events-daemon/src/mcp/server.ts`, `capabilities.json`, and generated
-  `docs/reference/events-daemon-cli.md` / `docs/reference/events-daemon-mcp.md`.
-- Add/update `packages/events-daemon/test/runtime/webhook-signing.test.ts`,
-  `packages/events-daemon/test/runtime/webhook-dispatcher.test.ts`,
-  `packages/events-daemon/test/runtime/webhook-races.test.ts`,
-  `packages/events-daemon/test/runtime/manual-retry.test.ts`, and
-  `packages/events-daemon/test/operations/deliveries.test.ts`.
+- Update packages/events-daemon/src/domain/activation-documents.ts,
+  packages/events-daemon/src/domain/versions.ts,
+  packages/events-daemon/src/operations/targets.ts,
+  packages/events-daemon/src/store/migrations.ts,
+  packages/events-daemon/src/store/aad.ts,
+  packages/events-daemon/src/store/records.ts, and
+  packages/events-daemon/src/store/event-secrets.ts.
+- Add packages/events-daemon/src/domain/webhook-target.ts and
+  packages/events-daemon/src/domain/sse-subscriber.ts.
+- Add/update packages/events-daemon/test/network-documents.test.ts,
+  packages/events-daemon/test/event-secrets.test.ts,
+  packages/events-daemon/test/secret-slot-race.test.ts, and
+  packages/events-daemon/test/migrations.test.ts.
 
 **Tests first**
 
-1. Characterise exact CloudEvent bytes, content type, stable delivery ID, attempt
-   timestamp, HMAC input, single and dual Standard Webhook signatures, five-minute
-   rotation overlap, and the injected-clock proof that retries keep ID/body but
-   change timestamp/signature. Assert keys and response bodies never appear in
-   result/error/log snapshots.
-2. Test 2xx success, all non-2xx/network/TLS classifications, backoff/jitter,
-   first-attempt-only cap charge, retry limits/deadline, dead lettering and
-   retention. Assert no redirect request reaches the receiver.
-3. For **each** await—approval read, direct `ConfigStore.load`, decrypt, encrypt,
-   secret URL read, signing-key read, taint flush, resolution, TCP connect, TLS
-   completion and response read—pause a test seam and race disable-all, pause,
-   rule/target replacement, target revocation, account removal and expiry. At the
-   DNS/connect/write seams additionally assert the actual fake receiver saw no
-   request when the pre-I/O fence loses.
-4. Race the response after a real loopback request has started. Assert terminal
-   winner state/purge remains, payload is not restored, no retry is made, only the
-   existing content-free attempt record says outcome discarded, and status output
-   says `externalOutcome: "unrecalled; discarded"`. Assert pause permits an
-   already-issued completion but blocks future claims.
-5. Test every refusal path of `delivery retry`: non-webhook, non-retryable,
-   attempt 20/target limit, expired, revoked/stale rule/target, removed account,
-   disabled generation and closed barrier. Each must be byte-for-byte no mutation.
-   Test success resets only `nextAt` on the same row.
-6. Exercise CLI and MCP against the same operation doubles for `deliveries list`,
-   `delivery retry`, and `delivery drop`; strict parity must see the same operation
-   name, input/output/redaction/errors and no remote HTTP.
+1. Canonical plain/secret webhook and SSE subscriber docs; URL byte changes version;
+   public serialisations/errors/logs reveal no synthetic URL/slot/token/key.
+2. B1 fixture proves append-only slot/AAD migration covers secret URL, webhook signing
+   current/previous, SSE bearer current/previous.
+3. Pausable fake store races create/rotate/reconcile/migrate and asserts lock →
+   masters plus every current/overlap ref → copy/write → read-back verify → selector
+   commit → source retirement, preserving old selector on failure.
+4. Existing B1 target capability only; assert no new command/tool/row/secret result
+   and subscriber factory stays internal.
 
 **Implementation, in order**
 
-1. Refactor the B1 dry-run dispatcher behind a common delivery-claim interface
-   without changing dry-run semantics. Persist a distinct attempt id/lease/start
-   record and keep long-lived `work_attempts` content-free. Add webhook-specific
-   state transitions, bounded scheduling and dead-letter deadline handling.
-2. Implement signing from the exact persisted bytes with injected clock/random
-   jitter. Read the secret outside a write transaction, then re-read the exact
-   slot/generation in the final transaction. Retired overlap keys are never
-   resurrected by an in-flight attempt.
-3. Implement the three synchronous-after-gate outbound starts described above.
-   At every gate, in one owner transaction re-read delivery id/state/lease/attempt,
-   record identity, expiration, switch generation/enabled, pause, direct core
-   account existence/revocation, rule and target version lineage, target
-   revocation, URL fingerprint/secret generation, barrier, attempt/cap facts and
-   approved addresses. The final request gate is immediately followed by raw
-   `socket.write`; do not put telemetry, taint flushing or a promise between them.
-4. After HTTP completes, start a new transaction and compare the exact lease,
-   attempt and all current authority facts before success/retry/dead-letter writes.
-   On a lost race follow the unrecalled-outcome rule above; never perform a
-   compensating insert/update to recover a purged delivery.
-5. Put `delivery retry` and `delivery drop` in one operations module used unchanged
-   by CLI and MCP. `drop` uses the same lifecycle fence and only produces a safe
-   terminal reason. Add capability rows and regenerate reference pages in this
-   task, not as a later documentation clean-up.
+1. Add append-only slot migration/AAD; never change B1 migration text.
+2. Add canonical types and existing shared target validation; add no delivery/
+   subscriber operations, CLI/MCP, capability row or reference.
+3. Extend EventSecretStore references/migration with complete locked
+   write/verify/commit/retire protocol.
+4. Add internal factories which reveal no complete secret.
 
 **Required mutations**
 
-- Reuse an HMAC/timestamp, charge a retry, alter bytes/ID, include an old key after
-  overlap, or follow a redirect: signing/dispatcher tests fail.
-- Remove any enumerated fence re-read or insert an `await` after a final gate:
-  the named `webhook-races` subcase fails.
-- Let an outcome recreate/mutate a terminal delivery or schedule retry: the
-  unrecalled-outcome subcase fails.
-- Make manual retry clone/remap/extend work or touch a refusal: `manual-retry`
-  fails; change only one surface/capability row and parity fails.
+- In-place URL/exposed slot or secret/missing canonical item/conflicting authority:
+  document-redaction tests fail.
+- Masters-only enumeration/overlap omission/commit-before-verify/retire-first:
+  secret migration tests fail.
+- Missing post-await reread: slot-race fails.
+- B3 public surface: negative operation audit fails.
 
 **Run**
 
-```sh
-pnpm --filter @agentcomms/events-daemon exec node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/runtime/webhook-signing.test.ts test/runtime/webhook-dispatcher.test.ts test/runtime/webhook-races.test.ts test/runtime/manual-retry.test.ts test/operations/deliveries.test.ts
-pnpm verify:parity --strict
-pnpm verify
-```
+    pnpm --filter @agentcomms/events-daemon exec node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/network-documents.test.ts test/event-secrets.test.ts test/secret-slot-race.test.ts test/migrations.test.ts
+    pnpm verify
 
-Passing means a webhook can disclose only through an attempt fence, and neither a
-response nor a convenience retry can outlive authority. Commit:
-`feat(events): dispatch fenced standard webhooks`.
+Passing: B1 migration, B2 secret references and B3-surface absence hold.
+Commit: feat(events): model network descriptors and reconcile event secrets.
 
-### Task 4 — network reset barriers, retention, and terminal cleanup **(high risk)**
+**Batch 1 close.** Integrate worktrees then pnpm verify; sealed substrate and model
+must coexist before outbox use.
+
+## Batch 2 — persistence and eligibility
+
+### Task 3 — ordinary delivery persistence and distinct system reset outbox **(highest risk)**
 
 **Files**
 
-- Update `packages/events-daemon/src/runtime/reset.ts`,
-  `packages/events-daemon/src/runtime/expiry.ts`,
-  `packages/events-daemon/src/runtime/lifecycle.ts`,
-  `packages/events-daemon/src/runtime/account-fence.ts`,
-  `packages/events-daemon/src/runtime/replacements.ts`,
-  `packages/events-daemon/src/runtime/revocations.ts`,
-  `packages/events-daemon/src/runtime/scheduler.ts`, and
-  `packages/events-daemon/src/store/owner.ts`.
-- Add/update `packages/events-daemon/test/runtime/reset-network.test.ts`,
-  `packages/events-daemon/test/runtime/retention-network.test.ts`, and
-  `packages/events-daemon/test/runtime/lifecycle-webhook.test.ts`.
+- Update packages/events-daemon/src/store/migrations.ts,
+  packages/events-daemon/src/store/aad.ts,
+  packages/events-daemon/src/store/records.ts,
+  packages/events-daemon/src/runtime/decisions.ts,
+  packages/events-daemon/src/runtime/reset.ts,
+  packages/events-daemon/src/runtime/replacements.ts, and
+  packages/events-daemon/src/runtime/revocations.ts.
+- Add packages/events-daemon/src/runtime/system-reset-outbox.ts and
+  packages/events-daemon/src/runtime/target-version-references.ts.
+- Add/update packages/events-daemon/test/outbox-persistence.test.ts,
+  packages/events-daemon/test/system-reset-outbox.test.ts,
+  packages/events-daemon/test/system-reset-references.test.ts, and
+  packages/events-daemon/test/migrations.test.ts.
 
 **Tests first**
 
-1. Start from a B1 local reset and prove B2 creates a retained encrypted reset
-   delivery and a closed durable barrier for each affected webhook target version;
-   ordinary work cannot claim/cross it. A 2xx opens it; retry exhaustion, expiry or
-   dead letter produces degraded state and remains durable across daemon restart.
-2. Prove reset uses exactly 20 attempts/fixed 24 hours/no cap, has the reset
-   canonical bytes/signing semantics, and cannot be silently replaced by ordinary
-   target delivery. Test the internal recovery primitive creates a new reset
-   delivery after all its rechecks, never revives an old delivery; assert no CLI/MCP
-   capability exists for it in B2.
-3. Race reset delivery/barrier creation and completion against target revocation,
-   reset-epoch replacement, disable, account removal, purge and expiry. Verify the
-   exact current barrier/epoch/target row is re-read inside the write transaction,
-   and losing work leaves no reopened barrier or recreated ciphertext.
-4. Test delivery-created expiry, dead-letter retention start, B2 stream/replay
-   deadline inputs, retention tightening, target/rule/account/disable purges and
-   the `in-flight-at-*` dispositions. Assert content is unrecoverable after purge
-   and work-attempt summaries remain content-free.
+1. B1 migration proves deliveries gains ordinary lease/order only; system_reset_outbox
+   owns reset bytes/state and no reset can satisfy ordinary decision/account/rule
+   constraints or insert fake identities.
+2. Active-rule plus retained superseded-delivery exact-version references remove/
+   replace one at a time; query retains reset until final authorised ref disappears,
+   then purges barrier/outbox in same transaction.
+3. Race reset create/restart/revoke/retained expiry; D6-only payload, 20/24 and no
+   cap charge.
+4. Interrupted migration/AAD mismatch/purge preserves B1 local reset and cannot
+   recreate system ciphertext.
 
 **Implementation, in order**
 
-1. Replace B1's network-agnostic notice-only reset path with a target-version
-   barrier record plus an encrypted, signed reset delivery using the generic
-   dispatcher. Retain B1 local behaviour where applicable; do not conflate an
-   installed generation's reset epoch with a target version replacement.
-2. Implement recovery as a private runtime method only. Before its post-await
-   insert/update, re-read target retention/revocation, barrier epoch/state, live
-   rule/account/switch authority and new delivery uniqueness in one transaction.
-3. Extend expiry/lifecycle/account/revocation/replacement cleanup in lockstep.
-   Cleanup must remove encrypted delivery/secret/stream material first, mark a
-   disclosing network attempt with the stipulated in-flight terminal reason, and
-   never let the completion path repopulate it. Apply tightened deadlines to every
-   B2 record, not merely future queued deliveries.
-4. Ensure scheduler recovery only sees current-generation, retained, unrevoked
-   rows and treats a degraded barrier as a wait, not a retry bypass.
+1. Add forward ordinary lease-token/attempt/order, system-outbox, target-reference,
+   order-counter/barrier-link migrations and AAD.
+2. Persist active refs on activation and retained refs atomically with ordinary bytes.
+3. Use exact reference query in all reset create/recover/cleanup/revocation paths.
+4. Implement cap-free system repository and forbid reset insertion into deliveries,
+   decisions, cap charges or fabricated account/rule.
 
 **Required mutations**
 
-- Open a barrier before reset 2xx, let ordinary work cross a closed/degraded
-  barrier, charge a reset cap, or revive an old reset: reset tests fail.
-- Omit an epoch/target/account/revocation re-read after an await: a reset race
-  fails.
-- Leave a ciphertext/stream eligibility row after a purge or let a completion
-  recreate it: lifecycle/retention tests fail.
+- Reset ordinary row/fake identity/cap charge: system schema fails.
+- Active-pointer-only/drop retained ref/cancel first removal: final-reference fails.
+- Missing system AAD/post-purge ciphertext: migration/purge fails.
 
 **Run**
 
-```sh
-pnpm --filter @agentcomms/events-daemon exec node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/runtime/reset-network.test.ts test/runtime/retention-network.test.ts test/runtime/lifecycle-webhook.test.ts
-pnpm verify
-```
+    pnpm --filter @agentcomms/events-daemon exec node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/outbox-persistence.test.ts test/system-reset-outbox.test.ts test/system-reset-references.test.ts test/migrations.test.ts
+    pnpm verify
 
-Passing means reset ordering survives a crash and no cleanup race restores an
-authorisation that was removed. Commit:
-`feat(events): persist network reset barriers and retention`.
+Passing: reset is system outbox work with final-reference semantics.
+Commit: feat(events): persist distinct reset outbox and target references.
 
-**Batch 2 close.** Run `pnpm verify` from the tree containing both Tasks 3 and 4;
-passing means a reset uses the same attempt/lifecycle fences as ordinary webhooks.
-
-## Batch 3 — streaming disclosure boundary
-
-### Task 5 — authenticated, generation-bound local SSE **(highest risk)**
+### Task 4 — atomic cap/barrier claims and per-target ordering fence **(highest risk)**
 
 **Files**
 
-- Add `packages/events-daemon/src/runtime/sse-server.ts`,
-  `packages/events-daemon/src/runtime/sse-dispatcher.ts`, and
-  `packages/events-daemon/src/runtime/stream-replay.ts`.
-- Update `packages/events-daemon/src/runtime/dispatcher.ts`,
-  `packages/events-daemon/src/runtime/disclosure-fence.ts`,
-  `packages/events-daemon/src/runtime/scheduler.ts`,
-  `packages/events-daemon/src/runtime/expiry.ts`,
-  `packages/events-daemon/src/runtime/lifecycle.ts`,
-  `packages/events-daemon/src/runtime/account-fence.ts`,
-  `packages/events-daemon/src/runtime/replacements.ts`,
-  `packages/events-daemon/src/runtime/revocations.ts`, and
-  `packages/events-daemon/src/store/owner.ts`.
-- Add `packages/events-daemon/src/operations/subscribers.ts`; update
-  `packages/events-daemon/src/cli/program.ts`, `packages/events-daemon/src/mcp/server.ts`,
-  `capabilities.json`, `docs/reference/events-daemon-cli.md`, and
-  `docs/reference/events-daemon-mcp.md`.
-- Add/update `packages/events-daemon/test/runtime/sse-auth-rotation.test.ts`,
-  `packages/events-daemon/test/runtime/sse-cors.test.ts`,
-  `packages/events-daemon/test/runtime/sse-fences.test.ts`,
-  `packages/events-daemon/test/runtime/sse-replay.test.ts`, and
-  `packages/events-daemon/test/operations/subscribers.test.ts`.
+- Update packages/events-daemon/src/runtime/dispatcher.ts,
+  packages/events-daemon/src/runtime/scheduler.ts,
+  packages/events-daemon/src/runtime/recovery.ts,
+  packages/events-daemon/src/runtime/expiry.ts,
+  packages/events-daemon/src/runtime/lifecycle.ts, and
+  packages/events-daemon/src/runtime/system-reset-outbox.ts.
+- Add packages/events-daemon/src/runtime/delivery-claim.ts.
+- Add/update packages/events-daemon/test/claim-cap-barrier.test.ts,
+  packages/events-daemon/test/claim-ordering.test.ts,
+  packages/events-daemon/test/stale-recovery.test.ts,
+  packages/events-daemon/test/dispatcher.test.ts, and
+  packages/events-daemon/test/retention.test.ts.
 
 **Tests first**
 
-1. Use only the Task 1 loopback SSE client to prove bearer-header authentication,
-   exact route/Host, query/cookie rejection, no EventSource assumptions, exact
-   origin matching, preflight header/method set, `Vary: Origin`, no credentials or
-   wildcard, and no CORS reflection for an unlisted origin.
-2. Test token generation rotation with concurrent old/new streams. Pause token
-   lookup/handshake/rotation, then prove the rotation transaction invalidates old
-   generation and closes its socket before the operation returns. The old stream
-   receives no post-rotation header/frame; retained replay is still available to a
-   correctly authenticated new stream.
-3. Test scheduler append, log encryption, event ID/order, live frame and replay
-   after `Last-Event-ID`, retention/deadline expiry, target/subscriber-version
-   replacement, revocation and account removal purge. A replay test must race each
-   decrypt/config/fence await and each frame with disable, pause, revoke, account
-   removal and token rotation.
-4. Assert append and delivery completion occur in one transaction after every
-   listed recheck; no orphan log exists on a failed completion and no frame is
-   written after its final generation/mutex check loses.
-5. Exercise CLI/MCP subscriber list/add/update/remove through the same operation,
-   including redaction, conflict/error values and strict parity. These operations
-   manipulate only public subscriber descriptors; no secret token create/rotate
-   operation appears in B2.
+1. At/before/after cap-window and closed/degraded/open barrier boundaries, including
+   restart, prove blocked means no attempt, lease, work attempt, cap charge, append
+   or ciphertext mutation.
+2. Later deterministic sequence waits behind earlier retry, active lease and expired/
+   recovered lease; runs after earlier completion/failure/cancel/expiry; cover restart
+   and stale completion.
+3. First charge/attempt/token is atomic once; retries/recovery reuse it; reset never
+   charges; cover pause/disable/revoke/account removal/expiry.
+4. Keep B1 dry-run green through shared eligibility, no webhook transport yet.
 
 **Implementation, in order**
 
-1. Start/stop one daemon-owned literal-loopback listener with the persisted fixed
-   authority rule from Task 2. Parse HTTP manually enough to reject all routes,
-   query/cookie auth and Host/CORS deviations before any stream registry entry is
-   created. Do not add a public network-control listener.
-2. Store bearer generations in independent secret slots. On accept, read/compare
-   outside a DB write transaction; immediately before `writeHead`, acquire the
-   subscriber mutex and re-read subscriber version, active token generation,
-   switch/account/rule authority and registered stream identity. Release no header
-   if that gate fails.
-3. Append encrypted stream-log records from the generic dispatcher in the same
-   transaction that marks its SSE delivery terminal. After every decrypt/encrypt,
-   taint/config/approval read, re-read all delivery/switch/account/rule/target/
-   subscriber/barrier/expiry/cap facts specified in the fence ledger.
-4. For live and replay frames, fetch/decrypt outside a write transaction, then
-   re-fence before each event. Hold the per-subscriber mutex, check the current
-   token generation and stream membership once more, and call `response.write`
-   synchronously next. On pause, stop new claims/frames; on disable/revocation/
-   account removal, close/purge per D8/D9 and make all later writes fail their
-   fence.
-5. Add shared subscriber operations and both surfaces/capability/reference pages.
-   Do not add secret operations, target resume, target test, or any judge surface.
+1. Allocate sequence in decision insert; one claimant serves scheduler/recovery.
+2. One immediate transaction evaluates all predicates before lease/attempt; blocked
+   result is content-free and mutation-free.
+3. Persist attempt id/random token; require both for release/recovery/completion.
+4. Apply token/lineage semantics to system reset while preserving cap exemption.
 
 **Required mutations**
 
-- Accept a query/cookie/EventSource-style token, wildcard/reflected origin, wrong
-  Host, or CORS credentials: SSE CORS/auth tests fail.
-- Close streams after (rather than inside) rotation completion, skip the final
-  mutex/generation check, or preserve logs after required purge: rotation/replay
-  tests fail.
-- Split log append from delivery transition or omit a post-await check: SSE fences
-  tests fail; change only one public surface/capability row and strict parity fails.
+- Attempt/lease/work/charge/append while cap or reset blocked: cap-barrier fails.
+- Later sequence past retry/recovered lease or recovery bypass: ordering fails.
+- Missing token/attempt or stale settlement: stale recovery fails.
 
 **Run**
 
-```sh
-pnpm --filter @agentcomms/events-daemon exec node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/runtime/sse-auth-rotation.test.ts test/runtime/sse-cors.test.ts test/runtime/sse-fences.test.ts test/runtime/sse-replay.test.ts test/operations/subscribers.test.ts
-pnpm verify:parity --strict
-pnpm verify
-```
+    pnpm --filter @agentcomms/events-daemon exec node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/claim-cap-barrier.test.ts test/claim-ordering.test.ts test/stale-recovery.test.ts test/dispatcher.test.ts test/retention.test.ts
+    pnpm verify
 
-Passing means a local stream is authenticated per generation, origin-exact, and
-cannot receive a stale live/replay byte after authority is gone. Commit:
-`feat(events): add fenced local SSE delivery`.
+Passing: blocked work consumes no attempt and ordering survives retry/recovery.
+Commit: feat(events): fence claims with caps barriers and ordering.
 
-**Batch 3 close.** Run `pnpm verify`; passing means the SSE listener, replay store
-and generic delivery/retention fences are validated together.
+**Batch 2 close.** Run pnpm verify before raw transport.
 
-## Batch 4 — integration and held-release gate
+## Batch 3 — webhook transport and recovery
 
-### Task 6 — B2 end-to-end proof, parity inventory, documentation, and release hold
+### Task 5 — fenced Standard Webhooks with DNS, TCP, TLS and write gates **(highest risk)**
 
 **Files**
 
-- Update `capabilities.json`, `scripts/parity.mjs`,
-  `test/events-daemon-e2e.test.mjs`, `test/helpers/loopback-seal.mjs`,
-  `docs/reference/events-daemon-cli.md`, and `docs/reference/events-daemon-mcp.md`.
-- Update `packages/events-daemon/README.md`, `docs/RELEASING.md` only if its held
-  package inventory/reference needs an explicit B2 note, and `CHANGELOG.md` or add
-  the PR's `No changelog: held, unreleased daemon/network capability` statement.
-- Add `packages/events-daemon/test/runtime/no-judge-before-e.test.ts` and
-  `packages/events-daemon/test/parity/b2-capabilities.test.ts` if the existing
-  parity harness cannot express the negative B2 assertions.
-- Do **not** edit either package's `agentcommsRelease.hold` field to lift it, and do
-  **not** edit publish workflow/package lists to include either held package.
+- Add packages/events-daemon/src/runtime/webhook-dispatcher.ts and
+  packages/events-daemon/src/runtime/webhook-signing.ts.
+- Update packages/events-daemon/src/runtime/dispatcher.ts,
+  packages/events-daemon/src/runtime/disclosure-fence.ts,
+  packages/events-daemon/src/runtime/account-fence.ts, and
+  packages/events-daemon/src/runtime/untrusted.ts.
+- Add packages/events-daemon/test/webhook-signing.test.ts,
+  packages/events-daemon/test/webhook-fences.test.ts, and
+  packages/events-daemon/test/webhook-dispatcher.test.ts.
 
 **Tests first**
 
-1. Extend the sealed E2E flow to run plain HTTPS webhook, literal-loopback HTTP
-   webhook, secret-descriptor redaction/fingerprint failure, attempt retry,
-   disable/revoke/account-removal in-flight outcome, reset degradation/recovery
-   primitive, SSE handshake/CORS/rotation/replay/purge, and no-judge-call proof.
-   The only receivers are Task 1 in-process literal-loopback fakes; seal counters
-   assert zero DNS and zero non-loopback attempts.
-2. Make the parity inventory enumerate exactly B2-owned rows: expanded
-   `targets add/update/remove` operation behaviour; `subscribers list/add/update/
-   remove`; `deliveries list`; `delivery retry`; and `delivery drop`. Every row
-   names its shared `packages/events-daemon/src/operations/...` function and runs
-   CLI/MCP stand-ins. Assert secret create/rotate, target test/resume, replay,
-   doctor and every judge operation are absent or explicitly deferred to B3/E.
-3. Make `pnpm verify:parity --strict` fail for a missing operation row, an
-   inconsistent operation name/schema, an ungenerated reference page, or an
-   accidental B2 human-only exception. Add a release hold test/assertion that
-   verifies both package holds remain and PUBLISHABLE/PACKAGES treatment does not
-   make B2 publishable.
+1. Pin exact bytes/content type/id/timestamp/HMAC/single-dual signature/overlap;
+   retry keeps body/id, changes time/signature and safe output excludes secret/body.
+2. Preload-sealed literal fake tests 2xx/non-2xx/network/TLS/backoff/no redirect.
+3. Pause before DNS, TCP, TLS ClientHello and HTTP write; race disable/pause/replace/
+   revoke/account removal/expiry/address drift/key change. Loser makes no resolver
+   call/SYN/ClientHello/request bytes, including revoke after TCP before TLS.
+4. Fingerprint/key rereads and no await after every final gate.
 
 **Implementation, in order**
 
-1. Update the strict parity stand-ins and capabilities rows only for the B2 public
-   operations above. Keep all secret-bearing actions absent from `capabilities.json`
-   until B3. Regenerate, do not hand-edit, reference pages with `pnpm sync:reference`.
-2. Assemble one loopback-sealed E2E scenario per boundary; re-use fakes rather than
-   adding fixture URLs, keys, mail addresses, credentials or real DNS. Ensure all
-   test logs redact synthetic payloads too, so snapshot patterns catch regressions.
-3. Add concise package/release documentation: both packages remain held, B2 changes
-   no publish list, version tag, provenance action, or registry state. Note B1-F
-   Node 22.16 floor and B1-G control boundary are still required.
-4. Prepare the PR evidence (not a release): proposed version
-   `X.Y.Z-events-b2`; focused plan/docs/code/tests; generated references; test
-   results; `No changelog: held, unreleased local event daemon capability` unless
-   release policy requires a line; provenance statement for the checked source and
-   generated docs; and an explicit “no real data, addresses, tokens, keys, URLs or
-   external traffic” attestation. Follow CONTRIBUTING's PR template: what changed
-   for a person, implementation summary, `pnpm verify`, tests, docs/skills, and
-   changelog disposition. The review sequence is normal focused PR review/required
-   checks/merge; it is not a publish authorisation.
+1. Sign exact persisted bytes using injected clock/jitter/current-overlap secret refs.
+2. Implement raw transport with gateDns, gateTcp, gateTls and gateWrite, each exact
+   row/lease/lineage/generation/account/barrier reread.
+3. Invoke net.connect synchronously after TCP gate, tls.connect({socket}) after TLS
+   gate, socket.write after write gate; never combine TCP/TLS.
+4. Classify no-follow response and hand outcome to Task 6; no operation/CLI/MCP/
+   capability/reference change.
 
 **Required mutations**
 
-- Add a CLI tool without its shared operation/capability/reference, or diverge CLI
-  and MCP: strict parity/B2 capability tests fail.
-- Add a secret/target-resume/judge B2 surface: negative parity/no-judge tests fail.
-- Remove loopback seal installation, permit DNS/non-loopback, lift a hold, or add a
-  publish package: sealed E2E/release-hold test fails.
+- Reused signature/time, changed ID/body, expired key, redirect, secret output:
+  signing/dispatcher fails.
+- Combined TCP/TLS, await after gate, omitted reread: named fence case fails.
+- Losing gate begins resolver/SYN/ClientHello/write: counters fail.
 
 **Run**
 
-```sh
-pnpm sync:reference
-pnpm test -- test/events-daemon-e2e.test.mjs
-pnpm verify:parity --strict
-pnpm verify
-```
+    pnpm --filter @agentcomms/events-daemon exec node --import ../../test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test test/webhook-signing.test.ts test/webhook-fences.test.ts test/webhook-dispatcher.test.ts
+    pnpm verify
 
-Passing means all exposed B2 commands/tools share their operation, all network
-tests are sealed to loopback, generated docs match, and the held release state is
-unchanged. Commit: `docs(events): document phase B2 held network delivery`.
+Passing: each byte phase has separate immediately-prior authority.
+Commit: feat(events): add separately fenced webhook transport.
 
-**Batch 4 close.** Run `pnpm verify` one final time after generated references are
-fresh; its pass is the only implementation-wide completion signal for this plan.
+### Task 6 — deterministic webhook crash, lease-expiry and stale-owner recovery **(highest risk)**
+
+**Files**
+
+- Update packages/events-daemon/src/runtime/webhook-dispatcher.ts,
+  packages/events-daemon/src/runtime/delivery-claim.ts,
+  packages/events-daemon/src/runtime/recovery.ts,
+  packages/events-daemon/src/runtime/lifecycle.ts,
+  packages/events-daemon/src/runtime/expiry.ts, and
+  packages/events-daemon/src/runtime/revocations.ts.
+- Add packages/events-daemon/test/fixtures/webhook-crash-points.ts and
+  packages/events-daemon/test/webhook-crash-recovery.test.ts.
+- Update packages/events-daemon/test/webhook-dispatcher.test.ts,
+  packages/events-daemon/test/stale-recovery.test.ts, and
+  packages/events-daemon/test/retention.test.ts.
+
+**Tests first**
+
+| Crash point | Required restart result |
+| --- | --- |
+| Before claim / cap charge | Queued; no lease/attempt/charge/request. |
+| After claim / before DNS | Recover only expired exact live lease; one charge. |
+| DNS→TCP, TCP→TLS, TLS→write | No request bytes; recover only exact current lineage. |
+| Write→response / response→outcome | At-least-once retry possible; no double charge; old owner cannot settle. |
+| After outcome | Durable terminal/retry; no old-attempt redispatch. |
+| Cancel/purge/generation/revoke | Winner stays terminal/purged; late outcome only existing discarded marker. |
+
+1. Run matrix with normal retry, lease recovery and stale late owner; assert token/
+   attempt ownership, no duplicate charge/stale outcome/recreated bytes, recovery only
+   exact live lineage.
+2. Race response with disable/revoke/account removal/expiry/version replacement;
+   assert content-free externalOutcome unrecalled-discarded, no retry after non-pause
+   loss, pause permits issued completion only.
+
+**Implementation, in order**
+
+1. Add test-only failpoints and durable content-free owner facts; production cannot
+   enable hooks.
+2. Recovery uses Task 4 expired claim then re-fences before DNS.
+3. Completion compares outbox/state/attempt/token; loser never compensates with
+   insert/encryption/reference/key restoration.
+4. Apply same stale-owner rule to system reset, preserving cap-free/final-ref stop.
+
+**Required mutations**
+
+- Recover different token/attempt/lineage, double charge post-write, or late overwrite:
+  matrix fails.
+- Recreate purge or retry post-revoke: purge matrix fails.
+- Store URL/body/key/response text in outcome: safe-output scan fails.
+
+**Run**
+
+    pnpm --filter @agentcomms/events-daemon exec node --import ../../test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test test/webhook-crash-recovery.test.ts test/webhook-dispatcher.test.ts test/stale-recovery.test.ts test/retention.test.ts
+    pnpm verify
+
+Passing: bounded at-least-once requests have exactly-owned non-resurrectable state.
+Commit: feat(events): recover fenced webhook leases safely.
+
+**Batch 3 close.** Run pnpm verify; all crash outcomes share lease/lineage/cap rules.
+
+## Batch 4 — SSE boundary
+
+### Task 7 — persisted SSE log, bearer generations and frame authority **(high risk)**
+
+**Files**
+
+- Add packages/events-daemon/src/runtime/sse-dispatcher.ts,
+  packages/events-daemon/src/runtime/stream-replay.ts, and
+  packages/events-daemon/src/runtime/subscriber-streams.ts.
+- Update packages/events-daemon/src/store/migrations.ts,
+  packages/events-daemon/src/store/aad.ts,
+  packages/events-daemon/src/store/records.ts,
+  packages/events-daemon/src/runtime/dispatcher.ts,
+  packages/events-daemon/src/runtime/disclosure-fence.ts,
+  packages/events-daemon/src/runtime/expiry.ts,
+  packages/events-daemon/src/runtime/lifecycle.ts,
+  packages/events-daemon/src/runtime/account-fence.ts, and
+  packages/events-daemon/src/runtime/revocations.ts.
+- Add packages/events-daemon/test/sse-persistence-auth.test.ts and
+  packages/events-daemon/test/sse-frame-fences.test.ts; update
+  packages/events-daemon/test/migrations.test.ts and
+  packages/events-daemon/test/retention.test.ts.
+
+**Tests first**
+
+1. Encrypted stream append and SSE settle atomically: stable event/order, first cap,
+   no orphan, replay no slot, AAD/expiry/purge exact.
+2. Bearer current plus five-minute previous only; rotation invalidates old internal
+   streams under mutex and reconciliation retires old slot.
+3. Race decrypt/config/fence await and final frame gate with pause/disable/revoke/
+   account removal/expiry/rotation; no post-loss frame.
+4. Assert no subscriber/bearer CLI/MCP/capability/reference surface.
+
+**Implementation, in order**
+
+1. Add forward stream-log migration/AAD and Task 2 generation refs.
+2. Append/settle together under Task 4 eligibility and purge bytes/refs together.
+3. Implement internal registry/mutex/auth boolean with live rereads/invalidation.
+4. Prepare replay/live outside writes then require Task 8 final frame gate.
+
+**Required mutations**
+
+- Split append/settle, charge replay, retain purged bytes: persistence fails.
+- Accept retired generation/close after rotation/skip gate: auth-frame fails.
+- Add subscriber/bearer operation: negative audit fails.
+
+**Run**
+
+    pnpm --filter @agentcomms/events-daemon exec node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/sse-persistence-auth.test.ts test/sse-frame-fences.test.ts test/migrations.test.ts test/retention.test.ts
+    pnpm verify
+
+Passing: SSE has durable disclosure semantics before listener. Commit:
+feat(events): persist fenced SSE replay and bearer state.
+
+### Task 8 — loopback SSE listener and real-browser CORS verification **(high risk)**
+
+**Files**
+
+- Add packages/events-daemon/src/runtime/sse-server.ts,
+  packages/events-daemon/test/support/browser-sse-fixture.ts,
+  packages/events-daemon/test/support/sse-client.ts,
+  packages/events/test/browser/sse-client.html, and
+  packages/events/test/browser/sse-client.js.
+- Update packages/events/scripts/verify-browser.mjs,
+  packages/events/test/browser/index.html, packages/events/test/browser/boot.js,
+  .github/workflows/release.yml, and test/release-packages.test.mjs.
+- Add packages/events-daemon/test/sse-listener.test.ts and
+  packages/events-daemon/test/sse-listener-browser.test.ts.
+
+**Tests first**
+
+1. Raw loopback client checks exact route/Host/bearer, query/cookie refusal, OPTIONS
+   method/headers, exact origin reflection, Vary, no wildcard/credentials, literal
+   persisted binding.
+2. Chromium/WebKit case inside pnpm verify:browser: page on one literal loopback
+   origin uses cross-origin streaming fetch with Authorization, Last-Event-ID and
+   credentials: omit to distinct literal SSE authority. Prove browser preflight,
+   authorised live/replay frame, no cookie/no ACA credentials; unlisted-origin/
+   credentialed cases fail before frame.
+3. Before page creation install route permit only exact page/SSE URLs; Node fixture
+   starts under Task 1 preload before dynamic daemon import and reports zero DNS/non-
+   loopback counters.
+4. Race header/every frame gate with rotation/pause/disable/revoke/account removal:
+   old stream receives no later header/frame.
+5. Assert root verify:browser runs this test; release browser job updates B2 name/
+   check and invokes root command after build; update structural workflow test.
+
+**Implementation, in order**
+
+1. Loopback-only listener over Task 7 registry; reject route/Host/auth/CORS before
+   registration and add no control/operation/CLI/MCP surface.
+2. Gate immediately before writeHead; independently gate immediately before every
+   synchronous response.write frame under mutex.
+3. Extend existing Playwright script with sealed daemon fixture/browser CORS, retain
+   event vectors and report both.
+4. Rename/document release required browser check as vectors plus loopback daemon
+   SSE/CORS while preserving publish dependency.
+
+**Required mutations**
+
+- Query/cookie auth, wrong Host, wildcard/unlisted reflection or credentials: CORS fails.
+- No preflight/credentials include/route seal skipped/case omitted: browser/workflow fails.
+- Final gate moved or old rotation stream frames: listener/frame fails.
+
+**Run**
+
+    pnpm --filter @agentcomms/events-daemon exec node --import ../../test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test test/sse-listener.test.ts test/sse-listener-browser.test.ts
+    pnpm verify:browser
+    pnpm verify
+
+Passing: Chromium/WebKit verify preflight and credential-omitting CORS against
+loopback daemon SSE; release requires it. Commit:
+feat(events): verify loopback SSE in real browsers.
+
+**Batch 4 close.** Run pnpm verify and pnpm verify:browser; stream state/listener/
+both browsers must share final fencing.
+
+## Batch 5 — held integration gate
+
+### Task 9 — sealed B2 E2E, B1-surface audit and release hold **(high risk)**
+
+**Files**
+
+- Update test/events-daemon-e2e.test.mjs, test/helpers/loopback-seal.mjs,
+  packages/events-daemon/test/capability-audit.test.ts, and
+  packages/events-daemon/test/built-surfaces.test.ts.
+- Update packages/events-daemon/README.md, docs/RELEASING.md, and
+  test/release-packages.test.mjs only for held/release-browser evidence.
+- Do **not** edit packages/events-daemon/src/cli/program.ts,
+  packages/events-daemon/src/mcp/server.ts, capabilities.json,
+  docs/reference/events-daemon-cli.md, or docs/reference/events-daemon-mcp.md for B2
+  public surface; preserve B1 doctor and references.
+
+**Tests first**
+
+1. Preloaded sealed E2E internal fixtures: HTTPS/loopback HTTP/fingerprint failure/
+   cap-barrier wait/order-recovery/reset-final-ref/in-flight discard/SSE rotation-
+   replay-purge/no judge call; only literal fakes and zero DNS/non-loopback.
+2. B1 doctor is on CLI/MCP and reaches B1 operation. Assert no delivery retry/drop/
+   hold, subscribers, named secrets/migration, target test/resume/replay/judges or
+   B3 doctor extensions.
+3. Assert holds/nonpublishable output/unchanged B1 generated references/release
+   browser B2 requirement.
+
+**Implementation, in order**
+
+1. Compose E2E through internal runtime/owner seams and dynamic imports after preload;
+   never smuggle B3 operation into test.
+2. Negative inventory assertions wrap existing parity/capability audit; never remove
+   or defer doctor.
+3. Concise held/release docs: no publish list/tag/provenance/registry/new public tool.
+4. PR evidence only: plan/docs/code/tests, pnpm verify, pnpm verify:browser, hold
+   proof and no real data/address/token/key/external-traffic attestation.
+
+**Required mutations**
+
+- Add delivery/subscriber/secret/target-resume/judge surface or remove doctor:
+  capability/built-surface fails.
+- Seal after import, allow DNS/non-loopback, remove fence: E2E fails.
+- Lift hold/add publishable package/remove browser SSE check: release test fails.
+
+**Run**
+
+    node --import test/helpers/loopback-seal-preload.mjs --test test/events-daemon-e2e.test.mjs
+    pnpm verify:browser
+    pnpm verify
+
+Passing: B2 is sealed/held, B1 doctor persists, B3/E public surface is absent.
+Commit: docs(events): document held B2 runtime boundaries.
+
+**Batch 5 close.** Run pnpm verify once more and pnpm verify:browser alongside it;
+release browser gate requires real-browser SSE/CORS.
 
 ## §5 coverage ownership
 
-Each B2-owned portion of §5 has one owner below. Existing B1 rows remain owned by
-B1; B3/E rows (named secret operations, target test/resume, full doctor/dry-run
-surface, migration command and callable judges) are intentionally not claimed.
+Each B2-owned §5 portion has exactly one owner. B1 retains its rows; B3/E retain
+delivery/hold/subscriber controls, named secret operations/migration command, target
+test/resume, full doctor/dry-run surface and callable judges.
 
 | §5 row / B2-owned assertion | Sole task owner |
 | --- | --- |
-| Network rules: canonical URL forms, approved sets, pinned answers, no redirects/proxy, HTTPS and literal-loopback HTTP exception | Task 1 |
-| Local endpoint judge transport validation is literal-loopback HTTP only and no judge is callable before E | Task 1 |
-| Versioned target/subscriber documents, secret URL redaction/fingerprint, URL change creates a new version, secret generation storage/rotation backing | Task 2 |
-| Webhook exact bytes/content type, Standard Webhooks per-attempt signing/rotation, caps, retry/backoff/dead letter, manual-retry fences, in-flight unrecalled outcome | Task 3 |
-| Network reset delivery/barrier ordering, degraded durable state/recovery primitive, delivery/dead-letter/reset retention and reset/lifecycle purge fences | Task 4 |
-| SSE bearer authentication, exact-origin CORS, generation rotation close, append/live/replay fences, replay retention and version-bound/revocation purge | Task 5 |
-| CLI/MCP B2 parity rows, generated references, loopback-sealed E2E, held-release/PR evidence and absence of B3/E-only surfaces | Task 6 |
+| Canonical URLs, all-answer pinning, redirect/proxy refusal, HTTPS/HTTP matrix, recursive transitions and every non-global IANA IPv4/IPv6 snapshot range | Task 1 |
+| Versioned webhook/subscriber docs, secret URL redaction/fingerprint/versioning, masters plus every current/overlap B2 secret ref migration/reconciliation | Task 2 |
+| Forward outbox/AAD schema, cap-free system reset outbox, active-plus-retained exact final-reference model | Task 3 |
+| Atomic cap/barrier-before-attempt eligibility, reset wait, deterministic ordering, stale claim prevention | Task 4 |
+| Webhook bytes/signing/overlap and separate DNS/TCP/TLS/write gates | Task 5 |
+| Webhook/system-reset crash matrix, lease ownership, no duplicate charge/stale outcome/recreated purge, exact-lineage recovery | Task 6 |
+| SSE encrypted append/replay, bearer current/overlap auth, rotation invalidation, internal frame authority | Task 7 |
+| Loopback SSE listener/CORS/final header-frame writes and Chromium/WebKit preflight credential-omitting verification in verify:browser/release | Task 8 |
+| Sealed full path, B1 doctor preservation, B3/E public-surface absence, held-release evidence | Task 9 |
 
 ## Final verification and hand-off
 
-After the final batch, inspect `git diff --check` and `git status --short` (do not
-alter unrelated work), then run one fresh:
+After final batch inspect git diff --check and git status --short without altering
+unrelated work, then run:
 
-```sh
-pnpm verify
-```
+    pnpm verify
+    pnpm verify:browser
 
-Record its complete pass/fail result in the PR. A failure blocks the B2 claim; do
-not hide it with a narrowed test command. No implementation commit, tag, publish,
-email, Slack post, Resend request, DNS lookup, or non-loopback connection is
-authorised by this plan.
+Record full pass/fail in PR. No implementation commit, tag, publish, email, Slack
+post, Resend request, DNS lookup or non-loopback connection is authorised by this
+plan.
 
-The plan document itself should be committed with:
+Commit this plan with:
 
-```text
-docs(plan): local event emission — phase B2
-```
+    docs(plan): local event emission — phase B2, review round 1
