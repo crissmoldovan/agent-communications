@@ -35,7 +35,7 @@ export interface ClaimedSystemReset {
 
 export type SystemResetClaimResult =
   | { readonly kind: 'claimed'; readonly claim: ClaimedSystemReset }
-  | { readonly kind: 'busy' | 'missing' | 'terminal' | 'expired' };
+  | { readonly kind: 'busy' | 'missing' | 'terminal' | 'expired' | 'paused' };
 
 /** D6's reset data is deliberately closed: sender content and ordinary delivery metadata cannot enter it. */
 export function systemResetControlData(input: Omit<SystemResetControlData, 'eventIdsRestart'>): SystemResetControlData {
@@ -118,7 +118,8 @@ export function claimSystemResetOutbox(input: {
   return input.store.immediate(() => {
     const row = input.store.database
       .prepare(
-        `SELECT id, reset_epoch, target_id, target_version, attempts, attempt_limit, expires_at, state, lease_until
+        `SELECT id, reset_epoch, target_id, target_version, attempts, attempt_limit, expires_at, state, lease_until,
+                switch_generation
          FROM system_reset_outbox WHERE id = ?`,
       )
       .get(input.outboxId) as
@@ -132,6 +133,7 @@ export function claimSystemResetOutbox(input: {
           expires_at: number;
           state: string;
           lease_until: number | null;
+          switch_generation: number;
         }
       | undefined;
     if (row === undefined) return { kind: 'missing' };
@@ -152,6 +154,13 @@ export function claimSystemResetOutbox(input: {
       return { kind: 'expired' };
     }
     if (!['queued', 'retryable', 'disclosing'].includes(row.state)) return { kind: 'terminal' };
+    // The kill switch and pause bind system work as they bind ordinary deliveries: a blocked claim writes nothing —
+    // no attempt, lease or state change — and reset work from before a disable-all never crosses into a later run.
+    const setting = input.store.database
+      .prepare('SELECT enabled, paused, switch_generation FROM event_settings WHERE singleton = 1')
+      .get() as { enabled: number; paused: number; switch_generation: number } | undefined;
+    if (setting?.enabled !== 1 || setting.switch_generation !== row.switch_generation) return { kind: 'terminal' };
+    if (setting.paused === 1) return { kind: 'paused' };
     const barrier = input.store.database
       .prepare(
         `SELECT state, system_outbox_id FROM reset_barriers

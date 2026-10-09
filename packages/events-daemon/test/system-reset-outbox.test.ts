@@ -18,6 +18,8 @@ import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 async function resetFixture(id: string) {
   const stateDir = await shortTempDir(`events-b2-reset-${id}-`);
   const store = await openEventDatabase({ stateDir });
+  // Reset work is claimable only while the switch is on, in the generation it was created in.
+  store.database.exec('UPDATE event_settings SET enabled = 1');
   const targetId = `target-${id}`;
   const ruleId = `rule-${id}`;
   store.database.exec(
@@ -163,6 +165,7 @@ test('B2-T5: reset recovery replaces the attempt token without creating an ordin
   const stateDir = await shortTempDir('events-b2-reset-claim-');
   const store = await openEventDatabase({ stateDir });
   try {
+    store.database.exec('UPDATE event_settings SET enabled = 1');
     store.database.exec(
       `INSERT INTO target_versions (id, target_id, version, document, digest)
        VALUES ('target-reset-claim@1', 'target-reset-claim', 1, '{}', 'digest');
@@ -251,6 +254,47 @@ test('RST-B2: expiry at claim purges reset bytes and degrades its closed barrier
       },
       { state: 'degraded', degraded_at: now },
     );
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('RST-B2: pause, the kill switch and a newer switch generation block a reset claim without writing anything', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await resetFixture('blocked');
+  const claim = () =>
+    claimSystemResetOutbox({
+      store: setup.store,
+      outboxId: 'blocked',
+      now: 10,
+      leaseMs: 10,
+      newAttemptId: () => 'attempt',
+      newLeaseToken: () => 'token',
+    });
+  const snapshot = () => ({
+    ...(setup.store.database
+      .prepare(
+        "SELECT state, attempts, attempt_id, lease_token, lease_until FROM system_reset_outbox WHERE id = 'blocked'",
+      )
+      .get() as Record<string, unknown>),
+  });
+  try {
+    const before = snapshot();
+    setup.store.database.exec('UPDATE event_settings SET paused = 1');
+    assert.deepEqual(claim(), { kind: 'paused' });
+    assert.deepEqual(snapshot(), before, 'a paused claim writes no attempt, lease or state');
+    setup.store.database.exec('UPDATE event_settings SET paused = 0, enabled = 0, switch_generation = 1');
+    assert.deepEqual(claim(), { kind: 'terminal' });
+    assert.deepEqual(snapshot(), before, 'a disabled claim writes nothing');
+    setup.store.database.exec('UPDATE event_settings SET enabled = 1');
+    assert.deepEqual(
+      claim(),
+      { kind: 'terminal' },
+      'reset work from before a disable-all never crosses into a later run',
+    );
+    assert.deepEqual(snapshot(), before);
   } finally {
     setup.store.close();
     await rm(setup.stateDir, { recursive: true, force: true });
