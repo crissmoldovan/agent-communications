@@ -43,16 +43,35 @@ export interface ExpirySweepResult {
   readonly streamRecords: number;
   readonly projections: number;
   readonly decisionMetadata: number;
+  readonly sourceStages: number;
+}
+
+/** Source-specific expiry that needs to decrypt a staged record before it can derive content-free terminal keys. */
+export interface AsyncSourceStageExpiry {
+  sweep(): Promise<number>;
 }
 
 /** Deletes B1 content at its durable deadline without waiting for a later delivery or read. */
 export class EventExpiry {
   readonly #store: EventDatabase;
   readonly #now: () => number;
+  readonly #asyncSourceStages: AsyncSourceStageExpiry | undefined;
 
-  constructor(store: EventDatabase, now: () => number = Date.now) {
+  constructor(
+    store: EventDatabase,
+    now: () => number = Date.now,
+    asyncSourceStages?: AsyncSourceStageExpiry | undefined,
+  ) {
     this.#store = store;
     this.#now = now;
+    this.#asyncSourceStages = asyncSourceStages;
+  }
+
+  /** Runs synchronous and decrypted source-stage expiry before the owner starts source, control, or replay work. */
+  async sweepAll(): Promise<ExpirySweepResult> {
+    const swept = this.sweep();
+    const sourceStages = (await this.#asyncSourceStages?.sweep()) ?? 0;
+    return { ...swept, sourceStages: swept.sourceStages + sourceStages };
   }
 
   sweep(): ExpirySweepResult {
@@ -136,7 +155,61 @@ export class EventExpiry {
           )
           .run(now, now).changes,
       );
-      return { deliveries, localRecords, streamRecords, projections, decisionMetadata };
+      const sourceStages = this.#expireSourceStages(database, now);
+      return { deliveries, localRecords, streamRecords, projections, decisionMetadata, sourceStages };
     });
+  }
+
+  /** Purges due source bytes before another source step could inspect or retry them. */
+  #expireSourceStages(database: EventDatabase['database'], now: number): number {
+    const stages = database
+      .prepare(
+        `SELECT id, source, account_id
+         FROM source_scan_state
+         WHERE source != 'gmail' AND stage_expires_at IS NOT NULL AND stage_expires_at <= ?`,
+      )
+      .all(now) as Array<{ id: string; source: string; account_id: string }>;
+    for (const stage of stages) {
+      database
+        .prepare(
+          `INSERT OR IGNORE INTO source_occurrence_resolutions
+           (source, account_id, occurrence_key, outcome, resolved_at, error_code)
+           VALUES (?, ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
+        )
+        .run(stage.source, stage.account_id, stage.id, now);
+      database
+        .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
+        .run(
+          `source-retention-expired:${stage.source}:${stage.account_id}:${stage.id}`,
+          'event.source.retention-expired',
+          now,
+        );
+      database.prepare('DELETE FROM source_scan_state WHERE id = ?').run(stage.id);
+    }
+
+    const whatsapp = database
+      .prepare(
+        `SELECT account_id, message_id
+         FROM whatsapp_occurrences
+         WHERE stage_expires_at IS NOT NULL AND stage_expires_at <= ?`,
+      )
+      .all(now) as Array<{ account_id: string; message_id: string }>;
+    for (const occurrence of whatsapp) {
+      database
+        .prepare(
+          `UPDATE whatsapp_rule_admissions
+           SET admission = 'expired', admitted_at = ?
+           WHERE account_id = ? AND message_id = ? AND admission != 'baseline'`,
+        )
+        .run(now, occurrence.account_id, occurrence.message_id);
+      database
+        .prepare(
+          `UPDATE whatsapp_occurrences
+           SET staged_payload_ref = NULL, stage_expires_at = NULL
+           WHERE account_id = ? AND message_id = ?`,
+        )
+        .run(occurrence.account_id, occurrence.message_id);
+    }
+    return stages.length + whatsapp.length;
   }
 }

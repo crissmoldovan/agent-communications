@@ -3,6 +3,9 @@ import { chmod, lstat, readFile, rm, writeFile } from 'node:fs/promises';
 import { CommsError, openCore, resolvePaths } from '@agentcomms/core';
 import { CATALOGUE } from '@agentcomms/events';
 import { createGmailEventSource, type GmailEventSource } from '@agentcomms/gmail';
+import { createResendEventReaderForPaths, type ResendEventReader } from '@agentcomms/resend';
+import { openSlackEventSourceForPaths, type SlackEventSource } from '@agentcomms/slack';
+import { openWhatsAppEventOperations, type WhatsAppEventOperations } from '@agentcomms/whatsapp';
 import { probeControl } from '../control/client.ts';
 import {
   assertControlSupported,
@@ -25,6 +28,9 @@ import { type RunningControlServer, startControlServer } from '../control/server
 import { EventDomainError } from '../domain/lifecycle.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import { MailboxLock } from '../sources/mailbox-lock.ts';
+import { type LocalEventSourceRegistry, phaseDSourceRegistry } from '../sources/registry.ts';
+import { SourceScopeLock } from '../sources/scope-lock.ts';
+import { GmailStageExpiry } from '../sources/source-worker.ts';
 import { openEventDatabase } from '../store/database.ts';
 import { openEventSecretStore } from '../store/event-secrets.ts';
 import { EventRecordCipher } from '../store/records.ts';
@@ -40,12 +46,14 @@ import {
   PassThroughSseFrameVisibilityGate,
   type SseFrameVisibilityGate,
 } from './phase-d-whatsapp-seam.ts';
+import { createPhaseDWhatsAppOwnerComposition } from './phase-d-whatsapp-owner-composition.ts';
 import { recoverActivations } from './recovery.ts';
-import { replacementIntentSummary } from './replacements.ts';
+import { GmailReplacementDrains, replacementIntentSummary } from './replacements.ts';
 import { disableRule, removeTarget } from './revocations.ts';
 import { EventScheduler } from './scheduler.ts';
 import { SseDispatcher } from './sse-dispatcher.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
+import { runSourceOwnerWork } from './source-owner-work.ts';
 
 export interface EventOwnerStatus extends EventLifecycleStatus {
   readonly owner: 'running';
@@ -80,6 +88,14 @@ export interface EventOwnerOptions {
   readonly gmailSourceFor?:
     | ((input: { readonly accountId: string; readonly alias: string }) => Promise<GmailEventSource>)
     | undefined;
+  /** Every Phase-D provider boundary is injectable; tests supply sealed fakes and never reach a real provider. */
+  readonly slackSourceFor?:
+    | ((input: { readonly accountId: string; readonly alias: string }) => Promise<SlackEventSource>)
+    | undefined;
+  readonly resendReaderFor?:
+    | ((input: { readonly accountId: string; readonly alias: string }) => Promise<ResendEventReader>)
+    | undefined;
+  readonly whatsappEventOperations?: WhatsAppEventOperations | undefined;
   readonly tickMs?: number | undefined;
   readonly pollIntervalMs?: number | undefined;
   /** Phase D supplies its concrete list fence through this structural seam; B2 defaults to synchronous pass-through. */
@@ -110,13 +126,78 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
     configDir: core.paths.configDir,
   });
   const cipher = new EventRecordCipher(database.database, eventSecrets);
-  const expiry = new EventExpiry(database);
+  const sourceRegistry = phaseDSourceRegistry();
+  // The concrete WhatsApp visibility fence is constructed in every production owner (D Task 7).
+  const whatsappEventOperations =
+    options.whatsappEventOperations ?? openWhatsAppEventOperations({ configDir: core.paths.configDir });
+  const whatsappComposition = createPhaseDWhatsAppOwnerComposition({
+    database,
+    eventOperations: whatsappEventOperations,
+  });
+  const mailboxLock = new MailboxLock(new SourceScopeLock());
+  const replacementDrains = new GmailReplacementDrains({
+    database: database.database,
+    decryptPosition: async (input) =>
+      JSON.parse(
+        (
+          await cipher.decrypt(
+            input.table === 'activation_baselines'
+              ? {
+                  table: 'activation_baselines',
+                  column: 'encryptedPosition',
+                  key: [
+                    { type: 'text', value: input.activationId },
+                    { type: 'text', value: 'gmail' },
+                    { type: 'text', value: input.accountId },
+                    { type: 'text', value: input.positionScope },
+                  ],
+                }
+              : {
+                  table: 'rule_activation_points',
+                  column: 'encryptedPosition',
+                  key: [
+                    { type: 'text', value: input.activationId },
+                    { type: 'text', value: input.ruleId as string },
+                    { type: 'integer', value: input.ruleVersion as number },
+                    { type: 'text', value: input.accountId },
+                    { type: 'text', value: input.positionScope },
+                  ],
+                },
+            input.record,
+          )
+        ).toString('utf8'),
+      ),
+  });
+  const expiry = new EventExpiry(
+    database,
+    Date.now,
+    new GmailStageExpiry({
+      store: database,
+      mailboxLock,
+      decryptStage: async (stored, stageId) =>
+        JSON.parse(
+          (
+            await cipher.decrypt(
+              { table: 'source_scan_state', column: 'encryptedRecord', key: [{ type: 'text', value: stageId }] },
+              stored,
+            )
+          ).toString('utf8'),
+        ),
+      encryptStage: async (value, stageId) =>
+        cipher.encrypt(
+          { table: 'source_scan_state', column: 'encryptedRecord', key: [{ type: 'text', value: stageId }] },
+          Buffer.from(JSON.stringify(value)),
+        ),
+      replacementDrains,
+    }),
+  );
   const dryrun = new DryRunDispatcher({
     store: database,
     cipher,
     approvals: core.approvals,
     config: core.config,
     expiry,
+    whatsappVisibilityFence: whatsappComposition.visibilityFence,
   });
   const webhook = new WebhookDispatcher({
     store: database,
@@ -155,7 +236,6 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
     webhook,
     sse,
   });
-  const mailboxLock = new MailboxLock();
   const gmailSourceFor = async (accountId: string): Promise<GmailEventSource> => {
     const config = await core.config.load();
     const alias = Object.entries(config.inboxes).find(
@@ -177,26 +257,98 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
       },
     });
   };
+  const sourceAliasFor = async (source: 'slack' | 'resend' | 'whatsapp', accountId: string): Promise<string> => {
+    const config = await core.config.load();
+    const alias = Object.entries(config.accounts).find(
+      ([, account]) => account.id === accountId && account.platform === source,
+    )?.[0];
+    if (!alias)
+      throw new CommsError('NOT_FOUND', 'the event account bound to this source is no longer connected', {
+        details: { reason: 'ACCOUNT_REMOVED', accountId, source },
+      });
+    return alias;
+  };
+  const slackSourceFor = async (accountId: string): Promise<SlackEventSource> => {
+    const alias = await sourceAliasFor('slack', accountId);
+    if (options.slackSourceFor) return options.slackSourceFor({ accountId, alias });
+    return openSlackEventSourceForPaths({
+      alias,
+      pathOverrides: { stateDir, ...(options.configDir === undefined ? {} : { configDir: options.configDir }) },
+    });
+  };
+  const resendReaderFor = async (accountId: string): Promise<ResendEventReader> => {
+    const alias = await sourceAliasFor('resend', accountId);
+    if (options.resendReaderFor) return options.resendReaderFor({ accountId, alias });
+    return createResendEventReaderForPaths({
+      account: alias,
+      pathOverrides: { stateDir, ...(options.configDir === undefined ? {} : { configDir: options.configDir }) },
+    });
+  };
   const activations = new ActivationRuntime({
     store: database,
     approvals: core.approvals,
     config: core.config,
     gmailSourceFor,
-    encryptBaseline: async (intentId, accountId, position) =>
+    sourceBaselineFor: async ({ source, accountId, scopeId }) => {
+      if (source === 'gmail') {
+        const profile = await (await gmailSourceFor(accountId)).getProfile();
+        return { historyId: profile.historyId };
+      }
+      if (source === 'slack') {
+        const conversationId = scopeId.slice(`slack:${accountId}:`.length);
+        const page = await (await slackSourceFor(accountId)).history({
+          conversationId,
+          oldest: '0.000000',
+          latest: '9999999999.999999',
+          limit: 1,
+        });
+        const timestamp = page.messages[0]?.ts ?? '0.000000';
+        return { timestamp, replyDrain: { through: timestamp, topLevelCovered: false } };
+      }
+      if (source === 'resend') {
+        const reader = await resendReaderFor(accountId);
+        if (scopeId === 'received') return { anchorId: (await reader.listReceived()).emails[0]?.id ?? 'empty' };
+        return { startedAt: new Date().toISOString() };
+      }
+      const snapshot = await whatsappEventOperations.withEventSnapshot({ accountId }, async (value) => value);
+      // The checked copy supplies raw identities, while the concrete D6 fence supplies the final current list
+      // decision. A list edit between those reads can only remove identities from this activation point.
+      return whatsappComposition.visibilityFence.withCurrentVisibility({ accountId }, async (visibility) => {
+        const head = database.database
+          .prepare('SELECT committed_generation FROM whatsapp_snapshot_heads WHERE account_id = ?')
+          .get(accountId) as { committed_generation: number } | undefined;
+        return {
+          capturedAt: new Date().toISOString(),
+          baselineGeneration: head?.committed_generation ?? 0,
+          baselineIdentities: snapshot.messages
+            .filter(
+              (message) =>
+                message.fromMe === false &&
+                message.chatJid !== null &&
+                message.senderJidRaw !== null &&
+                message.stanzaId !== null &&
+                visibility.seesMessage(message.chatJid, message.chatKind ?? 'unknown', message.senderJidRaw, false),
+            )
+            .map((message) => JSON.stringify(['wa-msg', message.chatJid, message.senderJidRaw, message.stanzaId]))
+            .sort(),
+        };
+      });
+    },
+    encryptBaseline: async (intentId, accountId, position, scope) =>
       cipher.encrypt(
         {
           table: 'activation_baselines',
           column: 'encryptedPosition',
           key: [
             { type: 'text', value: intentId },
-            { type: 'text', value: 'gmail' },
+            { type: 'text', value: scope?.source ?? 'gmail' },
             { type: 'text', value: accountId },
-            { type: 'text', value: 'mailbox' },
+            { type: 'text', value: scope?.scopeId ?? 'mailbox' },
           ],
         },
         Buffer.from(JSON.stringify(position)),
       ),
-    decryptBaseline: async (intentId, accountId, stored) =>
+    decryptBaseline: async (intentId, accountId, stored, scope) =>
       JSON.parse(
         (
           await cipher.decrypt(
@@ -205,15 +357,15 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
               column: 'encryptedPosition',
               key: [
                 { type: 'text', value: intentId },
-                { type: 'text', value: 'gmail' },
+                { type: 'text', value: scope?.source ?? 'gmail' },
                 { type: 'text', value: accountId },
-                { type: 'text', value: 'mailbox' },
+                { type: 'text', value: scope?.scopeId ?? 'mailbox' },
               ],
             },
             stored,
           )
         ).toString('utf8'),
-      ) as { readonly historyId: string },
+      ),
     encryptPoint: async ({ activationId, ruleId, ruleVersion, accountId, positionScope, position }) =>
       cipher.encrypt(
         {
@@ -249,6 +401,8 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
         ).toString('utf8'),
       ) as { readonly historyId: string },
     mailboxLock,
+    sourceRegistry,
+    retainedContentHooks: whatsappComposition.retainedContentHooks,
   });
   const scheduler = new EventScheduler({
     store: database,
@@ -261,7 +415,28 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
     config: core.config,
     taint: core.taint,
     gmailSourceFor,
+    sourceWorkFor: async (scope) => {
+      await runSourceOwnerWork(
+        {
+          store: database,
+          cipher,
+          approvals: core.approvals,
+          config: core.config,
+          taint: core.taint,
+          lifecycle,
+          sourceRegistry,
+          slackSourceFor,
+          resendReaderFor,
+          whatsappEventOperations,
+          whatsappVisibilityFence: whatsappComposition.visibilityFence,
+        },
+        scope,
+      );
+      return undefined;
+    },
     mailboxLock,
+    sourceRegistry,
+    whatsappVisibilityFence: whatsappComposition.visibilityFence,
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
     ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
   });
@@ -302,7 +477,7 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
   };
 
   try {
-    expiry.sweep();
+    await expiry.sweepAll();
     // Expired delivery leases are recovered by the scheduler's ticks, which claim nothing while paused or disabled.
     await recoverActivations(activations);
     await writeToken(paths, token);
@@ -310,7 +485,16 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
       endpoint: instance.endpoint,
       token,
       handle: async (request) =>
-        handleControl(owner, lifecycle, database.installationId, database, activations, dryrun, request),
+        handleControl(
+          owner,
+          lifecycle,
+          database.installationId,
+          database,
+          activations,
+          dryrun,
+          sourceRegistry,
+          request,
+        ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
     await chmod(instance.endpoint, 0o600);
@@ -348,6 +532,7 @@ async function handleControl(
   database: Awaited<ReturnType<typeof openEventDatabase>>,
   activations: ActivationRuntime,
   dispatcher: DryRunDispatcher,
+  sourceRegistry: LocalEventSourceRegistry,
   request: ControlRequest,
 ): Promise<unknown> {
   switch (request.operation) {
@@ -381,9 +566,9 @@ async function handleControl(
       return { type: definition.type, version: definition.version, channel: definition.type.split('.')[0] };
     }
     case 'sources-list':
-      return sourceRows(database);
+      return sourceRows(database, sourceRegistry);
     case 'source-show':
-      return sourceShow(database, requiredText(request.args.source, 'source'));
+      return sourceShow(database, sourceRegistry, requiredText(request.args.source, 'source'));
     case 'rules-list':
       return ruleRows(database);
     case 'rule-show':
@@ -477,22 +662,65 @@ function createTarget(database: Awaited<ReturnType<typeof openEventDatabase>>, d
   return domain(() => new ImmutableVersions(database.database).createTarget(document as never));
 }
 
-function sourceRows(database: Awaited<ReturnType<typeof openEventDatabase>>): unknown[] {
+function sourceRows(
+  database: Awaited<ReturnType<typeof openEventDatabase>>,
+  sourceRegistry: LocalEventSourceRegistry,
+): unknown[] {
   const rows = database.database
     .prepare("SELECT document FROM rule_versions WHERE state IN ('active', 'superseded')")
     .all() as Array<{ document: string }>;
-  const accounts = new Set<string>();
+  const scopes = new Map<string, { source: string; accountId: string; cursorScope: string }>();
   for (const row of rows) {
-    const document = JSON.parse(row.document) as { source?: { channel?: string; accountIds?: unknown } };
-    if (document.source?.channel !== 'gmail' || !Array.isArray(document.source.accountIds)) continue;
-    for (const accountId of document.source.accountIds) if (typeof accountId === 'string') accounts.add(accountId);
+    const document = JSON.parse(row.document) as {
+      source?: { channel?: string; accountIds?: unknown; options?: unknown };
+    };
+    if (!Array.isArray(document.source?.accountIds) || document.source.options === undefined) continue;
+    for (const accountId of document.source.accountIds) {
+      if (typeof accountId !== 'string') continue;
+      try {
+        const source = sourceRegistry.require(
+          document.source.channel as Parameters<LocalEventSourceRegistry['require']>[0],
+        );
+        const options = source.canonicalise(document.source.options);
+        for (const scope of source.scopesFor({ accountId, options })) {
+          scopes.set(`${scope.source}\u0000${scope.accountId}\u0000${scope.scopeId}`, {
+            source: scope.source,
+            accountId: scope.accountId,
+            cursorScope: scope.scopeId,
+          });
+        }
+      } catch {
+        // Immutable-version validation rejects invalid documents. This only keeps a manually damaged local database
+        // from inventing a source row.
+      }
+    }
   }
-  return [...accounts].sort().map((accountId) => ({ source: 'gmail', accountId, cursorScope: 'mailbox' }));
+  const ordered = [...scopes.values()].sort((left, right) =>
+    `${left.source}\u0000${left.accountId}\u0000${left.cursorScope}`.localeCompare(
+      `${right.source}\u0000${right.accountId}\u0000${right.cursorScope}`,
+    ),
+  );
+  return sourceRegistry.sources().map((source) => ({
+    source,
+    accounts: ordered.filter((scope) => scope.source === source),
+  }));
 }
 
-function sourceShow(database: Awaited<ReturnType<typeof openEventDatabase>>, source: string): unknown {
-  if (source !== 'gmail') throw new CommsError('NOT_FOUND', 'the requested source is not configured');
-  return { source, accounts: sourceRows(database) };
+function sourceShow(
+  database: Awaited<ReturnType<typeof openEventDatabase>>,
+  sourceRegistry: LocalEventSourceRegistry,
+  source: string,
+): unknown {
+  if (!sourceRegistry.sources().includes(source as Parameters<LocalEventSourceRegistry['require']>[0]))
+    throw new CommsError('NOT_FOUND', 'the requested source is not configured');
+  return {
+    source,
+    accounts: (
+      sourceRows(database, sourceRegistry).find((row) => (row as { source: string }).source === source) as {
+        accounts: unknown[];
+      }
+    ).accounts,
+  };
 }
 
 async function acquireWithStaleRecovery(paths: EventPaths): Promise<EventOwnerLock> {

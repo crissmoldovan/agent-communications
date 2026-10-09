@@ -76,8 +76,28 @@ test('STG-B1: a durable Gmail stage expires at its original deadline after downt
       assert.equal(staged.stage_expires_at, now + 100);
 
       now += 100;
-      const restarted = new GmailSourceWorker({ ...options, admit: async () => 'terminal' as const });
+      const drained: string[] = [];
+      const restarted = new GmailSourceWorker({
+        ...options,
+        admit: async () => 'terminal' as const,
+        replacementDrains: {
+          markPageDrained: async ({ historyId }: { readonly historyId: string }) => {
+            drained.push(historyId);
+          },
+        } as never,
+      });
       assert.deepEqual(await restarted.scan(), { cursor: '101', pending: false });
+      assert.equal(
+        (
+          store.database
+            .prepare("SELECT cursor FROM cursors WHERE source = 'gmail' AND account_id = 'ibx_ABCDEFGHIJKLMNOP'")
+            .get() as { cursor: string }
+        ).cursor,
+        '101',
+        'the worker consumes its own continuation before committing the completed chain',
+      );
+      assert.equal(store.database.prepare("SELECT 1 FROM source_scan_state WHERE source = 'gmail'").get(), undefined);
+      assert.deepEqual(drained, ['101'], 'an expired post-cutover page terminalises its replacement drain');
       assert.equal(
         (
           store.database.prepare("SELECT outcome FROM source_occurrence_resolutions WHERE source = 'gmail'").get() as {

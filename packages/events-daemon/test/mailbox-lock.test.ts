@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { persistGmailBaseline } from '../src/runtime/baseline.ts';
 import { MailboxLock } from '../src/sources/mailbox-lock.ts';
+import { gmailOnlySourceRegistry } from '../src/sources/registry.ts';
 import { GmailSourceWorker } from '../src/sources/source-worker.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
@@ -94,6 +95,7 @@ test('GML-B1: the real Gmail page stage, final cursor commit, and baseline captu
       const page = worker.scan();
       await new Promise((resolve) => setImmediate(resolve));
       const baseline = persistGmailBaseline(
+        gmailOnlySourceRegistry().require('gmail'),
         lock,
         'ibx_ABCDEFGHIJKLMNOP',
         async () => ({

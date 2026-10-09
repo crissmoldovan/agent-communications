@@ -1,10 +1,12 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Writable } from 'node:stream';
 import { type CliDeps, run } from '../../src/cli/program.ts';
 import { WhatsAppContext, type WhatsAppContextOptions } from '../../src/context.ts';
 import { LISTS_FILE } from '../../src/lists.ts';
+import { syncAccount } from '../../src/operations/sync.ts';
 import { WHATSAPP_GROUP_CONTAINER } from '../../src/source/location.ts';
 import { buildFixtureStore, type Fixture, type FixtureOptions } from './fixture.ts';
 
@@ -64,6 +66,8 @@ export interface Harness {
   >;
   /** The person's lists file, or null when there is none. */
   listsFile(): { version: 1; accounts: Record<string, { allow: string[]; deny: string[] }> } | null;
+  /** Rebuilds every channel-owned index artifact from the fixture source without touching an event-daemon database. */
+  resetAndRebuildAllIndexState(name?: string): Promise<void>;
 }
 
 class Capture extends Writable {
@@ -152,6 +156,15 @@ export async function newHarness(
     listsFile: () => {
       const path = join(configDir, LISTS_FILE);
       return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null;
+    },
+    async resetAndRebuildAllIndexState(name = 'acme/whatsapp') {
+      const config = harness.coreConfig();
+      const id = config.accounts[name]?.id;
+      if (typeof id !== 'string') throw new Error(`the fixture account ${name} was not added`);
+      const state = join(env.AGENT_COMMS_STATE_DIR as string, 'whatsapp', id);
+      // The harness owns only the channel's derived state. It never opens, locates, or changes a daemon database.
+      await rm(state, { recursive: true, force: true });
+      await syncAccount(harness.context(), { account: name });
     },
   };
   return harness;

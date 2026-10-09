@@ -6,7 +6,7 @@ import {
   activationDocumentDigest,
   disclosureBindingFor,
 } from '../src/domain/activation-documents.ts';
-import { assertDisclosable } from '../src/runtime/disclosure-fence.ts';
+import { assertDisclosable, isWhitelistedTightening } from '../src/runtime/disclosure-fence.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 test('APR-B1: the live disclosure fence reads immutable lifecycle, approval binding, object revocation, account and generation at call time', {
@@ -119,4 +119,50 @@ test('APR-B1: the live disclosure fence reads immutable lifecycle, approval bind
     switchGeneration: 7,
   });
   assert.ok(reads.size >= 5, 'each live fact is queried rather than accepted from a cached pointer or lifecycle input');
+});
+
+test('D2/D4: source-option derivation delegates to the four-channel dispatcher and refuses additions', () => {
+  const rule = (source: unknown, version: number) =>
+    ({
+      ruleId: 'rule-source-tightening',
+      version,
+      source: { channel: (source as { channel: string }).channel, accountIds: ['account-1'], options: source },
+      event: { type: 'slack.message.posted', version: 1 },
+      condition: { path: '/id', op: 'exists' },
+      mapping: { constant: 'safe' },
+      targets: [],
+      subscribers: [],
+      judges: [],
+      deliveryRateCap: 1,
+      retention: {
+        ingestMs: 1,
+        holdMs: 1,
+        deliveryMs: 1,
+        dryrunMs: 1,
+        sseReplayMs: 1,
+        deadLetterMs: 1,
+        decisionMetadataMs: 1,
+      },
+    }) as never;
+  const variants: ReadonlyArray<readonly [unknown, unknown, boolean]> = [
+    [
+      { channel: 'slack', conversations: ['C00000001', 'C00000002'] },
+      { channel: 'slack', conversations: ['C00000001'] },
+      true,
+    ],
+    [{ channel: 'resend', kinds: ['received', 'status'] }, { channel: 'resend', kinds: ['status'] }, true],
+    [
+      { channel: 'whatsapp', chats: 'all-allowed' },
+      { channel: 'whatsapp', chats: ['15550000001@s.whatsapp.net'] },
+      true,
+    ],
+    [
+      { channel: 'slack', conversations: ['C00000001'] },
+      { channel: 'slack', conversations: ['C00000001', 'C00000002'] },
+      false,
+    ],
+  ];
+  for (const [before, after, expected] of variants) {
+    assert.equal(isWhitelistedTightening(rule(before, 1), rule(after, 2), 'narrow-source-options'), expected);
+  }
 });

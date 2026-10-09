@@ -3,6 +3,7 @@ import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
 import { persistGmailBaseline } from '../src/runtime/baseline.ts';
 import { MailboxLock } from '../src/sources/mailbox-lock.ts';
+import { gmailOnlySourceRegistry } from '../src/sources/registry.ts';
 import { GmailSourceWorker } from '../src/sources/source-worker.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
@@ -120,6 +121,7 @@ test('APR-B1: the real Gmail stage and final cursor boundary keep a replacement 
       const scan = worker.scan();
       await atBoundary;
       const baseline = persistGmailBaseline(
+        gmailOnlySourceRegistry().require('gmail'),
         lock,
         accountId,
         async () => ({

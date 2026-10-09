@@ -92,6 +92,21 @@
     ],
     "approve": "agent-slack approve",
     "approvalGrouping": "draft-revision-digest",
+    "events": {
+      "types": [
+        "slack.message.posted"
+      ],
+      "minimumIntervalMs": 60000,
+      "access": {
+        "kind": "oauth-user",
+        "requiredScopes": [
+          "channels:history",
+          "groups:history",
+          "im:history",
+          "mpim:history"
+        ]
+      }
+    },
     "skills": {
       "prefix": "slack-",
       "contract": "skills/_shared/contract-slack.md"

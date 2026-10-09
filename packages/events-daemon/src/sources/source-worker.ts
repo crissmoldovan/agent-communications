@@ -8,20 +8,33 @@ import {
   gmailMessageSentV1,
   validateEvent,
 } from '@agentcomms/events';
-import { type GmailEventMessageMetadata, type GmailEventSource, normaliseGmailEventMetadata } from '@agentcomms/gmail';
+import {
+  type GmailEventMessageMetadata,
+  type GmailEventSource,
+  type GmailHistoryPage,
+  normaliseGmailEventMetadata,
+} from '@agentcomms/gmail';
 import type { GmailSourceOptions } from '../domain/source-options.ts';
 import { isRemovedAccountError, purgeRemovedAccountWork } from '../runtime/account-fence.ts';
 import type { GmailReplacementDrains } from '../runtime/replacements.ts';
 import type { EventDatabase } from '../store/database.ts';
+import {
+  assertSourceWriteStillLive,
+  type LocalEventSource,
+  StaleSourceWriteError,
+  sourceRuleSetSnapshot,
+  sourceStageRetentionForDebts,
+} from './contracts.ts';
 import {
   classifyGmailLabelChange,
   classifyGmailMessage,
   type GmailHistoryOccurrence,
   occurrencesFromHistory,
 } from './gmail.ts';
-import { isMailboxFenced } from './mailbox-fence.ts';
 import type { MailboxLock } from './mailbox-lock.ts';
 import type { GmailMaterialisationRequest, GmailMaterialisationResult } from './materialise.ts';
+import { gmailOnlySourceRegistry } from './registry.ts';
+import { isSourceScopeFenced } from './source-scope-fence.ts';
 
 type GmailSource = Pick<GmailEventSource, 'listHistory' | 'getMessageMetadata'> &
   Partial<Pick<GmailEventSource, 'getProfile' | 'getMessage'>>;
@@ -50,6 +63,8 @@ export interface GmailSourceWorkerOptions {
   readonly source: GmailSource;
   readonly mailbox: { readonly accountId: string; readonly name: string };
   readonly mailboxLock: MailboxLock;
+  /** The registered adapter owns the source lock; Gmail remains the only live adapter in this transition. */
+  readonly sourceAdapter?: LocalEventSource | undefined;
   /** Reads the exact active source versions; never a broad mailbox-level eligibility shortcut. */
   readonly rules: () => readonly GmailSourceRule[];
   /** The shared live authority fence, reached before an event becomes an admitted projection candidate. */
@@ -57,8 +72,8 @@ export interface GmailSourceWorkerOptions {
   /** Task 12 continues the terminal ingest/projection path; Task 10 keeps its result durable at this boundary. */
   readonly admit: (occurrence: GmailSourceOccurrence) => Promise<'terminal' | 'pending'>;
   /** Source staging is encrypted before, never inside, the write transaction. */
-  readonly encryptStage: (value: StoredHistoryPage, stageId?: string) => Promise<Uint8Array>;
-  readonly decryptStage?: ((stored: Uint8Array, stageId?: string) => Promise<StoredHistoryPage>) | undefined;
+  readonly encryptStage: (value: GmailStageRecord, stageId?: string) => Promise<Uint8Array>;
+  readonly decryptStage?: ((stored: Uint8Array, stageId?: string) => Promise<GmailStageRecord>) | undefined;
   /** Test-only collision injection; production uses Phase A's SHA-256 event identity function. */
   readonly eventIdFor?: ((input: Parameters<typeof eventId>[0]) => Promise<string>) | undefined;
   /** Deterministic test failpoints for the mailbox-lock interleaving contract. */
@@ -66,7 +81,8 @@ export interface GmailSourceWorkerOptions {
   readonly beforeCursorCommit?: (() => Promise<void> | void) | undefined;
   /** The real replacement fence holds post-P content inside its encrypted source stage until the pointer swap. */
   readonly replacementDrains?:
-    | Pick<GmailReplacementDrains, 'shouldWithhold' | 'isAfterActivePoint' | 'markPageDrained'>
+    | (Pick<GmailReplacementDrains, 'shouldWithhold' | 'isAfterActivePoint' | 'markPageDrained'> &
+        Partial<Pick<GmailReplacementDrains, 'drainIntentIdsForPage' | 'recordPageDrained'>>)
     | undefined;
   /**
    * D9: the account is read from core's configuration at each boundary, never cached. Called immediately before every
@@ -79,32 +95,24 @@ export interface GmailSourceWorkerOptions {
   readonly now?: (() => number) | undefined;
 }
 
-interface StoredHistoryPage {
+export interface GmailStoredHistoryPage {
   readonly cursorBefore: string;
-  readonly page: {
-    readonly historyId: string;
-    readonly nextPageToken: string | undefined;
-    readonly history: readonly {
-      readonly id: string;
-      readonly messagesAdded: readonly {
-        readonly message: { readonly id: string; readonly threadId?: string | undefined };
-      }[];
-      readonly labelsAdded: readonly {
-        readonly message: { readonly id: string; readonly threadId?: string | undefined };
-        readonly labelIds: readonly string[];
-      }[];
-      readonly labelsRemoved: readonly {
-        readonly message: { readonly id: string; readonly threadId?: string | undefined };
-        readonly labelIds: readonly string[];
-      }[];
-    }[];
-  };
+  readonly page: GmailHistoryPage;
   /** Raw history is durable before metadata classification. A message gets observedAt only after that read succeeds. */
   readonly stagedObservedAt: string;
   readonly messageStates: Readonly<Record<string, StoredMessageState>>;
   /** Terminal siblings of a held post-P occurrence must not be admitted again when the staged page resumes. */
   readonly completedOccurrenceKeys?: readonly string[] | undefined;
 }
+
+/** A terminal page keeps only chain progress; no provider content or observation state survives expiry. */
+export interface GmailExpiredHistoryContinuation {
+  readonly cursorBefore: string;
+  readonly page: Pick<GmailHistoryPage, 'historyId' | 'nextPageToken'> & { readonly history: readonly [] };
+  readonly expired: true;
+}
+
+export type GmailStageRecord = GmailStoredHistoryPage | GmailExpiredHistoryContinuation;
 
 interface StoredMessageState {
   readonly metadata?: GmailEventMessageMetadata | undefined;
@@ -115,9 +123,10 @@ interface StoredMessageState {
   readonly errorCode?: string | undefined;
 }
 
-interface StagedPage {
+interface StagedPage<T extends GmailStageRecord = GmailStageRecord> {
   readonly id: string;
-  value: StoredHistoryPage;
+  value: T;
+  encryptedRecord: Uint8Array;
 }
 
 function sourceStageId(accountId: string, cursor: string, pageIndex: number): string {
@@ -126,6 +135,157 @@ function sourceStageId(accountId: string, cursor: string, pageIndex: number): st
 
 function jsonClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+export function gmailOccurrenceKey(occurrence: GmailHistoryOccurrence): string {
+  return `${occurrence.historyRecordId}:${occurrence.kind}:${occurrence.messageId}`;
+}
+
+export function isExpiredGmailHistoryContinuation(value: GmailStageRecord): value is GmailExpiredHistoryContinuation {
+  return 'expired' in value && value.expired === true;
+}
+
+function expiredGmailHistoryContinuation(value: GmailStageRecord): GmailExpiredHistoryContinuation {
+  if (isExpiredGmailHistoryContinuation(value)) return value;
+  return {
+    cursorBefore: value.cursorBefore,
+    page: {
+      historyId: value.page.historyId,
+      nextPageToken: value.page.nextPageToken,
+      history: [],
+    },
+    expired: true,
+  };
+}
+
+/**
+ * The shared terminal state for a Gmail raw page. The caller decrypts only long enough to derive the occurrence keys,
+ * encrypts a content-free chain continuation, calculates any replacement drains, then commits resolutions, drain
+ * settlement and continuation replacement together. This has no authority or pause dependency: expiry is content-free
+ * settlement and must not move the mailbox cursor before the whole chain completes.
+ */
+export function terminaliseExpiredGmailPage(
+  database: EventDatabase['database'],
+  input: {
+    readonly stageId: string;
+    readonly accountId: string;
+    readonly page: GmailHistoryPage;
+    /** The bytes that were decrypted before encryption awaited; the transaction refuses a changed stage. */
+    readonly encryptedRecord: Uint8Array;
+    /** A re-encrypted, content-free continuation under this stage's original AAD/key. */
+    readonly continuationEncryptedRecord: Uint8Array;
+    readonly at: number;
+    readonly drainIntentIds: readonly string[];
+    readonly replacementDrains?: Pick<GmailReplacementDrains, 'recordPageDrained'> | undefined;
+  },
+): boolean {
+  const stage = database
+    .prepare(
+      `SELECT 1 AS present FROM source_scan_state
+       WHERE id = ? AND source = 'gmail' AND account_id = ? AND cursor_scope = 'mailbox'
+         AND stage_expires_at IS NOT NULL AND stage_expires_at <= ? AND encrypted_record = ?`,
+    )
+    .get(input.stageId, input.accountId, input.at, input.encryptedRecord) as { present: number } | undefined;
+  if (stage === undefined) return false;
+  const update = database
+    .prepare(
+      `UPDATE source_scan_state
+       SET staged_at = NULL, stage_expires_at = NULL, encrypted_record = ?, updated_at = ?
+       WHERE id = ? AND encrypted_record = ?`,
+    )
+    .run(input.continuationEncryptedRecord, input.at, input.stageId, input.encryptedRecord);
+  if (update.changes !== 1) return false;
+  for (const occurrence of occurrencesFromHistory(input.page)) {
+    database
+      .prepare(
+        `INSERT OR IGNORE INTO source_occurrence_resolutions
+         (source, account_id, occurrence_key, outcome, resolved_at, error_code)
+         VALUES ('gmail', ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
+      )
+      .run(input.accountId, gmailOccurrenceKey(occurrence), input.at);
+  }
+  input.replacementDrains?.recordPageDrained(input.drainIntentIds, input.at);
+  database.prepare('DELETE FROM source_stage_rule_debts WHERE stage_id = ?').run(input.stageId);
+  return true;
+}
+
+/** Common start-up/tick expiry for Gmail's encrypted pages, independent of whether collection may run. */
+export class GmailStageExpiry {
+  readonly #store: EventDatabase;
+  readonly #mailboxLock: MailboxLock;
+  readonly #decryptStage: (stored: Uint8Array, stageId: string) => Promise<GmailStageRecord>;
+  readonly #encryptStage: (value: GmailStageRecord, stageId: string) => Promise<Uint8Array>;
+  readonly #replacementDrains: Pick<GmailReplacementDrains, 'drainIntentIdsForPage' | 'recordPageDrained'> | undefined;
+  readonly #now: () => number;
+
+  constructor(options: {
+    readonly store: EventDatabase;
+    readonly mailboxLock: MailboxLock;
+    readonly decryptStage: (stored: Uint8Array, stageId: string) => Promise<GmailStageRecord>;
+    readonly encryptStage: (value: GmailStageRecord, stageId: string) => Promise<Uint8Array>;
+    readonly replacementDrains?:
+      | Pick<GmailReplacementDrains, 'drainIntentIdsForPage' | 'recordPageDrained'>
+      | undefined;
+    readonly now?: (() => number) | undefined;
+  }) {
+    this.#store = options.store;
+    this.#mailboxLock = options.mailboxLock;
+    this.#decryptStage = options.decryptStage;
+    this.#encryptStage = options.encryptStage;
+    this.#replacementDrains = options.replacementDrains;
+    this.#now = options.now ?? Date.now;
+  }
+
+  async sweep(): Promise<number> {
+    const accounts = this.#store.database
+      .prepare(
+        `SELECT DISTINCT account_id FROM source_scan_state
+         WHERE source = 'gmail' AND cursor_scope = 'mailbox'
+           AND stage_expires_at IS NOT NULL AND stage_expires_at <= ?
+         ORDER BY account_id`,
+      )
+      .all(this.#now()) as Array<{ account_id: string }>;
+    let expired = 0;
+    for (const { account_id: accountId } of accounts) {
+      expired += await this.#mailboxLock.withMailbox(accountId, async () => this.#expireMailbox(accountId));
+    }
+    return expired;
+  }
+
+  async #expireMailbox(accountId: string): Promise<number> {
+    const now = this.#now();
+    const stages = this.#store.database
+      .prepare(
+        `SELECT id, encrypted_record FROM source_scan_state
+         WHERE source = 'gmail' AND account_id = ? AND cursor_scope = 'mailbox'
+           AND stage_expires_at IS NOT NULL AND stage_expires_at <= ?
+         ORDER BY staged_at, id`,
+      )
+      .all(accountId, now) as Array<{ id: string; encrypted_record: Uint8Array }>;
+    let expired = 0;
+    for (const stage of stages) {
+      // Decryption is outside the write transaction: EventRecordCipher may read the master, and expiry needs only
+      // the content-free occurrence keys and chain continuation it derives here.
+      const value = await this.#decryptStage(stage.encrypted_record, stage.id);
+      const continuationEncryptedRecord = await this.#encryptStage(expiredGmailHistoryContinuation(value), stage.id);
+      const drainIntentIds =
+        (await this.#replacementDrains?.drainIntentIdsForPage({ accountId, historyId: value.page.historyId })) ?? [];
+      const terminalised = this.#store.immediate(() =>
+        terminaliseExpiredGmailPage(this.#store.database, {
+          stageId: stage.id,
+          accountId,
+          page: value.page,
+          encryptedRecord: stage.encrypted_record,
+          continuationEncryptedRecord,
+          at: now,
+          drainIntentIds,
+          replacementDrains: this.#replacementDrains,
+        }),
+      );
+      if (terminalised) expired += 1;
+    }
+    return expired;
+  }
 }
 
 function asMilliseconds(value: string): number {
@@ -173,6 +333,7 @@ export class GmailSourceWorker {
   readonly #source: GmailSource;
   readonly #mailbox: GmailSourceWorkerOptions['mailbox'];
   readonly #mailboxLock: MailboxLock;
+  readonly #sourceAdapter: LocalEventSource;
   readonly #rules: GmailSourceWorkerOptions['rules'];
   readonly #assertDisclosable: GmailSourceWorkerOptions['assertDisclosable'];
   readonly #admit: GmailSourceWorkerOptions['admit'];
@@ -191,6 +352,7 @@ export class GmailSourceWorker {
     this.#source = options.source;
     this.#mailbox = options.mailbox;
     this.#mailboxLock = options.mailboxLock;
+    this.#sourceAdapter = options.sourceAdapter ?? gmailOnlySourceRegistry().require('gmail');
     this.#rules = options.rules;
     this.#assertDisclosable = options.assertDisclosable;
     this.#admit = options.admit;
@@ -206,20 +368,24 @@ export class GmailSourceWorker {
   }
 
   async scan(): Promise<{ readonly cursor: string | null; readonly pending: boolean }> {
-    return this.#mailboxLock.withMailbox(this.#mailbox.accountId, async () => {
-      try {
-        return await this.#scanLocked();
-      } catch (error) {
-        // Account removal is a terminal source boundary. Re-throw the original stable error so the owner records no
-        // provider detail, but do not let the staged page or a later cursor commit resurrect account-bound work.
-        if (isRemovedAccountError(error)) {
-          this.#store.immediate(() =>
-            purgeRemovedAccountWork(this.#store.database, this.#mailbox.accountId, this.#now()),
-          );
+    return this.#sourceAdapter.withScopes(
+      this.#mailboxLock.sourceScopeLock,
+      [{ source: 'gmail', accountId: this.#mailbox.accountId, scopeId: 'mailbox' }],
+      async () => {
+        try {
+          return await this.#scanLocked();
+        } catch (error) {
+          // Account removal is a terminal source boundary. Re-throw the original stable error so the owner records no
+          // provider detail, but do not let the staged page or a later cursor commit resurrect account-bound work.
+          if (isRemovedAccountError(error)) {
+            this.#store.immediate(() =>
+              purgeRemovedAccountWork(this.#store.database, this.#mailbox.accountId, this.#now()),
+            );
+          }
+          throw error;
         }
-        throw error;
-      }
-    });
+      },
+    );
   }
 
   /**
@@ -234,32 +400,28 @@ export class GmailSourceWorker {
 
   /** The rule versions this mailbox's scan fans occurrences to; a change mid-scan makes the scan stale. */
   #ruleSet(): string {
-    return this.#rules()
-      .map((rule) => `${rule.ruleId}@${rule.ruleVersion}`)
-      .sort()
-      .join(',');
+    return sourceRuleSetSnapshot(this.#rules());
   }
 
   /** For the materialiser and any other writer working inside this scan: throws once the snapshot has moved. */
   assertScanLive(): void {
     const snapshot = this.#snapshot;
     if (snapshot === undefined) return;
-    const settings = this.#store.database
-      .prepare('SELECT enabled, switch_generation FROM event_settings WHERE singleton = 1')
-      .get() as { enabled: number; switch_generation: number } | undefined;
-    const revoked = this.#store.database
-      .prepare('SELECT 1 AS present FROM account_revocations WHERE account_id = ? AND revoked_at >= ?')
-      .get(this.#mailbox.accountId, snapshot.startedAt);
-    // A rule set that changed under the scan (a tightening, a swap, a revocation, a new activation) makes the scan
-    // stale: it would mark occurrences complete that a version it never fanned to is now owed.
-    if (
-      settings === undefined ||
-      settings.enabled !== snapshot.enabled ||
-      settings.switch_generation !== snapshot.generation ||
-      revoked !== undefined ||
-      this.#ruleSet() !== snapshot.rules
-    ) {
-      throw new StaleScanError();
+    try {
+      // A rule set that changed under the scan (a tightening, a swap, a revocation, a new activation) makes the scan
+      // stale: it would mark occurrences complete that a version it never fanned to is now owed. The same source
+      // fence also catches a claimed first/new-only baseline that appeared while a provider call was in flight.
+      assertSourceWriteStillLive(
+        this.#store.database,
+        { source: 'gmail', accountId: this.#mailbox.accountId, scopeId: 'mailbox' },
+        snapshot,
+        this.#rules,
+      );
+    } catch (error) {
+      if (error instanceof StaleSourceWriteError) {
+        throw new StaleScanError();
+      }
+      throw error;
     }
   }
 
@@ -290,9 +452,15 @@ export class GmailSourceWorker {
       rules: this.#ruleSet(),
     };
     try {
-      // D12's activation-completion scope fence (see isMailboxFenced): the mailbox lock covers the getProfile-to-
+      // D12's activation-completion scope fence: the mailbox lock covers the getProfile-to-
       // baseline step, and the durable baseline fences this mailbox from then until the point is installed.
-      if (isMailboxFenced(this.#store.database, this.#mailbox.accountId))
+      if (
+        isSourceScopeFenced(this.#store.database, {
+          source: 'gmail',
+          accountId: this.#mailbox.accountId,
+          scopeId: 'mailbox',
+        })
+      )
         return { cursor: this.#cursor(), pending: true };
       return await this.#scanFromSnapshot();
     } catch (error) {
@@ -389,6 +557,7 @@ export class GmailSourceWorker {
       const outcome = await this.#processPage({
         id: row.id,
         value: await this.#decryptStage(row.encrypted_record, row.id),
+        encryptedRecord: row.encrypted_record,
       });
       if (outcome !== 'terminal') return false;
     }
@@ -404,34 +573,38 @@ export class GmailSourceWorker {
     if (this.#decryptStage === undefined)
       throw new CommsError('CONFIG', 'the Gmail source worker needs its stage decryptor to resume a durable page');
     await this.#assertAllRules();
-    return { id, value: await this.#decryptStage(existing.encrypted_record, id) };
+    return {
+      id,
+      value: await this.#decryptStage(existing.encrypted_record, id),
+      encryptedRecord: existing.encrypted_record,
+    };
   }
 
-  async #stagePage(id: string, cursorBefore: string, page: StoredHistoryPage['page']): Promise<StagedPage> {
+  async #stagePage(id: string, cursorBefore: string, page: GmailStoredHistoryPage['page']): Promise<StagedPage> {
     const resumed = await this.#resumeStage(id);
     if (resumed !== null) return resumed;
     const stagedAt = this.#now();
-    const value: StoredHistoryPage = {
+    const value: GmailStoredHistoryPage = {
       cursorBefore,
       page: jsonClone(page),
       stagedObservedAt: new Date(stagedAt).toISOString(),
       messageStates: {},
     };
     const encrypted = await this.#encryptStage(value, id);
-    const expiresAt = stagedAt + this.#shortestRetention();
     await this.#commit(() => {
       // A page is kept only for the rule versions still live when it is written: one revoked during the provider call
       // or the encryption owes it nothing, and a page no live version owes would have nothing to resume or purge it.
       // A revoked version keeps its immutable row as `revoked`, so a revocation during the await is visible here.
       const live = this.#rules().filter((rule) => !isRevokedVersion(this.#store, rule.ruleId, rule.ruleVersion));
       if (live.length === 0) throw new StaleScanError();
+      const retention = sourceStageRetentionForDebts(stagedAt, live);
       this.#store.database
         .prepare(
           `INSERT OR IGNORE INTO source_scan_state
            (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at)
            VALUES (?, 'gmail', ?, 'mailbox', ?, ?, ?, ?)`,
         )
-        .run(id, this.#mailbox.accountId, stagedAt, expiresAt, encrypted, stagedAt);
+        .run(id, this.#mailbox.accountId, retention.stagedAt, retention.stageExpiresAt, encrypted, stagedAt);
       for (const rule of live) {
         this.#store.database
           .prepare(
@@ -442,41 +615,55 @@ export class GmailSourceWorker {
       }
     });
     await this.#onPageStaged?.(id);
-    return { id, value };
-  }
-
-  #shortestRetention(): number {
-    const durations = this.#rules()
-      .map((rule) => rule.ingestRetentionMs)
-      .filter((value) => value > 0);
-    if (durations.length === 0) return 86_400_000;
-    return Math.min(...durations);
+    return { id, value, encryptedRecord: encrypted };
   }
 
   async #processPage(stage: StagedPage): Promise<'terminal' | 'pending' | 'held'> {
-    if (this.#expired(stage.id)) {
-      await this.#terminaliseExpired(stage);
+    if (isExpiredGmailHistoryContinuation(stage.value)) {
+      await this.#commit(() => {
+        this.#store.database.prepare('DELETE FROM source_scan_state WHERE id = ?').run(stage.id);
+      });
       return 'terminal';
     }
-    const occurrences = occurrencesFromHistory(stage.value.page as Parameters<typeof occurrencesFromHistory>[0]);
+    const contentStage = stage as StagedPage<GmailStoredHistoryPage>;
+    if (this.#expired(contentStage.id)) {
+      const terminalisation = await this.#terminaliseExpired(contentStage);
+      if (!terminalisation.drainRecorded) {
+        await this.#replacementDrains?.markPageDrained({
+          accountId: this.#mailbox.accountId,
+          historyId: contentStage.value.page.historyId,
+        });
+      }
+      if (terminalisation.terminalised) {
+        // The worker has reached this page in its chain, so it can consume the continuation just written by the
+        // common transition. A crash before this transaction leaves that continuation for the next scan instead.
+        await this.#commit(() => {
+          this.#store.database
+            .prepare('DELETE FROM source_scan_state WHERE id = ? AND stage_expires_at IS NULL')
+            .run(contentStage.id);
+        });
+      }
+      return 'terminal';
+    }
+    const occurrences = occurrencesFromHistory(contentStage.value.page as Parameters<typeof occurrencesFromHistory>[0]);
     let held = false;
     for (const occurrence of occurrences) {
-      if (stage.value.completedOccurrenceKeys?.includes(this.#occurrenceKey(occurrence))) continue;
-      const outcome = await this.#processOccurrence(occurrence, stage);
+      if (contentStage.value.completedOccurrenceKeys?.includes(this.#occurrenceKey(occurrence))) continue;
+      const outcome = await this.#processOccurrence(occurrence, contentStage);
       if (outcome === 'pending') return 'pending';
       if (outcome === 'held') {
         held = true;
         continue;
       }
-      await this.#markOccurrenceComplete(stage, occurrence);
+      await this.#markOccurrenceComplete(contentStage, occurrence);
     }
     await this.#replacementDrains?.markPageDrained({
       accountId: this.#mailbox.accountId,
-      historyId: stage.value.page.historyId,
+      historyId: contentStage.value.page.historyId,
     });
     if (held) return 'held';
     await this.#commit(() => {
-      this.#store.database.prepare('DELETE FROM source_scan_state WHERE id = ?').run(stage.id);
+      this.#store.database.prepare('DELETE FROM source_scan_state WHERE id = ?').run(contentStage.id);
     });
     return 'terminal';
   }
@@ -488,22 +675,38 @@ export class GmailSourceWorker {
     return row?.stage_expires_at !== null && row?.stage_expires_at !== undefined && row.stage_expires_at <= this.#now();
   }
 
-  async #terminaliseExpired(stage: StagedPage): Promise<void> {
+  async #terminaliseExpired(
+    stage: StagedPage<GmailStoredHistoryPage>,
+  ): Promise<{ readonly terminalised: boolean; readonly drainRecorded: boolean }> {
     const at = this.#now();
-    await this.#commit(() => {
-      for (const occurrence of occurrencesFromHistory(
-        stage.value.page as Parameters<typeof occurrencesFromHistory>[0],
-      )) {
-        this.#store.database
-          .prepare(
-            `INSERT OR IGNORE INTO source_occurrence_resolutions
-             (source, account_id, occurrence_key, outcome, resolved_at, error_code)
-             VALUES ('gmail', ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
-          )
-          .run(this.#mailbox.accountId, this.#occurrenceKey(occurrence), at);
-      }
-      this.#store.database.prepare('DELETE FROM source_scan_state WHERE id = ?').run(stage.id);
-    });
+    const drains = this.#replacementDrains;
+    const drainIntentIdsForPage = drains?.drainIntentIdsForPage;
+    const recordPageDrained = drains?.recordPageDrained;
+    const canRecordDrain = drainIntentIdsForPage !== undefined && recordPageDrained !== undefined;
+    const replacementDrains =
+      recordPageDrained === undefined ? undefined : { recordPageDrained: recordPageDrained.bind(drains) };
+    const drainIntentIds =
+      (await drainIntentIdsForPage?.({
+        accountId: this.#mailbox.accountId,
+        historyId: stage.value.page.historyId,
+      })) ?? [];
+    const continuationEncryptedRecord = await this.#encryptStage(
+      expiredGmailHistoryContinuation(stage.value),
+      stage.id,
+    );
+    const terminalised = this.#store.immediate(() =>
+      terminaliseExpiredGmailPage(this.#store.database, {
+        stageId: stage.id,
+        accountId: this.#mailbox.accountId,
+        page: stage.value.page,
+        encryptedRecord: stage.encryptedRecord,
+        continuationEncryptedRecord,
+        at,
+        drainIntentIds,
+        ...(replacementDrains === undefined ? {} : { replacementDrains }),
+      }),
+    );
+    return { terminalised, drainRecorded: terminalised && canRecordDrain };
   }
 
   async #terminaliseOccurrence(
@@ -524,7 +727,7 @@ export class GmailSourceWorker {
 
   async #processOccurrence(
     occurrence: GmailHistoryOccurrence,
-    stage: StagedPage,
+    stage: StagedPage<GmailStoredHistoryPage>,
   ): Promise<'terminal' | 'pending' | 'held'> {
     const candidates = this.#rules().filter((rule) =>
       occurrence.kind === 'labelled'
@@ -613,7 +816,7 @@ export class GmailSourceWorker {
 
   async #admitEvent(
     occurrence: GmailHistoryOccurrence,
-    stage: StagedPage,
+    stage: StagedPage<GmailStoredHistoryPage>,
     event: Record<string, unknown>,
     rule: GmailSourceRule,
   ): Promise<'terminal' | 'pending'> {
@@ -643,7 +846,10 @@ export class GmailSourceWorker {
     });
   }
 
-  async #markOccurrenceComplete(stage: StagedPage, occurrence: GmailHistoryOccurrence): Promise<void> {
+  async #markOccurrenceComplete(
+    stage: StagedPage<GmailStoredHistoryPage>,
+    occurrence: GmailHistoryOccurrence,
+  ): Promise<void> {
     const completedOccurrenceKeys = [...(stage.value.completedOccurrenceKeys ?? []), this.#occurrenceKey(occurrence)];
     await this.#persistStage(stage, { ...stage.value, completedOccurrenceKeys });
   }
@@ -654,7 +860,7 @@ export class GmailSourceWorker {
 
   async #eventFor(
     occurrence: GmailHistoryOccurrence,
-    stage: StagedPage,
+    stage: StagedPage<GmailStoredHistoryPage>,
     candidates: readonly GmailSourceRule[],
   ): Promise<Record<string, unknown> | null | undefined> {
     if (occurrence.kind === 'labelled') {
@@ -700,7 +906,7 @@ export class GmailSourceWorker {
     };
   }
 
-  #messageState(value: StoredHistoryPage, occurrence: GmailHistoryOccurrence): StoredMessageState {
+  #messageState(value: GmailStoredHistoryPage, occurrence: GmailHistoryOccurrence): StoredMessageState {
     return value.messageStates[this.#occurrenceKey(occurrence)] ?? {};
   }
 
@@ -710,7 +916,7 @@ export class GmailSourceWorker {
    */
   async #metadataFor(
     occurrence: GmailHistoryOccurrence,
-    stage: StagedPage,
+    stage: StagedPage<GmailStoredHistoryPage>,
   ): Promise<GmailEventMessageMetadata | null | undefined> {
     const current = this.#messageState(stage.value, occurrence);
     if (current.metadata !== undefined) return current.metadata;
@@ -729,7 +935,7 @@ export class GmailSourceWorker {
     await this.#accountLive();
     try {
       const metadata = normaliseGmailEventMetadata(await this.#source.getMessageMetadata(occurrence.messageId));
-      const next: StoredHistoryPage = {
+      const next: GmailStoredHistoryPage = {
         ...stage.value,
         messageStates: {
           ...stage.value.messageStates,
@@ -755,7 +961,7 @@ export class GmailSourceWorker {
           retryJitter(this.#occurrenceKey(occurrence), attempts),
         horizon,
       );
-      const next: StoredHistoryPage = {
+      const next: GmailStoredHistoryPage = {
         ...stage.value,
         messageStates: {
           ...stage.value.messageStates,
@@ -779,7 +985,7 @@ export class GmailSourceWorker {
     return row?.stage_expires_at ?? null;
   }
 
-  async #persistStage(stage: StagedPage, value: StoredHistoryPage): Promise<void> {
+  async #persistStage(stage: StagedPage<GmailStoredHistoryPage>, value: GmailStoredHistoryPage): Promise<void> {
     const encrypted = await this.#encryptStage(value, stage.id);
     const now = this.#now();
     await this.#commit(() => {
@@ -788,6 +994,7 @@ export class GmailSourceWorker {
         .run(encrypted, now, stage.id);
     });
     stage.value = value;
+    stage.encryptedRecord = encrypted;
   }
 
   async #terminaliseUnresolvableMetadata(occurrence: GmailHistoryOccurrence, errorCode: string): Promise<void> {
@@ -934,6 +1141,6 @@ export class GmailSourceWorker {
   }
 
   #occurrenceKey(occurrence: GmailHistoryOccurrence): string {
-    return `${occurrence.historyRecordId}:${occurrence.kind}:${occurrence.messageId}`;
+    return gmailOccurrenceKey(occurrence);
   }
 }

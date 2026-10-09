@@ -48,12 +48,14 @@ export type ErrorCode =
   | 'REPLY_INVALID'
   | 'NOT_FOUND'
   | 'PROVIDER_UNAVAILABLE'
+  | 'SOURCE_UNAVAILABLE'
   | 'SECRET_STORE_UNAVAILABLE'
   | 'TRANSIENT'
   | 'KEYCHAIN_APPROVAL_PENDING'
   | 'LOCK_TIMEOUT'
   | 'AUTH_REQUIRED'
   | 'SCOPE_MISSING'
+  | 'WHATSAPP_VISIBILITY_SEAM_REQUIRED'
   | 'CONFIG';
 
 export const ERROR_REGISTRY: Readonly<Record<ErrorCode, ErrorSpec>> = {
@@ -107,6 +109,11 @@ export const ERROR_REGISTRY: Readonly<Record<ErrorCode, ErrorSpec>> = {
   REPLY_INVALID: { exit: EXIT_CODES.BAD_DATA, retryable: false, summary: 'the reply would not thread correctly' },
   NOT_FOUND: { exit: EXIT_CODES.NOT_FOUND, retryable: false, summary: 'not found' },
   PROVIDER_UNAVAILABLE: { exit: EXIT_CODES.UNAVAILABLE, retryable: true, summary: 'the mail provider is unavailable' },
+  SOURCE_UNAVAILABLE: {
+    exit: EXIT_CODES.UNAVAILABLE,
+    retryable: false,
+    summary: 'the selected local event source is unavailable',
+  },
   SECRET_STORE_UNAVAILABLE: {
     exit: EXIT_CODES.UNAVAILABLE,
     retryable: false,
@@ -121,6 +128,11 @@ export const ERROR_REGISTRY: Readonly<Record<ErrorCode, ErrorSpec>> = {
   LOCK_TIMEOUT: { exit: EXIT_CODES.TRANSIENT, retryable: true, summary: 'another process is busy with the same file' },
   AUTH_REQUIRED: { exit: EXIT_CODES.AUTH, retryable: false, summary: 'the inbox must be authorised again' },
   SCOPE_MISSING: { exit: EXIT_CODES.AUTH, retryable: false, summary: 'the inbox was not granted this permission' },
+  WHATSAPP_VISIBILITY_SEAM_REQUIRED: {
+    exit: EXIT_CODES.CONFIG,
+    retryable: false,
+    summary: 'the WhatsApp event visibility fence is unavailable',
+  },
   CONFIG: { exit: EXIT_CODES.CONFIG, retryable: false, summary: 'a configuration problem' },
 };
 

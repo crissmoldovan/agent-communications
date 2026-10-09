@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ACCOUNT_ID_PATTERN, CommsError, withFileLock, writeFileAtomic } from '@agentcomms/core';
+import { ACCOUNT_ID_PATTERN, CommsError, canonicalJson, withFileLock, writeFileAtomic } from '@agentcomms/core';
 import { z } from 'zod';
 import { CHAT_ID } from './chat-ref.ts';
 import type { ChatLists } from './visibility.ts';
@@ -97,6 +98,24 @@ export class ChatListStore {
   /** One account's lists; none when the account has no entry. */
   async of(accountId: string): Promise<ChatLists> {
     return entryOf(await this.#load(), accountId);
+  }
+
+  /**
+   * Reads the live list while holding the same inter-process gate as allow/deny/clear.  Event consumers get the
+   * parsed policy and its canonical digest, never a second mutable copy of the list file.
+   */
+  async withCurrent<T>(
+    accountId: string,
+    work: (current: Readonly<{ version: 1; lists: ChatLists; digest: string }>) => Promise<T> | T,
+  ): Promise<T> {
+    return withFileLock(this.#lockPath, async () => {
+      const file = await this.#load();
+      const lists = entryOf(file, accountId);
+      const digest = createHash('sha256')
+        .update(canonicalJson({ allow: [...lists.allow], deny: [...lists.deny] }), 'utf8')
+        .digest('hex');
+      return work({ version: file.version, lists, digest });
+    });
   }
 
   /** Changes one account's lists under the file's lock; an account left with neither list has no entry. */

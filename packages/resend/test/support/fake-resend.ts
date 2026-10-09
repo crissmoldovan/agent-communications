@@ -84,6 +84,9 @@ export interface FakeReceived {
 
 export interface FakeResend {
   readonly requests: SeenRequest[];
+  /** Deterministic provider clock for received/sent fixtures; it never affects the host clock. */
+  readonly now: () => number;
+  setNow(value: number): void;
   readonly keys: Map<string, FakeKey>;
   domains: FakeDomain[];
   readonly sent: FakeSent[];
@@ -128,8 +131,13 @@ function list<T>(items: T[], query: URLSearchParams, idOf: (item: T) => string):
 export async function startFakeResend(): Promise<FakeResend> {
   const requests: SeenRequest[] = [];
   const idempotency = new Map<string, { hash: string; reply: Reply }>();
+  let now = Date.now();
   const fake: FakeResend = {
     requests,
+    now: () => now,
+    setNow: (value) => {
+      now = value;
+    },
     keys: new Map(),
     domains: [],
     sent: [],
@@ -250,7 +258,7 @@ export async function startFakeResend(): Promise<FakeResend> {
         html: typeof body.html === 'string' ? body.html : null,
         last_event: body.scheduled_at ? 'scheduled' : 'delivered',
         scheduled_at: typeof body.scheduled_at === 'string' ? body.scheduled_at : null,
-        created_at: new Date().toISOString(),
+        created_at: new Date(now).toISOString(),
         message_id: `<${randomUUID()}@example.test>`,
         tags: (body.tags as { name: string; value: string }[]) ?? [],
         headers: (body.headers as Record<string, string>) ?? {},

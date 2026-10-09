@@ -24,4 +24,16 @@ export {
  */
 export { PACKAGE_NAME, RESEND_CALLER } from './caller.ts';
 export { createResendMcpServer, type ResendMcpOptions, type ResendMcpServer } from './mcp/server.ts';
+export {
+  createResendEventReader,
+  createResendEventReaderForPaths,
+  normaliseResendEventBody,
+  type ResendEventAddress,
+  type ResendEventAuthentication,
+  type ResendEventReader,
+  type ResendEventReceivedAttachment,
+  type ResendEventReceivedCandidate,
+  type ResendEventReceivedListItem,
+  type ResendEventSentItem,
+} from './operations/events.ts';
 export { VERSION };
