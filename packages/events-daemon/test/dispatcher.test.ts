@@ -539,6 +539,43 @@ test("CAP-B1: a lowered cap counts the rule's whole rolling window, earlier vers
   }
 });
 
+test('CAP-B2: a v1 delivery cannot exceed the lower cap of the current active rule version', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    const v1 = canonicalJson({ ...rule, deliveryRateCap: 2 });
+    const v2 = canonicalJson({ ...rule, version: 2, deliveryRateCap: 1 });
+    setup.store.database
+      .prepare("UPDATE rule_versions SET document = ?, digest = ?, state = 'superseded' WHERE id = 'rule-dispatch@1'")
+      .run(v1, sha256Hex(v1));
+    setup.store.database
+      .prepare(
+        `INSERT INTO rule_versions
+         (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+         VALUES (?, ?, ?, ?, ?, 'active', 'approval', 'activation', 2)`,
+      )
+      .run('rule-dispatch@2', rule.ruleId, 2, v2, sha256Hex(v2));
+    setup.store.database
+      .prepare(
+        `INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
+         VALUES ('rule', ?, 2, NULL, 2)`,
+      )
+      .run(rule.ruleId);
+
+    setup.insert('v1-charged');
+    setup.insert('v1-refused');
+    assert.deepEqual(await setup.dispatcher().dispatch('v1-charged'), { state: 'delivered', deliveryId: 'v1-charged' });
+    assert.deepEqual(await setup.dispatcher().dispatch('v1-refused'), {
+      state: 'waiting-cap',
+      deliveryId: 'v1-refused',
+    });
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
 test('RET-B1: the sweep purges an expired projection with its content-free retention-expired decision (D8)', {
   skip: WINDOWS_SKIP,
 }, async () => {

@@ -664,6 +664,116 @@ test('B2-T3: reconciliation removes only expired retired generations after their
   }
 });
 
+test('SEC-B2: webhook and SSE bearer overlap generations are limited to five minutes', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-secret-overlap-'));
+  const now = 1_700_000_000_000;
+  const originalNow = Date.now;
+  Date.now = () => now;
+  try {
+    const opened = await openEventDatabase({ stateDir });
+    try {
+      const target = { kind: 'target' as const, id: 'target-overlap', version: 1, digest: '5'.repeat(64) };
+      const subscriber = { kind: 'subscriber' as const, id: 'subscriber-overlap', version: 1, digest: '6'.repeat(64) };
+      opened.database
+        .prepare('INSERT INTO target_versions (id, target_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
+        .run('target-overlap@1', target.id, target.version, '{}', target.digest);
+      opened.database
+        .prepare(
+          'INSERT INTO subscriber_versions (id, subscriber_id, version, document, digest) VALUES (?, ?, ?, ?, ?)',
+        )
+        .run('subscriber-overlap@1', subscriber.id, subscriber.version, '{}', subscriber.digest);
+      const file = new MemorySecretStore('file');
+      await selectEventSecretStore(opened.database, 'file');
+      const secrets = await openEventSecretStore({
+        database: opened.database,
+        paths: opened.paths,
+        configDir: '/srv/test',
+        stores: { file },
+      });
+      const cipher = new EventRecordCipher(opened.database, secrets);
+
+      const signing = await storeEventSecretGeneration({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher,
+        owner: target,
+        purpose: 'webhook-signing',
+        material: 'signing-current',
+        expectedPriorGeneration: null,
+      });
+      await assert.rejects(
+        storeEventSecretGeneration({
+          database: opened.database,
+          paths: opened.paths,
+          store: secrets,
+          cipher,
+          owner: target,
+          purpose: 'webhook-signing',
+          material: 'signing-too-long',
+          expectedPriorGeneration: signing.generation,
+          overlapExpiresAt: now + 5 * 60_000 + 1,
+        }),
+        (error: unknown) => error instanceof Error && 'code' in error && error.code === 'EVENT_SECRET_REFERENCE',
+      );
+      await storeEventSecretGeneration({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher,
+        owner: target,
+        purpose: 'webhook-signing',
+        material: 'signing-next',
+        expectedPriorGeneration: signing.generation,
+        overlapExpiresAt: now + 5 * 60_000,
+      });
+
+      const bearer = await storeEventSecretGeneration({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher,
+        owner: subscriber,
+        purpose: 'sse-bearer',
+        material: 'bearer-current',
+        expectedPriorGeneration: null,
+      });
+      await assert.rejects(
+        storeEventSecretGeneration({
+          database: opened.database,
+          paths: opened.paths,
+          store: secrets,
+          cipher,
+          owner: subscriber,
+          purpose: 'sse-bearer',
+          material: 'bearer-too-long',
+          expectedPriorGeneration: bearer.generation,
+          overlapExpiresAt: now + 5 * 60_000 + 1,
+        }),
+        (error: unknown) => error instanceof Error && 'code' in error && error.code === 'EVENT_SECRET_REFERENCE',
+      );
+      await storeEventSecretGeneration({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher,
+        owner: subscriber,
+        purpose: 'sse-bearer',
+        material: 'bearer-next',
+        expectedPriorGeneration: bearer.generation,
+        overlapExpiresAt: now + 5 * 60_000,
+      });
+    } finally {
+      opened.close();
+    }
+  } finally {
+    Date.now = originalNow;
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('SEC-B1: the event-secret implementation never reads core configuration’s secret selector', async () => {
   const source = await readFile(new URL('../src/store/event-secrets.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /config\??\.secrets\??\.store/);

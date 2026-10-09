@@ -14,6 +14,35 @@ import { encodeAad } from '../src/store/aad.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
+async function resetFixture(id: string) {
+  const stateDir = await shortTempDir(`events-b2-reset-${id}-`);
+  const store = await openEventDatabase({ stateDir });
+  const targetId = `target-${id}`;
+  const ruleId = `rule-${id}`;
+  store.database.exec(
+    `INSERT INTO target_versions (id, target_id, version, document, digest)
+     VALUES ('${targetId}@1', '${targetId}', 1, '{}', 'digest');
+     INSERT INTO rule_versions
+       (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+     VALUES ('${ruleId}@1', '${ruleId}', 1, '{}', 'digest', 'active', 'approval', 'activation', 1);`,
+  );
+  addActiveRuleTargetReferences(store.database, {
+    ruleId,
+    ruleVersion: 1,
+    targets: [{ targetId, targetVersion: 1 }],
+    createdAt: 1,
+  });
+  createSystemResetOutbox(store, {
+    id,
+    resetEpoch: 1,
+    targetId,
+    targetVersion: 1,
+    encryptedRecord: Buffer.from('fixed reset bytes'),
+    createdAt: 1,
+  });
+  return { stateDir, store, targetId };
+}
+
 test('B2-T4: reset work is cap-free system work with a dedicated AAD and preserves the B1 local notice link', {
   skip: WINDOWS_SKIP,
 }, async () => {
@@ -185,5 +214,153 @@ test('B2-T5: reset recovery replaces the attempt token without creating an ordin
   } finally {
     store.close();
     await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('RST-B2: expiry at claim purges reset bytes and degrades its closed barrier', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await resetFixture('expiry');
+  const now = 1 + SYSTEM_RESET_RETENTION_MS;
+  try {
+    assert.deepEqual(
+      claimSystemResetOutbox({
+        store: setup.store,
+        outboxId: 'expiry',
+        now,
+        leaseMs: 10,
+        newAttemptId: () => 'attempt',
+        newLeaseToken: () => 'token',
+      }),
+      { kind: 'expired' },
+    );
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare("SELECT state, encrypted_record FROM system_reset_outbox WHERE id = 'expiry'")
+          .get() as Record<string, unknown>),
+      },
+      { state: 'retention-expired', encrypted_record: null },
+    );
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare("SELECT state, degraded_at FROM reset_barriers WHERE system_outbox_id = 'expiry'")
+          .get() as Record<string, unknown>),
+      },
+      { state: 'degraded', degraded_at: now },
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('RST-B2: a reset completion after its deadline expires and degrades instead of opening the barrier', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await resetFixture('late-completion');
+  const now = 1 + SYSTEM_RESET_RETENTION_MS;
+  try {
+    const claimed = claimSystemResetOutbox({
+      store: setup.store,
+      outboxId: 'late-completion',
+      now: 2,
+      leaseMs: 10,
+      newAttemptId: () => 'attempt',
+      newLeaseToken: () => 'token',
+    });
+    assert.equal(claimed.kind, 'claimed');
+    assert.equal(completeSystemResetClaim(setup.store, claimed.claim, { state: 'delivered', now }), true);
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare("SELECT state, encrypted_record FROM system_reset_outbox WHERE id = 'late-completion'")
+          .get() as Record<string, unknown>),
+      },
+      { state: 'retention-expired', encrypted_record: null },
+    );
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare("SELECT state, degraded_at FROM reset_barriers WHERE system_outbox_id = 'late-completion'")
+          .get() as Record<string, unknown>),
+      },
+      { state: 'degraded', degraded_at: now },
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('RST-B2: reset attempt exhaustion purges bytes and degrades its closed barrier', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await resetFixture('exhausted');
+  const now = 2;
+  try {
+    setup.store.database.prepare("UPDATE system_reset_outbox SET attempts = 20 WHERE id = 'exhausted'").run();
+    assert.deepEqual(
+      claimSystemResetOutbox({
+        store: setup.store,
+        outboxId: 'exhausted',
+        now,
+        leaseMs: 10,
+        newAttemptId: () => 'attempt',
+        newLeaseToken: () => 'token',
+      }),
+      { kind: 'terminal' },
+    );
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare("SELECT state, encrypted_record FROM system_reset_outbox WHERE id = 'exhausted'")
+          .get() as Record<string, unknown>),
+      },
+      { state: 'dead-lettered', encrypted_record: null },
+    );
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare("SELECT state, degraded_at FROM reset_barriers WHERE system_outbox_id = 'exhausted'")
+          .get() as Record<string, unknown>),
+      },
+      { state: 'degraded', degraded_at: now },
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('RST-B2: cancellation without a live target reference purges reset bytes', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await resetFixture('cancelled');
+  try {
+    setup.store.database.prepare('DELETE FROM target_version_references').run();
+    assert.deepEqual(
+      claimSystemResetOutbox({
+        store: setup.store,
+        outboxId: 'cancelled',
+        now: 2,
+        leaseMs: 10,
+        newAttemptId: () => 'attempt',
+        newLeaseToken: () => 'token',
+      }),
+      { kind: 'terminal' },
+    );
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare("SELECT state, encrypted_record FROM system_reset_outbox WHERE id = 'cancelled'")
+          .get() as Record<string, unknown>),
+      },
+      { state: 'cancelled', encrypted_record: null },
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
   }
 });

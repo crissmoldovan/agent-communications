@@ -4,13 +4,21 @@ import { execFileSync, spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { status } from '@agentcomms/events-daemon';
 
+if (globalThis[Symbol.for('agentcomms.events.loopback-seal.preloaded.v1')] !== true) {
+  throw new Error('the events-daemon consumer check requires the loopback seal preload');
+}
+
+const { status } = await import('@agentcomms/events-daemon');
 assert.deepEqual(await status(), { owner: 'not-running' });
 const dist = dirname(fileURLToPath(import.meta.resolve('@agentcomms/events-daemon')));
 const cli = join(dist, 'cli.mjs');
-const help = execFileSync(process.execPath, [cli, '--help'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-const result = execFileSync(process.execPath, [cli, '--json', 'status'], {
+const sealPath = fileURLToPath(new URL('./loopback-seal-preload.mjs', import.meta.url));
+const help = execFileSync(process.execPath, ['--import', sealPath, cli, '--help'], {
+  encoding: 'utf8',
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+const result = execFileSync(process.execPath, ['--import', sealPath, cli, '--json', 'status'], {
   encoding: 'utf8',
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -18,7 +26,10 @@ assert.match(help, /Usage: agent-events/);
 assert.equal(result, '{"owner":"not-running"}\n');
 
 function startMcp(command, args, env) {
-  const child = spawn(process.execPath, [command, ...args], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['--import', sealPath, command, ...args], {
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
   let stderr = '';
   let buffer = '';
   let nextId = 1;
@@ -88,7 +99,7 @@ if (process.platform !== 'win32') {
     NO_COLOR: '1',
   };
   let stderr = '';
-  const owner = spawn(process.execPath, [cli, '--state-dir', stateDir, 'run'], {
+  const owner = spawn(process.execPath, ['--import', sealPath, cli, '--state-dir', stateDir, 'run'], {
     env,
     stdio: ['ignore', 'ignore', 'pipe'],
   });
@@ -103,11 +114,15 @@ if (process.platform !== 'win32') {
     const deadline = Date.now() + 5_000;
     for (;;) {
       try {
-        const output = execFileSync(process.execPath, [cli, '--state-dir', stateDir, '--json', 'status'], {
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'pipe'],
-          env,
-        });
+        const output = execFileSync(
+          process.execPath,
+          ['--import', sealPath, cli, '--state-dir', stateDir, '--json', 'status'],
+          {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env,
+          },
+        );
         if (JSON.parse(output).owner === 'running') return;
       } catch {
         // The control socket appears only after the foreground owner has created its private state.
@@ -132,11 +147,15 @@ if (process.platform !== 'win32') {
     } finally {
       await mcp.close();
     }
-    const stopped = execFileSync(process.execPath, [cli, '--state-dir', stateDir, '--json', 'stop'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env,
-    });
+    const stopped = execFileSync(
+      process.execPath,
+      ['--import', sealPath, cli, '--state-dir', stateDir, '--json', 'stop'],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env,
+      },
+    );
     assert.equal(stopped, '{"stopping":true}\n');
     assert.equal(await exited, 0, stderr);
   } finally {

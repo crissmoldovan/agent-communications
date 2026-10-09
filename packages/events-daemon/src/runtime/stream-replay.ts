@@ -4,7 +4,7 @@ import type { EventRecordCipher } from '../store/records.ts';
 import { assertLiveGmailAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
 import { type ActiveDisclosableRequest, assertDisclosable } from './disclosure-fence.ts';
 import { PassThroughSseFrameVisibilityGate, type SseFrameVisibilityGate } from './phase-d-whatsapp-seam.ts';
-import { hasLiveSseLineage, type SealedSseFrameWrite, streamLocation } from './sse-dispatcher.ts';
+import { hasLiveSseLineage, type SealedSseFrameWrite, streamLocation, writeLiveSseFrame } from './sse-dispatcher.ts';
 
 /** Replay has its own writer entry point so Last-Event-ID frames cannot bypass the same synchronous D visibility seam. */
 export function writeReplaySseFrame(input: SealedSseFrameWrite): boolean {
@@ -67,6 +67,41 @@ export class StreamReplay {
     this.#fence = options.fence ?? assertDisclosable;
     this.#visibilityGate = options.visibilityGate ?? new PassThroughSseFrameVisibilityGate();
     this.#hasConcreteWhatsAppVisibilityFence = options.hasConcreteWhatsAppVisibilityFence ?? false;
+  }
+
+  /** The listener delegates its live writer here so replay and live frames share the same retained-content authority. */
+  async writeLive(input: {
+    readonly streamLogId: string;
+    readonly frame: string;
+    readonly isStreamCurrent: () => boolean;
+    readonly writeFrame: (frame: string) => void;
+  }): Promise<boolean> {
+    const row = this.#row(input.streamLogId);
+    if (row === undefined) return false;
+    try {
+      await this.#fence(this.#fenceRequest(row));
+      await assertLiveGmailAccount(this.#config, row.account_id);
+    } catch (error) {
+      if (isRemovedAccountError(error))
+        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, row.account_id, this.#now()));
+      return false;
+    }
+    let written = false;
+    const accepted = writeLiveSseFrame({
+      frame: input.frame,
+      accountId: row.account_id,
+      whatsappMessageId: row.whatsapp_message_id,
+      visibilityGate: this.#visibilityGate,
+      hasConcreteWhatsAppVisibilityFence: this.#hasConcreteWhatsAppVisibilityFence,
+      writeFrame: (frame) => {
+        this.#store.immediate(() => {
+          if (!this.#isFrameCurrent(row) || !input.isStreamCurrent()) return;
+          input.writeFrame(frame);
+          written = true;
+        });
+      },
+    });
+    return accepted && written;
   }
 
   async replay(input: {
@@ -156,30 +191,43 @@ export class StreamReplay {
       ) as unknown as StreamLogRow[];
   }
 
+  #row(id: string): StreamLogRow | undefined {
+    return this.#store.database
+      .prepare(
+        `SELECT id, rule_id, rule_version, target_id, target_version, subscriber_id, subscriber_version, account_id,
+                whatsapp_message_id, encrypted_record, delivered_at, expires_at, switch_generation
+         FROM stream_log WHERE id = ?`,
+      )
+      .get(id) as StreamLogRow | undefined;
+  }
+
   #isFrameCurrent(row: StreamLogRow): boolean {
-    if (row.expires_at <= this.#now()) {
-      this.#store.database.prepare('DELETE FROM stream_log WHERE id = ? AND expires_at <= ?').run(row.id, this.#now());
+    const current = this.#row(row.id);
+    if (current === undefined) return false;
+    const now = this.#now();
+    if (current.expires_at <= now) {
+      this.#store.database.prepare('DELETE FROM stream_log WHERE id = ? AND expires_at <= ?').run(current.id, now);
       return false;
     }
     const settings = this.#store.database
       .prepare('SELECT enabled, paused, switch_generation FROM event_settings WHERE singleton = 1')
       .get() as { enabled: number; paused: number; switch_generation: number } | undefined;
-    if (settings?.enabled !== 1 || settings.paused === 1 || settings.switch_generation !== row.switch_generation)
+    if (settings?.enabled !== 1 || settings.paused === 1 || settings.switch_generation !== current.switch_generation)
       return false;
     return hasLiveSseLineage(this.#store, {
-      id: row.id,
+      id: current.id,
       decision_id: '',
-      account_id: row.account_id,
-      rule_id: row.rule_id,
-      rule_version: row.rule_version,
-      target_id: row.target_id,
-      target_version: row.target_version,
-      subscriber_id: row.subscriber_id,
-      subscriber_version: row.subscriber_version,
+      account_id: current.account_id,
+      rule_id: current.rule_id,
+      rule_version: current.rule_version,
+      target_id: current.target_id,
+      target_version: current.target_version,
+      subscriber_id: current.subscriber_id,
+      subscriber_version: current.subscriber_version,
       target_kind: 'sse',
       encrypted_record: null,
-      expires_at: row.expires_at,
-      switch_generation: row.switch_generation,
+      expires_at: current.expires_at,
+      switch_generation: current.switch_generation,
       event_id: '',
     });
   }

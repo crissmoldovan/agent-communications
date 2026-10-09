@@ -225,6 +225,13 @@ async function main() {
       join(consumer, 'package.json'),
       JSON.stringify({ name: 'consumer', private: true, type: 'module' }),
     );
+    const sealedDaemonConsumer = manifest.name === '@agentcomms/events-daemon';
+    if (sealedDaemonConsumer) {
+      await copyFile(
+        fileURLToPath(new URL('../test/helpers/loopback-seal-preload.mjs', import.meta.url)),
+        join(consumer, 'loopback-seal-preload.mjs'),
+      );
+    }
     const registry = await refusingRegistry();
     const install = (tarballs) =>
       runAsync(
@@ -264,12 +271,17 @@ async function main() {
     }
     const check = await readFile(join(packageDir, 'test', 'consumer-check.mjs'), 'utf8');
     await writeFile(join(consumer, 'consumer-check.mjs'), check);
-    const output = run(process.execPath, ['consumer-check.mjs'], consumer, {
-      AGENT_COMMS_CONFIG_DIR: join(tempRoot, 'config'),
-      // The daily update check, off: a consumer check runs every command it tries against a temporary configuration,
-      // and none of them asks the real npm registry or stops for a release (design 2026-09-28).
-      AGENT_COMMS_UPDATE_CHECK: 'off',
-    });
+    const output = run(
+      process.execPath,
+      sealedDaemonConsumer ? ['--import', './loopback-seal-preload.mjs', 'consumer-check.mjs'] : ['consumer-check.mjs'],
+      consumer,
+      {
+        AGENT_COMMS_CONFIG_DIR: join(tempRoot, 'config'),
+        // The daily update check, off: a consumer check runs every command it tries against a temporary configuration,
+        // and none of them asks the real npm registry or stops for a release (design 2026-09-28).
+        AGENT_COMMS_UPDATE_CHECK: 'off',
+      },
+    );
     process.stdout.write(output);
     /*
      * A check proves itself by its last line, not by its exit code.
