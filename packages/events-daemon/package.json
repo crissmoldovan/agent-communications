@@ -41,7 +41,10 @@
   "dependencies": {
     "@agentcomms/core": "workspace:*",
     "@agentcomms/events": "workspace:*",
-    "@agentcomms/gmail": "workspace:*"
+    "@agentcomms/gmail": "workspace:*",
+    "@agentcomms/resend": "workspace:*",
+    "@agentcomms/slack": "workspace:*",
+    "@agentcomms/whatsapp": "workspace:*"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.0.0",

@@ -33,6 +33,8 @@ export interface ProjectionReference {
   readonly ruleVersion: number;
   readonly decisionDeadline: number;
   readonly encryptedProjection: Uint8Array;
+  readonly whatsappMessageId: string | null;
+  readonly whatsappVisibilityVersion: number | null;
 }
 
 function decodePointer(pointer: string): readonly string[] {
@@ -71,15 +73,11 @@ function mappingPointers(node: unknown, into: Set<string>): void {
 
 /** Retains only the exact rule's condition/mapping fields plus CloudEvent's structural fields, never a shared full event. */
 export function minimiseProjection(rule: CanonicalFullRuleDocument, event: Record<string, unknown>): StoredProjection {
-  const pointers = new Set<string>([
-    '/id',
-    '/type',
-    '/version',
-    '/occurredAt',
-    '/observedAt',
-    '/account/id',
-    '/messageId',
-  ]);
+  const definition = catalogueEntry(rule.event.type, rule.event.version);
+  if (!definition.ok)
+    throw new Error(definition.issues[0]?.message ?? 'the projection event definition is unavailable');
+  const pointers = new Set<string>(['/id', '/type', '/version', '/occurredAt', '/observedAt', '/account/id']);
+  for (const pointer of definition.value.identityPointers) pointers.add(pointer);
   for (const pointer of conditionPointers(rule.condition)) pointers.add(pointer);
   mappingPointers(rule.mapping, pointers);
   const projection: Record<string, unknown> = {};
@@ -108,6 +106,8 @@ export class EventProjectionStore {
     readonly stageId?: string | undefined;
     /** D9: reads core's configuration for the event's account after the encryption; throws once it is gone. */
     readonly accountLive?: (() => Promise<void>) | undefined;
+    /** D6 identity carried with a WhatsApp projection into its decision and delivery rows. */
+    readonly whatsapp?: Readonly<{ messageId: string; visibilityVersion: number }> | undefined;
   }): Promise<boolean> {
     const exists = this.#store.database
       .prepare('SELECT 1 AS present FROM ingest_rules WHERE event_id = ? AND rule_id = ? AND rule_version = ?')
@@ -152,10 +152,20 @@ export class EventProjectionStore {
       if (settings?.enabled !== 1) return false;
       database
         .prepare(
-          `INSERT OR IGNORE INTO ingest_rules (event_id, rule_id, rule_version, decision_deadline, encrypted_projection)
-           VALUES (?, ?, ?, ?, ?)`,
+          `INSERT OR IGNORE INTO ingest_rules
+            (event_id, rule_id, rule_version, decision_deadline, encrypted_projection,
+             whatsapp_visibility_version, whatsapp_message_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(input.eventId, input.rule.ruleId, input.rule.version, deadline, encrypted);
+        .run(
+          input.eventId,
+          input.rule.ruleId,
+          input.rule.version,
+          deadline,
+          encrypted,
+          input.whatsapp?.visibilityVersion ?? null,
+          input.whatsapp?.messageId ?? null,
+        );
       return true;
     });
   }
@@ -163,7 +173,8 @@ export class EventProjectionStore {
   row(eventId: string, ruleId: string, ruleVersion: number): ProjectionReference | null {
     const row = this.#store.database
       .prepare(
-        `SELECT event_id, rule_id, rule_version, decision_deadline, encrypted_projection
+        `SELECT event_id, rule_id, rule_version, decision_deadline, encrypted_projection,
+                whatsapp_message_id, whatsapp_visibility_version
          FROM ingest_rules WHERE event_id = ? AND rule_id = ? AND rule_version = ?`,
       )
       .get(eventId, ruleId, ruleVersion) as
@@ -173,6 +184,8 @@ export class EventProjectionStore {
           rule_version: number;
           decision_deadline: number;
           encrypted_projection: Uint8Array;
+          whatsapp_message_id: string | null;
+          whatsapp_visibility_version: number | null;
         }
       | undefined;
     return row === undefined
@@ -183,6 +196,8 @@ export class EventProjectionStore {
           ruleVersion: row.rule_version,
           decisionDeadline: row.decision_deadline,
           encryptedProjection: row.encrypted_projection,
+          whatsappMessageId: row.whatsapp_message_id,
+          whatsappVisibilityVersion: row.whatsapp_visibility_version,
         };
   }
 

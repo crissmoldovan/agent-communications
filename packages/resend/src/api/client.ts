@@ -1,7 +1,7 @@
 import { CommsError, type ErrorCode } from '@agentcomms/core';
 import { closedPermit, type FetchLike, guardResendRequests, type WritePermit } from './guard.ts';
 import { RESEND_API_ORIGIN, RESEND_DOWNLOAD_ORIGIN } from './routes.ts';
-import type { Throttle } from './throttle.ts';
+import type { Throttle, ThrottlePriority } from './throttle.ts';
 
 /**
  * One Resend call: through the throttle, through the guard, with Resend's failures turned into this repository's codes
@@ -171,6 +171,8 @@ export interface RequestOptions {
   body?: unknown;
   /** Only for the send: the approval id. */
   idempotencyKey?: string | undefined;
+  /** Event polling shares the machine throttle but yields fairly to interactive reads. */
+  throttlePriority?: ThrottlePriority | undefined;
 }
 
 /** One API request. Resolves to the parsed JSON body of a 2xx, or throws a `CommsError` whose text holds no key. */
@@ -194,7 +196,7 @@ export async function resendRequest<T>(
   if (options.idempotencyKey !== undefined) headers['idempotency-key'] = options.idempotencyKey;
 
   try {
-    await transport.throttle.before();
+    await transport.throttle.before(options.throttlePriority);
   } catch (error) {
     // Refused before anything left: for a write, that is certainly not sent.
     if (writing && error instanceof CommsError) {

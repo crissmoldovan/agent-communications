@@ -5,6 +5,7 @@ import {
   type ActivationDocumentV1,
   activationDocumentDigest,
   canonicalActivationDocument,
+  canonicalFullRuleDocument,
   disclosureBindingFor,
 } from '../src/domain/activation-documents.ts';
 import { disclosurePreviewFor } from '../src/domain/disclosure-preview.ts';
@@ -80,6 +81,76 @@ test('APR-B1: every standing-authority field mutation changes a rule document di
   assert.equal(reordered.kind, 'enable-all');
   reordered.ruleVersions = [...reordered.ruleVersions].reverse();
   assert.equal(activationDocumentDigest(reordered), activationDocumentDigest(enableAll.document));
+});
+
+test('D2/D4: canonical rule documents bind every Phase-D source option under its matching source channel', () => {
+  const sources = [
+    {
+      channel: 'gmail',
+      options: { channel: 'gmail', labels: 'inbox', includeSpamTrash: false },
+      eventType: 'gmail.message.received',
+    },
+    {
+      channel: 'slack',
+      options: { channel: 'slack', conversations: ['C00000001'] },
+      eventType: 'slack.message.posted',
+    },
+    {
+      channel: 'resend',
+      options: { channel: 'resend', kinds: ['received', 'status'] },
+      eventType: 'resend.email.received',
+    },
+    {
+      channel: 'whatsapp',
+      options: { channel: 'whatsapp', chats: 'all-allowed' },
+      eventType: 'whatsapp.message.received',
+    },
+  ] as const;
+  const common = {
+    ruleId: 'rule-source-variants',
+    version: 1,
+    event: { version: 1 },
+    condition: { path: '/id', op: 'exists' },
+    mapping: { constant: 'safe' },
+    targets: [{ targetId: 'target-source-variants', version: 1, kind: 'dry-run', retentionMs: 86_400_000 }],
+    subscribers: [],
+    judges: [],
+    deliveryRateCap: 60,
+    retention: {
+      ingestMs: 604_800_000,
+      holdMs: 604_800_000,
+      deliveryMs: 604_800_000,
+      dryrunMs: 86_400_000,
+      sseReplayMs: 604_800_000,
+      deadLetterMs: 604_800_000,
+      decisionMetadataMs: 7_776_000_000,
+    },
+  };
+  for (const source of sources) {
+    const canonical = canonicalFullRuleDocument({
+      ...common,
+      source: { channel: source.channel, accountIds: ['account-source-variants'], options: source.options },
+      event: { type: source.eventType, version: 1 },
+    });
+    assert.deepEqual(canonical.source, {
+      channel: source.channel,
+      accountIds: ['account-source-variants'],
+      options: source.options,
+    });
+  }
+  assert.throws(
+    () =>
+      canonicalFullRuleDocument({
+        ...common,
+        source: {
+          channel: 'slack',
+          accountIds: ['account-source-variants'],
+          options: { channel: 'gmail', labels: 'inbox', includeSpamTrash: false },
+        },
+        event: { type: 'slack.message.posted', version: 1 },
+      }),
+    /channel|source/i,
+  );
 });
 
 test('APR-B1: every standalone activation authority field is bound into its digest', async () => {

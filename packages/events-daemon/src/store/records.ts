@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import type { SourceOptions } from '../domain/source-options.ts';
 import { type AadComponent, encodeAad } from './aad.ts';
 import {
   decryptPackedRecord,
@@ -47,6 +48,54 @@ export interface RecordLayout {
   readonly column: string;
   readonly sqlColumn: string;
   readonly keyColumns: readonly string[];
+}
+
+/** A source/account pair is always explicit at the store boundary; aliases and provider objects never become keys. */
+export interface SourceAccountRecord {
+  readonly source: SourceOptions['channel'];
+  readonly accountId: string;
+}
+
+/** Typed D-owned state records keep provider cursors and raw identities out of untyped store calls. */
+export interface SlackReplyDrainRecord extends SourceAccountRecord {
+  readonly source: 'slack';
+  readonly intentId: string;
+  readonly conversationId: string;
+  readonly threadTs: string;
+  readonly cursor: string | null;
+  readonly coveredThrough: string;
+  readonly drainedAt: number | null;
+}
+
+export interface ResendStatusStateRecord extends SourceAccountRecord {
+  readonly source: 'resend';
+  readonly emailId: string;
+  readonly lastEvent:
+    | 'scheduled'
+    | 'sent'
+    | 'delivered'
+    | 'delivery_delayed'
+    | 'bounced'
+    | 'complained'
+    | 'opened'
+    | 'clicked'
+    | 'failed'
+    | 'suppressed'
+    | 'canceled'
+    | 'queued';
+  readonly observedAt: number;
+  readonly expiresAt: number;
+}
+
+export interface WhatsAppOccurrenceRecord extends SourceAccountRecord {
+  readonly source: 'whatsapp';
+  readonly messageId: string;
+  readonly firstSeenGeneration: number;
+  readonly firstSeenAt: number;
+  readonly visibilityVersion: number;
+  readonly stagedPayloadRef: string | null;
+  readonly stageExpiresAt: number | null;
+  readonly eventId: string | null;
 }
 
 /** Each encrypted column, with its table's primary key in the order the v1 migration declares it — the AAD order. */

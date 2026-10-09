@@ -330,6 +330,61 @@ test('the snapshot is a valid set of manifests, and narrowing is read off its da
   assert.equal(channelManifest('discord'), undefined);
 });
 
+test('D4: each event source manifest has strict typed event metadata and an explicit credential kind', () => {
+  const expected = {
+    gmail: {
+      types: ['gmail.message.received', 'gmail.message.sent', 'gmail.message.labelled'],
+      minimumIntervalMs: 60_000,
+      access: { kind: 'oauth-user', requiredScopes: ['https://www.googleapis.com/auth/gmail.readonly'] },
+    },
+    slack: {
+      types: ['slack.message.posted'],
+      minimumIntervalMs: 60_000,
+      access: {
+        kind: 'oauth-user',
+        requiredScopes: ['channels:history', 'groups:history', 'im:history', 'mpim:history'],
+      },
+    },
+    resend: {
+      types: ['resend.email.received', 'resend.email.status_changed'],
+      minimumIntervalMs: 60_000,
+      access: { kind: 'resend-full-access' },
+    },
+    whatsapp: {
+      types: ['whatsapp.message.received'],
+      minimumIntervalMs: 60_000,
+      access: { kind: 'local-store' },
+    },
+  } as const;
+  for (const [channel, events] of Object.entries(expected)) {
+    assert.deepEqual(channelManifest(channel)?.events, events, channel);
+  }
+
+  const cases: ReadonlyArray<readonly [string, (events: Record<string, unknown>) => void, RegExp]> = [
+    ['an unknown key', (events) => (events.extra = true), /events.*extra|Unrecognized key/i],
+    ['a zero interval', (events) => (events.minimumIntervalMs = 0), /minimumIntervalMs/i],
+    ['a non-integer interval', (events) => (events.minimumIntervalMs = 1.5), /minimumIntervalMs/i],
+    ['no types', (events) => (events.types = []), /types/i],
+    ['empty OAuth scopes', (events) => (events.access = { kind: 'oauth-user', requiredScopes: [] }), /requiredScopes/i],
+    [
+      'an incompatible access kind',
+      (events) => (events.access = { kind: 'local-store', requiredScopes: ['channels:history'] }),
+      /access|requiredScopes/i,
+    ],
+  ];
+  for (const [what, edit, expectedError] of cases) {
+    assert.match(
+      problemsAfter((entries) => {
+        const events = structuredClone(at(entries, 'slack').events) as Record<string, unknown>;
+        edit(events);
+        at(entries, 'slack').events = events;
+      }),
+      expectedError,
+      what,
+    );
+  }
+});
+
 /** The problems `parseChannelEntries` reports after `edit` is applied to the committed manifests. */
 function problemsAfter(edit: (entries: ReturnType<typeof valid>) => void): string {
   const entries = valid();

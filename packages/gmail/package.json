@@ -125,6 +125,20 @@
     ],
     "approve": "agent-gmail approve",
     "approvalGrouping": "draft",
+    "events": {
+      "types": [
+        "gmail.message.received",
+        "gmail.message.sent",
+        "gmail.message.labelled"
+      ],
+      "minimumIntervalMs": 60000,
+      "access": {
+        "kind": "oauth-user",
+        "requiredScopes": [
+          "https://www.googleapis.com/auth/gmail.readonly"
+        ]
+      }
+    },
     "skills": {
       "prefix": "gmail-",
       "contract": "skills/_shared/contract-gmail.md"

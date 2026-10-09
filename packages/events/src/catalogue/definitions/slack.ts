@@ -83,6 +83,7 @@ export const slackMessagePostedV1: DefinitionInternal<SlackMessagePostedV1, Reco
     { pattern: ['observedAt'], format: 'date-time' },
   ],
   invariants: [{ rule: 'slack-ts-instant', pointers: ['/ts', '/occurredAt'] }],
+  identityPointers: ['/channel/id', '/ts'],
   subject: (event) => `${event.channel.id}/${event.ts}`,
   dedupeKey: (event) => `${event.channel.id}/${event.ts}`,
   examples: [

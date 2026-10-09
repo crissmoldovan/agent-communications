@@ -30,6 +30,9 @@ test('PKG-B1-b: the local event daemon is a held service with its declared runti
     '@agentcomms/core': 'workspace:*',
     '@agentcomms/events': 'workspace:*',
     '@agentcomms/gmail': 'workspace:*',
+    '@agentcomms/resend': 'workspace:*',
+    '@agentcomms/slack': 'workspace:*',
+    '@agentcomms/whatsapp': 'workspace:*',
   });
   assert.deepEqual(manifest.files, ['dist', 'README.md', 'LICENSE', 'THIRD_PARTY_LICENSES']);
   assert.doesNotMatch(

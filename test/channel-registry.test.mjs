@@ -1137,15 +1137,16 @@ test('this checkout’s registry is the five channels, one held library, one hel
     REGISTRY.channels.map((channel) => channel.directory),
     ['core', 'gmail', 'resend', 'slack', 'whatsapp'],
   );
+  // Dependency order: the daemon depends on every source channel it reads (Phase D), so it comes after all of them.
   assert.deepEqual(REGISTRY.packages, [
     'core',
     'events',
     'gmail',
-    'events-daemon',
     'gmail-mcp',
     'resend',
     'slack',
     'whatsapp',
+    'events-daemon',
   ]);
   assert.deepEqual(REGISTRY.platforms, ['gmail', 'resend', 'slack', 'whatsapp']);
   assert.deepEqual(

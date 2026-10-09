@@ -2,7 +2,7 @@ import { type ApprovalStore, CommsError, type ConfigStore } from '@agentcomms/co
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import type { EventDatabase } from '../store/database.ts';
 import { fixedDeadline } from '../store/retention.ts';
-import { assertLiveGmailAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
+import { assertLiveEventAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
 import { commitDecisionOutbox, type DecisionFailpoint, StaleDecisionError } from './decisions.ts';
 import { prepareDeliveries } from './deliveries.ts';
 import type { ActiveDisclosableRequest, DisclosureSnapshot } from './disclosure-fence.ts';
@@ -79,6 +79,7 @@ export class EventEvaluator {
     readonly ruleVersion: number;
     readonly stagedAt: number;
     readonly stageId?: string | undefined;
+    readonly whatsapp?: Readonly<{ messageId: string; visibilityVersion: number }> | undefined;
   }): Promise<'terminal' | 'pending'> {
     const terminal = this.#store.database
       .prepare('SELECT 1 AS present FROM decisions WHERE event_id = ? AND rule_id = ? AND rule_version = ?')
@@ -97,9 +98,12 @@ export class EventEvaluator {
       event: input.event,
       stagedAt: input.stagedAt,
       stageId: input.stageId,
+      whatsapp: input.whatsapp,
       // D9: a source commit loads the live registry; a removal during the encryption refuses (the scan purges).
       accountLive:
-        config === undefined || accountId === undefined ? undefined : () => assertLiveGmailAccount(config, accountId),
+        config === undefined || accountId === undefined
+          ? undefined
+          : () => assertLiveEventAccount(config, { source: rule.source.channel, accountId }),
     });
     // Purged while it was being encrypted: there is nothing left to decide for this rule version.
     if (!kept) return 'terminal';
@@ -186,7 +190,13 @@ export class EventEvaluator {
       }
     } catch (error) {
       if (isRemovedAccountError(error)) {
-        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, ingest.account_id, this.#now()));
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            { source: rule.source.channel, accountId: ingest.account_id },
+            this.#now(),
+          ),
+        );
         return 'terminal';
       }
       if (error instanceof CommsError) return 'pending';
@@ -223,10 +233,16 @@ export class EventEvaluator {
     // taint flush is purged here, and its decision and deliveries are never written.
     if (this.#config !== undefined) {
       try {
-        await assertLiveGmailAccount(this.#config, ingest.account_id);
+        await assertLiveEventAccount(this.#config, { source: rule.source.channel, accountId: ingest.account_id });
       } catch (error) {
         if (!isRemovedAccountError(error)) throw error;
-        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, ingest.account_id, this.#now()));
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            { source: rule.source.channel, accountId: ingest.account_id },
+            this.#now(),
+          ),
+        );
         return 'terminal';
       }
     }
@@ -242,6 +258,9 @@ export class EventEvaluator {
           outcome,
           metadataExpiresAt: fixedDeadline(now, rule.retention.decisionMetadataMs),
           switchGeneration: authorised?.switchGeneration ?? this.#switchGeneration(),
+          ...(row.whatsappMessageId === null || row.whatsappVisibilityVersion === null
+            ? {}
+            : { whatsapp: { messageId: row.whatsappMessageId, visibilityVersion: row.whatsappVisibilityVersion } }),
           deliveries,
         },
         this.#failpoint,

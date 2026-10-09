@@ -48,16 +48,8 @@ function clock(start = Date.parse('2026-10-08T10:00:00.000Z')) {
 
 async function fixture(
   options: {
-    readonly encryptBaseline?: (
-      intentId: string,
-      accountId: string,
-      position: { readonly historyId: string },
-    ) => Promise<Uint8Array>;
-    readonly decryptBaseline?: (
-      intentId: string,
-      accountId: string,
-      stored: Uint8Array,
-    ) => Promise<{ readonly historyId: string }>;
+    readonly encryptBaseline?: (intentId: string, accountId: string, position: unknown) => Promise<Uint8Array>;
+    readonly decryptBaseline?: (intentId: string, accountId: string, stored: Uint8Array) => Promise<unknown>;
     /** Runs inside the baseline's profile call, between the authority check and the baseline write. */
     readonly onProfile?: (store: Awaited<ReturnType<typeof openEventDatabase>>) => void;
     readonly encryptPoint?: (input: {
@@ -65,7 +57,7 @@ async function fixture(
       readonly ruleId: string;
       readonly ruleVersion: number;
       readonly accountId: string;
-      readonly position: { readonly historyId: string };
+      readonly position: unknown;
     }) => Promise<Uint8Array>;
   } = {},
 ) {
@@ -1649,6 +1641,15 @@ test('APR-B1: a completion that crosses its deadline during the baseline or poin
       versions.createTarget(target);
       versions.createRule(rule);
       const prepared = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 1 })) as PreparedActivation;
+      if (stage === 'baseline') {
+        // This trigger makes the baseline transaction's own deadline check observable. The later settlement removes
+        // baselines, so inspecting only the final database would not prove that an expired baseline was never written.
+        setup.store.database.exec(
+          `CREATE TRIGGER reject_expired_baseline BEFORE INSERT ON activation_baselines
+           WHEN NEW.intent_id = '${prepared.intentId}'
+           BEGIN SELECT RAISE(ABORT, 'EXPIRED_BASELINE_WRITE'); END`,
+        );
+      }
       await assert.rejects(
         () =>
           (async () =>
