@@ -28,6 +28,7 @@ import {
 import { gmailBaseline, persistSourceBaseline } from './baseline.ts';
 import type { CutoverFailpoint } from './cutover-failpoint.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
+import type { AsyncSourceStageExpiry } from './expiry.ts';
 import {
   applyDerivedTightening,
   assertReplacementDrained,
@@ -135,6 +136,8 @@ export interface ActivationRuntimeOptions {
   readonly sourceRegistry?: LocalEventSourceRegistry | undefined;
   /** D4a's B2-independent seam; Task 7 supplies the normal owner composition. */
   readonly retainedContentHooks?: DSourceRetentionTighteningDispatcher | undefined;
+  /** D4a: source-specific expiry prepares the content-free terminalisation before the derived pointer write. */
+  readonly sourceStageExpiry?: AsyncSourceStageExpiry | undefined;
   readonly now?: (() => number) | undefined;
   readonly newIntentId?: (() => string) | undefined;
   /** Optional test seam; absent in production and therefore behaviour-free. */
@@ -161,6 +164,7 @@ export class ActivationRuntime {
   readonly #mailboxLock: MailboxLock;
   readonly #sourceRegistry: LocalEventSourceRegistry;
   readonly #retainedContentHooks: DSourceRetentionTighteningDispatcher | undefined;
+  readonly #sourceStageExpiry: AsyncSourceStageExpiry | undefined;
   readonly #now: () => number;
   readonly #newIntentId: () => string;
   readonly #failpoint: CutoverFailpoint | undefined;
@@ -187,6 +191,7 @@ export class ActivationRuntime {
     this.#mailboxLock = options.mailboxLock;
     this.#sourceRegistry = options.sourceRegistry ?? gmailOnlySourceRegistry();
     this.#retainedContentHooks = options.retainedContentHooks;
+    this.#sourceStageExpiry = options.sourceStageExpiry;
     this.#now = options.now ?? Date.now;
     this.#newIntentId = options.newIntentId ?? (() => `act_${randomBytes(16).toString('hex')}`);
     this.#failpoint = options.failpoint;
@@ -214,6 +219,9 @@ export class ActivationRuntime {
           child: document.rule,
           now: this.#now(),
           retainedContentHooks: this.#retainedContentHooks,
+          prepareSourceStageRetentionTightening: this.#sourceStageExpiry?.prepareRetentionTightening?.bind(
+            this.#sourceStageExpiry,
+          ),
           accountLive: async (accountId) => {
             try {
               await assertLiveEventAccount(this.#config, { source: parent.source.channel, accountId });

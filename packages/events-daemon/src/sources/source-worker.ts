@@ -16,6 +16,7 @@ import {
 } from '@agentcomms/gmail';
 import type { GmailSourceOptions } from '../domain/source-options.ts';
 import { isRemovedAccountError, purgeRemovedAccountWork } from '../runtime/account-fence.ts';
+import type { AsyncSourceStageExpiry, PreparedSourceStageTerminalisation } from '../runtime/expiry.ts';
 import type { GmailReplacementDrains } from '../runtime/replacements.ts';
 import type { EventDatabase } from '../store/database.ts';
 import {
@@ -228,7 +229,7 @@ export function terminaliseExpiredGmailPage(
 }
 
 /** Common start-up/tick expiry for Gmail's encrypted pages, independent of whether collection may run. */
-export class GmailStageExpiry {
+export class GmailStageExpiry implements AsyncSourceStageExpiry {
   readonly #store: EventDatabase;
   readonly #mailboxLock: MailboxLock;
   readonly #decryptStage: (stored: Uint8Array, stageId: string) => Promise<GmailStageRecord>;
@@ -268,6 +269,56 @@ export class GmailStageExpiry {
       expired += await this.#mailboxLock.withMailbox(accountId, async () => this.#expireMailbox(accountId));
     }
     return expired;
+  }
+
+  async prepareRetentionTightening(input: {
+    readonly ruleId: string;
+    readonly ingestRetentionMs: number;
+    readonly now: number;
+  }): Promise<readonly PreparedSourceStageTerminalisation[]> {
+    const stages = this.#store.database
+      .prepare(
+        `SELECT state.id, state.account_id, state.encrypted_record
+           FROM source_scan_state AS state
+          WHERE state.source = 'gmail' AND state.cursor_scope = 'mailbox'
+            AND state.staged_at IS NOT NULL AND state.staged_at + ? <= ?
+            AND EXISTS (
+              SELECT 1 FROM source_stage_rule_debts AS debt
+               WHERE debt.stage_id = state.id AND debt.rule_id = ?
+            )
+          ORDER BY state.staged_at, state.id`,
+      )
+      .all(input.ingestRetentionMs, input.now, input.ruleId) as Array<{
+      id: string;
+      account_id: string;
+      encrypted_record: Uint8Array;
+    }>;
+    const prepared: PreparedSourceStageTerminalisation[] = [];
+    for (const stage of stages) {
+      const value = await this.#decryptStage(stage.encrypted_record, stage.id);
+      const continuationEncryptedRecord = await this.#encryptStage(expiredGmailHistoryContinuation(value), stage.id);
+      const drainIntentIds =
+        (await this.#replacementDrains?.drainIntentIdsForPage({
+          accountId: stage.account_id,
+          historyId: value.page.historyId,
+        })) ?? [];
+      prepared.push({
+        terminaliseInTransaction: () =>
+          terminaliseExpiredGmailPage(this.#store.database, {
+            stageId: stage.id,
+            accountId: stage.account_id,
+            page: value.page,
+            encryptedRecord: stage.encrypted_record,
+            continuationEncryptedRecord,
+            at: input.now,
+            drainIntentIds,
+            replacementDrains: this.#replacementDrains,
+          })
+            ? 1
+            : 0,
+      });
+    }
+    return prepared;
   }
 
   async #expireMailbox(accountId: string): Promise<number> {

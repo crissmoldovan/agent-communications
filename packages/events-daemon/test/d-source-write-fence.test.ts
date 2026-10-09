@@ -436,6 +436,118 @@ test('D9: held WhatsApp snapshot and first-representation encryption use the can
   }
 });
 
+test('P1: a chat-A WhatsApp turn refuses its account-wide B write after B is revoked during encryption', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-account-wide-fence-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const accountId = 'acc_ABCDEFGHIJKLMNOP';
+    const chatA = 'chat-a@example.test';
+    const chatB = 'chat-b@example.test';
+    const scopeA: SourceScope = { source: 'whatsapp', accountId, scopeId: `chat:${chatA}` };
+    const scopeB: SourceScope = { source: 'whatsapp', accountId, scopeId: `chat:${chatB}` };
+    const ruleA = {
+      ...ruleFor('whatsapp', accountId, 'account-wide-a'),
+      source: {
+        channel: 'whatsapp' as const,
+        accountIds: [accountId],
+        options: { channel: 'whatsapp' as const, chats: [chatA] },
+      },
+    };
+    const ruleB = {
+      ...ruleFor('whatsapp', accountId, 'account-wide-b'),
+      source: {
+        channel: 'whatsapp' as const,
+        accountIds: [accountId],
+        options: { channel: 'whatsapp' as const, chats: [chatB] },
+      },
+    };
+    installActiveScope(store, scopeA, ruleA);
+    installActiveScope(store, scopeB, ruleB);
+    for (const rule of [ruleA, ruleB])
+      store.database
+        .prepare(
+          'UPDATE rule_activation_points SET encrypted_position = ? WHERE activation_id = ? AND rule_id = ? AND rule_version = 1',
+        )
+        .run(Buffer.from(JSON.stringify({ baselineIdentities: [] })), `activation-${rule.ruleId}`, rule.ruleId);
+    store.database.exec('UPDATE event_settings SET enabled = 1, paused = 0, switch_generation = 1');
+
+    const stageStarted = deferred<void>();
+    const staged = deferred<void>();
+    const running = runSourceOwnerWork(
+      {
+        store,
+        cipher: {
+          decrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+          encrypt: async (_location: unknown, value: Uint8Array) => {
+            stageStarted.resolve();
+            await staged.promise;
+            return Buffer.from(value);
+          },
+        } as never,
+        approvals: { get: async () => null },
+        config: { load: async () => config('whatsapp', accountId) } as never,
+        taint: { record: async () => undefined } as never,
+        lifecycle: {} as never,
+        sourceRegistry: phaseDSourceRegistry(),
+        slackSourceFor: async () => {
+          throw new Error('not Slack');
+        },
+        resendReaderFor: async () => {
+          throw new Error('not Resend');
+        },
+        whatsappEventOperations: {
+          withEventSnapshot: async (_input: unknown, work: (snapshot: unknown) => unknown) =>
+            work({
+              messages: [
+                {
+                  chatJid: chatB,
+                  chatKind: 'unknown',
+                  senderJidRaw: 'sender@example.test',
+                  stanzaId: 'message-b',
+                  fromMe: false,
+                },
+              ],
+            } as never),
+        } as never,
+        whatsappVisibilityFence: visibilityFence(store),
+        now: () => 1,
+      },
+      scopeA,
+    );
+    await stageStarted.promise;
+    store.database.prepare("DELETE FROM active_versions WHERE kind = 'rule' AND object_id = ?").run(ruleB.ruleId);
+    staged.resolve();
+
+    await assert.rejects(running, { code: 'APPROVAL_VOID' });
+    assert.equal(
+      store.database
+        .prepare("SELECT 1 FROM whatsapp_occurrences WHERE account_id = ? AND message_id LIKE '%message-b%'")
+        .get(accountId),
+      undefined,
+      'the revoked chat-B tuple has no occurrence ledger row',
+    );
+    assert.equal(
+      store.database
+        .prepare("SELECT 1 FROM source_scan_state WHERE source = 'whatsapp' AND account_id = ?")
+        .get(accountId),
+      undefined,
+      'the revoked chat-B tuple has no retained ciphertext',
+    );
+    assert.equal(
+      store.database
+        .prepare('SELECT 1 FROM whatsapp_rule_admissions WHERE rule_id = ? AND rule_version = 1')
+        .get(ruleB.ruleId),
+      undefined,
+      'the revoked chat-B tuple has no admission',
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('D9: source-owner crypto wrappers re-read Resend core configuration after encryption and decryption', {
   skip: WINDOWS_SKIP,
 }, async () => {
