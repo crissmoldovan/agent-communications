@@ -40,12 +40,12 @@ export function purgeRemovedAccountWork(database: DatabaseSync, accountId: strin
   database.prepare('DELETE FROM dryrun_log WHERE account_id = ?').run(accountId);
   database
     .prepare(
-      "UPDATE deliveries SET state = 'in-flight-at-account-removal', encrypted_record = NULL, lease_until = NULL WHERE account_id = ? AND state = 'disclosing'",
+      "UPDATE deliveries SET state = 'in-flight-at-account-removal', encrypted_record = NULL, lease_until = NULL, next_at = NULL WHERE account_id = ? AND state = 'disclosing'",
     )
     .run(accountId);
   database
     .prepare(
-      "UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL WHERE account_id = ? AND state IN ('queued', 'retryable')",
+      "UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL, next_at = NULL WHERE account_id = ? AND state IN ('queued', 'retryable')",
     )
     .run(accountId);
   database

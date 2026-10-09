@@ -276,7 +276,7 @@ export function purgeRevokedRuleWork(database: DatabaseSync, ruleId: string, ver
     database
       .prepare(
         `UPDATE deliveries
-         SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL
+         SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL, next_at = NULL
          WHERE rule_id = ? AND rule_version = ? AND state IN ('queued', 'retryable')`,
       )
       .run(ruleId, version);
@@ -285,7 +285,7 @@ export function purgeRevokedRuleWork(database: DatabaseSync, ruleId: string, ver
     database
       .prepare(
         `UPDATE deliveries
-         SET state = 'in-flight-at-disable', encrypted_record = NULL, lease_until = NULL
+         SET state = 'in-flight-at-disable', encrypted_record = NULL, lease_until = NULL, next_at = NULL
          WHERE rule_id = ? AND rule_version = ? AND state = 'disclosing'`,
       )
       .run(ruleId, version);
