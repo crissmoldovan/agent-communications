@@ -311,6 +311,53 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '10' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // B2 owns this post-D convergence migration (D-11, B2-first order).  v9 and D's v10 are immutable: this
+    // replacement is the first point at which the D-owned occurrence parent can be named safely.
+    version: 11,
+    name: 'event-sse-stream-log-whatsapp-occurrence-v1',
+    statements: [
+      `CREATE TABLE stream_log_v11 (
+        id TEXT PRIMARY KEY,
+        delivery_id TEXT NOT NULL UNIQUE REFERENCES deliveries(id),
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL,
+        target_id TEXT NOT NULL,
+        target_version INTEGER NOT NULL,
+        subscriber_id TEXT NOT NULL,
+        subscriber_version INTEGER NOT NULL,
+        event_id TEXT NOT NULL REFERENCES ingest(event_id),
+        account_id TEXT NOT NULL,
+        whatsapp_message_id TEXT,
+        whatsapp_visibility_version INTEGER,
+        encrypted_record BLOB NOT NULL,
+        delivered_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        switch_generation INTEGER NOT NULL,
+        CHECK (expires_at > delivered_at),
+        CHECK (expires_at - delivered_at <= 604800000),
+        CHECK (
+          (whatsapp_message_id IS NULL AND whatsapp_visibility_version IS NULL)
+          OR (whatsapp_message_id IS NOT NULL AND whatsapp_visibility_version IS NOT NULL)
+        ),
+        FOREIGN KEY (account_id, whatsapp_message_id)
+          REFERENCES whatsapp_occurrences(account_id, message_id)
+      ) STRICT`,
+      `INSERT INTO stream_log_v11
+       (id, delivery_id, rule_id, rule_version, target_id, target_version, subscriber_id, subscriber_version,
+        event_id, account_id, whatsapp_message_id, whatsapp_visibility_version, encrypted_record, delivered_at,
+        expires_at, switch_generation)
+       SELECT id, delivery_id, rule_id, rule_version, target_id, target_version, subscriber_id, subscriber_version,
+              event_id, account_id, whatsapp_message_id, whatsapp_visibility_version, encrypted_record, delivered_at,
+              expires_at, switch_generation
+         FROM stream_log`,
+      'DROP TABLE stream_log',
+      'ALTER TABLE stream_log_v11 RENAME TO stream_log',
+      'CREATE INDEX stream_log_account_whatsapp_message ON stream_log(account_id, whatsapp_message_id)',
+      'CREATE INDEX stream_log_replay ON stream_log(subscriber_id, subscriber_version, delivered_at, id)',
+      "UPDATE meta SET value = '11' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {
