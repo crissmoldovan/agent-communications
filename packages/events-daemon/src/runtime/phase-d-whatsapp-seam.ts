@@ -10,11 +10,11 @@ export type WhatsAppSseFrameInput = Readonly<{
 }>;
 
 /**
- * Phase D supplies the concrete list-lock implementation.  The callback form is deliberately synchronous: the
- * visibility check and physical frame write share one lock acquisition and no promise continuation may escape it.
+ * Phase D supplies the concrete list-lock implementation. The acquisition is async, but a concrete fence invokes the
+ * callback synchronously while its list lock is held; callers await whether that callback actually ran.
  */
 export interface SseFrameVisibilityGate {
-  withCurrentSseFrameVisibility<T>(input: WhatsAppSseFrameInput, writeFrame: () => T): T;
+  withCurrentSseFrameVisibility<T>(input: WhatsAppSseFrameInput, writeFrame: () => T): Promise<T | undefined>;
 }
 
 export type WhatsAppListChangeInput = Readonly<{
@@ -57,7 +57,7 @@ export interface DSourceRetentionHooks {
 
 /** B2's pre-D default: exactly one synchronous callback invocation and no visibility decision of its own. */
 export class PassThroughSseFrameVisibilityGate implements SseFrameVisibilityGate {
-  withCurrentSseFrameVisibility<T>(_input: WhatsAppSseFrameInput, writeFrame: () => T): T {
+  async withCurrentSseFrameVisibility<T>(_input: WhatsAppSseFrameInput, writeFrame: () => T): Promise<T> {
     return writeFrame();
   }
 }

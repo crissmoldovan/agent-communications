@@ -145,8 +145,6 @@ test('B2-T8a: the Phase-D retention participant reuses the persisted dead-letter
   let store = await openEventDatabase({ stateDir });
   try {
     store.database.exec(`
-      ALTER TABLE deliveries ADD COLUMN whatsapp_message_id TEXT;
-      ALTER TABLE deliveries ADD COLUMN whatsapp_visibility_version INTEGER;
       INSERT INTO ingest
         (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
       VALUES ('event-retention-participant', 'installation', 'example.event', 1, 'account-retention', 'dedupe', 1, 1, 1);

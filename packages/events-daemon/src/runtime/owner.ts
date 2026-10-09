@@ -40,20 +40,15 @@ import { EventExpiry } from './expiry.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
-import {
-  type DSourceRetentionHooks,
-  NoopDSourceRetentionHooks,
-  PassThroughSseFrameVisibilityGate,
-  type SseFrameVisibilityGate,
-} from './phase-d-whatsapp-seam.ts';
+import { createB2RetainedContentParticipants } from './phase-d-b2-retention.ts';
 import { createPhaseDWhatsAppOwnerComposition } from './phase-d-whatsapp-owner-composition.ts';
 import { recoverActivations } from './recovery.ts';
 import { GmailReplacementDrains, replacementIntentSummary } from './replacements.ts';
 import { disableRule, removeTarget } from './revocations.ts';
 import { EventScheduler } from './scheduler.ts';
+import { runSourceOwnerWork } from './source-owner-work.ts';
 import { SseDispatcher } from './sse-dispatcher.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
-import { runSourceOwnerWork } from './source-owner-work.ts';
 
 export interface EventOwnerStatus extends EventLifecycleStatus {
   readonly owner: 'running';
@@ -98,10 +93,6 @@ export interface EventOwnerOptions {
   readonly whatsappEventOperations?: WhatsAppEventOperations | undefined;
   readonly tickMs?: number | undefined;
   readonly pollIntervalMs?: number | undefined;
-  /** Phase D supplies its concrete list fence through this structural seam; B2 defaults to synchronous pass-through. */
-  readonly sseFrameVisibilityGate?: SseFrameVisibilityGate | undefined;
-  /** Phase D owns participant registration; B2 keeps an intentionally inert registry until that composition exists. */
-  readonly dSourceRetentionHooks?: DSourceRetentionHooks | undefined;
 }
 
 export async function startEventOwner(options: EventOwnerOptions = {}): Promise<EventOwner> {
@@ -133,6 +124,7 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
   const whatsappComposition = createPhaseDWhatsAppOwnerComposition({
     database,
     eventOperations: whatsappEventOperations,
+    createRetainedContentParticipants: createB2RetainedContentParticipants,
   });
   const mailboxLock = new MailboxLock(new SourceScopeLock());
   const replacementDrains = new GmailReplacementDrains({
@@ -218,17 +210,14 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
         material,
       })),
   });
-  const visibilityGate = options.sseFrameVisibilityGate ?? new PassThroughSseFrameVisibilityGate();
-  const retentionHooks = options.dSourceRetentionHooks ?? new NoopDSourceRetentionHooks();
   const sse = new SseDispatcher({
     store: database,
     cipher,
     approvals: core.approvals,
     config: core.config,
-    visibilityGate,
-    hasConcreteWhatsAppVisibilityFence:
-      options.sseFrameVisibilityGate !== undefined && options.dSourceRetentionHooks !== undefined,
-    retentionHooks,
+    visibilityGate: whatsappComposition.visibilityFence,
+    hasConcreteWhatsAppVisibilityFence: true,
+    retentionHooks: whatsappComposition.retainedContentHooks,
   });
   const dispatcher = new DeliveryDispatcher({
     store: database,

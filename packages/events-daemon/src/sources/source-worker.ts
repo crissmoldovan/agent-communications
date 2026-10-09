@@ -379,7 +379,11 @@ export class GmailSourceWorker {
           // provider detail, but do not let the staged page or a later cursor commit resurrect account-bound work.
           if (isRemovedAccountError(error)) {
             this.#store.immediate(() =>
-              purgeRemovedAccountWork(this.#store.database, this.#mailbox.accountId, this.#now()),
+              purgeRemovedAccountWork(
+                this.#store.database,
+                { source: 'gmail', accountId: this.#mailbox.accountId },
+                this.#now(),
+              ),
             );
           }
           throw error;
