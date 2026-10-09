@@ -79,6 +79,12 @@ export const RECORD_LAYOUTS: readonly RecordLayout[] = [
     sqlColumn: 'encrypted_ref',
     keyColumns: ['owner_kind', 'owner_id', 'owner_version', 'purpose', 'generation'],
   },
+  {
+    table: 'system_reset_outbox',
+    column: 'encryptedRecord',
+    sqlColumn: 'encrypted_record',
+    keyColumns: ['id'],
+  },
 ];
 
 type SqlValue = string | number | bigint | Uint8Array | null;

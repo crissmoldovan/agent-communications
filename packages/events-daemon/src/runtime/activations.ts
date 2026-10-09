@@ -30,6 +30,7 @@ import {
   type TighteningKind,
   tighteningKind,
 } from './replacements.ts';
+import { addActiveRuleTargetReferences, removeActiveRuleTargetReferences } from './target-version-references.ts';
 
 type IntentKind = ActivationDocumentV1['kind'];
 
@@ -747,6 +748,12 @@ export class ActivationRuntime {
       }
       if (document.kind === 'rule') {
         if (latest.replacement_of_version !== null) {
+          const old = this.#store.database
+            .prepare('SELECT rule_id, version FROM rule_versions WHERE id = ?')
+            .get(latest.replacement_of_version) as { rule_id: string; version: number } | undefined;
+          if (!old)
+            throw new CommsError('APPROVAL_VOID', 'the replacement predecessor disappeared before finalisation');
+          removeActiveRuleTargetReferences(this.#store.database, old.rule_id, old.version);
           this.#store.database
             .prepare(
               "UPDATE rule_versions SET state = 'superseded', superseded_at = ? WHERE id = ? AND state = 'active'",
@@ -772,6 +779,15 @@ export class ActivationRuntime {
             )
             .run(document.rule.version, intent.id, Date.parse(usedAt), document.rule.ruleId);
         }
+        addActiveRuleTargetReferences(this.#store.database, {
+          ruleId: document.rule.ruleId,
+          ruleVersion: document.rule.version,
+          targets: document.rule.targets.map((target) => ({
+            targetId: target.targetId,
+            targetVersion: target.version,
+          })),
+          createdAt: this.#now(),
+        });
       } else {
         for (const entry of document.ruleVersions) {
           this.#store.database

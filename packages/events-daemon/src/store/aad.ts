@@ -9,6 +9,7 @@ const PRIMARY_KEY_COMPONENT_COUNTS = {
   'deliveries.encryptedRecord': 1,
   'dryrun_log.encryptedRecord': 1,
   'event_secret_generations.encryptedReference': 5,
+  'system_reset_outbox.encryptedRecord': 1,
 } as const;
 
 export type AadComponent =

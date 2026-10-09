@@ -89,6 +89,84 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '6' WHERE key = 'schema_version'",
     ],
   },
+  {
+    version: 7,
+    name: 'event-network-outboxes-and-target-references-v1',
+    statements: [
+      "ALTER TABLE deliveries ADD COLUMN target_kind TEXT NOT NULL DEFAULT 'dry-run' CHECK (target_kind IN ('dry-run', 'webhook', 'sse'))",
+      "ALTER TABLE deliveries ADD COLUMN target_representation TEXT NOT NULL DEFAULT 'plain' CHECK (target_representation IN ('plain', 'enveloped'))",
+      'ALTER TABLE deliveries ADD COLUMN subscriber_id TEXT',
+      'ALTER TABLE deliveries ADD COLUMN subscriber_version INTEGER',
+      'ALTER TABLE deliveries ADD COLUMN attempt_id TEXT',
+      'ALTER TABLE deliveries ADD COLUMN lease_token TEXT',
+      'ALTER TABLE deliveries ADD COLUMN ordering_sequence INTEGER NOT NULL DEFAULT 0 CHECK (ordering_sequence >= 0)',
+      'ALTER TABLE deliveries ADD COLUMN dead_lettered_at INTEGER',
+      'ALTER TABLE deliveries ADD COLUMN dead_letter_expires_at INTEGER',
+      `CREATE TABLE system_reset_outbox (
+        id TEXT PRIMARY KEY,
+        reset_epoch INTEGER NOT NULL CHECK (reset_epoch > 0),
+        target_id TEXT NOT NULL,
+        target_version INTEGER NOT NULL CHECK (target_version > 0),
+        encrypted_record BLOB NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        attempt_limit INTEGER NOT NULL CHECK (attempt_limit = 20),
+        next_at INTEGER,
+        expires_at INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('queued', 'retryable', 'disclosing', 'delivered', 'dead-lettered', 'cancelled', 'content-unreadable')),
+        switch_generation INTEGER NOT NULL DEFAULT 0,
+        attempt_id TEXT,
+        lease_token TEXT,
+        lease_until INTEGER,
+        last_error_code TEXT,
+        last_status INTEGER,
+        created_at INTEGER NOT NULL,
+        UNIQUE (reset_epoch, target_id, target_version),
+        CHECK (expires_at = created_at + 86400000),
+        CHECK (encrypted_record IS NOT NULL OR state NOT IN ('queued', 'retryable', 'disclosing'))
+      ) STRICT`,
+      'ALTER TABLE reset_barriers ADD COLUMN system_outbox_id TEXT REFERENCES system_reset_outbox(id)',
+      `CREATE TABLE target_version_references (
+        id TEXT PRIMARY KEY,
+        reference_kind TEXT NOT NULL CHECK (reference_kind IN ('active-rule', 'retained-delivery')),
+        target_id TEXT NOT NULL,
+        target_version INTEGER NOT NULL CHECK (target_version > 0),
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL CHECK (rule_version > 0),
+        delivery_id TEXT,
+        created_at INTEGER NOT NULL,
+        UNIQUE (reference_kind, target_id, target_version, rule_id, rule_version, delivery_id),
+        CHECK (
+          (reference_kind = 'active-rule' AND delivery_id IS NULL)
+          OR (reference_kind = 'retained-delivery' AND delivery_id IS NOT NULL)
+        )
+      ) STRICT`,
+      `CREATE TABLE delivery_order_counters (
+        rule_id TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        next_sequence INTEGER NOT NULL CHECK (next_sequence >= 0),
+        PRIMARY KEY (rule_id, account_id, target_id)
+      ) STRICT`,
+      `INSERT OR IGNORE INTO target_version_references
+       (id, reference_kind, target_id, target_version, rule_id, rule_version, delivery_id, created_at)
+       SELECT 'active:' || rule_id || ':' || version || ':' || json_extract(target.value, '$.targetId') || ':' || json_extract(target.value, '$.version'),
+              'active-rule', json_extract(target.value, '$.targetId'), json_extract(target.value, '$.version'),
+              rule_id, version, NULL, COALESCE(activated_at, 0)
+       FROM rule_versions, json_each(rule_versions.document, '$.targets') AS target
+       WHERE state = 'active'`,
+      `INSERT OR IGNORE INTO target_version_references
+       (id, reference_kind, target_id, target_version, rule_id, rule_version, delivery_id, created_at)
+       SELECT 'retained:' || id || ':' || target_id || ':' || target_version,
+              'retained-delivery', target_id, target_version, rule_id, rule_version, id, 0
+       FROM deliveries
+       WHERE encrypted_record IS NOT NULL
+         AND state IN ('queued', 'retryable', 'disclosing', 'dead-lettered')`,
+      'CREATE INDEX deliveries_target_order ON deliveries(target_id, target_version, ordering_sequence)',
+      'CREATE INDEX target_version_references_target ON target_version_references(target_id, target_version)',
+      'CREATE INDEX target_version_references_rule ON target_version_references(rule_id, rule_version)',
+      "UPDATE meta SET value = '7' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

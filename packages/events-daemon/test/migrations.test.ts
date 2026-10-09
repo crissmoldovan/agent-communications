@@ -90,7 +90,10 @@ test('B2-T3: the forward secret-generation migration preserves B1 and binds each
       (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
       '5',
     );
-    applyMigrations(database);
+    applyMigrations(
+      database,
+      EVENT_MIGRATIONS.filter((migration) => migration.version <= 6),
+    );
     assert.equal(
       (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
       '6',
@@ -155,6 +158,60 @@ test('B2-T3: the forward secret-generation migration preserves B1 and binds each
     ]);
     for (const value of [signingCurrent, signingPrevious, bearerCurrent, bearerPrevious])
       assert.notDeepEqual(value, url);
+  } finally {
+    database.close();
+  }
+});
+
+test('B2-T4: v7 preserves a B1-only reset barrier and gives system-reset ciphertext one exact AAD location', () => {
+  const database = new DatabaseSync(':memory:');
+  try {
+    applyMigrations(
+      database,
+      EVENT_MIGRATIONS.filter((migration) => migration.version <= 6),
+    );
+    database.exec(
+      `INSERT INTO reset_notices (id, reset_epoch, target_id, target_version, created_at)
+       VALUES ('b1-reset', 2, 'target-migration', 1, 1);
+       INSERT INTO reset_barriers (reset_epoch, target_id, target_version, state, reset_delivery_id)
+       VALUES (2, 'target-migration', 1, 'closed', 'b1-reset');`,
+    );
+    applyMigrations(database);
+    assert.equal(
+      (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
+      '7',
+    );
+    assert.deepEqual(
+      {
+        ...(database
+          .prepare(
+            'SELECT reset_delivery_id, system_outbox_id FROM reset_barriers WHERE reset_epoch = 2 AND target_id = ?',
+          )
+          .get('target-migration') as { reset_delivery_id: string; system_outbox_id: string | null }),
+      },
+      { reset_delivery_id: 'b1-reset', system_outbox_id: null },
+    );
+    const columns = database
+      .prepare("SELECT name, type, pk FROM pragma_table_info('system_reset_outbox')")
+      .all() as Array<{ name: string; type: string; pk: number }>;
+    assert.deepEqual(
+      columns.filter((column) => column.pk > 0).map((column) => column.name),
+      ['id'],
+    );
+    assert.equal(columns.find((column) => column.name === 'encrypted_record')?.type, 'BLOB');
+    assert.ok(
+      RECORD_LAYOUTS.some(
+        (layout) =>
+          layout.table === 'system_reset_outbox' &&
+          layout.column === 'encryptedRecord' &&
+          layout.sqlColumn === 'encrypted_record',
+      ),
+    );
+    assert.ok(
+      encodeAad('system_reset_outbox', 'encryptedRecord', [{ type: 'text', value: 'system-reset-migration' }])
+        .byteLength > 0,
+    );
+    assert.throws(() => encodeAad('system_reset_outbox', 'encryptedRecord', []), /needs 1 primary-key components/);
   } finally {
     database.close();
   }
