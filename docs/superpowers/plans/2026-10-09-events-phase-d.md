@@ -191,10 +191,12 @@ interactive investigator behind polling.
 
 WhatsApp event discovery runs inside the channel package's existing checked
 copy/sync lock.  The event adapter invokes `rebuildIndex` before the checked
-copy is disposed and reads raw message fields from that checked copy.  It does
-not read the live store, infer an identity from `Z_PK`, or substitute an
-index-derived sender.  It exposes `fromMe: true | false | null`; only exactly
-`false`, with nonempty raw chat JID, raw sender JID, and stanza ID, is eligible.
+copy is disposed only to preserve the channel's checked-copy lifecycle; it
+does not read, compare, or retain any value from that index.  It reads raw
+message fields from the checked copy, not the live store, does not infer an
+identity from `Z_PK`, and does not substitute an index-derived sender.  It
+exposes `fromMe: true | false | null`; only exactly `false`, with nonempty raw
+chat JID, raw sender JID, and stanza ID, is eligible.
 
 The daemon constructs the raw key exactly as canonical JSON:
 
@@ -353,7 +355,11 @@ become a substitute representation.
 Reset is source-local and scope-local: Slack discards only an interrupted
 interval and re-establishes it from the preserved watermark; Resend clears the
 bounded received cycle or expired status state and records the required gap;
-WhatsApp discards a non-head candidate and retains the authoritative head.
+WhatsApp may reset and rebuild all checked-copy/source index state, but
+discards only a non-head candidate and retains the authoritative D-owned
+snapshot head, occurrence ledger, and admission ledger.  Its rebuilt index is
+never an authority: recovery repeats candidate-versus-committed-head comparison
+from the raw checked copy and those D records.
 The scheduler round-robins ready `(source, account, scope)` work and persists
 the next eligible instant/backoff.  It uses each manifest minimum interval and
 provider `Retry-After`; a hot Slack reply drain, a Resend detail retry, or a
@@ -424,8 +430,14 @@ without rewriting B1 rows:
 The migration uses `CHECK`s and uniqueness constraints for source kinds,
 generation/head state, and raw canonical keys.  It is idempotent under the
 existing migration ledger and is covered by an upgrade fixture from the final
-B1 schema.  No table is repurposed for a provider's opaque cursor.  The daemon
-declares the exact workspace runtime dependencies on Slack, Resend, and
+B1 schema.  It creates the real `whatsapp_occurrences` parent in either merge
+order, but never creates, rebuilds, or adds a foreign key to B2's
+`stream_log`. Thus a B2-first standalone stream migration can remain usable
+without a parent foreign key; after this D migration creates the parent, B2's
+next forward convergence migration can add its foreign key. When D lands
+first, the same parent already exists for B2's direct stream migration. No
+table is repurposed for a provider's opaque cursor. The daemon declares the
+exact workspace runtime dependencies on Slack, Resend, and
 WhatsApp and externalises them; no channel package imports or depends on the
 daemon.  `tsdown` keeps channel packages external and never bundles a provider
 or native database binary.
@@ -458,34 +470,60 @@ until the hold is lifted by the release owner.
 ### D-11 — Phase D / B2 merge contract
 
 Phase D and B2 may develop in parallel but neither branch imports the other.
-The coordinator lands Phase D's migration-registry commit first. B2 then
-rebases onto it, takes the next free migration number/name in the rebased
-registry (never an in-place edit or duplicate number), and owns creating
-`stream_log.whatsapp_message_id`. That column is nullable for non-WhatsApp
-rows, has the same-source `CHECK` as the D8 fields, has a composite foreign key
-`(account_id, whatsapp_message_id)` to
-`whatsapp_occurrences(account_id, message_id)`, and has an
-`(account_id, whatsapp_message_id)` index for visibility purge. B2's migration
-test upgrades a final-Phase-D fixture, asserts that exact column/check/
-foreign-key/index shape, and proves a prior D migration is not rewritten.
-Phase D owns every D table and its columns in B1-present tables; it must not
-create a placeholder stream table. If the coordinator exceptionally lands B2
-first, Phase D rebases and renumbers to the next free migration before merge,
-while B2 still adds that column in its own forward migration before it reaches
-main.
+Whichever branch lands second renumbers only its own **unapplied** migration to
+the next free registry number/name; neither recorded migration is edited,
+renumbered, or duplicated. Phase D owns `whatsapp_occurrences` and every other
+D table/column in a B1-present table. B2 owns `stream_log`, including its two
+nullable WhatsApp fields, `whatsapp_message_id` and
+`whatsapp_visibility_version`, their same-source `CHECK`, and the
+`(account_id, whatsapp_message_id)` visibility-purge index. D never creates a
+placeholder stream table.
 
-B2 Tasks 8–9 own the following implementation and test obligations, not this
-plan's Task 10:
+There are two executable migration orders:
 
-1. During B2 owner setup, call
-   `registerWhatsAppListChangeParticipant` and
-   `registerRetentionTighteningParticipant` exactly once with the D-6
-   participants. The list participant deletes B2 `stream_log` and dead-letter
-   payload content matching the supplied `(accountId, whatsappMessageId)` set
-   on the supplied transaction. The retention participant applies the D-6
-   deadline formula to B2 stream/dead-letter content of active and superseded
-   affected versions and deletes every B2 row of `revokedVersionId` on that
-   same transaction.
+1. **D first.** D's migration creates the real
+   `whatsapp_occurrences(account_id, message_id)` parent and the final-D
+   fixture. B2's one rebased stream migration may declare its nullable pair,
+   same-source `CHECK`, index, and
+   `FOREIGN KEY (account_id, whatsapp_message_id) REFERENCES
+   whatsapp_occurrences(account_id, message_id)` directly. Its upgrade test
+   starts from the final-D fixture, proves the exact shape, runs
+   `PRAGMA foreign_key_check`, and proves all earlier D ledger entries/names
+   are unchanged.
+2. **B2 first.** B2's standalone stream migration creates a usable
+   `stream_log` with the nullable pair, same-source `CHECK`, and purge index,
+   but **no foreign key that names `whatsapp_occurrences`**: SQLite foreign
+   keys are enabled and the parent does not exist yet, so even a non-WhatsApp
+   `NULL` row must remain insertable. D then rebases/renumbers its own
+   migration, creates the D parent and final-D fixture without reading,
+   rebuilding, or otherwise changing `stream_log`, and preserves every B2
+   encrypted row byte-for-byte. B2 alone owns the next forward convergence
+   migration after that parent exists. It rebuilds/copies `stream_log` to add
+   the exact nullable pair, same-source `CHECK`, composite foreign key, and
+   purge index; its test proves encrypted rows survive, valid nullable
+   non-WhatsApp rows remain usable, invalid WhatsApp references are refused,
+   and `PRAGMA foreign_key_check` is clean. It must not rewrite either the
+   B2-first standalone migration or D's recorded migration.
+
+Task 2 tests the D migration from both the final-B1 fixture and a synthetic
+B2-first standalone-stream fixture: the former proves D's complete schema;
+the latter proves D creates `whatsapp_occurrences` while leaving existing
+`stream_log` schema and encrypted rows untouched. Task 10 audits B2's direct
+or forward-convergence proof for the order actually landed.
+
+B2 Tasks 8–9 own the stream/dead-letter implementation and test obligations
+below; D Task 7 owns the normal production composition that constructs and
+installs them once Phase D is present, and Task 10 audits the combined proof:
+
+1. B2 supplies the concrete retained-content participant constructors to D
+   Task 7's production composition. The list participant deletes B2
+   `stream_log` and dead-letter payload content matching the supplied
+   `(accountId, whatsappMessageId)` set on the supplied transaction. The
+   retention participant applies the D-6 deadline formula to B2
+   stream/dead-letter content of active and superseded affected versions and
+   deletes every B2 row of `revokedVersionId` on that same transaction. The
+   D-owned composition, not a test-only injection, constructs both through
+   those constructors and registers each exactly once.
 2. In `sse-dispatcher.ts` and `stream-replay.ts`, call
    `WhatsAppVisibilityFence.withCurrentSseFrameVisibility` for every live and
    `Last-Event-ID` replay WhatsApp frame, after preparation and immediately
@@ -506,8 +544,9 @@ plan's Task 10:
    transaction, or omitting the stream index/column must fail it.
 
 Task 10 is a convergence audit only: once both branches share one branch, it
-runs and inspects B2's owned test and migration proof. It creates no B2 table,
-migration, writer, participant, or joint test.
+runs and inspects B2's owned test and migration proof plus Task 7's production
+owner-composition test. It creates no B2 table, migration, writer, participant,
+or joint test.
 
 ## Spec amendments to raise with the owner
 
@@ -519,8 +558,8 @@ until the owner changes the normative text.
 | D-A | D4 requires an `agentcomms` manifest `events` declaration with types, minimum interval, and scopes/key kind, but does not define its strict JSON shape, property names, permitted credential kinds, or interval units. | 993–998 | Use the strict discriminated `events` object in D-1/D-9: `types`, `minimumIntervalMs`, and `access` (`oauth-user` + nonempty `requiredScopes`, `resend-full-access`, or `local-store`). Reject unknown fields. |
 | D-B | The Slack aggregate barrier says replies must be “covered through P”, but does not specify the fixed request upper-bound or how an API whose reply ordering differs from history proves it. | 721 | Persist the parent, fixed `P`, cursor, and exact returned timestamp range; request/paginate until the adapter proves no reply <= `P` remains. If it cannot prove that, preserve the drain and do not finalise. |
 | D-C | Resend status asks for a durable local start time but does not state its storage representation or how a local clock rollback is classified. | 959–965 and 985–990 | Store an ISO-8601 UTC instant plus monotonic scan generation; wall-clock rollback retains the prior high-water start and emits no backfill or gap. |
-| D-D | D9 assigns every SSE-frame list check to Phase D even though B2 owns network delivery and stream-log writing. | 1901–1911 and 2824–2827 | Adopt D-11. Phase D provides `WhatsAppVisibilityFence.withCurrentSseFrameVisibility` plus the two registered-transaction seams in D-6. B2 Tasks 8–9 call/register them, implement every actual live/replay frame gate, and own the prepared-frame list-change/bypass mutation proof. No D-to-B2 runtime dependency is added. |
-| D-E | D8 specifies `stream_log` WhatsApp columns although this B1-based branch has no B2 stream table; the parallel B2 migration must not be guessed or made to collide. | 1502–1507 and 1547–1552 | Adopt D-11. Phase D lands the registry first and owns only D tables/B1-present columns; B2 rebases, renumbers to the next free migration, and owns the exact nullable `stream_log.whatsapp_message_id` column, same-source check, composite foreign key, purge index, and final-Phase-D upgrade proof. Do not create a pretend stream table. |
+| D-D | D9 assigns every SSE-frame list check to Phase D even though B2 owns network delivery and stream-log writing. | 1901–1911 and 2824–2827 | Adopt D-11. D Task 7's `createPhaseDWhatsAppOwnerComposition` constructs the concrete `WhatsAppVisibilityFence` and B2 retained-content participants and injects them through ordinary `startEventOwner`; after D's WhatsApp registry entry exists, an absent seam fails closed and cannot select B2 pass-through. B2 Tasks 8–9 own the actual live/replay writer calls and prepared-frame mutation proof. No D-to-B2 runtime dependency is added. |
+| D-E | D8 specifies `stream_log` WhatsApp columns although this B1-based branch has no B2 stream table; the parallel B2 migration must not be guessed or made to collide. | 1502–1507 and 1547–1552 | Adopt D-11. D owns the real `whatsapp_occurrences` parent but never a pretend stream table. If B2 lands first, its standalone stream migration has no foreign key to the absent parent and its later B2-owned convergence migration rebuilds/copies the exact nullable pair, check, foreign key, and purge index after D; if D lands first, B2 may declare that foreign key directly. Both paths preserve encrypted rows and prove `foreign_key_check`. |
 | D-F | D9 says a missing list-file account is represented canonically as no entry (`{allow: [], deny: []}`), but does not restate the established channel `Visibility` behaviour for that empty value. | 1864–1873 | Preserve the channel's established empty-list behaviour (no restriction); a read/parse failure—not a missing entry—is hide-all. This avoids silently changing existing list semantics. |
 
 ## The two defect classes designed out up front
@@ -721,10 +760,15 @@ provider, alter an inherited point, or keep a parent debt also fails.
 
 **Steps (tests first)**
 
-1. Write an upgrade test from the final B1 fixture.  Assert the exact
-   rebased-registry D table, index, foreign-key, `CHECK`, and nullable-column
-   shape; assert a second open is a no-op and a B1 Gmail record remains
-   readable.  Assert no `stream_log` table or stream column is created here.
+1. Write upgrade tests from the final B1 fixture and from a synthetic B2-first
+   standalone-stream fixture. Assert the exact rebased-registry D table,
+   index, foreign-key, `CHECK`, and nullable-column shape; assert a second
+   open is a no-op and a B1 Gmail record remains readable. For the B2-first
+   fixture, seed an encrypted `stream_log` row with the nullable WhatsApp pair
+   and no parent foreign key; prove this D migration creates
+   `whatsapp_occurrences` but neither creates/rebuilds `stream_log` nor changes
+   its schema or ciphertext bytes. Assert no `stream_log` table or stream
+   column is created from the final-B1 fixture.
 2. Write account/rule/target-removal tests that seed each new D table and prove
    a removal purges its account/version rows immediately while preserving
    another account.  Include retention of a content-free terminal/gap audit
@@ -745,10 +789,12 @@ pnpm --filter @agentcomms/events-daemon test -- migrations-phase-d account-fence
 pnpm --filter @agentcomms/events-daemon typecheck
 ```
 
-The final-B1 fixture upgrades once, all D tables are constrained, and removal
-purges only the affected account.  Mutate the allocated migration ledger
-version, create a placeholder stream table, remove a raw-key uniqueness
-constraint, or omit one D table from account purge: the named test must fail.
+The final-B1 fixture upgrades once, the B2-first fixture gains the real D
+parent without changing its stream row, all D tables are constrained, and
+removal purges only the affected account. Mutate the allocated migration ledger
+version, create or rebuild a placeholder stream table, remove a raw-key
+uniqueness constraint, or omit one D table from account purge: the named test
+must fail.
 
 **Commit:** `feat(events): add durable multi-source authority (events phase D, task 2)`
 
@@ -1058,6 +1104,7 @@ fail.
 - Add/modify `packages/events-daemon/test/whatsapp-source.test.ts`,
   `packages/events-daemon/test/whatsapp-visibility.test.ts`,
   `packages/events-daemon/test/whatsapp-write-fence.test.ts`,
+  `packages/events-daemon/test/whatsapp-index-recovery.test.ts`,
   `packages/events-daemon/test/whatsapp-taint.test.ts`, and
   `packages/events-daemon/test/sse-frame-visibility-gate.test.ts`.
 
@@ -1065,28 +1112,49 @@ fail.
 
 1. Extend the WhatsApp harness with checked-copy messages whose `Z_PK`, sender,
    `fromMe`, chat JID, stanza ID, ordering, disposal timing, and human list
-   file can differ.  It must never open a real local store.  Add vectors that
-   prove `null` `fromMe` is excluded; duplicate index values cannot collide;
-   raw sender differences make different keys; and copy disposal before first
-   representation is observable.
+   file can differ. It exposes `resetAndRebuildAllIndexState()` which clears
+   and rebuilds **all index state**, including every checked-copy/source index
+   cache and persisted index record, from raw rows without changing the D
+   database. It must never open a real local store. Add vectors
+   that prove `null` `fromMe` is excluded; duplicate index values cannot
+   collide; raw sender differences make different keys; and copy disposal
+   before first representation is observable.
 2. Add failing tests for candidate/head crash edges, list changes while waiting
    at every gate, unreadable-list hide-all, newly hidden purge, widening with
    no backfill, raw-key rule admissions, disabled activation, every synthetic
    frame invoking the visibility callback, and Task 4a's fixed-shortest first-
    representation deadline/restart/start-up expiry, after-P expiry, and atomic
-   retention-tightening fixtures.  Register the last group in Task 4a's common
-   deadline suite.
+   retention-tightening fixtures. Register the last group in Task 4a's common
+   deadline suite. In the separately named
+   `whatsapp-index-recovery.test.ts`, commit an eligible post-cut-over
+   emission, call `resetAndRebuildAllIndexState()` after every committed
+   generation, and vary every raw row's `Z_PK` on each rebuild. Repeat with a
+   retained emitted key, a newly present candidate key, and a candidate paused
+   after candidate-key writes/before the head commit and after that commit;
+   crash and reopen the same on-disk database at each pause. Assert that the
+   pre-reset `whatsapp_snapshot_heads` row and its committed snapshot remain
+   authoritative, and that `whatsapp_occurrences` and
+   `whatsapp_rule_admissions` retain their rows and remain authoritative. The
+   adapter must compare the raw candidate only with that D-owned committed
+   generation—not the rebuilt index—and recovery must discard an uncommitted
+   candidate or resume a committed one correctly. Assert exactly one raw
+   occurrence and one per-rule admission/projection/delivery for every
+   post-cut-over raw key, with no backfill or duplicate after each reset,
+   rebuild, and restart.
 3. Factor the channel's checked-copy routine so both ordinary sync and the
-   event adapter rebuild the index before disposal.  Add a raw event reader
-   with tri-state `fromMe`; preserve the existing presentation reader's public
-   behaviour.  Expose `withCurrentEventVisibility` under the list lock.  Its
-   request/result/callback types are structural and it declares no daemon
+   event adapter invoke the lifecycle rebuild before disposal, while the event
+   adapter copies raw fields and never reads the rebuilt index. Add a raw event
+   reader with tri-state `fromMe`; preserve the existing presentation reader's
+   public behaviour. Expose `withCurrentEventVisibility` under the list lock.
+   Its request/result/callback types are structural and it declares no daemon
    dependency or import.
 4. Implement candidate generation, second visibility read, conditional
    head-switch transaction, raw occurrence/admission ledgers, baseline tuple,
    and immediate hidden-data purge.  Stage every owed first representation
    while the checked copy remains open; on any failure discard the candidate,
-   not the previous head.
+   not the previous head. An index reset/source rebuild may clear only index
+   state: candidate recovery reads the D-owned committed head and both D-owned
+   ledgers, and no reset path may delete or reseed any of them.
 5. Add `WhatsAppVisibilityFence.withCurrentSseFrameVisibility` with the exact
    D-6 generic signature and sealed-sink tests. Add the list-change dispatcher
    that invokes registered `WhatsAppListChangeParticipant`s before its one
@@ -1098,17 +1166,21 @@ fail.
 
 ```sh
 pnpm --filter @agentcomms/whatsapp test -- events checked-copy lists
-pnpm --filter @agentcomms/events-daemon test -- whatsapp-source whatsapp-visibility whatsapp-write-fence whatsapp-taint sse-frame-visibility-gate
+pnpm --filter @agentcomms/events-daemon test -- whatsapp-source whatsapp-visibility whatsapp-write-fence whatsapp-index-recovery whatsapp-taint sse-frame-visibility-gate
 pnpm --filter @agentcomms/whatsapp typecheck
 pnpm --filter @agentcomms/events-daemon typecheck
 ```
 
-Only raw protocol keys reach the ledger, every checked copy is indexed before
-disposal, and list changes prevent disclosure and purge newly hidden D data.
-Mutate the key to use `Z_PK`, collapse `fromMe` to boolean, switch the head
-before staging, cache lists, skip one sealed-frame callback, or dispatch a list
-participant after commit: the named tests fail. The B2-owned test in D-11
-separately proves actual stream/dead-letter purge and real writer behaviour.
+Only raw protocol keys reach the ledger, every checked copy follows its index
+lifecycle before disposal without the adapter reading the index, committed
+heads and both ledgers survive an index reset/source rebuild, and list changes
+prevent disclosure and purge newly hidden D data. Mutate the key to use `Z_PK`,
+make the adapter read the rebuilt index, clear `whatsapp_snapshot_heads`,
+clear `whatsapp_occurrences` or `whatsapp_rule_admissions` during a reset,
+collapse `fromMe` to boolean, switch the head before staging, cache lists, skip
+one sealed-frame callback, or dispatch a list participant after commit: the
+named tests fail. The B2-owned test in D-11 separately proves actual
+stream/dead-letter purge and real writer behaviour.
 
 **Commit:** `feat(whatsapp): add visibility-fenced local event source (events phase D, task 6)`
 
@@ -1134,6 +1206,7 @@ access only—never email, Slack, Resend, or WhatsApp sends.
 - Modify `packages/events-daemon/package.json`,
   `packages/events-daemon/tsdown.config.ts`, build externalisation config,
   `packages/events-daemon/src/runtime/owner.ts`,
+  `packages/events-daemon/src/runtime/phase-d-whatsapp-owner-composition.ts`,
   `packages/events-daemon/src/runtime/scheduler.ts`,
   `packages/events-daemon/src/runtime/activations.ts`, and
   `packages/events-daemon/src/operations/sources.ts` only where registry
@@ -1141,6 +1214,7 @@ access only—never email, Slack, Resend, or WhatsApp sends.
 - Modify `capabilities.json`, `scripts/parity.mjs`, and
   `packages/events-daemon/test/capability-audit.test.ts`.
 - Add/modify `packages/events-daemon/test/phase-d-owner-e2e.test.ts`,
+  `packages/events-daemon/test/phase-d-owner-composition.test.ts`,
   `packages/events-daemon/test/source-scheduler-fence.test.ts`,
   `packages/events-daemon/test/d-source-taint-fence.test.ts`,
   `packages/events-daemon/test/channel-package-boundary.test.ts`, and existing
@@ -1150,41 +1224,89 @@ access only—never email, Slack, Resend, or WhatsApp sends.
 
 **Steps (tests first)**
 
-1. Add sealed end-to-end tests that boot one owner with all four fake adapters,
+1. Define the D-owned production composition function in
+   `phase-d-whatsapp-owner-composition.ts` with this exact signature:
+
+   ```ts
+   export function createPhaseDWhatsAppOwnerComposition(
+     input: Readonly<{
+       database: EventDatabase;
+       chatLists: ChatListStore;
+       createRetainedContentParticipants: (
+         input: Readonly<{ database: EventDatabase }>,
+       ) => Readonly<{
+         list: WhatsAppListChangeParticipant;
+         retention: DSourceRetentionParticipant;
+       }>;
+     }>,
+   ): Readonly<{
+     visibilityFence: WhatsAppVisibilityFence;
+     retainedContentHooks: DSourceRetentionHooks;
+   }>;
+   ```
+
+   It constructs the concrete `WhatsAppVisibilityFence` and D hook registry,
+   calls the supplied B2 retained-content participant constructors, registers
+   the resulting list and retention participants exactly once, and returns the
+   concrete fence and hooks. `startEventOwner` is the ordinary production
+   composition site: whenever its source registry contains WhatsApp, it calls
+   this function and injects its returned fence/hooks into the actual owner,
+   dispatcher, and live/replay writer path. B2-alone may select its structural
+   pass-through only when the registry has no D WhatsApp source. Once D's
+   WhatsApp source is registered, a missing constructor, failed composition, or
+   absent returned seam must reject owner start with
+   `WHATSAPP_VISIBILITY_SEAM_REQUIRED` before scheduling or dispatch; it must
+   never select B2's pre-D pass-through for a WhatsApp row.
+2. Add `phase-d-owner-composition.test.ts` before implementation. Boot the
+   normal `startEventOwner` path with the D WhatsApp registry entry and the
+   production B2 retained-content constructors, not an injected fence or hook
+   test double. Assert it constructs one `WhatsAppVisibilityFence`, registers
+   exactly one list and one retention participant, and passes that concrete
+   fence/hooks to the actual owner path. Add the negative production-owner
+   case with the D registry entry but no participant constructor/seam: startup
+   fails closed with `WHATSAPP_VISIBILITY_SEAM_REQUIRED`, schedules no WhatsApp
+   work, writes no WhatsApp frame, and makes zero calls to B2's pass-through
+   gate. Keep a pre-D registry-only control case to prove the B2-alone
+   pass-through remains confined to the no-D path.
+3. Add sealed end-to-end tests that boot one owner with all four fake adapters,
    interleave ready scopes, pause/remove an account while a source is in
    flight, and query each source through both CLI and MCP stand-ins.
-2. Add red parity rows from D-8.  For each row, make CLI and MCP invoke the
+4. Add red parity rows from D-8. For each row, make CLI and MCP invoke the
    same `sourceShow` operation and assert the matching source result.  Add a
    `sources list` assertion that all four registry entries are visible without
    adding a duplicate capability.
-3. Add explicit workspace runtime dependencies and externalisation for Slack,
+5. Add explicit workspace runtime dependencies and externalisation for Slack,
    Resend, and WhatsApp **to `@agentcomms/events-daemon` only**.  Channel
    `package.json` files retain no daemon dependency and their `events.ts`
    operations retain no daemon import, including type-only imports.  Register
    all adapters once in the owner and inject fakes in tests; no source reaches a
    provider constructor directly.
-4. Merge source scheduling with persisted fair ready-work selection, manifest
+6. Merge source scheduling with persisted fair ready-work selection, manifest
    minimums, provider backoff, and source-specific locks.  Ensure every
    provider call and provider-result write observes fresh core config; update
    `source show` to expose content-free state only.
-5. Run parity/reference generation and inspect that no new command/tool slipped
+7. Run parity/reference generation and inspect that no new command/tool slipped
    in.  Extend existing taint/disclosure tests across all D candidate types.
 
 **Commands and passing result**
 
 ```sh
-pnpm --filter @agentcomms/events-daemon test -- phase-d-owner-e2e source-scheduler-fence d-source-taint-fence channel-package-boundary capability-audit
+pnpm --filter @agentcomms/events-daemon test -- phase-d-owner-e2e phase-d-owner-composition source-scheduler-fence d-source-taint-fence channel-package-boundary capability-audit
 pnpm verify:parity --strict
 pnpm sync:reference
 pnpm --filter @agentcomms/events-daemon typecheck
 ```
 
-Every source is selected through one owner, each added source-show invocation
-has CLI/MCP parity, and a removed account cannot be rescheduled or disclosed.
-Mutate a parity row to a different operation, register an adapter twice, cache
-core config across the provider await, add a daemon dependency/import to a
-channel, or bypass taint: the named test, package-boundary test, or strict
-parity check fails.
+Every source is selected through one owner, a D-present owner constructs and
+injects the concrete WhatsApp fence and both retained-content participants,
+the missing-seam case fails closed rather than selecting pass-through, each
+added source-show invocation has CLI/MCP parity, and a removed account cannot
+be rescheduled or disclosed. Mutate a parity row to a different operation,
+register an adapter or participant twice, omit the D production composition,
+fall back to B2 pass-through after WhatsApp is registered, cache core config
+across the provider await, add a daemon dependency/import to a channel, or
+bypass taint: the named test, package-boundary test, or strict parity check
+fails.
 
 **Commit:** `feat(events): schedule Phase D sources through one owner (events phase D, task 7)`
 
@@ -1310,14 +1432,20 @@ the fake request journals and the mutation results, not just the green summary.
 **Steps**
 
 1. Start only after D and B2 share one branch. Read B2's migration and writer
-   code before running it; confirm the exact D-11 column/check/composite
-   foreign-key/index, the two one-time registrations, and the named gate at
-   both actual writer sites.
+   code before running it. Confirm the D-11 migration order actually landed:
+   direct nullable-pair/check/composite-foreign-key/index migration after D,
+   or a B2-first no-parent-FK standalone migration followed by its B2-owned
+   rebuild/copy convergence migration after D. Confirm preserved encrypted
+   rows, `PRAGMA foreign_key_check`, the D Task 7 one-time production
+   construction/registration of both retained-content participants, and the
+   named gate at both actual writer sites.
 2. Run B2's owned migration and contract test. Inspect its test setup to
    confirm it covers live and replay writes, a list change between preparation
    and write, bypass mutations, restart/crash points, list-triggered stream
    and dead-letter purge, and `sse-replay`/`dead-letter` shortening for live
-   and superseded records.
+   and superseded records. Run Task 7's production-owner test too; confirm its
+   negative D-present/missing-seam case fails closed and records no call to the
+   pre-D pass-through gate.
 3. Record pass/fail and the verified B2 commit in the PR evidence. A missing
    proof or failing mutation is a convergence blocker for its B2 owner; do not
    implement, edit, or repair any B2 file in this task.
@@ -1325,12 +1453,13 @@ the fake request journals and the mutation results, not just the green summary.
 **Commands and passing result**
 
 ```sh
-pnpm --filter @agentcomms/events-daemon test -- phase-d-b2-sse-visibility-contract migrations
+pnpm --filter @agentcomms/events-daemon test -- phase-d-owner-composition phase-d-b2-sse-visibility-contract migrations
 ```
 
-The existing B2 proof passes unchanged and demonstrates that hidden WhatsApp
-content reaches neither stream nor dead-letter retention, and that no B2
-content survives a relevant D-source tightening. This task builds nothing.
+The combined proof demonstrates the required migration order, a concrete
+ordinary-owner composition with no D-present pass-through fallback, hidden
+WhatsApp content reaching neither stream nor dead-letter retention, and no B2
+content surviving a relevant D-source tightening. This task builds nothing.
 
 **Commit:** none — audit only; Task 11 records the result.
 
@@ -1422,7 +1551,7 @@ may exercise a case incidentally, but it is not a second owner.
 | Slack reply pagination and aggregate top-level/reply drain barrier, including restart and fairness | Task 4 |
 | Resend received newest-first anchor/cycle, required detail terminal outcomes, 10-page bounded reset, and received source gaps | Task 5 |
 | Resend body Unicode-code-point vectors, attachment facts, status seeding/deltas, seven-day state, and shared-throttle interactive priority | Task 5 |
-| WhatsApp checked-copy/index lifecycle, raw protocol key, tri-state `fromMe`, snapshot generation diff, first representation, and raw admission ledger | Task 6 |
+| WhatsApp checked-copy/index lifecycle; reset/rebuild of **all** index state with post-commit `Z_PK` variation; candidate-versus-committed-head recovery without index reads; preserved authoritative snapshot head, occurrence/admission ledgers, and exactly-once projection/delivery across crashes; raw protocol key, tri-state `fromMe`, snapshot generation diff, first representation, and raw admission ledger | Task 6 |
 | WhatsApp list digest/version application, hide-all read failure, newly-hidden purge, no widening backfill, dry-run reads, and sealed synthetic every-frame gate | Task 6 |
 | Fixed shortest stage deadline, restart/start-up expiry, retry-deadline composition, after-P expiry, atomic retention shortening of every affected D shared/staged and retained row, and the synchronous participant contract for B2 retained content | Task 4a |
 | Per-source untrusted-content envelope and taint before dry-run disclosure | Task 7 |
