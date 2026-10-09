@@ -183,7 +183,7 @@ The entire B1 plan, including B1-A through B1-G and its committee table, is bind
 | Start TLS ClientHello | TCP facts and exact lease/token reread after TCP completes. | webhook-fences TCP-to-TLS |
 | Write HTTP bytes | Preceding facts plus exact attempt/timestamp/key generation; synchronous raw write follows. | webhook-fences write |
 | Record HTTP outcome | Exact disclosing state/lease token/attempt/live authority; otherwise only existing content-free discarded marker. | webhook-crash-recovery |
-| Append stream log / settle SSE delivery | Leased delivery/account/switch/rule/target/subscriber/barrier/expiry/cap/log identity remain; append+settle one transaction.  A WhatsApp row carries Task 8's nullable message/version pair and may name only the final-D occurrence parent. | sse-persistence-auth, phase-d-b2-migration-contract |
+| Append stream log / settle SSE delivery | Leased delivery/account/switch/rule/target/subscriber/barrier/expiry/cap/log identity remain; append+settle one transaction.  A WhatsApp row carries Task 8's nullable message/version pair.  The B2-first standalone migration has no occurrence foreign key; only the later B2-owned convergence migration, after D creates the parent, names the final-D occurrence parent.  The D-first, not-yet-recorded B2 migration may name it directly. | sse-persistence-auth, phase-d-b2-migration-contract |
 | Accept/rotate/close SSE stream | Exact subscriber/authority/token generation live; rotate commits invalidation then closes under mutex. | sse-persistence-auth |
 | Write each non-WhatsApp live/replay frame | Row/token/account/rule/subscriber/stream registration live; mutex repeats check immediately before write. | sse-frame-fences, browser listener |
 | Write each WhatsApp live/replay frame | The ordinary frame authority remains live and `WhatsAppVisibilityFence.withCurrentSseFrameVisibility({accountId, whatsappMessageId}, writeFrame)` holds the current list lock through the synchronous physical write; there is no await or scheduled write after its check. | sse-frame-fences, phase-d-b2-sse-visibility-contract |
@@ -731,17 +731,35 @@ Commit: feat(events): recover fenced webhook leases safely.
 3. Race decrypt/config/fence await and final frame gate with pause/disable/revoke/
    account removal/expiry/rotation; no post-loss frame.
 4. Assert no subscriber/bearer CLI/MCP/capability/reference surface.
-5. Add the forward-migration vectors before implementing it.  The B2-alone vector
-   proves that its new `stream_log` is usable for non-WhatsApp rows while its
-   nullable `whatsapp_message_id` foreign-key declaration names the future
-   `whatsapp_occurrences(account_id, message_id)` parent without inventing a D
-   table.  The final-D upgrade vector is guarded by the presence of the final-D
-   fixture: it upgrades that fixture through B2's rebased migration, asserts the
-   nullable column, the paired WhatsApp same-source `CHECK`, the composite foreign
-   key, and the `(account_id, whatsapp_message_id)` purge index, and proves every
-   pre-existing D migration ledger entry/name is unchanged.  Before D exists that
-   one vector is an explicit skip, not a substitute fixture; after D is present it
-   is mandatory and may not be disabled by an environment flag.
+5. Add the two immutable upgrade-order vectors before implementing either
+   migration path.  The B2-first vector starts from the final B1 fixture, applies
+   B2's standalone `stream_log` migration with foreign keys enabled, and proves
+   that a non-WhatsApp encrypted row with both nullable WhatsApp fields `NULL`
+   inserts and replays even though `whatsapp_occurrences` does not exist.  It
+   asserts that this recorded B2 migration has the nullable
+   `whatsapp_message_id`/`whatsapp_visibility_version` pair, their same-source
+   `CHECK`, and the `(account_id, whatsapp_message_id)` purge index, but **no**
+   `REFERENCES whatsapp_occurrences` clause.  It then applies D's immutable
+   migration that creates `whatsapp_occurrences`, followed by B2's new forward
+   convergence migration.  That migration must rebuild and copy `stream_log` to
+   the exact pair, same-source `CHECK`, composite
+   `FOREIGN KEY (account_id, whatsapp_message_id) REFERENCES
+   whatsapp_occurrences(account_id, message_id)`, and purge index; the vector
+   compares every pre-existing encrypted stream row byte-for-byte, checks its
+   stable identity/order/replay result, and requires `PRAGMA foreign_key_check`
+   to return no rows.
+
+   The D-first vector starts from the final-D fixture, applies B2's then-unapplied
+   direct-FK migration, and asserts that same final pair/`CHECK`/foreign-key/index
+   shape and an empty `PRAGMA foreign_key_check`.  It also proves a non-WhatsApp
+   encrypted row remains usable and that a WhatsApp row can reference its real D
+   occurrence.  Each vector uses its own frozen chronological migration fixture:
+   B2-first → D → B2 convergence, and D-first → B2 direct-FK.  It must compare
+   the ledger names and contents after every step and must never edit, replace, or
+   reapply an already-recorded migration.  Before the final-D fixture exists its
+   D-dependent vector is an explicit skip, not a substitute fixture; once D is
+   present both vectors are mandatory and neither may be disabled by an environment
+   flag.
 6. Add sealed-sink unit tests for both actual writer entry points:
    `sse-dispatcher.ts` live delivery and `stream-replay.ts` `Last-Event-ID`
    replay.  A recording `SseFrameVisibilityGate` must observe exactly one
@@ -755,29 +773,42 @@ Commit: feat(events): recover fenced webhook leases safely.
 
 1. At rebase, inspect the shared migration registry.  Whichever of B2 and Phase D
    lands second renumbers *its own* unapplied forward migration to the next free
-   number/name; neither side rewrites a recorded migration or reuses a number.  This
-   task owns B2's `stream_log.whatsapp_message_id` addition in that migration.  It
-   is nullable for non-WhatsApp rows, is paired with
-   `whatsapp_visibility_version` by the same-source `CHECK` used by the D8 fields,
-   has `FOREIGN KEY (account_id, whatsapp_message_id) REFERENCES
-   whatsapp_occurrences(account_id, message_id)`, and has the
-   `(account_id, whatsapp_message_id)` index used by the list-change purge.  If B2
-   lands first, SQLite's declaration may name the future parent but B2 writes only
-   null WhatsApp fields; Phase D later renumbers onto B2 and creates its own D
-   tables.  If D lands first, B2 renumbers, upgrades the final-D fixture, and adds
-   this column/check/foreign-key/index in its own forward migration.  D never
-   creates a placeholder `stream_log` table and B2 never adds a D-owned table.
-2. Add the forward stream-log migration/AAD and Task 3 generation refs.  Define
+   number/name; neither side rewrites a recorded migration or reuses a number.
+   B2 owns the `stream_log` nullable
+   `whatsapp_message_id`/`whatsapp_visibility_version` pair, their same-source
+   `CHECK`, the composite occurrence foreign key, and the
+   `(account_id, whatsapp_message_id)` purge index; D owns
+   `whatsapp_occurrences` and never creates a placeholder `stream_log` table.
+
+   If D lands first, B2's still-unapplied Task 8 migration declares the complete
+   pair/`CHECK`/foreign-key/index directly.  If B2 lands first, its recorded
+   standalone migration declares the same nullable pair, `CHECK`, and index but
+   **no foreign key at all** to the absent D table; it must stay usable with
+   `PRAGMA foreign_keys = ON` and B2 creates no D-owned table.  After D's recorded
+   migration creates `whatsapp_occurrences`, B2 owns a separate next-free forward
+   convergence migration.  It creates a replacement `stream_log` with the exact
+   pair/`CHECK`/foreign-key/index, copies every existing column and encrypted blob
+   unchanged, atomically swaps the rebuilt table into place, restores its ordinary
+   indexes, and proves `PRAGMA foreign_key_check` is empty before it completes.
+   This is a new migration, never a revision of the B2-first or D migration.
+2. Add the applicable forward stream-log migration(s)/AAD and Task 3 generation
+   refs.  Define
    `WhatsAppSseFrameInput`, `SseFrameVisibilityGate`,
    `WhatsAppListChangeParticipant`, `DSourceRetentionParticipant`, and
    `DSourceRetentionHooks` in `phase-d-whatsapp-seam.ts` with exactly D-6's
    structural signatures; the gate member is exactly
    `withCurrentSseFrameVisibility<T>(input: WhatsAppSseFrameInput, writeFrame: () => T): T`.
    Export a synchronous `PassThroughSseFrameVisibilityGate` and no-op hook registry
-   as the B2 default.  This file must import no Phase-D source file or package; after
-   convergence D's sole concrete
-   `WhatsAppVisibilityFence` supplies the same structural interface through B2's
-   owner wiring rather than B2 importing D at runtime.
+   as the B2 default.  `startEventOwner` accepts the concrete
+   `SseFrameVisibilityGate` and `DSourceRetentionHooks` through this same structural
+   owner seam.  B2-only owners retain that pass-through/no-op default and have no
+   WhatsApp row that can reach it.  A normal owner must never select the
+   pass-through gate for a persisted non-null WhatsApp tuple: if the concrete seam
+   is absent, it fails closed without invoking the sink.  After D is present, the
+   D-owned production composition step in Phase D Task 7 is the sole definition and
+   producer of the concrete `WhatsAppVisibilityFence` and participants; it supplies
+   `startEventOwner` through this seam.  B2 does not re-specify that composition or
+   import a D runtime module.
 3. Append/settle together under Task 5 eligibility and purge bytes/refs together.
 4. Implement internal registry/mutex/auth boolean with live rereads/invalidation.
 5. Prepare replay/live outside writes.  At each of the two named writer sites,
@@ -794,9 +825,13 @@ Commit: feat(events): recover fenced webhook leases safely.
 - Accept retired generation/close after rotation/skip gate: auth-frame fails.
 - Remove either writer's `withCurrentSseFrameVisibility` call, move its sink write
   out of `writeFrame`, insert an await/microtask between the callback's check and
-  write, make the pass-through asynchronous, omit the same-source `CHECK`, foreign
-  key, or purge index, or edit an already-recorded D migration: the named
-  frame-fence or migration-contract test fails.
+  write, make the pass-through asynchronous, select pass-through for a persisted
+  WhatsApp tuple without D's concrete seam, put the occurrence foreign key in the
+  B2-first standalone migration, omit it from the D-first/direct or B2-convergence
+  schema, lose an encrypted row during the rebuild/copy, omit the same-source
+  `CHECK` or purge index, fail `PRAGMA foreign_key_check`, or edit an
+  already-recorded migration: the named frame-fence or migration-contract test
+  fails.
 - Add subscriber/bearer operation: negative audit fails.
 
 **Run**
@@ -804,10 +839,12 @@ Commit: feat(events): recover fenced webhook leases safely.
     pnpm --filter @agentcomms/events-daemon exec node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/sse-persistence-auth.test.ts test/sse-frame-fences.test.ts test/phase-d-b2-migration-contract.test.ts test/migrations.test.ts test/retention.test.ts
     pnpm verify
 
-Passing before D: SSE has durable disclosure semantics, a synchronous structural
-pass-through, and the explicitly skipped final-D fixture proof; `pnpm verify` passes
-without a D import.  Passing after D: the same command runs the final-D upgrade proof
-against the actual fixture. Commit:
+Passing before D: SSE has durable disclosure semantics, the standalone `stream_log`
+migration has no absent-parent foreign key, and B2-only owners retain the synchronous
+structural pass-through with no WhatsApp row to reach it; `pnpm verify` passes without
+a D import.  Passing after D: the same command runs both immutable upgrade-order
+vectors, including B2's convergence rebuild and `foreign_key_check`, against the
+actual fixture. Commit:
 feat(events): persist fenced SSE replay and bearer state.
 
 ### Task 8a — register B2 retained content in Phase D's list and retention transactions **(high risk)**
@@ -830,11 +867,18 @@ feat(events): persist fenced SSE replay and bearer state.
 
 **Tests first**
 
-1. With the B2 default pass-through seams, boot the real owner twice and assert it
-   registers exactly one `WhatsAppListChangeParticipant` and exactly one
-   `DSourceRetentionParticipant` on each owner setup, without importing or loading
-   any D module.  A recording no-op registry must prove the registration is setup
-   work, not a per-frame or per-tick side effect.
+1. Before D, with the B2 default pass-through/no-op seams, boot the real owner twice
+   and assert it registers exactly one `WhatsAppListChangeParticipant` and exactly
+   one `DSourceRetentionParticipant` on each owner setup, without importing or
+   loading any D module.  A recording no-op registry must prove the registration is
+   setup work, not a per-frame or per-tick side effect; the B2-only fixture contains
+   no WhatsApp row.  After D is present, boot the normal production owner through
+   Phase D Task 7's production composition step—not a test-only owner override—and
+   prove it supplies the concrete `WhatsAppVisibilityFence` and concrete hooks to
+   `startEventOwner` through the Task 8 seam.  Repeat with that production seam
+   deliberately absent: a persisted WhatsApp stream row reaches neither
+   `PassThroughSseFrameVisibilityGate` nor a frame sink, while a non-WhatsApp row
+   retains its ordinary B2 path.  This is the production-owner fail-closed proof.
 2. Add transaction-boundary tests with a recording `DSourceRetentionHooks` and
    test-owned D-shaped columns only—never a production D migration or D import:
    invoke `purgeNewlyHiddenInTransaction(tx, input)` while its transaction is open,
@@ -876,8 +920,12 @@ feat(events): persist fenced SSE replay and bearer state.
 3. During `startEventOwner` setup, always register those two instances exactly once
    through `DSourceRetentionHooks.registerWhatsAppListChangeParticipant` and
    `registerRetentionTighteningParticipant`.  B2 supplies the Task 8 no-op registry
-   and pass-through visibility fence by default, while the converged owner receives
-   D's concrete hooks/fence structurally.  B2 must not import D's
+   and pass-through visibility fence only for the pre-D owner, where no WhatsApp
+   row exists.  The normal post-D owner receives D's concrete hooks/fence through
+   the same Task 8 seam from Phase D Task 7's production composition step; do not
+   recreate that factory or inject it solely in a test.  If a persisted WhatsApp
+   tuple reaches an owner without that concrete seam, select the fail-closed path
+   and do not invoke `writeFrame`, never the pass-through.  B2 must not import D's
    `whatsapp-visibility.ts`, construct a WhatsApp client, create a D transaction,
    or add a provider/send path.
 4. Route existing B2 expiry, revoke, disable, replacement, and retention helpers
@@ -887,8 +935,10 @@ feat(events): persist fenced SSE replay and bearer state.
 **Required mutations**
 
 - Omit either one-time registration, register it per tick, import a D runtime module,
-  or replace the B2 default seam with a failing optional import: the owner/seam test
-  fails before D lands.
+  replace the B2 default seam with a failing optional import, leave the normal
+  post-D owner on test-only injection, or route a WhatsApp tuple through
+  `PassThroughSseFrameVisibilityGate` when the D seam is absent: the owner/seam
+  test fails.
 - Start a new transaction, make either callback async, delete after commit, purge
   only `stream_log`, retain a matching dead-letter payload, omit a superseded
   version, use `max`/a new clock instead of `min(oldDeadline, clockStart +
@@ -901,8 +951,10 @@ feat(events): persist fenced SSE replay and bearer state.
     pnpm verify
 
 Passing before D: the no-op seams register B2's synchronous participants and all
-ordinary B2 tests pass without a D import.  Passing after D: the guarded real-schema
-crash/restart matrix runs and proves the one-transaction list and tightening contract.
+ordinary B2 tests pass without a D import or a WhatsApp row.  Passing after D: the
+normal production owner receives D's concrete seam, a missing seam fails closed for
+WhatsApp rows, and the guarded real-schema crash/restart matrix proves the
+one-transaction list and tightening contract.
 Commit: feat(events): join B2 retained SSE content to the Phase-D safety seam.
 
 ### Task 9 — loopback SSE listener, every-frame WhatsApp fence, and real-browser CORS verification **(high risk)**
@@ -951,6 +1003,11 @@ Commit: feat(events): join B2 retained SSE content to the Phase-D safety seam.
    neither frame nor replay and reaches neither retained `stream_log` content nor a
    dead-letter payload.  The trace must be `fence check -> synchronous writeFrame ->
    ServerResponse.write` with no await/microtask between the first two operations.
+   Construct this owner only through Phase D Task 7's production composition step,
+   then repeat with its concrete seam absent and prove that an otherwise allowed
+   WhatsApp tuple reaches neither the pass-through gate nor `ServerResponse.write`.
+   The pre-D branch retains the structural pass-through unit vector but has no
+   persisted WhatsApp row and explicitly skips this production-D proof.
    The test also runs the Task 8a list-change and `sse-replay`/`dead-letter`
    retention crash/restart cases through the concrete D transaction, for live and
    superseded versions before and after their proposed deadline.  This is B2's test:
@@ -971,9 +1028,11 @@ Commit: feat(events): join B2 retained SSE content to the Phase-D safety seam.
 3. Extend existing Playwright script with sealed daemon fixture/browser CORS, retain
    event vectors and report both.
 4. Run the final-D-guarded contract fixture through the real loopback client as well
-   as the sealed sink.  Ensure its D seam is injected structurally through the Task
-   8a owner option; B2 has no import of D's fence/hook implementation and remains
-   independently buildable when the pass-through is selected.
+   as the sealed sink.  Its normal-owner case must use Phase D Task 7's production
+   composition step and the same Task 8 owner seam, not a test-only injection; its
+   missing-seam case must fail closed for a WhatsApp tuple.  B2 has no import of D's
+   fence/hook implementation and remains independently buildable with the pre-D
+   structural pass-through, for which no WhatsApp row exists.
 5. Rename/document release required browser check as vectors plus loopback daemon
    SSE/CORS while preserving publish dependency.
 
@@ -985,9 +1044,11 @@ Commit: feat(events): join B2 retained SSE content to the Phase-D safety seam.
 - Delete either live/replay `withCurrentSseFrameVisibility` invocation, mutate the
   WhatsApp server callback to call `response.write` outside `writeFrame`, defer that
   write through an await/microtask, bypass the gate after prepared-frame list change,
-  omit either Task 8a registration, or split its D transaction: the named
-  `phase-d-b2-sse-visibility-contract` test fails.  This mutation is required after
-  D lands; it must demonstrate the convergence oracle, not merely a mocked callback.
+  omit either Task 8a registration, replace the normal D production composition
+  with test-only seam injection, allow an absent post-D seam to select pass-through,
+  or split its D transaction: the named `phase-d-b2-sse-visibility-contract` test
+  fails.  This mutation is required after D lands; it must demonstrate the
+  convergence oracle, not merely a mocked callback.
 
 **Run**
 
@@ -998,16 +1059,19 @@ Commit: feat(events): join B2 retained SSE content to the Phase-D safety seam.
 Passing before D: Chromium/WebKit verify preflight and credential-omitting CORS
 against loopback daemon SSE, while the final-D-only convergence fixture explicitly
 skips and B2 imports no D runtime.  Passing after D: the same commands exercise both
-writers and prove every WhatsApp frame is fenced at its actual write.  Release
+writers through the normal D production composition seam, prove an absent seam fails
+closed, and prove every WhatsApp frame is fenced at its actual write.  Release
 requires it. Commit:
 feat(events): verify loopback SSE in real browsers.
 
 **Batch 5 close.** Before Phase D lands, run `pnpm verify` and `pnpm
-verify:browser` with the structural pass-through and the two explicit final-D skips;
-stream state/listener/both browsers must share final fencing.  Once the branches
-share one rebased registry, inject D's real seam and run both commands again: the
-final-D migration, participant, prepared-frame, bypass-mutation, and crash/restart
-proofs are then required.  D Task 10 audits those B2-owned results only.
+verify:browser` with the standalone no-FK migration, structural pass-through, no
+persisted WhatsApp row, and the explicit final-D skips; stream state/listener/both
+browsers must share final fencing.  Once the branches share one rebased registry,
+run both immutable migration-order vectors and use Phase D Task 7's production
+composition seam: the B2 convergence rebuild/`foreign_key_check`, participant,
+prepared-frame, missing-seam fail-closed, bypass-mutation, and crash/restart proofs
+are then required.  D Task 10 audits those B2-owned results only.
 
 ## Batch 6 — held integration gate
 
@@ -1081,9 +1145,9 @@ test/resume, full doctor/dry-run surface and callable judges.
 | Webhook bytes/signing/overlap and separate DNS/TCP/TLS/write gates | Task 6 |
 | Webhook/system-reset crash matrix, lease ownership, no duplicate charge/stale outcome/recreated purge, exact-lineage recovery | Task 7 |
 | SSE encrypted append/replay, bearer current/overlap auth, rotation invalidation, and internal frame authority | Task 8 |
-| Forward `stream_log` schema/AAD, nullable WhatsApp message/version pair, same-source check, occurrence composite foreign key/purge index, final-D upgrade proof, and pre-D structural pass-through seam | Task 8 |
-| Exactly-once owner registration of B2 list-change/retention participants; same-transaction hidden stream/dead-letter purge; active and superseded shortening or revoked-version purge with crash/restart convergence | Task 8a |
-| Loopback SSE listener/CORS, actual live/replay WhatsApp every-frame gate, B2-owned prepared-frame list-change/bypass convergence proof, and Chromium/WebKit preflight credential-omitting verification in verify:browser/release | Task 9 |
+| Forward `stream_log` schema/AAD: B2-first no-FK standalone migration; D-first direct-FK migration; B2-owned post-D rebuild/copy convergence to the nullable WhatsApp message/version pair, same-source check, occurrence composite foreign key/purge index, encrypted-row preservation, and `foreign_key_check`; immutable proofs of both upgrade orders; and pre-D structural pass-through seam | Task 8 |
+| Exactly-once owner registration of B2 list-change/retention participants; Phase D Task 7 production-composition injection of the concrete fence/hooks through `startEventOwner`; fail-closed missing post-D seam; same-transaction hidden stream/dead-letter purge; active and superseded shortening or revoked-version purge with crash/restart convergence | Task 8a |
+| Loopback SSE listener/CORS, actual live/replay WhatsApp every-frame gate through the normal D production composition seam, B2-owned prepared-frame/list-change/missing-seam/bypass convergence proof, and Chromium/WebKit preflight credential-omitting verification in verify:browser/release | Task 9 |
 | Sealed full path, B1 doctor preservation, B3/E public-surface absence, held-release evidence | Task 10 |
 
 ## Final verification and hand-off
@@ -1100,4 +1164,4 @@ plan.
 
 Commit this plan with:
 
-    docs(plan): local event emission — phase B2, the Phase D seam
+    docs(plan): local event emission — phase B2, the Phase D seam, review round 4
