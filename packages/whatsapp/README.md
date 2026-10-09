@@ -11,6 +11,9 @@ npm install -g @agentcomms/whatsapp    # or run it with npx -y @agentcomms/whats
 It needs **macOS with WhatsApp for Mac** installed and signed in, and **Node 22.16 or newer** (it reads with Node's
 own SQLite, which is complete from 22.16; an older Node is refused with what to install).
 
+Phase D's held local event daemon may call this package's internal read-only event operation over a checked local copy.
+It adds no WhatsApp command or MCP tool, and it cannot send.
+
 ## What it does, and what it never does, in plain words
 
 - **It reads only local files.** Nothing it does to read, search, draft or keep its lists connects to WhatsApp, or

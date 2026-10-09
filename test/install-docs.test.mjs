@@ -58,7 +58,7 @@ test('every declared CLI/MCP surface has generated reference destinations', () =
   }
 });
 
-test('the held local event service README states B1’s foreground, platform, runtime, and read boundary', async () => {
+test('the held local event service README states the B1, B2 and Phase-D boundaries', async () => {
   const readme = await readFile(join(ROOT, 'packages', 'events-daemon', 'README.md'), 'utf8');
   const prose = readme.replace(/\s+/g, ' ');
   assert.match(prose, /foreground owner only/i);
@@ -67,7 +67,35 @@ test('the held local event service README states B1’s foreground, platform, ru
   assert.match(prose, /Node 22\.16(?:\.0)? or newer/i);
   assert.match(prose, /B1 accepts the local .*dry-run target/i);
   assert.match(prose, /reads are terminal-only/i);
-  assert.match(prose, /held from publication/i);
+  assert.match(prose, /Gmail, Slack, Resend and WhatsApp.*one owner/i);
+  assert.match(prose, /Slack scans history and thread replies.*reply barrier/i);
+  assert.match(prose, /Resend resolves received mail through its detail operation.*sent-mail status/i);
+  assert.match(prose, /Unicode-validated and bounded.*local throttle/i);
+  assert.match(prose, /WhatsApp reads the local checked copy only through the current live chat lists/i);
+  assert.match(prose, /hidden chat reaches no dry-run, stream or dead letter/i);
+  assert.match(prose, /Phase D adds no command or MCP tool beyond the `source show` rows for the new sources/i);
+  assert.match(
+    prose,
+    /stream and dead-letter handling is registered into Phase D's single list-change and retention transaction/i,
+  );
+  assert.match(prose, /Every Phase D test uses fakes, never a real provider/i);
+  assert.match(prose, /held from publication throughout B1, B2 and Phase D/i);
+  assert.match(prose, /A B1, B2 or Phase D merge publishes neither package/i);
+});
+
+test('the Phase-D channel README notes keep event operations internal and read-only', async () => {
+  const readmes = await Promise.all(
+    REGISTRY.platforms.map(async (channel) => ({
+      channel,
+      text: await readFile(join(ROOT, 'packages', channel, 'README.md'), 'utf8'),
+    })),
+  );
+
+  for (const { channel, text } of readmes) {
+    const prose = text.replace(/\s+/g, ' ');
+    assert.match(prose, /held local event daemon may call this package's internal read-only event operation/i, channel);
+    assert.match(prose, new RegExp(`adds no ${channel} command or MCP tool`, 'i'), channel);
+  }
 });
 
 /**

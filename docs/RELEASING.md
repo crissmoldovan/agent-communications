@@ -243,10 +243,10 @@ Steps 3 and 4 need the owner's npm account; an agent cannot do them. They are
 
 ### The held event library and daemon
 
-`@agentcomms/events` and `@agentcomms/events-daemon` are both held throughout B1 and B2. A B1 or B2 merge publishes
-neither package: both remain in `PUBLISHABLE` for builds, licences, version synchronisation and packed-tarball consumer
-checks, but neither is in `PACKAGES`, so the release preflight, publish and confirmation paths do not read their
-packuments.
+`@agentcomms/events` and `@agentcomms/events-daemon` are both held throughout B1, B2 and Phase D. A B1, B2 or Phase D
+merge publishes neither package: both remain in `PUBLISHABLE` for builds, licences, version synchronisation and
+packed-tarball consumer checks, but neither is in `PACKAGES`, so the release preflight, publish and confirmation paths
+do not read their packuments.
 
 The B2 runtime's loopback daemon SSE/CORS check runs with the event-library browser vectors in the separate macOS
 browser gate. It remains a release requirement while the packages are held; it is not a publish surface or a reason to
