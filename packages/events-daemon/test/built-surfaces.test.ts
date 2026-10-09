@@ -21,6 +21,11 @@ test('BOOT-B1: the built command has clean help and its MCP server exposes only 
     const help = await run(process.execPath, ['--import', PRELOAD, CLI, '--help'], { env });
     assert.match(help.stdout, /Usage: agent-events/);
     assert.doesNotMatch(help.stdout, /ExperimentalWarning/, 'the command keeps its user-facing output on stdout clean');
+    assert.doesNotMatch(
+      help.stdout,
+      /^\s+(?:delivery|subscriber|judge|migrate)\b|^\s+target (?:test|resume|replay)\b/m,
+      'the built CLI keeps B3/E controls out of the B2 public boundary',
+    );
 
     if (WINDOWS_SKIP) {
       // B1-G: on Windows the service refuses by name rather than reaching for a pipe it cannot protect.

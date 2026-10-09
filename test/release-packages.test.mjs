@@ -1012,13 +1012,33 @@ test('REL-B1: B1 stays held, while its eventual owner publish is events then eve
   assert.ok(!PACKAGES.includes('events-daemon'), '@agentcomms/events-daemon is absent from a B1 tag publish');
 
   const release = (await readFile(join(ROOT, 'docs', 'RELEASING.md'), 'utf8')).replace(/\s+/g, ' ');
-  assert.match(release, /A B1 merge publishes neither package/i);
+  assert.match(release, /A B1 or B2 merge publishes neither package/i);
   assert.match(release, /same checked tag/i);
   assert.match(
     release,
     /owner first publishes `@agentcomms\/events`, then publishes `@agentcomms\/events-daemon`/i,
     'the daemon follows the library that it depends on',
   );
+});
+
+test('REL-B2: the held B2 runtime stays out of publication and the release browser gate proves loopback SSE/CORS', async () => {
+  assert.ok(PUBLISHABLE.includes('events'), '@agentcomms/events remains consumer-checked for B2');
+  assert.ok(PUBLISHABLE.includes('events-daemon'), '@agentcomms/events-daemon remains consumer-checked for B2');
+  assert.ok(Object.hasOwn(HELD, 'events'), '@agentcomms/events remains held for B2');
+  assert.ok(Object.hasOwn(HELD, 'events-daemon'), '@agentcomms/events-daemon remains held for B2');
+  assert.ok(!PACKAGES.includes('events'), '@agentcomms/events is absent from a B2 tag publish');
+  assert.ok(!PACKAGES.includes('events-daemon'), '@agentcomms/events-daemon is absent from a B2 tag publish');
+
+  const [readme, release] = await Promise.all([
+    readFile(join(ROOT, 'packages', 'events-daemon', 'README.md'), 'utf8'),
+    readFile(join(ROOT, 'docs', 'RELEASING.md'), 'utf8'),
+  ]);
+  assert.match(readme, /B2 adds no command or MCP tool/i, 'B2 does not create a new public surface');
+  assert.match(readme, /delivery retry, drop or hold/i, 'B3 delivery controls remain absent');
+  assert.match(readme, /subscriber management/i, 'B3 subscriber controls remain absent');
+  assert.match(readme, /named event-secret or migration operation/i, 'B3 secret operations remain absent');
+  assert.match(release, /both held throughout B1 and B2/i, 'the release guide keeps both packages held through B2');
+  assert.match(release, /loopback daemon SSE\/CORS/i, 'the release browser gate includes B2 SSE/CORS verification');
 });
 
 /**
