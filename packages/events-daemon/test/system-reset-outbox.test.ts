@@ -301,6 +301,47 @@ test('RST-B2: pause, the kill switch and a newer switch generation block a reset
   }
 });
 
+test('RST-B2: a reset response that arrives after a disable-all is discarded and never opens the barrier', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await resetFixture('late');
+  try {
+    const claimed = claimSystemResetOutbox({
+      store: setup.store,
+      outboxId: 'late',
+      now: 10,
+      leaseMs: 1_000,
+      newAttemptId: () => 'attempt',
+      newLeaseToken: () => 'token',
+    });
+    assert.equal(claimed.kind, 'claimed');
+    if (claimed.kind !== 'claimed') return;
+    // disable-all wins while the request is out: the switch is off and the generation moves on.
+    setup.store.database.exec('UPDATE event_settings SET enabled = 0, switch_generation = switch_generation + 1');
+    assert.equal(completeSystemResetClaim(setup.store, claimed.claim, { state: 'delivered', now: 20 }), true);
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare("SELECT state, encrypted_record, lease_until FROM system_reset_outbox WHERE id = 'late'")
+          .get() as Record<string, unknown>),
+      },
+      { state: 'cancelled', encrypted_record: null, lease_until: null },
+    );
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare("SELECT state FROM reset_barriers WHERE system_outbox_id = 'late'")
+          .get() as Record<string, unknown>),
+      },
+      { state: 'closed' },
+      'a pre-disable response neither opens nor otherwise changes the barrier',
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
 test('RST-B2: the scheduled expiry sweep ends a reset at its deadline exactly as a claim does', {
   skip: WINDOWS_SKIP,
 }, async () => {
