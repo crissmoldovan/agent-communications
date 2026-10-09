@@ -242,11 +242,30 @@ export function completeSystemResetClaim(
     const now = input.now ?? Date.now();
     const row = store.database
       .prepare(
-        `SELECT expires_at FROM system_reset_outbox
+        `SELECT expires_at, switch_generation FROM system_reset_outbox
          WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
       )
-      .get(claim.id, claim.attemptId, claim.leaseToken, claim.leaseUntil) as { expires_at: number } | undefined;
-    const expired = row !== undefined && row.expires_at <= now;
+      .get(claim.id, claim.attemptId, claim.leaseToken, claim.leaseUntil) as
+      | { expires_at: number; switch_generation: number }
+      | undefined;
+    if (row === undefined) return false;
+    const setting = store.database
+      .prepare('SELECT enabled, switch_generation FROM event_settings WHERE singleton = 1')
+      .get() as { enabled: number; switch_generation: number } | undefined;
+    if (setting?.enabled !== 1 || setting.switch_generation !== row.switch_generation) {
+      // A disable-all or a newer generation won while the request was out: issued bytes cannot be recalled, but the
+      // outcome is discarded — the row ends cancelled with its record purged and its barrier exactly as it was.
+      return (
+        store.database
+          .prepare(
+            `UPDATE system_reset_outbox
+             SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL, next_at = NULL
+             WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
+          )
+          .run(claim.id, claim.attemptId, claim.leaseToken, claim.leaseUntil).changes === 1
+      );
+    }
+    const expired = row.expires_at <= now;
     const clearRecord = expired || input.state === 'cancelled' || input.state === 'dead-lettered';
     const changed = store.database
       .prepare(
