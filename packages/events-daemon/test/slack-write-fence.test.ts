@@ -153,7 +153,7 @@ test('D4: a Slack reply page returned after the source fence moves cannot advanc
       )
       .run();
     store.database.prepare('UPDATE event_settings SET enabled = 1, paused = 0 WHERE singleton = 1').run();
-    const page = await deferred<{ nextCursor: string | null }>();
+    const page = await deferred<{ messages: []; nextCursor: string | null; retainedHistoryBoundary: false }>();
     const started = await deferred<void>();
     const drains = new SlackReplyDrains({
       database: store.database,
@@ -173,6 +173,11 @@ test('D4: a Slack reply page returned after the source fence moves cannot advanc
       decryptState,
       now: () => 100,
       nowTimestamp: () => '1700000010.000000',
+      stage: {
+        scope: { source: 'slack', accountId: ACCOUNT, scopeId: `slack:${ACCOUNT}:${CONVERSATION}` },
+        debts: () => [{ ruleId: 'rule-test', ruleVersion: 1, ingestRetentionMs: 1_000 }],
+        admit: async () => 'terminal',
+      },
     });
     await drains.begin({
       intentId: 'intent-reply-fence',
@@ -193,7 +198,7 @@ test('D4: a Slack reply page returned after the source fence moves cannot advanc
     });
     await started.promise;
     store.database.prepare('UPDATE event_settings SET enabled = 0 WHERE singleton = 1').run();
-    page.resolve({ nextCursor: null });
+    page.resolve({ messages: [], nextCursor: null, retainedHistoryBoundary: false });
     await assert.rejects(resuming, { code: 'APPROVAL_VOID' });
     assert.deepEqual(
       {
