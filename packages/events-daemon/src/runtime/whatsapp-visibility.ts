@@ -1,4 +1,5 @@
 import { CommsError, canonicalJson } from '@agentcomms/core';
+import { chatKindOf } from '@agentcomms/whatsapp';
 import type { EventDatabase } from '../store/database.ts';
 import type { WhatsAppVisibilityRecheck } from './phase-d-whatsapp-seam.ts';
 import { purgeWhatsAppStagedPayload } from './whatsapp-staged-payload.ts';
@@ -56,7 +57,8 @@ function hidden(visibility: CurrentWhatsAppEventVisibility, messageId: string): 
     key === null ||
     !visibility.seesMessage(
       key.chatJid,
-      key.chatJid === 'status@broadcast' || key.chatJid.endsWith('@status') ? 'status' : 'direct',
+      // The channel's own vocabulary, as intake classifies the raw tuple: a raw JID keeps its case and padding.
+      chatKindOf(key.chatJid),
       key.senderJidRaw,
       false,
     )

@@ -221,3 +221,40 @@ test('D6: a retained-content participant failure rolls back the list journal and
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+test('P1 (review round 8): the fence classifies a raw status chat as intake does, whatever its case or padding', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-visibility-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const denied = 'denied@s.whatsapp.net';
+    // A list that hides one person's status posts and nothing else: only the chat kind decides.
+    const fence = new WhatsAppVisibilityFence({
+      store,
+      withCurrentEventVisibility: async (_input, work) =>
+        work({
+          version: 1,
+          digest: 'd'.repeat(64),
+          seesMessage: (_chatJid, chatKind, senderJidRaw) => !(chatKind === 'status' && senderJidRaw === denied),
+        }),
+    });
+    for (const chatJid of ['STATUS@BROADCAST', 'status@broadcast', '447700900123@STATUS', ' status@broadcast ']) {
+      const messageId = JSON.stringify(['wa-msg', chatJid, denied, 'post']);
+      assert.equal(
+        await fence.withCurrentCandidateVisibility({ accountId: 'wa_status', whatsappMessageId: messageId }, () => 1),
+        undefined,
+        `${JSON.stringify(chatJid)} is a status chat and its denied author's post stays hidden`,
+      );
+    }
+    const direct = JSON.stringify(['wa-msg', '447700900123@S.WHATSAPP.NET', denied, 'dm']);
+    assert.equal(
+      await fence.withCurrentCandidateVisibility({ accountId: 'wa_status', whatsappMessageId: direct }, () => 1),
+      1,
+      'a direct chat is not a status chat',
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
