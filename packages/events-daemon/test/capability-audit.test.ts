@@ -18,6 +18,9 @@ type Capability = {
   readonly mcp: string | null;
   readonly status: string;
   readonly operation?: string;
+  readonly argv?: readonly string[];
+  readonly args?: { readonly source?: string };
+  readonly expect?: { readonly source?: string };
 };
 
 const EXPECTED_B1_ROWS = [
@@ -33,6 +36,9 @@ const EXPECTED_B1_ROWS = [
   ['events-daemon.catalogue.show', 'catalogue show', 'events_catalogue_show', 'both', 'catalogueShow'],
   ['events-daemon.sources.list', 'sources list', 'events_sources_list', 'both', 'sourcesList'],
   ['events-daemon.source.show', 'source show', 'events_source_show', 'both', 'sourceShow'],
+  ['events-daemon.source.show.slack', 'source show', 'events_source_show', 'both', 'sourceShow'],
+  ['events-daemon.source.show.resend', 'source show', 'events_source_show', 'both', 'sourceShow'],
+  ['events-daemon.source.show.whatsapp', 'source show', 'events_source_show', 'both', 'sourceShow'],
   ['events-daemon.rules.list', 'rules list', 'events_rules_list', 'both', 'rulesList'],
   ['events-daemon.rule.show', 'rule show', 'events_rule_show', 'both', 'ruleShow'],
   ['events-daemon.rule.create', 'rule create', 'events_rule_create', 'both', 'createRule'],
@@ -90,6 +96,42 @@ test('PAR-B1: capability audit freezes the completed Decision 6 inventory', asyn
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);
   }
+});
+
+test('D7: each registered source has a distinct source-show parity invocation', async () => {
+  const table = JSON.parse(await readFile(join(ROOT, 'capabilities.json'), 'utf8')) as {
+    readonly capabilities: readonly Capability[];
+  };
+  const rows = table.capabilities.filter((row) => row.id.startsWith('events-daemon.source.show'));
+  assert.deepEqual(
+    rows.map((row) => ({ id: row.id, argv: row.argv, args: row.args, expect: row.expect })),
+    [
+      {
+        id: 'events-daemon.source.show',
+        argv: ['gmail'],
+        args: { source: 'gmail' },
+        expect: { source: 'gmail' },
+      },
+      {
+        id: 'events-daemon.source.show.slack',
+        argv: ['slack'],
+        args: { source: 'slack' },
+        expect: { source: 'slack' },
+      },
+      {
+        id: 'events-daemon.source.show.resend',
+        argv: ['resend'],
+        args: { source: 'resend' },
+        expect: { source: 'resend' },
+      },
+      {
+        id: 'events-daemon.source.show.whatsapp',
+        argv: ['whatsapp'],
+        args: { source: 'whatsapp' },
+        expect: { source: 'whatsapp' },
+      },
+    ],
+  );
 });
 
 test('PAR-B1: generated daemon references exactly describe the B1 registries', async () => {

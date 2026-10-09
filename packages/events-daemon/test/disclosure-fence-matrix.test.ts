@@ -9,7 +9,9 @@ import {
 } from '../src/domain/activation-documents.ts';
 import { assertDisclosable, isWhitelistedTightening } from '../src/runtime/disclosure-fence.ts';
 
-const RULE: CanonicalFullRuleDocument = {
+const RULE: CanonicalFullRuleDocument & {
+  readonly source: Extract<CanonicalFullRuleDocument['source'], { readonly channel: 'gmail' }>;
+} = {
   ruleId: 'rule-1',
   version: 1,
   source: {

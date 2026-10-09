@@ -1605,7 +1605,41 @@
       "status": "both",
       "operation": "sourceShow",
       "argv": ["gmail"],
-      "args": { "source": "gmail" }
+      "args": { "source": "gmail" },
+      "expect": { "source": "gmail" }
+    },
+    {
+      "id": "events-daemon.source.show.slack",
+      "package": "events-daemon",
+      "cli": "source show",
+      "mcp": "events_source_show",
+      "status": "both",
+      "operation": "sourceShow",
+      "argv": ["slack"],
+      "args": { "source": "slack" },
+      "expect": { "source": "slack" }
+    },
+    {
+      "id": "events-daemon.source.show.resend",
+      "package": "events-daemon",
+      "cli": "source show",
+      "mcp": "events_source_show",
+      "status": "both",
+      "operation": "sourceShow",
+      "argv": ["resend"],
+      "args": { "source": "resend" },
+      "expect": { "source": "resend" }
+    },
+    {
+      "id": "events-daemon.source.show.whatsapp",
+      "package": "events-daemon",
+      "cli": "source show",
+      "mcp": "events_source_show",
+      "status": "both",
+      "operation": "sourceShow",
+      "argv": ["whatsapp"],
+      "args": { "source": "whatsapp" },
+      "expect": { "source": "whatsapp" }
     },
     {
       "id": "events-daemon.rules.list",

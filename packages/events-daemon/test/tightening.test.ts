@@ -9,7 +9,9 @@ import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 const target = { targetId: 'target-tightening', version: 1, kind: 'dry-run' as const, retentionMs: 86_400_000 };
-const base: CanonicalFullRuleDocument = {
+const base: CanonicalFullRuleDocument & {
+  readonly source: Extract<CanonicalFullRuleDocument['source'], { readonly channel: 'gmail' }>;
+} = {
   ruleId: 'rule-tightening',
   version: 1,
   source: {

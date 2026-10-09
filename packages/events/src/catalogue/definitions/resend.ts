@@ -116,6 +116,7 @@ export const resendEmailReceivedV1: DefinitionInternal<ResendEmailReceivedV1, Re
     { rule: 'same-instant', pointers: ['/receivedAt', '/occurredAt'] },
     { rule: 'length-equals', pointers: ['/attachments', '/attachmentCount'] },
   ],
+  identityPointers: ['/emailId'],
   subject: (event) => event.emailId,
   dedupeKey: (event) => event.emailId,
   examples: [
@@ -225,6 +226,7 @@ export const resendEmailStatusChangedV1: DefinitionInternal<ResendEmailStatusCha
     { rule: 'identical', pointers: ['/at', '/occurredAt'] },
     { rule: 'identical', pointers: ['/occurredAt', '/observedAt'] },
   ],
+  identityPointers: ['/emailId', '/previous', '/current', '/at'],
   subject: (event) => event.emailId,
   dedupeKey: (event) => canonicalJson([event.emailId, event.previous, event.current, event.at]),
   examples: [

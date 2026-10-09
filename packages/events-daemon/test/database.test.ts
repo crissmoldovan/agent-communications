@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { ENCRYPTED_EVENT_COLUMNS } from '../src/store/aad.ts';
 import { openEventDatabase } from '../src/store/database.ts';
+import { EVENT_MIGRATIONS } from '../src/store/migrations.ts';
 import { RECORD_LAYOUTS } from '../src/store/records.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
 
@@ -58,7 +59,7 @@ test('SEC-B1: a fresh event database is one strict SQLite authority with durable
       const resetMeta = first.database.prepare("SELECT value FROM meta WHERE key = 'reset_epoch'").get() as
         | { value: string }
         | undefined;
-      assert.equal(schemaMeta?.value, '9');
+      assert.equal(schemaMeta?.value, String(EVENT_MIGRATIONS.at(-1)?.version));
       assert.equal(resetMeta?.value, '0');
 
       first.immediate(() => {

@@ -60,7 +60,26 @@ export interface HttpReply {
   readonly headers?: Record<string, string>;
 }
 
-export type Reply = (request: SlackRequest) => unknown | HttpReply | typeof DROP;
+export type Reply =
+  | ((request: SlackRequest) => unknown | HttpReply | typeof DROP)
+  | ((request: SlackRequest) => Promise<unknown | HttpReply | typeof DROP>);
+
+/** One cursor-addressed page from Slack's two event read methods. */
+export interface SlackEventPageFixture {
+  readonly messages?: readonly Record<string, unknown>[] | undefined;
+  readonly nextCursor?: string | null | undefined;
+  readonly retainedHistoryBoundary?: boolean | undefined;
+  /** A loopback 429 with Slack's documented retry hint. */
+  readonly retryAfterSeconds?: number | undefined;
+  /** Holds this page after the request journal records it. */
+  readonly delayed?: Promise<void> | undefined;
+}
+
+/** Cursor-addressed event fixtures; reply keys are `${parentTs}\u0000${cursor ?? ''}`. */
+export interface SlackEventPages {
+  readonly history: Readonly<Record<string, SlackEventPageFixture>>;
+  readonly replies: Readonly<Record<string, SlackEventPageFixture>>;
+}
 
 /** How the files host answers one file. */
 export interface FileReply {
@@ -147,6 +166,8 @@ export interface FakeSlack {
    * arrived and been recorded — until it settles: an upload as long as a test needs it to be.
    */
   uploadAnswer: UploadAnswer;
+  /** Installs the narrow, read-only history/replies routes used by local event tests. */
+  eventPages(pages: SlackEventPages): void;
   /**
    * Scripts the three Web API methods a file post makes, and returns what they see as they are called.
    *
@@ -307,6 +328,39 @@ function sendPaced(
   setTimeout(next, pace.everyMs);
 }
 
+function eventPageAnswer(page: SlackEventPageFixture): Reply {
+  return async () => {
+    await page.delayed;
+    if (page.retryAfterSeconds !== undefined)
+      return {
+        status: 429,
+        headers: { 'retry-after': String(page.retryAfterSeconds) },
+        body: { ok: false, error: 'ratelimited' },
+      };
+    return {
+      ok: true,
+      messages: page.messages ?? [],
+      ...(page.retainedHistoryBoundary === true ? { is_limited: true } : {}),
+      response_metadata:
+        page.nextCursor === null || page.nextCursor === undefined ? {} : { next_cursor: page.nextCursor },
+    };
+  };
+}
+
+function installEventPages(fake: FakeSlack, pages: SlackEventPages): void {
+  fake.script['conversations.history'] = (request) => {
+    const cursor = request.params.get('cursor') ?? '';
+    const page = pages.history[cursor];
+    return page === undefined ? { ok: false, error: 'invalid_cursor' } : eventPageAnswer(page)(request);
+  };
+  fake.script['conversations.replies'] = (request) => {
+    const parent = request.params.get('ts') ?? '';
+    const cursor = request.params.get('cursor') ?? '';
+    const page = pages.replies[`${parent}\u0000${cursor}`];
+    return page === undefined ? { ok: false, error: 'invalid_cursor' } : eventPageAnswer(page)(request);
+  };
+}
+
 export async function startFakeSlack(script: Record<string, Reply> = {}): Promise<FakeSlack> {
   const requests: SlackRequest[] = [];
   const fake: FakeSlack = {
@@ -314,6 +368,7 @@ export async function startFakeSlack(script: Record<string, Reply> = {}): Promis
     script,
     files: {},
     uploadAnswer: () => ({ status: 200, body: 'OK' }),
+    eventPages: (pages) => installEventPages(fake, pages),
     acceptUploads: (options) => acceptUploads(fake, options),
     local: '',
     fetch: async () => {
@@ -359,7 +414,7 @@ export async function startFakeSlack(script: Record<string, Reply> = {}): Promis
         return;
       }
       const reply = fake.script[method];
-      const answer = reply ? reply(recorded) : { ok: false, error: 'unknown_method' };
+      const answer = reply ? await reply(recorded) : { ok: false, error: 'unknown_method' };
       if (answer === DROP) {
         response.socket?.destroy();
         return;

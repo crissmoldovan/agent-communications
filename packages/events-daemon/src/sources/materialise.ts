@@ -1,6 +1,7 @@
 import { CommsError } from '@agentcomms/core';
 import { type GmailEventMessageMetadata, type GmailEventSource, normaliseGmailEventMetadata } from '@agentcomms/gmail';
 import type { EventDatabase } from '../store/database.ts';
+import { resolveStageRetryDeadline } from '../store/retention.ts';
 
 type GmailMaterialisationSource = Pick<GmailEventSource, 'getMessage'> &
   Partial<Pick<GmailEventSource, 'getAttachment'>>;
@@ -123,16 +124,17 @@ export class GmailMaterialiser {
       return this.#replaceUnresolved(outcomes, this.#terminaliseAll(unresolved, 'retention-expired', 'STAGE_EXPIRED'));
     const retry = await this.#retry(first);
     await this.#accountLive();
-    const horizon = retry === null ? stageExpiresAt : Math.min(retry.first_failed_at + MAX_RETRY_MS, stageExpiresAt);
-    if (now >= horizon) {
-      return this.#replaceUnresolved(
-        outcomes,
-        this.#terminaliseAll(
-          unresolved,
-          horizon === stageExpiresAt ? 'retention-expired' : 'unresolvable',
-          'RETRY_EXHAUSTED',
-        ),
-      );
+    const resolution =
+      retry === null
+        ? null
+        : resolveStageRetryDeadline({
+            now,
+            firstFailedAt: retry.first_failed_at,
+            stageExpiresAt,
+            retryWindowMs: MAX_RETRY_MS,
+          });
+    if (resolution !== null && resolution.state !== 'retry') {
+      return this.#replaceUnresolved(outcomes, this.#terminaliseAll(unresolved, resolution.state, 'RETRY_EXHAUSTED'));
     }
     if (retry !== null && now < retry.next_retry_at) {
       const pending: GmailMaterialisationResult = { state: 'pending', retryAt: retry.next_retry_at };
@@ -241,15 +243,15 @@ export class GmailMaterialiser {
     const now = this.#now();
     const firstFailedAt = previous?.first_failed_at ?? now;
     const attempts = (previous?.attempts ?? 0) + 1;
-    const horizon = Math.min(firstFailedAt + MAX_RETRY_MS, stageExpiresAt);
-    if (now >= horizon)
-      return this.#terminalise(
-        request,
-        horizon === stageExpiresAt ? 'retention-expired' : 'unresolvable',
-        'RETRY_EXHAUSTED',
-      );
+    const resolution = resolveStageRetryDeadline({
+      now,
+      firstFailedAt,
+      stageExpiresAt,
+      retryWindowMs: MAX_RETRY_MS,
+    });
+    if (resolution.state !== 'retry') return this.#terminalise(request, resolution.state, 'RETRY_EXHAUSTED');
     const backoff = Math.min(BASE_BACKOFF_MS * 2 ** Math.min(attempts - 1, 8), MAX_BACKOFF_MS);
-    const retryAt = Math.min(now + backoff, horizon);
+    const retryAt = Math.min(now + backoff, resolution.deadline);
     const state: GmailMaterialisationRetryState = {
       first_failed_at: firstFailedAt,
       next_retry_at: retryAt,

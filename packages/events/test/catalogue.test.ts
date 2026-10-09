@@ -13,7 +13,7 @@ import {
   whatsappMessageKey,
 } from '../src/index.ts';
 import { checkPattern, expandPattern } from '../src/pattern.ts';
-import { getPointer } from '../src/pointer.ts';
+import { getPointer, parsePointer } from '../src/pointer.ts';
 import type { SchemaNode } from '../src/schema/describe.ts';
 import { applyProseRules, extractAppendix, type ProseRules } from './appendix/extract.ts';
 import {
@@ -86,6 +86,49 @@ test('CAT-h and CAT-i: source selection excludes operational, reset and test rec
   const version = catalogueEntry('gmail.message.received', 2);
   assert.equal(version.ok, false);
   if (!version.ok) assert.equal(version.issues[0]?.code, 'EVENT_VERSION_UNKNOWN');
+});
+
+test("D3-a: each definition's identity pointers are exactly enough to compute its subject and dedupe key", () => {
+  // A rule projection retains these pointers whatever the rule maps (the daemon's minimiseProjection), so the
+  // CloudEvent subject and the dedupe key must be computable from them alone. A definition whose subject or dedupe
+  // key reads a field missing here would build an event from an incomplete projection.
+  for (const definition of CATALOGUE) {
+    const callable = definition as unknown as {
+      identityPointers: readonly string[];
+      subject(event: unknown): string;
+      dedupeKey(event: unknown, staging: Readonly<Record<string, string>>): string;
+    };
+    assert.ok(callable.identityPointers.length > 0, `${definition.type} names its identity pointers`);
+    const staging = { historyRecordId: '42' };
+    for (const event of definition.examples) {
+      const only: Record<string, unknown> = {};
+      for (const pointer of callable.identityPointers) {
+        const found = getPointer(event as never, pointer);
+        assert.ok(found.found, `${definition.type} example has ${pointer}`);
+        const tokens = parsePointer(pointer);
+        assert.ok(tokens.ok, pointer);
+        let at: Record<string, unknown> = only;
+        for (const [index, token] of tokens.value.entries()) {
+          if (index === tokens.value.length - 1) {
+            at[token] = found.value;
+            continue;
+          }
+          if (at[token] === undefined) at[token] = {};
+          at = at[token] as Record<string, unknown>;
+        }
+      }
+      assert.equal(
+        callable.subject(only),
+        callable.subject(event),
+        `${definition.type} subject from identity pointers`,
+      );
+      assert.equal(
+        callable.dedupeKey(only, staging),
+        callable.dedupeKey(event, staging),
+        `${definition.type} dedupe key from identity pointers`,
+      );
+    }
+  }
 });
 
 test('D3-a: every Appendix A subject and dedupe descriptor agrees with its definition', () => {

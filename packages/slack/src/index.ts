@@ -22,5 +22,16 @@ export const PACKAGE_NAME = '@agentcomms/slack';
  * since knowing a method's name grants nothing.
  */
 export * from './api/methods.ts';
-
 export { createSlackMcpServer, type SlackMcpOptions, type SlackMcpServer } from './mcp/server.ts';
+/** Read-only structural boundary consumed by the held local event service. */
+export {
+  compareSlackTimestamps,
+  normaliseSlackEventMessage,
+  openSlackEventSource,
+  openSlackEventSourceForPaths,
+  type SlackEventConversation,
+  type SlackEventMessage,
+  type SlackEventPage,
+  type SlackEventSource,
+  type SlackEventSourceOptions,
+} from './operations/events.ts';

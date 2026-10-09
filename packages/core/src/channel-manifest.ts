@@ -52,6 +52,19 @@ export interface ChannelRivalPackage {
  */
 export type ApprovalGrouping = 'draft' | 'draft-revision-digest';
 
+/** The credential boundary an event source needs, kept as manifest data rather than inferred from an adapter. */
+export type EventSourceAccess =
+  | { readonly kind: 'oauth-user'; readonly requiredScopes: readonly string[] }
+  | { readonly kind: 'resend-full-access' }
+  | { readonly kind: 'local-store' };
+
+/** A channel's optional local-event adapter declaration. */
+export interface ChannelEvents {
+  readonly types: readonly string[];
+  readonly minimumIntervalMs: number;
+  readonly access: EventSourceAccess;
+}
+
 export interface ChannelManifest {
   readonly contract: typeof CHANNEL_CONTRACT;
   /**
@@ -126,6 +139,8 @@ export interface ChannelManifest {
    * part in the report. The core, which sends nothing, declares none.
    */
   readonly approvalGrouping?: ApprovalGrouping | undefined;
+  /** Local event types the channel can acquire, with its scheduler floor and credential boundary. */
+  readonly events?: ChannelEvents | undefined;
 }
 
 /** A manifest, and the package that declares it. */
@@ -147,6 +162,18 @@ const narrowingSchema = z.strictObject({
   option: z.enum(['account', 'inbox', 'workspace', 'readOnly']),
   flag: z.string().regex(/^--[a-z][a-z-]*$/, 'a long flag, `--like-this`'),
   kind: z.enum(['pin', 'switch']),
+});
+
+const eventAccessSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('oauth-user'), requiredScopes: z.array(line).min(1) }),
+  z.strictObject({ kind: z.literal('resend-full-access') }),
+  z.strictObject({ kind: z.literal('local-store') }),
+]);
+
+const eventsSchema = z.strictObject({
+  types: z.array(line).min(1),
+  minimumIntervalMs: z.number().int().positive(),
+  access: eventAccessSchema,
 });
 
 /**
@@ -228,6 +255,7 @@ const manifestSchema = z
       .strictObject({ prefix: z.string().regex(/^[a-z][a-z0-9]*-$/, 'a word and a hyphen: `gmail-`'), contract: line })
       .optional(),
     approvalGrouping: z.enum(['draft', 'draft-revision-digest']).optional(),
+    events: eventsSchema.optional(),
   })
   .superRefine((manifest, ctx) => {
     const issue = (path: (string | number)[], message: string) => ctx.addIssue({ code: 'custom', path, message });

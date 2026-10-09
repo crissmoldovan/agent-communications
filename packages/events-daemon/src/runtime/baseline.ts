@@ -1,6 +1,19 @@
 import { CommsError } from '@agentcomms/core';
 import type { GmailEventSource } from '@agentcomms/gmail';
+import type { LocalEventSource, SourceScope } from '../sources/contracts.ts';
 import type { MailboxLock } from '../sources/mailbox-lock.ts';
+import type { SourceScopeLock } from '../sources/scope-lock.ts';
+
+/** The source-neutral lock-and-sample shape used by every activation baseline. */
+export async function persistSourceBaseline<TPosition, TResult>(
+  source: LocalEventSource,
+  lock: SourceScopeLock,
+  scope: SourceScope,
+  sample: () => Promise<TPosition>,
+  persist: (position: TPosition) => Promise<TResult> | TResult,
+): Promise<TResult> {
+  return source.withScopes(lock, [scope], async () => persist(await source.baseline(sample)));
+}
 
 /** The only Gmail activation baseline: a profile history id, never a history or body/materialisation read. */
 export async function gmailBaseline(
@@ -18,10 +31,17 @@ export async function gmailBaseline(
  * cursor commit. The callback is deliberately inside the lock because its encryption and write define the point.
  */
 export async function persistGmailBaseline<T>(
+  source: LocalEventSource,
   mailboxLock: MailboxLock,
   accountId: string,
   sourceFor: () => Promise<Pick<GmailEventSource, 'getProfile'>>,
   persist: (position: { readonly historyId: string }) => Promise<T> | T,
 ): Promise<T> {
-  return mailboxLock.withMailbox(accountId, async () => persist(await gmailBaseline(await sourceFor())));
+  return persistSourceBaseline(
+    source,
+    mailboxLock.sourceScopeLock,
+    { source: 'gmail', accountId, scopeId: 'mailbox' },
+    async () => gmailBaseline(await sourceFor()),
+    persist,
+  );
 }

@@ -16,7 +16,7 @@ import {
   validateCloudEventType,
 } from '@agentcomms/events';
 import { EventDomainError, isJudgeKind, type JudgeKind } from './lifecycle.ts';
-import { type GmailSourceOptions, normaliseGmailSourceOptions } from './source-options.ts';
+import { normaliseSourceOptions, type SourceOptions } from './source-options.ts';
 import {
   canonicalSseSubscriber,
   canonicalSseTarget,
@@ -55,14 +55,32 @@ export interface RuleRetentionDocument {
   readonly decisionMetadataMs: number;
 }
 
+export type CanonicalRuleSource =
+  | {
+      readonly channel: 'gmail';
+      readonly accountIds: readonly string[];
+      readonly options: Extract<SourceOptions, { channel: 'gmail' }>;
+    }
+  | {
+      readonly channel: 'slack';
+      readonly accountIds: readonly string[];
+      readonly options: Extract<SourceOptions, { channel: 'slack' }>;
+    }
+  | {
+      readonly channel: 'resend';
+      readonly accountIds: readonly string[];
+      readonly options: Extract<SourceOptions, { channel: 'resend' }>;
+    }
+  | {
+      readonly channel: 'whatsapp';
+      readonly accountIds: readonly string[];
+      readonly options: Extract<SourceOptions, { channel: 'whatsapp' }>;
+    };
+
 export interface CanonicalFullRuleDocument {
   readonly ruleId: string;
   readonly version: number;
-  readonly source: {
-    readonly channel: 'gmail';
-    readonly accountIds: readonly string[];
-    readonly options: GmailSourceOptions;
-  };
+  readonly source: CanonicalRuleSource;
   readonly event: { readonly type: string; readonly version: number };
   readonly condition: CanonicalCondition;
   readonly mapping: JsonValue;
@@ -206,11 +224,27 @@ function canonicalRetention(value: unknown): RuleRetentionDocument {
   return result;
 }
 
-/** Validates B1's Gmail-to-dry-run full rule shape and returns its canonical data-only form. */
+function canonicalRuleSource(value: unknown): CanonicalRuleSource {
+  const source = cloneJsonRecord(value, 'rule source');
+  const options = normaliseSourceOptions(source.options);
+  if (source.channel !== options.channel) return fail('rule source channel and source options channel agree');
+  const accountIds = canonicalStringSet(source.accountIds, 'rule account ids');
+  switch (options.channel) {
+    case 'gmail':
+      return { channel: 'gmail', accountIds, options };
+    case 'slack':
+      return { channel: 'slack', accountIds, options };
+    case 'resend':
+      return { channel: 'resend', accountIds, options };
+    case 'whatsapp':
+      return { channel: 'whatsapp', accountIds, options };
+  }
+}
+
+/** Validates a Phase-D full rule shape and returns its canonical data-only form. */
 export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocument {
   const rule = cloneJsonRecord(value, 'a rule document');
-  const source = cloneJsonRecord(rule.source, 'rule source');
-  if (source.channel !== 'gmail') return fail('B1 supports only Gmail rule sources', 'SOURCE_CHANNEL_UNSUPPORTED');
+  const source = canonicalRuleSource(rule.source);
   const event = cloneJsonRecord(rule.event, 'rule event');
   const eventType = requiredText(event.type, 'an event type');
   if (eventType === TEST_CLOUD_EVENT.type || eventType === 'io.agentcomms.control.installation-reset.v1') {
@@ -226,8 +260,8 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
       definition.issues[0]?.message ?? 'the event type is not selectable',
       definition.issues[0]?.code as EventDomainError['code'],
     );
-  if (!eventType.startsWith('gmail.'))
-    return fail('B1 supports only Gmail catalogue events', 'SOURCE_CHANNEL_UNSUPPORTED');
+  if (!eventType.startsWith(`${source.channel}.`))
+    return fail('a rule event type belongs to its source channel', 'SOURCE_CHANNEL_UNSUPPORTED');
   const condition = canonicaliseCondition(definition.value, rule.condition);
   if (!condition.ok) return fail(condition.issues[0]?.message ?? 'the rule condition is not valid');
   const mapping = canonicalJsonValue(rule.mapping, 'rule mapping');
@@ -257,11 +291,7 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
   return {
     ruleId: requiredText(rule.ruleId, 'a rule id'),
     version: positiveInteger(rule.version, 'a rule version'),
-    source: {
-      channel: 'gmail',
-      accountIds: canonicalStringSet(source.accountIds, 'rule account ids'),
-      options: normaliseGmailSourceOptions(source.options),
-    },
+    source,
     event: { type: eventType, version: eventVersion },
     condition: condition.value,
     mapping,

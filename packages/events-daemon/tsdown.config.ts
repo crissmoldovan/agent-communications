@@ -12,5 +12,13 @@ export default defineConfig({
   clean: true,
   dts: { resolve: true },
   noExternal: [/.*/],
-  external: ['@agentcomms/core', '@agentcomms/events', '@agentcomms/gmail', '@napi-rs/keyring'],
+  external: [
+    '@agentcomms/core',
+    '@agentcomms/events',
+    '@agentcomms/gmail',
+    '@agentcomms/resend',
+    '@agentcomms/slack',
+    '@agentcomms/whatsapp',
+    '@napi-rs/keyring',
+  ],
 });
