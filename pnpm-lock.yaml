@@ -114,6 +114,9 @@ importers:
       commander:
         specifier: ^15.0.0
         version: 15.0.0
+      playwright:
+        specifier: 1.61.1
+        version: 1.61.1
       tsdown:
         specifier: 'catalog:'
         version: 0.23.0(typescript@7.0.2)

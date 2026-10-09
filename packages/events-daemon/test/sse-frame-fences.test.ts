@@ -8,7 +8,7 @@ import {
   type SseFrameVisibilityGate,
   type WhatsAppListChangeParticipant,
 } from '../src/runtime/phase-d-whatsapp-seam.ts';
-import { writeLiveSseFrame } from '../src/runtime/sse-dispatcher.ts';
+import { SseDispatcher, writeLiveSseFrame } from '../src/runtime/sse-dispatcher.ts';
 import { writeReplaySseFrame } from '../src/runtime/stream-replay.ts';
 
 function recordingGate(trace: string[]): SseFrameVisibilityGate {
@@ -57,17 +57,29 @@ test('B2-T8: the synchronous pass-through gate invokes a frame writer exactly on
   assert.deepEqual(trace, ['write']);
 });
 
-test('B2-T8: each actual live and replay writer nests a WhatsApp sink write in the injected visibility gate', () => {
-  for (const writer of [writeLiveSseFrame, writeReplaySseFrame]) {
+test('B2-T9: each actual dispatcher/live and Last-Event-ID replay writer nests a WhatsApp sink write in the injected visibility gate', () => {
+  for (const kind of ['live', 'replay'] as const) {
     const trace: string[] = [];
-    writer({
+    const input = {
       frame: 'id: stream-1\ndata: {}\n\n',
       accountId: 'account-1',
       whatsappMessageId: 'message-1',
       visibilityGate: recordingGate(trace),
       hasConcreteWhatsAppVisibilityFence: true,
-      writeFrame: (frame) => trace.push(`write:${frame}`),
-    });
+      writeFrame: (frame: string) => trace.push(`write:${frame}`),
+    };
+    const accepted =
+      kind === 'live'
+        ? new SseDispatcher({
+            store: {} as never,
+            cipher: {} as never,
+            approvals: {} as never,
+            config: {} as never,
+            visibilityGate: input.visibilityGate,
+            hasConcreteWhatsAppVisibilityFence: true,
+          }).writeLive(input)
+        : writeReplaySseFrame(input);
+    assert.equal(accepted, true);
     assert.deepEqual(trace, ['gate:account-1:message-1', 'write:id: stream-1\ndata: {}\n\n', 'gate-return']);
   }
 });

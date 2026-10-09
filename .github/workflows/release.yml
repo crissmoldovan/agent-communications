@@ -101,14 +101,13 @@ jobs:
       - run: node --version
       - run: node --test packages/events-daemon/test/old-node.test.mjs
 
-  # **The event library's vectors in real browsers.** The `verify:browser` script runs every vector family of
-  # `@agentcomms/events` in Playwright's Chromium and WebKit, under the desktop app's production CSP, and requires the
-  # same results as Node and the bare realm every verify leg runs. WebKit is JavaScriptCore, the engine of the macOS
-  # webview the desktop app uses; Chromium is the engine of Windows' WebView2. Kept out of the six verify legs because
-  # it downloads two browsers. `test/release-packages.test.mjs` holds the job to this shape (events phase A plan,
-  # decision 3).
+  # **The event library's vectors and loopback daemon SSE/CORS in real browsers.** The `verify:browser` script runs
+  # every vector family of `@agentcomms/events` and B2's sealed loopback preflight/credential-omitting stream test in
+  # Playwright's Chromium and WebKit. WebKit is JavaScriptCore, the engine of the macOS webview the desktop app uses;
+  # Chromium is the engine of Windows' WebView2. Kept out of the six verify legs because it downloads two browsers.
+  # `test/release-packages.test.mjs` holds the job to this shape (events phase A plan, decision 3; B2 Task 9).
   browser:
-    name: event vectors in chromium and webkit
+    name: event vectors and loopback SSE CORS in chromium and webkit
     runs-on: macos-latest
     permissions:
       contents: read

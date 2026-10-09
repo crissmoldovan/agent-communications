@@ -1,0 +1,213 @@
+import assert from 'node:assert/strict';
+import { rm } from 'node:fs/promises';
+import { createServer, request } from 'node:http';
+import { test } from 'node:test';
+import { canonicalJson, sha256Hex } from '@agentcomms/core';
+import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
+import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { requestSse } from './support/sse-client.ts';
+
+assertLoopbackSeal();
+
+const accountId = 'account-sse-listener';
+/** A loopback port free when the suite starts, so the listener never collides with a fixed number already in use. */
+const PORT = await new Promise<number>((resolve, reject) => {
+  const probe = createServer();
+  probe.once('error', reject);
+  probe.listen(0, '127.0.0.1', () => {
+    const address = probe.address();
+    probe.close(() =>
+      typeof address === 'object' && address !== null ? resolve(address.port) : reject(new Error('no port')),
+    );
+  });
+});
+const allowedOrigin = 'http://127.0.0.1:38124';
+const subscriber = {
+  subscriberId: 'subscriber-listener',
+  version: 1,
+  kind: 'sse' as const,
+  authority: { host: '127.0.0.1' as const, port: PORT },
+  origins: [allowedOrigin],
+  retentionMs: 60_000,
+};
+
+async function fixture() {
+  const [{ startSseServer }, { openEventDatabase }] = await Promise.all([
+    import('../src/runtime/sse-server.ts'),
+    import('../src/store/database.ts'),
+  ]);
+  const stateDir = await shortTempDir('events-sse-listener-');
+  const store = await openEventDatabase({ stateDir });
+  store.database.exec('UPDATE event_settings SET enabled = 1, switch_generation = 1');
+  const document = canonicalJson(subscriber);
+  store.database
+    .prepare('INSERT INTO subscriber_versions (id, subscriber_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
+    .run('subscriber-listener@1', subscriber.subscriberId, subscriber.version, document, sha256Hex(document));
+  const server = await startSseServer({
+    store,
+    subscriberId: subscriber.subscriberId,
+    subscriberVersion: subscriber.version,
+    cipher: {
+      encrypt: async (_location: unknown, bytes: Uint8Array) => Buffer.from(bytes),
+      decrypt: async (_location: unknown, bytes: Uint8Array) => Buffer.from(bytes),
+    },
+    approvals: { get: async () => null },
+    config: { load: async () => ({ inboxes: { inbox: { id: accountId, provider: 'gmail' } } }) } as never,
+    readBearerGenerations: async () => [{ generation: 1, lifecycle: 'current' as const, material: 'listener-token' }],
+  });
+  return { stateDir, store, server };
+}
+
+test('B2-T9: loopback SSE listener rejects an invalid route, Host, query, cookie or bearer before stream registration', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
+  let setup: Awaited<ReturnType<typeof fixture>>;
+  try {
+    setup = await fixture();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+      t.skip('the development sandbox blocks loopback listeners; the coordinator runs this listener proof outside it');
+      return;
+    }
+    throw error;
+  }
+  try {
+    assert.deepEqual(setup.server.authority, subscriber.authority, 'the listener binds only its persisted authority');
+    for (const { expected, ...input } of [
+      {
+        expected: 404,
+        path: '/v1/streams/other',
+        headers: { host: `127.0.0.1:${PORT}`, authorization: 'Bearer listener-token' },
+      },
+      { expected: 403, headers: { host: 'wrong.test', authorization: 'Bearer listener-token' } },
+      {
+        expected: 403,
+        path: '/v1/streams/subscriber-listener?access_token=listener-token',
+        headers: { host: `127.0.0.1:${PORT}`, authorization: 'Bearer listener-token' },
+      },
+      {
+        expected: 403,
+        headers: { host: `127.0.0.1:${PORT}`, cookie: 'token=listener-token', authorization: 'Bearer listener-token' },
+      },
+      { expected: 403, headers: { host: `127.0.0.1:${PORT}`, authorization: 'Bearer wrong' } },
+    ]) {
+      const result = await requestSse({ port: PORT, ...input });
+      assert.equal(result.status, expected);
+    }
+  } finally {
+    await setup.server.close();
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B2-T9: exact-origin preflight reflects only the approved CORS contract without credentials or a wildcard', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
+  let setup: Awaited<ReturnType<typeof fixture>>;
+  try {
+    setup = await fixture();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+      t.skip('the development sandbox blocks loopback listeners; the coordinator runs this listener proof outside it');
+      return;
+    }
+    throw error;
+  }
+  try {
+    const approved = await requestSse({
+      port: PORT,
+      method: 'OPTIONS',
+      headers: {
+        host: `127.0.0.1:${PORT}`,
+        origin: allowedOrigin,
+        'access-control-request-method': 'GET',
+        'access-control-request-headers': 'authorization,last-event-id',
+      },
+    });
+    assert.equal(approved.status, 204);
+    assert.equal(approved.headers['access-control-allow-origin'], allowedOrigin);
+    assert.equal(approved.headers['access-control-allow-methods'], 'GET');
+    assert.equal(approved.headers['access-control-allow-headers'], 'Authorization, Last-Event-ID');
+    assert.equal(approved.headers.vary, 'Origin');
+    assert.equal(approved.headers['access-control-allow-credentials'], undefined);
+    assert.notEqual(approved.headers['access-control-allow-origin'], '*');
+
+    const refused = await requestSse({
+      port: PORT,
+      method: 'OPTIONS',
+      headers: {
+        host: `127.0.0.1:${PORT}`,
+        origin: 'http://127.0.0.1:38125',
+        'access-control-request-method': 'GET',
+        'access-control-request-headers': 'authorization,last-event-id',
+      },
+    });
+    assert.equal(refused.status, 403);
+  } finally {
+    await setup.server.close();
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B2-T9: rotation, pause and the per-frame writer gate prevent a registered old stream from receiving another frame', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
+  let setup: Awaited<ReturnType<typeof fixture>>;
+  try {
+    setup = await fixture();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+      t.skip('the development sandbox blocks loopback listeners; the coordinator runs this listener proof outside it');
+      return;
+    }
+    throw error;
+  }
+  try {
+    const connected = request({
+      host: '127.0.0.1',
+      port: PORT,
+      path: '/v1/streams/subscriber-listener',
+      headers: { host: `127.0.0.1:${PORT}`, authorization: 'Bearer listener-token' },
+    });
+    const frames: string[] = [];
+    const open = new Promise<void>((resolve, reject) => {
+      connected.once('response', (incoming) => {
+        incoming.on('data', (chunk: Buffer) => frames.push(chunk.toString('utf8')));
+        resolve();
+      });
+      connected.once('error', reject);
+    });
+    connected.end();
+    await open;
+    assert.equal(
+      setup.server.writeLive({ accountId, whatsappMessageId: null, switchGeneration: 1, frame: 'data: first\n\n' }),
+      1,
+    );
+    setup.server.rotate({
+      subscriberId: subscriber.subscriberId,
+      subscriberVersion: subscriber.version,
+      generation: 2,
+    });
+    assert.equal(
+      setup.server.writeLive({ accountId, whatsappMessageId: null, switchGeneration: 1, frame: 'data: old\n\n' }),
+      0,
+    );
+    setup.store.database.exec('UPDATE event_settings SET paused = 1');
+    assert.equal(
+      setup.server.writeLive({ accountId, whatsappMessageId: null, switchGeneration: 1, frame: 'data: paused\n\n' }),
+      0,
+    );
+    // The client reads over a real loopback socket: wait (bounded) for the first frame, then give any frame wrongly
+    // written after the rotation or the pause the same chance to arrive before asserting none did.
+    for (let waited = 0; frames.length === 0 && waited < 2_000; waited += 5)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.deepEqual(frames, ['data: first\n\n']);
+  } finally {
+    await setup.server.close();
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
