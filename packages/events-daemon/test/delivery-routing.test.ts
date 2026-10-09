@@ -134,13 +134,14 @@ test('B2-T2: an owner scheduler tick routes every B2 kind without rebuilding its
   }
 });
 
-test('B2-T2: public target acceptance remains dry-run-only while owner scheduling depends on the generic facade', async () => {
+test('B2-T2: owner scheduling depends on the generic facade while document widening stays free of a new public operation', async () => {
   const [documents, scheduler, owner] = await Promise.all([
     readFile(new URL('../src/domain/activation-documents.ts', import.meta.url), 'utf8'),
     readFile(new URL('../src/runtime/scheduler.ts', import.meta.url), 'utf8'),
     readFile(new URL('../src/runtime/owner.ts', import.meta.url), 'utf8'),
   ]);
-  assert.match(documents, /B1 supports only dry-run target documents/);
+  assert.match(documents, /canonicalWebhookTarget/);
+  assert.match(documents, /canonicalSseTarget/);
   assert.doesNotMatch(scheduler, /DryRunDispatcher/);
   assert.match(scheduler, /DeliveryDispatcher/);
   assert.match(owner, /new DeliveryDispatcher/);

@@ -73,6 +73,12 @@ export const RECORD_LAYOUTS: readonly RecordLayout[] = [
   { table: 'decisions', column: 'encryptedRecord', sqlColumn: 'encrypted_record', keyColumns: ['id'] },
   { table: 'deliveries', column: 'encryptedRecord', sqlColumn: 'encrypted_record', keyColumns: ['id'] },
   { table: 'dryrun_log', column: 'encryptedRecord', sqlColumn: 'encrypted_record', keyColumns: ['delivery_id'] },
+  {
+    table: 'event_secret_generations',
+    column: 'encryptedReference',
+    sqlColumn: 'encrypted_ref',
+    keyColumns: ['owner_kind', 'owner_id', 'owner_version', 'purpose', 'generation'],
+  },
 ];
 
 type SqlValue = string | number | bigint | Uint8Array | null;

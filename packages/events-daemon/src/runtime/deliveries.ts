@@ -1,5 +1,7 @@
 import type { AnyEventDefinition, JsonValue, MappedClassification } from '@agentcomms/events';
-import type { CanonicalFullRuleDocument, DryRunTargetDocument } from '../domain/activation-documents.ts';
+import type { CanonicalFullRuleDocument, TargetDocument } from '../domain/activation-documents.ts';
+import { sseDeliveryTarget } from '../domain/sse-subscriber.ts';
+import { webhookDeliveryTarget } from '../domain/webhook-target.ts';
 import { fixedDeadline } from '../store/retention.ts';
 import type { ProjectionCipher } from './projections.ts';
 import { constructTargetDelivery, type DeliveryRepresentation, type DeliveryTarget } from './target-delivery.ts';
@@ -35,7 +37,7 @@ export async function prepareDeliveries(input: {
   readonly targets?: readonly DeliveryTarget[] | undefined;
 }): Promise<readonly PreparedDelivery[]> {
   const deliveries: PreparedDelivery[] = [];
-  const targets = input.targets ?? input.rule.targets.map(dryRunDeliveryTarget);
+  const targets = input.targets ?? input.rule.targets.map((target) => documentDeliveryTarget(input.rule, target));
   for (const target of targets) {
     const id = input.newId();
     const constructed = constructTargetDelivery({
@@ -73,11 +75,28 @@ export async function prepareDeliveries(input: {
   return deliveries;
 }
 
-function dryRunDeliveryTarget(target: DryRunTargetDocument): DeliveryTarget {
-  return {
-    kind: 'dry-run',
-    targetId: target.targetId,
-    targetVersion: target.version,
-    representation: 'plain',
-  };
+function documentDeliveryTarget(rule: CanonicalFullRuleDocument, target: TargetDocument): DeliveryTarget {
+  switch (target.kind) {
+    case 'dry-run':
+      return {
+        kind: 'dry-run',
+        targetId: target.targetId,
+        targetVersion: target.version,
+        representation: 'plain',
+      };
+    case 'webhook':
+      return webhookDeliveryTarget(target);
+    case 'sse': {
+      const subscriber = rule.subscribers.find(
+        (candidate) => candidate.subscriberId === target.subscriberId && candidate.version === target.subscriberVersion,
+      );
+      if (subscriber === undefined) throw new Error('an immutable SSE target has no bound subscriber version');
+      return sseDeliveryTarget({
+        targetId: target.targetId,
+        version: target.version,
+        subscriber,
+        representation: target.representation,
+      });
+    }
+  }
 }

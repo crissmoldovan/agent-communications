@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
+import { encodeAad } from '../src/store/aad.ts';
 import { applyMigrations, EVENT_MIGRATIONS, type EventMigration } from '../src/store/migrations.ts';
+import { RECORD_LAYOUTS } from '../src/store/records.ts';
 
 test('SEC-B1: an interruption at every migration statement leaves neither its schema nor its ledger version committed', () => {
   const migration: EventMigration = {
@@ -77,4 +79,83 @@ test('SEC-B1: every statement in each real authority migration is atomic with it
 test('SEC-B1: every event migration starts with an immediate writer transaction', async () => {
   const source = await readFile(new URL('../src/store/migrations.ts', import.meta.url), 'utf8');
   assert.match(source, /database\.exec\('BEGIN IMMEDIATE'\)/);
+});
+
+test('B2-T3: the forward secret-generation migration preserves B1 and binds each opaque reference to its exact slot AAD', () => {
+  const database = new DatabaseSync(':memory:');
+  try {
+    const b1 = EVENT_MIGRATIONS.filter((migration) => migration.version <= 5);
+    applyMigrations(database, b1);
+    assert.equal(
+      (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
+      '5',
+    );
+    applyMigrations(database);
+    assert.equal(
+      (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
+      '6',
+    );
+    const columns = database
+      .prepare("SELECT name, type, pk FROM pragma_table_info('event_secret_generations')")
+      .all() as Array<{
+      name: string;
+      type: string;
+      pk: number;
+    }>;
+    assert.deepEqual(
+      columns
+        .filter((column) => column.pk > 0)
+        .sort((left, right) => left.pk - right.pk)
+        .map((column) => column.name),
+      ['owner_kind', 'owner_id', 'owner_version', 'purpose', 'generation'],
+    );
+    assert.equal(columns.find((column) => column.name === 'encrypted_ref')?.type, 'BLOB');
+    assert.ok(
+      RECORD_LAYOUTS.some(
+        (layout) =>
+          layout.table === 'event_secret_generations' &&
+          layout.column === 'encryptedReference' &&
+          layout.sqlColumn === 'encrypted_ref',
+      ),
+    );
+    const url = encodeAad('event_secret_generations', 'encryptedReference', [
+      { type: 'text', value: 'target' },
+      { type: 'text', value: 'target-1' },
+      { type: 'integer', value: 1 },
+      { type: 'text', value: 'secret-url' },
+      { type: 'integer', value: 1 },
+    ]);
+    const signingCurrent = encodeAad('event_secret_generations', 'encryptedReference', [
+      { type: 'text', value: 'target' },
+      { type: 'text', value: 'target-1' },
+      { type: 'integer', value: 1 },
+      { type: 'text', value: 'webhook-signing' },
+      { type: 'integer', value: 2 },
+    ]);
+    const signingPrevious = encodeAad('event_secret_generations', 'encryptedReference', [
+      { type: 'text', value: 'target' },
+      { type: 'text', value: 'target-1' },
+      { type: 'integer', value: 1 },
+      { type: 'text', value: 'webhook-signing' },
+      { type: 'integer', value: 1 },
+    ]);
+    const bearerCurrent = encodeAad('event_secret_generations', 'encryptedReference', [
+      { type: 'text', value: 'subscriber' },
+      { type: 'text', value: 'subscriber-1' },
+      { type: 'integer', value: 1 },
+      { type: 'text', value: 'sse-bearer' },
+      { type: 'integer', value: 2 },
+    ]);
+    const bearerPrevious = encodeAad('event_secret_generations', 'encryptedReference', [
+      { type: 'text', value: 'subscriber' },
+      { type: 'text', value: 'subscriber-1' },
+      { type: 'integer', value: 1 },
+      { type: 'text', value: 'sse-bearer' },
+      { type: 'integer', value: 1 },
+    ]);
+    for (const value of [signingCurrent, signingPrevious, bearerCurrent, bearerPrevious])
+      assert.notDeepEqual(value, url);
+  } finally {
+    database.close();
+  }
 });

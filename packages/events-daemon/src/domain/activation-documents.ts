@@ -17,6 +17,13 @@ import {
 } from '@agentcomms/events';
 import { EventDomainError, isJudgeKind, type JudgeKind } from './lifecycle.ts';
 import { type GmailSourceOptions, normaliseGmailSourceOptions } from './source-options.ts';
+import {
+  canonicalSseSubscriber,
+  canonicalSseTarget,
+  type SseSubscriberDocument,
+  type SseTargetDocument,
+} from './sse-subscriber.ts';
+import { canonicalWebhookTarget, type WebhookTargetDocument } from './webhook-target.ts';
 
 export interface DryRunTargetDocument {
   readonly targetId: string;
@@ -24,6 +31,8 @@ export interface DryRunTargetDocument {
   readonly kind: 'dry-run';
   readonly retentionMs: number;
 }
+
+export type TargetDocument = DryRunTargetDocument | WebhookTargetDocument | SseTargetDocument;
 
 export interface JudgeDocument {
   readonly judgeId: string;
@@ -34,12 +43,7 @@ export interface JudgeDocument {
   readonly [field: string]: unknown;
 }
 
-export interface SubscriberDocument {
-  readonly subscriberId: string;
-  readonly version: number;
-  readonly kind: string;
-  readonly [field: string]: unknown;
-}
+export type SubscriberDocument = SseSubscriberDocument;
 
 export interface RuleRetentionDocument {
   readonly ingestMs: number;
@@ -64,7 +68,7 @@ export interface CanonicalFullRuleDocument {
   readonly mapping: JsonValue;
   /** D2/D6: the optional exact CloudEvent `type` override, part of the approval when present; absent means the default. */
   readonly cloudEventType?: string;
-  readonly targets: readonly DryRunTargetDocument[];
+  readonly targets: readonly TargetDocument[];
   readonly subscribers: readonly SubscriberDocument[];
   readonly judges: readonly JudgeDocument[];
   readonly deliveryRateCap: number;
@@ -142,18 +146,27 @@ function canonicalStringSet(value: unknown, name: string): readonly string[] {
   return sorted;
 }
 
-/** The one canonical form of a dry-run target version — stored, and embedded in every rule that names it. */
-export function canonicalTarget(value: unknown): DryRunTargetDocument {
+/** The canonical immutable target document — stored, and embedded in every rule that names it. */
+export function canonicalTarget(value: unknown): TargetDocument {
   const target = cloneJsonRecord(value, 'a target document');
-  if (target.kind !== 'dry-run') return fail('B1 supports only dry-run target documents');
-  const retentionMs = positiveInteger(target.retentionMs, 'a dry-run retention');
-  if (retentionMs > 86_400_000) return fail('a dry-run retention is at most 24 hours');
-  return {
-    targetId: requiredText(target.targetId, 'a target id'),
-    version: positiveInteger(target.version, 'a target version'),
-    kind: 'dry-run',
-    retentionMs,
-  };
+  switch (target.kind) {
+    case 'dry-run': {
+      const retentionMs = positiveInteger(target.retentionMs, 'a dry-run retention');
+      if (retentionMs > 86_400_000) return fail('a dry-run retention is at most 24 hours');
+      return {
+        targetId: requiredText(target.targetId, 'a target id'),
+        version: positiveInteger(target.version, 'a target version'),
+        kind: 'dry-run',
+        retentionMs,
+      };
+    }
+    case 'webhook':
+      return canonicalWebhookTarget(target);
+    case 'sse':
+      return canonicalSseTarget(target);
+    default:
+      return fail('a target document has a known kind');
+  }
 }
 
 /** The one canonical form of a judge version — stored, and embedded in every rule that names it. */
@@ -173,12 +186,8 @@ export function canonicalJudge(value: unknown): JudgeDocument {
 /** The one canonical form of a subscriber version — stored, and embedded in every rule that names it. */
 export function canonicalSubscriber(value: unknown): SubscriberDocument {
   const subscriber = cloneJsonRecord(value, 'a subscriber document');
-  return {
-    ...subscriber,
-    subscriberId: requiredText(subscriber.subscriberId, 'a subscriber id'),
-    version: positiveInteger(subscriber.version, 'a subscriber version'),
-    kind: requiredText(subscriber.kind, 'a subscriber kind'),
-  };
+  if (subscriber.kind !== 'sse') return fail('a subscriber document has a known kind');
+  return canonicalSseSubscriber(subscriber);
 }
 
 function canonicalRetention(value: unknown): RuleRetentionDocument {
@@ -230,7 +239,14 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
   const subscribers = Array.isArray(rule.subscribers)
     ? rule.subscribers.map(canonicalSubscriber)
     : fail('rule subscribers are an array');
-  if (subscribers.length !== 0) return fail('B1 has no runnable subscriber target');
+  for (const target of targets) {
+    if (target.kind !== 'sse') continue;
+    const bound = subscribers.find(
+      (subscriber) =>
+        subscriber.subscriberId === target.subscriberId && subscriber.version === target.subscriberVersion,
+    );
+    if (bound === undefined) return fail('an SSE target embeds its exact subscriber version');
+  }
   const judges = Array.isArray(rule.judges) ? rule.judges.map(canonicalJudge) : fail('rule judges are an array');
   let cloudEventType: string | undefined;
   if (rule.cloudEventType !== undefined) {

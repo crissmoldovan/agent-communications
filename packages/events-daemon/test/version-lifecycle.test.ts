@@ -47,7 +47,9 @@ test('APR/JDG-B1: immutable target, subscriber and judge versions are inert, whi
         subscriberId: 'subscriber-1',
         version: 1,
         kind: 'sse',
-        origins: ['https://app.example'],
+        authority: { host: '127.0.0.1', port: 9443 },
+        origins: ['https://app.example.test'],
+        retentionMs: 604_800_000,
       });
       versions.createJudge(judge);
       const prepared = versions.createRule(deterministicRule);

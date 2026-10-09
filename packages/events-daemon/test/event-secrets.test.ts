@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { SecretStore } from '@agentcomms/core';
+import { ImmutableVersions } from '../src/domain/versions.ts';
+import { secretWebhookUrlDescriptor } from '../src/domain/webhook-target.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import {
   type EventSecretStoreKind,
@@ -11,7 +13,10 @@ import {
   migrateEventSecrets,
   openEventSecretStore,
   selectEventSecretStore,
+  storeEventSecretGeneration,
+  storeSecretWebhookUrl,
 } from '../src/store/event-secrets.ts';
+import { EventRecordCipher } from '../src/store/records.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 class MemorySecretStore implements SecretStore {
@@ -37,6 +42,51 @@ class MemorySecretStore implements SecretStore {
   }
 
   invalidate(): void {}
+}
+
+class JournalSecretStore extends MemorySecretStore {
+  readonly journal: string[];
+  #pauseNextRead = false;
+  #releaseRead: (() => void) | undefined;
+  #startedRead: (() => void) | undefined;
+  readonly readStarted = new Promise<void>((resolve) => {
+    this.#startedRead = resolve;
+  });
+
+  constructor(kind: EventSecretStoreKind, journal: string[]) {
+    super(kind);
+    this.journal = journal;
+  }
+
+  pauseNextRead(): void {
+    this.#pauseNextRead = true;
+  }
+
+  continueRead(): void {
+    this.#releaseRead?.();
+  }
+
+  override async get(ref: string): Promise<string | null> {
+    this.journal.push(`${this.kind}:get:${ref}`);
+    if (this.#pauseNextRead) {
+      this.#pauseNextRead = false;
+      this.#startedRead?.();
+      await new Promise<void>((resolve) => {
+        this.#releaseRead = resolve;
+      });
+    }
+    return super.get(ref);
+  }
+
+  override async set(ref: string, value: string): Promise<void> {
+    this.journal.push(`${this.kind}:set:${ref}`);
+    await super.set(ref, value);
+  }
+
+  override async delete(ref: string): Promise<boolean> {
+    this.journal.push(`${this.kind}:delete:${ref}`);
+    return super.delete(ref);
+  }
 }
 
 test('SEC-B1: event masters use the database-selected backend, separate namespace, and rotation ledger', {
@@ -214,6 +264,377 @@ test('SEC-B1: event-secret migration uses only database references and rolls cop
         .prepare("SELECT value FROM meta WHERE key = 'event_secret_store'")
         .get() as { value: string } | undefined;
       assert.equal(cleanupSelector?.value, 'file');
+    } finally {
+      opened.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B2-T3: event-secret migration copies masters and every current or overlap network generation before selecting its destination', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-network-secret-migration-'));
+  try {
+    const opened = await openEventDatabase({ stateDir });
+    try {
+      const file = new MemorySecretStore('file');
+      const keychain = new MemorySecretStore('keychain');
+      const targetDocument = JSON.stringify({ kind: 'webhook', targetId: 'target-1', version: 1 });
+      const subscriberDocument = JSON.stringify({ kind: 'sse', subscriberId: 'subscriber-1', version: 1 });
+      const targetDigest = '1'.repeat(64);
+      const subscriberDigest = '2'.repeat(64);
+      opened.database
+        .prepare('INSERT INTO target_versions (id, target_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
+        .run('target-1@1', 'target-1', 1, targetDocument, targetDigest);
+      opened.database
+        .prepare(
+          'INSERT INTO subscriber_versions (id, subscriber_id, version, document, digest) VALUES (?, ?, ?, ?, ?)',
+        )
+        .run('subscriber-1@1', 'subscriber-1', 1, subscriberDocument, subscriberDigest);
+      await selectEventSecretStore(opened.database, 'file');
+      const secrets = await openEventSecretStore({
+        database: opened.database,
+        paths: opened.paths,
+        configDir: '/srv/test',
+        stores: { file, keychain },
+      });
+      const cipher = new EventRecordCipher(opened.database, secrets);
+      await secrets.currentMaster();
+      const target = { kind: 'target' as const, id: 'target-1', version: 1, digest: targetDigest };
+      const subscriber = { kind: 'subscriber' as const, id: 'subscriber-1', version: 1, digest: subscriberDigest };
+      await storeEventSecretGeneration({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher,
+        owner: target,
+        purpose: 'secret-url',
+        material: 'hidden-url-value',
+        expectedPriorGeneration: null,
+      });
+      const signing = await storeEventSecretGeneration({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher,
+        owner: target,
+        purpose: 'webhook-signing',
+        material: 'hidden-signing-first',
+        expectedPriorGeneration: null,
+      });
+      await storeEventSecretGeneration({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher,
+        owner: target,
+        purpose: 'webhook-signing',
+        material: 'hidden-signing-second',
+        expectedPriorGeneration: signing.generation,
+      });
+      const bearer = await storeEventSecretGeneration({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher,
+        owner: subscriber,
+        purpose: 'sse-bearer',
+        material: 'hidden-bearer-first',
+        expectedPriorGeneration: null,
+      });
+      await storeEventSecretGeneration({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher,
+        owner: subscriber,
+        purpose: 'sse-bearer',
+        material: 'hidden-bearer-second',
+        expectedPriorGeneration: bearer.generation,
+      });
+
+      const migration = await migrateEventSecrets({
+        database: opened.database,
+        paths: opened.paths,
+        from: 'file',
+        to: 'keychain',
+        source: file,
+        target: keychain,
+        referenceCipher: cipher,
+      });
+      assert.equal(
+        migration.moved,
+        6,
+        'the master plus URL, current and overlap signing/bearer references move together',
+      );
+      assert.deepEqual(migration.leftovers, []);
+      assert.equal(file.values.size, 0);
+      const selected = await openEventSecretStore({
+        database: opened.database,
+        paths: opened.paths,
+        configDir: '/srv/test',
+        stores: { file, keychain },
+      });
+      const selectedCipher = new EventRecordCipher(opened.database, selected);
+      assert.deepEqual([...keychain.values.keys()].sort(), await selected.references(selectedCipher));
+      assert.equal(JSON.stringify(signing).includes('hidden-signing-first'), false);
+      assert.equal(JSON.stringify(bearer).includes('hidden-bearer-first'), false);
+    } finally {
+      opened.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B2-T3: the internal secret-URL factory commits only a matching opaque generation and never returns URL material', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-secret-url-factory-'));
+  try {
+    const opened = await openEventDatabase({ stateDir });
+    try {
+      const url = 'https://receiver.example.test/private-path?credential=fixture';
+      const document = {
+        targetId: 'target-url',
+        version: 1,
+        kind: 'webhook' as const,
+        url: secretWebhookUrlDescriptor(url),
+        approvedAddressSet: ['8.8.8.8'],
+        signing: 'standard-webhooks' as const,
+        ordering: 'strict' as const,
+        retryLimit: 20,
+        representation: 'enveloped' as const,
+      };
+      new ImmutableVersions(opened.database).createInternalTarget(document);
+      await selectEventSecretStore(opened.database, 'file');
+      const file = new MemorySecretStore('file');
+      const secrets = await openEventSecretStore({
+        database: opened.database,
+        paths: opened.paths,
+        configDir: '/srv/test',
+        stores: { file },
+      });
+      const generation = await storeSecretWebhookUrl({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher: new EventRecordCipher(opened.database, secrets),
+        document,
+        completeUrl: url,
+        expectedPriorGeneration: null,
+      });
+      assert.equal(generation.purpose, 'secret-url');
+      assert.equal(JSON.stringify(generation).includes(url), false);
+      assert.equal(JSON.stringify(generation).includes('private-path'), false);
+      assert.equal(JSON.stringify(generation).includes('credential=fixture'), false);
+      assert.equal(JSON.stringify(generation).includes('event-secret:'), false);
+      await assert.rejects(
+        storeSecretWebhookUrl({
+          database: opened.database,
+          paths: opened.paths,
+          store: secrets,
+          cipher: new EventRecordCipher(opened.database, secrets),
+          document,
+          completeUrl: 'https://receiver.example.test/other-path?credential=fixture',
+          expectedPriorGeneration: generation.generation,
+        }),
+        (error: unknown) => error instanceof Error && !error.message.includes('other-path'),
+      );
+    } finally {
+      opened.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B2-T3: migration locks create, rotation and reconciliation; it reads back every copy before selecting or retiring', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-migration-lock-'));
+  try {
+    const opened = await openEventDatabase({ stateDir });
+    try {
+      const journal: string[] = [];
+      const file = new JournalSecretStore('file', journal);
+      const keychain = new JournalSecretStore('keychain', journal);
+      const document = JSON.stringify({ kind: 'webhook', targetId: 'target-lock', version: 1 });
+      const digest = '3'.repeat(64);
+      opened.database
+        .prepare('INSERT INTO target_versions (id, target_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
+        .run('target-lock@1', 'target-lock', 1, document, digest);
+      await selectEventSecretStore(opened.database, 'file');
+      const secrets = await openEventSecretStore({
+        database: opened.database,
+        paths: opened.paths,
+        configDir: '/srv/test',
+        stores: { file, keychain },
+      });
+      const cipher = new EventRecordCipher(opened.database, secrets);
+      await secrets.currentMaster();
+      const owner = { kind: 'target' as const, id: 'target-lock', version: 1, digest };
+      await storeEventSecretGeneration({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher,
+        owner,
+        purpose: 'webhook-signing',
+        material: 'first-signing-secret',
+        expectedPriorGeneration: null,
+      });
+      const references = await secrets.references(cipher);
+      file.pauseNextRead();
+      const moving = migrateEventSecrets({
+        database: opened.database,
+        paths: opened.paths,
+        from: 'file',
+        to: 'keychain',
+        source: file,
+        target: keychain,
+        referenceCipher: cipher,
+      });
+      await file.readStarted;
+      const creating = storeEventSecretGeneration({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher,
+        owner,
+        purpose: 'webhook-signing',
+        material: 'second-signing-secret',
+        expectedPriorGeneration: 1,
+      });
+      const rotating = secrets.rotateMaster();
+      const reconciling = secrets.reconcileRetiredGenerations(cipher);
+      const staleStoreRefusals = [creating, rotating, reconciling].map((delayed) =>
+        assert.rejects(
+          delayed,
+          (error: unknown) => error instanceof Error && 'code' in error && error.code === 'EVENT_SECRET_SELECTOR',
+        ),
+      );
+      file.continueRead();
+      assert.equal((await moving).moved, references.length);
+      await Promise.all(staleStoreRefusals);
+      assert.deepEqual([...keychain.values.keys()].sort(), references);
+      assert.equal(file.values.size, 0, 'the old backend retires only after a committed selector');
+      const firstSourceDelete = journal.findIndex((entry) => entry.startsWith('file:delete:'));
+      const finalTargetRead = journal.reduce(
+        (last, entry, index) => (entry.startsWith('keychain:get:') ? index : last),
+        -1,
+      );
+      assert.ok(firstSourceDelete > finalTargetRead, 'source retirement follows every target read-back');
+      const selector = opened.database.prepare("SELECT value FROM meta WHERE key = 'event_secret_store'").get() as {
+        value: string;
+      };
+      assert.equal(selector.value, 'keychain');
+    } finally {
+      opened.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B2-T3: a failed destination read-back leaves the prior selector and every source reference intact', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-migration-rollback-'));
+  try {
+    const opened = await openEventDatabase({ stateDir });
+    try {
+      const file = new MemorySecretStore('file');
+      const corrupt = new MemorySecretStore('keychain');
+      corrupt.get = async () => 'corrupt-read-back';
+      await selectEventSecretStore(opened.database, 'file');
+      const secrets = await openEventSecretStore({
+        database: opened.database,
+        paths: opened.paths,
+        configDir: '/srv/test',
+        stores: { file },
+      });
+      await secrets.currentMaster();
+      const references = await secrets.references();
+      await assert.rejects(
+        migrateEventSecrets({
+          database: opened.database,
+          paths: opened.paths,
+          from: 'file',
+          to: 'keychain',
+          source: file,
+          target: corrupt,
+        }),
+        /did not verify/,
+      );
+      assert.deepEqual([...file.values.keys()].sort(), references, 'failure never retires a source value first');
+      assert.equal(corrupt.values.size, 0, 'an unselected, failed destination is cleaned');
+      assert.equal(
+        (opened.database.prepare("SELECT value FROM meta WHERE key = 'event_secret_store'").get() as { value: string })
+          .value,
+        'file',
+      );
+    } finally {
+      opened.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B2-T3: reconciliation removes only expired retired generations after their ledger rows no longer name them', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-secret-reconcile-'));
+  try {
+    const opened = await openEventDatabase({ stateDir });
+    try {
+      const file = new MemorySecretStore('file');
+      const digest = '4'.repeat(64);
+      opened.database
+        .prepare('INSERT INTO target_versions (id, target_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
+        .run('target-reconcile@1', 'target-reconcile', 1, '{"kind":"webhook"}', digest);
+      await selectEventSecretStore(opened.database, 'file');
+      const secrets = await openEventSecretStore({
+        database: opened.database,
+        paths: opened.paths,
+        configDir: '/srv/test',
+        stores: { file },
+      });
+      const cipher = new EventRecordCipher(opened.database, secrets);
+      const owner = { kind: 'target' as const, id: 'target-reconcile', version: 1, digest };
+      const first = await storeEventSecretGeneration({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher,
+        owner,
+        purpose: 'webhook-signing',
+        material: 'first',
+        expectedPriorGeneration: null,
+      });
+      const expiry = Date.now() + 1_000;
+      await storeEventSecretGeneration({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher,
+        owner,
+        purpose: 'webhook-signing',
+        material: 'second',
+        expectedPriorGeneration: first.generation,
+        overlapExpiresAt: expiry,
+      });
+      assert.equal((await secrets.references(cipher)).length, 3, 'master, current and overlap remain reachable');
+      assert.deepEqual(await secrets.reconcileRetiredGenerations(cipher, expiry), []);
+      assert.equal((await secrets.references(cipher)).length, 2, 'only master and current remain reachable');
+      assert.equal(file.values.size, 2);
+      const retired = opened.database
+        .prepare("SELECT COUNT(*) AS count FROM event_secret_generations WHERE lifecycle = 'retired'")
+        .get() as { count: number };
+      assert.equal(retired.count, 0);
     } finally {
       opened.close();
     }

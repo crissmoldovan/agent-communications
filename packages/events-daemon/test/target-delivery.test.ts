@@ -171,13 +171,21 @@ test('B2-T2: target construction preserves the approved rule CloudEvent type in 
   assert.equal(JSON.parse(delivery.cloudEventBytes).type, 'com.example.mail.received');
 });
 
-test('B2-T2: public target documents still reject B2 webhook and SSE forms', () => {
-  assert.throws(
-    () => canonicalTarget({ targetId: 'target-1', version: 1, kind: 'webhook', retentionMs: 60_000 }),
-    /B1 supports only dry-run target documents/,
-  );
+test('B2-T3: canonical B2 documents map to Task 2 target kinds and reject incomplete descriptors', () => {
+  const webhook = canonicalTarget({
+    targetId: 'target-1',
+    version: 1,
+    kind: 'webhook',
+    url: { kind: 'plain', value: 'https://receiver.example.test/events' },
+    approvedAddressSet: ['8.8.8.8'],
+    signing: 'standard-webhooks',
+    ordering: 'strict',
+    retryLimit: 20,
+    representation: 'plain',
+  });
+  assert.equal(webhook.kind, 'webhook');
   assert.throws(
     () => canonicalTarget({ targetId: 'target-1', version: 1, kind: 'sse', retentionMs: 60_000 }),
-    /B1 supports only dry-run target documents/,
+    /subscriber id|representation/i,
   );
 });
