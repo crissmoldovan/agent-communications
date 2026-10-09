@@ -7,6 +7,7 @@ import { SourceScopeLock } from './scope-lock.ts';
 import { isSourceScopeFenced } from './source-scope-fence.ts';
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1_000;
+const DEFAULT_PAGE_BUDGET = 10;
 const STATUS = new Set([
   'scheduled',
   'sent',
@@ -40,6 +41,12 @@ export interface ResendStatusChange {
 interface PendingStatusStage {
   readonly change: ResendStatusChange;
 }
+
+interface StatusScanContinuation {
+  readonly after: string;
+}
+
+type StatusStoredRecord = PendingStatusStage | StatusScanContinuation;
 
 interface LoadedPendingStatusStage {
   readonly id: string;
@@ -150,7 +157,7 @@ export class ResendStatusSource {
   readonly #accountId: string;
   readonly #reader: ResendEventReader;
   readonly #admit: (change: ResendStatusChange) => Promise<'terminal' | 'pending'>;
-  readonly #encrypt: (value: PendingStatusStage, id: string) => Promise<Uint8Array>;
+  readonly #encrypt: (value: StatusStoredRecord, id: string) => Promise<Uint8Array>;
   readonly #decrypt: (stored: Uint8Array, id: string) => Promise<unknown>;
   readonly #debts: () => readonly SourceStageDebt[];
   readonly #assertWriteStillLive: () => void;
@@ -166,7 +173,7 @@ export class ResendStatusSource {
       accountId: string;
       reader: ResendEventReader;
       admit: (change: ResendStatusChange) => Promise<'terminal' | 'pending'>;
-      encrypt: (value: PendingStatusStage, id: string) => Promise<Uint8Array>;
+      encrypt: (value: StatusStoredRecord, id: string) => Promise<Uint8Array>;
       decrypt: (stored: Uint8Array, id: string) => Promise<unknown>;
       debts: () => readonly SourceStageDebt[];
       assertWriteStillLive?: (() => void) | undefined;
@@ -213,14 +220,17 @@ export class ResendStatusSource {
     return start;
   }
 
-  async scan(): Promise<void> {
-    return this.#scopeLock.withScope(this.#scope, () => this.#scan());
+  async scan(input: Readonly<{ maxPages?: number | undefined }> = {}): Promise<Readonly<{ pending: boolean }>> {
+    const maxPages = input.maxPages ?? DEFAULT_PAGE_BUDGET;
+    if (!Number.isSafeInteger(maxPages) || maxPages < 1)
+      throw new Error('a Resend status scan needs a positive page budget');
+    return this.#scopeLock.withScope(this.#scope, () => this.#scan(maxPages));
   }
 
-  async #scan(): Promise<void> {
+  async #scan(maxPages: number): Promise<Readonly<{ pending: boolean }>> {
     this.#assertUnfenced();
-    let after: string | undefined;
-    for (;;) {
+    let after = (await this.#loadContinuation())?.after;
+    for (let pages = 0; pages < maxPages; pages += 1) {
       const page = await this.#reader.listSent(after);
       for (const item of page.emails) {
         if (!STATUS.has(item.lastEvent)) throw new Error('unsupported Resend status');
@@ -274,9 +284,17 @@ export class ResendStatusSource {
           this.#settlePending(staged);
         }
       }
-      if (page.next === null) return;
+      if (page.next === null) {
+        await this.#deleteContinuation();
+        return { pending: false };
+      }
+      if (pages + 1 === maxPages) {
+        await this.#saveContinuation({ after: page.next });
+        return { pending: true };
+      }
       after = page.next;
     }
+    throw new Error('a Resend status scan exhausted its page budget unexpectedly');
   }
 
   pruneExpired(): number {
@@ -342,6 +360,50 @@ export class ResendStatusSource {
         });
       }
       return expired;
+    });
+  }
+
+  async #loadContinuation(): Promise<StatusScanContinuation | null> {
+    const id = this.#continuationId();
+    const row = this.#store.database
+      .prepare("SELECT encrypted_record FROM source_scan_state WHERE id = ? AND cursor_scope = 'status-continuation'")
+      .get(id) as { encrypted_record: Uint8Array } | undefined;
+    if (row === undefined) return null;
+    const value = (await this.#decrypt(row.encrypted_record, id)) as unknown;
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      typeof (value as { after?: unknown }).after !== 'string' ||
+      (value as { after: string }).after.length === 0
+    )
+      throw new Error('a Resend status continuation is malformed');
+    return value as StatusScanContinuation;
+  }
+
+  async #saveContinuation(value: StatusScanContinuation): Promise<void> {
+    const id = this.#continuationId();
+    const encrypted = await this.#encrypt(value, id);
+    this.#store.immediate(() => {
+      this.#assertWriteStillLive();
+      this.#assertUnfenced();
+      this.#store.database
+        .prepare(
+          `INSERT INTO source_scan_state
+           (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at)
+           VALUES (?, 'resend', ?, 'status-continuation', NULL, NULL, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET encrypted_record = excluded.encrypted_record, updated_at = excluded.updated_at`,
+        )
+        .run(id, this.#accountId, encrypted, this.#now());
+    });
+  }
+
+  async #deleteContinuation(): Promise<void> {
+    this.#store.immediate(() => {
+      this.#assertWriteStillLive();
+      this.#assertUnfenced();
+      this.#store.database
+        .prepare("DELETE FROM source_scan_state WHERE id = ? AND cursor_scope = 'status-continuation'")
+        .run(this.#continuationId());
     });
   }
 
@@ -428,6 +490,10 @@ export class ResendStatusSource {
 
   #stageId(emailId: string): string {
     return `resend-status:${this.#accountId}:${emailId}`;
+  }
+
+  #continuationId(): string {
+    return `resend-status-continuation:${this.#accountId}`;
   }
 
   #assertUnfenced(): void {

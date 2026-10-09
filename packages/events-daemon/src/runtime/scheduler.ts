@@ -160,26 +160,7 @@ export class EventScheduler {
     const status = this.#lifecycle.status();
     if (!status.enabled || status.paused) return;
 
-    for (const account of await this.#boundLiveAccounts()) {
-      try {
-        if (!this.#due(account.accountId)) continue;
-        await this.#poll(account);
-      } catch (error) {
-        if (isRemovedAccountError(error)) {
-          this.#store.immediate(() =>
-            purgeRemovedAccountWork(
-              this.#store.database,
-              { source: 'gmail', accountId: account.accountId },
-              this.#now(),
-            ),
-          );
-          continue;
-        }
-        this.#recordFailure('gmail', account.accountId);
-      }
-    }
-
-    await this.#pollNonGmailScopes();
+    await this.#pollReadyScope();
 
     try {
       await recoverDeliveryLeases(this.#dispatcher);
@@ -201,13 +182,15 @@ export class EventScheduler {
     }
   }
 
-  /** One fair ready-source turn per owner tick; a source cannot monopolise the loop with pages, drains, or retries. */
-  async #pollNonGmailScopes(): Promise<void> {
-    if (!this.#sourceWorkFor) return;
+  /** One fair ready-source turn per owner tick; Gmail and every Phase-D source share the same bounded rotation. */
+  async #pollReadyScope(): Promise<void> {
+    const gmailAccounts = new Map((await this.#boundLiveAccounts()).map((account) => [account.accountId, account]));
     // Rotate the complete bound set, then take the first eligible one. Replacing the wheel with only due scopes
     // would reset it after every successful poll (that poll moves its own next-eligible instant) and starve every
     // scope other than the lexical first one.
-    const scopes = this.#boundSourceScopes().filter((scope) => scope.source !== 'gmail');
+    const scopes = this.#boundSourceScopes().filter((scope) =>
+      scope.source === 'gmail' ? gmailAccounts.has(scope.accountId) : this.#sourceWorkFor !== undefined,
+    );
     const key = scopes.map((scope) => `${scope.source}\u0000${scope.accountId}\u0000${scope.scopeId}`).join('\n');
     if (key !== this.#readyKey) {
       this.#ready.replace(scopes, this.#lastReadyScope());
@@ -216,12 +199,31 @@ export class EventScheduler {
     let scope: SourceScope | undefined;
     for (let turn = 0; turn < scopes.length; turn += 1) {
       const candidate = this.#ready.next();
-      if (candidate !== undefined && this.#dueScope(candidate)) {
+      if (
+        candidate !== undefined &&
+        (candidate.source === 'gmail' ? this.#due(candidate.accountId) : this.#dueScope(candidate))
+      ) {
         scope = candidate;
         break;
       }
     }
     if (!scope) return;
+    if (scope.source === 'gmail') {
+      const account = gmailAccounts.get(scope.accountId);
+      if (account === undefined) return;
+      try {
+        await this.#poll(account);
+        this.#rememberReadyScope(scope);
+      } catch (error) {
+        if (isRemovedAccountError(error)) {
+          this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, scope, this.#now()));
+          return;
+        }
+        this.#rememberReadyScope(scope);
+        this.#recordFailure('gmail', scope.accountId);
+      }
+      return;
+    }
     try {
       await assertLiveEventAccount(this.#config, { source: scope.source, accountId: scope.accountId });
       if (isSourceScopeFenced(this.#store.database, scope)) return;
@@ -499,9 +501,10 @@ export class EventScheduler {
         }
         return materialiser.materialiseAll(requests);
       },
+      now: this.#now,
     });
     scanning = worker;
-    await worker.scan();
+    await worker.scan({ maxPages: 1 });
   }
 
   #due(accountId: string): boolean {

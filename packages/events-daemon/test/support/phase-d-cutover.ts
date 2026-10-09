@@ -103,6 +103,9 @@ export class PhaseDCutoverFixture {
   #failpoint: CutoverFailpoint | undefined;
   #deadlineFailpoint: ActivationDeadlineFailpoint | undefined;
   #slackPages: Pick<SlackEventSource, 'history' | 'replies'> | undefined;
+  #slackBaselineTimestamp = '1759999999.000000';
+  #resendReceivedBaseline = 'empty';
+  #resendReceivedReader: Pick<ResendEventReader, 'listReceived' | 'getReceived'> | undefined;
   #resendSentStatus = 'sent';
 
   private constructor(input: {
@@ -179,6 +182,20 @@ export class PhaseDCutoverFixture {
     this.#slackPages = pages;
   }
 
+  /** Test-only baseline seam for independent-version and enable-all cut-over cells. */
+  setSlackBaseline(timestamp: string): void {
+    this.#slackBaselineTimestamp = timestamp;
+  }
+
+  /** Test-only received reader/baseline seam; production obtains both through the channel operation. */
+  setResendReceivedBaseline(anchorId: string): void {
+    this.#resendReceivedBaseline = anchorId;
+  }
+
+  setResendReceivedReader(reader: Pick<ResendEventReader, 'listReceived' | 'getReceived'> | undefined): void {
+    this.#resendReceivedReader = reader;
+  }
+
   setResendSentStatus(status: string): void {
     this.#resendSentStatus = status;
   }
@@ -199,6 +216,20 @@ export class PhaseDCutoverFixture {
       });
     versions.createRule(this.rule(version, options, mapping, 60, accountIds));
     const prepared = await this.runtime.prepareRule({ ruleId: 'rule-cutover', version });
+    if (!('approvalId' in prepared)) return;
+    await this.#approve(prepared);
+  }
+
+  /** Adds an independently active rule sharing the source scope of the fixture's original rule. */
+  async activateAdditionalRule(
+    ruleId: string,
+    options: unknown = this.options(),
+    mapping = 'safe',
+    accountIds: readonly string[] = [this.accountId],
+  ): Promise<void> {
+    const versions = new ImmutableVersions(this.#store.database);
+    versions.createRule(this.rule(1, options, mapping, 60, accountIds, ruleId));
+    const prepared = await this.runtime.prepareRule({ ruleId, version: 1 });
     if (!('approvalId' in prepared)) return;
     await this.#approve(prepared);
   }
@@ -526,9 +557,10 @@ export class PhaseDCutoverFixture {
     mapping: string,
     deliveryRateCap = 60,
     accountIds: readonly string[] = [this.accountId],
+    ruleId = 'rule-cutover',
   ) {
     return {
-      ruleId: 'rule-cutover',
+      ruleId,
       version,
       source: { channel: this.source, accountIds: [...accountIds].sort(), options },
       event: {
@@ -646,9 +678,15 @@ export class PhaseDCutoverFixture {
 
   private async baseline(source: CutoverSource | 'gmail', scope: string): Promise<unknown> {
     this.baselineCalls += 1;
-    if (source === 'slack') return { timestamp: '1759999999.000000', replyDrain: { through: '1759999999.000000' } };
+    if (source === 'slack')
+      return {
+        timestamp: this.#slackBaselineTimestamp,
+        replyDrain: { through: this.#slackBaselineTimestamp },
+      };
     if (source === 'resend')
-      return scope === 'received' ? { anchorId: 'empty' } : { startedAt: new Date(this.now.value).toISOString() };
+      return scope === 'received'
+        ? { anchorId: this.#resendReceivedBaseline }
+        : { startedAt: new Date(this.now.value).toISOString() };
     return { capturedAt: new Date(this.now.value).toISOString(), baselineGeneration: 0, baselineIdentities: [] };
   }
 
@@ -696,12 +734,14 @@ export class PhaseDCutoverFixture {
 
   private resendReader(): ResendEventReader {
     return {
-      listReceived: async () => {
+      listReceived: async (after) => {
         await this.record('resend.listReceived');
+        if (this.#resendReceivedReader !== undefined) return this.#resendReceivedReader.listReceived(after);
         return { emails: [{ id: IDS.resendId }], next: null };
       },
-      getReceived: async () => {
+      getReceived: async (id) => {
         await this.record('resend.getReceived');
+        if (this.#resendReceivedReader !== undefined) return this.#resendReceivedReader.getReceived(id);
         return {
           kind: 'candidate',
           candidate: {

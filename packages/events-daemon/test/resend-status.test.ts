@@ -97,6 +97,59 @@ test('Resend status seeds its first observed state, emits only deltas, and prune
   }
 });
 
+test('P1-D7: a Resend status turn stops at its page budget and resumes its durable continuation', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-resend-status-page-budget-');
+  try {
+    const store = await openEventDatabase({ stateDir });
+    try {
+      const afters: Array<string | undefined> = [];
+      const reader: ResendEventReader = {
+        async listReceived() {
+          return { emails: [], next: null };
+        },
+        async getReceived() {
+          return { kind: 'vanished' };
+        },
+        async listSent(after) {
+          afters.push(after);
+          return after === undefined
+            ? { emails: [sent('scheduled')], next: 'second' }
+            : { emails: [sent('scheduled')], next: null };
+        },
+      };
+      const source = new ResendStatusSource({
+        store,
+        accountId: ACCOUNT,
+        reader,
+        admit: async () => 'terminal',
+        encrypt: encode,
+        decrypt: decode,
+        debts,
+      });
+
+      await source.scan({ maxPages: 1 });
+      assert.deepEqual(afters, [undefined]);
+      assert.ok(
+        store.database
+          .prepare(
+            "SELECT 1 FROM source_scan_state WHERE source = 'resend' AND account_id = ? AND cursor_scope = 'status-continuation'",
+          )
+          .get(ACCOUNT),
+        'the next-page token is durable before this turn yields',
+      );
+
+      await source.scan({ maxPages: 1 });
+      assert.deepEqual(afters, [undefined, 'second']);
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('a claimed Resend status baseline fences the provider before status polling', { skip: WINDOWS_SKIP }, async () => {
   const stateDir = await shortTempDir('events-resend-status-fence-');
   try {

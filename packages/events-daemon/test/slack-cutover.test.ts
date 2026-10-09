@@ -190,6 +190,71 @@ test('S: replacement has distinct old-only, new-only and shared conversations', 
   }
 });
 
+test('P1-D2: a shared Slack cursor admits a pre-later-point message only to the earlier rule', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fixture = await PhaseDCutoverFixture.create('slack');
+  try {
+    await fixture.activate();
+    await fixture.enable();
+    fixture.setSlackBaseline('1760000001.000000');
+    await fixture.activateAdditionalRule('rule-later');
+    fixture.setSlackPages({
+      history: async () => ({
+        messages: [slackMessage({ ts: IDS.slackTs, threadTs: null, replyCount: 0, text: 'between points' })],
+        nextCursor: null,
+        retainedHistoryBoundary: false,
+      }),
+      replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+    });
+
+    await fixture.schedulerTurn();
+
+    assert.deepEqual(
+      fixture.store.database
+        .prepare('SELECT rule_id FROM decisions ORDER BY rule_id')
+        .all()
+        .map((row) => ({ ...row })),
+      [{ rule_id: 'rule-cutover' }],
+    );
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test('P1-D2: enable-all takes a fresh Slack point and does not backfill disabled-interval messages', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fixture = await PhaseDCutoverFixture.create('slack');
+  try {
+    await fixture.activate();
+    await fixture.enable();
+    fixture.setSlackPages({
+      history: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+      replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+    });
+    await fixture.schedulerTurn();
+    await fixture.disableAll();
+    fixture.now.value += 2_000;
+    fixture.setSlackBaseline('1760000001.000000');
+    await fixture.enable();
+    fixture.setSlackPages({
+      history: async () => ({
+        messages: [slackMessage({ ts: '1760000000.500000', threadTs: null, replyCount: 0, text: 'while disabled' })],
+        nextCursor: null,
+        retainedHistoryBoundary: false,
+      }),
+      replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+    });
+
+    await fixture.schedulerTurn();
+
+    fixture.oracle({ raw: 0, admissions: 0 });
+  } finally {
+    await fixture.dispose();
+  }
+});
+
 test('P1: a replacement reply at P is admitted once to the old version and holds the swap', {
   skip: WINDOWS_SKIP,
 }, async () => {
@@ -198,6 +263,7 @@ test('P1: a replacement reply at P is admitted once to the old version and holds
   const replyTs = '1759999999.000000';
   let postP = false;
   try {
+    fixture.setSlackBaseline('1759999997.000000');
     fixture.setSlackPages({
       history: async () => ({
         messages: [
@@ -228,6 +294,7 @@ test('P1: a replacement reply at P is admitted once to the old version and holds
       )
       .run(fixture.accountId, fixture.scope.scopeId, fixture.now.value);
 
+    fixture.setSlackBaseline(replyTs);
     let waiting = false;
     try {
       await fixture.activate(2, fixture.options(), 'changed');
@@ -294,6 +361,7 @@ test('P1: a replacement drain inherits a recently observed parent below P after 
   const replyTs = '1759999999.000000';
   let replacement = false;
   try {
+    fixture.setSlackBaseline('1759999997.000000');
     fixture.setSlackPages({
       history: async () => ({
         messages: replacement
@@ -322,6 +390,7 @@ test('P1: a replacement drain inherits a recently observed parent below P after 
     fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
 
     replacement = true;
+    fixture.setSlackBaseline(replyTs);
     let waiting = false;
     try {
       await fixture.activate(2, fixture.options(), 'changed');
