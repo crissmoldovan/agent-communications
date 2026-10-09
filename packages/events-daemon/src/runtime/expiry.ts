@@ -51,6 +51,21 @@ export interface AsyncSourceStageExpiry {
   sweep(): Promise<number>;
 }
 
+/** Runs every source-specific decrypted expiry before any adapter can inspect a retained source record. */
+export class SourceStageExpiryGroup implements AsyncSourceStageExpiry {
+  readonly #sources: readonly AsyncSourceStageExpiry[];
+
+  constructor(sources: readonly AsyncSourceStageExpiry[]) {
+    this.#sources = sources;
+  }
+
+  async sweep(): Promise<number> {
+    let expired = 0;
+    for (const source of this.#sources) expired += await source.sweep();
+    return expired;
+  }
+}
+
 /** Deletes B1 content at its durable deadline without waiting for a later delivery or read. */
 export class EventExpiry {
   readonly #store: EventDatabase;
@@ -162,31 +177,6 @@ export class EventExpiry {
 
   /** Purges due source bytes before another source step could inspect or retry them. */
   #expireSourceStages(database: EventDatabase['database'], now: number): number {
-    const stages = database
-      .prepare(
-        `SELECT id, source, account_id
-         FROM source_scan_state
-         WHERE source != 'gmail' AND stage_expires_at IS NOT NULL AND stage_expires_at <= ?`,
-      )
-      .all(now) as Array<{ id: string; source: string; account_id: string }>;
-    for (const stage of stages) {
-      database
-        .prepare(
-          `INSERT OR IGNORE INTO source_occurrence_resolutions
-           (source, account_id, occurrence_key, outcome, resolved_at, error_code)
-           VALUES (?, ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
-        )
-        .run(stage.source, stage.account_id, stage.id, now);
-      database
-        .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
-        .run(
-          `source-retention-expired:${stage.source}:${stage.account_id}:${stage.id}`,
-          'event.source.retention-expired',
-          now,
-        );
-      database.prepare('DELETE FROM source_scan_state WHERE id = ?').run(stage.id);
-    }
-
     const whatsapp = database
       .prepare(
         `SELECT account_id, message_id
@@ -210,6 +200,8 @@ export class EventExpiry {
         )
         .run(occurrence.account_id, occurrence.message_id);
     }
-    return stages.length + whatsapp.length;
+    // Gmail, Slack and Resend stages are decrypted by their registered source-specific sweepers. The old generic
+    // branch could only name an opaque stage id, which both lost the durable continuation and allowed re-admission.
+    return whatsapp.length;
   }
 }

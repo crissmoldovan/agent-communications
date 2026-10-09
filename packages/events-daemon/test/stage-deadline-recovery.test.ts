@@ -5,7 +5,7 @@ import { EventExpiry } from '../src/runtime/expiry.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
-test('D4a: startup/tick expiry deletes a due source stage before a source can resume it and leaves a content-free terminal row', {
+test('D4a: the generic sweep refuses to purge an opaque non-WhatsApp stage without its source continuation', {
   skip: WINDOWS_SKIP,
 }, async () => {
   const stateDir = await shortTempDir('events-stage-expiry-');
@@ -27,17 +27,11 @@ test('D4a: startup/tick expiry deletes a due source stage before a source can re
     );
 
     const atDeadline = new EventExpiry(store, () => 20).sweep();
-    assert.equal(atDeadline.sourceStages, 1);
-    assert.equal(store.database.prepare("SELECT 1 FROM source_scan_state WHERE id = 'stage-expiry'").get(), undefined);
-    assert.deepEqual(
-      {
-        ...(store.database
-          .prepare(
-            "SELECT outcome, error_code FROM source_occurrence_resolutions WHERE source = 'resend' AND occurrence_key = 'stage-expiry'",
-          )
-          .get() as Record<string, unknown>),
-      },
-      { outcome: 'retention-expired', error_code: 'STAGE_EXPIRED' },
+    assert.equal(atDeadline.sourceStages, 0);
+    assert.notEqual(
+      store.database.prepare("SELECT 1 FROM source_scan_state WHERE id = 'stage-expiry'").get(),
+      undefined,
+      'only a registered source-specific expiry may decrypt the stage, preserve its continuation, and purge it',
     );
   } finally {
     store.close();
