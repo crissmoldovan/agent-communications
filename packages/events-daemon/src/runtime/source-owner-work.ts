@@ -1107,10 +1107,9 @@ async function sourceRulesForWhatsAppAccount(
         .get(row.current_cutover_id, rule.ruleId, rule.version, accountId, scope.scopeId) as
         | { encrypted_position: Uint8Array }
         | undefined;
-      if (point === undefined) {
-        malformed = true;
-        break;
-      }
+      // K6: an account removal deletes that account's points but keeps a multi-account version. The version is dark
+      // there until an approval re-samples it, so it owes this scope nothing; aborting would refuse that approval.
+      if (point === undefined) continue;
       const position = JSON.parse(
         (
           await input.cipher.decrypt(

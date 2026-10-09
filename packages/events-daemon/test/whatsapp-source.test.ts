@@ -358,3 +358,94 @@ test('D5: a replacement baseline stages the old rule’s first representation be
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+test('P1 (review round 8): a multi-account version with no point for a re-added account neither aborts nor owes it', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-k6-readd-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const removed = 'acc_REMOVEDREADDED00';
+    const retained = 'acc_RETAINEDACCOUNT0';
+    const chatJid = 'chat-k6@example.test';
+    const messageId = rawWhatsAppMessageId(chatJid, 'sender@example.test', 'after-readd');
+    const rule = {
+      ruleId: 'multi-rule',
+      version: 1,
+      source: {
+        channel: 'whatsapp',
+        accountIds: [removed, retained],
+        options: { channel: 'whatsapp', chats: [chatJid] },
+      },
+      event: { type: 'whatsapp.message.received', version: 1 },
+      retention: { ingestMs: 1_000 },
+    };
+    store.database.exec('UPDATE event_settings SET enabled = 1, paused = 0, switch_generation = 1');
+    store.database
+      .prepare(
+        `INSERT INTO rule_versions
+          (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+         VALUES ('multi-rule@1', 'multi-rule', 1, ?, 'digest', 'active', 'approval', 'activation-multi', 1)`,
+      )
+      .run(JSON.stringify(rule));
+    store.database
+      .prepare(
+        "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'multi-rule', 1, 'activation-multi', 1)",
+      )
+      .run();
+    // The removal purged the removed account's point (account-fence D9); the retained account keeps its own.
+    store.database
+      .prepare(
+        `INSERT INTO rule_activation_points
+          (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at)
+         VALUES ('activation-multi', 'multi-rule', 1, 'whatsapp', ?, ?, ?, 1)`,
+      )
+      .run(retained, `chat:${chatJid}`, Buffer.from(JSON.stringify({ baselineIdentities: [] })));
+    const options = (positionOf: () => unknown) => ({
+      store,
+      cipher: {
+        encrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+        decrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+      } as never,
+      sourceRegistry: phaseDSourceRegistry(),
+      whatsappEventOperations: {
+        withEventSnapshot: async (_input: unknown, work: (snapshot: unknown) => unknown) => work(positionOf() as never),
+      } as never,
+      whatsappVisibilityFence: new WhatsAppVisibilityFence({
+        store,
+        withCurrentEventVisibility: async (_input, work) =>
+          work({ version: 1, digest: 'c'.repeat(64), seesMessage: () => true }),
+      }),
+      now: () => 10,
+    });
+    const snapshot = () => ({
+      messages: [
+        { chatJid, chatKind: 'unknown', senderJidRaw: 'sender@example.test', stanzaId: 'after-readd', fromMe: false },
+      ],
+    });
+
+    // The approval that re-samples the re-added account runs this baseline; it must not abort on the dark version.
+    const baseline = await stageWhatsAppBaselineSnapshot(options(snapshot), removed);
+    assert.deepEqual(baseline.baselineIdentities, [messageId]);
+    assert.equal(
+      store.database.prepare('SELECT 1 FROM whatsapp_rule_admissions WHERE account_id = ?').get(removed),
+      undefined,
+      'a version dark for the re-added account owes it nothing, so the re-add never backfills',
+    );
+
+    // A point that is present but malformed is still corrupt authority, and still stops the pass.
+    store.database
+      .prepare(
+        `INSERT INTO rule_activation_points
+          (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at)
+         VALUES ('activation-multi', 'multi-rule', 1, 'whatsapp', ?, ?, ?, 1)`,
+      )
+      .run(removed, `chat:${chatJid}`, Buffer.from(JSON.stringify({})));
+    await assert.rejects(() => stageWhatsAppBaselineSnapshot(options(snapshot), removed), {
+      code: 'BAD_DATA',
+    });
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
