@@ -17,7 +17,11 @@ import {
 } from './delivery-claim.ts';
 import { type ActiveDisclosableRequest, assertDisclosable } from './disclosure-fence.ts';
 import type { DeliveryDispatchHandler, DispatchResult } from './dispatcher.ts';
-import type { DSourceRetentionHooks, SseFrameVisibilityGate } from './phase-d-whatsapp-seam.ts';
+import type {
+  DSourceRetentionHooks,
+  SseFrameVisibilityGate,
+  WhatsAppVisibilityRecheck,
+} from './phase-d-whatsapp-seam.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 
 export interface SealedSseFrameWrite {
@@ -27,6 +31,8 @@ export interface SealedSseFrameWrite {
   readonly visibilityGate: SseFrameVisibilityGate;
   /** Only D's production owner composition may turn this on for persisted WhatsApp tuples. */
   readonly hasConcreteWhatsAppVisibilityFence: boolean;
+  /** Fresh external authority reads that run under the list lock immediately before `writeFrame`. */
+  readonly recheck?: WhatsAppVisibilityRecheck | undefined;
   readonly writeFrame: (frame: string) => void;
 }
 
@@ -198,9 +204,20 @@ export class SseDispatcher implements DeliveryDispatchHandler {
     }
     let appended: DispatchResult | undefined;
     let ran = false;
+    let recheckStarted = false;
+    let recheckCompleted = false;
     try {
       await this.#visibilityGate.withCurrentSseFrameVisibility(
         { accountId: claim.accountId, whatsappMessageId: row.whatsapp_message_id },
+        async () => {
+          recheckStarted = true;
+          await this.#fence(this.#fenceRequest(claim));
+          await assertLiveEventAccount(this.#config, {
+            source: sourceOfDelivery(this.#store, claim.id),
+            accountId: claim.accountId,
+          });
+          recheckCompleted = true;
+        },
         () => {
           ran = true;
           // The fence invokes this callback synchronously under the live list lock; #append owns one immediate
@@ -210,8 +227,24 @@ export class SseDispatcher implements DeliveryDispatchHandler {
         },
       );
     } catch (error) {
+      if (isRemovedAccountError(error)) {
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            { source: sourceOfDelivery(this.#store, claim.id), accountId: claim.accountId },
+            this.#now(),
+          ),
+        );
+        return { state: 'terminal', deliveryId: claim.id };
+      }
       // The append itself failed: that is not a list decision, so it is not turned into a cancellation.
       if (ran) throw error;
+      // An authority refusal during the fresh re-check preserves the ordinary post-encryption failure path.  Only a
+      // failure before that callback is a list-read fault that may be retried with the retained claim.
+      if (recheckStarted && !recheckCompleted) {
+        releaseDeliveryClaim(this.#store, claim);
+        throw error;
+      }
       // D-6: an unreadable list hides all — nothing is appended — but it purges nothing merely because the file could
       // not be read. The claim is released with its retained record so a later turn retries once the list reads.
       releaseDeliveryClaim(this.#store, claim);
@@ -428,6 +461,7 @@ export async function writeLiveSseFrame(input: SealedSseFrameWrite): Promise<boo
   let wrote = false;
   await input.visibilityGate.withCurrentSseFrameVisibility(
     { accountId: input.accountId, whatsappMessageId: input.whatsappMessageId },
+    input.recheck ?? (async () => {}),
     () => {
       input.writeFrame(input.frame);
       wrote = true;

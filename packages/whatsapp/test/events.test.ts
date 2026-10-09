@@ -38,6 +38,45 @@ test('D6: the event reader retains the raw sender and tri-state fromMe instead o
   }
 });
 
+test('P1: the event reader retains raw WhatsApp identity bytes, including surrounding and all-whitespace fields', async () => {
+  const fixture = await buildFixtureStore(join(tempDir('whatsapp-events-raw-identity-'), 'store'), { wal: true });
+  try {
+    const before = await openDatabase(fixture.path, { readOnly: true });
+    let sourceOrder: number;
+    try {
+      const row = readRawEventMessages(before, inspectSchema(before)).find(
+        (message) => message.stanzaId === '3EB0TEST00000001',
+      );
+      if (row === undefined) throw new Error('the fixture must contain the raw identity row');
+      sourceOrder = row.sourceOrder;
+    } finally {
+      before.close();
+    }
+    fixture.write(
+      `UPDATE ZWACHATSESSION SET ZCONTACTJID = ' 15555550101@s.whatsapp.net '
+        WHERE ZCONTACTJID = '15555550101@s.whatsapp.net';
+       UPDATE ZWAMESSAGE
+          SET ZFROMJID = ' 15555550101@s.whatsapp.net ', ZSTANZAID = ' '
+        WHERE Z_PK = ${sourceOrder}`,
+    );
+    const database = await openDatabase(fixture.path, { readOnly: true });
+    try {
+      const row = readRawEventMessages(database, inspectSchema(database)).find(
+        (message) => message.sourceOrder === sourceOrder,
+      );
+      assert.deepEqual(row && [row.chatJid, row.senderJidRaw, row.stanzaId], [
+        ' 15555550101@s.whatsapp.net ',
+        ' 15555550101@s.whatsapp.net ',
+        ' ',
+      ]);
+    } finally {
+      database.close();
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
 test('D6: a malformed raw fromMe value remains unknown instead of becoming an eligible false', async () => {
   const fixture = await buildFixtureStore(join(tempDir('whatsapp-events-null-'), 'store'), { wal: true });
   try {

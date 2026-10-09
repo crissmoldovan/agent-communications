@@ -350,6 +350,7 @@ test('B2-T8a: final-D production composition and crash/restart retention contrac
     assert.equal(
       await composition.visibilityFence.withCurrentSseFrameVisibility(
         { accountId: ACCOUNT, whatsappMessageId: '["wa-msg","chat","sender","message"]' },
+        async () => {},
         () => 'written',
       ),
       'written',

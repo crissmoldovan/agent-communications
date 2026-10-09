@@ -17,6 +17,7 @@ test('D6: every sealed WhatsApp frame is refused when its tuple is hidden', { sk
     let writes = 0;
     const result = await fence.withCurrentSseFrameVisibility(
       { accountId: 'wa_frame', whatsappMessageId: '["wa-msg","chat@example.test","sender@example.test","one"]' },
+      async () => assert.fail('a hidden tuple must not run the post-lock authority recheck'),
       () => {
         writes += 1;
         return 'written';

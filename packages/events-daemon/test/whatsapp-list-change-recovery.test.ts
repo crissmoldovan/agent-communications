@@ -264,13 +264,21 @@ test('D9: a sealed synthetic frame consults the one live-list gate immediately b
     });
     let writes = 0;
     assert.equal(
-      await current.withCurrentSseFrameVisibility({ accountId, whatsappMessageId: messageId }, () => ++writes),
+      await current.withCurrentSseFrameVisibility(
+        { accountId, whatsappMessageId: messageId },
+        async () => {},
+        () => ++writes,
+      ),
       1,
     );
     visible = false;
     digest = 'e'.repeat(64);
     assert.equal(
-      await current.withCurrentSseFrameVisibility({ accountId, whatsappMessageId: messageId }, () => ++writes),
+      await current.withCurrentSseFrameVisibility(
+        { accountId, whatsappMessageId: messageId },
+        async () => {},
+        () => ++writes,
+      ),
       undefined,
     );
     assert.equal(writes, 1);
