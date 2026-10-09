@@ -77,6 +77,31 @@ for (const name of cells) {
         fixture.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
         return;
       }
+      if (name === 'W:tighten-transfers-first-representation-admissions-stale-snapshot-writes-nothing') {
+        await fixture.activate();
+        await fixture.enable();
+        // The candidate transaction commits the tuple's first representation and its v1 admission; the owner then
+        // stops before evaluating it, so v1 still owes the tuple when the tightening derives v2.
+        await fixture.setFailpoint((edge) => {
+          if (edge === 'after-move') throw new Error('stop before evaluation');
+        });
+        await assert.rejects(() => fixture.sourceTurn(), /stop before evaluation/);
+        await fixture.setFailpoint(undefined);
+        fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
+        await fixture.tighten();
+        await fixture.sourceTurn();
+        fixture.oracle({ raw: 1, admissions: 1, versions: [2] });
+        assert.deepEqual(
+          (
+            fixture.store.database.prepare('SELECT rule_version FROM decisions').all() as Array<{
+              rule_version: number;
+            }>
+          ).map((row) => row.rule_version),
+          [2],
+          'the derived version evaluates the tuple its parent still owed, exactly once',
+        );
+        return;
+      }
       if (name === 'W:tighten-preserves-raw-admission-boundary') {
         await fixture.activate();
         await fixture.enable();

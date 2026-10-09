@@ -101,6 +101,42 @@ export function transferStageDebtToDerivedRule(
 }
 
 /**
+ * WhatsApp admission is driven by its own ledger, not by stage debts, and an observed raw tuple is never admitted a
+ * second time. So the child inherits each first representation its parent was owed and has not yet decided, beside the
+ * debt above; one the parent already decided stays the parent's, as a Gmail page the parent already processed does.
+ */
+export function transferWhatsAppAdmissionsToDerivedRule(
+  database: DatabaseSync,
+  input: {
+    readonly ruleId: string;
+    readonly parentVersion: number;
+    readonly childVersion: number;
+    readonly childActivationId: string;
+  },
+): void {
+  database
+    .prepare(
+      `INSERT OR IGNORE INTO whatsapp_rule_admissions
+        (account_id, message_id, rule_id, rule_version, admission, activation_id, visibility_version, admitted_at)
+       SELECT admission.account_id, admission.message_id, admission.rule_id, ?, 'admitted', ?,
+              admission.visibility_version, admission.admitted_at
+         FROM whatsapp_rule_admissions AS admission
+         JOIN whatsapp_occurrences AS occurrence
+           ON occurrence.account_id = admission.account_id AND occurrence.message_id = admission.message_id
+        WHERE admission.rule_id = ? AND admission.rule_version = ? AND admission.admission = 'admitted'
+          AND occurrence.staged_payload_ref IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM decisions
+             WHERE decisions.account_id = admission.account_id
+               AND decisions.whatsapp_message_id = admission.message_id
+               AND decisions.rule_id = admission.rule_id
+               AND decisions.rule_version = admission.rule_version
+          )`,
+    )
+    .run(input.childVersion, input.childActivationId, input.ruleId, input.parentVersion);
+}
+
+/**
  * At a replacement swap, only the old-version debt in a scope absent from the new version becomes unowed. Keep any
  * shared page until no rule debt remains; this intentionally works for every source/cursor scope rather than Gmail's
  * mailbox singleton.
@@ -876,6 +912,12 @@ export async function applyDerivedTightening(input: {
       ruleId: input.parent.ruleId,
       parentVersion: input.parent.version,
       childVersion: input.child.version,
+    });
+    transferWhatsAppAdmissionsToDerivedRule(database, {
+      ruleId: input.parent.ruleId,
+      parentVersion: input.parent.version,
+      childVersion: input.child.version,
+      childActivationId: childId,
     });
     purgeRevokedRuleWork(database, input.parent.ruleId, [input.parent.version]);
     database
