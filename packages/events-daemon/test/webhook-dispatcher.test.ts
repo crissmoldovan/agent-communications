@@ -217,6 +217,124 @@ test('B2-T6: a network outcome is content-free and leaves retry/backoff ownershi
   }
 });
 
+/** A fake socket whose peer never answers, or streams `stream` bytes after the request, recording each destroy. */
+function stallingSocket(stream?: string) {
+  const state = { destroyed: 0 };
+  const listeners = new Map<string, (value: unknown) => void>();
+  const socket = {
+    write() {
+      if (stream !== undefined) queueMicrotask(() => listeners.get('data')?.(Buffer.from(stream, 'latin1')));
+      return true;
+    },
+    destroy() {
+      state.destroyed += 1;
+    },
+    once(event: string, listener: (value: unknown) => void) {
+      listeners.set(event, listener);
+      return this;
+    },
+    on(event: string, listener: (value: unknown) => void) {
+      listeners.set(event, listener);
+      return this;
+    },
+  };
+  return { socket, state };
+}
+
+test('B2-T6 (PR #60): a peer that accepts and never answers ends at the attempt deadline, and its socket is destroyed', {
+  skip: WINDOWS_SKIP,
+  timeout: 15_000,
+}, async () => {
+  const setup = await fixture('https://receiver.test:44444/stall');
+  const peer = stallingSocket();
+  const outcomes: unknown[] = [];
+  try {
+    const started = Date.now();
+    assert.deepEqual(
+      await setup
+        .dispatcher({
+          attemptTimeoutMs: 50,
+          tcpConnect: async () => peer.socket as never,
+          tlsConnect: async () => peer.socket as never,
+          onOutcome: async (_claim: unknown, outcome: unknown) => outcomes.push(outcome),
+        })
+        .dispatch('delivery-webhook'),
+      { state: 'issued', deliveryId: 'delivery-webhook' },
+    );
+    assert.ok(Date.now() - started < 5_000, 'the attempt is bounded, not left waiting for the peer');
+    assert.deepEqual(outcomes, [{ kind: 'network' }]);
+    assert.ok(peer.state.destroyed >= 1, 'the stalled socket is destroyed');
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B2-T6 (PR #60): a peer streaming bytes with no status line is cut off at the byte limit and its socket destroyed', {
+  skip: WINDOWS_SKIP,
+  timeout: 15_000,
+}, async () => {
+  const setup = await fixture('https://receiver.test:44444/stream');
+  const peer = stallingSocket('x'.repeat(4_096));
+  const outcomes: unknown[] = [];
+  try {
+    const started = Date.now();
+    assert.deepEqual(
+      await setup
+        .dispatcher({
+          attemptTimeoutMs: 60_000,
+          tcpConnect: async () => peer.socket as never,
+          tlsConnect: async () => peer.socket as never,
+          onOutcome: async (_claim: unknown, outcome: unknown) => outcomes.push(outcome),
+        })
+        .dispatch('delivery-webhook'),
+      { state: 'issued', deliveryId: 'delivery-webhook' },
+    );
+    assert.deepEqual(outcomes, [{ kind: 'network' }]);
+    assert.ok(Date.now() - started < 5_000, 'refused at the byte limit, long before the 60-second deadline');
+    assert.ok(peer.state.destroyed >= 1);
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B2-T6 (PR #60): a TCP connect that completes after the deadline is refused, and the late socket is destroyed', {
+  skip: WINDOWS_SKIP,
+  timeout: 15_000,
+}, async () => {
+  const setup = await fixture('https://receiver.test:44444/late');
+  const peer = stallingSocket();
+  let arrived: (() => void) | undefined;
+  const lateArrival = new Promise<void>((resolve) => {
+    arrived = resolve;
+  });
+  try {
+    await assert.rejects(
+      setup
+        .dispatcher({
+          attemptTimeoutMs: 20,
+          tcpConnect: () =>
+            new Promise((resolve) =>
+              setTimeout(() => {
+                resolve(peer.socket as never);
+                queueMicrotask(() => arrived?.());
+              }, 100),
+            ),
+          tlsConnect: async () => peer.socket as never,
+        })
+        .dispatch('delivery-webhook'),
+      /deadline/,
+    );
+    await lateArrival;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(peer.state.destroyed, 1, 'a socket arriving after the deadline is never used and is destroyed');
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
 test('B2-T6: an HTTPS webhook uses a per-test loopback certificate over the separately fenced TLS connection', {
   skip: WINDOWS_SKIP,
 }, async () => {
