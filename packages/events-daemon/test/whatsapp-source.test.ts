@@ -137,3 +137,71 @@ test('D6: the shortest owed retention fixes the first-representation deadline', 
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+test('P1: a fenced matching WhatsApp scope delays an account snapshot tuple without observing it', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-overlap-fence-');
+  const store = await openEventDatabase({ stateDir });
+  const chatJid = 'chat-a@example.test';
+  let fenced = true;
+  try {
+    for (const ruleId of ['rule-all', 'rule-chat']) {
+      store.database
+        .prepare('INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, ?, 1, ?, ?)')
+        .run(`${ruleId}@1`, ruleId, '{}', `${ruleId}-digest`);
+    }
+    const worker = new WhatsAppSourceWorker({
+      store,
+      accountId: 'wa_overlap_fence',
+      snapshot: async (work) =>
+        work({
+          visibility: { version: 1, digest: 'd'.repeat(64), seesMessage: () => true },
+          messages: [{ chatJid, senderJidRaw: 'sender@example.test', stanzaId: 'one', fromMe: false }],
+        }),
+      stage: async () => Buffer.from('first representation'),
+      rules: () => [
+        {
+          ruleId: 'rule-all',
+          ruleVersion: 1,
+          ingestRetentionMs: 500,
+          activationId: 'activation-all',
+          options: { channel: 'whatsapp' as const, chats: 'all-allowed' as const },
+          activationPointIdentities: new Map([['all-allowed', new Set<string>()]]),
+        },
+        {
+          ruleId: 'rule-chat',
+          ruleVersion: 1,
+          ingestRetentionMs: 500,
+          activationId: 'activation-chat',
+          options: { channel: 'whatsapp' as const, chats: [chatJid] },
+          activationPointIdentities: new Map([[`chat:${chatJid}`, new Set<string>()]]),
+        },
+      ],
+      scopeIsFenced: (scopeId: string) => fenced && scopeId === `chat:${chatJid}`,
+    });
+    await worker.scan();
+    assert.equal(
+      (store.database.prepare('SELECT count(*) AS n FROM whatsapp_occurrences').get() as { n: number }).n,
+      0,
+    );
+    assert.equal(
+      (store.database.prepare('SELECT count(*) AS n FROM whatsapp_rule_admissions').get() as { n: number }).n,
+      0,
+    );
+
+    fenced = false;
+    await worker.scan();
+    assert.equal(
+      (store.database.prepare('SELECT count(*) AS n FROM whatsapp_occurrences').get() as { n: number }).n,
+      1,
+    );
+    assert.equal(
+      (store.database.prepare('SELECT count(*) AS n FROM whatsapp_rule_admissions').get() as { n: number }).n,
+      2,
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
