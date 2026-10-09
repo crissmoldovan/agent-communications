@@ -867,12 +867,14 @@ feat(events): persist fenced SSE replay and bearer state.
 
 **Tests first**
 
-1. Before D, with the B2 default pass-through/no-op seams, boot the real owner twice
-   and assert it registers exactly one `WhatsAppListChangeParticipant` and exactly
-   one `DSourceRetentionParticipant` on each owner setup, without importing or
-   loading any D module.  A recording no-op registry must prove the registration is
-   setup work, not a per-frame or per-tick side effect; the B2-only fixture contains
-   no WhatsApp row.  After D is present, boot the normal production owner through
+1. Before D, boot the real owner twice with the B2 default pass-through/no-op seams and
+   assert, through a recording registry, that `startEventOwner` registers no participant
+   itself and imports or loads no D module; the B2-only fixture contains no WhatsApp
+   row. Separately, call `createB2RetainedContentParticipants({ database })` and drive
+   both returned participants inside a supplied open transaction (the purge and
+   shortening cases below). After D is present, the production owner must register
+   exactly one of each, and only through Phase D Task 7's composition step: assert the
+   count on two owner setups. After D is present, boot the normal production owner through
    Phase D Task 7's production composition step—not a test-only owner override—and
    prove it supplies the concrete `WhatsAppVisibilityFence` and concrete hooks to
    `startEventOwner` through the Task 8 seam.  Repeat with that production seam
@@ -909,7 +911,16 @@ feat(events): persist fenced SSE replay and bearer state.
 1. Use Task 4's persisted `dead_lettered_at` and immutable dead-letter deadline as
    the original clock start; do not derive either from a current rule, a replacement,
    or a post-restart clock.
-2. Add B2 participants in `phase-d-b2-retention.ts`.  Their only database handle is
+2. Add B2 participants in `phase-d-b2-retention.ts`, exported through one factory with exactly
+   the type Phase D Task 7 accepts as `createRetainedContentParticipants`:
+
+   ```ts
+   export function createB2RetainedContentParticipants(
+     input: Readonly<{ database: EventDatabase }>,
+   ): Readonly<{ list: WhatsAppListChangeParticipant; retention: DSourceRetentionParticipant }>;
+   ```
+
+   Their only database handle is
    the supplied open `tx`: the list participant deletes `stream_log` by the supplied
    `(accountId, newlyHiddenMessageIds)` and clears matching dead-letter encrypted
    payloads; it neither opens another transaction nor performs an await.  The
@@ -917,13 +928,17 @@ feat(events): persist fenced SSE replay and bearer state.
    ones, shortens only `sse-replay` stream rows and `dead-letter` payloads using the
    exact `min(oldDeadline, clockStart + durationMs)` formula, and purges both kinds
    for `revokedVersionId` even when `changes` lacks either retention kind.
-3. During `startEventOwner` setup, always register those two instances exactly once
-   through `DSourceRetentionHooks.registerWhatsAppListChangeParticipant` and
-   `registerRetentionTighteningParticipant`.  B2 supplies the Task 8 no-op registry
-   and pass-through visibility fence only for the pre-D owner, where no WhatsApp
-   row exists.  The normal post-D owner receives D's concrete hooks/fence through
-   the same Task 8 seam from Phase D Task 7's production composition step; do not
-   recreate that factory or inject it solely in a test.  If a persisted WhatsApp
+3. Registration has one site. `startEventOwner` never registers a participant itself.
+   Before D it keeps the Task 8 no-op registry and pass-through visibility fence, where
+   no WhatsApp row exists and B2's own native purge and shortening paths (step 4) cover
+   its content. Once D's WhatsApp source is registered, `startEventOwner` passes
+   `createB2RetainedContentParticipants` to Phase D Task 7's
+   `createPhaseDWhatsAppOwnerComposition` as its `createRetainedContentParticipants`,
+   which registers both participants exactly once (through
+   `DSourceRetentionHooks.registerWhatsAppListChangeParticipant` and
+   `registerRetentionTighteningParticipant`) and returns the concrete hooks and fence
+   that reach the owner through the same Task 8 seam; do not recreate that factory or
+   inject it solely in a test.  If a persisted WhatsApp
    tuple reaches an owner without that concrete seam, select the fail-closed path
    and do not invoke `writeFrame`, never the pass-through.  B2 must not import D's
    `whatsapp-visibility.ts`, construct a WhatsApp client, create a D transaction,
