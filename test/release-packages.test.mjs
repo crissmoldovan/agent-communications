@@ -1652,7 +1652,7 @@ test('the publish waits for the old-Node leg, which builds on the tooling Node a
   assert.equal(root.engines.node, '>=22.18.0');
 });
 
-test('BRW-b: the release cannot publish without the event vectors run in Chromium and WebKit', async () => {
+test('BRW-b: the release cannot publish without event vectors and loopback SSE CORS in Chromium and WebKit', async () => {
   /*
    * Events phase A plan, decision 3, layer 4: `pnpm verify:browser` runs the event library's vector families in real
    * Chromium and WebKit, the engines of the desktop app's webviews. It is kept out of `pnpm verify` and the six verify
@@ -1669,6 +1669,7 @@ test('BRW-b: the release cannot publish without the event vectors run in Chromiu
 
   const job = jobBlock(workflow, 'browser');
   assert.ok(job, 'there is a browser job');
+  assert.match(job, /name: event vectors and loopback SSE CORS in chromium and webkit/);
   assert.match(job, /\n {4}runs-on: macos-latest\n/);
   assert.match(job, /\n {4}permissions:\n {6}contents: read\n {4}steps:\n/, 'contents: read, and nothing else');
   const steps = [...job.matchAll(/\n {6}- (?:uses|run|name): .*/g)].map((match) => match[0].trim());
@@ -1703,6 +1704,17 @@ test('BRW-b: the release cannot publish without the event vectors run in Chromiu
   const root = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
   assert.doesNotMatch(root.scripts.verify, /verify:browser/);
   assert.equal(root.scripts['verify:browser'], 'pnpm --filter @agentcomms/events run verify:browser');
+  const browserScript = await readFile(join(ROOT, 'packages', 'events', 'scripts', 'verify-browser.mjs'), 'utf8');
+  assert.match(browserScript, /packages\/events-daemon\/test\/sse-listener-browser\.test\.ts/);
+  assert.match(browserScript, /loopback-seal-preload\.mjs/);
+  const sseBrowser = await readFile(
+    join(ROOT, 'packages', 'events-daemon', 'test', 'sse-listener-browser.test.ts'),
+    'utf8',
+  );
+  assert.match(sseBrowser, /context\.route/);
+  assert.match(sseBrowser, /credentials: 'omit'/);
+  assert.match(sseBrowser, /credentials: 'include'/);
+  assert.match(sseBrowser, /preflightCount\(\) > 0/);
 });
 
 test('BRW-c: without the browsers, the browser run says how to get them, launches nothing and downloads nothing', async () => {

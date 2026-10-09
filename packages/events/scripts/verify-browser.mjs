@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process';
 /**
- * The event library's vectors in real Chromium and WebKit (events phase A plan, decision 3, layer 4).
+ * The event library's vectors plus daemon loopback SSE/CORS in real Chromium and WebKit (events phase A decision 3;
+ * events phase B2 Task 9).
  *
  *   pnpm verify:browser      # from the repository root; it is not part of `pnpm verify`
  *
@@ -14,7 +16,9 @@
  * `AgentcommsEventsRealm.run` in the page and requires no failures and result JSON byte-identical to the same family's
  * Node and realm results, computed here, in this process. It also requires that the page made no request but itself,
  * its `boot.js` and the bundle, and that the CSP held: the page's own `boot.js` tries `new Function('')` and records
- * what happened, because Playwright's `evaluate` is not the page's script and is not held to the page's CSP.
+ * what happened, because Playwright's `evaluate` is not the page's script and is not held to the page's CSP. Once
+ * those vectors pass, it launches the sealed daemon SSE browser contract: preflight, credential omission and exact
+ * origin reflection are exercised against a separate literal-loopback listener.
  *
  * Without the browsers it stops, before launching anything, and says how to install them once.
  */
@@ -25,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium, webkit } from 'playwright';
 
 const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const at = (...parts) => join(PACKAGE_ROOT, ...parts);
 const say = (line) => process.stdout.write(`${line}\n`);
 
@@ -229,7 +234,29 @@ if (problems.length > 0) {
   for (const problem of problems) process.stderr.write(`  ✗ ${problem}\n`);
   process.exit(1);
 }
+const daemonBrowserStatus = await new Promise((resolve, reject) => {
+  const child = spawn(
+    process.execPath,
+    [
+      '--import',
+      './test/helpers/loopback-seal-preload.mjs',
+      '--experimental-strip-types',
+      '--disable-warning=ExperimentalWarning',
+      '--test',
+      'packages/events-daemon/test/sse-listener-browser.test.ts',
+    ],
+    { cwd: ROOT, stdio: 'inherit' },
+  );
+  child.once('error', reject);
+  child.once('exit', (code, signal) => resolve({ code, signal }));
+});
+if (daemonBrowserStatus.code !== 0) {
+  process.stderr.write(
+    `  ✗ loopback daemon SSE/CORS browser test failed${daemonBrowserStatus.signal ? ` (${daemonBrowserStatus.signal})` : ''}\n`,
+  );
+  process.exit(1);
+}
 const derived = families.filter((family) => !family.name.startsWith('test/vectors/')).length;
 say(
-  `BRW-a and BRW-d: event vectors in real browsers OK: ${families.length - derived} vector ${families.length - derived === 1 ? 'file' : 'files'} and ${derived} Unicode conformance ${derived === 1 ? 'file' : 'files'} in chromium and webkit, under the production CSP`,
+  `BRW-a, BRW-d and B2-T9: event vectors plus loopback daemon SSE/CORS in real browsers OK: ${families.length - derived} vector ${families.length - derived === 1 ? 'file' : 'files'} and ${derived} Unicode conformance ${derived === 1 ? 'file' : 'files'} in chromium and webkit, under the production CSP`,
 );
