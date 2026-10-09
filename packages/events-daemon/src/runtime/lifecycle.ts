@@ -1,5 +1,6 @@
 import { CommsError } from '@agentcomms/core';
 import type { EventDatabase } from '../store/database.ts';
+import { purgeAllB2StreamRecords } from './phase-d-b2-retention.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 
 export interface EventLifecycleStatus {
@@ -63,7 +64,7 @@ export class EventLifecycle {
         )
         .all() as Array<{ id: string }>;
       database.exec('DELETE FROM dryrun_log');
-      database.exec('DELETE FROM stream_log');
+      purgeAllB2StreamRecords(database);
       database.exec('DELETE FROM ingest_rules');
       database.exec('DELETE FROM source_scan_state');
       database.exec('DELETE FROM activation_baselines');
