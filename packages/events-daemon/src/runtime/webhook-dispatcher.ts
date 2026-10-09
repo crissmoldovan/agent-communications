@@ -35,6 +35,10 @@ import type { DeliveryDispatchHandler, DispatchResult } from './dispatcher.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 import { signStandardWebhook } from './webhook-signing.ts';
 
+const DEFAULT_ATTEMPT_TIMEOUT_MS = 20_000;
+const LEASE_MARGIN_MS = 2_000;
+const MAX_STATUS_LINE_BYTES = 1_024;
+
 export type WebhookFencePhase = 'dns' | 'tcp' | 'tls' | 'write';
 
 /** Test-only durable-boundary interruption points. They are constructor seams, never configuration or a public surface. */
@@ -81,6 +85,8 @@ export interface WebhookDispatcherOptions {
   readonly resolver?: AddressResolver | undefined;
   readonly now?: (() => number) | undefined;
   readonly leaseMs?: number | undefined;
+  /** The whole network attempt — DNS, TCP, TLS and the response status — ends before this, and before its lease. */
+  readonly attemptTimeoutMs?: number | undefined;
   readonly fence?: ((request: ActiveDisclosableRequest) => Promise<unknown>) | undefined;
   readonly tcpConnect?: ((options: PinnedTcpOptions) => Promise<net.Socket>) | undefined;
   readonly tlsConnect?: ((options: PinnedTlsOptions) => Promise<tls.TLSSocket>) | undefined;
@@ -127,6 +133,7 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
   readonly #resolver: AddressResolver | undefined;
   readonly #now: () => number;
   readonly #leaseMs: number;
+  readonly #attemptTimeoutMs: number;
   readonly #fence: (request: ActiveDisclosableRequest) => Promise<unknown>;
   readonly #tcpConnect: (options: PinnedTcpOptions) => Promise<net.Socket>;
   readonly #tlsConnect: (options: PinnedTlsOptions) => Promise<tls.TLSSocket>;
@@ -143,6 +150,7 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
     this.#resolver = options.resolver;
     this.#now = options.now ?? Date.now;
     this.#leaseMs = options.leaseMs ?? 30_000;
+    this.#attemptTimeoutMs = options.attemptTimeoutMs ?? DEFAULT_ATTEMPT_TIMEOUT_MS;
     this.#fence = options.fence ?? assertDisclosable;
     this.#tcpConnect = options.tcpConnect ?? connectPinnedTcp;
     this.#tlsConnect = options.tlsConnect ?? connectPinnedTls;
@@ -177,6 +185,12 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
     }
     if (claimed.kind !== 'claimed') return { state: claimed.kind, deliveryId };
     const claim = claimed.claim;
+    // One deadline bounds every network phase and falls before the lease expires, so recovery can never issue a second
+    // attempt while this one still holds a socket (Blocks review, PR #60).
+    const deadline = Math.min(
+      Date.now() + this.#attemptTimeoutMs,
+      Date.now() + (claim.leaseUntil - this.#now()) - LEASE_MARGIN_MS,
+    );
     this.#testFailpoint?.('after-claim', claim);
     let record: DeliveryRecord;
     try {
@@ -196,18 +210,25 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
     if (preparedDns !== null) return preparedDns;
     const gateDns = this.#finalGate(claim, target);
     if (gateDns !== null) return gateDns;
-    const connection = await preparePinnedConnection({
-      url: target.url,
-      approvedAddressSet: target.document.approvedAddressSet,
-      approvedAddressSetDigest: addressSetDigest(target.document.approvedAddressSet),
-      ...(this.#resolver === undefined ? {} : { resolver: this.#resolver }),
-    });
+    const connection = await beforeDeadline(
+      preparePinnedConnection({
+        url: target.url,
+        approvedAddressSet: target.document.approvedAddressSet,
+        approvedAddressSetDigest: addressSetDigest(target.document.approvedAddressSet),
+        ...(this.#resolver === undefined ? {} : { resolver: this.#resolver }),
+      }),
+      deadline,
+    );
     this.#testFailpoint?.('after-dns', claim);
     const preparedTcp = await this.#prepareGate(claim, target, 'tcp');
     if (preparedTcp !== null) return preparedTcp;
     const gateTcp = this.#finalGate(claim, target);
     if (gateTcp !== null) return gateTcp;
-    const tcp = await this.#tcpConnect({ host: connection.address, port: connection.port });
+    const tcp = await beforeDeadline(
+      this.#tcpConnect({ host: connection.address, port: connection.port }),
+      deadline,
+      (late) => late.destroy(),
+    );
     this.#testFailpoint?.('after-tcp', claim);
     let socket: net.Socket | tls.TLSSocket = tcp;
     if (connection.useTls) {
@@ -221,7 +242,14 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
         tcp.destroy();
         return gateTls;
       }
-      socket = await this.#tlsConnect({ socket: tcp, ...connection.tls });
+      try {
+        socket = await beforeDeadline(this.#tlsConnect({ socket: tcp, ...connection.tls }), deadline, (late) =>
+          late.destroy(),
+        );
+      } catch (error) {
+        tcp.destroy();
+        throw error;
+      }
       this.#testFailpoint?.('after-tls', claim);
     }
     const current = target.signing.find((secret) => secret.lifecycle === 'current');
@@ -254,9 +282,11 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
     // The write is deliberately synchronous with its immediately preceding gate: no callback or await may intervene.
     socket.write(request);
     this.#testFailpoint?.('after-write', claim);
-    const outcome = await responseStatus(socket)
+    // Only the status line matters; the socket is destroyed on every path once it is read, refused or overdue.
+    const outcome = await beforeDeadline(responseStatus(socket), deadline)
       .then(classifyWebhookResponseStatus)
-      .catch((): WebhookOutcome => ({ kind: 'network' }));
+      .catch((): WebhookOutcome => ({ kind: 'network' }))
+      .finally(() => socket.destroy());
     this.#testFailpoint?.('after-response', claim);
     await this.#onOutcome?.(claim, outcome);
     this.#testFailpoint?.('after-outcome', claim);
@@ -761,18 +791,56 @@ function parseDeliveryRecord(value: Buffer): DeliveryRecord {
 function responseStatus(socket: net.Socket | tls.TLSSocket): Promise<number> {
   return new Promise((resolve, reject) => {
     let received = '';
+    let settled = false;
     const finish = () => {
+      if (settled) return;
+      settled = true;
       const match = /^HTTP\/1\.[01] (\d{3})\b/.exec(received);
       if (match?.[1] === undefined) reject(new Error('webhook peer returned no HTTP status'));
       else resolve(Number(match[1]));
     };
-    socket.once('error', reject);
+    socket.once('error', (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
     socket.on('data', (chunk: Buffer) => {
-      received += chunk.toString('ascii');
-      if (received.includes('\r\n')) finish();
+      if (settled) return;
+      received += chunk.toString('latin1');
+      if (received.includes('\r\n')) return finish();
+      // A status line is short; a peer streaming bytes without one cannot grow this buffer without bound.
+      if (received.length > MAX_STATUS_LINE_BYTES) {
+        settled = true;
+        reject(new Error('webhook peer sent no status line within the byte limit'));
+      }
     });
-    socket.once('end', () => {
-      if (!received.includes('\r\n')) finish();
-    });
+    socket.once('end', finish);
   });
+}
+
+/** A network phase that misses the attempt deadline rejects; a late result (a socket) is disposed of when it arrives. */
+async function beforeDeadline<T>(work: Promise<T>, deadline: number, disposeLate?: (late: T) => void): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  let expired = false;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => {
+            expired = true;
+            reject(new CommsError('TRANSIENT', 'the webhook attempt reached its deadline'));
+          },
+          Math.max(0, deadline - Date.now()),
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    if (expired)
+      work.then(
+        (late) => disposeLate?.(late),
+        () => undefined,
+      );
+  }
 }
