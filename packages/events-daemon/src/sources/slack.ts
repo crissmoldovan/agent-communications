@@ -1,7 +1,7 @@
 import { CommsError } from '@agentcomms/core';
 import { normaliseSlackSourceOptions } from '../domain/source-options.ts';
 import type { CutoverFailpoint } from '../runtime/cutover-failpoint.ts';
-import type { AsyncSourceStageExpiry } from '../runtime/expiry.ts';
+import type { AsyncSourceStageExpiry, PreparedSourceStageTerminalisation } from '../runtime/expiry.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { LocalEventSource } from './contracts.ts';
 import {
@@ -229,14 +229,52 @@ export class SlackHistoryStageExpiry implements AsyncSourceStageExpiry {
     return expired;
   }
 
+  async prepareRetentionTightening(input: {
+    readonly ruleId: string;
+    readonly ingestRetentionMs: number;
+    readonly now: number;
+  }): Promise<readonly PreparedSourceStageTerminalisation[]> {
+    const rows = this.#store.database
+      .prepare(
+        `SELECT state.id, state.account_id
+           FROM source_scan_state AS state
+          WHERE state.source = 'slack' AND state.id LIKE 'slack-history-page:%'
+            AND state.staged_at IS NOT NULL AND state.staged_at + ? <= ?
+            AND EXISTS (
+              SELECT 1 FROM source_stage_rule_debts AS debt
+               WHERE debt.stage_id = state.id AND debt.rule_id = ?
+            )`,
+      )
+      .all(input.ingestRetentionMs, input.now, input.ruleId) as Array<{ id: string; account_id: string }>;
+    const prepared: PreparedSourceStageTerminalisation[] = [];
+    for (const row of rows) {
+      const identity = historyPageIdentity(row.id);
+      if (identity === null || identity.accountId !== row.account_id) continue;
+      const terminalisation = await this.#prepareTerminalisation(row.id, identity, input.now, false);
+      if (terminalisation !== undefined) prepared.push(terminalisation);
+    }
+    return prepared;
+  }
+
   async #expire(stageId: string, identity: NonNullable<ReturnType<typeof historyPageIdentity>>): Promise<number> {
+    const terminalisation = await this.#prepareTerminalisation(stageId, identity, this.#now());
+    return terminalisation === undefined ? 0 : this.#store.immediate(() => terminalisation.terminaliseInTransaction());
+  }
+
+  async #prepareTerminalisation(
+    stageId: string,
+    identity: NonNullable<ReturnType<typeof historyPageIdentity>>,
+    at: number,
+    requireDue = true,
+  ): Promise<PreparedSourceStageTerminalisation | undefined> {
     const row = this.#store.database
       .prepare(
         `SELECT encrypted_record, stage_expires_at FROM source_scan_state
-         WHERE id = ? AND stage_expires_at IS NOT NULL AND stage_expires_at <= ?`,
+         WHERE id = ? AND stage_expires_at IS NOT NULL
+           AND (? = 0 OR stage_expires_at <= ?)`,
       )
-      .get(stageId, this.#now()) as { encrypted_record: Uint8Array; stage_expires_at: number } | undefined;
-    if (row === undefined) return 0;
+      .get(stageId, requireDue ? 1 : 0, at) as { encrypted_record: Uint8Array; stage_expires_at: number } | undefined;
+    if (row === undefined) return undefined;
     const value = (await this.#decrypt(row.encrypted_record, stageId)) as SlackPageStage;
     if (
       value.kind !== 'slack-history-page-v1' ||
@@ -250,14 +288,14 @@ export class SlackHistoryStageExpiry implements AsyncSourceStageExpiry {
     const scan = this.#store.database
       .prepare('SELECT encrypted_record FROM source_scan_state WHERE id = ?')
       .get(scanIdForPage) as { encrypted_record: Uint8Array } | undefined;
-    if (scan === undefined) return 0;
+    if (scan === undefined) return undefined;
     const scanState = (await this.#decrypt(scan.encrypted_record, scanIdForPage)) as SlackScanState;
     if (
       scanState.kind !== 'slack-history-scan-v1' ||
       scanState.generation !== identity.generation ||
       scanState.cursor !== identity.cursorBefore
     )
-      return 0;
+      return undefined;
     const next = { ...scanState, cursor: identity.nextCursor };
     const continuation = await this.#encrypt(next, scanIdForPage);
     const occurrenceKeys = value.page.messages
@@ -266,59 +304,65 @@ export class SlackHistoryStageExpiry implements AsyncSourceStageExpiry {
         assertSlackTimestamp(message.ts);
         return slackOccurrenceKey(identity.conversationId, message.ts);
       });
-    return this.#store.immediate(() => {
-      const current = this.#store.database
-        .prepare(
-          `SELECT 1 AS present FROM source_scan_state
-           WHERE id = ? AND encrypted_record = ? AND stage_expires_at = ? AND stage_expires_at <= ?`,
-        )
-        .get(stageId, row.encrypted_record, row.stage_expires_at, this.#now()) as { present: number } | undefined;
-      if (current === undefined) return 0;
-      const scanCurrent = this.#store.database
-        .prepare('SELECT 1 AS present FROM source_scan_state WHERE id = ? AND encrypted_record = ?')
-        .get(scanIdForPage, scan.encrypted_record) as { present: number } | undefined;
-      if (scanCurrent === undefined) return 0;
-      const now = this.#now();
-      const resolution = this.#store.database.prepare(
-        `INSERT OR IGNORE INTO source_occurrence_resolutions
+    return {
+      terminaliseInTransaction: () => {
+        const current = this.#store.database
+          .prepare(
+            `SELECT 1 AS present FROM source_scan_state
+           WHERE id = ? AND encrypted_record = ? AND stage_expires_at <= ?`,
+          )
+          .get(stageId, row.encrypted_record, at) as { present: number } | undefined;
+        if (current === undefined) return 0;
+        const scanCurrent = this.#store.database
+          .prepare('SELECT 1 AS present FROM source_scan_state WHERE id = ? AND encrypted_record = ?')
+          .get(scanIdForPage, scan.encrypted_record) as { present: number } | undefined;
+        if (scanCurrent === undefined) return 0;
+        const now = at;
+        const resolution = this.#store.database.prepare(
+          `INSERT OR IGNORE INTO source_occurrence_resolutions
          (source, account_id, occurrence_key, outcome, resolved_at, error_code)
          VALUES ('slack', ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
-      );
-      for (const occurrenceKey of occurrenceKeys) resolution.run(identity.accountId, occurrenceKey, now);
-      const advanced = this.#store.database
-        .prepare(
-          'UPDATE source_scan_state SET encrypted_record = ?, updated_at = ? WHERE id = ? AND encrypted_record = ?',
-        )
-        .run(continuation, now, scanIdForPage, scan.encrypted_record);
-      if (Number(advanced.changes) !== 1) return 0;
-      const deleted = this.#store.database
-        .prepare('DELETE FROM source_scan_state WHERE id = ? AND encrypted_record = ? AND stage_expires_at = ?')
-        .run(stageId, row.encrypted_record, row.stage_expires_at);
-      if (Number(deleted.changes) !== 1) return 0;
-      this.#store.database.prepare('DELETE FROM source_stage_rule_debts WHERE stage_id = ?').run(stageId);
-      if (next.cursor === null) {
-        this.#store.database
+        );
+        for (const occurrenceKey of occurrenceKeys) resolution.run(identity.accountId, occurrenceKey, now);
+        const advanced = this.#store.database
           .prepare(
-            `INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('slack', ?, ?, ?, ?)
-             ON CONFLICT(source, account_id, cursor_scope) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at`,
+            'UPDATE source_scan_state SET encrypted_record = ?, updated_at = ? WHERE id = ? AND encrypted_record = ?',
           )
-          .run(identity.accountId, `slack:${identity.accountId}:${identity.conversationId}`, next.latest, now);
-        this.#store.database
-          .prepare('DELETE FROM source_scan_state WHERE id = ? AND encrypted_record = ?')
-          .run(scanIdForPage, continuation);
+          .run(continuation, now, scanIdForPage, scan.encrypted_record);
+        if (Number(advanced.changes) !== 1) return 0;
+        const deleted = this.#store.database
+          .prepare('DELETE FROM source_scan_state WHERE id = ? AND encrypted_record = ? AND stage_expires_at <= ?')
+          .run(stageId, row.encrypted_record, at);
+        if (Number(deleted.changes) !== 1) return 0;
+        this.#store.database.prepare('DELETE FROM source_stage_rule_debts WHERE stage_id = ?').run(stageId);
+        if (next.cursor === null) {
+          this.#store.database
+            .prepare(
+              `INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('slack', ?, ?, ?, ?)
+             ON CONFLICT(source, account_id, cursor_scope) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at`,
+            )
+            .run(identity.accountId, `slack:${identity.accountId}:${identity.conversationId}`, next.latest, now);
+          this.#store.database
+            .prepare('DELETE FROM source_scan_state WHERE id = ? AND encrypted_record = ?')
+            .run(scanIdForPage, continuation);
+          this.#store.database
+            .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
+            .run(
+              `slack-expired-history:${identity.accountId}:${identity.conversationId}:${next.latest}`,
+              'event.source.expired-continuation',
+              now,
+            );
+        }
         this.#store.database
           .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
           .run(
-            `slack-expired-history:${identity.accountId}:${identity.conversationId}:${next.latest}`,
-            'event.source.expired-continuation',
+            `source-retention-expired:slack:${identity.accountId}:${stageId}`,
+            'event.source.retention-expired',
             now,
           );
-      }
-      this.#store.database
-        .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
-        .run(`source-retention-expired:slack:${identity.accountId}:${stageId}`, 'event.source.retention-expired', now);
-      return 1;
-    });
+        return 1;
+      },
+    };
   }
 }
 

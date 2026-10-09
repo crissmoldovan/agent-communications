@@ -1,5 +1,5 @@
 import type { CutoverFailpoint } from '../runtime/cutover-failpoint.ts';
-import type { AsyncSourceStageExpiry } from '../runtime/expiry.ts';
+import type { AsyncSourceStageExpiry, PreparedSourceStageTerminalisation } from '../runtime/expiry.ts';
 import type { EventDatabase } from '../store/database.ts';
 import { type SourceScope, type SourceStageDebt, sourceStageRetentionForDebts } from './contracts.ts';
 import type { ResendEventReader, ResendSentItem } from './resend.ts';
@@ -91,37 +91,82 @@ export class ResendStatusStageExpiry implements AsyncSourceStageExpiry {
     return expired;
   }
 
+  async prepareRetentionTightening(input: {
+    readonly ruleId: string;
+    readonly ingestRetentionMs: number;
+    readonly now: number;
+  }): Promise<readonly PreparedSourceStageTerminalisation[]> {
+    const rows = this.#store.database
+      .prepare(
+        `SELECT state.id, state.account_id, state.encrypted_record, state.stage_expires_at
+           FROM source_scan_state AS state
+          WHERE state.source = 'resend' AND state.cursor_scope = 'status'
+            AND state.staged_at IS NOT NULL AND state.staged_at + ? <= ?
+            AND EXISTS (
+              SELECT 1 FROM source_stage_rule_debts AS debt
+               WHERE debt.stage_id = state.id AND debt.rule_id = ?
+            )`,
+      )
+      .all(input.ingestRetentionMs, input.now, input.ruleId) as Array<{
+      id: string;
+      account_id: string;
+      encrypted_record: Uint8Array;
+      stage_expires_at: number;
+    }>;
+    const prepared: PreparedSourceStageTerminalisation[] = [];
+    for (const row of rows) {
+      const terminalisation = await this.#prepareTerminalisation(row, input.now, false);
+      if (terminalisation !== undefined) prepared.push(terminalisation);
+    }
+    return prepared;
+  }
+
   async #expireAccount(accountId: string): Promise<number> {
     const rows = this.#store.database
       .prepare(
-        `SELECT id, encrypted_record, stage_expires_at FROM source_scan_state
+        `SELECT id, account_id, encrypted_record, stage_expires_at FROM source_scan_state
          WHERE source = 'resend' AND account_id = ? AND cursor_scope = 'status'
            AND stage_expires_at IS NOT NULL AND stage_expires_at <= ?`,
       )
       .all(accountId, this.#now()) as Array<{
       id: string;
+      account_id: string;
       encrypted_record: Uint8Array;
       stage_expires_at: number;
     }>;
     let expired = 0;
     for (const row of rows) {
-      const value = (await this.#decrypt(row.encrypted_record, row.id)) as PendingStatusStage;
-      expired += this.#store.immediate(() => {
+      const terminalisation = await this.#prepareTerminalisation(row, this.#now());
+      if (terminalisation !== undefined)
+        expired += this.#store.immediate(() => terminalisation.terminaliseInTransaction());
+    }
+    return expired;
+  }
+
+  async #prepareTerminalisation(
+    row: Readonly<{ id: string; account_id: string; encrypted_record: Uint8Array; stage_expires_at: number }>,
+    at: number,
+    requireDue = true,
+  ): Promise<PreparedSourceStageTerminalisation | undefined> {
+    if (requireDue && row.stage_expires_at > at) return undefined;
+    const value = (await this.#decrypt(row.encrypted_record, row.id)) as PendingStatusStage;
+    return {
+      terminaliseInTransaction: () => {
         const present = this.#store.database
           .prepare(
             `SELECT 1 AS present FROM source_scan_state
-             WHERE id = ? AND encrypted_record = ? AND stage_expires_at = ? AND stage_expires_at <= ?`,
+             WHERE id = ? AND encrypted_record = ? AND stage_expires_at <= ?`,
           )
-          .get(row.id, row.encrypted_record, row.stage_expires_at, this.#now()) as { present: number } | undefined;
+          .get(row.id, row.encrypted_record, at) as { present: number } | undefined;
         if (present === undefined) return 0;
-        const now = this.#now();
+        const now = at;
         this.#store.database
           .prepare(
             `INSERT OR IGNORE INTO source_occurrence_resolutions
              (source, account_id, occurrence_key, outcome, resolved_at, error_code)
              VALUES ('resend', ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
           )
-          .run(accountId, statusOccurrenceKey(value.change), now);
+          .run(row.account_id, statusOccurrenceKey(value.change), now);
         // The status value is the content-free continuation. Persisting it before removing the staged delta makes
         // an unchanged provider observation terminal on every later scan, rather than re-staging expired content.
         this.#store.database
@@ -131,19 +176,18 @@ export class ResendStatusStageExpiry implements AsyncSourceStageExpiry {
              ON CONFLICT(account_id, email_id) DO UPDATE SET last_event = excluded.last_event,
                observed_at = excluded.observed_at, expires_at = excluded.expires_at`,
           )
-          .run(accountId, value.change.emailId, value.change.current, now, now + WEEK_MS);
+          .run(row.account_id, value.change.emailId, value.change.current, now, now + WEEK_MS);
         const deleted = this.#store.database
-          .prepare('DELETE FROM source_scan_state WHERE id = ? AND encrypted_record = ? AND stage_expires_at = ?')
-          .run(row.id, row.encrypted_record, row.stage_expires_at);
+          .prepare('DELETE FROM source_scan_state WHERE id = ? AND encrypted_record = ? AND stage_expires_at <= ?')
+          .run(row.id, row.encrypted_record, at);
         if (Number(deleted.changes) !== 1) return 0;
         this.#store.database.prepare('DELETE FROM source_stage_rule_debts WHERE stage_id = ?').run(row.id);
         this.#store.database
           .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
-          .run(`source-retention-expired:resend:${accountId}:${row.id}`, 'event.source.retention-expired', now);
+          .run(`source-retention-expired:resend:${row.account_id}:${row.id}`, 'event.source.retention-expired', now);
         return 1;
-      });
-    }
-    return expired;
+      },
+    };
   }
 }
 

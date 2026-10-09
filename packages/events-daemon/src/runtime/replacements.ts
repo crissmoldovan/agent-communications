@@ -4,6 +4,7 @@ import type { CanonicalFullRuleDocument } from '../domain/activation-documents.t
 import type { SourceOptions } from '../domain/source-options.ts';
 import type { SourceScope } from '../sources/contracts.ts';
 import { isWhitelistedTightening } from './disclosure-fence.ts';
+import type { PreparedSourceStageTerminalisation } from './expiry.ts';
 import {
   purgeB2RetainedContentForRuleVersions,
   shortenB2DeadLetterDeadlines,
@@ -15,6 +16,7 @@ import {
   purgeUnreferencedSystemTargets,
   removeRuleVersionTargetReferences,
 } from './target-version-references.ts';
+import { purgeWhatsAppStagedPayload } from './whatsapp-staged-payload.ts';
 
 export type TighteningKind =
   | 'remove-target'
@@ -577,37 +579,6 @@ export function shortenRuleRetentionDeadlines(input: {
     at: now,
   });
 
-  const dueStages = database
-    .prepare(
-      `SELECT state.id, state.source, state.account_id
-       FROM source_scan_state AS state
-       WHERE state.stage_expires_at IS NOT NULL
-         AND state.stage_expires_at <= ?
-         AND EXISTS (
-           SELECT 1 FROM source_stage_rule_debts AS debt WHERE debt.stage_id = state.id AND debt.rule_id = ?
-         )`,
-    )
-    .all(now, ruleId) as Array<{ id: string; source: string; account_id: string }>;
-  for (const stage of dueStages) {
-    // A source stage can be unclassified raw content. Its durable stage id is the only common occurrence identity at
-    // this layer; source adapters add their finer-grained terminal rows before they advance their own cursor.
-    database
-      .prepare(
-        `INSERT OR IGNORE INTO source_occurrence_resolutions
-         (source, account_id, occurrence_key, outcome, resolved_at, error_code)
-         VALUES (?, ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
-      )
-      .run(stage.source, stage.account_id, stage.id, now);
-    database
-      .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
-      .run(
-        `source-retention-expired:${stage.source}:${stage.account_id}:${stage.id}`,
-        'event.source.retention-expired',
-        now,
-      );
-    database.prepare('DELETE FROM source_scan_state WHERE id = ?').run(stage.id);
-  }
-
   const dueWhatsapp = database
     .prepare(
       `SELECT occurrence.account_id, occurrence.message_id
@@ -631,13 +602,10 @@ export function shortenRuleRetentionDeadlines(input: {
          WHERE account_id = ? AND message_id = ? AND admission != 'baseline'`,
       )
       .run(now, occurrence.account_id, occurrence.message_id);
-    database
-      .prepare(
-        `UPDATE whatsapp_occurrences
-         SET staged_payload_ref = NULL, stage_expires_at = NULL
-         WHERE account_id = ? AND message_id = ?`,
-      )
-      .run(occurrence.account_id, occurrence.message_id);
+    purgeWhatsAppStagedPayload(database, {
+      accountId: occurrence.account_id,
+      messageId: occurrence.message_id,
+    });
   }
 
   const dueProjections = database
@@ -694,6 +662,15 @@ export async function applyDerivedTightening(input: {
   readonly now: number;
   /** Optional until the D owner composition is installed; when present it shares this exact pointer transaction. */
   readonly retainedContentHooks?: DSourceRetentionTighteningDispatcher | undefined;
+  /**
+   * Decrypts and prepares due source stages before the pointer transaction.  Its closures use the same
+   * source-specific terminalisation as common expiry, inside the transaction that shortens their deadline.
+   */
+  readonly prepareSourceStageRetentionTightening?:
+    | ((
+        input: Readonly<{ ruleId: string; ingestRetentionMs: number; now: number }>,
+      ) => Promise<readonly PreparedSourceStageTerminalisation[]>)
+    | undefined;
   /** Reads a parent point using the parent row's own complete D8 AAD location. */
   readonly decryptPoint: (input: {
     readonly activationId: string;
@@ -722,6 +699,7 @@ export async function applyDerivedTightening(input: {
   const database = input.database;
   const parentId = ruleVersionId(input.parent.ruleId, input.parent.version);
   const childId = ruleVersionId(input.child.ruleId, input.child.version);
+  const changes = changedRetentions(input.parent.retention, input.child.retention);
   // Encryption reserves its nonce with BEGIN IMMEDIATE. It must finish before the pointer/lifecycle transaction,
   // and the copied plaintext must be authenticated for the child row rather than moved as a parent-row ciphertext.
   const parentActivationId = (
@@ -767,6 +745,17 @@ export async function applyDerivedTightening(input: {
   );
   // The decryption and encryption awaited: every account a copied point binds is read again from the configuration.
   for (const accountId of new Set(preparedPoints.map((point) => point.accountId))) await input.accountLive?.(accountId);
+  // Source stages may require a content decrypt/re-encrypt to preserve their continuation.  This has to happen
+  // before BEGIN IMMEDIATE, but each prepared closure authenticates the exact old ciphertext and runs only after
+  // the new deadline is made due in the pointer transaction below.
+  const dueSourceStages =
+    changes.length === 0
+      ? []
+      : ((await input.prepareSourceStageRetentionTightening?.({
+          ruleId: input.parent.ruleId,
+          ingestRetentionMs: input.child.retention.ingestMs,
+          now: input.now,
+        })) ?? []);
   database.exec('BEGIN IMMEDIATE');
   try {
     const parent = database.prepare('SELECT state, approval_id FROM rule_versions WHERE id = ?').get(parentId) as
@@ -834,7 +823,6 @@ export async function applyDerivedTightening(input: {
           input.now,
         );
     }
-    const changes = changedRetentions(input.parent.retention, input.child.retention);
     if (changes.length > 0) {
       shortenRuleRetentionDeadlines({
         database,
@@ -842,6 +830,13 @@ export async function applyDerivedTightening(input: {
         child: input.child,
         now: input.now,
       });
+      for (const stage of dueSourceStages) {
+        if (stage.terminaliseInTransaction() !== 1)
+          throw new CommsError(
+            'TRANSIENT',
+            'a source stage changed while its retention-tightening terminalisation was being prepared',
+          );
+      }
     }
     const affectedVersionIds = database
       .prepare(
