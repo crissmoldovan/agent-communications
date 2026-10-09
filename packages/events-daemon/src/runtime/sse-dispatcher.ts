@@ -191,7 +191,37 @@ export class SseDispatcher implements DeliveryDispatchHandler {
       releaseDeliveryClaim(this.#store, claim);
       throw error;
     }
-    return this.#append(claim, row, subscriber.retentionMs, encrypted);
+    if (row.whatsapp_message_id === null) return this.#append(claim, row, subscriber.retentionMs, encrypted);
+    if (this.#visibilityGate === undefined || !this.#hasConcreteWhatsAppVisibilityFence) {
+      this.#store.immediate(() => this.#cancel(claim));
+      return { state: 'terminal', deliveryId: claim.id };
+    }
+    let appended: DispatchResult | undefined;
+    let ran = false;
+    try {
+      await this.#visibilityGate.withCurrentSseFrameVisibility(
+        { accountId: claim.accountId, whatsappMessageId: row.whatsapp_message_id },
+        () => {
+          ran = true;
+          // The fence invokes this callback synchronously under the live list lock; #append owns one immediate
+          // append-and-settle transaction, so no retained stream bytes can exist before the visibility decision.
+          appended = this.#append(claim, row, subscriber.retentionMs, encrypted);
+          return appended;
+        },
+      );
+    } catch (error) {
+      // The append itself failed: that is not a list decision, so it is not turned into a cancellation.
+      if (ran) throw error;
+      // D-6: an unreadable list hides all — nothing is appended — but it purges nothing merely because the file could
+      // not be read. The claim is released with its retained record so a later turn retries once the list reads.
+      releaseDeliveryClaim(this.#store, claim);
+      throw new CommsError('TRANSIENT', 'the WhatsApp chat list could not be read; the delivery waits', {
+        cause: error,
+      });
+    }
+    if (appended !== undefined) return appended;
+    this.#store.immediate(() => this.#cancel(claim));
+    return { state: 'terminal', deliveryId: claim.id };
   }
 
   #append(

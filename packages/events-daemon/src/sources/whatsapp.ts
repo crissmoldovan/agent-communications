@@ -48,6 +48,16 @@ export interface WhatsAppSourceRule {
   readonly ruleVersion: number;
   readonly ingestRetentionMs: number;
   readonly activationId: string;
+  /** The rule selector is evaluated per raw tuple, never by whichever scope happened to poll first. */
+  readonly options?: WhatsAppSourceOptions | undefined;
+  /** Exact baseline tuple sets, keyed by the rule's source scope; present rows suppress backfill for that rule only. */
+  readonly activationPointIdentities?: ReadonlyMap<string, ReadonlySet<string>> | undefined;
+}
+
+interface StageableWhatsAppMessage {
+  readonly messageId: string;
+  readonly message: EligibleWhatsAppRawMessage;
+  readonly debts: readonly WhatsAppSourceRule[];
 }
 
 export function rawWhatsAppMessageId(chatJid: string, senderJidRaw: string, stanzaId: string): string {
@@ -92,7 +102,7 @@ export class WhatsAppSourceWorker {
   readonly #rules: WhatsAppSourceWorkerOptions['rules'];
   readonly #now: () => number;
   readonly #assertWrite: (() => void) | undefined;
-  readonly #sourceOptions: WhatsAppSourceOptions | undefined;
+  readonly #scopeIsFenced: ((scopeId: string) => boolean) | undefined;
   readonly #failpoint: CutoverFailpoint | undefined;
 
   constructor(options: WhatsAppSourceWorkerOptions) {
@@ -103,7 +113,7 @@ export class WhatsAppSourceWorker {
     this.#rules = options.rules;
     this.#now = options.now ?? Date.now;
     this.#assertWrite = options.assertWrite;
-    this.#sourceOptions = options.sourceOptions;
+    this.#scopeIsFenced = options.scopeIsFenced;
     this.#failpoint = options.failpoint;
   }
 
@@ -112,9 +122,6 @@ export class WhatsAppSourceWorker {
       const candidates = new Map<string, EligibleWhatsAppRawMessage>();
       for (const message of snapshot.messages) {
         if (!eligible(message, snapshot.visibility)) continue;
-        if (this.#sourceOptions?.chats !== undefined && this.#sourceOptions.chats !== 'all-allowed') {
-          if (!this.#sourceOptions.chats.includes(message.chatJid)) continue;
-        }
         const key = rawWhatsAppMessageId(message.chatJid, message.senderJidRaw, message.stanzaId);
         if (!candidates.has(key)) candidates.set(key, message);
       }
@@ -122,12 +129,21 @@ export class WhatsAppSourceWorker {
       try {
         // This is the owed-rule snapshot for the complete checked-copy pass. A later activation never turns an
         // already observed key into a new backfill candidate.
-        const debts = this.#rules();
-        const stageable = debts.length === 0 ? [] : added;
+        const candidatesWithDebts = added.flatMap(([messageId, message]) => {
+          const debts = this.#rules().filter((rule) => owes(rule, messageId, message.chatJid));
+          return debts.length === 0 ? [] : [{ messageId, message, debts }];
+        });
+        const deferred = candidatesWithDebts.filter((item) => this.hasFencedMatchingScope(item));
+        if (deferred.length > 0)
+          this.discardCandidateKeys(
+            generation,
+            deferred.map((item) => item.messageId),
+          );
+        const stageable = candidatesWithDebts.filter((item) => !this.hasFencedMatchingScope(item));
         const encrypted = new Map<string, Uint8Array>();
         this.#failpoint?.('before-stage');
-        for (const [messageId, message] of stageable) encrypted.set(messageId, await this.#stage(message));
-        this.commitCandidate(snapshot.visibility, generation, stageable, debts, encrypted);
+        for (const item of stageable) encrypted.set(item.messageId, await this.#stage(item.message));
+        this.commitCandidate(snapshot.visibility, generation, stageable, encrypted);
         this.#failpoint?.('after-stage');
         return { generation, newMessages: stageable.length };
       } catch (error) {
@@ -209,15 +225,20 @@ export class WhatsAppSourceWorker {
   private commitCandidate(
     visibility: WhatsAppEventVisibility,
     generation: number,
-    added: readonly (readonly [string, EligibleWhatsAppRawMessage])[],
-    debts: readonly WhatsAppSourceRule[],
+    added: readonly StageableWhatsAppMessage[],
     encrypted: ReadonlyMap<string, Uint8Array>,
   ): void {
     const now = this.#now();
-    const retention = added.length === 0 ? undefined : sourceStageRetentionForDebts(now, debts);
     this.#failpoint?.('before-move');
     this.#store.immediate(() => {
       this.#assertWrite?.();
+      const deferred = added.filter((item) => this.hasFencedMatchingScope(item));
+      if (deferred.length > 0)
+        this.deleteCandidateKeys(
+          generation,
+          deferred.map((item) => item.messageId),
+        );
+      const stageable = added.filter((item) => !this.hasFencedMatchingScope(item));
       const live = this.#store.database
         .prepare('SELECT version, lists_digest FROM whatsapp_visibility WHERE account_id = ?')
         .get(this.#accountId) as { version: number; lists_digest: string } | undefined;
@@ -226,8 +247,8 @@ export class WhatsAppSourceWorker {
       const before = this.currentHead();
       if ((before?.committed_generation ?? 0) !== generation - 1)
         throw new CommsError('APPROVAL_VOID', 'the WhatsApp snapshot head changed before the candidate could commit');
-      for (const [messageId, message] of added) {
-        if (retention === undefined) throw new CommsError('BAD_DATA', 'a WhatsApp representation has no owed rule');
+      for (const { messageId, message, debts } of stageable) {
+        const retention = sourceStageRetentionForDebts(now, debts);
         const stageId = stageIdFor(this.#accountId, messageId);
         const record = encrypted.get(messageId);
         if (record === undefined) throw new CommsError('BAD_DATA', 'a WhatsApp first representation was not staged');
@@ -304,6 +325,71 @@ export class WhatsAppSourceWorker {
       .prepare('SELECT committed_generation, visibility_version FROM whatsapp_snapshot_heads WHERE account_id = ?')
       .get(this.#accountId) as Head | undefined;
   }
+
+  private hasFencedMatchingScope(item: StageableWhatsAppMessage): boolean {
+    return (
+      this.#scopeIsFenced !== undefined &&
+      item.debts.some((rule) => this.#scopeIsFenced?.(scopeFor(rule, item.message.chatJid)) === true)
+    );
+  }
+
+  private discardCandidateKeys(generation: number, messageIds: readonly string[]): void {
+    this.#store.immediate(() => this.deleteCandidateKeys(generation, messageIds));
+  }
+
+  private deleteCandidateKeys(generation: number, messageIds: readonly string[]): void {
+    if (messageIds.length === 0) return;
+    const keys = messageIds.map(parseRawWhatsAppMessageId);
+    const marks = keys.map(() => '(?, ?, ?)').join(', ');
+    this.#store.database
+      .prepare(
+        `DELETE FROM whatsapp_snapshot_keys
+          WHERE account_id = ? AND generation = ?
+            AND (chat_jid, sender_jid_raw, stanza_id) IN (${marks})`,
+      )
+      .run(this.#accountId, generation, ...keys.flatMap((key) => [key.chatJid, key.senderJidRaw, key.stanzaId]));
+  }
+}
+
+function covers(rule: WhatsAppSourceRule, chatJid: string): boolean {
+  return (
+    rule.options?.chats === undefined || rule.options.chats === 'all-allowed' || rule.options.chats.includes(chatJid)
+  );
+}
+
+function owes(rule: WhatsAppSourceRule, messageId: string, chatJid: string): boolean {
+  if (!covers(rule, chatJid)) return false;
+  const points = rule.activationPointIdentities;
+  if (points === undefined) return true;
+  const scopeId = scopeFor(rule, chatJid);
+  const baseline = points.get(scopeId);
+  // A live rule without its own exact point is malformed authority, not permission to backfill.
+  return baseline !== undefined && !baseline.has(messageId);
+}
+
+function scopeFor(rule: WhatsAppSourceRule, chatJid: string): string {
+  return rule.options?.chats === 'all-allowed' ? 'all-allowed' : `chat:${chatJid}`;
+}
+
+function parseRawWhatsAppMessageId(messageId: string): {
+  readonly chatJid: string;
+  readonly senderJidRaw: string;
+  readonly stanzaId: string;
+} {
+  try {
+    const key = JSON.parse(messageId);
+    if (
+      !Array.isArray(key) ||
+      key.length !== 4 ||
+      key[0] !== 'wa-msg' ||
+      !key.slice(1).every((part) => typeof part === 'string' && part.length > 0) ||
+      rawWhatsAppMessageId(key[1] as string, key[2] as string, key[3] as string) !== messageId
+    )
+      throw new Error('invalid');
+    return { chatJid: key[1] as string, senderJidRaw: key[2] as string, stanzaId: key[3] as string };
+  } catch {
+    throw new CommsError('BAD_DATA', 'a WhatsApp candidate has no canonical raw identity');
+  }
 }
 
 export interface WhatsAppSourceWorkerOptions {
@@ -313,8 +399,8 @@ export interface WhatsAppSourceWorkerOptions {
   readonly stage: (message: EligibleWhatsAppRawMessage) => Promise<Uint8Array>;
   readonly rules: () => readonly WhatsAppSourceRule[];
   readonly now?: (() => number) | undefined;
-  /** The canonical D4 selector for this rule-version scan; live lists remain the separate D6 capability fence. */
-  readonly sourceOptions?: WhatsAppSourceOptions | undefined;
+  /** Every matching rule scope must be unfenced before this tuple becomes observed. */
+  readonly scopeIsFenced?: ((scopeId: string) => boolean) | undefined;
   /** The owner supplies the common post-await account/switch/rule/fence recheck inside the commit transaction. */
   readonly assertWrite?: (() => void) | undefined;
   /** Optional D8 crash seam; omitted in production. */
