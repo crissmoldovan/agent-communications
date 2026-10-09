@@ -11,6 +11,8 @@ import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 const ACCOUNT = 'resend-account';
 const ANCHOR = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const NEWEST = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const PAGE_ONE_OLDER = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const PAGE_ONE_NEWER = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 
 const encode = async (value: unknown) => Buffer.from(JSON.stringify(value));
 const decode = async (stored: Uint8Array) => JSON.parse(Buffer.from(stored).toString('utf8')) as unknown;
@@ -58,6 +60,235 @@ test('a canonical empty baseline stages later received mail before it moves to t
         store.database.prepare("SELECT 1 FROM operational_records WHERE kind = 'agentcomms.source.gap'").get(),
         undefined,
       );
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('Resend received lists the complete cycle before comparing first-page candidates with their anchor', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-resend-complete-chain-');
+  try {
+    const store = await openEventDatabase({ stateDir });
+    try {
+      const afters: Array<string | undefined> = [];
+      const admitted: string[] = [];
+      const source = new ResendReceivedSource({
+        store,
+        accountId: ACCOUNT,
+        reader: {
+          async listReceived(after) {
+            afters.push(after);
+            return after === undefined
+              ? { emails: [{ id: PAGE_ONE_NEWER }, { id: PAGE_ONE_OLDER }], next: 'page-2' }
+              : { emails: [{ id: NEWEST }, { id: ANCHOR }], next: null };
+          },
+          async getReceived(id) {
+            return {
+              kind: 'candidate',
+              candidate: { emailId: id, subject: 'safe', receivedAt: '2026-10-09T08:00:00.000Z' },
+            };
+          },
+          async listSent() {
+            return { emails: [], next: null };
+          },
+        },
+        encrypt: encode,
+        decrypt: decode,
+        debts: () => [{ ruleId: 'rule', ruleVersion: 1, ingestRetentionMs: 1_000 }],
+        admit: async (candidate, position) => {
+          if (position.orderedIds.indexOf(ANCHOR) > position.candidateIndex) admitted.push(candidate.emailId);
+          return 'terminal';
+        },
+      });
+
+      await source.seedAnchor(ANCHOR);
+      assert.deepEqual(await source.scan(), { pending: false, anchorId: PAGE_ONE_NEWER });
+      assert.deepEqual(afters, [undefined, 'page-2']);
+      assert.deepEqual(admitted, [PAGE_ONE_NEWER, PAGE_ONE_OLDER, NEWEST]);
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('Resend received consumes a listed email without materialising it when no rule owes the cycle position', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-resend-prefetch-gate-');
+  try {
+    const store = await openEventDatabase({ stateDir });
+    try {
+      let detailCalls = 0;
+      const source = new ResendReceivedSource({
+        store,
+        accountId: ACCOUNT,
+        reader: {
+          async listReceived() {
+            return { emails: [{ id: NEWEST }, { id: ANCHOR }], next: null };
+          },
+          async getReceived() {
+            detailCalls += 1;
+            return {
+              kind: 'candidate',
+              candidate: { emailId: NEWEST, subject: 'must not be read', receivedAt: '2026-10-09T08:00:00.000Z' },
+            };
+          },
+          async listSent() {
+            return { emails: [], next: null };
+          },
+        },
+        encrypt: encode,
+        decrypt: decode,
+        debts: () => [{ ruleId: 'rule', ruleVersion: 1, ingestRetentionMs: 1_000 }],
+        mayFetch: async () => false,
+        admit: async () => 'terminal',
+      });
+
+      await source.seedAnchor(ANCHOR);
+      assert.deepEqual(await source.scan(), { pending: false, anchorId: NEWEST });
+      assert.equal(detailCalls, 0);
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('Resend received resumes its content-free listing phase after a restart without relisting or duplicating', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-resend-listing-restart-');
+  try {
+    const store = await openEventDatabase({ stateDir });
+    try {
+      const afters: Array<string | undefined> = [];
+      const admitted: string[] = [];
+      let crashAfterListing = false;
+      const reader: ResendEventReader = {
+        async listReceived(after) {
+          afters.push(after);
+          return after === undefined
+            ? { emails: [{ id: PAGE_ONE_NEWER }], next: 'page-2' }
+            : { emails: [{ id: NEWEST }, { id: ANCHOR }], next: null };
+        },
+        async getReceived(id) {
+          return {
+            kind: 'candidate',
+            candidate: { emailId: id, subject: 'safe', receivedAt: '2026-10-09T08:00:00.000Z' },
+          };
+        },
+        async listSent() {
+          return { emails: [], next: null };
+        },
+      };
+      const first = new ResendReceivedSource({
+        store,
+        accountId: ACCOUNT,
+        reader,
+        encrypt: encode,
+        decrypt: decode,
+        debts: () => [{ ruleId: 'rule', ruleVersion: 1, ingestRetentionMs: 1_000 }],
+        admit: async (candidate) => {
+          admitted.push(candidate.emailId);
+          return 'terminal';
+        },
+        failpoint: (edge) => {
+          if (crashAfterListing && edge === 'after-stage') throw new Error('restart after first listed page');
+        },
+      });
+      await first.seedAnchor(ANCHOR);
+      crashAfterListing = true;
+      await assert.rejects(() => first.scan(), /restart after first listed page/);
+
+      const resumed = new ResendReceivedSource({
+        store,
+        accountId: ACCOUNT,
+        reader,
+        encrypt: encode,
+        decrypt: decode,
+        debts: () => [{ ruleId: 'rule', ruleVersion: 1, ingestRetentionMs: 1_000 }],
+        admit: async (candidate) => {
+          admitted.push(candidate.emailId);
+          return 'terminal';
+        },
+      });
+      assert.deepEqual(await resumed.scan(), { pending: false, anchorId: PAGE_ONE_NEWER });
+      assert.deepEqual(afters, [undefined, 'page-2']);
+      assert.deepEqual(admitted, [PAGE_ONE_NEWER, NEWEST]);
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('Resend received resumes its processing phase after a restart without another detail fetch or duplicate', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-resend-processing-restart-');
+  try {
+    const store = await openEventDatabase({ stateDir });
+    try {
+      const details: string[] = [];
+      const admitted: string[] = [];
+      const reader: ResendEventReader = {
+        async listReceived() {
+          return { emails: [{ id: PAGE_ONE_NEWER }, { id: NEWEST }, { id: ANCHOR }], next: null };
+        },
+        async getReceived(id) {
+          details.push(id);
+          return {
+            kind: 'candidate',
+            candidate: { emailId: id, subject: 'safe', receivedAt: '2026-10-09T08:00:00.000Z' },
+          };
+        },
+        async listSent() {
+          return { emails: [], next: null };
+        },
+      };
+      let stagedWrites = 0;
+      const first = new ResendReceivedSource({
+        store,
+        accountId: ACCOUNT,
+        reader,
+        encrypt: encode,
+        decrypt: decode,
+        debts: () => [{ ruleId: 'rule', ruleVersion: 1, ingestRetentionMs: 1_000 }],
+        admit: async (candidate) => {
+          admitted.push(candidate.emailId);
+          return 'terminal';
+        },
+        failpoint: (edge) => {
+          if (edge === 'after-stage' && ++stagedWrites === 2) throw new Error('restart after staged detail');
+        },
+      });
+      await first.seedAnchor(ANCHOR);
+      await assert.rejects(() => first.scan(), /restart after staged detail/);
+
+      const resumed = new ResendReceivedSource({
+        store,
+        accountId: ACCOUNT,
+        reader,
+        encrypt: encode,
+        decrypt: decode,
+        debts: () => [{ ruleId: 'rule', ruleVersion: 1, ingestRetentionMs: 1_000 }],
+        admit: async (candidate) => {
+          admitted.push(candidate.emailId);
+          return 'terminal';
+        },
+      });
+      assert.deepEqual(await resumed.scan(), { pending: false, anchorId: PAGE_ONE_NEWER });
+      assert.deepEqual(details, [PAGE_ONE_NEWER, NEWEST]);
+      assert.deepEqual(admitted, [PAGE_ONE_NEWER, NEWEST]);
     } finally {
       store.close();
     }
@@ -145,8 +376,13 @@ test('Resend received records one bounded anchor-loss gap and rebaselines after 
     const store = await openEventDatabase({ stateDir });
     try {
       let page = 0;
+      let phase: 'lost' | 'recovered' = 'lost';
+      let details = 0;
+      const admitted: string[] = [];
       const reader: ResendEventReader = {
         async listReceived() {
+          if (phase === 'recovered')
+            return { emails: [{ id: NEWEST }, { id: '00000001-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }], next: null };
           page += 1;
           return {
             emails: [{ id: `${page.toString().padStart(8, '0')}-aaaa-4aaa-8aaa-aaaaaaaaaaaa` }],
@@ -154,6 +390,7 @@ test('Resend received records one bounded anchor-loss gap and rebaselines after 
           };
         },
         async getReceived(id) {
+          details += 1;
           return {
             kind: 'candidate',
             candidate: { emailId: id, subject: 'safe', receivedAt: '2026-10-09T08:00:00.000Z' },
@@ -170,12 +407,17 @@ test('Resend received records one bounded anchor-loss gap and rebaselines after 
         encrypt: encode,
         decrypt: decode,
         debts: () => [{ ruleId: 'rule', ruleVersion: 1, ingestRetentionMs: 1_000 }],
-        admit: async () => 'terminal',
+        admit: async (candidate) => {
+          admitted.push(candidate.emailId);
+          return 'terminal';
+        },
         now: () => 1_760_000_000_000,
       });
       await source.seedAnchor(ANCHOR);
       await source.scan();
       assert.equal(source.anchorId(), '00000001-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+      assert.equal(details, 0, 'an unbounded relative position is never materialised');
+      assert.deepEqual(admitted, [], 'the lost bounded window is content-free');
       assert.equal(
         (
           store.database
@@ -186,6 +428,10 @@ test('Resend received records one bounded anchor-loss gap and rebaselines after 
         ).count,
         1,
       );
+      phase = 'recovered';
+      await source.scan();
+      assert.equal(details, 1, 'the next cycle reads only mail newer than the re-baselined head');
+      assert.deepEqual(admitted, [NEWEST]);
     } finally {
       store.close();
     }

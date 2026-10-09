@@ -10,6 +10,7 @@ const P = '11111111-1111-4111-8111-111111111111';
 const E0 = '22222222-2222-4222-8222-222222222222';
 const E1 = '33333333-3333-4333-8333-333333333333';
 const E2 = '44444444-4444-4444-8444-444444444444';
+const E3 = '55555555-5555-4555-8555-555555555555';
 
 function receivedCandidate(emailId: string) {
   return {
@@ -273,11 +274,12 @@ test('R: independent received points keep their cut-over across three completed 
     await fixture.activateAdditionalRule('rule-later', RECEIVED);
     let cycle = 0;
     fixture.setResendReceivedReader({
-      listReceived: async () => {
+      listReceived: async (after) => {
+        if (after === 'first-page') return { emails: [{ id: P }, { id: E0 }, { id: X0 }], next: null };
         cycle += 1;
-        if (cycle === 1) return { emails: [{ id: P }, { id: E0 }, { id: X0 }], next: null };
-        if (cycle === 2) return { emails: [{ id: E1 }, { id: P }], next: null };
-        if (cycle === 3) return { emails: [{ id: E2 }, { id: E1 }], next: null };
+        if (cycle === 1) return { emails: [{ id: E1 }], next: 'first-page' };
+        if (cycle === 2) return { emails: [{ id: E2 }, { id: E1 }], next: null };
+        if (cycle === 3) return { emails: [{ id: E3 }, { id: E2 }], next: null };
         throw new Error(`unexpected received cycle ${cycle}`);
       },
       getReceived: async (id) => (id === P ? { kind: 'vanished' as const } : receivedCandidate(id)),
@@ -302,7 +304,439 @@ test('R: independent received points keep their cut-over across three completed 
         { dedupe_key: E1, rule_id: 'rule-later' },
         { dedupe_key: E2, rule_id: 'rule-cutover' },
         { dedupe_key: E2, rule_id: 'rule-later' },
+        { dedupe_key: E3, rule_id: 'rule-cutover' },
+        { dedupe_key: E3, rule_id: 'rule-later' },
       ],
+    );
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test('R: re-approval after the last received rule revokes skips pre-point details and admits each post-point page once', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  try {
+    fixture.setResendReceivedBaseline(X0);
+    fixture.setResendReceivedReader({
+      listReceived: async () => ({ emails: [{ id: X0 }], next: null }),
+      getReceived: async (id) => receivedCandidate(id),
+    });
+    await fixture.activate(1, RECEIVED);
+    await fixture.enable();
+    await fixture.schedulerTurn();
+    await fixture.revokeByRule();
+
+    fixture.setResendReceivedBaseline(P);
+    await fixture.activateAdditionalRule('rule-reapproved', RECEIVED);
+    fixture.setResendReceivedReader({
+      listReceived: async (after) =>
+        after === undefined
+          ? { emails: [{ id: E2 }, { id: E1 }], next: 'page-2' }
+          : { emails: [{ id: P }, { id: E0 }, { id: X0 }], next: null },
+      getReceived: async (id) => receivedCandidate(id),
+    });
+    const before = fixture.calls.filter((call) => call === 'resend.getReceived').length;
+
+    await fixture.sourceTurn();
+
+    assert.deepEqual(
+      fixture.store.database
+        .prepare(
+          `SELECT ingest.dedupe_key, decisions.rule_id
+             FROM decisions JOIN ingest ON ingest.event_id = decisions.event_id
+             ORDER BY ingest.dedupe_key, decisions.rule_id`,
+        )
+        .all()
+        .map((row) => ({ ...row })),
+      [
+        { dedupe_key: E1, rule_id: 'rule-reapproved' },
+        { dedupe_key: E2, rule_id: 'rule-reapproved' },
+      ],
+    );
+    assert.equal(
+      fixture.calls.filter((call) => call === 'resend.getReceived').length - before,
+      2,
+      'the revoked interval and P are content-free only',
+    );
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test('R: exact received replacement caps the old drain at P and leaves newer mail for the published child', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  try {
+    fixture.setResendReceivedBaseline(X0);
+    fixture.setResendReceivedReader({
+      listReceived: async () => ({ emails: [{ id: X0 }], next: null }),
+      getReceived: async (id) => receivedCandidate(id),
+    });
+    await fixture.activate(1, RECEIVED);
+    await fixture.enable();
+    await fixture.schedulerTurn();
+
+    fixture.setResendReceivedBaseline(P);
+    await assert.rejects(
+      () => fixture.activate(2, RECEIVED, 'changed'),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+    );
+    let phase: 'drain' | 'child' = 'drain';
+    fixture.setResendReceivedReader({
+      listReceived: async (after) => {
+        if (phase === 'child') return { emails: [{ id: E2 }, { id: E1 }, { id: P }], next: null };
+        return after === undefined
+          ? { emails: [{ id: E2 }, { id: E1 }], next: 'page-2' }
+          : { emails: [{ id: P }, { id: E0 }, { id: X0 }], next: null };
+      },
+      getReceived: async (id) => receivedCandidate(id),
+    });
+    const before = fixture.calls.filter((call) => call === 'resend.getReceived').length;
+
+    await fixture.sourceTurn();
+
+    assert.deepEqual(
+      fixture.store.database
+        .prepare(
+          `SELECT ingest.dedupe_key, decisions.rule_id, decisions.rule_version
+             FROM decisions JOIN ingest ON ingest.event_id = decisions.event_id
+             ORDER BY ingest.dedupe_key, decisions.rule_id, decisions.rule_version`,
+        )
+        .all()
+        .map((row) => ({ ...row })),
+      [
+        { dedupe_key: P, rule_id: 'rule-cutover', rule_version: 1 },
+        { dedupe_key: E0, rule_id: 'rule-cutover', rule_version: 1 },
+      ],
+      'the old version receives P and its older interval only',
+    );
+    assert.equal(
+      fixture.calls.filter((call) => call === 'resend.getReceived').length - before,
+      2,
+      'newer post-P items stay content-free while the old version drains',
+    );
+
+    await fixture.runtime.resumeClaimedCompletions();
+    phase = 'child';
+    await fixture.sourceTurn();
+
+    assert.deepEqual(
+      fixture.store.database
+        .prepare(
+          `SELECT ingest.dedupe_key, decisions.rule_id, decisions.rule_version
+             FROM decisions JOIN ingest ON ingest.event_id = decisions.event_id
+             ORDER BY ingest.dedupe_key, decisions.rule_id, decisions.rule_version`,
+        )
+        .all()
+        .map((row) => ({ ...row })),
+      [
+        { dedupe_key: P, rule_id: 'rule-cutover', rule_version: 1 },
+        { dedupe_key: E0, rule_id: 'rule-cutover', rule_version: 1 },
+        { dedupe_key: E1, rule_id: 'rule-cutover', rule_version: 2 },
+        { dedupe_key: E2, rule_id: 'rule-cutover', rule_version: 2 },
+      ],
+    );
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test('R: a cap leaves a later received point unreached until its own anchor is crossed', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  try {
+    fixture.setResendReceivedBaseline(X0);
+    fixture.setResendReceivedReader({
+      listReceived: async () => ({ emails: [{ id: X0 }], next: null }),
+      getReceived: async (id) => receivedCandidate(id),
+    });
+    await fixture.activate(1, RECEIVED);
+    await fixture.enable();
+    await fixture.schedulerTurn();
+
+    fixture.now.value += 1;
+    fixture.setResendReceivedBaseline(P);
+    await assert.rejects(
+      () => fixture.activate(2, RECEIVED, 'changed'),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+    );
+
+    fixture.now.value += 1;
+    fixture.setResendReceivedBaseline(E1);
+    await fixture.activateAdditionalRule('rule-later', RECEIVED);
+
+    let phase: 'drain' | 'first-child' | 'second-child' = 'drain';
+    fixture.setResendReceivedReader({
+      listReceived: async () => {
+        if (phase === 'drain')
+          return { emails: [{ id: E2 }, { id: E1 }, { id: E0 }, { id: P }, { id: X0 }], next: null };
+        if (phase === 'first-child') return { emails: [{ id: E2 }, { id: E1 }, { id: E0 }, { id: P }], next: null };
+        return { emails: [{ id: E3 }, { id: E2 }], next: null };
+      },
+      getReceived: async (id) => receivedCandidate(id),
+    });
+
+    await fixture.sourceTurn();
+    assert.deepEqual(
+      fixture.store.database
+        .prepare(
+          `SELECT ingest.dedupe_key, decisions.rule_id, decisions.rule_version
+             FROM decisions JOIN ingest ON ingest.event_id = decisions.event_id
+             ORDER BY ingest.dedupe_key, decisions.rule_id, decisions.rule_version`,
+        )
+        .all()
+        .map((row) => ({ ...row })),
+      [{ dedupe_key: P, rule_id: 'rule-cutover', rule_version: 1 }],
+      'the later rule receives none of the suffix below its own point before the swap',
+    );
+
+    await fixture.runtime.resumeClaimedCompletions();
+    phase = 'first-child';
+    await fixture.sourceTurn();
+    phase = 'second-child';
+    await fixture.sourceTurn();
+
+    assert.deepEqual(
+      fixture.store.database
+        .prepare(
+          `SELECT ingest.dedupe_key, decisions.rule_id, decisions.rule_version
+             FROM decisions JOIN ingest ON ingest.event_id = decisions.event_id
+             ORDER BY ingest.dedupe_key, decisions.rule_id, decisions.rule_version`,
+        )
+        .all()
+        .map((row) => ({ ...row })),
+      [
+        { dedupe_key: P, rule_id: 'rule-cutover', rule_version: 1 },
+        { dedupe_key: E0, rule_id: 'rule-cutover', rule_version: 2 },
+        { dedupe_key: E1, rule_id: 'rule-cutover', rule_version: 2 },
+        { dedupe_key: E2, rule_id: 'rule-cutover', rule_version: 2 },
+        { dedupe_key: E2, rule_id: 'rule-later', rule_version: 1 },
+        { dedupe_key: E3, rule_id: 'rule-cutover', rule_version: 2 },
+        { dedupe_key: E3, rule_id: 'rule-later', rule_version: 1 },
+      ],
+      'the child receives every post-P email once, while the later rule receives only mail after its own point',
+    );
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test('R: a lost shared received anchor during a drain re-baselines at P without reading the lost window', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  try {
+    fixture.setResendReceivedBaseline(X0);
+    fixture.setResendReceivedReader({
+      listReceived: async () => ({ emails: [{ id: X0 }], next: null }),
+      getReceived: async (id) => receivedCandidate(id),
+    });
+    await fixture.activate(1, RECEIVED);
+    await fixture.enable();
+    await fixture.schedulerTurn();
+
+    fixture.now.value += 1;
+    fixture.setResendReceivedBaseline(P);
+    await assert.rejects(
+      () => fixture.activate(2, RECEIVED, 'changed'),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+    );
+
+    fixture.setResendReceivedReader({
+      listReceived: async () => ({ emails: [{ id: E2 }, { id: P }], next: null }),
+      getReceived: async (id) => receivedCandidate(id),
+    });
+    const detailsBefore = fixture.calls.filter((call) => call === 'resend.getReceived').length;
+
+    await fixture.sourceTurn();
+
+    assert.equal(
+      fixture.calls.filter((call) => call === 'resend.getReceived').length - detailsBefore,
+      0,
+      'the bounded lost window never reaches the detail endpoint',
+    );
+    assert.equal(
+      Number(
+        (fixture.store.database.prepare('SELECT COUNT(*) AS count FROM decisions').get() as { count: number }).count,
+      ),
+      0,
+    );
+    assert.equal(
+      Number(
+        (
+          fixture.store.database
+            .prepare("SELECT COUNT(*) AS count FROM operational_records WHERE kind = 'agentcomms.source.gap'")
+            .get() as { count: number }
+        ).count,
+      ),
+      2,
+      'the source loss and incomplete old drain each record one content-free gap',
+    );
+
+    await fixture.runtime.resumeClaimedCompletions();
+    await fixture.sourceTurn();
+    assert.deepEqual(
+      fixture.store.database
+        .prepare(
+          `SELECT ingest.dedupe_key, decisions.rule_version
+             FROM decisions JOIN ingest ON ingest.event_id = decisions.event_id
+             ORDER BY ingest.dedupe_key, decisions.rule_version`,
+        )
+        .all()
+        .map((row) => ({ ...row })),
+      [{ dedupe_key: E2, rule_version: 2 }],
+      'the published child receives the post-P mail once after the capped re-baseline',
+    );
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test('R: a received drain waits for a cycle that contains P when P was sampled during an older cycle', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  try {
+    fixture.setResendReceivedBaseline(X0);
+    fixture.setResendReceivedReader({
+      listReceived: async () => ({ emails: [{ id: X0 }], next: null }),
+      getReceived: async (id) => receivedCandidate(id),
+    });
+    await fixture.activate(1, RECEIVED);
+    await fixture.enable();
+    await fixture.schedulerTurn();
+
+    fixture.setResendReceivedReader({
+      listReceived: async () => ({ emails: [{ id: E0 }, { id: X0 }], next: null }),
+      getReceived: async (id) => receivedCandidate(id),
+    });
+    await fixture.setFailpoint((edge) => {
+      if (edge === 'after-stage') throw new Error('leave older received cycle in progress');
+    });
+    await assert.rejects(() => fixture.sourceTurn(), /older received cycle/);
+    await fixture.setFailpoint(undefined);
+
+    fixture.now.value += 1;
+    fixture.setResendReceivedBaseline(P);
+    await assert.rejects(
+      () => fixture.activate(2, RECEIVED, 'changed'),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+    );
+    let reachedP = false;
+    fixture.setResendReceivedReader({
+      listReceived: async () =>
+        reachedP
+          ? { emails: [{ id: P }, { id: E1 }, { id: E0 }], next: null }
+          : { emails: [{ id: E0 }, { id: X0 }], next: null },
+      getReceived: async (id) => receivedCandidate(id),
+    });
+
+    await fixture.sourceTurn();
+
+    assert.equal(
+      (
+        fixture.store.database
+          .prepare(
+            "SELECT COUNT(*) AS count FROM replacement_drains WHERE source = 'resend' AND position_scope = 'received' AND drained_at IS NULL",
+          )
+          .get() as { count: number }
+      ).count,
+      1,
+      'an older cycle that cannot contain P must not complete the new drain',
+    );
+    reachedP = true;
+    await fixture.sourceTurn();
+
+    assert.equal(
+      (
+        fixture.store.database
+          .prepare(
+            "SELECT COUNT(*) AS count FROM replacement_drains WHERE source = 'resend' AND position_scope = 'received' AND drained_at IS NULL",
+          )
+          .get() as { count: number }
+      ).count,
+      0,
+    );
+    assert.deepEqual(
+      fixture.store.database
+        .prepare(
+          `SELECT ingest.dedupe_key, decisions.rule_version
+             FROM decisions JOIN ingest ON ingest.event_id = decisions.event_id
+             ORDER BY ingest.dedupe_key, decisions.rule_version`,
+        )
+        .all()
+        .map((row) => ({ ...row })),
+      [
+        { dedupe_key: P, rule_version: 1 },
+        { dedupe_key: E0, rule_version: 1 },
+        { dedupe_key: E1, rule_version: 1 },
+      ],
+      'the pre-swap old version receives every occurrence from its older head through P exactly once',
+    );
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test('R: a deleted received drain point fails closed, records one gap, and does not stall the swap', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  try {
+    fixture.setResendReceivedBaseline(X0);
+    fixture.setResendReceivedReader({
+      listReceived: async () => ({ emails: [{ id: X0 }], next: null }),
+      getReceived: async (id) => receivedCandidate(id),
+    });
+    await fixture.activate(1, RECEIVED);
+    await fixture.enable();
+    await fixture.schedulerTurn();
+
+    fixture.now.value += 1;
+    fixture.setResendReceivedBaseline(P);
+    await assert.rejects(
+      () => fixture.activate(2, RECEIVED, 'changed'),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+    );
+    fixture.setResendReceivedReader({
+      listReceived: async () => ({ emails: [{ id: E1 }, { id: X0 }], next: null }),
+      getReceived: async (id) => receivedCandidate(id),
+    });
+
+    await fixture.sourceTurn();
+
+    assert.equal(
+      Number(
+        (fixture.store.database.prepare('SELECT COUNT(*) AS count FROM decisions').get() as { count: number }).count,
+      ),
+      0,
+      'the old version cannot admit an email whose position relative to deleted P is unknown',
+    );
+    assert.equal(
+      Number(
+        (
+          fixture.store.database
+            .prepare("SELECT COUNT(*) AS count FROM operational_records WHERE kind = 'agentcomms.source.gap'")
+            .get() as { count: number }
+        ).count,
+      ),
+      1,
+    );
+    await fixture.runtime.resumeClaimedCompletions();
+    assert.equal(
+      Number(
+        (
+          fixture.store.database
+            .prepare("SELECT COUNT(*) AS count FROM activation_intents WHERE status = 'pending-completion'")
+            .get() as { count: number }
+        ).count,
+      ),
+      0,
+      'the content-free settlement permits the replacement to publish',
     );
   } finally {
     await fixture.dispose();

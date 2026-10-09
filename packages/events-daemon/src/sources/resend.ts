@@ -46,8 +46,18 @@ export interface ResendReceivedPosition {
 
 /** Content-free certificate retained until every active rule point has settled this completed scan cycle. */
 export interface ResendReceivedCycle {
+  /** The first provider id in this complete newest-first listing. */
   readonly cycleHeadId: string;
+  /** Complete newest-first listing, including ids skipped by a replacement cap. */
   readonly orderedIds: readonly string[];
+  /** The shared anchor written when this cycle completed; it may be below the listing head when a drain caps it. */
+  readonly advancedAnchorId: string;
+  /** True only when a drain cap present in this listing chose `advancedAnchorId`. */
+  readonly capped: boolean;
+  /** The prior shared anchor was absent, so this listing intentionally materialised no candidates. */
+  readonly anchorLost: boolean;
+  /** Local instant when this fixed listing began; compares a replacement P with an older in-flight cycle. */
+  readonly startedAt: number;
 }
 
 export interface ResendSentItem {
@@ -79,8 +89,17 @@ export interface ResendEventReader {
 interface ReceivedState {
   readonly anchorId: string;
   readonly cycleHeadId: string | null;
+  readonly cycleStartedAt?: number | undefined;
+  /** The replacement P that capped this cycle, if it was present in the completed chain. */
+  readonly cycleCapId?: string | undefined;
   readonly after: string | null;
   readonly pagesScanned: number;
+  /** Listing is content-free and must reach the fixed anchor before any item is materialised. */
+  readonly listingComplete?: boolean | undefined;
+  /** The bounded listing did not contain its old anchor and will record its gap only after every listed id settles. */
+  readonly anchorLost?: boolean | undefined;
+  /** Complete effective newest-first listing, retained when a replacement cap trims `items` for materialisation. */
+  readonly listedIds?: readonly string[] | undefined;
   readonly items: readonly string[];
   /** IDs already consumed in this bounded newest-first cycle. */
   readonly seenIds?: readonly string[] | undefined;
@@ -314,13 +333,17 @@ export class ResendReceivedSource {
     candidate: ResendReceivedCandidate,
     position: ResendReceivedPosition,
   ) => Promise<'terminal' | 'pending'>;
+  /** Content-free point gate that runs before the detail/body provider call. */
+  readonly #mayFetch: (position: ResendReceivedPosition) => Promise<boolean>;
   readonly #assertWriteStillLive: () => void;
   readonly #now: () => number;
   readonly #scopeLock: SourceScopeLock;
   readonly #scope: SourceScope;
   readonly #failpoint: CutoverFailpoint | undefined;
   readonly #settleCompletedCycle: ((cycle: ResendReceivedCycle) => Promise<void>) | undefined;
+  readonly #drainCap: Readonly<{ anchorId: string; capturedAt: number }> | undefined;
   #currentAnchor: string | null = null;
+  #lastCompletedCycle: ResendReceivedCycle | undefined;
 
   constructor(
     input: Readonly<{
@@ -331,11 +354,14 @@ export class ResendReceivedSource {
       decrypt: (stored: Uint8Array, id: string) => Promise<unknown>;
       debts: () => readonly SourceStageDebt[];
       admit: (candidate: ResendReceivedCandidate, position: ResendReceivedPosition) => Promise<'terminal' | 'pending'>;
+      mayFetch?: ((position: ResendReceivedPosition) => Promise<boolean>) | undefined;
       assertWriteStillLive?: (() => void) | undefined;
       scopeLock?: SourceScopeLock | undefined;
       now?: (() => number) | undefined;
       /** Records the owner's durable per-version cut-over facts before the cycle certificate is acknowledged. */
       settleCompletedCycle?: ((cycle: ResendReceivedCycle) => Promise<void>) | undefined;
+      /** While an exact replacement drains, its old version may process only P through the shared anchor. */
+      drainCap?: Readonly<{ anchorId: string; capturedAt: number }> | undefined;
       /** Optional D8 crash seam; omitted in production. */
       failpoint?: CutoverFailpoint | undefined;
     }>,
@@ -347,11 +373,13 @@ export class ResendReceivedSource {
     this.#decrypt = input.decrypt;
     this.#debts = input.debts;
     this.#admit = input.admit;
+    this.#mayFetch = input.mayFetch ?? (async () => this.#debts().length > 0);
     this.#assertWriteStillLive = input.assertWriteStillLive ?? (() => undefined);
     this.#now = input.now ?? Date.now;
     this.#scopeLock = input.scopeLock ?? new SourceScopeLock();
     this.#scope = { source: 'resend', accountId: input.accountId, scopeId: RECEIVED_SCOPE };
     this.#settleCompletedCycle = input.settleCompletedCycle;
+    this.#drainCap = input.drainCap;
     this.#failpoint = input.failpoint;
   }
 
@@ -372,7 +400,14 @@ export class ResendReceivedSource {
   }
 
   async seedAnchor(anchorId: string): Promise<void> {
-    await this.#save({ anchorId, cycleHeadId: null, after: null, pagesScanned: 0, items: [], seenIds: [] }, false);
+    await this.#save(
+      { anchorId, cycleHeadId: null, after: null, pagesScanned: 0, listedIds: [], items: [], seenIds: [] },
+      false,
+    );
+  }
+
+  completedCycle(): ResendReceivedCycle | undefined {
+    return this.#lastCompletedCycle;
   }
 
   async scan(): Promise<Readonly<{ pending: boolean; anchorId: string | null }>> {
@@ -443,30 +478,145 @@ export class ResendReceivedSource {
       const state = await this.#load();
       if (state === null) throw new Error('the received source needs a baseline before scanning');
       if (state.completedCycle !== undefined) {
-        await this.#settleAndAcknowledgeCompletedCycle(state.completedCycle);
+        const completedCycle = state.completedCycle;
+        await this.#settleAndAcknowledgeCompletedCycle(completedCycle);
+        this.#lastCompletedCycle = completedCycle;
         return { pending: false, anchorId: state.anchorId === EMPTY ? null : state.anchorId };
       }
-      if (state.candidate !== undefined) {
-        if (this.#isResolved(state.candidate.emailId)) {
-          await this.#save(this.#consumeItem(state), false);
-          continue;
-        }
-        const admitted = await this.#admit(state.candidate, state.candidatePosition ?? this.#candidatePosition(state));
-        if (admitted === 'pending') return { pending: true, anchorId: this.anchorId() };
-        await this.#save(this.#consumeItem(state), state.items.length > 1);
+      // A candidate's relative position is only safe once the durable newest-first chain includes the shared anchor.
+      // In particular, never materialise page one merely because page two has not been listed yet.
+      // Older durable records used one fully listed final page as their processing state and have no
+      // `listingComplete` marker. Resume that compatible shape without a fresh provider list; a partial old page
+      // still has `after` and must first be extended into the complete chain.
+      if (!state.listingComplete && !(state.items.length > 0 && state.after === null)) {
+        this.#assertUnfenced();
+        const page = await this.#reader.listReceived(state.after ?? undefined);
+        const cycleHeadId = state.cycleHeadId ?? page.emails[0]?.id ?? null;
+        const pagesScanned = state.pagesScanned + 1;
+        const foundAnchor = page.emails.some((item) => item.id === state.anchorId);
+        const startedEmpty = state.anchorId === EMPTY;
+        const anchorLost = !startedEmpty && !foundAnchor && (pagesScanned >= MAX_PAGES || page.next === null);
+        const listingComplete = foundAnchor || anchorLost || (startedEmpty && page.next === null);
+        const pageIds = page.emails.map((item) => item.id);
+        const effectivePageIds = foundAnchor ? pageIds.slice(0, pageIds.indexOf(state.anchorId) + 1) : pageIds;
+        const listingTail = startedEmpty && page.next === null ? [EMPTY] : [];
+        await this.#save(
+          {
+            ...state,
+            cycleHeadId,
+            cycleStartedAt: state.cycleStartedAt ?? this.#now(),
+            after: listingComplete ? null : page.next,
+            pagesScanned,
+            listingComplete,
+            anchorLost,
+            seenIds: state.seenIds ?? [],
+            // `empty` is a durable activation point rather than an id Resend can return. At the final page it marks
+            // the end of a first post-empty cycle after every real id has been listed.
+            listedIds: [
+              ...(state.listedIds ?? [...(state.seenIds ?? []), ...state.items]),
+              ...effectivePageIds,
+              ...listingTail,
+            ],
+            items: [...state.items, ...effectivePageIds, ...listingTail],
+          },
+          page.emails.length > 0,
+        );
         continue;
       }
-      const item = state.items[0];
-      if (item !== undefined) {
-        if (item === state.anchorId) {
+      if (state.anchorLost === true) {
+        const cap = this.#drainCap;
+        const chain = this.#listedIds(state);
+        const capPresent = cap !== undefined && cap.anchorId !== EMPTY && chain.includes(cap.anchorId);
+        const nextAnchor = capPresent ? cap.anchorId : (state.cycleHeadId ?? EMPTY);
+        const completedCycle = this.#completedCycle(state, nextAnchor, capPresent, true);
+        await this.#save(
+          {
+            anchorId: nextAnchor,
+            cycleHeadId: null,
+            cycleStartedAt: undefined,
+            cycleCapId: undefined,
+            after: null,
+            pagesScanned: 0,
+            listingComplete: undefined,
+            anchorLost: undefined,
+            listedIds: [],
+            items: [],
+            seenIds: [],
+            completedCycle,
+          },
+          false,
+          undefined,
+          `resend-anchor-gap:${this.#accountId}:${state.anchorId}:${nextAnchor}`,
+        );
+        await this.#settleAndAcknowledgeCompletedCycle(completedCycle);
+        this.#lastCompletedCycle = completedCycle;
+        return { pending: false, anchorId: nextAnchor === EMPTY ? null : nextAnchor };
+      }
+      const cap = this.#drainCap;
+      if (cap !== undefined && state.cycleCapId === undefined) {
+        const seen = state.seenIds ?? [];
+        const chain = this.#listedIds(state);
+        const capIndex = cap.anchorId === EMPTY ? -1 : chain.indexOf(cap.anchorId);
+        if (cap.anchorId === EMPTY || capIndex >= 0) {
+          if (cap.anchorId === EMPTY) {
+            const completedCycle = this.#completedCycle(state, EMPTY, true, false);
+            await this.#save(
+              {
+                anchorId: EMPTY,
+                cycleHeadId: null,
+                cycleStartedAt: undefined,
+                cycleCapId: undefined,
+                after: null,
+                pagesScanned: 0,
+                listingComplete: undefined,
+                anchorLost: undefined,
+                listedIds: [],
+                items: [],
+                seenIds: [],
+                completedCycle,
+              },
+              false,
+            );
+            await this.#settleAndAcknowledgeCompletedCycle(completedCycle);
+            this.#lastCompletedCycle = completedCycle;
+            return { pending: false, anchorId: null };
+          }
+          const itemIndex = Math.max(0, capIndex - seen.length);
+          const retainedItems = state.items.slice(itemIndex);
+          const retainCandidate = state.candidate?.emailId === retainedItems[0];
+          await this.#save(
+            {
+              ...state,
+              cycleCapId: cap.anchorId,
+              items: retainedItems,
+              candidate: retainCandidate ? state.candidate : undefined,
+              candidatePosition: retainCandidate ? state.candidatePosition : undefined,
+              retry: retainCandidate ? state.retry : undefined,
+            },
+            false,
+          );
+          continue;
+        }
+        // P was sampled after this listing began, so it is necessarily newer than this old in-flight cycle. Finish
+        // that old cycle normally; the next cycle will list from the then-current head down to P.
+        if ((state.cycleStartedAt ?? 0) < cap.capturedAt) {
+          // Do not set a cap: there is no safe order relation between this old cycle and P yet.
+        } else {
+          // The bounded post-P listing has no P (deleted or aged out). Fail closed: retain only its content-free
+          // chain, let the owner record a per-drain gap, and advance so neither version can admit unknown-order mail.
           const nextAnchor = state.cycleHeadId ?? state.anchorId;
-          const completedCycle = { cycleHeadId: nextAnchor, orderedIds: [...(state.seenIds ?? []), item] };
+          const completedCycle = this.#completedCycle(state, nextAnchor, false, false);
           await this.#save(
             {
               anchorId: nextAnchor,
               cycleHeadId: null,
+              cycleStartedAt: undefined,
+              cycleCapId: undefined,
               after: null,
               pagesScanned: 0,
+              listingComplete: undefined,
+              anchorLost: undefined,
+              listedIds: [],
               items: [],
               seenIds: [],
               completedCycle,
@@ -474,6 +624,44 @@ export class ResendReceivedSource {
             false,
           );
           await this.#settleAndAcknowledgeCompletedCycle(completedCycle);
+          this.#lastCompletedCycle = completedCycle;
+          return { pending: false, anchorId: nextAnchor === EMPTY ? null : nextAnchor };
+        }
+      }
+      if (state.candidate !== undefined) {
+        if (this.#isResolved(state.candidate.emailId)) {
+          await this.#save(this.#consumeItem(state), false);
+          continue;
+        }
+        const admitted = await this.#admit(state.candidate, this.#candidatePosition(state));
+        if (admitted === 'pending') return { pending: true, anchorId: this.anchorId() };
+        await this.#save(this.#consumeItem(state), state.items.length > 1);
+        continue;
+      }
+      const item = state.items[0];
+      if (item !== undefined) {
+        if (item === state.anchorId) {
+          const nextAnchor = state.cycleCapId ?? state.cycleHeadId ?? state.anchorId;
+          const completedCycle = this.#completedCycle(state, nextAnchor, state.cycleCapId !== undefined, false);
+          await this.#save(
+            {
+              anchorId: nextAnchor,
+              cycleHeadId: null,
+              cycleStartedAt: undefined,
+              cycleCapId: undefined,
+              after: null,
+              pagesScanned: 0,
+              listingComplete: undefined,
+              anchorLost: undefined,
+              listedIds: [],
+              items: [],
+              seenIds: [],
+              completedCycle,
+            },
+            false,
+          );
+          await this.#settleAndAcknowledgeCompletedCycle(completedCycle);
+          this.#lastCompletedCycle = completedCycle;
           return { pending: false, anchorId: nextAnchor === EMPTY ? null : nextAnchor };
         }
         if (item !== EMPTY && this.#isResolved(item)) {
@@ -500,6 +688,10 @@ export class ResendReceivedSource {
             continue;
           }
           if (this.#now() < retry.nextRetryAt) return { pending: true, anchorId: this.anchorId() };
+        }
+        if (!(await this.#mayFetch(this.#candidatePosition(state)))) {
+          await this.#save(this.#consumeItem(state), false);
+          continue;
         }
         this.#assertUnfenced();
         let detail: Awaited<ReturnType<ResendEventReader['getReceived']>>;
@@ -563,48 +755,30 @@ export class ResendReceivedSource {
         );
         continue;
       }
-      this.#assertUnfenced();
-      const page = await this.#reader.listReceived(state.after ?? undefined);
-      const cycleHeadId = state.cycleHeadId ?? page.emails[0]?.id ?? null;
-      const pagesScanned = state.pagesScanned + 1;
-      const foundAnchor = page.emails.some((item) => item.id === state.anchorId);
-      const startedEmpty = state.anchorId === EMPTY;
-      if (!startedEmpty && (pagesScanned >= MAX_PAGES || (page.next === null && !foundAnchor))) {
-        const nextAnchor = cycleHeadId ?? page.emails[0]?.id ?? EMPTY;
-        const completedCycle = {
-          cycleHeadId: nextAnchor,
-          orderedIds: [...(state.seenIds ?? []), ...page.emails.map((item) => item.id)],
-        };
-        await this.#save(
-          {
-            anchorId: nextAnchor,
-            cycleHeadId: null,
-            after: null,
-            pagesScanned: 0,
-            items: [],
-            seenIds: [],
-            completedCycle,
-          },
-          false,
-          undefined,
-          `resend-anchor-gap:${this.#accountId}:${state.anchorId}:${nextAnchor}`,
-        );
-        await this.#settleAndAcknowledgeCompletedCycle(completedCycle);
-        return { pending: false, anchorId: nextAnchor === EMPTY ? null : nextAnchor };
-      }
+      const nextAnchor = state.cycleCapId ?? state.cycleHeadId ?? state.anchorId;
+      const completedCycle = this.#completedCycle(state, nextAnchor, state.cycleCapId !== undefined, false);
       await this.#save(
         {
-          ...state,
-          cycleHeadId,
-          after: page.next,
-          pagesScanned,
-          seenIds: state.seenIds ?? [],
-          // `empty` is a durable activation point rather than an id Resend can return.  At the final page it is the
-          // completion marker that lets a first post-empty cycle stage every new item before its anchor moves.
-          items: [...page.emails.map((item) => item.id), ...(startedEmpty && page.next === null ? [EMPTY] : [])],
+          anchorId: nextAnchor,
+          cycleHeadId: null,
+          cycleStartedAt: undefined,
+          cycleCapId: undefined,
+          after: null,
+          pagesScanned: 0,
+          listingComplete: undefined,
+          anchorLost: undefined,
+          listedIds: [],
+          items: [],
+          seenIds: [],
+          completedCycle,
         },
-        page.emails.length > 0,
+        false,
+        undefined,
+        state.anchorLost ? `resend-anchor-gap:${this.#accountId}:${state.anchorId}:${nextAnchor}` : undefined,
       );
+      await this.#settleAndAcknowledgeCompletedCycle(completedCycle);
+      this.#lastCompletedCycle = completedCycle;
+      return { pending: false, anchorId: nextAnchor === EMPTY ? null : nextAnchor };
     }
   }
 
@@ -616,6 +790,26 @@ export class ResendReceivedSource {
   #candidatePosition(state: ReceivedState): ResendReceivedPosition {
     const seen = state.seenIds ?? [];
     return { orderedIds: [...seen, ...state.items], candidateIndex: seen.length };
+  }
+
+  #listedIds(state: ReceivedState): readonly string[] {
+    return state.listedIds ?? [...(state.seenIds ?? []), ...state.items];
+  }
+
+  #completedCycle(
+    state: ReceivedState,
+    advancedAnchorId: string,
+    capped: boolean,
+    anchorLost: boolean,
+  ): ResendReceivedCycle {
+    return {
+      cycleHeadId: state.cycleHeadId ?? advancedAnchorId,
+      orderedIds: this.#listedIds(state),
+      advancedAnchorId,
+      capped,
+      anchorLost,
+      startedAt: state.cycleStartedAt ?? 0,
+    };
   }
 
   #consumeItem(state: ReceivedState): ReceivedState {
@@ -755,6 +949,10 @@ export class ResendReceivedSource {
 function sameCycle(left: ResendReceivedCycle, right: ResendReceivedCycle): boolean {
   return (
     left.cycleHeadId === right.cycleHeadId &&
+    left.advancedAnchorId === right.advancedAnchorId &&
+    left.capped === right.capped &&
+    left.anchorLost === right.anchorLost &&
+    left.startedAt === right.startedAt &&
     left.orderedIds.length === right.orderedIds.length &&
     left.orderedIds.every((value, index) => value === right.orderedIds[index])
   );

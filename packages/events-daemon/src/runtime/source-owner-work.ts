@@ -351,6 +351,7 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
       },
     };
     if (scope.scopeId === 'received') {
+      const receivedDrains = await pendingReplacementDrains(input, scope);
       const source = new ResendReceivedSource({
         store: input.store,
         accountId: scope.accountId,
@@ -366,6 +367,14 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
           return JSON.parse(plaintext.toString('utf8'));
         },
         debts: rules,
+        mayFetch: async (position) =>
+          (
+            await debtsAfterActivationPoint(input, scope, rules(), {
+              source: 'resend-received',
+              position,
+            })
+          ).length > 0,
+        drainCap: resendReceivedDrainCap(receivedDrains),
         admit: (candidate, position) =>
           admit(resendReceivedEvent(scope, candidate), rules(), {
             position: { source: 'resend-received', position },
@@ -392,7 +401,8 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
       const result = await source.scan();
       // A completed received cycle has terminally visited the fixed anchor captured at P (or its empty sentinel).
       // Do not settle after a budget/retry continuation: it may still contain old-version candidates.
-      if (!result.pending) completePendingReplacementDrains(input, scope, (input.now ?? Date.now)());
+      if (!result.pending)
+        await completePendingReplacementDrains(input, scope, (input.now ?? Date.now)(), source.completedCycle());
       return;
     }
     const pendingStatusStarts = await pendingReplacementDrains(input, scope);
@@ -424,7 +434,7 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
     const result = await source.scan({ maxPages: 1 });
     // Status scanning has no provider cursor, so one complete source pass is its content-free P certificate. The
     // scan's per-item state machine has already terminalised every observed pre-P status before this write.
-    if (!result.pending) completePendingReplacementDrains(input, scope, (input.now ?? Date.now)());
+    if (!result.pending) await completePendingReplacementDrains(input, scope, (input.now ?? Date.now)());
     return;
   }
 
@@ -476,13 +486,15 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
     await admitWhatsAppStages(input, scope, evaluator, whatsappRules);
     // The checked-copy snapshot is atomic with respect to the local source. Its candidate/head transaction and the
     // rule-admission pass above have settled the P snapshot before this replacement certificate is written.
-    completePendingReplacementDrains(input, scope, (input.now ?? Date.now)());
+    await completePendingReplacementDrains(input, scope, (input.now ?? Date.now)());
   });
 }
 
 interface PendingReplacementDrain {
   readonly intentId: string;
   readonly position: unknown;
+  readonly capturedAt: number;
+  readonly drainedAt: number | null;
 }
 
 /**
@@ -495,7 +507,8 @@ async function pendingReplacementDrains(
 ): Promise<readonly PendingReplacementDrain[]> {
   const rows = input.store.database
     .prepare(
-      `SELECT replacement_drains.intent_id, activation_baselines.encrypted_position
+      `SELECT replacement_drains.intent_id, replacement_drains.drained_at, activation_baselines.encrypted_position,
+              activation_baselines.response_at
          FROM replacement_drains
          JOIN activation_intents ON activation_intents.id = replacement_drains.intent_id
          JOIN activation_baselines
@@ -505,12 +518,20 @@ async function pendingReplacementDrains(
           AND activation_baselines.position_scope = replacement_drains.position_scope
         WHERE replacement_drains.source = ? AND replacement_drains.account_id = ? AND replacement_drains.position_scope = ?
           AND replacement_drains.old_in_scope = 1
-          AND activation_intents.status = 'pending-completion'`,
+          AND activation_intents.status = 'pending-completion'
+        ORDER BY activation_baselines.response_at ASC, replacement_drains.intent_id ASC`,
     )
-    .all(scope.source, scope.accountId, scope.scopeId) as Array<{ intent_id: string; encrypted_position: Uint8Array }>;
+    .all(scope.source, scope.accountId, scope.scopeId) as Array<{
+    intent_id: string;
+    drained_at: number | null;
+    encrypted_position: Uint8Array;
+    response_at: number;
+  }>;
   return Promise.all(
     rows.map(async (row) => ({
       intentId: row.intent_id,
+      capturedAt: row.response_at,
+      drainedAt: row.drained_at,
       position: JSON.parse(
         (
           await input.cipher.decrypt(
@@ -532,18 +553,62 @@ async function pendingReplacementDrains(
   );
 }
 
-function completePendingReplacementDrains(input: SourceOwnerWorkOptions, scope: SourceScope, at: number): void {
-  for (const row of input.store.database
-    .prepare(
-      `SELECT replacement_drains.intent_id
-         FROM replacement_drains JOIN activation_intents ON activation_intents.id = replacement_drains.intent_id
-        WHERE replacement_drains.source = ? AND replacement_drains.account_id = ? AND replacement_drains.position_scope = ?
-          AND replacement_drains.old_in_scope = 1 AND replacement_drains.drained_at IS NULL
-          AND activation_intents.status = 'pending-completion'`,
-    )
-    .all(scope.source, scope.accountId, scope.scopeId) as Array<{ intent_id: string }>) {
-    completeSourceReplacementDrain(input.store.database, { intentId: row.intent_id, scope, at });
+async function completePendingReplacementDrains(
+  input: SourceOwnerWorkOptions,
+  scope: SourceScope,
+  at: number,
+  cycle?: ResendReceivedCycle | undefined,
+): Promise<void> {
+  const drains = await pendingReplacementDrains(input, scope);
+  for (const drain of drains) {
+    if (drain.drainedAt !== null) continue;
+    let gap = false;
+    if (scope.source === 'resend' && scope.scopeId === 'received') {
+      // A Resend received drain is proved by the exact content-free chain, not by merely finishing whichever cycle
+      // happened to be in progress when P was sampled. An older cycle must finish first and let the next one reach P.
+      if (cycle === undefined) continue;
+      const point = resendReceivedAnchor(drain.position);
+      if (point === undefined) gap = true;
+      else if (point !== 'empty') {
+        if (!cycle.orderedIds.includes(point)) {
+          if (cycle.startedAt < drain.capturedAt) continue;
+          gap = true;
+        } else if (cycle.anchorLost) {
+          // The source re-baselined without materialising any part of the old interval, including P when present.
+          gap = true;
+        }
+      }
+    }
+    input.store.immediate(() => {
+      if (gap)
+        input.store.database
+          .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
+          .run(resendReceivedDrainGapRecordId(scope, drain.intentId), 'agentcomms.source.gap', at);
+      completeSourceReplacementDrain(input.store.database, { intentId: drain.intentId, scope, at });
+    });
   }
+}
+
+/** The first sampled Resend P is the oldest (and therefore strictest) cap while several old versions drain. */
+function resendReceivedDrainCap(
+  drains: readonly PendingReplacementDrain[],
+): Readonly<{ anchorId: string; capturedAt: number }> | undefined {
+  const earliest = drains
+    .filter((drain) => drain.position !== undefined)
+    .reduce<PendingReplacementDrain | undefined>(
+      (selected, drain) => (selected === undefined || drain.capturedAt < selected.capturedAt ? drain : selected),
+      undefined,
+    );
+  if (earliest === undefined) return undefined;
+  const anchorId = resendReceivedAnchor(earliest.position);
+  if (anchorId === undefined) throw new CommsError('BAD_DATA', 'a Resend received replacement baseline has no anchor');
+  return { anchorId, capturedAt: earliest.capturedAt };
+}
+
+function resendReceivedDrainGapRecordId(scope: SourceScope, intentId: string): string {
+  return `resend-received-drain-gap:${createHash('sha256')
+    .update(JSON.stringify([intentId, scope.source, scope.accountId, scope.scopeId]))
+    .digest('hex')}`;
 }
 
 /** A Resend status replacement has no ordered backlog: P belongs to its new baseline, never the old version. */
@@ -828,13 +893,26 @@ async function settleResendReceivedPoints(
   cycle: ResendReceivedCycle,
   assertWrite: () => void,
 ): Promise<void> {
-  const ids = new Set(cycle.orderedIds);
+  const advancedIndex = cycle.orderedIds.indexOf(cycle.advancedAnchorId);
   const settlements = await Promise.all(
     debts.map(async (debt) => {
       if (resendReceivedPointReached(input.store, scope, debt)) return undefined;
       const anchorId = resendReceivedAnchor(await activationPoint(input, scope, debt));
       if (anchorId === undefined) return undefined;
-      return { debt, gap: anchorId !== 'empty' && !ids.has(anchorId) };
+      // `empty` is the durable position before any received message. It is never a provider id, but still means
+      // every later cycle follows the point as soon as the cycle itself has settled.
+      if (anchorId === 'empty') return { debt, gap: false };
+      const pointIndex = cycle.orderedIds.indexOf(anchorId);
+      if (pointIndex >= 0 && advancedIndex >= 0) {
+        // A capped cycle advances only to P. An anchor above P remains relative to the next cycle's full chain;
+        // marking it reached here would silently admit the capped interval as a later backfill.
+        if (pointIndex < advancedIndex) return undefined;
+        return { debt, gap: cycle.anchorLost };
+      }
+      // A cap that did not cross this point proves no relation to it. Keep the version closed until an uncapped
+      // cycle can either cross the point or apply the one-time anchor-loss settlement.
+      if (cycle.capped) return undefined;
+      return { debt, gap: true };
     }),
   );
   const at = (input.now ?? Date.now)();
