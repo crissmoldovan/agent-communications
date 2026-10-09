@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
+import { stageWhatsAppBaselineSnapshot } from '../src/runtime/source-owner-work.ts';
+import { WhatsAppVisibilityFence } from '../src/runtime/whatsapp-visibility.ts';
+import { phaseDSourceRegistry } from '../src/sources/registry.ts';
 import { rawWhatsAppMessageId, WhatsAppSourceWorker } from '../src/sources/whatsapp.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
@@ -256,6 +259,99 @@ test('P1: a fenced matching WhatsApp scope delays an account snapshot tuple with
         { rule_id: 'rule-all', rule_version: 1, admission: 'admitted' },
         { rule_id: 'rule-chat', rule_version: 1, admission: 'admitted' },
       ],
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('D5: a replacement baseline stages the old rule’s first representation before excluding the P tuple', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-baseline-stage-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const accountId = 'acc_ABCDEFGHIJKLMNOP';
+    const chatJid = 'chat-p@example.test';
+    const messageId = rawWhatsAppMessageId(chatJid, 'sender@example.test', 'present-at-p');
+    const rule = {
+      ruleId: 'old-rule',
+      version: 1,
+      source: { channel: 'whatsapp', accountIds: [accountId], options: { channel: 'whatsapp', chats: [chatJid] } },
+      event: { type: 'whatsapp.message.received', version: 1 },
+      retention: { ingestMs: 1_000 },
+    };
+    store.database.exec('UPDATE event_settings SET enabled = 1, paused = 0, switch_generation = 1');
+    store.database
+      .prepare(
+        `INSERT INTO rule_versions
+          (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+         VALUES ('old-rule@1', 'old-rule', 1, ?, 'digest', 'active', 'approval', 'activation-old', 1)`,
+      )
+      .run(JSON.stringify(rule));
+    store.database
+      .prepare(
+        "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'old-rule', 1, 'activation-old', 1)",
+      )
+      .run();
+    store.database
+      .prepare(
+        `INSERT INTO rule_activation_points
+          (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at)
+         VALUES ('activation-old', 'old-rule', 1, 'whatsapp', ?, ?, ?, 1)`,
+      )
+      .run(accountId, `chat:${chatJid}`, Buffer.from(JSON.stringify({ baselineIdentities: [] })));
+    const visibilityFence = new WhatsAppVisibilityFence({
+      store,
+      withCurrentEventVisibility: async (_input, work) =>
+        work({ version: 1, digest: 'f'.repeat(64), seesMessage: () => true }),
+    });
+    const baseline = await stageWhatsAppBaselineSnapshot(
+      {
+        store,
+        cipher: {
+          encrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+          decrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+        } as never,
+        sourceRegistry: phaseDSourceRegistry(),
+        whatsappEventOperations: {
+          withEventSnapshot: async (_input: unknown, work: (snapshot: unknown) => unknown) =>
+            work({
+              messages: [
+                {
+                  chatJid,
+                  chatKind: 'unknown',
+                  senderJidRaw: 'sender@example.test',
+                  stanzaId: 'present-at-p',
+                  fromMe: false,
+                },
+              ],
+            } as never),
+        } as never,
+        whatsappVisibilityFence: visibilityFence,
+        now: () => 10,
+      },
+      accountId,
+    );
+
+    assert.deepEqual(baseline.baselineIdentities, [messageId]);
+    assert.equal(baseline.baselineGeneration, 1);
+    assert.deepEqual(
+      store.database
+        .prepare(
+          'SELECT rule_id, rule_version, admission FROM whatsapp_rule_admissions WHERE account_id = ? AND message_id = ?',
+        )
+        .all(accountId, messageId)
+        .map((row) => ({ ...(row as Record<string, unknown>) })),
+      [{ rule_id: 'old-rule', rule_version: 1, admission: 'admitted' }],
+      'the replacement rule can exclude the tuple only after the old version owns its first representation',
+    );
+    assert.ok(
+      store.database
+        .prepare('SELECT 1 FROM source_scan_state WHERE source = ? AND account_id = ?')
+        .get('whatsapp', accountId),
+      'the old version has durable ciphertext before the checked snapshot is disposed',
     );
   } finally {
     store.close();

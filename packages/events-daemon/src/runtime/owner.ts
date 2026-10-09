@@ -53,7 +53,7 @@ import { recoverActivations } from './recovery.ts';
 import { GmailReplacementDrains, replacementIntentSummary } from './replacements.ts';
 import { disableRule, removeTarget } from './revocations.ts';
 import { EventScheduler } from './scheduler.ts';
-import { runSourceOwnerWork } from './source-owner-work.ts';
+import { runSourceOwnerWork, stageWhatsAppBaselineSnapshot } from './source-owner-work.ts';
 import { SseDispatcher } from './sse-dispatcher.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
 
@@ -215,43 +215,40 @@ async function startOwnerWithLock(
       { table: 'source_scan_state', column: 'encryptedRecord', key: [{ type: 'text', value: stageId }] },
       Buffer.from(JSON.stringify(value)),
     );
-  const expiry = new EventExpiry(
-    database,
-    Date.now,
-    new SourceStageExpiryGroup([
-      new GmailStageExpiry({
-        store: database,
-        mailboxLock,
-        decryptStage: async (stored, stageId): Promise<GmailStageRecord> =>
-          (await decryptSourceStage(stored, stageId)) as GmailStageRecord,
-        encryptStage: encryptSourceStage,
-        replacementDrains,
-      }),
-      new SlackHistoryStageExpiry({
-        store: database,
-        lock: mailboxLock.sourceScopeLock,
-        decrypt: decryptSourceStage,
-        encrypt: encryptSourceStage,
-      }),
-      new SlackReplyStageExpiry({
-        database: database.database,
-        lock: mailboxLock.sourceScopeLock,
-        decrypt: decryptSourceStage,
-        encrypt: encryptSourceStage,
-      }),
-      new ResendReceivedStageExpiry({
-        store: database,
-        lock: mailboxLock.sourceScopeLock,
-        decrypt: decryptSourceStage,
-        encrypt: encryptSourceStage,
-      }),
-      new ResendStatusStageExpiry({
-        store: database,
-        lock: mailboxLock.sourceScopeLock,
-        decrypt: decryptSourceStage,
-      }),
-    ]),
-  );
+  const sourceStageExpiry = new SourceStageExpiryGroup([
+    new GmailStageExpiry({
+      store: database,
+      mailboxLock,
+      decryptStage: async (stored, stageId): Promise<GmailStageRecord> =>
+        (await decryptSourceStage(stored, stageId)) as GmailStageRecord,
+      encryptStage: encryptSourceStage,
+      replacementDrains,
+    }),
+    new SlackHistoryStageExpiry({
+      store: database,
+      lock: mailboxLock.sourceScopeLock,
+      decrypt: decryptSourceStage,
+      encrypt: encryptSourceStage,
+    }),
+    new SlackReplyStageExpiry({
+      database: database.database,
+      lock: mailboxLock.sourceScopeLock,
+      decrypt: decryptSourceStage,
+      encrypt: encryptSourceStage,
+    }),
+    new ResendReceivedStageExpiry({
+      store: database,
+      lock: mailboxLock.sourceScopeLock,
+      decrypt: decryptSourceStage,
+      encrypt: encryptSourceStage,
+    }),
+    new ResendStatusStageExpiry({
+      store: database,
+      lock: mailboxLock.sourceScopeLock,
+      decrypt: decryptSourceStage,
+    }),
+  ]);
+  const expiry = new EventExpiry(database, Date.now, sourceStageExpiry);
   const dryrun = new DryRunDispatcher({
     store: database,
     cipher,
@@ -349,6 +346,7 @@ async function startOwnerWithLock(
     approvals: core.approvals,
     config: core.config,
     gmailSourceFor,
+    sourceStageExpiry,
     sourceBaselineFor: async ({ source, accountId, scopeId }) => {
       if (source === 'gmail') {
         const profile = await (await gmailSourceFor(accountId)).getProfile();
@@ -370,29 +368,16 @@ async function startOwnerWithLock(
         if (scopeId === 'received') return { anchorId: (await reader.listReceived()).emails[0]?.id ?? 'empty' };
         return { startedAt: new Date().toISOString() };
       }
-      const snapshot = await whatsappEventOperations.withEventSnapshot({ accountId }, async (value) => value);
-      // The checked copy supplies raw identities, while the concrete D6 fence supplies the final current list
-      // decision. A list edit between those reads can only remove identities from this activation point.
-      return whatsappComposition.visibilityFence.withCurrentVisibility({ accountId }, async (visibility) => {
-        const head = database.database
-          .prepare('SELECT committed_generation FROM whatsapp_snapshot_heads WHERE account_id = ?')
-          .get(accountId) as { committed_generation: number } | undefined;
-        return {
-          capturedAt: new Date().toISOString(),
-          baselineGeneration: head?.committed_generation ?? 0,
-          baselineIdentities: snapshot.messages
-            .filter(
-              (message) =>
-                message.fromMe === false &&
-                message.chatJid !== null &&
-                message.senderJidRaw !== null &&
-                message.stanzaId !== null &&
-                visibility.seesMessage(message.chatJid, message.chatKind ?? 'unknown', message.senderJidRaw, false),
-            )
-            .map((message) => JSON.stringify(['wa-msg', message.chatJid, message.senderJidRaw, message.stanzaId]))
-            .sort(),
-        };
-      });
+      return stageWhatsAppBaselineSnapshot(
+        {
+          store: database,
+          cipher,
+          sourceRegistry,
+          whatsappEventOperations,
+          whatsappVisibilityFence: whatsappComposition.visibilityFence,
+        },
+        accountId,
+      );
     },
     encryptBaseline: async (intentId, accountId, position, scope) =>
       cipher.encrypt(

@@ -1,6 +1,7 @@
 import { CommsError, canonicalJson } from '@agentcomms/core';
 import type { EventDatabase } from '../store/database.ts';
 import type { WhatsAppVisibilityRecheck } from './phase-d-whatsapp-seam.ts';
+import { purgeWhatsAppStagedPayload } from './whatsapp-staged-payload.ts';
 
 export interface CurrentWhatsAppEventVisibility {
   /** The channel file format version; the daemon journal version is stored separately. */
@@ -174,7 +175,6 @@ export class WhatsAppVisibilityFence {
       }
       if (newlyHidden.length === 0) return;
       const marks = newlyHidden.map(() => '?').join(', ');
-      const stageIds = hiddenRows.flatMap((row) => (row.staged_payload_ref === null ? [] : [row.staged_payload_ref]));
       // Snapshot keys retain their tuple columns, so the canonical id is compared by tuple rather than an index id.
       for (const messageId of newlyHidden) {
         const key = parseRawKey(messageId);
@@ -186,17 +186,14 @@ export class WhatsAppVisibilityFence {
           )
           .run(accountId, key.chatJid, key.senderJidRaw, key.stanzaId);
       }
+      for (const messageId of newlyHidden) purgeWhatsAppStagedPayload(this.#store.database, { accountId, messageId });
       this.#store.database
         .prepare(
           `UPDATE whatsapp_occurrences
-              SET staged_payload_ref = NULL, stage_expires_at = NULL, event_id = NULL
+              SET event_id = NULL
             WHERE account_id = ? AND message_id IN (${marks})`,
         )
         .run(accountId, ...newlyHidden);
-      if (stageIds.length > 0) {
-        const stageMarks = stageIds.map(() => '?').join(', ');
-        this.#store.database.prepare(`DELETE FROM source_scan_state WHERE id IN (${stageMarks})`).run(...stageIds);
-      }
       this.#store.database
         .prepare(
           `UPDATE whatsapp_rule_admissions

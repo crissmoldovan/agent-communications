@@ -74,14 +74,87 @@ export interface SourceOwnerWorkOptions {
 }
 
 /**
+ * Runs D-5's candidate/diff/first-representation pass while an activation samples a WhatsApp baseline.  The returned
+ * position is deliberately calculated only after the checked-copy keys have become the authoritative head: a tuple
+ * seen at P is therefore already owed to the active predecessor before the replacement version excludes it.
+ */
+export async function stageWhatsAppBaselineSnapshot(
+  input: Pick<
+    SourceOwnerWorkOptions,
+    'store' | 'cipher' | 'sourceRegistry' | 'whatsappEventOperations' | 'whatsappVisibilityFence' | 'now'
+  >,
+  accountId: string,
+): Promise<Readonly<{ capturedAt: string; baselineGeneration: number; baselineIdentities: readonly string[] }>> {
+  const captured = await input.whatsappEventOperations.withEventSnapshot({ accountId }, async (value) => value);
+  const rules = await sourceRulesForWhatsAppAccount(input as SourceOwnerWorkOptions, accountId);
+  const writeScope: SourceScope = { source: 'whatsapp', accountId, scopeId: 'all-allowed' };
+  const writeRules = () => sourceRuleVersionsForWhatsAppAccount(input.store, accountId);
+  const snapshot = sourceSnapshot(input.store, writeRules);
+  const assertWrite = () => assertSourceWriteStillLive(input.store.database, writeScope, snapshot, writeRules);
+  await input.whatsappVisibilityFence.withCurrentVisibility({ accountId }, async (visibility) => {
+    const worker = new WhatsAppSourceWorker({
+      store: input.store,
+      accountId,
+      snapshot: async (work) => work({ ...captured, visibility }),
+      stage: async (message) => {
+        const id = whatsappStageId(accountId, message);
+        return input.cipher.encrypt(sourceStateLocation(id), Buffer.from(JSON.stringify(message)));
+      },
+      // A disabled exact replacement still advances its authoritative baseline head, but it owes no old-version
+      // disclosure work.  Enabled collection freezes every active account rule for the D-5 pass.
+      rules: () =>
+        snapshot.enabled === 1
+          ? rules.map((rule) => ({
+              ...rule,
+              options: rule.options.channel === 'whatsapp' ? rule.options : undefined,
+            }))
+          : [],
+      scopeIsFenced: (scopeId) => isSourceScopeFenced(input.store.database, { source: 'whatsapp', accountId, scopeId }),
+      assertWrite,
+      now: input.now,
+    });
+    await worker.scan();
+  });
+  const head = input.store.database
+    .prepare('SELECT committed_generation FROM whatsapp_snapshot_heads WHERE account_id = ?')
+    .get(accountId) as { committed_generation: number } | undefined;
+  return input.whatsappVisibilityFence.withCurrentVisibility({ accountId }, async (visibility) => ({
+    capturedAt: new Date((input.now ?? Date.now)()).toISOString(),
+    baselineGeneration: head?.committed_generation ?? 0,
+    baselineIdentities: captured.messages
+      .filter(
+        (message) =>
+          message.fromMe === false &&
+          message.chatJid !== null &&
+          message.senderJidRaw !== null &&
+          message.stanzaId !== null &&
+          visibility.seesMessage(message.chatJid, message.chatKind ?? 'unknown', message.senderJidRaw, false),
+      )
+      .flatMap((message) =>
+        message.chatJid === null || message.senderJidRaw === null || message.stanzaId === null
+          ? []
+          : [rawWhatsAppMessageId(message.chatJid, message.senderJidRaw, message.stanzaId)],
+      )
+      .sort(),
+  }));
+}
+
+/**
  * The owner-owned bridge from a registered source scope to its Batch-2 state machine. Channel packages hand out
  * only their narrow event operations; raw clients and daemon imports never cross this boundary.
  */
 export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: SourceScope): Promise<void> {
   if (scope.source === 'gmail') throw new CommsError('BAD_DATA', 'Gmail uses its established source worker');
+  // WhatsApp observes and writes an account-wide raw snapshot, even when this scheduler turn was selected for one
+  // chat.  Its post-await fence must consequently freeze every account rule version that can receive such a write.
+  // Other sources write only their selected durable scope.
+  const writeRules = () =>
+    scope.source === 'whatsapp'
+      ? sourceRuleVersionsForWhatsAppAccount(input.store, scope.accountId)
+      : sourceRulesForScope(input.store, input.sourceRegistry, scope);
   const rules = () => sourceRulesForScope(input.store, input.sourceRegistry, scope);
-  const snapshot = sourceSnapshot(input.store, rules);
-  const assertWrite = () => assertSourceWriteStillLive(input.store.database, scope, snapshot, rules);
+  const snapshot = sourceSnapshot(input.store, writeRules);
+  const assertWrite = () => assertSourceWriteStillLive(input.store.database, scope, snapshot, writeRules);
   const evaluator = evaluatorFor(input);
   const admit = async (
     event: Record<string, unknown>,
@@ -397,7 +470,10 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
     await source.scan();
     await accountLive();
     input.failpoint?.('before-finalise');
-    await admitWhatsAppStages(input, scope, evaluator, rules());
+    // Stage commit and admission share the identical account-wide frozen fan-out.  A rule removed after the checked
+    // copy was captured therefore makes this turn stale rather than letting the frozen rule recreate purged work.
+    assertWrite();
+    await admitWhatsAppStages(input, scope, evaluator, whatsappRules);
     // The checked-copy snapshot is atomic with respect to the local source. Its candidate/head transaction and the
     // rule-admission pass above have settled the P snapshot before this replacement certificate is written.
     completePendingReplacementDrains(input, scope, (input.now ?? Date.now)());
@@ -553,6 +629,36 @@ function sourceRulesForScope(
       activationId: row.current_cutover_id,
       options,
     });
+  }
+  return [...found.values()];
+}
+
+/** The synchronous account-wide half of the WhatsApp write fence; point decryption happens only after this snapshot. */
+function sourceRuleVersionsForWhatsAppAccount(store: EventDatabase, accountId: string): readonly RuleDebt[] {
+  const found = new Map<string, RuleDebt>();
+  for (const row of store.database
+    .prepare(
+      `SELECT rule_versions.document, active_versions.current_cutover_id
+         FROM active_versions JOIN rule_versions
+           ON rule_versions.rule_id = active_versions.object_id AND rule_versions.version = active_versions.version
+        WHERE active_versions.kind = 'rule'`,
+    )
+    .all() as unknown as Array<StoredRule & { current_cutover_id: string | null }>) {
+    const rule = JSON.parse(row.document) as CanonicalFullRuleDocument;
+    if (
+      rule.source.channel !== 'whatsapp' ||
+      !rule.source.accountIds.includes(accountId) ||
+      row.current_cutover_id === null
+    )
+      continue;
+    found.set(`${rule.ruleId}@${rule.version}`, {
+      ruleId: rule.ruleId,
+      ruleVersion: rule.version,
+      ingestRetentionMs: rule.retention.ingestMs,
+      eventType: rule.event.type,
+      activationId: row.current_cutover_id,
+      options: rule.source.options,
+    } as RuleDebt);
   }
   return [...found.values()];
 }
