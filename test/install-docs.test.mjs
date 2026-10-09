@@ -65,7 +65,7 @@ test('the held local event service README states B1’s foreground, platform, ru
   assert.match(prose, /macOS and Linux only/i);
   assert.match(prose, /Windows refuses/i);
   assert.match(prose, /Node 22\.16(?:\.0)? or newer/i);
-  assert.match(prose, /only the local .*dry-run target/i);
+  assert.match(prose, /B1 accepts the local .*dry-run target/i);
   assert.match(prose, /reads are terminal-only/i);
   assert.match(prose, /held from publication/i);
 });

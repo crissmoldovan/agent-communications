@@ -118,3 +118,63 @@ test('PAR-B1: generated daemon references exactly describe the B1 registries', a
     '--check',
   ]);
 });
+
+test('PAR-B2: doctor remains the paired B1 operation and no B3/E public boundary is exposed', async () => {
+  const table = JSON.parse(await readFile(join(ROOT, 'capabilities.json'), 'utf8')) as {
+    readonly capabilities: readonly Capability[];
+  };
+  const rows = table.capabilities.filter((row) => row.package === 'events-daemon');
+  const doctor = rows.find((row) => row.id === 'events-daemon.doctor');
+  assert.ok(doctor, 'B2 preserves the B1 doctor capability row');
+  assert.deepEqual(rowShape(doctor), {
+    id: 'events-daemon.doctor',
+    cli: 'doctor',
+    mcp: 'events_doctor',
+    status: 'both',
+    operation: 'doctor',
+  });
+
+  const registries = await deriveRegistries({ env: scratchEnv() });
+  const daemon = registries['events-daemon'];
+  assert.ok(daemon, 'the daemon service surface remains discoverable');
+  assert.ok(daemon.commands.includes('doctor'));
+  assert.ok(daemon.tools.includes('events_doctor'));
+
+  const forbiddenCommands = [
+    'delivery retry',
+    'delivery drop',
+    'delivery hold',
+    'subscriber list',
+    'subscriber token create',
+    'target secret create',
+    'target url set',
+    'target test',
+    'target resume',
+    'target replay',
+    'judge test',
+  ];
+  const forbiddenTools = [
+    'events_delivery_retry',
+    'events_delivery_drop',
+    'events_delivery_hold',
+    'events_subscribers_list',
+    'events_subscriber_token_create',
+    'events_target_secret_create',
+    'events_target_url_set',
+    'events_target_test',
+    'events_target_resume',
+    'events_target_replay',
+    'events_judge_test',
+  ];
+  for (const command of forbiddenCommands)
+    assert.ok(!daemon.commands.includes(command), `${command} remains deferred beyond B2`);
+  for (const tool of forbiddenTools) assert.ok(!daemon.tools.includes(tool), `${tool} remains deferred beyond B2`);
+  for (const row of rows) {
+    assert.ok(
+      !/\b(?:delivery\.(?:retry|drop|hold)|subscriber|secret|migration|target\.(?:test|resume|replay)|judge)\b/.test(
+        row.id,
+      ),
+      `${row.id} exposes a deferred B3/E capability`,
+    );
+  }
+});

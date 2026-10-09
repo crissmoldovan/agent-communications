@@ -21,10 +21,9 @@ What guards the release instead is stated rather than implied: the environment a
 the tag must match the declared version and still name the commit the run started from, six platform legs must pass
 before the publish job starts — and so must one more on exactly Node 22.12.0, the oldest the packages claim, which
 runs the printed commands a source checkout's registration needs there and the held event service's built status
-command through Node's SQLite module, and one on macOS that runs the event
-library's vectors in Chromium and WebKit (`pnpm verify:browser`) — and every version carries provenance naming
-the commit and the workflow run that built it. If a bad version ever went out,
-that attestation is what makes it traceable.
+command through Node's SQLite module, and one on macOS that runs the event library's vectors plus loopback daemon
+SSE/CORS in Chromium and WebKit (`pnpm verify:browser`) — and every version carries provenance naming the commit and
+the workflow run that built it. If a bad version ever went out, that attestation is what makes it traceable.
 
 Restoring the reviewer is one API call, and worth doing the day this repository has more than one maintainer or the
 day an agent here starts acting on mail it did not fetch deliberately.
@@ -244,10 +243,14 @@ Steps 3 and 4 need the owner's npm account; an agent cannot do them. They are
 
 ### The held event library and daemon
 
-`@agentcomms/events` and `@agentcomms/events-daemon` are both held throughout B1. A B1 merge publishes neither
-package: both remain in `PUBLISHABLE` for builds, licences, version synchronisation and packed-tarball consumer
+`@agentcomms/events` and `@agentcomms/events-daemon` are both held throughout B1 and B2. A B1 or B2 merge publishes
+neither package: both remain in `PUBLISHABLE` for builds, licences, version synchronisation and packed-tarball consumer
 checks, but neither is in `PACKAGES`, so the release preflight, publish and confirmation paths do not read their
 packuments.
+
+The B2 runtime's loopback daemon SSE/CORS check runs with the event-library browser vectors in the separate macOS
+browser gate. It remains a release requirement while the packages are held; it is not a publish surface or a reason to
+lift either hold.
 
 When the owner decides to release the first daemon consumer, they remove both holds in one normal version/release
 commit and tag it only after the complete release checks pass. From that same checked tag, the owner first publishes

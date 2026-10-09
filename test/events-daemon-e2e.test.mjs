@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { readFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
+import { promisify } from 'node:util';
 import { assertLoopbackSeal, loopbackSealAttempts } from './helpers/loopback-seal-preload.mjs';
 
 assertLoopbackSeal();
@@ -38,6 +40,43 @@ const refused = loopbackSealAttempts();
 const requireFromDaemon = createRequire(new URL('../packages/events-daemon/package.json', import.meta.url));
 const { Client } = requireFromDaemon('@modelcontextprotocol/client');
 const { InMemoryTransport } = requireFromDaemon('@modelcontextprotocol/server');
+const exec = promisify(execFile);
+
+const B2_E2E_FIXTURES = [
+  '../packages/events-daemon/test/network/pinned-connection.test.ts',
+  '../packages/events-daemon/test/webhook-dispatcher.test.ts',
+  '../packages/events-daemon/test/claim-cap-barrier.test.ts',
+  '../packages/events-daemon/test/claim-ordering.test.ts',
+  '../packages/events-daemon/test/system-reset-references.test.ts',
+  '../packages/events-daemon/test/webhook-crash-recovery.test.ts',
+  '../packages/events-daemon/test/sse-persistence-auth.test.ts',
+  '../packages/events-daemon/test/sse-listener.test.ts',
+].map((path) => new URL(path, import.meta.url).pathname);
+
+async function runSealedB2Fixtures() {
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  try {
+    return await exec(
+      process.execPath,
+      [
+        '--import',
+        new URL('./helpers/loopback-seal-preload.mjs', import.meta.url).pathname,
+        '--experimental-strip-types',
+        '--disable-warning=ExperimentalWarning',
+        '--test',
+        ...B2_E2E_FIXTURES,
+      ],
+      { cwd: new URL('..', import.meta.url).pathname, env, timeout: 60_000 },
+    );
+  } catch (error) {
+    const failed = error;
+    throw new Error(
+      `sealed B2 integration fixtures failed:\n${String(failed.stdout ?? '')}${String(failed.stderr ?? '')}`,
+      { cause: error },
+    );
+  }
+}
 
 function streams() {
   const stdin = new PassThrough();
@@ -138,6 +177,28 @@ test('REL-B1: the Gmail end-to-end path is sealed to the repository fake', async
   );
   refused.length = 0;
   assert.doesNotMatch(source, /https?:\/\/(?!127\.0\.0\.1)/, 'the test may not name a real Google endpoint');
+});
+
+test('REL-B2: sealed internal fixtures cover pinned webhook, claim, reset, crash and SSE boundaries without a judge', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const { stdout, stderr } = await runSealedB2Fixtures();
+  const output = `${stdout}${stderr}`;
+  for (const caseName of [
+    'validates the approved fingerprint before resolving',
+    'a webhook posts the prepared CloudEvent bytes',
+    'an HTTPS webhook uses a per-test loopback certificate',
+    'cap and reset-barrier blocks create no attempt',
+    'rule and target replacements share one stable order through recovery',
+    'a reset remains until its final active or retained exact-version reference disappears',
+    'disable winning after an issued request preserves its terminal state',
+    'bearer rotation accepts only current plus an unexpired previous generation',
+    'stream bytes are purged by their replay deadline',
+    'loopback SSE listener rejects an invalid route',
+  ])
+    assert.match(output, new RegExp(caseName), `the sealed fixture did not run: ${caseName}`);
+  assert.doesNotMatch(output, /not ok \d+ -/, output);
+  assert.deepEqual(refused, [], 'the parent E2E process made no DNS or non-loopback attempt');
 });
 
 test('REL-B1: a fake-Google Gmail event crosses the foreground owner, CLI and MCP control boundary into a terminal-only dry-run', {
