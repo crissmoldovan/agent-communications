@@ -102,6 +102,7 @@ export class PhaseDCutoverFixture {
   #whatsapp: ReturnType<typeof createPhaseDWhatsAppOwnerComposition> | undefined;
   #failpoint: CutoverFailpoint | undefined;
   #deadlineFailpoint: ActivationDeadlineFailpoint | undefined;
+  #slackPages: Pick<SlackEventSource, 'history' | 'replies'> | undefined;
 
   private constructor(input: {
     root: string;
@@ -170,6 +171,11 @@ export class PhaseDCutoverFixture {
   async setDeadlineFailpoint(failpoint: ActivationDeadlineFailpoint | undefined): Promise<void> {
     this.#deadlineFailpoint = failpoint;
     await this.#openRuntime();
+  }
+
+  /** Injected fake-only Slack pages for source-owner integration fixtures; no transport escapes this harness. */
+  setSlackPages(pages: Pick<SlackEventSource, 'history' | 'replies'> | undefined): void {
+    this.#slackPages = pages;
   }
 
   async activate(
@@ -647,8 +653,9 @@ export class PhaseDCutoverFixture {
       accountAlias: 'cutover',
       workspaceId: 'T-cutover',
       conversation: async () => ({ id: 'C-cutover', name: 'cutover', kind: 'private_channel' }),
-      history: async () => {
+      history: async (input) => {
         await this.record('slack.history');
+        if (this.#slackPages !== undefined) return this.#slackPages.history(input);
         return {
           messages: [
             {
@@ -669,8 +676,9 @@ export class PhaseDCutoverFixture {
           retainedHistoryBoundary: false,
         };
       },
-      replies: async () => {
+      replies: async (input) => {
         await this.record('slack.replies');
+        if (this.#slackPages !== undefined) return this.#slackPages.replies(input);
         return { messages: [], nextCursor: null, retainedHistoryBoundary: false };
       },
     } as SlackEventSource;

@@ -23,7 +23,7 @@ import {
   SlackHistorySource,
   type SlackSourceMessage,
 } from '../sources/slack.ts';
-import { SlackReplyDrains } from '../sources/slack-replies.ts';
+import { SlackReplyDrains, SlackReplyReconciler, type SlackReplyStageHooks } from '../sources/slack-replies.ts';
 import { isSourceScopeFenced } from '../sources/source-scope-fence.ts';
 import { rawWhatsAppMessageId, type WhatsAppRawMessage, WhatsAppSourceWorker } from '../sources/whatsapp.ts';
 import type { EventDatabase } from '../store/database.ts';
@@ -73,9 +73,13 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
   const snapshot = sourceSnapshot(input.store, rules);
   const assertWrite = () => assertSourceWriteStillLive(input.store.database, scope, snapshot, rules);
   const evaluator = evaluatorFor(input);
-  const admit = async (event: Record<string, unknown>, debts: readonly RuleDebt[]): Promise<'terminal' | 'pending'> => {
+  const admit = async (
+    event: Record<string, unknown>,
+    debts: readonly RuleDebt[],
+    stageId?: string,
+  ): Promise<'terminal' | 'pending'> => {
     input.failpoint?.('before-finalise');
-    return admitEvent(input, scope, evaluator, event, debts);
+    return admitEvent(input, scope, evaluator, event, debts, undefined, stageId);
   };
   const accountLive = () => assertLiveEventAccount(input.config, { source: scope.source, accountId: scope.accountId });
 
@@ -86,27 +90,69 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
     const conversation = await reader.conversation({ conversationId });
     await accountLive();
     const replacementDrains = await pendingReplacementDrains(input, scope);
+    const replyStage: SlackReplyStageHooks = {
+      scope,
+      debts: rules,
+      admit: ({ candidate, stageId }) =>
+        admit(slackEvent(scope, reader, conversation, candidate), sourceRulesForStage(input, scope, stageId), stageId),
+    };
+    const replySource = {
+      replies: async (request: {
+        conversationId: string;
+        parentTs: string;
+        latest: string;
+        cursor?: string | undefined;
+      }) => {
+        await accountLive();
+        const page = await reader.replies({ ...request, limit: 100 });
+        await accountLive();
+        return { ...page, messages: page.messages.map((message) => ({ ...message }) as SlackSourceMessage) };
+      },
+    };
+    const replyCipher = {
+      encryptState: async (value: unknown, id: string) => {
+        const encrypted = await input.cipher.encrypt(sourceStateLocation(id), Buffer.from(JSON.stringify(value)));
+        await accountLive();
+        return encrypted;
+      },
+      decryptState: async (record: Uint8Array, id: string) => {
+        const plaintext = await input.cipher.decrypt(sourceStateLocation(id), record);
+        await accountLive();
+        return JSON.parse(plaintext.toString('utf8'));
+      },
+    };
+    const ordinaryReplies = new SlackReplyReconciler({
+      database: input.store.database,
+      source: replySource,
+      assertLive: assertWrite,
+      now: input.now,
+      ...replyCipher,
+      stage: replyStage,
+    });
     const replyDrains = await Promise.all(
       replacementDrains.map(async (drain) => {
         const through = slackDrainThrough(drain.position);
         const replies = new SlackReplyDrains({
           database: input.store.database,
-          source: {
-            replies: async (request) => {
-              await accountLive();
-              const page = await reader.replies({ ...request, limit: 100 });
-              await accountLive();
-              return { nextCursor: page.nextCursor };
-            },
-          },
+          source: replySource,
           assertLive: assertWrite,
           now: input.now,
-          encryptState: (value, id) =>
-            input.cipher.encrypt(sourceStateLocation(id), Buffer.from(JSON.stringify(value))),
-          decryptState: async (record, id) =>
-            JSON.parse((await input.cipher.decrypt(sourceStateLocation(id), record)).toString('utf8')),
+          ...replyCipher,
+          stage: replyStage,
         });
         await replies.begin({ intentId: drain.intentId, accountId: scope.accountId, conversationId, through });
+        for (const parentTs of await ordinaryReplies.parentsAtOrBefore({
+          accountId: scope.accountId,
+          conversationId,
+          through,
+        })) {
+          await replies.discoverParent({
+            intentId: drain.intentId,
+            accountId: scope.accountId,
+            conversationId,
+            parentTs,
+          });
+        }
         return { ...drain, through, replies };
       }),
     );
@@ -131,6 +177,11 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
       admit: async (candidate) => admit(slackEvent(scope, reader, conversation, candidate), rules()),
       replacementObserver: {
         onTopLevel: async (message) => {
+          await ordinaryReplies.discoverParent({
+            accountId: scope.accountId,
+            conversationId,
+            parentTs: message.ts,
+          });
           await Promise.all(
             replyDrains.map(({ intentId, replies }) =>
               replies.discoverParent({
@@ -169,6 +220,9 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
         replyDrains[0]?.through ?? slackTimestamp((input.now ?? Date.now)()),
       );
     const result = await source.scan({ conversationId, latest, maxPages: 1 });
+    // Ordinary reconciliation shares the replacement ceiling. An old active version therefore cannot see a reply
+    // after P while its exact replacement is still waiting on that same conversation's aggregate barrier.
+    await ordinaryReplies.resumeOne({ accountId: scope.accountId, conversationId, latest });
     for (const drain of replyDrains) {
       const historyCovered = result.watermark !== null && compareSlackTimestamp(result.watermark, drain.through) >= 0;
       const replyInput = { intentId: drain.intentId, accountId: scope.accountId, conversationId };
@@ -330,7 +384,10 @@ interface PendingReplacementDrain {
   readonly position: unknown;
 }
 
-/** Reads only active old-in-scope drains; plaintext positions stay in this owner and never leave a provider boundary. */
+/**
+ * Reads every old-in-scope drain held by an unfinalised exact replacement. A completed drain proves P but must keep
+ * fencing this source until the same completion transaction publishes the child pointer.
+ */
 async function pendingReplacementDrains(
   input: SourceOwnerWorkOptions,
   scope: SourceScope,
@@ -346,7 +403,7 @@ async function pendingReplacementDrains(
           AND activation_baselines.account_id = replacement_drains.account_id
           AND activation_baselines.position_scope = replacement_drains.position_scope
         WHERE replacement_drains.source = ? AND replacement_drains.account_id = ? AND replacement_drains.position_scope = ?
-          AND replacement_drains.old_in_scope = 1 AND replacement_drains.drained_at IS NULL
+          AND replacement_drains.old_in_scope = 1
           AND activation_intents.status = 'pending-completion'`,
     )
     .all(scope.source, scope.accountId, scope.scopeId) as Array<{ intent_id: string; encrypted_position: Uint8Array }>;
@@ -456,6 +513,49 @@ function sourceRulesForScope(
   return [...found.values()];
 }
 
+/**
+ * A reply page is owed to the versions frozen into its durable stage, rather than whichever version happens to be
+ * active when a restart reaches it. That keeps a pre-P ordinary reply stage from becoming a new-version admission
+ * after an exact replacement has already certified the old side of P.
+ */
+function sourceRulesForStage(
+  input: Pick<SourceOwnerWorkOptions, 'store' | 'sourceRegistry'>,
+  scope: SourceScope,
+  stageId: string,
+): readonly RuleDebt[] {
+  const source = input.sourceRegistry.require(scope.source);
+  const found = new Map<string, RuleDebt>();
+  for (const row of input.store.database
+    .prepare(
+      `SELECT source_stage_rule_debts.rule_id, source_stage_rule_debts.rule_version, rule_versions.document
+         FROM source_stage_rule_debts JOIN rule_versions
+           ON rule_versions.rule_id = source_stage_rule_debts.rule_id
+          AND rule_versions.version = source_stage_rule_debts.rule_version
+        WHERE source_stage_rule_debts.stage_id = ?`,
+    )
+    .all(stageId) as Array<{ rule_id: string; rule_version: number; document: string }>) {
+    const rule = JSON.parse(row.document) as CanonicalFullRuleDocument;
+    if (rule.source.channel !== scope.source || !rule.source.accountIds.includes(scope.accountId)) continue;
+    const options = source.canonicalise(rule.source.options);
+    if (
+      !source
+        .scopesFor({ accountId: scope.accountId, options })
+        .some((candidate) => candidate.scopeId === scope.scopeId)
+    )
+      continue;
+    found.set(`${row.rule_id}@${row.rule_version}`, {
+      ruleId: row.rule_id,
+      ruleVersion: row.rule_version,
+      ingestRetentionMs: rule.retention.ingestMs,
+      eventType: rule.event.type,
+      // Reply admission consumes immutable rule versions; its source page has already fixed the relevant position.
+      activationId: stageId,
+      options,
+    });
+  }
+  return [...found.values()];
+}
+
 function sourceSnapshot(store: EventDatabase, rules: () => readonly RuleDebt[]) {
   const settings = store.database
     .prepare('SELECT enabled, switch_generation FROM event_settings WHERE singleton = 1')
@@ -475,8 +575,18 @@ async function admitEvent(
   event: Record<string, unknown>,
   debts: readonly RuleDebt[],
   whatsapp?: Readonly<{ messageId: string; visibilityVersion: number }>,
+  stageId?: string,
 ): Promise<'terminal' | 'pending'> {
   if (debts.length === 0) return 'terminal';
+  const stagedAt =
+    stageId === undefined
+      ? (input.now ?? Date.now)()
+      : (
+          input.store.database.prepare('SELECT staged_at FROM source_scan_state WHERE id = ?').get(stageId) as
+            | { staged_at: number | null }
+            | undefined
+        )?.staged_at;
+  if (stagedAt === null || stagedAt === undefined) return 'terminal';
   const entry = catalogueEntry(String(event.type), Number(event.version));
   if (!entry.ok) throw new CommsError('BAD_DATA', entry.issues[0]?.message ?? 'a source event is unknown');
   const identity = {
@@ -507,7 +617,7 @@ async function admitEvent(
         identity.dedupeKey,
         instant(String((checked.value as unknown as Record<string, unknown>).occurredAt)),
         instant(String((checked.value as unknown as Record<string, unknown>).observedAt)),
-        (input.now ?? Date.now)(),
+        stagedAt,
       );
   });
   for (const rule of debts) {
@@ -516,7 +626,8 @@ async function admitEvent(
       eventId: id,
       ruleId: rule.ruleId,
       ruleVersion: rule.ruleVersion,
-      stagedAt: (input.now ?? Date.now)(),
+      stagedAt,
+      ...(stageId === undefined ? {} : { stageId }),
       whatsapp,
     });
     if (result === 'pending') return 'pending';
