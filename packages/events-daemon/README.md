@@ -20,8 +20,16 @@ Delivery retry, drop or hold controls, subscriber management, named event-secret
 test/resume/replay controls, judges, and B3 doctor extensions are not present. The B2 runtime never sends mail or
 messages through the channel packages.
 
-Both this package and `@agentcomms/events` are held from publication throughout B1 and B2. A B1 or B2 merge publishes
-neither package. When the owner elects to make the first release from one checked tag, they publish
+Phase D puts the four local sources — Gmail, Slack, Resend and WhatsApp — behind that one owner. Slack scans history
+and thread replies, and its reply barrier holds progress until both are covered. Resend resolves received mail through
+its detail operation and observes sent-mail status; its text is Unicode-validated and bounded, and all its event reads
+share the local throttle. WhatsApp reads the local checked copy only through the current live chat lists: a hidden chat
+reaches no dry-run, stream or dead letter. Phase D adds no command or MCP tool beyond the `source show` rows for the
+new sources. B2's stream and dead-letter handling is registered into Phase D's single list-change and retention
+transaction. Every Phase D test uses fakes, never a real provider.
+
+Both this package and `@agentcomms/events` are held from publication throughout B1, B2 and Phase D. A B1, B2 or Phase D
+merge publishes neither package. When the owner elects to make the first release from one checked tag, they publish
 `@agentcomms/events` first and then `@agentcomms/events-daemon`, because the daemon has an exact runtime dependency on
 the library. See the [release guide](../../docs/RELEASING.md#the-held-event-library-and-daemon).
 
