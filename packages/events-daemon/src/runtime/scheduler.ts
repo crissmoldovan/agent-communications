@@ -17,7 +17,6 @@ import type { EventDatabase } from '../store/database.ts';
 import type { EventRecordCipher } from '../store/records.ts';
 import {
   assertLiveEventAccount,
-  assertLiveGmailAccount,
   isRemovedAccountError,
   liveEventAccountIds,
   purgeRemovedAccountWork,
@@ -167,7 +166,13 @@ export class EventScheduler {
         await this.#poll(account);
       } catch (error) {
         if (isRemovedAccountError(error)) {
-          this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, account.accountId, this.#now()));
+          this.#store.immediate(() =>
+            purgeRemovedAccountWork(
+              this.#store.database,
+              { source: 'gmail', accountId: account.accountId },
+              this.#now(),
+            ),
+          );
           continue;
         }
         this.#recordFailure('gmail', account.accountId);
@@ -437,7 +442,7 @@ export class EventScheduler {
       store: this.#store,
       accountId: account.accountId,
       guard: () => scanning?.assertScanLive(),
-      accountLive: () => assertLiveGmailAccount(this.#config, account.accountId),
+      accountLive: () => assertLiveEventAccount(this.#config, { source: 'gmail', accountId: account.accountId }),
       source,
       assertDisclosable: async () => undefined,
       encryptState: (value, stateId) =>
@@ -483,7 +488,7 @@ export class EventScheduler {
           (await this.#cipher.decrypt(sourceStateLocation(requiredStateId(stageId)), stored)).toString('utf8'),
         ),
       replacementDrains: drains,
-      accountLive: () => assertLiveGmailAccount(this.#config, account.accountId),
+      accountLive: () => assertLiveEventAccount(this.#config, { source: 'gmail', accountId: account.accountId }),
       materialise: async (requests) => {
         for (const request of requests) {
           const rule = rules().find(
@@ -579,7 +584,7 @@ export class EventScheduler {
       if (historyId === undefined || BigInt(position.historyId) < BigInt(historyId)) historyId = position.historyId;
     }
     if (historyId === undefined) return;
-    await assertLiveGmailAccount(this.#config, accountId);
+    await assertLiveEventAccount(this.#config, { source: 'gmail', accountId });
     this.#store.immediate(() => {
       // The decryption awaited, and finalisation does not take the mailbox lock: a point published meanwhile (perhaps
       // lower than every point read) or a new fence means this minimum is stale. Install nothing; the next tick

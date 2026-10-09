@@ -4,7 +4,7 @@ import { canonicalSseSubscriber } from '../domain/sse-subscriber.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { EncryptedRecordLocation, EventRecordCipher } from '../store/records.ts';
 import { sseReplayDeadline } from '../store/retention.ts';
-import { assertLiveGmailAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
+import { assertLiveEventAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
 import type { DeliveryRecord } from './deliveries.ts';
 import {
   type ClaimedDelivery,
@@ -45,6 +45,8 @@ export interface CurrentSseDelivery {
   readonly expires_at: number;
   readonly switch_generation: number;
   readonly event_id: string;
+  readonly whatsapp_message_id: string | null;
+  readonly whatsapp_visibility_version: number | null;
 }
 
 export interface SseDispatcherOptions {
@@ -91,7 +93,9 @@ export class SseDispatcher implements DeliveryDispatchHandler {
   }
 
   /** Task 9 supplies a sealed synchronous ServerResponse callback to this retained-content writer. */
-  writeLive(input: Omit<SealedSseFrameWrite, 'visibilityGate' | 'hasConcreteWhatsAppVisibilityFence'>): boolean {
+  async writeLive(
+    input: Omit<SealedSseFrameWrite, 'visibilityGate' | 'hasConcreteWhatsAppVisibilityFence'>,
+  ): Promise<boolean> {
     // Referencing the registered D hooks here makes their owner seam explicit without letting B2 register participants.
     void this.#retentionHooks;
     if (this.#visibilityGate === undefined) {
@@ -116,7 +120,11 @@ export class SseDispatcher implements DeliveryDispatchHandler {
         leaseMs: this.#leaseMs,
         newAttemptId: randomUUID,
         newLeaseToken: randomUUID,
-        assertAccountLive: (accountId) => assertLiveGmailAccount(this.#config, accountId),
+        assertAccountLive: (accountId) =>
+          assertLiveEventAccount(this.#config, {
+            source: sourceOfDelivery(this.#store, deliveryId),
+            accountId,
+          }),
         preflight: async (row) => {
           await this.#fence(this.#fenceRequest(row));
         },
@@ -124,7 +132,16 @@ export class SseDispatcher implements DeliveryDispatchHandler {
     } catch (error) {
       const row = sseDelivery(this.#store, deliveryId);
       if (row !== undefined && isRemovedAccountError(error)) {
-        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, row.account_id, this.#now()));
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            {
+              source: sourceOfDelivery(this.#store, deliveryId),
+              accountId: row.account_id,
+            },
+            this.#now(),
+          ),
+        );
         return { state: 'terminal', deliveryId };
       }
       throw error;
@@ -153,10 +170,22 @@ export class SseDispatcher implements DeliveryDispatchHandler {
     const encrypted = await this.#cipher.encrypt(streamLocation(claim.id), Buffer.from(record.cloudEventBytes, 'utf8'));
     try {
       await this.#fence(this.#fenceRequest(claim));
-      await assertLiveGmailAccount(this.#config, claim.accountId);
+      await assertLiveEventAccount(this.#config, {
+        source: sourceOfDelivery(this.#store, claim.id),
+        accountId: claim.accountId,
+      });
     } catch (error) {
       if (isRemovedAccountError(error)) {
-        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, claim.accountId, this.#now()));
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            {
+              source: sourceOfDelivery(this.#store, claim.id),
+              accountId: claim.accountId,
+            },
+            this.#now(),
+          ),
+        );
         return { state: 'terminal', deliveryId: claim.id };
       }
       releaseDeliveryClaim(this.#store, claim);
@@ -189,6 +218,14 @@ export class SseDispatcher implements DeliveryDispatchHandler {
         this.#cancel(claim);
         return { state: 'terminal', deliveryId: claim.id };
       }
+      if ((row.whatsapp_message_id === null) !== (row.whatsapp_visibility_version === null)) {
+        this.#cancel(claim);
+        return { state: 'terminal', deliveryId: claim.id };
+      }
+      if (sourceOfDelivery(this.#store, claim.id) === 'whatsapp' && row.whatsapp_message_id === null) {
+        this.#cancel(claim);
+        return { state: 'terminal', deliveryId: claim.id };
+      }
       const settings = this.#store.database
         .prepare('SELECT enabled, paused, switch_generation FROM event_settings WHERE singleton = 1')
         .get() as { enabled: number; paused: number; switch_generation: number } | undefined;
@@ -215,7 +252,7 @@ export class SseDispatcher implements DeliveryDispatchHandler {
            (id, delivery_id, rule_id, rule_version, target_id, target_version, subscriber_id, subscriber_version,
             event_id, account_id, whatsapp_message_id, whatsapp_visibility_version, encrypted_record, delivered_at,
             expires_at, switch_generation)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           claim.id,
@@ -228,6 +265,8 @@ export class SseDispatcher implements DeliveryDispatchHandler {
           row.subscriber_version,
           row.event_id,
           row.account_id,
+          row.whatsapp_message_id,
+          row.whatsapp_visibility_version,
           encryptedRecord,
           now,
           sseReplayDeadline(now, retentionMs),
@@ -296,7 +335,7 @@ function sseDelivery(store: EventDatabase, id: string): CurrentSseDelivery | und
     .prepare(
       `SELECT d.id, d.decision_id, d.account_id, d.rule_id, d.rule_version, d.target_id, d.target_version,
               d.subscriber_id, d.subscriber_version, d.target_kind, d.encrypted_record, d.expires_at,
-              d.switch_generation, decision.event_id
+              d.switch_generation, decision.event_id, d.whatsapp_message_id, d.whatsapp_visibility_version
        FROM deliveries d JOIN decisions decision ON decision.id = d.decision_id WHERE d.id = ?`,
     )
     .get(id) as CurrentSseDelivery | undefined;
@@ -350,15 +389,42 @@ export function streamLocation(id: string): EncryptedRecordLocation {
  * Task 8's live writer seam. Task 9 supplies the sealed ServerResponse.write callback; this function owns the final
  * WhatsApp callback nesting and deliberately performs no await or scheduling between the fence and that callback.
  */
-export function writeLiveSseFrame(input: SealedSseFrameWrite): boolean {
+export async function writeLiveSseFrame(input: SealedSseFrameWrite): Promise<boolean> {
   if (input.whatsappMessageId === null) {
     input.writeFrame(input.frame);
     return true;
   }
   if (!input.hasConcreteWhatsAppVisibilityFence) return false;
-  input.visibilityGate.withCurrentSseFrameVisibility(
+  let wrote = false;
+  await input.visibilityGate.withCurrentSseFrameVisibility(
     { accountId: input.accountId, whatsappMessageId: input.whatsappMessageId },
-    () => input.writeFrame(input.frame),
+    () => {
+      input.writeFrame(input.frame);
+      wrote = true;
+    },
   );
-  return true;
+  return wrote;
+}
+
+function sourceOfDelivery(store: EventDatabase, deliveryId: string): 'gmail' | 'slack' | 'resend' | 'whatsapp' {
+  const row = store.database
+    .prepare(
+      `SELECT rule.document
+         FROM deliveries JOIN rule_versions AS rule
+           ON rule.rule_id = deliveries.rule_id AND rule.version = deliveries.rule_version
+        WHERE deliveries.id = ?`,
+    )
+    .get(deliveryId) as { document: string } | undefined;
+  if (row === undefined) throw new CommsError('APPROVAL_VOID', 'the SSE delivery has no exact rule version');
+  try {
+    const document = JSON.parse(row.document) as { source?: { channel?: unknown } };
+    // B2's Gmail-only immutable documents predate the source field.  Absence means that durable Gmail binding;
+    // a source field that is present but malformed or unknown remains a closed refusal.
+    if (document.source === undefined) return 'gmail';
+    const source = document.source?.channel;
+    if (source === 'gmail' || source === 'slack' || source === 'resend' || source === 'whatsapp') return source;
+  } catch {
+    // The closed refusal below is the safe result for a damaged immutable rule row.
+  }
+  throw new CommsError('APPROVAL_VOID', 'the SSE delivery rule has no recognised event source');
 }

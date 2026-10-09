@@ -19,13 +19,17 @@ async function pathsModule(): Promise<PathsModule | null> {
   return import('../src/runtime/paths.ts').catch(() => null);
 }
 
-test('B2-T8: the owner installs the SSE adapter through the pre-D structural default seam', async () => {
+test('B2-T8: the post-D owner installs the SSE adapter through D’s concrete visibility composition', async () => {
   const owner = await readFile(new URL('../src/runtime/owner.ts', import.meta.url), 'utf8');
   assert.match(owner, /const dryrun = new DryRunDispatcher/);
   assert.match(owner, /const webhook = new WebhookDispatcher/);
   assert.match(owner, /const sse = new SseDispatcher/);
-  assert.match(owner, /PassThroughSseFrameVisibilityGate/);
-  assert.match(owner, /NoopDSourceRetentionHooks/);
+  assert.match(owner, /createPhaseDWhatsAppOwnerComposition/);
+  assert.match(owner, /createB2RetainedContentParticipants/);
+  assert.match(owner, /visibilityGate: whatsappComposition\.visibilityFence/);
+  assert.match(owner, /hasConcreteWhatsAppVisibilityFence: true/);
+  assert.match(owner, /retentionHooks: whatsappComposition\.retainedContentHooks/);
+  assert.doesNotMatch(owner, /PassThroughSseFrameVisibilityGate/);
   assert.match(owner, /const dispatcher = new DeliveryDispatcher/);
   assert.match(owner, /dryrun,\n {4}webhook,/);
   assert.match(owner, /sse,/);

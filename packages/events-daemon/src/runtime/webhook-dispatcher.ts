@@ -19,7 +19,7 @@ import {
 import type { AddressResolver } from '../network/resolver.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { EventRecordCipher } from '../store/records.ts';
-import { assertLiveGmailAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
+import { assertLiveEventAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
 import type { DeliveryRecord } from './deliveries.ts';
 import {
   type ClaimedDelivery,
@@ -170,7 +170,8 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
         leaseMs: this.#leaseMs,
         newAttemptId: randomUUID,
         newLeaseToken: randomUUID,
-        assertAccountLive: (accountId) => assertLiveGmailAccount(this.#config, accountId),
+        assertAccountLive: (accountId) =>
+          assertLiveEventAccount(this.#config, { source: sourceOfDelivery(this.#store, deliveryId), accountId }),
         preflight: async (row) => {
           await this.#fence(this.#fenceRequest(row));
         },
@@ -178,7 +179,16 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
     } catch (error) {
       const row = delivery(this.#store, deliveryId);
       if (row !== undefined && isRemovedAccountError(error)) {
-        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, row.account_id, this.#now()));
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            {
+              source: sourceOfDelivery(this.#store, deliveryId),
+              accountId: row.account_id,
+            },
+            this.#now(),
+          ),
+        );
         return { state: 'terminal', deliveryId };
       }
       throw error;
@@ -300,10 +310,22 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
   async #settleOutcome(claim: ClaimedDelivery, outcome: WebhookOutcome): Promise<void> {
     try {
       await this.#fence(this.#fenceRequest(claim));
-      await assertLiveGmailAccount(this.#config, claim.accountId);
+      await assertLiveEventAccount(this.#config, {
+        source: sourceOfDelivery(this.#store, claim.id),
+        accountId: claim.accountId,
+      });
     } catch (error) {
       if (isRemovedAccountError(error)) {
-        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, claim.accountId, this.#now()));
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            {
+              source: sourceOfDelivery(this.#store, claim.id),
+              accountId: claim.accountId,
+            },
+            this.#now(),
+          ),
+        );
       }
       settleWebhookOutcome({ store: this.#store, claim, outcome, now: this.#now(), authorityLost: true });
       return;
@@ -375,10 +397,22 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
     await this.#beforeGate?.(phase, claim);
     try {
       await this.#fence(this.#fenceRequest(claim, `webhook-${phase}`));
-      await assertLiveGmailAccount(this.#config, claim.accountId);
+      await assertLiveEventAccount(this.#config, {
+        source: sourceOfDelivery(this.#store, claim.id),
+        accountId: claim.accountId,
+      });
     } catch (error) {
       if (isRemovedAccountError(error)) {
-        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, claim.accountId, this.#now()));
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            {
+              source: sourceOfDelivery(this.#store, claim.id),
+              accountId: claim.accountId,
+            },
+            this.#now(),
+          ),
+        );
         return { state: 'terminal', deliveryId: claim.id };
       }
       const stable = this.#store.immediate(() => this.#gateState(claim, target));
@@ -492,6 +526,29 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
   #release(claim: ClaimedDelivery): void {
     this.#store.immediate(() => releaseDeliveryClaimInTransaction(this.#store.database, claim));
   }
+}
+
+function sourceOfDelivery(store: EventDatabase, deliveryId: string): 'gmail' | 'slack' | 'resend' | 'whatsapp' {
+  const row = store.database
+    .prepare(
+      `SELECT rule.document
+         FROM deliveries JOIN rule_versions AS rule
+           ON rule.rule_id = deliveries.rule_id AND rule.version = deliveries.rule_version
+        WHERE deliveries.id = ?`,
+    )
+    .get(deliveryId) as { document: string } | undefined;
+  if (row === undefined) throw new CommsError('APPROVAL_VOID', 'the webhook delivery has no exact rule version');
+  try {
+    const document = JSON.parse(row.document) as { source?: { channel?: unknown } };
+    // B2's Gmail-only immutable documents predate the source field.  Their omitted field is therefore a durable
+    // Gmail binding, not an invitation to guess for a multi-source document. Any present-but-invalid source refuses.
+    if (document.source === undefined) return 'gmail';
+    const source = document.source?.channel;
+    if (source === 'gmail' || source === 'slack' || source === 'resend' || source === 'whatsapp') return source;
+  } catch {
+    // The closed refusal below is the safe result for a damaged immutable rule row.
+  }
+  throw new CommsError('APPROVAL_VOID', 'the webhook delivery rule has no recognised event source');
 }
 
 const DEFAULT_DEAD_LETTER_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
