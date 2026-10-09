@@ -203,9 +203,10 @@ export function releaseDeliveryClaimInTransaction(database: DatabaseSync, claim:
     database
       .prepare(
         `UPDATE deliveries SET state = 'queued', lease_until = NULL
-         WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
+         WHERE id = ? AND state = 'disclosing' AND switch_generation = ?
+           AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
       )
-      .run(claim.id, claim.attemptId, claim.leaseToken, claim.leaseUntil).changes === 1
+      .run(claim.id, claim.switchGeneration, claim.attemptId, claim.leaseToken, claim.leaseUntil).changes === 1
   );
 }
 
@@ -214,9 +215,10 @@ export function isCurrentDeliveryClaim(database: DatabaseSync, claim: ClaimedDel
     database
       .prepare(
         `SELECT 1 AS present FROM deliveries
-         WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
+         WHERE id = ? AND state = 'disclosing' AND switch_generation = ?
+           AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
       )
-      .get(claim.id, claim.attemptId, claim.leaseToken, claim.leaseUntil) !== undefined
+      .get(claim.id, claim.switchGeneration, claim.attemptId, claim.leaseToken, claim.leaseUntil) !== undefined
   );
 }
 
@@ -244,9 +246,18 @@ export function completeDeliveryClaimInTransaction(
     .prepare(
       `UPDATE deliveries
        SET state = ?, encrypted_record = CASE WHEN ? THEN NULL ELSE encrypted_record END, lease_until = NULL
-       WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
+       WHERE id = ? AND state = 'disclosing' AND switch_generation = ?
+         AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
     )
-    .run(input.state, input.clearRecord ? 1 : 0, claim.id, claim.attemptId, claim.leaseToken, claim.leaseUntil);
+    .run(
+      input.state,
+      input.clearRecord ? 1 : 0,
+      claim.id,
+      claim.switchGeneration,
+      claim.attemptId,
+      claim.leaseToken,
+      claim.leaseUntil,
+    );
   if (result.changes === 1 && input.clearRecord) {
     const targets = removeRetainedDeliveryTargetReference(database, claim.id);
     for (const target of targets) {
@@ -328,7 +339,7 @@ function deliveryRateCap(database: DatabaseSync, row: DeliveryClaimRow): number 
 function expireDeliveryInTransaction(database: DatabaseSync, row: DeliveryClaimRow, now: number): void {
   const changed = database
     .prepare(
-      `UPDATE deliveries SET state = 'retention-expired', encrypted_record = NULL, lease_until = NULL
+      `UPDATE deliveries SET state = 'retention-expired', encrypted_record = NULL, lease_until = NULL, next_at = NULL
        WHERE id = ? AND state IN ('queued', 'retryable', 'disclosing') AND expires_at <= ?`,
     )
     .run(row.id, now).changes;

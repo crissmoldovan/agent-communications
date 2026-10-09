@@ -32,9 +32,21 @@ import {
 import type { ActiveDisclosableRequest } from './disclosure-fence.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import type { DeliveryDispatchHandler, DispatchResult } from './dispatcher.ts';
+import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 import { signStandardWebhook } from './webhook-signing.ts';
 
 export type WebhookFencePhase = 'dns' | 'tcp' | 'tls' | 'write';
+
+/** Test-only durable-boundary interruption points. They are constructor seams, never configuration or a public surface. */
+export type WebhookCrashPoint =
+  | 'before-claim'
+  | 'after-claim'
+  | 'after-dns'
+  | 'after-tcp'
+  | 'after-tls'
+  | 'after-write'
+  | 'after-response'
+  | 'after-outcome';
 
 export interface WebhookSecretMaterial {
   readonly generation: number;
@@ -76,6 +88,8 @@ export interface WebhookDispatcherOptions {
   readonly onOutcome?: ((claim: ClaimedDelivery, outcome: WebhookOutcome) => Promise<void>) | undefined;
   /** Test-only point before a gate; production supplies no hook. */
   readonly beforeGate?: ((phase: WebhookFencePhase, claim: ClaimedDelivery) => void | Promise<void>) | undefined;
+  /** Test-only interruption seam. It cannot be enabled through a target, config, CLI or MCP input. */
+  readonly testFailpoint?: ((point: WebhookCrashPoint, claim?: ClaimedDelivery) => void) | undefined;
 }
 
 interface LoadedTarget {
@@ -100,8 +114,9 @@ interface DeliveryRow {
 }
 
 /**
- * The network-only half of webhook delivery. It never settles an outcome: Task 7 owns durable retry, dead-letter and
- * stale-owner completion. This half keeps the exact claim disclosing after bytes cross the wire.
+ * The network half of webhook delivery. Its default outcome seam durably settles retry, dead-letter and stale-owner
+ * completion; a test or future owner may replace that seam while keeping the exact claim disclosing after bytes cross
+ * the wire.
  */
 export class WebhookDispatcher implements DeliveryDispatchHandler {
   readonly #store: EventDatabase;
@@ -117,6 +132,7 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
   readonly #tlsConnect: (options: PinnedTlsOptions) => Promise<tls.TLSSocket>;
   readonly #onOutcome: ((claim: ClaimedDelivery, outcome: WebhookOutcome) => Promise<void>) | undefined;
   readonly #beforeGate: ((phase: WebhookFencePhase, claim: ClaimedDelivery) => void | Promise<void>) | undefined;
+  readonly #testFailpoint: ((point: WebhookCrashPoint, claim?: ClaimedDelivery) => void) | undefined;
 
   constructor(options: WebhookDispatcherOptions) {
     this.#store = options.store;
@@ -130,11 +146,13 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
     this.#fence = options.fence ?? assertDisclosable;
     this.#tcpConnect = options.tcpConnect ?? connectPinnedTcp;
     this.#tlsConnect = options.tlsConnect ?? connectPinnedTls;
-    this.#onOutcome = options.onOutcome;
+    this.#onOutcome = options.onOutcome ?? ((claim, outcome) => this.#settleOutcome(claim, outcome));
     this.#beforeGate = options.beforeGate;
+    this.#testFailpoint = options.testFailpoint;
   }
 
   async dispatch(deliveryId: string): Promise<DispatchResult> {
+    this.#testFailpoint?.('before-claim');
     let claimed: DeliveryClaimResult;
     try {
       claimed = await claimDelivery({
@@ -159,6 +177,7 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
     }
     if (claimed.kind !== 'claimed') return { state: claimed.kind, deliveryId };
     const claim = claimed.claim;
+    this.#testFailpoint?.('after-claim', claim);
     let record: DeliveryRecord;
     try {
       record = parseDeliveryRecord(await this.#cipher.decrypt(deliveryLocation(claim.id), claim.encryptedRecord));
@@ -183,11 +202,13 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
       approvedAddressSetDigest: addressSetDigest(target.document.approvedAddressSet),
       ...(this.#resolver === undefined ? {} : { resolver: this.#resolver }),
     });
+    this.#testFailpoint?.('after-dns', claim);
     const preparedTcp = await this.#prepareGate(claim, target, 'tcp');
     if (preparedTcp !== null) return preparedTcp;
     const gateTcp = this.#finalGate(claim, target);
     if (gateTcp !== null) return gateTcp;
     const tcp = await this.#tcpConnect({ host: connection.address, port: connection.port });
+    this.#testFailpoint?.('after-tcp', claim);
     let socket: net.Socket | tls.TLSSocket = tcp;
     if (connection.useTls) {
       const preparedTls = await this.#prepareGate(claim, target, 'tls');
@@ -201,6 +222,7 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
         return gateTls;
       }
       socket = await this.#tlsConnect({ socket: tcp, ...connection.tls });
+      this.#testFailpoint?.('after-tls', claim);
     }
     const current = target.signing.find((secret) => secret.lifecycle === 'current');
     if (current === undefined) {
@@ -231,11 +253,32 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
     }
     // The write is deliberately synchronous with its immediately preceding gate: no callback or await may intervene.
     socket.write(request);
+    this.#testFailpoint?.('after-write', claim);
     const outcome = await responseStatus(socket)
       .then(classifyWebhookResponseStatus)
       .catch((): WebhookOutcome => ({ kind: 'network' }));
+    this.#testFailpoint?.('after-response', claim);
     await this.#onOutcome?.(claim, outcome);
+    this.#testFailpoint?.('after-outcome', claim);
     return { state: 'issued', deliveryId: claim.id };
+  }
+
+  /**
+   * Completion runs after an await for the network response. Re-read account authority before the database transaction;
+   * the transaction then compares the exact lease ownership, generation, lineage and deadline before it can retry.
+   */
+  async #settleOutcome(claim: ClaimedDelivery, outcome: WebhookOutcome): Promise<void> {
+    try {
+      await this.#fence(this.#fenceRequest(claim));
+      await assertLiveGmailAccount(this.#config, claim.accountId);
+    } catch (error) {
+      if (isRemovedAccountError(error)) {
+        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, claim.accountId, this.#now()));
+      }
+      settleWebhookOutcome({ store: this.#store, claim, outcome, now: this.#now(), authorityLost: true });
+      return;
+    }
+    settleWebhookOutcome({ store: this.#store, claim, outcome, now: this.#now() });
   }
 
   async #loadTarget(claim: ClaimedDelivery): Promise<LoadedTarget> {
@@ -419,6 +462,270 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
   #release(claim: ClaimedDelivery): void {
     this.#store.immediate(() => releaseDeliveryClaimInTransaction(this.#store.database, claim));
   }
+}
+
+const DEFAULT_DEAD_LETTER_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_RETRY_BACKOFF_MS = 60 * 60 * 1000;
+
+/**
+ * Settles one issued webhook attempt. The exact owner predicate is deliberately the first durable decision: a late
+ * response can add a content-free discarded marker, but cannot overwrite a recovered lease, a purge or a winner.
+ */
+export function settleWebhookOutcome(input: {
+  readonly store: EventDatabase;
+  readonly claim: ClaimedDelivery;
+  readonly outcome: WebhookOutcome;
+  readonly now: number;
+  /** A just-reread asynchronous fence refused; its exact owner may only terminalise, never retry. */
+  readonly authorityLost?: boolean | undefined;
+}): boolean {
+  return input.store.immediate(() => {
+    const database = input.store.database;
+    const row = database
+      .prepare(
+        `SELECT id, rule_id, rule_version, target_id, target_version, encrypted_record, attempts, expires_at, state,
+                switch_generation, attempt_id, lease_token, lease_until
+         FROM deliveries WHERE id = ?`,
+      )
+      .get(input.claim.id) as
+      | {
+          id: string;
+          rule_id: string;
+          rule_version: number;
+          target_id: string;
+          target_version: number;
+          encrypted_record: Uint8Array | null;
+          attempts: number;
+          expires_at: number;
+          state: string;
+          switch_generation: number;
+          attempt_id: string | null;
+          lease_token: string | null;
+          lease_until: number | null;
+        }
+      | undefined;
+    if (
+      row === undefined ||
+      row.state !== 'disclosing' ||
+      row.switch_generation !== input.claim.switchGeneration ||
+      row.attempt_id !== input.claim.attemptId ||
+      row.lease_token !== input.claim.leaseToken ||
+      row.lease_until !== input.claim.leaseUntil
+    ) {
+      recordDiscardedWebhookOutcome(database, input.claim, input.now);
+      return false;
+    }
+
+    if (input.authorityLost) {
+      const cancelled = database
+        .prepare(
+          `UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL, next_at = NULL
+           WHERE id = ? AND state = 'disclosing' AND switch_generation = ?
+             AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
+        )
+        .run(
+          input.claim.id,
+          input.claim.switchGeneration,
+          input.claim.attemptId,
+          input.claim.leaseToken,
+          input.claim.leaseUntil,
+        ).changes;
+      if (cancelled === 1) dropRetainedTargetReference(database, input.claim.id, input.now);
+      recordDiscardedWebhookOutcome(database, input.claim, input.now);
+      return false;
+    }
+
+    if (row.expires_at <= input.now) {
+      const expired = database
+        .prepare(
+          `UPDATE deliveries SET state = 'retention-expired', encrypted_record = NULL, lease_until = NULL, next_at = NULL
+           WHERE id = ? AND state = 'disclosing' AND switch_generation = ?
+             AND attempt_id = ? AND lease_token = ? AND lease_until = ?
+             AND expires_at <= ?`,
+        )
+        .run(
+          input.claim.id,
+          input.claim.switchGeneration,
+          input.claim.attemptId,
+          input.claim.leaseToken,
+          input.claim.leaseUntil,
+          input.now,
+        ).changes;
+      if (expired === 1) dropRetainedTargetReference(database, input.claim.id, input.now);
+      recordDiscardedWebhookOutcome(database, input.claim, input.now);
+      return false;
+    }
+
+    const setting = database
+      .prepare('SELECT enabled, switch_generation FROM event_settings WHERE singleton = 1')
+      .get() as { enabled: number; switch_generation: number } | undefined;
+    if (
+      setting?.enabled !== 1 ||
+      setting.switch_generation !== input.claim.switchGeneration ||
+      !hasLiveDeliveryLineage(database, row)
+    ) {
+      const terminal = setting?.enabled === 1 ? 'cancelled' : 'in-flight-at-disable';
+      const cancelled = database
+        .prepare(
+          `UPDATE deliveries SET state = ?, encrypted_record = NULL, lease_until = NULL, next_at = NULL
+           WHERE id = ? AND state = 'disclosing' AND switch_generation = ?
+             AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
+        )
+        .run(
+          terminal,
+          input.claim.id,
+          input.claim.switchGeneration,
+          input.claim.attemptId,
+          input.claim.leaseToken,
+          input.claim.leaseUntil,
+        ).changes;
+      if (cancelled === 1) dropRetainedTargetReference(database, input.claim.id, input.now);
+      recordDiscardedWebhookOutcome(database, input.claim, input.now);
+      return false;
+    }
+
+    if (input.outcome.kind === 'response' && input.outcome.success) {
+      const delivered = database
+        .prepare(
+          `UPDATE deliveries
+           SET state = 'delivered', encrypted_record = NULL, lease_until = NULL, next_at = NULL,
+               last_error_code = NULL, last_status = ?
+           WHERE id = ? AND state = 'disclosing' AND switch_generation = ?
+             AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
+        )
+        .run(
+          input.outcome.status,
+          input.claim.id,
+          input.claim.switchGeneration,
+          input.claim.attemptId,
+          input.claim.leaseToken,
+          input.claim.leaseUntil,
+        ).changes;
+      if (delivered === 1) dropRetainedTargetReference(database, input.claim.id, input.now);
+      return delivered === 1;
+    }
+
+    const status = input.outcome.kind === 'response' ? input.outcome.status : null;
+    const errorCode = input.outcome.kind === 'response' ? 'HTTP_NON_SUCCESS' : 'NETWORK';
+    const retryLimit = retryLimitFor(database, row.target_id, row.target_version);
+    if (row.attempts >= retryLimit) {
+      const deadLettered = database
+        .prepare(
+          `UPDATE deliveries
+           SET state = 'dead-lettered', lease_until = NULL, next_at = NULL, last_error_code = ?, last_status = ?,
+               dead_lettered_at = COALESCE(dead_lettered_at, ?),
+               dead_letter_expires_at = COALESCE(dead_letter_expires_at, ?)
+           WHERE id = ? AND state = 'disclosing' AND switch_generation = ?
+             AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
+        )
+        .run(
+          errorCode,
+          status,
+          input.now,
+          input.now + deadLetterRetentionFor(database, row.rule_id, row.rule_version),
+          input.claim.id,
+          input.claim.switchGeneration,
+          input.claim.attemptId,
+          input.claim.leaseToken,
+          input.claim.leaseUntil,
+        ).changes;
+      return deadLettered === 1;
+    }
+
+    const nextAt = input.now + retryBackoffMs(row.attempts, row.id);
+    if (nextAt >= row.expires_at) {
+      const expired = database
+        .prepare(
+          `UPDATE deliveries SET state = 'retention-expired', encrypted_record = NULL, lease_until = NULL, next_at = NULL,
+             last_error_code = ?, last_status = ?
+           WHERE id = ? AND state = 'disclosing' AND switch_generation = ?
+             AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
+        )
+        .run(
+          errorCode,
+          status,
+          input.claim.id,
+          input.claim.switchGeneration,
+          input.claim.attemptId,
+          input.claim.leaseToken,
+          input.claim.leaseUntil,
+        ).changes;
+      if (expired === 1) dropRetainedTargetReference(database, input.claim.id, input.now);
+      return expired === 1;
+    }
+    const retried = database
+      .prepare(
+        `UPDATE deliveries
+         SET state = 'retryable', lease_until = NULL, next_at = ?, last_error_code = ?, last_status = ?
+         WHERE id = ? AND state = 'disclosing' AND switch_generation = ?
+           AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
+      )
+      .run(
+        nextAt,
+        errorCode,
+        status,
+        input.claim.id,
+        input.claim.switchGeneration,
+        input.claim.attemptId,
+        input.claim.leaseToken,
+        input.claim.leaseUntil,
+      ).changes;
+    return retried === 1;
+  });
+}
+
+function recordDiscardedWebhookOutcome(database: EventDatabase['database'], claim: ClaimedDelivery, now: number): void {
+  const id = `webhook-outcome:${sha256Hex(`${claim.id}:${claim.attemptId}:${claim.leaseToken}`)}`;
+  database
+    .prepare(
+      `INSERT OR IGNORE INTO work_attempts (id, work_id, switch_generation, code, created_at)
+       VALUES (?, ?, ?, 'external-outcome-unrecalled-discarded', ?)`,
+    )
+    .run(id, claim.id, claim.switchGeneration, now);
+}
+
+function dropRetainedTargetReference(database: EventDatabase['database'], deliveryId: string, now: number): void {
+  for (const target of removeRetainedDeliveryTargetReference(database, deliveryId)) {
+    purgeUnreferencedSystemTargets(database, { ...target, now });
+  }
+}
+
+function retryLimitFor(database: EventDatabase['database'], targetId: string, targetVersion: number): number {
+  const row = database
+    .prepare('SELECT document FROM target_versions WHERE target_id = ? AND version = ?')
+    .get(targetId, targetVersion) as { document: string } | undefined;
+  if (row === undefined) return 20;
+  try {
+    return canonicalWebhookTarget(JSON.parse(row.document)).retryLimit;
+  } catch {
+    return 20;
+  }
+}
+
+function deadLetterRetentionFor(database: EventDatabase['database'], ruleId: string, ruleVersion: number): number {
+  const row = database
+    .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
+    .get(ruleId, ruleVersion) as { document: string } | undefined;
+  try {
+    const value = (JSON.parse(row?.document ?? '{}') as { retention?: { deadLetterMs?: unknown } }).retention
+      ?.deadLetterMs;
+    return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+      ? value
+      : DEFAULT_DEAD_LETTER_RETENTION_MS;
+  } catch {
+    return DEFAULT_DEAD_LETTER_RETENTION_MS;
+  }
+}
+
+/**
+ * A stable, bounded jitter keeps a crashed attempt's recovery deterministic without allowing a retry storm to align.
+ * The id is already content-free and never leaves the daemon.
+ */
+function retryBackoffMs(attempts: number, deliveryId: string): number {
+  const exponential = Math.min(1_000 * 2 ** Math.max(0, attempts - 1), MAX_RETRY_BACKOFF_MS);
+  const jitterRange = Math.max(1, Math.floor(exponential / 4));
+  const entropy = Number.parseInt(sha256Hex(`${deliveryId}:${attempts}`).slice(0, 8), 16);
+  return Math.min(exponential + (entropy % jitterRange), MAX_RETRY_BACKOFF_MS);
 }
 
 function delivery(store: EventDatabase, id: string): DeliveryRow | undefined {

@@ -5,6 +5,7 @@ import type { CanonicalFullRuleDocument } from '../src/domain/activation-documen
 import { type ClaimedDelivery, completeDeliveryClaim } from '../src/runtime/delivery-claim.ts';
 import { deadLetterDelivery, EventExpiry } from '../src/runtime/expiry.ts';
 import { shortenRuleRetentionDeadlines } from '../src/runtime/replacements.ts';
+import { settleWebhookOutcome } from '../src/runtime/webhook-dispatcher.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import {
   createRetentionDeadlines,
@@ -175,13 +176,31 @@ test('B2-T5: expiry wins over a stale claimed delivery and leaves it unable to s
       leaseUntil: 200,
     };
     assert.equal(completeDeliveryClaim(store, stale, { state: 'delivered', clearRecord: true }), false);
+    assert.equal(
+      settleWebhookOutcome({
+        store,
+        claim: stale,
+        outcome: { kind: 'response', status: 204, success: true },
+        now: 100,
+      }),
+      false,
+      'an HTTP outcome after expiry cannot recreate the purged record or settle the stale lease',
+    );
     assert.deepEqual(
       {
         ...(store.database
-          .prepare("SELECT state, encrypted_record FROM deliveries WHERE id = 'delivery-expired'")
+          .prepare("SELECT state, encrypted_record, next_at FROM deliveries WHERE id = 'delivery-expired'")
           .get() as Record<string, unknown>),
       },
-      { state: 'retention-expired', encrypted_record: null },
+      { state: 'retention-expired', encrypted_record: null, next_at: null },
+    );
+    assert.deepEqual(
+      (
+        store.database.prepare("SELECT code FROM work_attempts WHERE work_id = 'delivery-expired'").all() as Array<{
+          code: string;
+        }>
+      ).map((row) => ({ ...row })),
+      [{ code: 'external-outcome-unrecalled-discarded' }],
     );
   } finally {
     store.close();

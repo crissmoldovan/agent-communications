@@ -109,7 +109,7 @@ async function fixture(url: string) {
   return { stateDir, store, dispatcher };
 }
 
-test('B2-T6: a webhook posts the prepared CloudEvent bytes with Standard Webhooks headers and leaves outcome ownership for Task 7', {
+test('B2-T7: a webhook posts the prepared CloudEvent bytes and its default outcome seam settles the owned lease', {
   skip: WINDOWS_SKIP,
 }, async () => {
   let request = '';
@@ -139,8 +139,8 @@ test('B2-T6: a webhook posts the prepared CloudEvent bytes with Standard Webhook
           .prepare("SELECT state, attempts FROM deliveries WHERE id = 'delivery-webhook'")
           .get() as object),
       },
-      { state: 'disclosing', attempts: 1 },
-      'Task 6 has issued bytes but Task 7 owns outcome settlement',
+      { state: 'delivered', attempts: 1 },
+      'Task 7 settles only the issued attempt after the response',
     );
   } finally {
     setup.store.close();

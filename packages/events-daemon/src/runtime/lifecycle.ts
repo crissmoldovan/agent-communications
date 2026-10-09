@@ -68,10 +68,10 @@ export class EventLifecycle {
       database.exec('DELETE FROM activation_baselines');
       database.exec('DELETE FROM replacement_drains');
       database.exec(
-        "UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL WHERE state IN ('queued', 'retryable')",
+        "UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL, next_at = NULL WHERE state IN ('queued', 'retryable')",
       );
       database.exec(
-        "UPDATE deliveries SET state = 'in-flight-at-disable', encrypted_record = NULL, lease_until = NULL WHERE state = 'disclosing'",
+        "UPDATE deliveries SET state = 'in-flight-at-disable', encrypted_record = NULL, lease_until = NULL, next_at = NULL WHERE state = 'disclosing'",
       );
       database.exec("UPDATE deliveries SET encrypted_record = NULL WHERE state = 'dead-lettered'");
       for (const delivery of retained) {

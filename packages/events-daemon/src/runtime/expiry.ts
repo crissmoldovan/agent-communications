@@ -66,7 +66,7 @@ export class EventExpiry {
       const deliveries = Number(
         database
           .prepare(
-            `UPDATE deliveries SET state = 'retention-expired', encrypted_record = NULL, lease_until = NULL
+            `UPDATE deliveries SET state = 'retention-expired', encrypted_record = NULL, lease_until = NULL, next_at = NULL
              WHERE (state IN ('queued', 'retryable', 'disclosing') AND expires_at <= ?)
                 OR (state = 'dead-lettered' AND dead_letter_expires_at IS NOT NULL AND dead_letter_expires_at <= ?)`,
           )
