@@ -182,6 +182,74 @@ test('GML-B1: one mailbox cursor follows every history page and commits only aft
   }
 });
 
+test('P1-D7: a Gmail history turn stops at its page budget and resumes its durable continuation', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'events-daemon-gmail-page-budget-'));
+  try {
+    const store = await openEventDatabase({ stateDir });
+    try {
+      store.database
+        .prepare(
+          "INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('gmail', 'ibx_ABCDEFGHIJKLMNOP', 'mailbox', '100', 0)",
+        )
+        .run();
+      const calls: Array<string | undefined> = [];
+      const worker = new GmailSourceWorker({
+        store,
+        source: {
+          async listHistory({ pageToken }) {
+            calls.push(pageToken);
+            return pageToken === undefined
+              ? { historyId: '101', nextPageToken: 'second', history: [] }
+              : { historyId: '102', nextPageToken: undefined, history: [] };
+          },
+          async getMessageMetadata() {
+            throw new Error('no event metadata is needed for empty history pages');
+          },
+        },
+        mailbox: { accountId: 'ibx_ABCDEFGHIJKLMNOP', name: 'Events inbox' },
+        mailboxLock: new MailboxLock(),
+        rules: () => [
+          {
+            ruleId: 'rule',
+            ruleVersion: 1,
+            eventType: 'gmail.message.received',
+            options: { channel: 'gmail', labels: 'any', includeSpamTrash: true },
+            ingestRetentionMs: 60_000,
+          },
+        ],
+        assertDisclosable: async () => undefined,
+        admit: async () => 'terminal',
+        encryptStage: async (value) => Buffer.from(JSON.stringify(value)),
+        decryptStage: async (stored) => JSON.parse(Buffer.from(stored).toString('utf8')),
+        now: () => 1_760_000_000_000,
+      });
+
+      assert.deepEqual(await worker.scan({ maxPages: 1 }), { cursor: '100', pending: true });
+      assert.deepEqual(calls, [undefined]);
+      assert.equal(
+        (
+          store.database
+            .prepare(
+              "SELECT cursor FROM cursors WHERE source = 'gmail' AND account_id = ? AND cursor_scope = 'mailbox'",
+            )
+            .get('ibx_ABCDEFGHIJKLMNOP') as { cursor: string }
+        ).cursor,
+        '100',
+        'a budget boundary cannot advance the shared mailbox cursor',
+      );
+
+      assert.deepEqual(await worker.scan({ maxPages: 1 }), { cursor: '102', pending: false });
+      assert.deepEqual(calls, [undefined, 'second']);
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('P1-B1: a source account-removal refusal purges its staged page and mailbox cursor', {
   skip: WINDOWS_SKIP,
 }, async () => {

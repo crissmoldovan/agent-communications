@@ -5,6 +5,8 @@ import { EventLifecycle } from '../src/runtime/lifecycle.ts';
 import { EventScheduler } from '../src/runtime/scheduler.ts';
 import { MailboxLock } from '../src/sources/mailbox-lock.ts';
 import { LocalEventSourceRegistry } from '../src/sources/registry.ts';
+import type { ResendEventReader, ResendSentItem } from '../src/sources/resend.ts';
+import { ResendStatusSource } from '../src/sources/resend-status.ts';
 import { SourceScopeLock } from '../src/sources/scope-lock.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
@@ -15,6 +17,8 @@ const second = {
   accountId: 'acc_SLACKSOURCE001',
   scopeId: 'slack:acc_SLACKSOURCE001:C-source',
 };
+const gmail = { source: 'gmail' as const, accountId: 'ibx_ABCDEFGHIJKLMNOP', scopeId: 'mailbox' };
+const status = { source: 'resend' as const, accountId: 'acc_RESENDSTATUS001', scopeId: 'status' };
 
 test('D7b: source turns are fair, persisted across restart, rate limited, and never run when paused or fenced', {
   skip: WINDOWS_SKIP,
@@ -124,6 +128,146 @@ test('D7b: source turns are fair, persisted across restart, rate limited, and ne
   } finally {
     store.close();
     await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('P1-D7: an unbounded Gmail history or Resend status list cannot monopolise source turns, expiry, or delivery', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  for (const kind of ['gmail', 'resend-status'] as const) {
+    const stateDir = await shortTempDir(`aev-d-source-scheduler-${kind}-`);
+    const store = await openEventDatabase({ stateDir });
+    try {
+      const busy = kind === 'gmail' ? gmail : status;
+      const busyOptions =
+        kind === 'gmail'
+          ? { channel: 'gmail', labels: 'any', includeSpamTrash: true }
+          : { channel: 'resend', kinds: ['status'] };
+      const busyPoint = kind === 'gmail' ? { historyId: '100' } : { startedAt: '2026-10-09T00:00:00.000Z' };
+      installBoundScope(store, busy, busyOptions, busyPoint);
+      installBoundScope(store, second, { channel: 'slack', conversations: ['C-source'] }, { timestamp: '1.000000' });
+      store.database.prepare('UPDATE event_settings SET enabled = 1, switch_generation = 1 WHERE singleton = 1').run();
+      store.database
+        .prepare(
+          "INSERT INTO ingest (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at) VALUES ('event-ready', 'install', 'slack.message.posted', 1, 'account-ready', 'ready', 1, 1, 1)",
+        )
+        .run();
+      store.database
+        .prepare(
+          "INSERT INTO decisions (id, event_id, account_id, rule_id, rule_version, outcome, metadata_expires_at, metadata_state) VALUES ('decision-ready', 'event-ready', 'account-ready', 'rule-ready', 1, 'allow', 999999, 'retained')",
+        )
+        .run();
+      store.database
+        .prepare(
+          `INSERT INTO deliveries
+           (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version,
+            encrypted_record, expires_at, state, switch_generation)
+           VALUES ('delivery-ready', 'decision-ready', 'account-ready', 'rule-ready', 1, 'dry-run:ready:1', 'ready', 1,
+                   X'01', 999999, 'queued', 1)`,
+        )
+        .run();
+      let now = 1;
+      let expirySweeps = 0;
+      const dispatched: string[] = [];
+      const slackTurns: string[] = [];
+      const gmailPages: Array<string | undefined> = [];
+      const statusPages: Array<string | undefined> = [];
+      const reader: ResendEventReader = {
+        async listReceived() {
+          return { emails: [], next: null };
+        },
+        async getReceived() {
+          return { kind: 'vanished' };
+        },
+        async listSent(after) {
+          statusPages.push(after);
+          return { emails: [statusItem()], next: `next-${statusPages.length}` };
+        },
+      };
+      const statusSource = new ResendStatusSource({
+        store,
+        accountId: status.accountId,
+        reader,
+        admit: async () => 'terminal',
+        encrypt: async (value) => Buffer.from(JSON.stringify(value)),
+        decrypt: async (stored) => JSON.parse(Buffer.from(stored).toString('utf8')),
+        debts: () => [],
+        now: () => now,
+      });
+      const config = {
+        inboxes:
+          kind === 'gmail' ? { events: { id: gmail.accountId, provider: 'gmail', email: 'events@example.test' } } : {},
+        accounts: {
+          slack: { id: second.accountId, platform: 'slack' },
+          ...(kind === 'resend-status' ? { resend: { id: status.accountId, platform: 'resend' } } : {}),
+        },
+      };
+      const scheduler = new EventScheduler({
+        store,
+        lifecycle: new EventLifecycle(store, () => now),
+        activations: { resumeClaimedCompletions: async () => undefined } as never,
+        dispatcher: {
+          recoverLeases: async () => [],
+          dispatch: async (id: string) => {
+            dispatched.push(id);
+          },
+        } as never,
+        expiry: {
+          sweepAll: async () => {
+            expirySweeps += 1;
+          },
+        } as never,
+        cipher: {
+          encrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+          decrypt: async (_location: unknown, record: Uint8Array) => Buffer.from(record),
+        } as never,
+        approvals: {} as never,
+        config: { load: async () => config } as never,
+        taint: {} as never,
+        gmailSourceFor: async () =>
+          ({
+            listHistory: async ({ pageToken }: { pageToken?: string }) => {
+              gmailPages.push(pageToken);
+              return {
+                historyId: String(101 + gmailPages.length),
+                nextPageToken: `next-${gmailPages.length}`,
+                history: [],
+              };
+            },
+            getMessageMetadata: async () => {
+              throw new Error('the empty history pages need no metadata');
+            },
+          }) as never,
+        sourceWorkFor: async (scope) => {
+          if (scope.source === 'resend' && scope.scopeId === 'status') await statusSource.scan({ maxPages: 1 });
+          else slackTurns.push(`${scope.source}:${scope.scopeId}`);
+          return undefined;
+        },
+        mailboxLock: new MailboxLock(new SourceScopeLock()),
+        sourceRegistry: registry(),
+        pollIntervalMs: 1,
+        now: () => now,
+      });
+
+      await scheduler.tick();
+      assert.equal(kind === 'gmail' ? gmailPages.length : statusPages.length, 1, `${kind} consumes one page per turn`);
+      assert.deepEqual(dispatched, ['delivery-ready'], `${kind} cannot delay a ready delivery`);
+      now += 1;
+      await scheduler.tick();
+      assert.deepEqual(slackTurns, [`slack:${second.scopeId}`], `${kind} yields the next fair source turn to Slack`);
+      assert.equal(expirySweeps, 2, `${kind} cannot delay the next expiry sweep`);
+      now += 1;
+      await scheduler.tick();
+      assert.equal(kind === 'gmail' ? gmailPages.length : statusPages.length, 2, `${kind} resumes once Slack yields`);
+      assert.equal(
+        kind === 'gmail' ? gmailPages[1] : statusPages[1],
+        'next-1',
+        `${kind} resumes its durable continuation after Slack's turn`,
+      );
+    } finally {
+      store.close();
+      await rm(stateDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -243,8 +387,23 @@ test('D7b: the owner re-reads live config after a provider await and purges a re
   }
 });
 
+function statusItem(): ResendSentItem {
+  return {
+    id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    lastEvent: 'scheduled',
+    from: null,
+    to: [],
+    cc: [],
+    bcc: [],
+    subject: 'safe',
+    createdAt: '2026-10-09T00:00:00.000Z',
+    scheduledAt: null,
+    messageId: null,
+  };
+}
+
 function registry(): LocalEventSourceRegistry {
-  const adapter = (source: 'slack' | 'resend') => ({
+  const adapter = (source: 'gmail' | 'slack' | 'resend') => ({
     source,
     canonicalise: (value: unknown) => value as never,
     scopesFor: ({
@@ -254,7 +413,9 @@ function registry(): LocalEventSourceRegistry {
       accountId: string;
       options?: { channel?: string; kinds?: string[]; conversations?: string[] };
     }) => {
-      if (source === 'resend' && options?.channel === 'resend') return [{ source, accountId, scopeId: 'received' }];
+      if (source === 'gmail' && options?.channel === 'gmail') return [{ source, accountId, scopeId: 'mailbox' }];
+      if (source === 'resend' && options?.channel === 'resend')
+        return (options.kinds ?? []).map((scopeId) => ({ source, accountId, scopeId }));
       if (source === 'slack' && options?.channel === 'slack')
         return [{ source, accountId, scopeId: `slack:${accountId}:${options.conversations?.[0]}` }];
       return [];
@@ -266,22 +427,30 @@ function registry(): LocalEventSourceRegistry {
     describeCursor: <T>(cursor: T) => cursor,
     cleanup: <T>(_kind: 'reset' | 'drain' | 'purge', work: () => Promise<T>) => work(),
   });
-  return new LocalEventSourceRegistry([adapter('resend'), adapter('slack')] as never);
+  return new LocalEventSourceRegistry([adapter('gmail'), adapter('resend'), adapter('slack')] as never);
 }
 
 function installBoundScope(
   store: Awaited<ReturnType<typeof openEventDatabase>>,
-  scope: typeof first | typeof second,
+  scope: typeof first | typeof second | typeof gmail | typeof status,
   options: unknown,
   point: unknown,
   suffix = '',
 ): void {
   const id = `rule-${scope.source}-${scope.accountId}${suffix}`;
+  const eventType =
+    scope.source === 'gmail'
+      ? 'gmail.message.received'
+      : scope.source === 'slack'
+        ? 'slack.message.posted'
+        : scope.scopeId === 'status'
+          ? 'resend.email.status_changed'
+          : 'resend.email.received';
   const rule = {
     ruleId: id,
     version: 1,
     source: { channel: scope.source, accountIds: [scope.accountId], options },
-    event: { type: scope.source === 'slack' ? 'slack.message.posted' : 'resend.email.received', version: 1 },
+    event: { type: eventType, version: 1 },
     condition: { path: '/id', op: 'exists' },
     mapping: { constant: 'safe' },
     targets: [],

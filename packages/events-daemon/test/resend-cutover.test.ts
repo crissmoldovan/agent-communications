@@ -4,6 +4,33 @@ import { DURABLE_CUTOVER_EDGES } from '../src/runtime/cutover-failpoint.ts';
 import { IDS, PhaseDCutoverFixture } from './support/phase-d-cutover.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
 
+const RECEIVED = { channel: 'resend', kinds: ['received'] };
+const X0 = '00000000-0000-4000-8000-000000000000';
+const P = '11111111-1111-4111-8111-111111111111';
+const E0 = '22222222-2222-4222-8222-222222222222';
+const E1 = '33333333-3333-4333-8333-333333333333';
+const E2 = '44444444-4444-4444-8444-444444444444';
+
+function receivedCandidate(emailId: string) {
+  return {
+    kind: 'candidate' as const,
+    candidate: {
+      emailId,
+      receivedAt: '2026-10-09T12:00:00.000Z',
+      subject: 'received cut-over fixture',
+      attachments: [],
+      attachmentCount: 0,
+      from: null,
+      replyTo: [],
+      to: [],
+      cc: [],
+      receivedFor: [],
+      messageId: null,
+      authentication: { spf: null, dkim: null, dmarc: null, evaluatedBy: null },
+    },
+  };
+}
+
 const cells = [
   'R:first-enabled-received-and-status',
   'R:first-disabled-seeds-anchor-and-status',
@@ -186,6 +213,271 @@ test('R: replacement has distinct old-only, new-only and shared received/status 
   try {
     await fixture.beginScopedReplacement();
     fixture.assertScopedReplacement();
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test('R: a received rule admits one newer email in each completed cycle', { skip: WINDOWS_SKIP }, async () => {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  try {
+    fixture.setResendReceivedBaseline(X0);
+    await fixture.activate(1, RECEIVED);
+    await fixture.enable();
+    let cycle = 0;
+    fixture.setResendReceivedReader({
+      listReceived: async () => {
+        cycle += 1;
+        if (cycle === 1) return { emails: [{ id: E1 }, { id: X0 }], next: null };
+        if (cycle === 2) return { emails: [{ id: E2 }, { id: E1 }], next: null };
+        throw new Error(`unexpected received cycle ${cycle}`);
+      },
+      getReceived: async (id) => receivedCandidate(id),
+    });
+
+    // The scheduler owns first-cursor installation; it then runs cycle 1 through the production owner path.
+    await fixture.schedulerTurn();
+    await fixture.sourceTurn();
+
+    assert.deepEqual(
+      fixture.store.database
+        .prepare('SELECT dedupe_key FROM ingest ORDER BY dedupe_key')
+        .all()
+        .map((row) => ({ ...row })),
+      [{ dedupe_key: E1 }, { dedupe_key: E2 }],
+    );
+    assert.deepEqual(
+      fixture.store.database
+        .prepare('SELECT rule_id, rule_version FROM decisions ORDER BY rule_id, rule_version')
+        .all()
+        .map((row) => ({ ...row })),
+      [
+        { rule_id: 'rule-cutover', rule_version: 1 },
+        { rule_id: 'rule-cutover', rule_version: 1 },
+      ],
+    );
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test('R: independent received points keep their cut-over across three completed cycles', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  try {
+    fixture.setResendReceivedBaseline(X0);
+    await fixture.activate(1, RECEIVED);
+    await fixture.enable();
+    fixture.setResendReceivedBaseline(P);
+    await fixture.activateAdditionalRule('rule-later', RECEIVED);
+    let cycle = 0;
+    fixture.setResendReceivedReader({
+      listReceived: async () => {
+        cycle += 1;
+        if (cycle === 1) return { emails: [{ id: P }, { id: E0 }, { id: X0 }], next: null };
+        if (cycle === 2) return { emails: [{ id: E1 }, { id: P }], next: null };
+        if (cycle === 3) return { emails: [{ id: E2 }, { id: E1 }], next: null };
+        throw new Error(`unexpected received cycle ${cycle}`);
+      },
+      getReceived: async (id) => (id === P ? { kind: 'vanished' as const } : receivedCandidate(id)),
+    });
+
+    await fixture.schedulerTurn();
+    await fixture.sourceTurn();
+    await fixture.sourceTurn();
+
+    assert.deepEqual(
+      fixture.store.database
+        .prepare(
+          `SELECT ingest.dedupe_key, decisions.rule_id
+             FROM decisions JOIN ingest ON ingest.event_id = decisions.event_id
+             ORDER BY ingest.dedupe_key, decisions.rule_id`,
+        )
+        .all()
+        .map((row) => ({ ...row })),
+      [
+        { dedupe_key: E0, rule_id: 'rule-cutover' },
+        { dedupe_key: E1, rule_id: 'rule-cutover' },
+        { dedupe_key: E1, rule_id: 'rule-later' },
+        { dedupe_key: E2, rule_id: 'rule-cutover' },
+        { dedupe_key: E2, rule_id: 'rule-later' },
+      ],
+    );
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test('R: a missing received point re-baselines that version once and records one content-free gap', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  try {
+    fixture.setResendReceivedBaseline(X0);
+    await fixture.activate(1, RECEIVED);
+    await fixture.enable();
+    fixture.setResendReceivedBaseline(P);
+    await fixture.activateAdditionalRule('rule-later', RECEIVED);
+    let cycle = 0;
+    fixture.setResendReceivedReader({
+      listReceived: async () => {
+        cycle += 1;
+        if (cycle === 1) return { emails: [{ id: E0 }, { id: X0 }], next: null };
+        if (cycle === 2) return { emails: [{ id: E1 }, { id: E0 }], next: null };
+        throw new Error(`unexpected received cycle ${cycle}`);
+      },
+      getReceived: async (id) => receivedCandidate(id),
+    });
+
+    await fixture.schedulerTurn();
+    await fixture.sourceTurn();
+
+    assert.deepEqual(
+      fixture.store.database
+        .prepare(
+          `SELECT ingest.dedupe_key, decisions.rule_id
+             FROM decisions JOIN ingest ON ingest.event_id = decisions.event_id
+             ORDER BY ingest.dedupe_key, decisions.rule_id`,
+        )
+        .all()
+        .map((row) => ({ ...row })),
+      [
+        { dedupe_key: E0, rule_id: 'rule-cutover' },
+        { dedupe_key: E1, rule_id: 'rule-cutover' },
+        { dedupe_key: E1, rule_id: 'rule-later' },
+      ],
+    );
+    const gaps = fixture.store.database
+      .prepare("SELECT id, kind FROM operational_records WHERE kind = 'agentcomms.source.gap' ORDER BY id")
+      .all()
+      .map((row) => ({ ...row }));
+    assert.equal(gaps.length, 1, 'the missing later point records exactly one source gap');
+    assert.match(String(gaps[0]?.id), /^resend-received-point-gap:/, 'the gap carries no provider content');
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test('R: a reached received point survives restart between completed cycles', { skip: WINDOWS_SKIP }, async () => {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  try {
+    fixture.setResendReceivedBaseline(X0);
+    await fixture.activate(1, RECEIVED);
+    await fixture.enable();
+    let cycle = 0;
+    fixture.setResendReceivedReader({
+      listReceived: async () => {
+        cycle += 1;
+        if (cycle === 1) return { emails: [{ id: E1 }, { id: X0 }], next: null };
+        if (cycle === 2) return { emails: [{ id: E2 }, { id: E1 }], next: null };
+        throw new Error(`unexpected received cycle ${cycle}`);
+      },
+      getReceived: async (id) => receivedCandidate(id),
+    });
+
+    await fixture.schedulerTurn();
+    await fixture.restart();
+    await fixture.sourceTurn();
+
+    fixture.oracle({ raw: 2, admissions: 2, versions: [1, 1] });
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test('P1-D2: a shared Resend received anchor admits a pre-later-point message only to the earlier rule', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  try {
+    fixture.setResendReceivedBaseline('watermark');
+    await fixture.activate();
+    await fixture.enable();
+    fixture.setResendReceivedBaseline('point');
+    await fixture.activateAdditionalRule('rule-later');
+    fixture.setResendReceivedReader({
+      listReceived: async () => ({ emails: [{ id: 'point' }, { id: IDS.resendId }, { id: 'watermark' }], next: null }),
+      getReceived: async (id) =>
+        id === 'point'
+          ? { kind: 'vanished' as const }
+          : {
+              kind: 'candidate' as const,
+              candidate: {
+                emailId: IDS.resendId,
+                receivedAt: '2026-10-09T12:00:00.000Z',
+                subject: 'between anchors',
+                attachments: [],
+                attachmentCount: 0,
+                from: null,
+                replyTo: [],
+                to: [],
+                cc: [],
+                receivedFor: [],
+                messageId: null,
+                authentication: { spf: null, dkim: null, dmarc: null, evaluatedBy: null },
+              },
+            },
+    });
+
+    await fixture.schedulerTurn();
+
+    assert.deepEqual(
+      fixture.store.database
+        .prepare('SELECT rule_id FROM decisions ORDER BY rule_id')
+        .all()
+        .map((row) => ({ ...row })),
+      [{ rule_id: 'rule-cutover' }],
+    );
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test('P1-D2: enable-all takes a fresh Resend received anchor and does not backfill disabled-interval messages', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  try {
+    fixture.setResendReceivedBaseline('watermark');
+    await fixture.activate();
+    await fixture.enable();
+    fixture.setResendReceivedReader({
+      listReceived: async () => ({ emails: [{ id: 'watermark' }], next: null }),
+      getReceived: async () => ({ kind: 'vanished' as const }),
+    });
+    await fixture.schedulerTurn();
+    await fixture.disableAll();
+    fixture.now.value += 1;
+    fixture.setResendReceivedBaseline('point');
+    await fixture.enable();
+    fixture.setResendReceivedReader({
+      listReceived: async () => ({ emails: [{ id: 'point' }, { id: IDS.resendId }, { id: 'watermark' }], next: null }),
+      getReceived: async (id) =>
+        id === 'point'
+          ? { kind: 'vanished' as const }
+          : {
+              kind: 'candidate' as const,
+              candidate: {
+                emailId: IDS.resendId,
+                receivedAt: '2026-10-09T12:00:00.000Z',
+                subject: 'while disabled',
+                attachments: [],
+                attachmentCount: 0,
+                from: null,
+                replyTo: [],
+                to: [],
+                cc: [],
+                receivedFor: [],
+                messageId: null,
+                authentication: { spf: null, dkim: null, dmarc: null, evaluatedBy: null },
+              },
+            },
+    });
+
+    await fixture.schedulerTurn();
+
+    fixture.oracle({ raw: 0, admissions: 0 });
   } finally {
     await fixture.dispose();
   }

@@ -72,8 +72,8 @@ export interface GmailSourceWorkerOptions {
   /** Task 12 continues the terminal ingest/projection path; Task 10 keeps its result durable at this boundary. */
   readonly admit: (occurrence: GmailSourceOccurrence) => Promise<'terminal' | 'pending'>;
   /** Source staging is encrypted before, never inside, the write transaction. */
-  readonly encryptStage: (value: GmailStageRecord, stageId?: string) => Promise<Uint8Array>;
-  readonly decryptStage?: ((stored: Uint8Array, stageId?: string) => Promise<GmailStageRecord>) | undefined;
+  readonly encryptStage: (value: GmailStoredRecord, stageId?: string) => Promise<Uint8Array>;
+  readonly decryptStage?: ((stored: Uint8Array, stageId?: string) => Promise<GmailStoredRecord>) | undefined;
   /** Test-only collision injection; production uses Phase A's SHA-256 event identity function. */
   readonly eventIdFor?: ((input: Parameters<typeof eventId>[0]) => Promise<string>) | undefined;
   /** Deterministic test failpoints for the mailbox-lock interleaving contract. */
@@ -114,6 +114,16 @@ export interface GmailExpiredHistoryContinuation {
 
 export type GmailStageRecord = GmailStoredHistoryPage | GmailExpiredHistoryContinuation;
 
+/** Content-free durable next-page token retained when an owner turn reaches its Gmail history budget. */
+interface GmailScanContinuation {
+  readonly cursor: string;
+  readonly pageIndex: number;
+  readonly pageToken: string;
+  readonly finalCursor: string;
+}
+
+type GmailStoredRecord = GmailStageRecord | GmailScanContinuation;
+
 interface StoredMessageState {
   readonly metadata?: GmailEventMessageMetadata | undefined;
   readonly observedAt?: string | undefined;
@@ -133,6 +143,10 @@ function sourceStageId(accountId: string, cursor: string, pageIndex: number): st
   return `gmail-history:${accountId}:${cursor}:${pageIndex}`;
 }
 
+function scanContinuationId(accountId: string, cursor: string): string {
+  return `gmail-history-continuation:${accountId}:${cursor}`;
+}
+
 function jsonClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -143,6 +157,10 @@ export function gmailOccurrenceKey(occurrence: GmailHistoryOccurrence): string {
 
 export function isExpiredGmailHistoryContinuation(value: GmailStageRecord): value is GmailExpiredHistoryContinuation {
   return 'expired' in value && value.expired === true;
+}
+
+function isGmailScanContinuation(value: GmailStoredRecord): value is GmailScanContinuation {
+  return 'pageToken' in value && 'pageIndex' in value && 'finalCursor' in value;
 }
 
 function expiredGmailHistoryContinuation(value: GmailStageRecord): GmailExpiredHistoryContinuation {
@@ -367,13 +385,18 @@ export class GmailSourceWorker {
     this.#now = options.now ?? Date.now;
   }
 
-  async scan(): Promise<{ readonly cursor: string | null; readonly pending: boolean }> {
+  async scan(
+    input: Readonly<{ maxPages?: number | undefined }> = {},
+  ): Promise<{ readonly cursor: string | null; readonly pending: boolean }> {
+    const maxPages = input.maxPages ?? 10;
+    if (!Number.isSafeInteger(maxPages) || maxPages < 1)
+      throw new CommsError('BAD_DATA', 'a Gmail history scan needs a positive page budget');
     return this.#sourceAdapter.withScopes(
       this.#mailboxLock.sourceScopeLock,
       [{ source: 'gmail', accountId: this.#mailbox.accountId, scopeId: 'mailbox' }],
       async () => {
         try {
-          return await this.#scanLocked();
+          return await this.#scanLocked(maxPages);
         } catch (error) {
           // Account removal is a terminal source boundary. Re-throw the original stable error so the owner records no
           // provider detail, but do not let the staged page or a later cursor commit resurrect account-bound work.
@@ -445,7 +468,7 @@ export class GmailSourceWorker {
     return this.#write(work);
   }
 
-  async #scanLocked(): Promise<{ readonly cursor: string | null; readonly pending: boolean }> {
+  async #scanLocked(maxPages: number): Promise<{ readonly cursor: string | null; readonly pending: boolean }> {
     const settings = this.#store.database
       .prepare('SELECT enabled, switch_generation FROM event_settings WHERE singleton = 1')
       .get() as { enabled: number; switch_generation: number } | undefined;
@@ -466,7 +489,7 @@ export class GmailSourceWorker {
         })
       )
         return { cursor: this.#cursor(), pending: true };
-      return await this.#scanFromSnapshot();
+      return await this.#scanFromSnapshot(maxPages);
     } catch (error) {
       if (error instanceof StaleScanError) return { cursor: this.#cursor(), pending: true };
       throw error;
@@ -475,15 +498,17 @@ export class GmailSourceWorker {
     }
   }
 
-  async #scanFromSnapshot(): Promise<{ readonly cursor: string | null; readonly pending: boolean }> {
+  async #scanFromSnapshot(maxPages: number): Promise<{ readonly cursor: string | null; readonly pending: boolean }> {
     const cursor = this.#cursor();
     if (cursor === null) return { cursor: null, pending: false };
-    let pageToken: string | undefined;
-    let pageIndex = 0;
-    let finalCursor = cursor;
-    const pages: StagedPage[] = [];
+    const continuation = await this.#loadContinuation(cursor);
+    let pageToken = continuation?.pageToken;
+    let pageIndex = continuation?.pageIndex ?? 0;
+    let finalCursor = continuation?.finalCursor ?? cursor;
+    const pagesToProcess: StagedPage[] = [];
+    let complete = false;
     try {
-      for (;;) {
+      for (let pages = 0; pages < maxPages; pages += 1) {
         const id = sourceStageId(this.#mailbox.accountId, cursor, pageIndex);
         // A page an interrupted scan already staged is resumed as it was: its content, its next page token and its
         // final cursor. Taking the cursor from a fresh listing instead would jump past mail that arrived meanwhile,
@@ -498,11 +523,14 @@ export class GmailSourceWorker {
             await this.#source.listHistory({ historyId: cursor, ...(pageToken ? { pageToken } : {}) }),
           );
         }
-        pages.push(page);
         finalCursor = page.value.page.historyId;
         pageIndex += 1;
         pageToken = page.value.page.nextPageToken;
-        if (pageToken === undefined) break;
+        pagesToProcess.push(page);
+        if (pageToken === undefined) {
+          complete = true;
+          break;
+        }
       }
     } catch (error) {
       // Only Gmail's expired-history NOT_FOUND re-baselines; an account removal (also NOT_FOUND) ends the scan, and
@@ -513,29 +541,36 @@ export class GmailSourceWorker {
       if (!(await this.#resumeStagedPages())) return { cursor, pending: true };
       return this.#rebaselineExpiredCursor();
     }
-    let heldAfterPoint = false;
-    for (const page of pages) {
+    // Acquire the bounded turn before materialising it. This preserves the durable-stage guarantee: a provider
+    // failure while getting a later page leaves every earlier page untouched for the next owner turn. (The scheduler
+    // uses a one-page turn, while direct callers keep the established multi-page acquisition behaviour.)
+    for (const page of pagesToProcess) {
       const outcome = await this.#processPage(page);
       if (outcome === 'pending') return { cursor, pending: true };
-      if (outcome === 'held') heldAfterPoint = true;
+      if (outcome === 'held') return { cursor, pending: true };
     }
-    if (heldAfterPoint) return { cursor, pending: true };
-    await this.#beforeCursorCommit?.();
-    await this.#commit(() => {
-      const remaining = this.#store.database
-        .prepare(
-          "SELECT 1 AS present FROM source_scan_state WHERE source = 'gmail' AND account_id = ? AND cursor_scope = 'mailbox'",
-        )
-        .get(this.#mailbox.accountId) as { present: number } | undefined;
-      if (remaining !== undefined) return;
-      this.#store.database
-        .prepare(
-          `INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('gmail', ?, 'mailbox', ?, ?)
-           ON CONFLICT(source, account_id, cursor_scope) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at`,
-        )
-        .run(this.#mailbox.accountId, finalCursor, this.#now());
-    });
-    return { cursor: finalCursor, pending: false };
+    if (complete) {
+      await this.#deleteContinuation(cursor);
+      await this.#beforeCursorCommit?.();
+      await this.#commit(() => {
+        const remaining = this.#store.database
+          .prepare(
+            "SELECT 1 AS present FROM source_scan_state WHERE source = 'gmail' AND account_id = ? AND cursor_scope = 'mailbox'",
+          )
+          .get(this.#mailbox.accountId) as { present: number } | undefined;
+        if (remaining !== undefined) return;
+        this.#store.database
+          .prepare(
+            `INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('gmail', ?, 'mailbox', ?, ?)
+             ON CONFLICT(source, account_id, cursor_scope) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at`,
+          )
+          .run(this.#mailbox.accountId, finalCursor, this.#now());
+      });
+      return { cursor: finalCursor, pending: false };
+    }
+    if (pageToken === undefined) throw new Error('a Gmail history budget ended without a continuation token');
+    await this.#saveContinuation({ cursor, pageIndex, pageToken, finalCursor });
+    return { cursor, pending: true };
   }
 
   #cursor(): string | null {
@@ -543,6 +578,49 @@ export class GmailSourceWorker {
       .prepare("SELECT cursor FROM cursors WHERE source = 'gmail' AND account_id = ? AND cursor_scope = 'mailbox'")
       .get(this.#mailbox.accountId) as { cursor: string } | undefined;
     return row?.cursor ?? null;
+  }
+
+  async #loadContinuation(cursor: string): Promise<GmailScanContinuation | null> {
+    const id = scanContinuationId(this.#mailbox.accountId, cursor);
+    const row = this.#store.database
+      .prepare("SELECT encrypted_record FROM source_scan_state WHERE id = ? AND cursor_scope = 'mailbox-continuation'")
+      .get(id) as { encrypted_record: Uint8Array } | undefined;
+    if (row === undefined) return null;
+    if (this.#decryptStage === undefined)
+      throw new CommsError('CONFIG', 'the Gmail source worker needs its stage decryptor to resume a durable page');
+    const value = await this.#decryptStage(row.encrypted_record, id);
+    if (
+      !isGmailScanContinuation(value) ||
+      value.cursor !== cursor ||
+      !Number.isSafeInteger(value.pageIndex) ||
+      value.pageIndex < 0
+    )
+      throw new CommsError('BAD_DATA', 'a Gmail history continuation is malformed');
+    return value;
+  }
+
+  async #saveContinuation(value: GmailScanContinuation): Promise<void> {
+    const id = scanContinuationId(this.#mailbox.accountId, value.cursor);
+    const encrypted = await this.#encryptStage(value, id);
+    await this.#commit(() => {
+      this.#store.database
+        .prepare(
+          `INSERT INTO source_scan_state
+           (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at)
+           VALUES (?, 'gmail', ?, 'mailbox-continuation', NULL, NULL, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET encrypted_record = excluded.encrypted_record, updated_at = excluded.updated_at`,
+        )
+        .run(id, this.#mailbox.accountId, encrypted, this.#now());
+    });
+  }
+
+  async #deleteContinuation(cursor: string): Promise<void> {
+    const id = scanContinuationId(this.#mailbox.accountId, cursor);
+    await this.#commit(() => {
+      this.#store.database
+        .prepare("DELETE FROM source_scan_state WHERE id = ? AND cursor_scope = 'mailbox-continuation'")
+        .run(id);
+    });
   }
 
   async #resumeStagedPages(): Promise<boolean> {
@@ -560,7 +638,7 @@ export class GmailSourceWorker {
     for (const row of rows) {
       const outcome = await this.#processPage({
         id: row.id,
-        value: await this.#decryptStage(row.encrypted_record, row.id),
+        value: await this.#historyStage(await this.#decryptStage(row.encrypted_record, row.id)),
         encryptedRecord: row.encrypted_record,
       });
       if (outcome !== 'terminal') return false;
@@ -579,9 +657,15 @@ export class GmailSourceWorker {
     await this.#assertAllRules();
     return {
       id,
-      value: await this.#decryptStage(existing.encrypted_record, id),
+      value: await this.#historyStage(await this.#decryptStage(existing.encrypted_record, id)),
       encryptedRecord: existing.encrypted_record,
     };
+  }
+
+  async #historyStage(value: GmailStoredRecord): Promise<GmailStageRecord> {
+    if (isGmailScanContinuation(value))
+      throw new CommsError('BAD_DATA', 'a Gmail history page was replaced by a continuation record');
+    return value;
   }
 
   async #stagePage(id: string, cursorBefore: string, page: GmailStoredHistoryPage['page']): Promise<StagedPage> {

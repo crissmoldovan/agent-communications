@@ -38,6 +38,18 @@ export interface ResendReceivedCandidate {
     | undefined;
 }
 
+/** A candidate's durable newest-first position within the received scan cycle. */
+export interface ResendReceivedPosition {
+  readonly orderedIds: readonly string[];
+  readonly candidateIndex: number;
+}
+
+/** Content-free certificate retained until every active rule point has settled this completed scan cycle. */
+export interface ResendReceivedCycle {
+  readonly cycleHeadId: string;
+  readonly orderedIds: readonly string[];
+}
+
 export interface ResendSentItem {
   readonly id: string;
   readonly lastEvent: string;
@@ -70,7 +82,12 @@ interface ReceivedState {
   readonly after: string | null;
   readonly pagesScanned: number;
   readonly items: readonly string[];
+  /** IDs already consumed in this bounded newest-first cycle. */
+  readonly seenIds?: readonly string[] | undefined;
+  /** A completed cycle awaits the owner-side, per-rule point settlement before another provider page may be read. */
+  readonly completedCycle?: ResendReceivedCycle | undefined;
   readonly candidate?: ResendReceivedCandidate | undefined;
+  readonly candidatePosition?: ResendReceivedPosition | undefined;
   readonly retry?:
     | Readonly<{ emailId: string; firstFailedAt: number; nextRetryAt: number; attempts: number; errorCode: string }>
     | undefined;
@@ -255,12 +272,16 @@ export class ResendReceivedSource {
   readonly #encrypt: (value: ReceivedState, id: string) => Promise<Uint8Array>;
   readonly #decrypt: (stored: Uint8Array, id: string) => Promise<unknown>;
   readonly #debts: () => readonly SourceStageDebt[];
-  readonly #admit: (candidate: ResendReceivedCandidate) => Promise<'terminal' | 'pending'>;
+  readonly #admit: (
+    candidate: ResendReceivedCandidate,
+    position: ResendReceivedPosition,
+  ) => Promise<'terminal' | 'pending'>;
   readonly #assertWriteStillLive: () => void;
   readonly #now: () => number;
   readonly #scopeLock: SourceScopeLock;
   readonly #scope: SourceScope;
   readonly #failpoint: CutoverFailpoint | undefined;
+  readonly #settleCompletedCycle: ((cycle: ResendReceivedCycle) => Promise<void>) | undefined;
   #currentAnchor: string | null = null;
 
   constructor(
@@ -271,10 +292,12 @@ export class ResendReceivedSource {
       encrypt: (value: ReceivedState, id: string) => Promise<Uint8Array>;
       decrypt: (stored: Uint8Array, id: string) => Promise<unknown>;
       debts: () => readonly SourceStageDebt[];
-      admit: (candidate: ResendReceivedCandidate) => Promise<'terminal' | 'pending'>;
+      admit: (candidate: ResendReceivedCandidate, position: ResendReceivedPosition) => Promise<'terminal' | 'pending'>;
       assertWriteStillLive?: (() => void) | undefined;
       scopeLock?: SourceScopeLock | undefined;
       now?: (() => number) | undefined;
+      /** Records the owner's durable per-version cut-over facts before the cycle certificate is acknowledged. */
+      settleCompletedCycle?: ((cycle: ResendReceivedCycle) => Promise<void>) | undefined;
       /** Optional D8 crash seam; omitted in production. */
       failpoint?: CutoverFailpoint | undefined;
     }>,
@@ -290,6 +313,7 @@ export class ResendReceivedSource {
     this.#now = input.now ?? Date.now;
     this.#scopeLock = input.scopeLock ?? new SourceScopeLock();
     this.#scope = { source: 'resend', accountId: input.accountId, scopeId: RECEIVED_SCOPE };
+    this.#settleCompletedCycle = input.settleCompletedCycle;
     this.#failpoint = input.failpoint;
   }
 
@@ -310,11 +334,23 @@ export class ResendReceivedSource {
   }
 
   async seedAnchor(anchorId: string): Promise<void> {
-    await this.#save({ anchorId, cycleHeadId: null, after: null, pagesScanned: 0, items: [] }, false);
+    await this.#save({ anchorId, cycleHeadId: null, after: null, pagesScanned: 0, items: [], seenIds: [] }, false);
   }
 
   async scan(): Promise<Readonly<{ pending: boolean; anchorId: string | null }>> {
     return this.#scopeLock.withScope(this.#scope, () => this.#scan());
+  }
+
+  /**
+   * The owner settles a durable cycle certificate before it is acknowledged. If a process stops between the two
+   * writes, the certificate remains in encrypted source state and is settled idempotently on the next turn.
+   */
+  async #settleAndAcknowledgeCompletedCycle(cycle: ResendReceivedCycle): Promise<void> {
+    await this.#settleCompletedCycle?.(cycle);
+    const state = await this.#load();
+    if (state?.completedCycle === undefined) return;
+    if (!sameCycle(state.completedCycle, cycle)) throw new Error('the Resend received completion certificate changed');
+    await this.#save({ ...state, completedCycle: undefined }, false);
   }
 
   /** Source-specific expiry preserves the cursor/anchor while deleting the encrypted candidate and recording only its terminal fact. */
@@ -333,6 +369,7 @@ export class ResendReceivedSource {
       const next: ReceivedState = {
         ...state,
         candidate: undefined,
+        candidatePosition: undefined,
         retry: undefined,
       };
       const encrypted = await this.#encrypt(next, id);
@@ -367,25 +404,42 @@ export class ResendReceivedSource {
     for (;;) {
       const state = await this.#load();
       if (state === null) throw new Error('the received source needs a baseline before scanning');
+      if (state.completedCycle !== undefined) {
+        await this.#settleAndAcknowledgeCompletedCycle(state.completedCycle);
+        return { pending: false, anchorId: state.anchorId === EMPTY ? null : state.anchorId };
+      }
       if (state.candidate !== undefined) {
         if (this.#isResolved(state.candidate.emailId)) {
-          await this.#save({ ...state, candidate: undefined, retry: undefined, items: state.items.slice(1) }, false);
+          await this.#save(this.#consumeItem(state), false);
           continue;
         }
-        const admitted = await this.#admit(state.candidate);
+        const admitted = await this.#admit(state.candidate, state.candidatePosition ?? this.#candidatePosition(state));
         if (admitted === 'pending') return { pending: true, anchorId: this.anchorId() };
-        await this.#save({ ...state, candidate: undefined, items: state.items.slice(1) }, state.items.length > 1);
+        await this.#save(this.#consumeItem(state), state.items.length > 1);
         continue;
       }
       const item = state.items[0];
       if (item !== undefined) {
         if (item === state.anchorId) {
           const nextAnchor = state.cycleHeadId ?? state.anchorId;
-          await this.#save({ anchorId: nextAnchor, cycleHeadId: null, after: null, pagesScanned: 0, items: [] }, false);
+          const completedCycle = { cycleHeadId: nextAnchor, orderedIds: [...(state.seenIds ?? []), item] };
+          await this.#save(
+            {
+              anchorId: nextAnchor,
+              cycleHeadId: null,
+              after: null,
+              pagesScanned: 0,
+              items: [],
+              seenIds: [],
+              completedCycle,
+            },
+            false,
+          );
+          await this.#settleAndAcknowledgeCompletedCycle(completedCycle);
           return { pending: false, anchorId: nextAnchor === EMPTY ? null : nextAnchor };
         }
         if (item !== EMPTY && this.#isResolved(item)) {
-          await this.#save({ ...state, candidate: undefined, retry: undefined, items: state.items.slice(1) }, false);
+          await this.#save(this.#consumeItem(state), false);
           continue;
         }
         const retry = state.retry?.emailId === item ? state.retry : undefined;
@@ -399,7 +453,7 @@ export class ResendReceivedSource {
             retryWindowMs: DAY_MS,
           });
           if (resolution.state !== 'retry') {
-            await this.#save({ ...state, retry: undefined, items: state.items.slice(1) }, state.items.length > 1, {
+            await this.#save(this.#consumeItem(state), state.items.length > 1, {
               occurrenceKey: item,
               outcome: resolution.state,
               code: resolution.state === 'unresolvable' ? 'RETRY_EXHAUSTED' : 'STAGE_EXPIRED',
@@ -424,7 +478,7 @@ export class ResendReceivedSource {
             retryWindowMs: DAY_MS,
           });
           if (resolution.state !== 'retry') {
-            await this.#save({ ...state, retry: undefined, items: state.items.slice(1) }, state.items.length > 1, {
+            await this.#save(this.#consumeItem(state), state.items.length > 1, {
               occurrenceKey: item,
               outcome: resolution.state,
               code: resolution.state === 'unresolvable' ? 'RETRY_EXHAUSTED' : 'STAGE_EXPIRED',
@@ -453,7 +507,7 @@ export class ResendReceivedSource {
           return { pending: true, anchorId: this.anchorId() };
         }
         if (detail.kind === 'vanished') {
-          await this.#save({ ...state, items: state.items.slice(1) }, state.items.length > 1, {
+          await this.#save(this.#consumeItem(state), state.items.length > 1, {
             occurrenceKey: item,
             outcome: 'vanished',
             code: 'NOT_FOUND',
@@ -461,7 +515,12 @@ export class ResendReceivedSource {
           continue;
         }
         await this.#save(
-          { ...state, retry: undefined, candidate: normaliseResendEventCandidate(detail.candidate) },
+          {
+            ...state,
+            retry: undefined,
+            candidate: normaliseResendEventCandidate(detail.candidate),
+            candidatePosition: this.#candidatePosition(state),
+          },
           true,
         );
         continue;
@@ -473,13 +532,26 @@ export class ResendReceivedSource {
       const foundAnchor = page.emails.some((item) => item.id === state.anchorId);
       const startedEmpty = state.anchorId === EMPTY;
       if (!startedEmpty && (pagesScanned >= MAX_PAGES || (page.next === null && !foundAnchor))) {
-        const nextAnchor = cycleHeadId ?? state.anchorId;
+        const nextAnchor = cycleHeadId ?? page.emails[0]?.id ?? EMPTY;
+        const completedCycle = {
+          cycleHeadId: nextAnchor,
+          orderedIds: [...(state.seenIds ?? []), ...page.emails.map((item) => item.id)],
+        };
         await this.#save(
-          { anchorId: nextAnchor, cycleHeadId: null, after: null, pagesScanned: 0, items: [] },
+          {
+            anchorId: nextAnchor,
+            cycleHeadId: null,
+            after: null,
+            pagesScanned: 0,
+            items: [],
+            seenIds: [],
+            completedCycle,
+          },
           false,
           undefined,
           `resend-anchor-gap:${this.#accountId}:${state.anchorId}:${nextAnchor}`,
         );
+        await this.#settleAndAcknowledgeCompletedCycle(completedCycle);
         return { pending: false, anchorId: nextAnchor === EMPTY ? null : nextAnchor };
       }
       await this.#save(
@@ -488,6 +560,7 @@ export class ResendReceivedSource {
           cycleHeadId,
           after: page.next,
           pagesScanned,
+          seenIds: state.seenIds ?? [],
           // `empty` is a durable activation point rather than an id Resend can return.  At the final page it is the
           // completion marker that lets a first post-empty cycle stage every new item before its anchor moves.
           items: [...page.emails.map((item) => item.id), ...(startedEmpty && page.next === null ? [EMPTY] : [])],
@@ -500,6 +573,23 @@ export class ResendReceivedSource {
   #assertUnfenced(): void {
     if (isSourceScopeFenced(this.#store.database, this.#scope))
       throw new Error('the Resend received scope is fenced by an unpublished activation');
+  }
+
+  #candidatePosition(state: ReceivedState): ResendReceivedPosition {
+    const seen = state.seenIds ?? [];
+    return { orderedIds: [...seen, ...state.items], candidateIndex: seen.length };
+  }
+
+  #consumeItem(state: ReceivedState): ReceivedState {
+    const item = state.items[0];
+    return {
+      ...state,
+      candidate: undefined,
+      candidatePosition: undefined,
+      retry: undefined,
+      items: state.items.slice(1),
+      seenIds: item === undefined ? (state.seenIds ?? []) : [...(state.seenIds ?? []), item],
+    };
   }
 
   async #load(): Promise<ReceivedState | null> {
@@ -622,4 +712,12 @@ export class ResendReceivedSource {
       .get(sourceId(this.#accountId)) as { stage_expires_at: number | null } | undefined;
     return row?.stage_expires_at ?? null;
   }
+}
+
+function sameCycle(left: ResendReceivedCycle, right: ResendReceivedCycle): boolean {
+  return (
+    left.cycleHeadId === right.cycleHeadId &&
+    left.orderedIds.length === right.orderedIds.length &&
+    left.orderedIds.every((value, index) => value === right.orderedIds[index])
+  );
 }

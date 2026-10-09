@@ -13,7 +13,12 @@ import {
   sourceRuleSetSnapshot,
 } from '../sources/contracts.ts';
 import type { LocalEventSourceRegistry } from '../sources/registry.ts';
-import { type ResendReceivedCandidate, ResendReceivedSource } from '../sources/resend.ts';
+import {
+  type ResendReceivedCandidate,
+  type ResendReceivedCycle,
+  type ResendReceivedPosition,
+  ResendReceivedSource,
+} from '../sources/resend.ts';
 import { type ResendStatusChange, ResendStatusSource } from '../sources/resend-status.ts';
 import { SourceScopeLock } from '../sources/scope-lock.ts';
 import {
@@ -46,6 +51,11 @@ interface RuleDebt extends SourceStageDebt {
   readonly options: SourceOptions;
 }
 
+type CandidatePosition =
+  | Readonly<{ source: 'slack'; timestamp: string }>
+  | Readonly<{ source: 'resend-received'; position: ResendReceivedPosition }>
+  | Readonly<{ source: 'resend-status'; observedAt: string }>;
+
 export interface SourceOwnerWorkOptions {
   readonly store: EventDatabase;
   readonly cipher: EventRecordCipher;
@@ -76,10 +86,10 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
   const admit = async (
     event: Record<string, unknown>,
     debts: readonly RuleDebt[],
-    stageId?: string,
+    admission?: Readonly<{ stageId?: string | undefined; position?: CandidatePosition | undefined }>,
   ): Promise<'terminal' | 'pending'> => {
     input.failpoint?.('before-finalise');
-    return admitEvent(input, scope, evaluator, event, debts, undefined, stageId);
+    return admitEvent(input, scope, evaluator, event, debts, undefined, admission?.stageId, admission?.position);
   };
   const accountLive = () => assertLiveEventAccount(input.config, { source: scope.source, accountId: scope.accountId });
 
@@ -94,7 +104,10 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
       scope,
       debts: rules,
       admit: ({ candidate, stageId }) =>
-        admit(slackEvent(scope, reader, conversation, candidate), sourceRulesForStage(input, scope, stageId), stageId),
+        admit(slackEvent(scope, reader, conversation, candidate), sourceRulesForStage(input, scope, stageId), {
+          stageId,
+          position: { source: 'slack', timestamp: candidate.message.ts },
+        }),
     };
     const replySource = {
       replies: async (request: {
@@ -174,7 +187,10 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
       lock: new SourceScopeLock(),
       rules,
       accountLive,
-      admit: async (candidate) => admit(slackEvent(scope, reader, conversation, candidate), rules()),
+      admit: async (candidate) =>
+        admit(slackEvent(scope, reader, conversation, candidate), rules(), {
+          position: { source: 'slack', timestamp: candidate.message.ts },
+        }),
       replacementObserver: {
         onTopLevel: async (message) => {
           await ordinaryReplies.discoverParent({
@@ -277,10 +293,14 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
           return JSON.parse(plaintext.toString('utf8'));
         },
         debts: rules,
-        admit: (candidate) => admit(resendReceivedEvent(scope, candidate), rules()),
+        admit: (candidate, position) =>
+          admit(resendReceivedEvent(scope, candidate), rules(), {
+            position: { source: 'resend-received', position },
+          }),
         assertWriteStillLive: assertWrite,
         scopeLock: new SourceScopeLock(),
         now: input.now,
+        settleCompletedCycle: async (cycle) => settleResendReceivedPoints(input, scope, rules(), cycle, assertWrite),
         failpoint: input.failpoint,
       });
       const state = input.store.database
@@ -318,17 +338,20 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
         return JSON.parse(plaintext.toString('utf8'));
       },
       debts: rules,
-      admit: (change) => admit(resendStatusEvent(scope, change), rules()),
+      admit: (change) =>
+        admit(resendStatusEvent(scope, change), rules(), {
+          position: { source: 'resend-status', observedAt: change.observedAt },
+        }),
       assertWriteStillLive: assertWrite,
       scopeLock: new SourceScopeLock(),
       now: input.now,
       mayAdmit: (change) => statusObservationBelongsToOldVersion(change, pendingStatusStarts),
       failpoint: input.failpoint,
     });
-    await source.scan();
+    const result = await source.scan({ maxPages: 1 });
     // Status scanning has no provider cursor, so one complete source pass is its content-free P certificate. The
     // scan's per-item state machine has already terminalised every observed pre-P status before this write.
-    completePendingReplacementDrains(input, scope, (input.now ?? Date.now)());
+    if (!result.pending) completePendingReplacementDrains(input, scope, (input.now ?? Date.now)());
     return;
   }
 
@@ -548,13 +571,22 @@ function sourceRulesForStage(
   const found = new Map<string, RuleDebt>();
   for (const row of input.store.database
     .prepare(
-      `SELECT source_stage_rule_debts.rule_id, source_stage_rule_debts.rule_version, rule_versions.document
+      `SELECT source_stage_rule_debts.rule_id, source_stage_rule_debts.rule_version, rule_versions.document,
+              active_versions.current_cutover_id
          FROM source_stage_rule_debts JOIN rule_versions
            ON rule_versions.rule_id = source_stage_rule_debts.rule_id
           AND rule_versions.version = source_stage_rule_debts.rule_version
+         JOIN active_versions
+           ON active_versions.kind = 'rule' AND active_versions.object_id = source_stage_rule_debts.rule_id
+          AND active_versions.version = source_stage_rule_debts.rule_version
         WHERE source_stage_rule_debts.stage_id = ?`,
     )
-    .all(stageId) as Array<{ rule_id: string; rule_version: number; document: string }>) {
+    .all(stageId) as Array<{
+    rule_id: string;
+    rule_version: number;
+    document: string;
+    current_cutover_id: string | null;
+  }>) {
     const rule = JSON.parse(row.document) as CanonicalFullRuleDocument;
     if (rule.source.channel !== scope.source || !rule.source.accountIds.includes(scope.accountId)) continue;
     const options = source.canonicalise(rule.source.options);
@@ -564,13 +596,13 @@ function sourceRulesForStage(
         .some((candidate) => candidate.scopeId === scope.scopeId)
     )
       continue;
+    if (row.current_cutover_id === null) continue;
     found.set(`${row.rule_id}@${row.rule_version}`, {
       ruleId: row.rule_id,
       ruleVersion: row.rule_version,
       ingestRetentionMs: rule.retention.ingestMs,
       eventType: rule.event.type,
-      // Reply admission consumes immutable rule versions; its source page has already fixed the relevant position.
-      activationId: stageId,
+      activationId: row.current_cutover_id,
       options,
     });
   }
@@ -597,8 +629,10 @@ async function admitEvent(
   debts: readonly RuleDebt[],
   whatsapp?: Readonly<{ messageId: string; visibilityVersion: number }>,
   stageId?: string,
+  position?: CandidatePosition,
 ): Promise<'terminal' | 'pending'> {
-  if (debts.length === 0) return 'terminal';
+  const eligibleDebts = position === undefined ? debts : await debtsAfterActivationPoint(input, scope, debts, position);
+  if (eligibleDebts.length === 0) return 'terminal';
   const stagedAt =
     stageId === undefined
       ? (input.now ?? Date.now)()
@@ -641,7 +675,7 @@ async function admitEvent(
         stagedAt,
       );
   });
-  for (const rule of debts) {
+  for (const rule of eligibleDebts) {
     const result = await evaluator.admit({
       event: checked.value as unknown as Record<string, unknown>,
       eventId: id,
@@ -654,6 +688,154 @@ async function admitEvent(
     if (result === 'pending') return 'pending';
   }
   return 'terminal';
+}
+
+/** Each shared source cursor begins at the oldest live point; admission must still honour the exact point of each rule. */
+async function debtsAfterActivationPoint(
+  input: SourceOwnerWorkOptions,
+  scope: SourceScope,
+  debts: readonly RuleDebt[],
+  candidate: CandidatePosition,
+): Promise<readonly RuleDebt[]> {
+  const admitted: RuleDebt[] = [];
+  for (const debt of debts) {
+    if (candidate.source === 'resend-received' && resendReceivedPointReached(input.store, scope, debt)) {
+      admitted.push(debt);
+      continue;
+    }
+    const point = await activationPoint(input, scope, debt);
+    // A missing exact current point has no safe ordering relation and therefore cannot receive the candidate.
+    if (point === undefined) continue;
+    if (candidateFollowsPoint(candidate, point)) admitted.push(debt);
+  }
+  return admitted;
+}
+
+/**
+ * A Resend id has only a newest-first order while its cycle is retained. Once that cycle has completed, this durable,
+ * content-free record is the per-version absolute position: every later cycle is strictly after it.
+ */
+async function settleResendReceivedPoints(
+  input: SourceOwnerWorkOptions,
+  scope: SourceScope,
+  debts: readonly RuleDebt[],
+  cycle: ResendReceivedCycle,
+  assertWrite: () => void,
+): Promise<void> {
+  const ids = new Set(cycle.orderedIds);
+  const settlements = await Promise.all(
+    debts.map(async (debt) => {
+      if (resendReceivedPointReached(input.store, scope, debt)) return undefined;
+      const anchorId = resendReceivedAnchor(await activationPoint(input, scope, debt));
+      if (anchorId === undefined) return undefined;
+      return { debt, gap: anchorId !== 'empty' && !ids.has(anchorId) };
+    }),
+  );
+  const at = (input.now ?? Date.now)();
+  input.store.immediate(() => {
+    assertWrite();
+    for (const settlement of settlements) {
+      if (settlement === undefined) continue;
+      const reachedId = resendReceivedPointRecordId('resend-received-point-reached', scope, settlement.debt);
+      input.store.database
+        .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
+        .run(reachedId, 'agentcomms.source.point-reached', at);
+      if (settlement.gap)
+        input.store.database
+          .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
+          .run(
+            resendReceivedPointRecordId('resend-received-point-gap', scope, settlement.debt),
+            'agentcomms.source.gap',
+            at,
+          );
+    }
+  });
+}
+
+async function activationPoint(
+  input: Pick<SourceOwnerWorkOptions, 'store' | 'cipher'>,
+  scope: SourceScope,
+  debt: RuleDebt,
+): Promise<unknown | undefined> {
+  const row = input.store.database
+    .prepare(
+      `SELECT encrypted_position FROM rule_activation_points
+        WHERE activation_id = ? AND rule_id = ? AND rule_version = ? AND source = ? AND account_id = ?
+          AND position_scope = ?`,
+    )
+    .get(debt.activationId, debt.ruleId, debt.ruleVersion, scope.source, scope.accountId, scope.scopeId) as
+    | { encrypted_position: Uint8Array }
+    | undefined;
+  if (row === undefined) return undefined;
+  return JSON.parse(
+    (
+      await input.cipher.decrypt(
+        activationPointLocation(debt.activationId, debt.ruleId, debt.ruleVersion, scope.accountId, scope.scopeId),
+        row.encrypted_position,
+      )
+    ).toString('utf8'),
+  ) as unknown;
+}
+
+function resendReceivedAnchor(point: unknown): string | undefined {
+  const anchorId = typeof point === 'object' && point !== null ? (point as { anchorId?: unknown }).anchorId : undefined;
+  return typeof anchorId === 'string' && anchorId.length > 0 ? anchorId : undefined;
+}
+
+function resendReceivedPointReached(store: EventDatabase, scope: SourceScope, debt: RuleDebt): boolean {
+  return (
+    store.database
+      .prepare('SELECT 1 AS present FROM operational_records WHERE id = ?')
+      .get(resendReceivedPointRecordId('resend-received-point-reached', scope, debt)) !== undefined
+  );
+}
+
+function resendReceivedPointRecordId(prefix: string, scope: SourceScope, debt: RuleDebt): string {
+  const identity = JSON.stringify([
+    debt.activationId,
+    debt.ruleId,
+    debt.ruleVersion,
+    scope.source,
+    scope.accountId,
+    scope.scopeId,
+  ]);
+  return `${prefix}:${createHash('sha256').update(identity).digest('hex')}`;
+}
+
+/** Missing or malformed positions never become an implicit backfill. */
+function candidateFollowsPoint(candidate: CandidatePosition, point: unknown): boolean {
+  if (candidate.source === 'slack') {
+    const timestamp =
+      typeof point === 'object' && point !== null ? (point as { timestamp?: unknown }).timestamp : undefined;
+    if (typeof timestamp !== 'string') return false;
+    try {
+      return compareSlackTimestamp(assertSlackTimestamp(candidate.timestamp), assertSlackTimestamp(timestamp)) > 0;
+    } catch {
+      return false;
+    }
+  }
+  if (candidate.source === 'resend-received') {
+    const anchorId = resendReceivedAnchor(point);
+    if (anchorId === undefined) return false;
+    // `empty` is the canonical position before the first received message; every observed item follows it.
+    if (anchorId === 'empty') return true;
+    const { orderedIds, candidateIndex } = candidate.position;
+    if (
+      !Number.isSafeInteger(candidateIndex) ||
+      candidateIndex < 0 ||
+      candidateIndex >= orderedIds.length ||
+      typeof orderedIds[candidateIndex] !== 'string'
+    )
+      return false;
+    const pointIndex = orderedIds.indexOf(anchorId);
+    return pointIndex > candidateIndex;
+  }
+  const startedAt =
+    typeof point === 'object' && point !== null ? (point as { startedAt?: unknown }).startedAt : undefined;
+  if (typeof startedAt !== 'string') return false;
+  const observed = Date.parse(candidate.observedAt);
+  const activation = Date.parse(startedAt);
+  return Number.isFinite(observed) && Number.isFinite(activation) && observed > activation;
 }
 
 function slackEvent(
@@ -861,6 +1043,26 @@ async function sourceRulesForWhatsAppAccount(
 }
 
 function whatsappActivationPointLocation(
+  activationId: string,
+  ruleId: string,
+  ruleVersion: number,
+  accountId: string,
+  positionScope: string,
+) {
+  return {
+    table: 'rule_activation_points',
+    column: 'encryptedPosition',
+    key: [
+      { type: 'text' as const, value: activationId },
+      { type: 'text' as const, value: ruleId },
+      { type: 'integer' as const, value: ruleVersion },
+      { type: 'text' as const, value: accountId },
+      { type: 'text' as const, value: positionScope },
+    ],
+  };
+}
+
+function activationPointLocation(
   activationId: string,
   ruleId: string,
   ruleVersion: number,
