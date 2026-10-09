@@ -19,7 +19,7 @@ import { EventLifecycle } from '../../src/runtime/lifecycle.ts';
 import { createPhaseDWhatsAppOwnerComposition } from '../../src/runtime/phase-d-whatsapp-owner-composition.ts';
 import { disableRule, removeTarget } from '../../src/runtime/revocations.ts';
 import { EventScheduler } from '../../src/runtime/scheduler.ts';
-import { runSourceOwnerWork } from '../../src/runtime/source-owner-work.ts';
+import { runSourceOwnerWork, stageWhatsAppBaselineSnapshot } from '../../src/runtime/source-owner-work.ts';
 import type { SourceScope } from '../../src/sources/contracts.ts';
 import { MailboxLock } from '../../src/sources/mailbox-lock.ts';
 import { phaseDSourceRegistry } from '../../src/sources/registry.ts';
@@ -46,6 +46,14 @@ export const IDS = {
   resendId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   whatsappRawKey: '["wa-msg","chat-cutover","sender-cutover","stanza-cutover"]',
 } as const;
+
+/** Synthetic, content-free WhatsApp tuple identity controls for the Phase-D cut-over harness. */
+export interface WhatsAppCutoverMessage {
+  readonly chatJid: string;
+  readonly senderJidRaw: string;
+  readonly stanzaId: string;
+  readonly body?: string | undefined;
+}
 
 type ScopedReplacementPlan = Readonly<{
   readonly oldOptions: unknown;
@@ -109,6 +117,14 @@ export class PhaseDCutoverFixture {
   #resendSentStatus = 'sent';
   #resendSentItems: readonly Readonly<{ id: string; status: string }>[] | undefined;
   #schedulerPointDecryptHook: (() => Promise<void> | void) | undefined;
+  #whatsappMessages: readonly WhatsAppCutoverMessage[] = [
+    {
+      chatJid: 'chat-cutover',
+      senderJidRaw: 'sender-cutover',
+      stanzaId: 'stanza-cutover',
+      body: 'cutover',
+    },
+  ];
 
   private constructor(input: {
     root: string;
@@ -210,6 +226,11 @@ export class PhaseDCutoverFixture {
   /** Holds the scheduler between its published-point read and cursor insert; used only for the D12 stale-point race. */
   setSchedulerPointDecryptHook(hook: (() => Promise<void> | void) | undefined): void {
     this.#schedulerPointDecryptHook = hook;
+  }
+
+  /** Replaces the next checked-copy snapshot without opening a provider connection. */
+  setWhatsAppMessages(messages: readonly WhatsAppCutoverMessage[]): void {
+    this.#whatsappMessages = messages;
   }
 
   async activate(
@@ -661,7 +682,21 @@ export class PhaseDCutoverFixture {
       gmailSourceFor: async () => ({ getProfile: async () => ({ historyId: '1' }) }) as never,
       sourceRegistry: phaseDSourceRegistry(),
       mailboxLock: new MailboxLock(new SourceScopeLock()),
-      sourceBaselineFor: async (scope) => this.baseline(scope.source, scope.scopeId),
+      sourceBaselineFor: async (scope) => {
+        if (scope.source !== 'whatsapp') return this.baseline(scope.source, scope.scopeId);
+        if (!this.#whatsapp) throw new Error('cut-over WhatsApp composition is closed');
+        return stageWhatsAppBaselineSnapshot(
+          {
+            store: this.#store,
+            cipher,
+            sourceRegistry: phaseDSourceRegistry(),
+            whatsappEventOperations: this.whatsappReader(),
+            whatsappVisibilityFence: this.#whatsapp.visibilityFence,
+            now: () => this.now.value,
+          },
+          scope.accountId,
+        );
+      },
       encryptBaseline: async (intentId, accountId, value, scope) =>
         cipher.encrypt(
           activationBaselineLocation(intentId, scope?.source ?? 'gmail', accountId, scope?.scopeId ?? 'mailbox'),
@@ -817,19 +852,17 @@ export class PhaseDCutoverFixture {
           accountId: this.accountId,
           accountName: 'cutover',
           visibility,
-          messages: [
-            {
-              sourceOrder: 1,
-              chatJid: 'chat-cutover',
-              chatKind: 'group',
-              senderJidRaw: 'sender-cutover',
-              stanzaId: 'stanza-cutover',
-              fromMe: false,
-              at: '2026-10-09T12:00:00.000Z',
-              kind: 'text',
-              body: 'cutover',
-            },
-          ],
+          messages: this.#whatsappMessages.map((message, index) => ({
+            sourceOrder: index + 1,
+            chatJid: message.chatJid,
+            chatKind: 'group',
+            senderJidRaw: message.senderJidRaw,
+            stanzaId: message.stanzaId,
+            fromMe: false,
+            at: '2026-10-09T12:00:00.000Z',
+            kind: 'text',
+            body: message.body ?? 'cutover',
+          })),
         });
       },
     };

@@ -50,6 +50,42 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
     exportName: 'WhatsAppSourceWorker',
   },
   {
+    id: 'whatsapp-early-head-old-only',
+    file: 'sources/whatsapp.ts',
+    before: 'const before = this.currentHead();',
+    after: `this.commitCandidate(snapshot.visibility, generation, [], encrypted);
+      const before = this.currentHead();`,
+    cell: 'W:replace-old-only-admits-by-old-generation',
+    exportName: 'WhatsAppSourceWorker',
+  },
+  {
+    id: 'whatsapp-early-head-new-only',
+    file: 'sources/whatsapp.ts',
+    before: 'const before = this.currentHead();',
+    after: `this.commitCandidate(snapshot.visibility, generation, [], encrypted);
+      const before = this.currentHead();`,
+    cell: 'W:replace-new-only-baselines-raw-generation',
+    exportName: 'WhatsAppSourceWorker',
+  },
+  {
+    id: 'whatsapp-early-head-enable-all',
+    file: 'sources/whatsapp.ts',
+    before: 'const before = this.currentHead();',
+    after: `this.commitCandidate(snapshot.visibility, generation, [], encrypted);
+      const before = this.currentHead();`,
+    cell: 'W:enable-all-rebaselines-authoritative-head',
+    exportName: 'WhatsAppSourceWorker',
+  },
+  {
+    id: 'whatsapp-early-head-generation-recheck',
+    file: 'sources/whatsapp.ts',
+    before: 'const before = this.currentHead();',
+    after: `this.commitCandidate(snapshot.visibility, generation, [], encrypted);
+      const before = this.currentHead();`,
+    cell: 'W:initial-cursor-rechecks-generation-under-chat-lock',
+    exportName: 'WhatsAppSourceWorker',
+  },
+  {
     id: 'unconditional-resend-anchor',
     file: 'sources/resend.ts',
     before: 'WHERE id = ? AND encrypted_record = ? AND staged_at IS ? AND stage_expires_at IS ?',
@@ -78,6 +114,14 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
     before: guards.rawKey,
     after: `return canonicalJson(['wa-msg', chatJid, senderJidRaw, \`Z_PK:\${stanzaId}\`]);`,
     cell: 'W:replace-shared-raw-key-one-version',
+    exportName: 'rawWhatsAppMessageId',
+  },
+  {
+    id: 'whatsapp-raw-z-pk-initial-baseline',
+    file: 'sources/whatsapp.ts',
+    before: guards.rawKey,
+    after: `return canonicalJson(['wa-msg', chatJid, senderJidRaw, \`Z_PK:\${stanzaId}\`]);`,
+    cell: 'W:initial-baseline-generation-and-identities-atomic',
     exportName: 'rawWhatsAppMessageId',
   },
   {
@@ -147,6 +191,14 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
     exportName: 'settleOldOnlyStageDebts',
   },
   {
+    id: 'retain-old-only-whatsapp-debt-at-swap',
+    file: 'runtime/replacements.ts',
+    before: 'if (retained) continue;',
+    after: 'if (true) continue;',
+    cell: 'W:swap-drops-old-only-first-representation-debt',
+    exportName: 'settleOldOnlyStageDebts',
+  },
+  {
     id: 'deadline-before-claim',
     file: 'runtime/activations.ts',
     before: guards.deadlineClaim,
@@ -168,6 +220,14 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
     before: guards.deadlineFinalise,
     after: 'if (false) {',
     cell: 'W:deadline-at-P-after-P-and-finalise-settles-without-head-write',
+    exportName: 'ActivationRuntime',
+  },
+  {
+    id: 'deadline-before-finalise-whatsapp-timeout',
+    file: 'runtime/activations.ts',
+    before: guards.deadlineFinalise,
+    after: 'if (false) {',
+    cell: 'W:timeout-discards-candidate-not-head',
     exportName: 'ActivationRuntime',
   },
 ];
@@ -205,11 +265,23 @@ export async function expectMatrixCellToKillMutant(copy: MutantCopy): Promise<vo
             : 'whatsapp-cutover.test.ts';
     }
   })();
+  const isMatrixCellTest =
+    sourceTest === 'whatsapp-cutover.test.ts' ||
+    sourceTest === 'slack-cutover.test.ts' ||
+    sourceTest === 'resend-cutover.test.ts';
   const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
   const result = await new Promise<{ code: number | null; output: string }>((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', '--test', join(copiedTests, sourceTest)],
+      [
+        '--experimental-strip-types',
+        '--disable-warning=ExperimentalWarning',
+        '--test',
+        ...(isMatrixCellTest
+          ? ['--test-name-pattern', `^${copy.mutation.cell.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`]
+          : []),
+        join(copiedTests, sourceTest),
+      ],
       { cwd: copy.root, env: environment, stdio: ['ignore', 'pipe', 'pipe'] },
     );
     let output = '';
