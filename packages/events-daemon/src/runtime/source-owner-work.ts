@@ -302,6 +302,7 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
       if (!result.pending) completePendingReplacementDrains(input, scope, (input.now ?? Date.now)());
       return;
     }
+    const pendingStatusStarts = await pendingReplacementDrains(input, scope);
     const source = new ResendStatusSource({
       store: input.store,
       accountId: scope.accountId,
@@ -321,6 +322,7 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
       assertWriteStillLive: assertWrite,
       scopeLock: new SourceScopeLock(),
       now: input.now,
+      mayAdmit: (change) => statusObservationBelongsToOldVersion(change, pendingStatusStarts),
       failpoint: input.failpoint,
     });
     await source.scan();
@@ -443,6 +445,25 @@ function completePendingReplacementDrains(input: SourceOwnerWorkOptions, scope: 
     .all(scope.source, scope.accountId, scope.scopeId) as Array<{ intent_id: string }>) {
     completeSourceReplacementDrain(input.store.database, { intentId: row.intent_id, scope, at });
   }
+}
+
+/** A Resend status replacement has no ordered backlog: P belongs to its new baseline, never the old version. */
+function statusObservationBelongsToOldVersion(
+  change: ResendStatusChange,
+  drains: readonly PendingReplacementDrain[],
+): boolean {
+  const observed = Date.parse(change.observedAt);
+  if (!Number.isFinite(observed)) return false;
+  for (const drain of drains) {
+    const startedAt =
+      typeof drain.position === 'object' && drain.position !== null
+        ? (drain.position as { startedAt?: unknown }).startedAt
+        : undefined;
+    const point = typeof startedAt === 'string' ? Date.parse(startedAt) : Number.NaN;
+    // Missing/malformed P or equality is a closed refusal. First observations at P seed state and emit nothing.
+    if (!Number.isFinite(point) || observed >= point) return false;
+  }
+  return true;
 }
 
 function slackDrainThrough(position: unknown): string {

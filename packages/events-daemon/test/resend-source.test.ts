@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
 import { CommsError } from '@agentcomms/core';
-import { type ResendEventReader, ResendReceivedSource } from '../src/sources/resend.ts';
+import { EventExpiry } from '../src/runtime/expiry.ts';
+import { type ResendEventReader, ResendReceivedSource, ResendReceivedStageExpiry } from '../src/sources/resend.ts';
+import { SourceScopeLock } from '../src/sources/scope-lock.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
@@ -258,6 +260,87 @@ test('Resend received keeps its first shortest stage deadline through detail mat
         ).stage_expires_at,
         null,
       );
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('P1: common expiry keeps a paused Resend received continuation and resolves the received email id', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-resend-common-expiry-');
+  try {
+    const store = await openEventDatabase({ stateDir });
+    try {
+      let now = 1_760_000_000_000;
+      let details = 0;
+      let admissions = 0;
+      const reader: ResendEventReader = {
+        async listReceived() {
+          return { emails: [{ id: NEWEST }, { id: ANCHOR }], next: null };
+        },
+        async getReceived(id) {
+          details += 1;
+          return {
+            kind: 'candidate',
+            candidate: { emailId: id, subject: 'safe', receivedAt: '2026-10-09T08:00:00.000Z' },
+          };
+        },
+        async listSent() {
+          return { emails: [], next: null };
+        },
+      };
+      const source = new ResendReceivedSource({
+        store,
+        accountId: ACCOUNT,
+        reader,
+        encrypt: encode,
+        decrypt: decode,
+        debts: () => [{ ruleId: 'rule', ruleVersion: 1, ingestRetentionMs: 100 }],
+        admit: async () => {
+          admissions += 1;
+          return 'pending';
+        },
+        now: () => now,
+      });
+      await source.seedAnchor(ANCHOR);
+      assert.deepEqual(await source.scan(), { pending: true, anchorId: ANCHOR });
+      now += 100;
+      store.database.prepare('UPDATE event_settings SET paused = 1 WHERE singleton = 1').run();
+      assert.equal(
+        (
+          await new EventExpiry(
+            store,
+            () => now,
+            new ResendReceivedStageExpiry({
+              store,
+              decrypt: decode,
+              encrypt: encode,
+              lock: new SourceScopeLock(),
+              now: () => now,
+            }),
+          ).sweepAll()
+        ).sourceStages,
+        1,
+      );
+      assert.deepEqual(
+        (
+          store.database
+            .prepare(
+              "SELECT occurrence_key, outcome FROM source_occurrence_resolutions WHERE source = 'resend' AND account_id = ?",
+            )
+            .all(ACCOUNT) as Array<{ occurrence_key: string; outcome: string }>
+        ).map((row) => ({ ...row })),
+        [{ occurrence_key: NEWEST, outcome: 'retention-expired' }],
+        'expiry resolves the received occurrence, never the encrypted stage id',
+      );
+      store.database.prepare('UPDATE event_settings SET paused = 0 WHERE singleton = 1').run();
+      assert.deepEqual(await source.scan(), { pending: false, anchorId: NEWEST });
+      assert.equal(details, 1, 'resume continues from the retained anchor without another detail read');
+      assert.equal(admissions, 1, 'the terminal retained occurrence is never admitted again');
     } finally {
       store.close();
     }

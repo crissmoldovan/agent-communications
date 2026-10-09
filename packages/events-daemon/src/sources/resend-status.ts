@@ -1,4 +1,5 @@
 import type { CutoverFailpoint } from '../runtime/cutover-failpoint.ts';
+import type { AsyncSourceStageExpiry } from '../runtime/expiry.ts';
 import type { EventDatabase } from '../store/database.ts';
 import { type SourceScope, type SourceStageDebt, sourceStageRetentionForDebts } from './contracts.ts';
 import type { ResendEventReader, ResendSentItem } from './resend.ts';
@@ -46,6 +47,103 @@ interface LoadedPendingStatusStage {
   readonly value: PendingStatusStage;
 }
 
+/** Common start-up/tick expiry for encrypted Resend status deltas. */
+export class ResendStatusStageExpiry implements AsyncSourceStageExpiry {
+  readonly #store: EventDatabase;
+  readonly #decrypt: (stored: Uint8Array, id: string) => Promise<unknown>;
+  readonly #lock: SourceScopeLock;
+  readonly #now: () => number;
+
+  constructor(
+    input: Readonly<{
+      store: EventDatabase;
+      decrypt: (stored: Uint8Array, id: string) => Promise<unknown>;
+      lock: SourceScopeLock;
+      now?: (() => number) | undefined;
+    }>,
+  ) {
+    this.#store = input.store;
+    this.#decrypt = input.decrypt;
+    this.#lock = input.lock;
+    this.#now = input.now ?? Date.now;
+  }
+
+  async sweep(): Promise<number> {
+    const accounts = this.#store.database
+      .prepare(
+        `SELECT DISTINCT account_id FROM source_scan_state
+         WHERE source = 'resend' AND cursor_scope = 'status'
+           AND stage_expires_at IS NOT NULL AND stage_expires_at <= ?`,
+      )
+      .all(this.#now()) as Array<{ account_id: string }>;
+    let expired = 0;
+    for (const { account_id: accountId } of accounts)
+      expired += await this.#lock.withScope({ source: 'resend', accountId, scopeId: 'status' }, () =>
+        this.#expireAccount(accountId),
+      );
+    return expired;
+  }
+
+  async #expireAccount(accountId: string): Promise<number> {
+    const rows = this.#store.database
+      .prepare(
+        `SELECT id, encrypted_record, stage_expires_at FROM source_scan_state
+         WHERE source = 'resend' AND account_id = ? AND cursor_scope = 'status'
+           AND stage_expires_at IS NOT NULL AND stage_expires_at <= ?`,
+      )
+      .all(accountId, this.#now()) as Array<{
+      id: string;
+      encrypted_record: Uint8Array;
+      stage_expires_at: number;
+    }>;
+    let expired = 0;
+    for (const row of rows) {
+      const value = (await this.#decrypt(row.encrypted_record, row.id)) as PendingStatusStage;
+      expired += this.#store.immediate(() => {
+        const present = this.#store.database
+          .prepare(
+            `SELECT 1 AS present FROM source_scan_state
+             WHERE id = ? AND encrypted_record = ? AND stage_expires_at = ? AND stage_expires_at <= ?`,
+          )
+          .get(row.id, row.encrypted_record, row.stage_expires_at, this.#now()) as { present: number } | undefined;
+        if (present === undefined) return 0;
+        const now = this.#now();
+        this.#store.database
+          .prepare(
+            `INSERT OR IGNORE INTO source_occurrence_resolutions
+             (source, account_id, occurrence_key, outcome, resolved_at, error_code)
+             VALUES ('resend', ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
+          )
+          .run(accountId, statusOccurrenceKey(value.change), now);
+        // The status value is the content-free continuation. Persisting it before removing the staged delta makes
+        // an unchanged provider observation terminal on every later scan, rather than re-staging expired content.
+        this.#store.database
+          .prepare(
+            `INSERT INTO resend_status_state (account_id, email_id, last_event, observed_at, expires_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(account_id, email_id) DO UPDATE SET last_event = excluded.last_event,
+               observed_at = excluded.observed_at, expires_at = excluded.expires_at`,
+          )
+          .run(accountId, value.change.emailId, value.change.current, now, now + WEEK_MS);
+        const deleted = this.#store.database
+          .prepare('DELETE FROM source_scan_state WHERE id = ? AND encrypted_record = ? AND stage_expires_at = ?')
+          .run(row.id, row.encrypted_record, row.stage_expires_at);
+        if (Number(deleted.changes) !== 1) return 0;
+        this.#store.database.prepare('DELETE FROM source_stage_rule_debts WHERE stage_id = ?').run(row.id);
+        this.#store.database
+          .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
+          .run(`source-retention-expired:resend:${accountId}:${row.id}`, 'event.source.retention-expired', now);
+        return 1;
+      });
+    }
+    return expired;
+  }
+}
+
+function statusOccurrenceKey(change: ResendStatusChange): string {
+  return JSON.stringify([change.emailId, change.current, change.observedAt]);
+}
+
 /** The sent-mail observer retains only ids and last observed statuses, never an event payload. */
 export class ResendStatusSource {
   readonly #store: EventDatabase;
@@ -60,6 +158,7 @@ export class ResendStatusSource {
   readonly #scopeLock: SourceScopeLock;
   readonly #scope: SourceScope;
   readonly #failpoint: CutoverFailpoint | undefined;
+  readonly #mayAdmit: (change: ResendStatusChange) => boolean;
 
   constructor(
     input: Readonly<{
@@ -73,6 +172,8 @@ export class ResendStatusSource {
       assertWriteStillLive?: (() => void) | undefined;
       scopeLock?: SourceScopeLock | undefined;
       now?: (() => number) | undefined;
+      /** The old half of an exact replacement may observe at most values strictly before its durable P instant. */
+      mayAdmit?: ((change: ResendStatusChange) => boolean) | undefined;
       /** Optional D8 crash seam; omitted in production. */
       failpoint?: CutoverFailpoint | undefined;
     }>,
@@ -89,6 +190,7 @@ export class ResendStatusSource {
     this.#scopeLock = input.scopeLock ?? new SourceScopeLock();
     this.#scope = { source: 'resend', accountId: input.accountId, scopeId: 'status' };
     this.#failpoint = input.failpoint;
+    this.#mayAdmit = input.mayAdmit ?? (() => true);
   }
 
   async baseline(): Promise<string> {
@@ -158,6 +260,12 @@ export class ResendStatusSource {
           scheduledAt: item.scheduledAt,
           messageId: item.messageId,
         };
+        // A status source has no ordered backlog. Once a replacement sampled P, an old rule may only seed its
+        // content-free P state; it cannot consume an observation at/after P. Leaving the old P state intact lets
+        // the new version, once installed, see this later change exactly once instead of silently losing it.
+        if (!this.#mayAdmit(change)) {
+          continue;
+        }
         await this.#stage(change);
         const staged = await this.#pending(item.id);
         if (staged === null) continue;
@@ -209,11 +317,28 @@ export class ResendStatusSource {
                (source, account_id, occurrence_key, outcome, resolved_at, error_code)
                VALUES ('resend', ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
             )
-            .run(this.#accountId, this.#occurrenceKey(value.change), this.#now());
+            .run(this.#accountId, statusOccurrenceKey(value.change), this.#now());
+          this.#store.database
+            .prepare(
+              `INSERT INTO resend_status_state (account_id, email_id, last_event, observed_at, expires_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(account_id, email_id) DO UPDATE SET last_event = excluded.last_event,
+                 observed_at = excluded.observed_at, expires_at = excluded.expires_at`,
+            )
+            .run(this.#accountId, value.change.emailId, value.change.current, this.#now(), this.#now() + WEEK_MS);
           const deleted = this.#store.database
             .prepare('DELETE FROM source_scan_state WHERE id = ? AND encrypted_record = ? AND stage_expires_at = ?')
             .run(row.id, row.encrypted_record, row.stage_expires_at);
-          expired += Number(deleted.changes);
+          if (Number(deleted.changes) !== 1) return;
+          this.#store.database.prepare('DELETE FROM source_stage_rule_debts WHERE stage_id = ?').run(row.id);
+          this.#store.database
+            .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
+            .run(
+              `source-retention-expired:resend:${this.#accountId}:${row.id}`,
+              'event.source.retention-expired',
+              this.#now(),
+            );
+          expired += 1;
         });
       }
       return expired;
@@ -303,10 +428,6 @@ export class ResendStatusSource {
 
   #stageId(emailId: string): string {
     return `resend-status:${this.#accountId}:${emailId}`;
-  }
-
-  #occurrenceKey(change: ResendStatusChange): string {
-    return JSON.stringify([change.emailId, change.current, change.observedAt]);
   }
 
   #assertUnfenced(): void {

@@ -1,6 +1,7 @@
 import { CommsError } from '@agentcomms/core';
 import { normaliseSlackSourceOptions } from '../domain/source-options.ts';
 import type { CutoverFailpoint } from '../runtime/cutover-failpoint.ts';
+import type { AsyncSourceStageExpiry } from '../runtime/expiry.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { LocalEventSource } from './contracts.ts';
 import {
@@ -153,6 +154,174 @@ function topLevel(message: SlackSourceMessage): boolean {
   return message.threadTs === null || message.threadTs === message.ts;
 }
 
+export function slackOccurrenceKey(conversationId: string, timestamp: string): string {
+  return JSON.stringify([conversationId, timestamp]);
+}
+
+function historyPageIdentity(id: string): {
+  readonly accountId: string;
+  readonly conversationId: string;
+  readonly generation: number;
+  readonly cursorBefore: string | null;
+  readonly nextCursor: string | null;
+} | null {
+  if (!id.startsWith('slack-history-page:')) return null;
+  try {
+    const values = JSON.parse(
+      Buffer.from(id.slice('slack-history-page:'.length), 'base64url').toString('utf8'),
+    ) as unknown;
+    if (!Array.isArray(values) || values.length !== 5) return null;
+    const [accountId, conversationId, generation, cursorBefore, nextCursor] = values;
+    if (
+      typeof accountId !== 'string' ||
+      typeof conversationId !== 'string' ||
+      !Number.isSafeInteger(generation) ||
+      (cursorBefore !== null && typeof cursorBefore !== 'string') ||
+      (nextCursor !== null && typeof nextCursor !== 'string')
+    )
+      return null;
+    return { accountId, conversationId, generation, cursorBefore, nextCursor };
+  } catch {
+    return null;
+  }
+}
+
+/** Common start-up/tick expiry for Slack history pages, including their content-free scan continuation. */
+export class SlackHistoryStageExpiry implements AsyncSourceStageExpiry {
+  readonly #store: EventDatabase;
+  readonly #lock: SourceScopeLock;
+  readonly #decrypt: (record: Uint8Array, id: string) => Promise<unknown>;
+  readonly #encrypt: (value: unknown, id: string) => Promise<Uint8Array>;
+  readonly #now: () => number;
+
+  constructor(
+    input: Readonly<{
+      store: EventDatabase;
+      lock: SourceScopeLock;
+      decrypt: (record: Uint8Array, id: string) => Promise<unknown>;
+      encrypt: (value: unknown, id: string) => Promise<Uint8Array>;
+      now?: (() => number) | undefined;
+    }>,
+  ) {
+    this.#store = input.store;
+    this.#lock = input.lock;
+    this.#decrypt = input.decrypt;
+    this.#encrypt = input.encrypt;
+    this.#now = input.now ?? Date.now;
+  }
+
+  async sweep(): Promise<number> {
+    const rows = this.#store.database
+      .prepare(
+        `SELECT id, account_id FROM source_scan_state
+         WHERE source = 'slack' AND id LIKE 'slack-history-page:%'
+           AND stage_expires_at IS NOT NULL AND stage_expires_at <= ?`,
+      )
+      .all(this.#now()) as Array<{ id: string; account_id: string }>;
+    let expired = 0;
+    for (const row of rows) {
+      const identity = historyPageIdentity(row.id);
+      if (identity === null || identity.accountId !== row.account_id) continue;
+      expired += await this.#lock.withScope(slackConversationScope(identity.accountId, identity.conversationId), () =>
+        this.#expire(row.id, identity),
+      );
+    }
+    return expired;
+  }
+
+  async #expire(stageId: string, identity: NonNullable<ReturnType<typeof historyPageIdentity>>): Promise<number> {
+    const row = this.#store.database
+      .prepare(
+        `SELECT encrypted_record, stage_expires_at FROM source_scan_state
+         WHERE id = ? AND stage_expires_at IS NOT NULL AND stage_expires_at <= ?`,
+      )
+      .get(stageId, this.#now()) as { encrypted_record: Uint8Array; stage_expires_at: number } | undefined;
+    if (row === undefined) return 0;
+    const value = (await this.#decrypt(row.encrypted_record, stageId)) as SlackPageStage;
+    if (
+      value.kind !== 'slack-history-page-v1' ||
+      value.scanGeneration !== identity.generation ||
+      value.cursorBefore !== identity.cursorBefore ||
+      value.nextCursor !== identity.nextCursor ||
+      !Array.isArray(value.completed)
+    )
+      throw new CommsError('BAD_DATA', 'an expired Slack history stage is malformed');
+    const scanIdForPage = scanId(identity.accountId, identity.conversationId);
+    const scan = this.#store.database
+      .prepare('SELECT encrypted_record FROM source_scan_state WHERE id = ?')
+      .get(scanIdForPage) as { encrypted_record: Uint8Array } | undefined;
+    if (scan === undefined) return 0;
+    const scanState = (await this.#decrypt(scan.encrypted_record, scanIdForPage)) as SlackScanState;
+    if (
+      scanState.kind !== 'slack-history-scan-v1' ||
+      scanState.generation !== identity.generation ||
+      scanState.cursor !== identity.cursorBefore
+    )
+      return 0;
+    const next = { ...scanState, cursor: identity.nextCursor };
+    const continuation = await this.#encrypt(next, scanIdForPage);
+    const occurrenceKeys = value.page.messages
+      .filter((message) => topLevel(message) && !value.completed.includes(message.ts))
+      .map((message) => {
+        assertSlackTimestamp(message.ts);
+        return slackOccurrenceKey(identity.conversationId, message.ts);
+      });
+    return this.#store.immediate(() => {
+      const current = this.#store.database
+        .prepare(
+          `SELECT 1 AS present FROM source_scan_state
+           WHERE id = ? AND encrypted_record = ? AND stage_expires_at = ? AND stage_expires_at <= ?`,
+        )
+        .get(stageId, row.encrypted_record, row.stage_expires_at, this.#now()) as { present: number } | undefined;
+      if (current === undefined) return 0;
+      const scanCurrent = this.#store.database
+        .prepare('SELECT 1 AS present FROM source_scan_state WHERE id = ? AND encrypted_record = ?')
+        .get(scanIdForPage, scan.encrypted_record) as { present: number } | undefined;
+      if (scanCurrent === undefined) return 0;
+      const now = this.#now();
+      const resolution = this.#store.database.prepare(
+        `INSERT OR IGNORE INTO source_occurrence_resolutions
+         (source, account_id, occurrence_key, outcome, resolved_at, error_code)
+         VALUES ('slack', ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
+      );
+      for (const occurrenceKey of occurrenceKeys) resolution.run(identity.accountId, occurrenceKey, now);
+      const advanced = this.#store.database
+        .prepare(
+          'UPDATE source_scan_state SET encrypted_record = ?, updated_at = ? WHERE id = ? AND encrypted_record = ?',
+        )
+        .run(continuation, now, scanIdForPage, scan.encrypted_record);
+      if (Number(advanced.changes) !== 1) return 0;
+      const deleted = this.#store.database
+        .prepare('DELETE FROM source_scan_state WHERE id = ? AND encrypted_record = ? AND stage_expires_at = ?')
+        .run(stageId, row.encrypted_record, row.stage_expires_at);
+      if (Number(deleted.changes) !== 1) return 0;
+      this.#store.database.prepare('DELETE FROM source_stage_rule_debts WHERE stage_id = ?').run(stageId);
+      if (next.cursor === null) {
+        this.#store.database
+          .prepare(
+            `INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('slack', ?, ?, ?, ?)
+             ON CONFLICT(source, account_id, cursor_scope) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at`,
+          )
+          .run(identity.accountId, `slack:${identity.accountId}:${identity.conversationId}`, next.latest, now);
+        this.#store.database
+          .prepare('DELETE FROM source_scan_state WHERE id = ? AND encrypted_record = ?')
+          .run(scanIdForPage, continuation);
+        this.#store.database
+          .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
+          .run(
+            `slack-expired-history:${identity.accountId}:${identity.conversationId}:${next.latest}`,
+            'event.source.expired-continuation',
+            now,
+          );
+      }
+      this.#store.database
+        .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
+        .run(`source-retention-expired:slack:${identity.accountId}:${stageId}`, 'event.source.retention-expired', now);
+      return 1;
+    });
+  }
+}
+
 function assertTaintedMessage(message: SlackSourceMessage): void {
   if (!/^<untrusted-content\b[^>]*>[\s\S]*<\/untrusted-content(?:\s[^>]*)?>$/u.test(message.text))
     throw new CommsError('BAD_DATA', 'a Slack event message arrived without its untrusted-content envelope');
@@ -227,6 +396,9 @@ export class SlackHistorySource {
   ): Promise<{ readonly watermark: string | null; readonly pending: boolean }> {
     const watermark = this.#watermark(scope);
     if (watermark === null) return { watermark: null, pending: false };
+    // Only an explicitly expired interval can suppress a same-bound retry. Ordinary completed scans still run their
+    // durable-edge checks even when a scheduler happens to sample the same latest timestamp twice.
+    if (this.#expiredBoundCovered(scope, input.conversationId, input.latest)) return { watermark, pending: false };
     const rules = this.#rules();
     if (rules.length === 0) return { watermark, pending: false };
     const snapshot = this.#snapshot(rules);
@@ -317,6 +489,14 @@ export class SlackHistorySource {
       this.#store.database
         .prepare('SELECT 1 AS present FROM source_scan_state WHERE id = ?')
         .get(scanId(scope.accountId, this.#conversationFromScope(scope))) !== undefined
+    );
+  }
+
+  #expiredBoundCovered(scope: SourceScope, conversationId: string, latest: string): boolean {
+    return (
+      this.#store.database
+        .prepare('SELECT 1 AS present FROM operational_records WHERE id = ?')
+        .get(`slack-expired-history:${scope.accountId}:${conversationId}:${latest}`) !== undefined
     );
   }
 
@@ -464,6 +644,22 @@ export class SlackHistorySource {
         current.value.completed.includes(message.ts)
       )
         continue;
+      if (this.#isResolved(scope, conversationId, message.ts)) {
+        const next: SlackPageStage = { ...current.value, completed: [...current.value.completed, message.ts] };
+        const encrypted = await this.#encryptStage(next, current.id);
+        await this.#accountLive();
+        this.#store.immediate(() => {
+          this.#assertCurrent(scope, snapshot, rules);
+          const updated = this.#store.database
+            .prepare(
+              'UPDATE source_scan_state SET encrypted_record = ?, updated_at = ? WHERE id = ? AND encrypted_record = ?',
+            )
+            .run(encrypted, this.#now(), current.id, current.record);
+          if (Number(updated.changes) !== 1) throw new StaleSourceWriteError();
+        });
+        current = { id: current.id, value: next, record: encrypted };
+        continue;
+      }
       const result = await this.#admit({ conversationId, message });
       if (result === 'pending') return { pending: true, complete: false, scan };
       await this.#replacementObserver?.onTopLevel(message);
@@ -605,13 +801,16 @@ export class SlackHistorySource {
         )
         .run(stage.id, stage.record, this.#now());
       if (Number(deleted.changes) !== 1) throw new StaleSourceWriteError();
-      this.#store.database
-        .prepare(
-          `INSERT OR IGNORE INTO source_occurrence_resolutions
-           (source, account_id, occurrence_key, outcome, resolved_at, error_code)
-           VALUES ('slack', ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
-        )
-        .run(scope.accountId, stage.id, this.#now());
+      const resolution = this.#store.database.prepare(
+        `INSERT OR IGNORE INTO source_occurrence_resolutions
+         (source, account_id, occurrence_key, outcome, resolved_at, error_code)
+         VALUES ('slack', ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
+      );
+      for (const message of stage.value.page.messages) {
+        if (!topLevel(message) || stage.value.completed.includes(message.ts)) continue;
+        resolution.run(scope.accountId, slackOccurrenceKey(conversationId, message.ts), this.#now());
+      }
+      this.#store.database.prepare('DELETE FROM source_stage_rule_debts WHERE stage_id = ?').run(stage.id);
     });
     const advanced = await this.#advanceAfterExpiredContinuation(scope, conversationId, scan, stage);
     return { pending: false, ...advanced };
@@ -655,6 +854,17 @@ export class SlackHistorySource {
     return row?.stage_expires_at !== null && row?.stage_expires_at !== undefined && row.stage_expires_at <= this.#now();
   }
 
+  #isResolved(scope: SourceScope, conversationId: string, timestamp: string): boolean {
+    return (
+      this.#store.database
+        .prepare(
+          `SELECT 1 AS present FROM source_occurrence_resolutions
+           WHERE source = 'slack' AND account_id = ? AND occurrence_key = ?`,
+        )
+        .get(scope.accountId, slackOccurrenceKey(conversationId, timestamp)) !== undefined
+    );
+  }
+
   #assertCurrent(scope: SourceScope, snapshot: SlackWriteSnapshot, rules: readonly SlackHistoryRule[]): void {
     const settings = this.#store.database.prepare('SELECT paused FROM event_settings WHERE singleton = 1').get() as
       | { paused: number }
@@ -683,24 +893,6 @@ export class SlackHistorySource {
     readonly cursorBefore: string | null;
     readonly nextCursor: string | null;
   } | null {
-    if (!id.startsWith('slack-history-page:')) return null;
-    try {
-      const values = JSON.parse(
-        Buffer.from(id.slice('slack-history-page:'.length), 'base64url').toString('utf8'),
-      ) as unknown;
-      if (!Array.isArray(values) || values.length !== 5) return null;
-      const [accountId, conversationId, generation, cursorBefore, nextCursor] = values;
-      if (
-        typeof accountId !== 'string' ||
-        typeof conversationId !== 'string' ||
-        !Number.isSafeInteger(generation) ||
-        (cursorBefore !== null && typeof cursorBefore !== 'string') ||
-        (nextCursor !== null && typeof nextCursor !== 'string')
-      )
-        return null;
-      return { accountId, conversationId, generation, cursorBefore, nextCursor };
-    } catch {
-      return null;
-    }
+    return historyPageIdentity(id);
   }
 }

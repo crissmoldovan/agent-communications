@@ -655,6 +655,9 @@ export class ActivationRuntime {
                 // `disable-all` already terminalised its old work — so every union scope is re-baselined to P and its
                 // drain is recorded drained in this same transaction.
                 const disabled = !this.#switch().enabled;
+                // A Resend status observer has no cursor range to drain. Its durable P instant is the boundary:
+                // pre-P observations belong to the old rule, and the new status state seeds at P without emitting.
+                const statusScope = scope.source === 'resend' && scope.scopeId === 'status';
                 // A new-only scope gets its own P activation point but owes no old-version occurrence, so it must not
                 // leave an impossible drain open waiting for a worker that never ran the old rule there.
                 if (oldInScope) {
@@ -671,7 +674,7 @@ export class ActivationRuntime {
                       scope.scopeId,
                       1,
                       newInScope ? 1 : 0,
-                      disabled ? this.#now() : null,
+                      disabled || statusScope ? this.#now() : null,
                     );
                 }
                 if (disabled) {

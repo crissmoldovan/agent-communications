@@ -190,3 +190,67 @@ test('R: replacement has distinct old-only, new-only and shared received/status 
     await fixture.dispose();
   }
 });
+
+test('R: a status change before P belongs to the old version and one after P belongs only to the new version', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  const statusOptions = { channel: 'resend', kinds: ['status'] };
+  try {
+    await fixture.activate(1, statusOptions);
+    await fixture.enable();
+    await fixture.schedulerTurn();
+    fixture.now.value += 1;
+    fixture.setResendSentStatus('delivered');
+    await fixture.sourceTurn({ source: 'resend', accountId: fixture.accountId, scopeId: 'status' });
+
+    fixture.now.value += 1;
+    let draining = false;
+    try {
+      await fixture.activate(2, statusOptions, 'changed');
+    } catch (error: unknown) {
+      draining = (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING';
+      if (!draining) throw error;
+    }
+    fixture.now.value += 1;
+    fixture.setResendSentStatus('bounced');
+    await fixture.sourceTurn({ source: 'resend', accountId: fixture.accountId, scopeId: 'status' });
+    if (draining) await fixture.runtime.resumeClaimedCompletions();
+
+    fixture.oracle({ raw: 2, admissions: 2, versions: [1, 2] });
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test('R: a post-P status change waits for the new version while a received drain still completes', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  const options = { channel: 'resend', kinds: ['received', 'status'] };
+  try {
+    await fixture.activate(1, options);
+    await fixture.enable();
+    await fixture.schedulerTurn();
+    fixture.now.value += 1;
+    fixture.setResendSentStatus('delivered');
+    await fixture.sourceTurn({ source: 'resend', accountId: fixture.accountId, scopeId: 'status' });
+
+    fixture.now.value += 1;
+    await assert.rejects(
+      () => fixture.activate(2, options, 'changed'),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+    );
+    fixture.now.value += 1;
+    fixture.setResendSentStatus('bounced');
+    await fixture.sourceTurn({ source: 'resend', accountId: fixture.accountId, scopeId: 'status' });
+    fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
+
+    await fixture.sourceTurn({ source: 'resend', accountId: fixture.accountId, scopeId: 'received' });
+    await fixture.runtime.resumeClaimedCompletions();
+    await fixture.sourceTurn({ source: 'resend', accountId: fixture.accountId, scopeId: 'status' });
+    fixture.oracle({ raw: 2, admissions: 2, versions: [1, 2] });
+  } finally {
+    await fixture.dispose();
+  }
+});

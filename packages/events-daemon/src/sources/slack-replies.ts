@@ -1,12 +1,15 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { CommsError } from '@agentcomms/core';
+import type { AsyncSourceStageExpiry } from '../runtime/expiry.ts';
 import { type SourceScope, type SourceStageDebt, sourceStageRetentionForDebts } from './contracts.ts';
+import type { SourceScopeLock } from './scope-lock.ts';
 import {
   assertSlackTimestamp,
   compareSlackTimestamp,
   type SlackCandidate,
   type SlackSourceMessage,
   type SlackSourcePage,
+  slackOccurrenceKey,
 } from './slack.ts';
 
 interface SlackReplyBarrier {
@@ -256,17 +259,17 @@ class SlackReplyPageStager {
   }
 
   /**
-   * Turns an expired raw page into its content-free cursor continuation. A prior EventExpiry sweep has the same
-   * durable resolution row, so both restart paths advance the exact saved next cursor without another provider call.
+   * Finds an expired page's content-free continuation. Common expiry normally advances its owner atomically; this
+   * fallback handles a page found exactly at the deadline without ever using a stage id as an occurrence key.
    */
-  expiredContinuation(input: {
+  async expiredContinuation(input: {
     readonly owner: string;
     readonly accountId: string;
     readonly conversationId: string;
     readonly parentTs: string;
     readonly generation: number;
     readonly cursorBefore: string | null;
-  }): Readonly<{ nextCursor: string | null; retainedHistoryBoundary: boolean }> | null {
+  }): Promise<Readonly<{ nextCursor: string | null; retainedHistoryBoundary: boolean }> | null> {
     const matches = (id: string) => {
       const identity = replyPageIdentity(id);
       return (
@@ -297,6 +300,10 @@ class SlackReplyPageStager {
       ) {
         const identity = replyPageIdentity(stage.id);
         if (identity === null) throw new CommsError('BAD_DATA', 'an expired Slack reply stage has no cursor identity');
+        const page = await this.#decode(stage.id, stage.encrypted_record);
+        const occurrenceKeys = page.value.messages
+          .filter((message) => !page.value.completed.includes(message.ts))
+          .map((message) => slackOccurrenceKey(identity.conversationId, message.ts));
         this.#assertLive();
         immediate(this.#database, () => {
           this.#assertLive();
@@ -308,24 +315,29 @@ class SlackReplyPageStager {
             .run(stage.id, stage.encrypted_record, this.#now());
           if (Number(deleted.changes) !== 1)
             throw new CommsError('APPROVAL_VOID', 'the expired Slack reply stage changed before its continuation');
+          const resolution = this.#database.prepare(
+            `INSERT OR IGNORE INTO source_occurrence_resolutions
+             (source, account_id, occurrence_key, outcome, resolved_at, error_code)
+             VALUES ('slack', ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
+          );
+          for (const occurrenceKey of occurrenceKeys) resolution.run(input.accountId, occurrenceKey, this.#now());
+          this.#database.prepare('DELETE FROM source_stage_rule_debts WHERE stage_id = ?').run(stage.id);
           this.#database
-            .prepare(
-              `INSERT OR IGNORE INTO source_occurrence_resolutions
-               (source, account_id, occurrence_key, outcome, resolved_at, error_code)
-               VALUES ('slack', ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
-            )
-            .run(input.accountId, stage.id, this.#now());
+            .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
+            .run(`slack-expired-reply:${stage.id}`, 'event.source.expired-continuation', this.#now());
         });
         return { nextCursor: identity.nextCursor, retainedHistoryBoundary: identity.retainedHistoryBoundary };
       }
       return null;
     }
-    const resolution = (
+    const marker = (
       this.#database
-        .prepare("SELECT occurrence_key FROM source_occurrence_resolutions WHERE source = 'slack' AND account_id = ?")
-        .all(input.accountId) as Array<{ occurrence_key: string }>
-    ).find((row) => matches(row.occurrence_key));
-    const identity = resolution === undefined ? null : replyPageIdentity(resolution.occurrence_key);
+        .prepare(
+          "SELECT id FROM operational_records WHERE kind = 'event.source.expired-continuation' AND id LIKE 'slack-expired-reply:%'",
+        )
+        .all() as Array<{ id: string }>
+    ).find((row) => matches(row.id.slice('slack-expired-reply:'.length)));
+    const identity = marker === undefined ? null : replyPageIdentity(marker.id.slice('slack-expired-reply:'.length));
     return identity === null
       ? null
       : { nextCursor: identity.nextCursor, retainedHistoryBoundary: identity.retainedHistoryBoundary };
@@ -412,6 +424,30 @@ class SlackReplyPageStager {
     let current = input.stage;
     for (const message of current.value.messages) {
       if (current.value.completed.includes(message.ts)) continue;
+      if (
+        this.#database
+          .prepare(
+            `SELECT 1 AS present FROM source_occurrence_resolutions
+             WHERE source = 'slack' AND account_id = ? AND occurrence_key = ?`,
+          )
+          .get(this.#hooks.scope.accountId, slackOccurrenceKey(input.conversationId, message.ts)) !== undefined
+      ) {
+        const next: SlackReplyPageStage = { ...current.value, completed: [...current.value.completed, message.ts] };
+        const record = await this.#encrypt(next, current.id);
+        this.#assertLive();
+        immediate(this.#database, () => {
+          this.#assertLive();
+          const updated = this.#database
+            .prepare(
+              'UPDATE source_scan_state SET encrypted_record = ?, updated_at = ? WHERE id = ? AND encrypted_record = ?',
+            )
+            .run(record, this.#now(), current.id, current.record);
+          if (Number(updated.changes) !== 1)
+            throw new CommsError('APPROVAL_VOID', 'the Slack reply stage changed while terminal content was skipped');
+        });
+        current = { id: current.id, value: next, record };
+        continue;
+      }
       const outcome = await this.#hooks.admit({
         candidate: { conversationId: input.conversationId, message },
         stageId: current.id,
@@ -469,6 +505,176 @@ class SlackReplyPageStager {
     if (!value.completed.every((timestamp) => typeof timestamp === 'string'))
       throw new CommsError('BAD_DATA', 'a staged Slack reply completion is malformed');
     return { id, value: value as SlackReplyPageStage, record };
+  }
+}
+
+/** Common start-up/tick expiry for Slack reply pages and their owner-specific content-free continuation. */
+export class SlackReplyStageExpiry implements AsyncSourceStageExpiry {
+  readonly #database: DatabaseSync;
+  readonly #lock: SourceScopeLock;
+  readonly #decrypt: (record: Uint8Array, id: string) => Promise<unknown>;
+  readonly #encrypt: (value: unknown, id: string) => Promise<Uint8Array>;
+  readonly #now: () => number;
+
+  constructor(
+    input: Readonly<{
+      database: DatabaseSync;
+      lock: SourceScopeLock;
+      decrypt: (record: Uint8Array, id: string) => Promise<unknown>;
+      encrypt: (value: unknown, id: string) => Promise<Uint8Array>;
+      now?: (() => number) | undefined;
+    }>,
+  ) {
+    this.#database = input.database;
+    this.#lock = input.lock;
+    this.#decrypt = input.decrypt;
+    this.#encrypt = input.encrypt;
+    this.#now = input.now ?? Date.now;
+  }
+
+  async sweep(): Promise<number> {
+    const rows = this.#database
+      .prepare(
+        `SELECT id, account_id, cursor_scope FROM source_scan_state
+         WHERE source = 'slack' AND id LIKE 'slack-reply-page:%'
+           AND stage_expires_at IS NOT NULL AND stage_expires_at <= ?`,
+      )
+      .all(this.#now()) as Array<{ id: string; account_id: string; cursor_scope: string }>;
+    let expired = 0;
+    for (const row of rows) {
+      const identity = replyPageIdentity(row.id);
+      if (identity === null || identity.accountId !== row.account_id) continue;
+      expired += await this.#lock.withScope(
+        { source: 'slack', accountId: identity.accountId, scopeId: row.cursor_scope },
+        () => this.#expire(row.id, identity),
+      );
+    }
+    return expired;
+  }
+
+  async #expire(stageId: string, identity: NonNullable<ReturnType<typeof replyPageIdentity>>): Promise<number> {
+    const row = this.#database
+      .prepare(
+        `SELECT encrypted_record, stage_expires_at FROM source_scan_state
+         WHERE id = ? AND stage_expires_at IS NOT NULL AND stage_expires_at <= ?`,
+      )
+      .get(stageId, this.#now()) as { encrypted_record: Uint8Array; stage_expires_at: number } | undefined;
+    if (row === undefined) return 0;
+    const page = (await this.#decrypt(row.encrypted_record, stageId)) as SlackReplyPageStage;
+    if (
+      page.kind !== 'slack-reply-page-v1' ||
+      page.owner !== identity.owner ||
+      page.parentTs !== identity.parentTs ||
+      page.generation !== identity.generation ||
+      page.cursorBefore !== identity.cursorBefore ||
+      page.nextCursor !== identity.nextCursor ||
+      page.retainedHistoryBoundary !== identity.retainedHistoryBoundary ||
+      !Array.isArray(page.messages) ||
+      !Array.isArray(page.completed)
+    )
+      throw new CommsError('BAD_DATA', 'an expired Slack reply stage is malformed');
+
+    let owner:
+      | Readonly<{ kind: 'reconcile'; id: string; record: Uint8Array; next: SlackReplyReconciliationState }>
+      | Readonly<{ kind: 'drain'; intentId: string }>
+      | undefined;
+    if (!page.retainedHistoryBoundary && page.owner.startsWith('reconcile:')) {
+      const id = page.owner.slice('reconcile:'.length);
+      const state = this.#database.prepare('SELECT encrypted_record FROM source_scan_state WHERE id = ?').get(id) as
+        | { encrypted_record: Uint8Array }
+        | undefined;
+      if (state !== undefined) {
+        const value = (await this.#decrypt(state.encrypted_record, id)) as SlackReplyReconciliationState;
+        if (
+          value.kind === 'slack-reply-reconciliation-v1' &&
+          value.cursor === page.cursorBefore &&
+          value.latest === page.latest
+        )
+          owner = {
+            kind: 'reconcile',
+            id,
+            record: state.encrypted_record,
+            next: {
+              ...value,
+              cursor: page.nextCursor,
+              watermark: page.nextCursor === null ? page.latest : value.watermark,
+              latest: page.nextCursor === null ? null : value.latest,
+              turn: value.turn + 1,
+            },
+          };
+      }
+    } else if (!page.retainedHistoryBoundary && page.owner.startsWith('drain:')) {
+      owner = { kind: 'drain', intentId: page.owner.slice('drain:'.length) };
+    }
+    const continuation = owner?.kind === 'reconcile' ? await this.#encrypt(owner.next, owner.id) : undefined;
+    const occurrenceKeys = page.messages
+      .filter((message) => !page.completed.includes(message.ts))
+      .map((message) => {
+        assertSlackTimestamp(message.ts);
+        return slackOccurrenceKey(identity.conversationId, message.ts);
+      });
+    return immediate(this.#database, () => {
+      const current = this.#database
+        .prepare(
+          `SELECT 1 AS present FROM source_scan_state
+           WHERE id = ? AND encrypted_record = ? AND stage_expires_at = ? AND stage_expires_at <= ?`,
+        )
+        .get(stageId, row.encrypted_record, row.stage_expires_at, this.#now()) as { present: number } | undefined;
+      if (current === undefined) return 0;
+      const now = this.#now();
+      const resolution = this.#database.prepare(
+        `INSERT OR IGNORE INTO source_occurrence_resolutions
+         (source, account_id, occurrence_key, outcome, resolved_at, error_code)
+         VALUES ('slack', ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
+      );
+      for (const occurrenceKey of occurrenceKeys) resolution.run(identity.accountId, occurrenceKey, now);
+      let advanced = false;
+      if (owner?.kind === 'reconcile' && continuation !== undefined) {
+        advanced =
+          Number(
+            this.#database
+              .prepare(
+                'UPDATE source_scan_state SET encrypted_record = ?, updated_at = ? WHERE id = ? AND encrypted_record = ?',
+              )
+              .run(continuation, now, owner.id, owner.record).changes,
+          ) === 1;
+      } else if (owner?.kind === 'drain') {
+        advanced =
+          Number(
+            this.#database
+              .prepare(
+                `UPDATE slack_reply_drains SET cursor = ?, covered_through = ?, drained_at = ?
+                 WHERE intent_id = ? AND account_id = ? AND conversation_id = ? AND thread_ts = ?
+                   AND cursor IS ? AND drained_at IS NULL`,
+              )
+              .run(
+                page.nextCursor,
+                page.nextCursor === null ? page.latest : identity.parentTs,
+                page.nextCursor === null ? now : null,
+                owner.intentId,
+                identity.accountId,
+                identity.conversationId,
+                identity.parentTs,
+                identity.cursorBefore,
+              ).changes,
+          ) === 1;
+      }
+      if (!advanced) {
+        // A retained-history boundary (or damaged owner continuation) must not be silently retried from the provider.
+        this.#database
+          .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
+          .run(`slack-expired-reply:${stageId}`, 'event.source.expired-continuation', now);
+      }
+      const deleted = this.#database
+        .prepare('DELETE FROM source_scan_state WHERE id = ? AND encrypted_record = ? AND stage_expires_at = ?')
+        .run(stageId, row.encrypted_record, row.stage_expires_at);
+      if (Number(deleted.changes) !== 1) return 0;
+      this.#database.prepare('DELETE FROM source_stage_rule_debts WHERE stage_id = ?').run(stageId);
+      this.#database
+        .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
+        .run(`source-retention-expired:slack:${identity.accountId}:${stageId}`, 'event.source.retention-expired', now);
+      return 1;
+    });
   }
 }
 
@@ -598,7 +804,7 @@ export class SlackReplyDrains {
     if (row === undefined) return true;
     const owner = `drain:${input.intentId}`;
     const stager = this.#stager;
-    const expired = stager.expiredContinuation({
+    const expired = await stager.expiredContinuation({
       owner,
       accountId: input.accountId,
       conversationId: input.conversationId,
@@ -862,7 +1068,7 @@ export class SlackReplyReconciler {
     const latest = current.value.latest;
     if (latest === null) throw new CommsError('BAD_DATA', 'a Slack reply scan lost its frozen boundary');
     const owner = `reconcile:${current.id}`;
-    const expired = this.#stager.expiredContinuation({
+    const expired = await this.#stager.expiredContinuation({
       owner,
       accountId: input.accountId,
       conversationId: input.conversationId,
@@ -966,7 +1172,7 @@ export class SlackReplyReconciler {
       cursorBefore: state.value.cursor,
     };
     if ((await this.#stager.load(stageInput)) !== null) return true;
-    return this.#stager.expiredContinuation(stageInput) !== null;
+    return (await this.#stager.expiredContinuation(stageInput)) !== null;
   }
 
   #dropExpired(state: StoredReconciliation): void {

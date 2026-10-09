@@ -197,6 +197,25 @@ test('D7b: every non-Gmail replacement gives old-only, new-only and shared scope
       await approve(fixture.runtime, fixture.approvals, rule(entry, 1, true).ruleId, 1);
       fixture.store.database.prepare('UPDATE event_settings SET enabled = 1 WHERE singleton = 1').run();
 
+      if (entry.source === 'resend' && entry.oldOnly.scopeId === 'status') {
+        await approve(fixture.runtime, fixture.approvals, rule(entry, 2, false).ruleId, 2);
+        assert.equal(
+          fixture.versions.activeVersion('rule', rule(entry, 1, true).ruleId)?.version,
+          2,
+          'a Resend status replacement is completely drained at P',
+        );
+        assert.equal(
+          (
+            fixture.store.database.prepare('SELECT COUNT(*) AS count FROM replacement_drains').get() as {
+              count: number;
+            }
+          ).count,
+          0,
+          'a status scope has no ordered old-version backlog after P',
+        );
+        continue;
+      }
+
       await assert.rejects(
         () => approve(fixture.runtime, fixture.approvals, rule(entry, 2, false).ruleId, 2),
         (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',

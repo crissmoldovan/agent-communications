@@ -103,6 +103,7 @@ export class PhaseDCutoverFixture {
   #failpoint: CutoverFailpoint | undefined;
   #deadlineFailpoint: ActivationDeadlineFailpoint | undefined;
   #slackPages: Pick<SlackEventSource, 'history' | 'replies'> | undefined;
+  #resendSentStatus = 'sent';
 
   private constructor(input: {
     root: string;
@@ -176,6 +177,10 @@ export class PhaseDCutoverFixture {
   /** Injected fake-only Slack pages for source-owner integration fixtures; no transport escapes this harness. */
   setSlackPages(pages: Pick<SlackEventSource, 'history' | 'replies'> | undefined): void {
     this.#slackPages = pages;
+  }
+
+  setResendSentStatus(status: string): void {
+    this.#resendSentStatus = status;
   }
 
   async activate(
@@ -285,6 +290,8 @@ export class PhaseDCutoverFixture {
       drained_at: number | null;
     }>;
     const drainByScope = new Map(drains.map((row) => [`${row.account_id}\u0000${row.position_scope}`, row]));
+    const drainedAtP = (scope: SourceScope) =>
+      this.source === 'resend' && scope.scopeId === 'status' ? this.now.value : null;
     for (const scope of oldOnly) {
       assert.deepEqual(
         { ...drainByScope.get(key(scope)) },
@@ -293,7 +300,7 @@ export class PhaseDCutoverFixture {
           position_scope: scope.scopeId,
           old_in_scope: 1,
           new_in_scope: 0,
-          drained_at: null,
+          drained_at: drainedAtP(scope),
         },
       );
     }
@@ -305,7 +312,7 @@ export class PhaseDCutoverFixture {
           position_scope: scope.scopeId,
           old_in_scope: 1,
           new_in_scope: 1,
-          drained_at: null,
+          drained_at: drainedAtP(scope),
         },
       );
     }
@@ -529,7 +536,10 @@ export class PhaseDCutoverFixture {
           this.source === 'slack'
             ? 'slack.message.posted'
             : this.source === 'resend'
-              ? 'resend.email.received'
+              ? (options as { kinds?: readonly string[] }).kinds?.includes('status') === true &&
+                !(options as { kinds?: readonly string[] }).kinds?.includes('received')
+                ? 'resend.email.status_changed'
+                : 'resend.email.received'
               : 'whatsapp.message.received',
         version: 1,
       },
@@ -712,7 +722,23 @@ export class PhaseDCutoverFixture {
       },
       listSent: async () => {
         await this.record('resend.listSent');
-        return { emails: [], next: null };
+        return {
+          emails: [
+            {
+              id: IDS.resendId,
+              lastEvent: this.#resendSentStatus,
+              from: null,
+              to: [],
+              cc: [],
+              bcc: [],
+              subject: 'cutover status',
+              createdAt: '2026-10-09T12:00:00.000Z',
+              scheduledAt: null,
+              messageId: null,
+            },
+          ],
+          next: null,
+        };
       },
     };
   }

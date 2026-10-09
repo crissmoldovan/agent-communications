@@ -29,14 +29,18 @@ import { EventDomainError } from '../domain/lifecycle.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import { MailboxLock } from '../sources/mailbox-lock.ts';
 import { type LocalEventSourceRegistry, phaseDSourceRegistry } from '../sources/registry.ts';
+import { ResendReceivedStageExpiry } from '../sources/resend.ts';
+import { ResendStatusStageExpiry } from '../sources/resend-status.ts';
 import { SourceScopeLock } from '../sources/scope-lock.ts';
-import { GmailStageExpiry } from '../sources/source-worker.ts';
+import { SlackHistoryStageExpiry } from '../sources/slack.ts';
+import { SlackReplyStageExpiry } from '../sources/slack-replies.ts';
+import { GmailStageExpiry, type GmailStageRecord } from '../sources/source-worker.ts';
 import { openEventDatabase } from '../store/database.ts';
 import { openEventSecretStore } from '../store/event-secrets.ts';
 import { EventRecordCipher } from '../store/records.ts';
 import { ActivationRuntime } from './activations.ts';
 import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
-import { EventExpiry } from './expiry.ts';
+import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
@@ -197,28 +201,56 @@ async function startOwnerWithLock(
         ).toString('utf8'),
       ),
   });
+  const decryptSourceStage = async (stored: Uint8Array, stageId: string): Promise<unknown> =>
+    JSON.parse(
+      (
+        await cipher.decrypt(
+          { table: 'source_scan_state', column: 'encryptedRecord', key: [{ type: 'text', value: stageId }] },
+          stored,
+        )
+      ).toString('utf8'),
+    );
+  const encryptSourceStage = async (value: unknown, stageId: string): Promise<Uint8Array> =>
+    cipher.encrypt(
+      { table: 'source_scan_state', column: 'encryptedRecord', key: [{ type: 'text', value: stageId }] },
+      Buffer.from(JSON.stringify(value)),
+    );
   const expiry = new EventExpiry(
     database,
     Date.now,
-    new GmailStageExpiry({
-      store: database,
-      mailboxLock,
-      decryptStage: async (stored, stageId) =>
-        JSON.parse(
-          (
-            await cipher.decrypt(
-              { table: 'source_scan_state', column: 'encryptedRecord', key: [{ type: 'text', value: stageId }] },
-              stored,
-            )
-          ).toString('utf8'),
-        ),
-      encryptStage: async (value, stageId) =>
-        cipher.encrypt(
-          { table: 'source_scan_state', column: 'encryptedRecord', key: [{ type: 'text', value: stageId }] },
-          Buffer.from(JSON.stringify(value)),
-        ),
-      replacementDrains,
-    }),
+    new SourceStageExpiryGroup([
+      new GmailStageExpiry({
+        store: database,
+        mailboxLock,
+        decryptStage: async (stored, stageId): Promise<GmailStageRecord> =>
+          (await decryptSourceStage(stored, stageId)) as GmailStageRecord,
+        encryptStage: encryptSourceStage,
+        replacementDrains,
+      }),
+      new SlackHistoryStageExpiry({
+        store: database,
+        lock: mailboxLock.sourceScopeLock,
+        decrypt: decryptSourceStage,
+        encrypt: encryptSourceStage,
+      }),
+      new SlackReplyStageExpiry({
+        database: database.database,
+        lock: mailboxLock.sourceScopeLock,
+        decrypt: decryptSourceStage,
+        encrypt: encryptSourceStage,
+      }),
+      new ResendReceivedStageExpiry({
+        store: database,
+        lock: mailboxLock.sourceScopeLock,
+        decrypt: decryptSourceStage,
+        encrypt: encryptSourceStage,
+      }),
+      new ResendStatusStageExpiry({
+        store: database,
+        lock: mailboxLock.sourceScopeLock,
+        decrypt: decryptSourceStage,
+      }),
+    ]),
   );
   const dryrun = new DryRunDispatcher({
     store: database,
