@@ -6,6 +6,8 @@ approval the user gives at that moment**.
 This package is the `agent-gmail` command and the MCP server behind it. It is part of
 [agent-communications](https://github.com/crissmoldovan/agent-communications).
 
+Phase D's held local event daemon may call this package's internal read-only event operation. It adds no Gmail command
+or MCP tool, and it cannot send.
 
 ## Why the sending rule exists
 

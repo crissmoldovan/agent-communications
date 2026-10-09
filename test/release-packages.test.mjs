@@ -1003,7 +1003,7 @@ test('REL-d: the release documents say what a hold is, and how it is lifted', as
 
 // ── The OIDC preflight and the commit check, against a fake GitHub and a fake registry ───────────────────────────
 
-test('REL-B1: B1 stays held, while its eventual owner publish is events then events-daemon from one checked tag', async () => {
+test('REL-B1: B1 through Phase D stay held, while their eventual owner publish is events then events-daemon from one checked tag', async () => {
   assert.ok(PUBLISHABLE.includes('events'), '@agentcomms/events is consumer-checked while held');
   assert.ok(PUBLISHABLE.includes('events-daemon'), '@agentcomms/events-daemon is consumer-checked while held');
   assert.ok(Object.hasOwn(HELD, 'events'), '@agentcomms/events remains held for B1');
@@ -1012,7 +1012,7 @@ test('REL-B1: B1 stays held, while its eventual owner publish is events then eve
   assert.ok(!PACKAGES.includes('events-daemon'), '@agentcomms/events-daemon is absent from a B1 tag publish');
 
   const release = (await readFile(join(ROOT, 'docs', 'RELEASING.md'), 'utf8')).replace(/\s+/g, ' ');
-  assert.match(release, /A B1 or B2 merge publishes neither package/i);
+  assert.match(release, /A B1, B2 or Phase D merge publishes neither package/i);
   assert.match(release, /same checked tag/i);
   assert.match(
     release,
@@ -1021,7 +1021,7 @@ test('REL-B1: B1 stays held, while its eventual owner publish is events then eve
   );
 });
 
-test('REL-B2: the held B2 runtime stays out of publication and the release browser gate proves loopback SSE/CORS', async () => {
+test('REL-B2: the held B2 and Phase-D runtime stays out of publication and the release browser gate proves loopback SSE/CORS', async () => {
   assert.ok(PUBLISHABLE.includes('events'), '@agentcomms/events remains consumer-checked for B2');
   assert.ok(PUBLISHABLE.includes('events-daemon'), '@agentcomms/events-daemon remains consumer-checked for B2');
   assert.ok(Object.hasOwn(HELD, 'events'), '@agentcomms/events remains held for B2');
@@ -1037,7 +1037,16 @@ test('REL-B2: the held B2 runtime stays out of publication and the release brows
   assert.match(readme, /delivery retry, drop or hold/i, 'B3 delivery controls remain absent');
   assert.match(readme, /subscriber management/i, 'B3 subscriber controls remain absent');
   assert.match(readme, /named event-secret or migration operation/i, 'B3 secret operations remain absent');
-  assert.match(release, /both held throughout B1 and B2/i, 'the release guide keeps both packages held through B2');
+  assert.match(
+    release,
+    /both held throughout B1, B2 and Phase D/i,
+    'the release guide keeps both packages held through Phase D',
+  );
+  assert.match(
+    readme,
+    /held from publication throughout B1, B2 and Phase D/i,
+    'the daemon README keeps both packages held through Phase D',
+  );
   assert.match(release, /loopback daemon SSE\/CORS/i, 'the release browser gate includes B2 SSE/CORS verification');
 });
 
