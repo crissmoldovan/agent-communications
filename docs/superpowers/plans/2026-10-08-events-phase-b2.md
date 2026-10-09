@@ -965,8 +965,10 @@ feat(events): persist fenced SSE replay and bearer state.
     pnpm --filter @agentcomms/events-daemon exec node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/phase-d-b2-retention-seam.test.ts test/migrations.test.ts test/retention.test.ts
     pnpm verify
 
-Passing before D: the no-op seams register B2's synchronous participants and all
-ordinary B2 tests pass without a D import or a WhatsApp row.  Passing after D: the
+Passing before D: no participant is registered (the no-op seams stay empty, and B2's
+native purge and shortening paths cover its content), `createB2RetainedContentParticipants`
+passes its supplied-transaction tests, and all ordinary B2 tests pass without a D import or
+a WhatsApp row.  Passing after D: the
 normal production owner receives D's concrete seam, a missing seam fails closed for
 WhatsApp rows, and the guarded real-schema crash/restart matrix proves the
 one-transaction list and tightening contract.
