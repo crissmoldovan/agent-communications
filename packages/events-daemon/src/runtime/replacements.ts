@@ -3,6 +3,11 @@ import { CommsError } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import { isWhitelistedTightening } from './disclosure-fence.ts';
 import {
+  purgeB2RetainedContentForRuleVersions,
+  shortenB2DeadLetterDeadlines,
+  shortenB2SseReplayDeadlines,
+} from './phase-d-b2-retention.ts';
+import {
   addActiveRuleTargetReferences,
   purgeUnreferencedSystemTargets,
   removeRuleVersionTargetReferences,
@@ -270,9 +275,9 @@ export function replacementIntentSummary(database: DatabaseSync): readonly {
  * is retained. The caller owns the surrounding BEGIN IMMEDIATE, so lifecycle, pointer and purge are observed together.
  */
 export function purgeRevokedRuleWork(database: DatabaseSync, ruleId: string, versions: readonly number[]): void {
+  purgeB2RetainedContentForRuleVersions(database, { ruleId, ruleVersions: versions });
   for (const version of versions) {
     database.prepare('DELETE FROM dryrun_log WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
-    database.prepare('DELETE FROM stream_log WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
     database.prepare('DELETE FROM ingest_rules WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
     database
       .prepare(
@@ -288,11 +293,6 @@ export function purgeRevokedRuleWork(database: DatabaseSync, ruleId: string, ver
         `UPDATE deliveries
          SET state = 'in-flight-at-disable', encrypted_record = NULL, lease_until = NULL, next_at = NULL
          WHERE rule_id = ? AND rule_version = ? AND state = 'disclosing'`,
-      )
-      .run(ruleId, version);
-    database
-      .prepare(
-        "UPDATE deliveries SET encrypted_record = NULL WHERE rule_id = ? AND rule_version = ? AND state = 'dead-lettered'",
       )
       .run(ruleId, version);
     // A raw staged page is shared until no other rule version still owes it; only a sole debt is purged here.
@@ -377,6 +377,13 @@ export function shortenRuleRetentionDeadlines(input: {
   const originalRetention = new Map(
     retainedVersions.map((row) => [row.version, storedRetention(row.document)] as const),
   );
+  const retainedRuleVersions = retainedVersions.map((row) => row.version);
+  shortenB2DeadLetterDeadlines(database, {
+    ruleId,
+    ruleVersions: retainedRuleVersions,
+    durationMs: child.retention.deadLetterMs,
+    at: now,
+  });
   const deliveries = database
     .prepare(
       'SELECT id, rule_version, expires_at, state, dead_lettered_at, dead_letter_expires_at FROM deliveries WHERE rule_id = ?',
@@ -392,30 +399,7 @@ export function shortenRuleRetentionDeadlines(input: {
   for (const delivery of deliveries) {
     const prior = originalRetention.get(delivery.rule_version);
     if (!prior) continue;
-    if (
-      delivery.state === 'dead-lettered' &&
-      delivery.dead_lettered_at !== null &&
-      delivery.dead_letter_expires_at !== null
-    ) {
-      const deadLetterExpiresAt = Math.min(
-        delivery.dead_letter_expires_at,
-        delivery.dead_lettered_at + child.retention.deadLetterMs,
-      );
-      if (deadLetterExpiresAt <= now) {
-        database
-          .prepare(
-            `UPDATE deliveries
-             SET dead_letter_expires_at = ?, state = 'retention-expired', encrypted_record = NULL, lease_until = NULL
-             WHERE id = ?`,
-          )
-          .run(deadLetterExpiresAt, delivery.id);
-      } else {
-        database
-          .prepare('UPDATE deliveries SET dead_letter_expires_at = ? WHERE id = ?')
-          .run(deadLetterExpiresAt, delivery.id);
-      }
-      continue;
-    }
+    if (delivery.state === 'dead-lettered') continue;
     const createdAt = delivery.expires_at - prior.deliveryMs;
     const expiresAt = Math.min(delivery.expires_at, createdAt + child.retention.deliveryMs);
     if (expiresAt <= now && ['queued', 'retryable'].includes(delivery.state)) {
@@ -437,14 +421,12 @@ export function shortenRuleRetentionDeadlines(input: {
     else
       database.prepare('UPDATE dryrun_log SET expires_at = ? WHERE delivery_id = ?').run(expiresAt, dryrun.delivery_id);
   }
-  const streams = database
-    .prepare('SELECT id, delivered_at, expires_at FROM stream_log WHERE rule_id = ?')
-    .all(ruleId) as Array<{ id: string; delivered_at: number; expires_at: number }>;
-  for (const stream of streams) {
-    const expiresAt = Math.min(stream.expires_at, stream.delivered_at + child.retention.sseReplayMs);
-    if (expiresAt <= now) database.prepare('DELETE FROM stream_log WHERE id = ?').run(stream.id);
-    else database.prepare('UPDATE stream_log SET expires_at = ? WHERE id = ?').run(expiresAt, stream.id);
-  }
+  shortenB2SseReplayDeadlines(database, {
+    ruleId,
+    ruleVersions: retainedRuleVersions,
+    durationMs: child.retention.sseReplayMs,
+    at: now,
+  });
   database
     .prepare(
       'UPDATE decisions SET encrypted_record = NULL, purged_at = ? WHERE rule_id = ? AND metadata_expires_at <= ?',

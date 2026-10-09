@@ -1,5 +1,6 @@
 import type { EventDatabase } from '../store/database.ts';
 import { fixedDeadline } from '../store/retention.ts';
+import { purgeExpiredB2StreamRecords } from './phase-d-b2-retention.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 
 export interface DeadLetterInput {
@@ -85,7 +86,7 @@ export class EventExpiry {
         )
         .run(now);
       const localRecords = Number(database.prepare('DELETE FROM dryrun_log WHERE expires_at <= ?').run(now).changes);
-      const streamRecords = Number(database.prepare('DELETE FROM stream_log WHERE expires_at <= ?').run(now).changes);
+      const streamRecords = purgeExpiredB2StreamRecords(database, now);
       // D8: an expired projection ends with its content-free terminal outcome, recorded in the same transaction as
       // the purge, so a sweep never makes an outcome disappear. Evaluation records the same outcome when it gets
       // there first; the unique (event, rule, version) decision keeps them one.
