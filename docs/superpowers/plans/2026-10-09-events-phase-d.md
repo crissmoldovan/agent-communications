@@ -1246,9 +1246,12 @@ access only—never email, Slack, Resend, or WhatsApp sends.
    ```
 
    It constructs the concrete `WhatsAppVisibilityFence` and D hook registry,
-   calls the supplied B2 retained-content participant constructors, registers
+   calls the supplied B2 retained-content participant constructor, registers
    the resulting list and retention participants exactly once, and returns the
-   concrete fence and hooks. `startEventOwner` is the ordinary production
+   concrete fence and hooks. It is the only place those participants are
+   registered: `startEventOwner` supplies B2 Task 8a's exported
+   `createB2RetainedContentParticipants` as `createRetainedContentParticipants`
+   and registers nothing itself, before D or after. `startEventOwner` is the ordinary production
    composition site: whenever its source registry contains WhatsApp, it calls
    this function and injects its returned fence/hooks into the actual owner,
    dispatcher, and live/replay writer path. B2-alone may select its structural
