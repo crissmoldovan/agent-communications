@@ -16,6 +16,7 @@ import type { DeliveryDispatcher } from './dispatcher.ts';
 import { EventEvaluator } from './evaluate.ts';
 import type { EventExpiry } from './expiry.ts';
 import type { EventLifecycle } from './lifecycle.ts';
+import { recoverDeliveryLeases } from './recovery.ts';
 import { recordEventTaint } from './untrusted.ts';
 
 const DEFAULT_TICK_MS = 5_000;
@@ -142,7 +143,7 @@ export class EventScheduler {
     }
 
     try {
-      await this.#dispatcher.recoverLeases();
+      await recoverDeliveryLeases(this.#dispatcher);
       const ids = this.#store.database
         .prepare(
           "SELECT id FROM deliveries WHERE state IN ('queued', 'retryable') AND (next_at IS NULL OR next_at <= ?) ORDER BY id LIMIT ?",

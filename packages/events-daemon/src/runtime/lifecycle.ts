@@ -1,5 +1,6 @@
 import { CommsError } from '@agentcomms/core';
 import type { EventDatabase } from '../store/database.ts';
+import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 
 export interface EventLifecycleStatus {
   readonly enabled: boolean;
@@ -55,6 +56,12 @@ export class EventLifecycle {
     return this.store.immediate(() => {
       const database = this.store.database;
       const now = this.now();
+      const retained = database
+        .prepare(
+          `SELECT id FROM deliveries
+           WHERE state IN ('queued', 'retryable', 'disclosing', 'dead-lettered') AND encrypted_record IS NOT NULL`,
+        )
+        .all() as Array<{ id: string }>;
       database.exec('DELETE FROM dryrun_log');
       database.exec('DELETE FROM ingest_rules');
       database.exec('DELETE FROM source_scan_state');
@@ -67,6 +74,10 @@ export class EventLifecycle {
         "UPDATE deliveries SET state = 'in-flight-at-disable', encrypted_record = NULL, lease_until = NULL WHERE state = 'disclosing'",
       );
       database.exec("UPDATE deliveries SET encrypted_record = NULL WHERE state = 'dead-lettered'");
+      for (const delivery of retained) {
+        for (const target of removeRetainedDeliveryTargetReference(database, delivery.id))
+          purgeUnreferencedSystemTargets(database, { ...target, now });
+      }
       database
         .prepare(
           "UPDATE activation_intents SET status = 'cancelled', updated_at = ? WHERE status IN ('pending', 'pending-completion')",

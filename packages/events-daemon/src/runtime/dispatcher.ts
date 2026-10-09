@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { type ApprovalStore, CommsError, type ConfigStore } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument, DryRunTargetDocument } from '../domain/activation-documents.ts';
 import type { EventDatabase } from '../store/database.ts';
@@ -5,15 +6,22 @@ import { type EventRecordCipher, RecordStorageError } from '../store/records.ts'
 import { dryrunDeadline } from '../store/retention.ts';
 import { assertLiveGmailAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
 import type { DeliveryRecord } from './deliveries.ts';
+import {
+  type ClaimedDelivery,
+  claimDelivery,
+  type DeliveryClaimResult,
+  hasLiveDeliveryLineage,
+  isCurrentDeliveryClaim,
+  releaseDeliveryClaim,
+  releaseDeliveryClaimInTransaction,
+} from './delivery-claim.ts';
 import { type ActiveDisclosableRequest, assertDisclosable } from './disclosure-fence.ts';
 import { EventExpiry } from './expiry.ts';
 import { newLocalResetBarrier } from './reset.ts';
+import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 
-type DeliveryState = 'queued' | 'retryable' | 'disclosing' | 'delivered' | 'retention-expired' | 'cancelled';
-
-interface DeliveryRow {
+interface CurrentDeliveryRow {
   readonly id: string;
-  readonly decision_id: string;
   readonly account_id: string;
   readonly rule_id: string;
   readonly rule_version: number;
@@ -21,9 +29,11 @@ interface DeliveryRow {
   readonly target_version: number;
   readonly encrypted_record: Uint8Array | null;
   readonly expires_at: number;
-  readonly state: DeliveryState;
+  readonly state: string;
   readonly switch_generation: number;
   readonly lease_until: number | null;
+  readonly attempt_id: string | null;
+  readonly lease_token: string | null;
   readonly event_id: string;
 }
 
@@ -54,6 +64,7 @@ export type DispatchResult =
       readonly state:
         | 'waiting-cap'
         | 'waiting-reset'
+        | 'waiting-order'
         | 'paused'
         | 'busy'
         | 'missing'
@@ -134,8 +145,9 @@ export interface DryRunDispatcherOptions {
 }
 
 /**
- * The sole B1 plaintext-to-local-record boundary.  It claims a delivery, proves its exact authority before decrypting,
- * encrypts the retained presentation outside its write transaction, then atomically charges, appends and settles.
+ * The sole B1 plaintext-to-local-record boundary. It atomically claims and charges a delivery, proves its exact
+ * authority before decrypting, encrypts the retained presentation outside its write transaction, then appends and
+ * settles only the exact current claim.
  */
 export class DryRunDispatcher {
   readonly #store: EventDatabase;
@@ -162,55 +174,87 @@ export class DryRunDispatcher {
 
   async dispatch(deliveryId: string): Promise<DispatchResult> {
     this.#expiry.sweep();
-    const claimed = this.#claim(deliveryId);
-    if (claimed.kind !== 'claimed') return { state: claimed.kind, deliveryId };
-    if (this.#barrierClosed(claimed.row)) {
-      this.#release(claimed.row);
-      return { state: 'waiting-reset', deliveryId };
+    let claimed: DeliveryClaimResult;
+    try {
+      claimed = await claimDelivery({
+        store: this.#store,
+        deliveryId,
+        now: this.#now(),
+        leaseMs: this.#leaseMs,
+        newAttemptId: randomUUID,
+        newLeaseToken: randomUUID,
+        assertAccountLive: (accountId) => assertLiveGmailAccount(this.#config, accountId),
+        preflight: async (row) => {
+          await this.#fence({
+            database: this.#store.database,
+            approvals: this.#approvals,
+            config: this.#config,
+            accountId: row.accountId,
+            boundary: 'dispatch',
+            ruleId: row.ruleId,
+            ruleVersion: row.ruleVersion,
+            targetId: row.targetId,
+            targetVersion: row.targetVersion,
+            switchGeneration: row.switchGeneration,
+          });
+        },
+      });
+    } catch (error) {
+      const candidate = deliveryById(this.#store, deliveryId);
+      if (candidate !== undefined && isRemovedAccountError(error)) {
+        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, candidate.account_id, this.#now()));
+        return { state: 'terminal', deliveryId };
+      }
+      throw error;
     }
+    if (claimed.kind !== 'claimed') return { state: claimed.kind, deliveryId };
+    const row = claimed.claim;
     let rule: CanonicalFullRuleDocument;
     let target: DryRunTargetDocument;
     try {
-      rule = ruleFor(this.#store, claimed.row.rule_id, claimed.row.rule_version);
-      target = dryRunTarget(rule, claimed.row.target_id, claimed.row.target_version);
-      await this.#fence(this.#fenceRequest(claimed.row));
+      rule = ruleFor(this.#store, row.ruleId, row.ruleVersion);
+      target = dryRunTarget(rule, row.targetId, row.targetVersion);
     } catch (error) {
       if (isRemovedAccountError(error)) {
-        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, claimed.row.account_id, this.#now()));
+        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, row.accountId, this.#now()));
         return { state: 'terminal', deliveryId };
       }
-      this.#release(claimed.row);
+      releaseDeliveryClaim(this.#store, row);
       throw error;
     }
 
     let plaintext: Buffer;
     try {
-      plaintext = await this.#cipher.decrypt(deliveryLocation(claimed.row.id), claimed.row.encrypted_record);
+      plaintext = await this.#cipher.decrypt(deliveryLocation(row.id), row.encryptedRecord);
     } catch (error) {
       if (error instanceof RecordStorageError) {
-        this.#markUnreadable(claimed.row, true);
+        this.#markUnreadable(row, true);
         return { state: 'unreadable', deliveryId };
       }
-      this.#release(claimed.row);
+      releaseDeliveryClaim(this.#store, row);
       throw error;
     }
     if (!isDeliveryRecord(plaintext)) {
-      this.#markUnreadable(claimed.row, true);
+      this.#markUnreadable(row, true);
       return { state: 'unreadable', deliveryId };
     }
 
     // encrypt opens its own nonce reservation transaction.  It must precede this boundary's immediate transaction.
-    const localRecord = await this.#cipher.encrypt(dryRunLocation(claimed.row.id), plaintext);
+    const localRecord = await this.#cipher.encrypt(dryRunLocation(row.id), plaintext);
     // D9: the account is read again immediately before the append; one removed during decryption or encryption is
     // purged here, and nothing is appended for it.
     try {
-      await assertLiveGmailAccount(this.#config, claimed.row.account_id);
+      await this.#fence(this.#fenceRequest(row));
+      await assertLiveGmailAccount(this.#config, row.accountId);
     } catch (error) {
-      if (!isRemovedAccountError(error)) throw error;
-      this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, claimed.row.account_id, this.#now()));
-      return { state: 'terminal', deliveryId };
+      if (isRemovedAccountError(error)) {
+        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, row.accountId, this.#now()));
+        return { state: 'terminal', deliveryId };
+      }
+      releaseDeliveryClaim(this.#store, row);
+      throw error;
     }
-    return this.#append(claimed.row, target, localRecord);
+    return this.#append(row, target, localRecord);
   }
 
   list(): readonly DryRunLogEntry[] {
@@ -317,68 +361,45 @@ export class DryRunDispatcher {
     return Promise.all(ids.map(({ id }) => this.dispatch(id)));
   }
 
-  #fenceRequest(row: DeliveryRow): ActiveDisclosableRequest {
+  #fenceRequest(row: ClaimedDelivery): ActiveDisclosableRequest {
     return {
       database: this.#store.database,
       approvals: this.#approvals,
       config: this.#config,
-      accountId: row.account_id,
+      accountId: row.accountId,
       boundary: 'dispatch',
-      ruleId: row.rule_id,
-      ruleVersion: row.rule_version,
-      targetId: row.target_id,
-      targetVersion: row.target_version,
-      switchGeneration: row.switch_generation,
+      ruleId: row.ruleId,
+      ruleVersion: row.ruleVersion,
+      targetId: row.targetId,
+      targetVersion: row.targetVersion,
+      switchGeneration: row.switchGeneration,
     };
   }
 
-  #claim(
-    deliveryId: string,
-  ):
-    | { readonly kind: Exclude<DispatchResult['state'], 'delivered' | 'unreadable'> }
-    | { readonly kind: 'claimed'; readonly row: DeliveryRow } {
-    return this.#store.immediate(() => {
-      // D12: an operational pause stops delivery claims — startup lease recovery included.
-      if (this.#paused()) return { kind: 'paused' };
-      const row = deliveryById(this.#store, deliveryId);
-      if (!row) return { kind: 'missing' };
-      const now = this.#now();
-      if (row.expires_at <= now) {
-        if (['queued', 'retryable', 'disclosing'].includes(row.state)) this.#expire(row.id);
-        return { kind: 'expired' };
-      }
-      if (!['queued', 'retryable', 'disclosing'].includes(row.state)) return { kind: 'terminal' };
-      if (row.state === 'disclosing' && (row.lease_until ?? 0) > now) return { kind: 'busy' };
-      const leaseUntil = now + this.#leaseMs;
-      this.#store.database
-        .prepare(
-          "UPDATE deliveries SET state = 'disclosing', lease_until = ?, attempts = attempts + 1 WHERE id = ? AND state IN ('queued', 'retryable', 'disclosing')",
-        )
-        .run(leaseUntil, row.id);
-      return { kind: 'claimed', row: { ...row, state: 'disclosing', lease_until: leaseUntil } };
-    });
-  }
-
-  #append(row: DeliveryRow, target: DryRunTargetDocument, encryptedRecord: Buffer): DispatchResult {
+  #append(row: ClaimedDelivery, target: DryRunTargetDocument, encryptedRecord: Buffer): DispatchResult {
     const now = this.#now();
     return this.#store.immediate(() => {
       const current = deliveryById(this.#store, row.id);
-      if (current?.state !== 'disclosing' || current.lease_until !== row.lease_until)
+      if (current === undefined || !isCurrentDeliveryClaim(this.#store.database, row))
         return { state: 'terminal', deliveryId: row.id };
       if (current.expires_at <= now) {
-        this.#expire(current.id);
+        this.#expire(row);
         return { state: 'expired', deliveryId: row.id };
+      }
+      if (!hasLiveDeliveryLineage(this.#store.database, current)) {
+        this.#cancel(row);
+        return { state: 'terminal', deliveryId: row.id };
       }
       const setting = this.#store.database
         .prepare('SELECT enabled, paused, switch_generation FROM event_settings WHERE singleton = 1')
         .get() as { enabled: number; paused: number; switch_generation: number } | undefined;
       if (setting?.enabled !== 1 || setting.switch_generation !== current.switch_generation) {
-        this.#cancel(current.id);
+        this.#cancel(row);
         return { state: 'terminal', deliveryId: row.id };
       }
       // A pause that began after the claim still wins: the work waits, encrypted, for a resume.
       if (setting.paused === 1) {
-        this.#release(current);
+        releaseDeliveryClaimInTransaction(this.#store.database, row);
         return { state: 'paused', deliveryId: row.id };
       }
       const barrier = this.#store.database
@@ -387,28 +408,11 @@ export class DryRunDispatcher {
         )
         .get(current.target_id, current.target_version) as { state: string } | undefined;
       if (barrier && barrier.state !== 'open') {
-        this.#release(current);
+        releaseDeliveryClaimInTransaction(this.#store.database, row);
         return { state: 'waiting-reset', deliveryId: row.id };
-      }
-      // The rolling window belongs to the rule, not to one version: a tightening that lowers the cap starts no fresh
-      // window, so every charge any version of this rule made in the last hour counts against this version's cap (D2:
-      // "no new cap charge can exceed the lower rolling-window limit").
-      const since = now - 60 * 60 * 1000;
-      const cap = this.#store.database
-        .prepare('SELECT count(*) AS count FROM delivery_cap_charges WHERE rule_id = ? AND charged_at > ?')
-        .get(current.rule_id, since) as { count: number };
-      const rule = ruleFor(this.#store, current.rule_id, current.rule_version);
-      if (cap.count >= rule.deliveryRateCap) {
-        this.#release(current);
-        return { state: 'waiting-cap', deliveryId: row.id };
       }
       const logExpiresAt = dryrunDeadline(now, target.retentionMs);
       this.#beforeCommit?.();
-      this.#store.database
-        .prepare(
-          'INSERT INTO delivery_cap_charges (delivery_id, rule_id, rule_version, charged_at) VALUES (?, ?, ?, ?)',
-        )
-        .run(current.id, current.rule_id, current.rule_version, now);
       this.#store.database
         .prepare(
           `INSERT INTO dryrun_log (delivery_id, rule_id, rule_version, target_id, target_version, event_id, account_id, encrypted_record, delivered_at, expires_at)
@@ -426,74 +430,68 @@ export class DryRunDispatcher {
           now,
           logExpiresAt,
         );
-      this.#store.database
+      const settled = this.#store.database
         .prepare(
-          "UPDATE deliveries SET state = 'delivered', encrypted_record = NULL, cap_charged_at = ?, lease_until = NULL WHERE id = ?",
+          `UPDATE deliveries SET state = 'delivered', encrypted_record = NULL, lease_until = NULL
+           WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
         )
-        .run(now, current.id);
+        .run(row.id, row.attemptId, row.leaseToken, row.leaseUntil).changes;
+      if (settled !== 1) return { state: 'terminal', deliveryId: row.id };
+      this.#dropRetainedTargetReference(row.id, now);
       return { state: 'delivered', deliveryId: row.id };
     });
   }
 
-  #paused(): boolean {
-    const row = this.#store.database.prepare('SELECT paused FROM event_settings WHERE singleton = 1').get() as
-      | { paused: number }
-      | undefined;
-    return row?.paused === 1;
-  }
-
-  #release(row: DeliveryRow): void {
-    this.#store.database
+  #cancel(row: ClaimedDelivery): void {
+    const changed = this.#store.database
       .prepare(
-        "UPDATE deliveries SET state = 'queued', lease_until = NULL WHERE id = ? AND state = 'disclosing' AND lease_until = ?",
+        `UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL
+         WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
       )
-      .run(row.id, row.lease_until);
+      .run(row.id, row.attemptId, row.leaseToken, row.leaseUntil).changes;
+    if (changed === 1) this.#dropRetainedTargetReference(row.id, this.#now());
   }
 
-  #cancel(deliveryId: string): void {
-    this.#store.database
-      .prepare("UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL WHERE id = ?")
-      .run(deliveryId);
-  }
-
-  #expire(deliveryId: string): void {
-    this.#store.database
+  #expire(row: ClaimedDelivery): void {
+    const changed = this.#store.database
       .prepare(
-        "UPDATE deliveries SET state = 'retention-expired', encrypted_record = NULL, lease_until = NULL WHERE id = ?",
+        `UPDATE deliveries SET state = 'retention-expired', encrypted_record = NULL, lease_until = NULL
+         WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
       )
-      .run(deliveryId);
+      .run(row.id, row.attemptId, row.leaseToken, row.leaseUntil).changes;
+    if (changed === 1) this.#dropRetainedTargetReference(row.id, this.#now());
   }
 
-  #barrierClosed(row: Pick<DeliveryRow, 'target_id' | 'target_version'>): boolean {
-    const barrier = this.#store.database
-      .prepare(
-        `SELECT state FROM reset_barriers WHERE target_id = ? AND target_version = ? ORDER BY reset_epoch DESC LIMIT 1`,
-      )
-      .get(row.target_id, row.target_version) as { state: string } | undefined;
-    return barrier !== undefined && barrier.state !== 'open';
-  }
-
-  #markUnreadable(row: DeliveryRow, reset: boolean): void {
-    this.#store.immediate(() => {
+  #markUnreadable(row: ClaimedDelivery, reset: boolean): void {
+    const marked = this.#store.immediate(() => {
       this.#store.database.prepare('DELETE FROM dryrun_log WHERE delivery_id = ?').run(row.id);
-      this.#store.database
+      const changed = this.#store.database
         .prepare(
-          "UPDATE deliveries SET state = 'content-unreadable', encrypted_record = NULL, lease_until = NULL WHERE id = ?",
+          `UPDATE deliveries SET state = 'content-unreadable', encrypted_record = NULL, lease_until = NULL
+           WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
         )
-        .run(row.id);
+        .run(row.id, row.attemptId, row.leaseToken, row.leaseUntil).changes;
+      if (changed === 1) this.#dropRetainedTargetReference(row.id, this.#now());
+      return changed === 1;
     });
-    if (reset) newLocalResetBarrier(this.#store, row.target_id, row.target_version);
+    if (reset && marked) newLocalResetBarrier(this.#store, row.targetId, row.targetVersion);
+  }
+
+  #dropRetainedTargetReference(deliveryId: string, now: number): void {
+    for (const target of removeRetainedDeliveryTargetReference(this.#store.database, deliveryId))
+      purgeUnreferencedSystemTargets(this.#store.database, { ...target, now });
   }
 }
 
-function deliveryById(store: EventDatabase, id: string): DeliveryRow | undefined {
+function deliveryById(store: EventDatabase, id: string): CurrentDeliveryRow | undefined {
   return store.database
     .prepare(
       `SELECT d.id, d.decision_id, d.account_id, d.rule_id, d.rule_version, d.target_id, d.target_version,
-              d.encrypted_record, d.expires_at, d.state, d.switch_generation, d.lease_until, decision.event_id
+              d.encrypted_record, d.expires_at, d.state, d.switch_generation, d.lease_until, d.attempt_id,
+              d.lease_token, decision.event_id
        FROM deliveries d JOIN decisions decision ON decision.id = d.decision_id WHERE d.id = ?`,
     )
-    .get(id) as DeliveryRow | undefined;
+    .get(id) as CurrentDeliveryRow | undefined;
 }
 
 function ruleFor(store: EventDatabase, ruleId: string, ruleVersion: number): CanonicalFullRuleDocument {

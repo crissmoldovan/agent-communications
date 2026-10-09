@@ -167,6 +167,31 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '7' WHERE key = 'schema_version'",
     ],
   },
+  {
+    version: 8,
+    name: 'event-delivery-stable-order-v1',
+    statements: [
+      `UPDATE deliveries
+       SET ordering_sequence = (
+         SELECT count(*)
+         FROM deliveries AS earlier
+         WHERE earlier.rule_id = deliveries.rule_id
+           AND earlier.account_id = deliveries.account_id
+           AND earlier.target_id = deliveries.target_id
+           AND earlier.rowid < deliveries.rowid
+       )`,
+      `INSERT INTO delivery_order_counters (rule_id, account_id, target_id, next_sequence)
+       SELECT rule_id, account_id, target_id, max(ordering_sequence) + 1
+       FROM deliveries
+       GROUP BY rule_id, account_id, target_id
+       ON CONFLICT(rule_id, account_id, target_id)
+       DO UPDATE SET next_sequence = MAX(delivery_order_counters.next_sequence, excluded.next_sequence)`,
+      'DROP INDEX deliveries_target_order',
+      `CREATE INDEX deliveries_stable_order
+       ON deliveries(rule_id, account_id, target_id, ordering_sequence, state, lease_until)`,
+      "UPDATE meta SET value = '8' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {
