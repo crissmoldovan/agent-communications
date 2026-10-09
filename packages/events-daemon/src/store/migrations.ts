@@ -61,6 +61,34 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '5' WHERE key = 'schema_version'",
     ],
   },
+  {
+    version: 6,
+    name: 'event-network-secret-generations-v1',
+    statements: [
+      `CREATE TABLE event_secret_generations (
+        owner_kind TEXT NOT NULL CHECK (owner_kind IN ('target', 'subscriber')),
+        owner_id TEXT NOT NULL,
+        owner_version INTEGER NOT NULL CHECK (owner_version > 0),
+        purpose TEXT NOT NULL CHECK (purpose IN ('secret-url', 'webhook-signing', 'sse-bearer')),
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        owner_digest TEXT NOT NULL,
+        secret_digest TEXT NOT NULL,
+        encrypted_ref BLOB NOT NULL,
+        lifecycle TEXT NOT NULL CHECK (lifecycle IN ('current', 'overlap', 'retired')),
+        expires_at INTEGER,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_kind, owner_id, owner_version, purpose, generation),
+        CHECK (
+          (owner_kind = 'target' AND purpose IN ('secret-url', 'webhook-signing'))
+          OR (owner_kind = 'subscriber' AND purpose = 'sse-bearer')
+        )
+      ) STRICT`,
+      `CREATE UNIQUE INDEX event_secret_generations_current
+       ON event_secret_generations(owner_kind, owner_id, owner_version, purpose)
+       WHERE lifecycle = 'current'`,
+      "UPDATE meta SET value = '6' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

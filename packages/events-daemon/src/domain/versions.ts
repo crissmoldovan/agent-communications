@@ -7,12 +7,12 @@ import {
   canonicalJudge,
   canonicalSubscriber,
   canonicalTarget,
-  type DryRunTargetDocument,
   type JudgeBudgetDocument,
   type JudgeDocument,
   type JudgeKindEnablementDocument,
   normaliseActivationDocument,
   type SubscriberDocument,
+  type TargetDocument,
 } from './activation-documents.ts';
 import { assertJudgeKindEnabled, EventDomainError, isJudgeKind } from './lifecycle.ts';
 
@@ -74,8 +74,23 @@ export class ImmutableVersions {
     return this.insert('rule_versions', 'rule', document.ruleId, document.version, document);
   }
 
-  createTarget(input: DryRunTargetDocument): PendingVersion {
+  createTarget(input: unknown): PendingVersion {
     const document = canonicalTarget(input);
+    if (document.kind === 'webhook' && document.url.kind === 'secret') {
+      throw new EventDomainError(
+        'VERSION_DOCUMENT_INVALID',
+        'a secret webhook URL is completed only by the internal human-secret factory',
+      );
+    }
+    return this.insertTarget(document);
+  }
+
+  /** Internal B2 factory seam for a version whose complete URL is written only through the secret store. */
+  createInternalTarget(input: unknown): PendingVersion {
+    return this.insertTarget(canonicalTarget(input));
+  }
+
+  private insertTarget(document: TargetDocument): PendingVersion {
     return this.insert('target_versions', 'target', document.targetId, document.version, document);
   }
 
