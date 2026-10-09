@@ -113,8 +113,33 @@ test('D6: a narrowed live list advances the journal and removes newly hidden sna
          VALUES ('delivery', 'rule', 1, 'target', 1, 'event', ?, X'01', 1, 100, ?)`,
       )
       .run('wa_visibility', id);
+    // A second linked account sees the same raw tuple (the raw identity carries no account): its projection must
+    // survive a list change in the first account.
+    store.database
+      .prepare(
+        `INSERT INTO ingest
+          (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
+         VALUES ('event-other', 'installation', 'whatsapp.message.received', 1, ?, 'dedupe-other', 1, 1, 1)`,
+      )
+      .run('wa_other');
+    store.database
+      .prepare(
+        `INSERT INTO ingest_rules
+          (event_id, rule_id, rule_version, decision_deadline, encrypted_projection, whatsapp_visibility_version, whatsapp_message_id)
+         VALUES ('event-other', 'rule', 1, 100, X'01', 1, ?)`,
+      )
+      .run(id);
     visible = false;
     await fence.withCurrentVisibility({ accountId: 'wa_visibility' }, () => undefined);
+    assert.deepEqual(
+      (
+        store.database.prepare('SELECT event_id FROM ingest_rules ORDER BY event_id').all() as Array<{
+          event_id: string;
+        }>
+      ).map((row) => row.event_id),
+      ['event-other'],
+      "the hidden tuple's projection is purged for its own account only",
+    );
     assert.equal(
       (store.database.prepare('SELECT version FROM whatsapp_visibility').get() as { version: number }).version,
       2,

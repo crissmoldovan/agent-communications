@@ -202,8 +202,13 @@ export class WhatsAppVisibilityFence {
         )
         .run(at, accountId, ...newlyHidden);
       this.#store.database
-        .prepare(`DELETE FROM ingest_rules WHERE whatsapp_message_id IN (${marks})`)
-        .run(...newlyHidden);
+        // The raw tuple identity carries no account: two linked accounts can share it, so scope by the ingest's account.
+        .prepare(
+          `DELETE FROM ingest_rules
+            WHERE whatsapp_message_id IN (${marks})
+              AND event_id IN (SELECT event_id FROM ingest WHERE account_id = ?)`,
+        )
+        .run(...newlyHidden, accountId);
       this.#store.database
         .prepare(`DELETE FROM dryrun_log WHERE account_id = ? AND whatsapp_message_id IN (${marks})`)
         .run(accountId, ...newlyHidden);
