@@ -42,7 +42,7 @@
   },
   "devDependencies": {
     "ajv": "8.20.0",
-    "playwright": "1.61.1",
+    "playwright": "1.63.0",
     "tsdown": "catalog:",
     "typescript": "catalog:"
   },
