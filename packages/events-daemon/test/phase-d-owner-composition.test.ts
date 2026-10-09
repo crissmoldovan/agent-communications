@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { emptyConfig } from '@agentcomms/core';
 import { openWhatsAppEventOperations } from '@agentcomms/whatsapp';
+import { startEventOwner } from '../src/runtime/owner.ts';
 import {
   createPhaseDWhatsAppOwnerComposition,
   requirePhaseDWhatsAppVisibilitySeam,
 } from '../src/runtime/phase-d-whatsapp-owner-composition.ts';
+import { PassThroughSseFrameVisibilityGate } from '../src/runtime/phase-d-whatsapp-seam.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
@@ -89,4 +92,46 @@ test('D7: a registered WhatsApp source refuses to start without its concrete vis
     undefined,
     'the no-D-source control path alone may omit the D visibility fence',
   );
+});
+
+test('D7: a production owner with the WhatsApp source and no concrete fence refuses to start and never uses the pass-through gate', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const root = await shortTempDir('aev-d7-seam-');
+  const stateDir = join(root, 'state');
+  const configDir = join(root, 'config');
+  await mkdir(configDir, { recursive: true });
+  await writeFile(join(configDir, 'config.json'), `${JSON.stringify(emptyConfig())}\n`);
+  const prototype = PassThroughSseFrameVisibilityGate.prototype;
+  const original = prototype.withCurrentSseFrameVisibility;
+  let passThroughCalls = 0;
+  prototype.withCurrentSseFrameVisibility = async function (
+    this: PassThroughSseFrameVisibilityGate,
+    ...args: Parameters<typeof original>
+  ) {
+    passThroughCalls += 1;
+    return original.apply(this, args);
+  } as typeof original;
+  try {
+    await assert.rejects(
+      startEventOwner({
+        stateDir,
+        configDir,
+        tickMs: 60_000,
+        phaseDComposition: (input) => ({
+          ...createPhaseDWhatsAppOwnerComposition(input),
+          visibilityFence: undefined as never,
+        }),
+      }),
+      (error: unknown) =>
+        error instanceof Error && 'code' in error && error.code === 'WHATSAPP_VISIBILITY_SEAM_REQUIRED',
+    );
+    assert.equal(passThroughCalls, 0, "the refused owner never selected B2's pre-D pass-through gate");
+    // The refused start left nothing held: a normal owner starts on the same state directory and stops cleanly.
+    const owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000 });
+    await owner.stop();
+  } finally {
+    prototype.withCurrentSseFrameVisibility = original;
+    await rm(root, { recursive: true, force: true });
+  }
 });
