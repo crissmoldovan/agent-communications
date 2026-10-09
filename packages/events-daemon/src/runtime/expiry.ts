@@ -38,6 +38,7 @@ export function deadLetterDelivery(store: EventDatabase, input: DeadLetterInput)
 export interface ExpirySweepResult {
   readonly deliveries: number;
   readonly localRecords: number;
+  readonly streamRecords: number;
   readonly projections: number;
   readonly decisionMetadata: number;
 }
@@ -84,6 +85,7 @@ export class EventExpiry {
         )
         .run(now);
       const localRecords = Number(database.prepare('DELETE FROM dryrun_log WHERE expires_at <= ?').run(now).changes);
+      const streamRecords = Number(database.prepare('DELETE FROM stream_log WHERE expires_at <= ?').run(now).changes);
       // D8: an expired projection ends with its content-free terminal outcome, recorded in the same transaction as
       // the purge, so a sweep never makes an outcome disappear. Evaluation records the same outcome when it gets
       // there first; the unique (event, rule, version) decision keeps them one.
@@ -111,7 +113,7 @@ export class EventExpiry {
           )
           .run(now, now).changes,
       );
-      return { deliveries, localRecords, projections, decisionMetadata };
+      return { deliveries, localRecords, streamRecords, projections, decisionMetadata };
     });
   }
 }

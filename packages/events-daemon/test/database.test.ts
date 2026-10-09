@@ -58,7 +58,7 @@ test('SEC-B1: a fresh event database is one strict SQLite authority with durable
       const resetMeta = first.database.prepare("SELECT value FROM meta WHERE key = 'reset_epoch'").get() as
         | { value: string }
         | undefined;
-      assert.equal(schemaMeta?.value, '8');
+      assert.equal(schemaMeta?.value, '9');
       assert.equal(resetMeta?.value, '0');
 
       first.immediate(() => {

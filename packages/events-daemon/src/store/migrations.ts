@@ -192,6 +192,41 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '8' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // B2 lands before Phase D on this branch.  This migration intentionally has no occurrence-parent foreign key:
+    // the D-owned parent table does not exist yet.  A later B2 convergence migration rebuilds this table after D.
+    version: 9,
+    name: 'event-sse-stream-log-v1',
+    statements: [
+      `CREATE TABLE stream_log (
+        id TEXT PRIMARY KEY,
+        delivery_id TEXT NOT NULL UNIQUE REFERENCES deliveries(id),
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL,
+        target_id TEXT NOT NULL,
+        target_version INTEGER NOT NULL,
+        subscriber_id TEXT NOT NULL,
+        subscriber_version INTEGER NOT NULL,
+        event_id TEXT NOT NULL REFERENCES ingest(event_id),
+        account_id TEXT NOT NULL,
+        whatsapp_message_id TEXT,
+        whatsapp_visibility_version INTEGER,
+        encrypted_record BLOB NOT NULL,
+        delivered_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        switch_generation INTEGER NOT NULL,
+        CHECK (expires_at > delivered_at),
+        CHECK (expires_at - delivered_at <= 604800000),
+        CHECK (
+          (whatsapp_message_id IS NULL AND whatsapp_visibility_version IS NULL)
+          OR (whatsapp_message_id IS NOT NULL AND whatsapp_visibility_version IS NOT NULL)
+        )
+      ) STRICT`,
+      'CREATE INDEX stream_log_account_whatsapp_message ON stream_log(account_id, whatsapp_message_id)',
+      'CREATE INDEX stream_log_replay ON stream_log(subscriber_id, subscriber_version, delivered_at, id)',
+      "UPDATE meta SET value = '9' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

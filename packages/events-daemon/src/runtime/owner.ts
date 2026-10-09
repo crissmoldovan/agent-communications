@@ -29,15 +29,22 @@ import { openEventDatabase } from '../store/database.ts';
 import { openEventSecretStore } from '../store/event-secrets.ts';
 import { EventRecordCipher } from '../store/records.ts';
 import { ActivationRuntime } from './activations.ts';
-import { DeliveryDispatcher, type DeliveryDispatchHandler, DryRunDispatcher } from './dispatcher.ts';
+import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
 import { EventExpiry } from './expiry.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
+import {
+  type DSourceRetentionHooks,
+  NoopDSourceRetentionHooks,
+  PassThroughSseFrameVisibilityGate,
+  type SseFrameVisibilityGate,
+} from './phase-d-whatsapp-seam.ts';
 import { recoverActivations } from './recovery.ts';
 import { replacementIntentSummary } from './replacements.ts';
 import { disableRule, removeTarget } from './revocations.ts';
 import { EventScheduler } from './scheduler.ts';
+import { SseDispatcher } from './sse-dispatcher.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
 
 export interface EventOwnerStatus extends EventLifecycleStatus {
@@ -75,6 +82,10 @@ export interface EventOwnerOptions {
     | undefined;
   readonly tickMs?: number | undefined;
   readonly pollIntervalMs?: number | undefined;
+  /** Phase D supplies its concrete list fence through this structural seam; B2 defaults to synchronous pass-through. */
+  readonly sseFrameVisibilityGate?: SseFrameVisibilityGate | undefined;
+  /** Phase D owns participant registration; B2 keeps an intentionally inert registry until that composition exists. */
+  readonly dSourceRetentionHooks?: DSourceRetentionHooks | undefined;
 }
 
 export async function startEventOwner(options: EventOwnerOptions = {}): Promise<EventOwner> {
@@ -126,12 +137,23 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
         material,
       })),
   });
-  const unavailable = unavailableDeliveryHandler();
+  const visibilityGate = options.sseFrameVisibilityGate ?? new PassThroughSseFrameVisibilityGate();
+  const retentionHooks = options.dSourceRetentionHooks ?? new NoopDSourceRetentionHooks();
+  const sse = new SseDispatcher({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    visibilityGate,
+    hasConcreteWhatsAppVisibilityFence:
+      options.sseFrameVisibilityGate !== undefined && options.dSourceRetentionHooks !== undefined,
+    retentionHooks,
+  });
   const dispatcher = new DeliveryDispatcher({
     store: database,
     dryrun,
     webhook,
-    sse: unavailable,
+    sse,
   });
   const mailboxLock = new MailboxLock();
   const gmailSourceFor = async (accountId: string): Promise<GmailEventSource> => {
@@ -300,15 +322,6 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
     await owner.stop();
     throw error;
   }
-}
-
-/** SSE documents cannot enter B1, so this stub remains unreachable until its later B2 adapter replaces it. */
-function unavailableDeliveryHandler(): DeliveryDispatchHandler {
-  return {
-    async dispatch(): Promise<never> {
-      throw new CommsError('BAD_DATA', 'the persisted delivery adapter is unavailable');
-    },
-  };
 }
 
 /** Runs the owner until a local stop request or a terminal signal closes it cleanly. */

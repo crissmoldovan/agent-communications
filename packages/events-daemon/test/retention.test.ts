@@ -11,7 +11,9 @@ import {
   createRetentionDeadlines,
   dryrunDeadline,
   MAX_DRYRUN_RETENTION_MS,
+  MAX_SSE_REPLAY_RETENTION_MS,
   shortenDeadline,
+  sseReplayDeadline,
   stageDeadline,
 } from '../src/store/retention.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
@@ -30,9 +32,11 @@ test('RET-B1: event-content deadlines are fixed from their specified clock start
   assert.equal(created.deliveryExpiresAt, 11_000, 'delivery starts its independently approved clock at creation');
   assert.equal(created.dryrunExpiresAt, 14_000);
   assert.equal(stageDeadline(1_000, [10_000, 4_000]), 5_000, 'shared staging takes the shortest owed retention');
+  assert.equal(sseReplayDeadline(11_000, 3_000), 14_000);
   assert.equal(shortenDeadline(14_000, 12_000), 12_000);
   assert.equal(shortenDeadline(12_000, 14_000), 12_000, 'a deadline can never be extended by retry or read');
   assert.throws(() => dryrunDeadline(0, MAX_DRYRUN_RETENTION_MS + 1), /24 hours/);
+  assert.throws(() => sseReplayDeadline(0, MAX_SSE_REPLAY_RETENTION_MS + 1), /seven days/);
 });
 
 test('B2-T4: dead-letter time is fixed once, survives restart, only tightens, and purges at that fixed deadline', {
