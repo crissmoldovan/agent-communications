@@ -1,3 +1,4 @@
+import type { DatabaseSync } from 'node:sqlite';
 import type { EventDatabase } from '../store/database.ts';
 import { hasLiveSystemTargetReference } from './target-version-references.ts';
 
@@ -144,7 +145,7 @@ export function claimSystemResetOutbox(input: {
         .run(row.id).changes;
       if (changed === 1)
         degradeResetBarrier(
-          input.store,
+          input.store.database,
           { id: row.id, resetEpoch: row.reset_epoch, targetId: row.target_id, targetVersion: row.target_version },
           input.now,
         );
@@ -187,7 +188,7 @@ export function claimSystemResetOutbox(input: {
         .run(row.id).changes;
       if (changed === 1)
         degradeResetBarrier(
-          input.store,
+          input.store.database,
           { id: row.id, resetEpoch: row.reset_epoch, targetId: row.target_id, targetVersion: row.target_version },
           input.now,
         );
@@ -259,7 +260,7 @@ export function completeSystemResetClaim(
       ).changes;
     if (changed !== 1) return false;
     if (expired || input.state === 'dead-lettered') {
-      degradeResetBarrier(store, claim, now);
+      degradeResetBarrier(store.database, claim, now);
     } else if (input.state === 'delivered') {
       store.database
         .prepare(
@@ -272,12 +273,13 @@ export function completeSystemResetClaim(
   });
 }
 
-function degradeResetBarrier(
-  store: EventDatabase,
+/** A reset notice that ended without delivery leaves its barrier closed and marks it degraded; it never opens it. */
+export function degradeResetBarrier(
+  database: DatabaseSync,
   reset: Pick<ClaimedSystemReset, 'id' | 'resetEpoch' | 'targetId' | 'targetVersion'>,
   now: number,
 ): void {
-  store.database
+  database
     .prepare(
       `UPDATE reset_barriers SET state = 'degraded', degraded_at = ?
        WHERE reset_epoch = ? AND target_id = ? AND target_version = ? AND system_outbox_id = ?`,

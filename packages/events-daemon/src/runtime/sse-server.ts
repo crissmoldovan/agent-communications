@@ -7,7 +7,11 @@ import type { EventRecordCipher } from '../store/records.ts';
 import { type ActiveDisclosableRequest, assertDisclosable } from './disclosure-fence.ts';
 import type { SseFrameVisibilityGate } from './phase-d-whatsapp-seam.ts';
 import { StreamReplay } from './stream-replay.ts';
-import { type SubscriberBearerGeneration, SubscriberStreams } from './subscriber-streams.ts';
+import {
+  type SubscriberBearerGeneration,
+  type SubscriberStreamAdmission,
+  SubscriberStreams,
+} from './subscriber-streams.ts';
 
 export interface SseServerOptions {
   readonly store: EventDatabase;
@@ -52,6 +56,8 @@ interface PersistedSubscriber {
 
 interface LiveConnection {
   readonly generation: number;
+  /** An overlap-bearer stream's authority ends here; a current-bearer stream has none until a rotation. */
+  readonly authorizedUntil: number | undefined;
   readonly response: ServerResponse;
   readonly close: () => void;
 }
@@ -179,8 +185,11 @@ class LoopbackSseServer implements SseServer {
           subscriberId: this.#subscriber.document.subscriberId,
           subscriberVersion: this.#subscriber.document.version,
           generation: connection.generation,
+          authorizedUntil: connection.authorizedUntil,
         })
       ) {
+        // A rotated or expired-overlap stream has lost its bearer authority: end it rather than keep it open.
+        connection.close();
         continue;
       }
       const wrote = await this.#replay.writeLive({
@@ -193,6 +202,7 @@ class LoopbackSseServer implements SseServer {
             subscriberId: this.#subscriber.document.subscriberId,
             subscriberVersion: this.#subscriber.document.version,
             generation: connection.generation,
+            authorizedUntil: connection.authorizedUntil,
           }),
         writeFrame: (frame) => {
           connection.response.write(frame);
@@ -238,18 +248,19 @@ class LoopbackSseServer implements SseServer {
     const token = bearer(request.headers.authorization);
     if (token === null) return endForbidden(response);
 
-    let generation: number | null;
+    let admission: SubscriberStreamAdmission | null;
     try {
       const generations = await this.#bearerGenerations();
       if (!this.#subscriberIsCurrent()) return endForbidden(response);
-      generation = this.#streams.authenticate({
+      admission = this.#streams.admit({
         bearer: token,
         generations: asBearerGenerations(generations),
       });
     } catch {
       return endForbidden(response);
     }
-    if (generation === null) return endForbidden(response);
+    if (admission === null) return endForbidden(response);
+    const { generation, currentGeneration, authorizedUntil } = admission;
 
     let closed = false;
     const close = () => {
@@ -264,19 +275,22 @@ class LoopbackSseServer implements SseServer {
       });
       response.end();
     };
-    const connection: LiveConnection = { generation, response, close };
+    const connection: LiveConnection = { generation, authorizedUntil, response, close };
     if (
       !this.#streams.register({
         subscriberId: subscriber.subscriberId,
         subscriberVersion: subscriber.version,
         generation,
         close,
+        currentGeneration,
+        authorizedUntil,
       }) ||
       !this.#subscriberIsCurrent() ||
       !this.#streams.isCurrent({
         subscriberId: subscriber.subscriberId,
         subscriberVersion: subscriber.version,
         generation,
+        authorizedUntil,
       })
     ) {
       return endForbidden(response);
@@ -290,6 +304,7 @@ class LoopbackSseServer implements SseServer {
         subscriberId: subscriber.subscriberId,
         subscriberVersion: subscriber.version,
         generation,
+        authorizedUntil,
       })
     ) {
       close();
@@ -314,6 +329,7 @@ class LoopbackSseServer implements SseServer {
             subscriberId: subscriber.subscriberId,
             subscriberVersion: subscriber.version,
             generation,
+            authorizedUntil,
           })
         ) {
           response.write(frame);

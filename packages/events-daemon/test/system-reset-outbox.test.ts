@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
+import { EventExpiry } from '../src/runtime/expiry.ts';
 import {
   claimSystemResetOutbox,
   completeSystemResetClaim,
@@ -249,6 +250,36 @@ test('RST-B2: expiry at claim purges reset bytes and degrades its closed barrier
           .get() as Record<string, unknown>),
       },
       { state: 'degraded', degraded_at: now },
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('RST-B2: the scheduled expiry sweep ends a reset at its deadline exactly as a claim does', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await resetFixture('sweep');
+  const now = 1 + SYSTEM_RESET_RETENTION_MS;
+  try {
+    new EventExpiry(setup.store, () => now).sweep();
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare("SELECT state, encrypted_record, lease_until, next_at FROM system_reset_outbox WHERE id = 'sweep'")
+          .get() as Record<string, unknown>),
+      },
+      { state: 'retention-expired', encrypted_record: null, lease_until: null, next_at: null },
+    );
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare("SELECT state, degraded_at FROM reset_barriers WHERE system_outbox_id = 'sweep'")
+          .get() as Record<string, unknown>),
+      },
+      { state: 'degraded', degraded_at: now },
+      'a sweep that wins the race degrades the barrier and never leaves it merely closed or opens it',
     );
   } finally {
     setup.store.close();

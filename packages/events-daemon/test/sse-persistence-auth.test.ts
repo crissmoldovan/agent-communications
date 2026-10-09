@@ -215,6 +215,50 @@ test('B2-T8: bearer rotation accepts only current plus an unexpired previous gen
   );
 });
 
+test('B2-T8: the persisted current generation, not arrival order, decides; an overlap stream ends with its overlap', () => {
+  let now = 1_000;
+  const streams = new SubscriberStreams({ now: () => now });
+  const key = { subscriberId: 'subscriber-sse', subscriberVersion: 1 } as const;
+  const generations = [
+    { generation: 2, lifecycle: 'current' as const, material: 'current' },
+    { generation: 1, lifecycle: 'overlap' as const, material: 'previous', expiresAt: now + 300_000 },
+  ];
+  const previous = streams.admit({ bearer: 'previous', generations });
+  assert.deepEqual(previous, { generation: 1, currentGeneration: 2, authorizedUntil: now + 300_000 });
+  const current = streams.admit({ bearer: 'current', generations });
+  assert.deepEqual(current, { generation: 2, currentGeneration: 2 });
+  if (previous === null || current === null) throw new Error('both bearers are admitted');
+
+  // The overlap stream arrives first; it must not make generation 1 the current one and lock generation 2 out.
+  let overlapClosed = 0;
+  assert.equal(streams.register({ ...key, ...previous, close: () => (overlapClosed += 1) }), true);
+  assert.equal(streams.register({ ...key, ...current, close: () => undefined }), true);
+  assert.equal(streams.isCurrent({ ...key, ...current }), true);
+  assert.equal(streams.isCurrent({ ...key, ...previous }), true, 'the previous bearer is live inside its overlap');
+  assert.equal(
+    streams.isCurrent({ ...key, generation: 1 }),
+    false,
+    'without its overlap bound, generation 1 is not current',
+  );
+  assert.equal(
+    streams.register({ ...key, generation: 1, close: () => undefined, currentGeneration: 1 }),
+    false,
+    'an admission read before a rotation this process has seen is stale',
+  );
+  now += 300_000;
+  assert.equal(streams.isCurrent({ ...key, ...previous }), false, 'the overlap stream ends exactly at its expiry');
+  assert.equal(streams.isCurrent({ ...key, ...current }), true);
+
+  // A rotation persisted elsewhere is applied at the next admission: older streams are closed, as rotate does.
+  const later = new SubscriberStreams({ now: () => now });
+  let staleClosed = 0;
+  assert.equal(later.register({ ...key, generation: 2, currentGeneration: 2, close: () => (staleClosed += 1) }), true);
+  assert.equal(later.register({ ...key, generation: 3, currentGeneration: 3, close: () => undefined }), true);
+  assert.equal(staleClosed, 1);
+  assert.equal(later.isCurrent({ ...key, generation: 2 }), false);
+  assert.equal(overlapClosed, 0, 'expiry alone ends authority; the listener closes the socket on its next write');
+});
+
 test('B2-T8: stream bytes are purged by their replay deadline and disable-all in the same authority transaction', {
   skip: WINDOWS_SKIP,
 }, async () => {
