@@ -1182,3 +1182,11 @@ plan.
 Commit this plan with:
 
     docs(plan): local event emission — phase B2, the Phase D seam, review round 4
+
+## Decisions made during the build
+
+| Decision | Raised in | Question | Resolution |
+| --- | --- | --- | --- |
+| — (coordinator) | Code review round 1, finding 4 | The webhook dispatcher re-reads core configuration before each DNS, TCP, TLS and write gate, then runs the synchronous SQLite gate; a removal between that read and the gate is not seen. Is that a fence gap? | No. It is the D9 model B1's committee accepted: configuration lives in a file another process may change at any instant, so it is read fresh at every boundary immediately before the synchronous transaction, and nothing awaits between them. |
+| — (coordinator) | Code review round 2, finding 2 | Should the SSE append re-check the delivery cap after its encryption await, so that a cap lowered after the claim refuses the append? | No. The cap is charged once, at the claim, under the cap then binding, and the charge is never refunded; the spec bounds new charges ("no new cap charge can exceed the lower rolling-window limit"), and the append makes none. A refusal there would also be ineffective: a re-claim of an already-charged delivery skips the cap check by design. The append still requires the exact leased, charged claim. |
+| — (coordinator) | Code review round 2, finding 3 | The stream registry took its current bearer generation from the first stream to arrive, so an overlap-bearer stream arriving first locked the current bearer out, and an overlap stream never expired. | Admission returns the persisted current generation and an overlap stream's end; registration uses the persisted generation, refuses a stale admission, closes older streams when a rotation persisted elsewhere is first seen, and an overlap stream stops receiving frames at its expiry and is closed by the next live write. |

@@ -1,6 +1,7 @@
 import type { EventDatabase } from '../store/database.ts';
 import { fixedDeadline } from '../store/retention.ts';
 import { purgeExpiredB2StreamRecords } from './phase-d-b2-retention.ts';
+import { degradeResetBarrier } from './system-reset-outbox.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 
 export interface DeadLetterInput {
@@ -78,13 +79,34 @@ export class EventExpiry {
         const targets = removeRetainedDeliveryTargetReference(database, delivery.id);
         for (const target of targets) purgeUnreferencedSystemTargets(database, { ...target, now });
       }
-      database
+      // A reset notice at its 24-hour deadline ends `retention-expired` with its barrier degraded — exactly as the
+      // claim path ends it — so whichever of the sweep and a claim gets there first leaves the same state.
+      const expiredResets = database
         .prepare(
-          `UPDATE system_reset_outbox
-           SET state = 'dead-lettered', encrypted_record = NULL, lease_until = NULL
+          `SELECT id, reset_epoch, target_id, target_version FROM system_reset_outbox
            WHERE state IN ('queued', 'retryable', 'disclosing') AND expires_at <= ?`,
         )
-        .run(now);
+        .all(now) as Array<{ id: string; reset_epoch: number; target_id: string; target_version: number }>;
+      for (const reset of expiredResets) {
+        const changed = database
+          .prepare(
+            `UPDATE system_reset_outbox
+             SET state = 'retention-expired', encrypted_record = NULL, lease_until = NULL, next_at = NULL
+             WHERE id = ? AND state IN ('queued', 'retryable', 'disclosing') AND expires_at <= ?`,
+          )
+          .run(reset.id, now).changes;
+        if (changed === 1)
+          degradeResetBarrier(
+            database,
+            {
+              id: reset.id,
+              resetEpoch: reset.reset_epoch,
+              targetId: reset.target_id,
+              targetVersion: reset.target_version,
+            },
+            now,
+          );
+      }
       const localRecords = Number(database.prepare('DELETE FROM dryrun_log WHERE expires_at <= ?').run(now).changes);
       const streamRecords = purgeExpiredB2StreamRecords(database, now);
       // D8: an expired projection ends with its content-free terminal outcome, recorded in the same transaction as
