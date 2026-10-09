@@ -135,13 +135,19 @@ export function claimSystemResetOutbox(input: {
       | undefined;
     if (row === undefined) return { kind: 'missing' };
     if (row.expires_at <= input.now) {
-      input.store.database
+      const changed = input.store.database
         .prepare(
           `UPDATE system_reset_outbox
-           SET state = 'dead-lettered', encrypted_record = NULL, lease_until = NULL
+           SET state = 'retention-expired', encrypted_record = NULL, lease_until = NULL, next_at = NULL
            WHERE id = ? AND state IN ('queued', 'retryable', 'disclosing')`,
         )
-        .run(row.id);
+        .run(row.id).changes;
+      if (changed === 1)
+        degradeResetBarrier(
+          input.store,
+          { id: row.id, resetEpoch: row.reset_epoch, targetId: row.target_id, targetVersion: row.target_version },
+          input.now,
+        );
       return { kind: 'expired' };
     }
     if (!['queued', 'retryable', 'disclosing'].includes(row.state)) return { kind: 'terminal' };
@@ -165,19 +171,26 @@ export function claimSystemResetOutbox(input: {
     ) {
       input.store.database
         .prepare(
-          `UPDATE system_reset_outbox SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL
+          `UPDATE system_reset_outbox SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL, next_at = NULL
            WHERE id = ? AND state IN ('queued', 'retryable', 'disclosing')`,
         )
         .run(row.id);
       return { kind: 'terminal' };
     }
     if (row.attempts >= row.attempt_limit) {
-      input.store.database
+      const changed = input.store.database
         .prepare(
-          `UPDATE system_reset_outbox SET state = 'dead-lettered', lease_until = NULL
+          `UPDATE system_reset_outbox
+           SET state = 'dead-lettered', encrypted_record = NULL, lease_until = NULL, next_at = NULL
            WHERE id = ? AND state IN ('queued', 'retryable', 'disclosing')`,
         )
-        .run(row.id);
+        .run(row.id).changes;
+      if (changed === 1)
+        degradeResetBarrier(
+          input.store,
+          { id: row.id, resetEpoch: row.reset_epoch, targetId: row.target_id, targetVersion: row.target_version },
+          input.now,
+        );
       return { kind: 'terminal' };
     }
     const attemptId = input.newAttemptId();
@@ -210,18 +223,44 @@ export function claimSystemResetOutbox(input: {
 export function completeSystemResetClaim(
   store: EventDatabase,
   claim: ClaimedSystemReset,
-  input: { readonly state: 'delivered' | 'retryable' | 'cancelled' | 'dead-lettered' },
+  input: {
+    readonly state: 'delivered' | 'retryable' | 'cancelled' | 'dead-lettered';
+    readonly now?: number | undefined;
+  },
 ): boolean {
   return store.immediate(() => {
+    const now = input.now ?? Date.now();
+    const row = store.database
+      .prepare(
+        `SELECT expires_at FROM system_reset_outbox
+         WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
+      )
+      .get(claim.id, claim.attemptId, claim.leaseToken, claim.leaseUntil) as { expires_at: number } | undefined;
+    const expired = row !== undefined && row.expires_at <= now;
+    const clearRecord = expired || input.state === 'cancelled' || input.state === 'dead-lettered';
     const changed = store.database
       .prepare(
         `UPDATE system_reset_outbox
-         SET state = ?, lease_until = NULL
+         SET state = CASE WHEN ? THEN 'retention-expired' ELSE ? END,
+             encrypted_record = CASE WHEN ? THEN NULL ELSE encrypted_record END,
+             lease_until = NULL,
+             next_at = CASE WHEN ? THEN NULL ELSE next_at END
          WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
       )
-      .run(input.state, claim.id, claim.attemptId, claim.leaseToken, claim.leaseUntil).changes;
+      .run(
+        expired ? 1 : 0,
+        input.state,
+        clearRecord ? 1 : 0,
+        clearRecord ? 1 : 0,
+        claim.id,
+        claim.attemptId,
+        claim.leaseToken,
+        claim.leaseUntil,
+      ).changes;
     if (changed !== 1) return false;
-    if (input.state === 'delivered') {
+    if (expired || input.state === 'dead-lettered') {
+      degradeResetBarrier(store, claim, now);
+    } else if (input.state === 'delivered') {
       store.database
         .prepare(
           `UPDATE reset_barriers SET state = 'open'
@@ -231,4 +270,17 @@ export function completeSystemResetClaim(
     }
     return true;
   });
+}
+
+function degradeResetBarrier(
+  store: EventDatabase,
+  reset: Pick<ClaimedSystemReset, 'id' | 'resetEpoch' | 'targetId' | 'targetVersion'>,
+  now: number,
+): void {
+  store.database
+    .prepare(
+      `UPDATE reset_barriers SET state = 'degraded', degraded_at = ?
+       WHERE reset_epoch = ? AND target_id = ? AND target_version = ? AND system_outbox_id = ?`,
+    )
+    .run(now, reset.resetEpoch, reset.targetId, reset.targetVersion, reset.id);
 }

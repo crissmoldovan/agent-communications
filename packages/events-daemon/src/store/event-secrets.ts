@@ -478,12 +478,13 @@ export class EventSecretStore {
               'the expected prior secret generation changed while writing',
             );
           }
+          const now = Date.now();
           if (current !== null) {
-            const overlap = overlapExpiresAt ?? Date.now() + 5 * 60_000;
-            if (!Number.isSafeInteger(overlap) || overlap <= Date.now()) {
+            const overlap = overlapExpiresAt ?? now + 5 * 60_000;
+            if (!Number.isSafeInteger(overlap) || overlap <= now || overlap > now + 5 * 60_000) {
               throw new EventSecretError(
                 'EVENT_SECRET_REFERENCE',
-                'a rotating event secret generation has a future overlap expiry',
+                'a rotating event secret generation has an overlap expiry within five minutes',
               );
             }
             const overlaps = this.#database
@@ -521,7 +522,7 @@ export class EventSecretStore {
               owner.digest,
               sha256Hex(material),
               encryptedRef,
-              Date.now(),
+              now,
             );
           this.#database.exec('COMMIT');
         } catch (error) {

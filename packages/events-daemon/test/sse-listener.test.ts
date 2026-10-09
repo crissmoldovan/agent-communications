@@ -10,6 +10,7 @@ import { requestSse } from './support/sse-client.ts';
 assertLoopbackSeal();
 
 const accountId = 'account-sse-listener';
+const liveStreamId = 'stream-listener';
 /** A loopback port free when the suite starts, so the listener never collides with a fixed number already in use. */
 const PORT = await new Promise<number>((resolve, reject) => {
   const probe = createServer();
@@ -43,6 +44,25 @@ async function fixture() {
   store.database
     .prepare('INSERT INTO subscriber_versions (id, subscriber_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
     .run('subscriber-listener@1', subscriber.subscriberId, subscriber.version, document, sha256Hex(document));
+  store.database.exec(
+    `INSERT INTO rule_versions
+       (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+     VALUES ('rule-listener@1', 'rule-listener', 1, '{}', 'digest', 'active', 'approval', 'activation', 1);
+     INSERT INTO target_versions (id, target_id, version, document, digest)
+     VALUES ('target-listener@1', 'target-listener', 1, '{}', 'digest');
+     INSERT INTO ingest
+       (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
+     VALUES ('event-listener', '${store.installationId}', 'example.event', 1, '${accountId}', 'listener', 1, 1, 1);
+     INSERT INTO decisions
+       (id, event_id, account_id, rule_id, rule_version, outcome, metadata_expires_at, metadata_state)
+     VALUES ('decision-listener', 'event-listener', '${accountId}', 'rule-listener', 1, 'matched', 9999999999999, 'retained');
+     INSERT INTO deliveries
+       (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, target_kind,
+        target_representation, subscriber_id, subscriber_version, encrypted_record, expires_at, state, switch_generation)
+     VALUES ('delivery-listener', 'decision-listener', '${accountId}', 'rule-listener', 1,
+             'sse:target-listener:1:subscriber-listener:1', 'target-listener', 1, 'sse', 'plain', 'subscriber-listener', 1,
+             X'00', 9999999999999, 'delivered', 1);`,
+  );
   const server = await startSseServer({
     store,
     subscriberId: subscriber.subscriberId,
@@ -54,6 +74,7 @@ async function fixture() {
     approvals: { get: async () => null },
     config: { load: async () => ({ inboxes: { inbox: { id: accountId, provider: 'gmail' } } }) } as never,
     readBearerGenerations: async () => [{ generation: 1, lifecycle: 'current' as const, material: 'listener-token' }],
+    fence: async () => undefined,
   });
   return { stateDir, store, server };
 }
@@ -151,6 +172,20 @@ test('B2-T9: exact-origin preflight reflects only the approved CORS contract wit
   }
 });
 
+/** A live frame is for a row appended after the subscriber connected; a row present at connect is replayed instead. */
+function appendLiveRow(store: Awaited<ReturnType<typeof fixture>>['store']): void {
+  const now = Date.now();
+  store.database
+    .prepare(
+      `INSERT INTO stream_log
+       (id, delivery_id, rule_id, rule_version, target_id, target_version, subscriber_id, subscriber_version, event_id,
+        account_id, whatsapp_message_id, whatsapp_visibility_version, encrypted_record, delivered_at, expires_at, switch_generation)
+       VALUES (?, 'delivery-listener', 'rule-listener', 1, 'target-listener', 1, 'subscriber-listener', 1, 'event-listener',
+               ?, NULL, NULL, X'00', ?, ?, 1)`,
+    )
+    .run(liveStreamId, accountId, now, now + 60_000);
+}
+
 test('B2-T9: rotation, pause and the per-frame writer gate prevent a registered old stream from receiving another frame', {
   skip: WINDOWS_SKIP,
 }, async (t) => {
@@ -181,24 +216,16 @@ test('B2-T9: rotation, pause and the per-frame writer gate prevent a registered 
     });
     connected.end();
     await open;
-    assert.equal(
-      setup.server.writeLive({ accountId, whatsappMessageId: null, switchGeneration: 1, frame: 'data: first\n\n' }),
-      1,
-    );
+    appendLiveRow(setup.store);
+    assert.equal(await setup.server.writeLive({ streamLogId: liveStreamId, frame: 'data: first\n\n' }), 1);
     setup.server.rotate({
       subscriberId: subscriber.subscriberId,
       subscriberVersion: subscriber.version,
       generation: 2,
     });
-    assert.equal(
-      setup.server.writeLive({ accountId, whatsappMessageId: null, switchGeneration: 1, frame: 'data: old\n\n' }),
-      0,
-    );
+    assert.equal(await setup.server.writeLive({ streamLogId: liveStreamId, frame: 'data: old\n\n' }), 0);
     setup.store.database.exec('UPDATE event_settings SET paused = 1');
-    assert.equal(
-      setup.server.writeLive({ accountId, whatsappMessageId: null, switchGeneration: 1, frame: 'data: paused\n\n' }),
-      0,
-    );
+    assert.equal(await setup.server.writeLive({ streamLogId: liveStreamId, frame: 'data: paused\n\n' }), 0);
     // The client reads over a real loopback socket: wait (bounded) for the first frame, then give any frame wrongly
     // written after the rotation or the pause the same chance to arrive before asserting none did.
     for (let waited = 0; frames.length === 0 && waited < 2_000; waited += 5)

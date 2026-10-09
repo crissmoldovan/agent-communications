@@ -5,8 +5,7 @@ import type { EventDatabase } from '../store/database.ts';
 import type { EventSecretOwner, EventSecretStore } from '../store/event-secrets.ts';
 import type { EventRecordCipher } from '../store/records.ts';
 import { type ActiveDisclosableRequest, assertDisclosable } from './disclosure-fence.ts';
-import { PassThroughSseFrameVisibilityGate, type SseFrameVisibilityGate } from './phase-d-whatsapp-seam.ts';
-import { writeLiveSseFrame } from './sse-dispatcher.ts';
+import type { SseFrameVisibilityGate } from './phase-d-whatsapp-seam.ts';
 import { StreamReplay } from './stream-replay.ts';
 import { type SubscriberBearerGeneration, SubscriberStreams } from './subscriber-streams.ts';
 
@@ -39,12 +38,10 @@ export interface SseServer {
   rotate(input: Readonly<{ subscriberId: string; subscriberVersion: number; generation: number }>): void;
   writeLive(
     input: Readonly<{
-      accountId: string;
-      whatsappMessageId: string | null;
-      switchGeneration: number;
+      streamLogId: string;
       frame: string;
     }>,
-  ): number;
+  ): Promise<number>;
   preflightCount(): number;
 }
 
@@ -169,14 +166,12 @@ class LoopbackSseServer implements SseServer {
     this.#streams.rotate(input);
   }
 
-  writeLive(
+  async writeLive(
     input: Readonly<{
-      accountId: string;
-      whatsappMessageId: string | null;
-      switchGeneration: number;
+      streamLogId: string;
       frame: string;
     }>,
-  ): number {
+  ): Promise<number> {
     let written = 0;
     for (const connection of [...this.#connections]) {
       if (
@@ -188,28 +183,22 @@ class LoopbackSseServer implements SseServer {
       ) {
         continue;
       }
-      const wrote = writeLiveSseFrame({
+      const wrote = await this.#replay.writeLive({
+        streamLogId: input.streamLogId,
         frame: input.frame,
-        accountId: input.accountId,
-        whatsappMessageId: input.whatsappMessageId,
-        visibilityGate: this.#options.visibilityGate ?? new PassThroughSseFrameVisibilityGate(),
-        hasConcreteWhatsAppVisibilityFence: this.#options.hasConcreteWhatsAppVisibilityFence ?? false,
+        isStreamCurrent: () =>
+          this.#connections.has(connection) &&
+          this.#subscriberIsCurrent() &&
+          this.#streams.isCurrent({
+            subscriberId: this.#subscriber.document.subscriberId,
+            subscriberVersion: this.#subscriber.document.version,
+            generation: connection.generation,
+          }),
         writeFrame: (frame) => {
-          if (
-            this.#subscriberIsCurrent() &&
-            this.#switchIsCurrent(input.switchGeneration) &&
-            this.#streams.isCurrent({
-              subscriberId: this.#subscriber.document.subscriberId,
-              subscriberVersion: this.#subscriber.document.version,
-              generation: connection.generation,
-            })
-          ) {
-            connection.response.write(frame);
-            written += 1;
-          }
+          connection.response.write(frame);
         },
       });
-      if (!wrote) continue;
+      if (wrote) written += 1;
     }
     return written;
   }
@@ -356,13 +345,6 @@ class LoopbackSseServer implements SseServer {
     } catch {
       return false;
     }
-  }
-
-  #switchIsCurrent(generation: number): boolean {
-    const settings = this.#options.store.database
-      .prepare('SELECT enabled, paused, switch_generation FROM event_settings WHERE singleton = 1')
-      .get() as { enabled: number; paused: number; switch_generation: number } | undefined;
-    return settings?.enabled === 1 && settings.paused === 0 && settings.switch_generation === generation;
   }
 }
 

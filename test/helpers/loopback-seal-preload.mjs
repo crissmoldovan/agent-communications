@@ -69,9 +69,23 @@ function patchLookup(target, promiseTarget = false) {
       };
 }
 
+function patchLookupService(target, promiseTarget = false) {
+  const lookupService = target.lookupService;
+  if (typeof lookupService !== 'function') return;
+  target.lookupService = promiseTarget
+    ? async function sealedPromiseLookupService(hostname, ...rest) {
+        if (!isLiteralLoopback(hostname)) refused('DNS lookup service', hostname);
+        return lookupService.call(this, hostname, ...rest);
+      }
+    : function sealedLookupService(hostname, ...rest) {
+        if (!isLiteralLoopback(hostname)) refused('DNS lookup service', hostname);
+        return lookupService.call(this, hostname, ...rest);
+      };
+}
+
 function patchResolverMethods(target, promiseTarget = false) {
   for (const name of Object.getOwnPropertyNames(target)) {
-    if (name !== 'resolve' && !name.startsWith('resolve')) continue;
+    if (name !== 'reverse' && name !== 'resolve' && !name.startsWith('resolve')) continue;
     const original = target[name];
     if (typeof original !== 'function') continue;
     Object.defineProperty(target, name, {
@@ -105,9 +119,12 @@ function install() {
   Object.defineProperty(globalThis, MARKER, { value: true });
   patchLookup(dns);
   patchLookup(dns.promises, true);
+  patchLookupService(dns);
+  patchLookupService(dns.promises, true);
   patchResolverMethods(dns);
   patchResolverMethods(dns.promises, true);
   patchResolverMethods(dns.Resolver.prototype);
+  patchResolverMethods(dns.promises.Resolver.prototype, true);
   const socketConnect = net.Socket.prototype.connect;
   net.Socket.prototype.connect = function sealedSocketConnect(...args) {
     assertSocket(args, 'socket connection');

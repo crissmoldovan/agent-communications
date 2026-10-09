@@ -330,7 +330,19 @@ function deliveryRateCap(database: DatabaseSync, row: DeliveryClaimRow): number 
     .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
     .get(row.rule_id, row.rule_version) as { document: string } | undefined;
   if (stored === undefined) throw new Error('a claim has no exact rule version');
-  const value = (JSON.parse(stored.document) as { deliveryRateCap?: unknown }).deliveryRateCap;
+  const cap = rateCapFromDocument(stored.document);
+  const active = database
+    .prepare(
+      `SELECT rule.document FROM active_versions
+       JOIN rule_versions AS rule ON rule.rule_id = active_versions.object_id AND rule.version = active_versions.version
+       WHERE active_versions.kind = 'rule' AND active_versions.object_id = ?`,
+    )
+    .get(row.rule_id) as { document: string } | undefined;
+  return active === undefined ? cap : Math.min(cap, rateCapFromDocument(active.document));
+}
+
+function rateCapFromDocument(document: string): number {
+  const value = (JSON.parse(document) as { deliveryRateCap?: unknown }).deliveryRateCap;
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1)
     throw new Error('a claim rule has no valid delivery rate cap');
   return value;

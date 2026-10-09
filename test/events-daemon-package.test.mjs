@@ -50,6 +50,20 @@ test('PKG-B1-b: the local event daemon is a held service with its declared runti
   assert.match(loader, /export const MIN_NODE = '22\.16\.0';/, 'the loader checks the floor engines states');
 });
 
+test('PKG-B2: the packed events-daemon consumer check is preloaded with the loopback seal', () => {
+  const verifier = readFileSync(join(ROOT, 'scripts', 'verify-package.mjs'), 'utf8');
+  assert.match(
+    verifier,
+    /manifest\.name === '@agentcomms\/events-daemon'.*loopback-seal-preload\.mjs/s,
+    'only the network-capable daemon consumer receives the copied preload',
+  );
+  assert.match(
+    verifier,
+    /\['--import', '\.\/loopback-seal-preload\.mjs', 'consumer-check\.mjs'\]/,
+    'the daemon consumer starts under the copied seal before it imports the package',
+  );
+});
+
 test('PKG-B1-b: nothing but the lazy loader imports Node SQLite at runtime, so an older Node is refused, not crashed', () => {
   // A value import anywhere in the bundle would load before `--help` runs: Node 22.12 has no unflagged module.
   const offenders = [];
