@@ -144,7 +144,8 @@ export function requestBytesForPinnedConnection(
   ]);
 }
 
-function connectTcp(options: PinnedTcpOptions): Promise<net.Socket> {
+/** Opens the selected literal TCP peer. Callers place their final authority fence immediately before this call. */
+export function connectPinnedTcp(options: PinnedTcpOptions): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
     const socket = net.connect({ host: options.host, port: options.port });
     socket.once('error', reject);
@@ -155,7 +156,8 @@ function connectTcp(options: PinnedTcpOptions): Promise<net.Socket> {
   });
 }
 
-function connectTls(options: PinnedTlsOptions): Promise<tls.TLSSocket> {
+/** Starts TLS only over the already-pinned TCP socket. Callers fence immediately before this ClientHello. */
+export function connectPinnedTls(options: PinnedTlsOptions): Promise<tls.TLSSocket> {
   return new Promise((resolve, reject) => {
     const socket = tls.connect({
       socket: options.socket,
@@ -176,7 +178,7 @@ export async function openPinnedConnection(
   connection: PinnedConnection,
   options: OpenPinnedConnectionOptions = {},
 ): Promise<net.Socket | tls.TLSSocket> {
-  const socket = await (options.tcpConnect ?? connectTcp)({ host: connection.address, port: connection.port });
+  const socket = await (options.tcpConnect ?? connectPinnedTcp)({ host: connection.address, port: connection.port });
   if (!connection.useTls) return socket;
-  return (options.tlsConnect ?? connectTls)({ socket, ...connection.tls });
+  return (options.tlsConnect ?? connectPinnedTls)({ socket, ...connection.tls });
 }

@@ -86,6 +86,12 @@ export interface EventSecretGeneration {
   readonly secretDigest: string;
 }
 
+/** Internal-only resolved material. Callers must use it only at the owned byte boundary and never serialize it. */
+export interface EventSecretMaterial extends Omit<EventSecretGeneration, 'lifecycle'> {
+  readonly lifecycle: 'current' | 'overlap';
+  readonly material: string;
+}
+
 export interface StoreEventSecretGenerationOptions {
   readonly database: DatabaseSync;
   readonly paths: EventPaths;
@@ -340,6 +346,74 @@ export class EventSecretStore {
         .prepare('SELECT key_id FROM event_secret_masters WHERE retired_at IS NULL ORDER BY created_at DESC LIMIT 1')
         .get() as { key_id: string } | undefined;
       return this.createMaster(current?.key_id);
+    });
+  }
+
+  /**
+   * Resolves the current and still-valid overlap generations for one exact immutable owner. The opaque backend
+   * reference stays inside this store; only the byte-boundary adapter receives material, and only in memory.
+   */
+  async readLiveGenerations(input: {
+    readonly owner: EventSecretOwner;
+    readonly purpose: EventSecretPurpose;
+    readonly cipher: EventSecretReferenceCipher;
+    readonly now?: number | undefined;
+  }): Promise<readonly EventSecretMaterial[]> {
+    assertPurpose(input.owner, input.purpose);
+    return this.withLock(async () => {
+      this.assertSelectedBackend();
+      this.assertLiveOwner(input.owner);
+      const now = input.now ?? Date.now();
+      const rows = this.#database
+        .prepare(
+          `SELECT owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest,
+                  encrypted_ref, lifecycle, expires_at
+           FROM event_secret_generations
+           WHERE owner_kind = ? AND owner_id = ? AND owner_version = ? AND purpose = ?
+             AND (lifecycle = 'current' OR (lifecycle = 'overlap' AND expires_at > ?))
+           ORDER BY generation DESC`,
+        )
+        .all(input.owner.kind, input.owner.id, input.owner.version, input.purpose, now) as Array<
+        Record<string, unknown>
+      >;
+      const resolved: EventSecretMaterial[] = [];
+      for (const row of rows) {
+        const generation = asStoredGeneration(row);
+        if (generation.owner.digest !== input.owner.digest) {
+          throw new EventSecretError(
+            'EVENT_SECRET_OWNER_STALE',
+            'the secret generation owner digest is no longer exact',
+          );
+        }
+        const reference = await input.cipher.decrypt(
+          generationLocation(generation.owner, generation.purpose, generation.generation),
+          generation.encryptedRef,
+        );
+        const ref = reference.toString('utf8');
+        if (!/^event-secret:[a-f0-9]{24}$/.test(ref)) {
+          throw new EventSecretError(
+            'EVENT_SECRET_REFERENCE',
+            'event secret generation has an invalid opaque reference',
+          );
+        }
+        const material = await this.#store.get(ref);
+        if (material === null || sha256Hex(material) !== generation.secretDigest) {
+          throw new EventSecretError(
+            'EVENT_SECRET_REFERENCE',
+            'event secret generation material is unavailable or changed',
+          );
+        }
+        resolved.push({
+          owner: generation.owner,
+          purpose: generation.purpose,
+          generation: generation.generation,
+          lifecycle: generation.lifecycle as 'current' | 'overlap',
+          expiresAt: generation.expiresAt,
+          secretDigest: generation.secretDigest,
+          material,
+        });
+      }
+      return resolved;
     });
   }
 

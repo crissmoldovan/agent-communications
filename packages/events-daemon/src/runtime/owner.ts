@@ -38,6 +38,7 @@ import { recoverActivations } from './recovery.ts';
 import { replacementIntentSummary } from './replacements.ts';
 import { disableRule, removeTarget } from './revocations.ts';
 import { EventScheduler } from './scheduler.ts';
+import { WebhookDispatcher } from './webhook-dispatcher.ts';
 
 export interface EventOwnerStatus extends EventLifecycleStatus {
   readonly owner: 'running';
@@ -106,11 +107,30 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
     config: core.config,
     expiry,
   });
+  const webhook = new WebhookDispatcher({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    secretReader: async ({ targetId, targetVersion, targetDigest, purpose }) =>
+      (
+        await eventSecrets.readLiveGenerations({
+          owner: { kind: 'target', id: targetId, version: targetVersion, digest: targetDigest },
+          purpose,
+          cipher,
+        })
+      ).map(({ generation, lifecycle, secretDigest, material }) => ({
+        generation,
+        lifecycle,
+        secretDigest,
+        material,
+      })),
+  });
   const unavailable = unavailableDeliveryHandler();
   const dispatcher = new DeliveryDispatcher({
     store: database,
     dryrun,
-    webhook: unavailable,
+    webhook,
     sse: unavailable,
   });
   const mailboxLock = new MailboxLock();
@@ -282,7 +302,7 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
   }
 }
 
-/** Webhook and SSE documents cannot enter B1, so these stubs are unreachable until their later B2 adapters replace them. */
+/** SSE documents cannot enter B1, so this stub remains unreachable until its later B2 adapter replaces it. */
 function unavailableDeliveryHandler(): DeliveryDispatchHandler {
   return {
     async dispatch(): Promise<never> {

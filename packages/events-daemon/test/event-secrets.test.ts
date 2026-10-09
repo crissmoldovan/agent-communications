@@ -627,6 +627,27 @@ test('B2-T3: reconciliation removes only expired retired generations after their
         expectedPriorGeneration: first.generation,
         overlapExpiresAt: expiry,
       });
+      const live = await secrets.readLiveGenerations({
+        owner,
+        purpose: 'webhook-signing',
+        cipher,
+        now: expiry - 1,
+      });
+      assert.deepEqual(
+        live.map(({ generation, lifecycle, material }) => ({ generation, lifecycle, material })),
+        [
+          { generation: 2, lifecycle: 'current', material: 'second' },
+          { generation: 1, lifecycle: 'overlap', material: 'first' },
+        ],
+        'the delivery boundary receives only the exact current and still-live overlap generations',
+      );
+      assert.deepEqual(
+        (await secrets.readLiveGenerations({ owner, purpose: 'webhook-signing', cipher, now: expiry })).map(
+          ({ generation }) => generation,
+        ),
+        [2],
+        'an expired overlap never reaches the byte boundary',
+      );
       assert.equal((await secrets.references(cipher)).length, 3, 'master, current and overlap remain reachable');
       assert.deepEqual(await secrets.reconcileRetiredGenerations(cipher, expiry), []);
       assert.equal((await secrets.references(cipher)).length, 2, 'only master and current remain reachable');
