@@ -327,10 +327,12 @@ export class WhatsAppSourceWorker {
   }
 
   private hasFencedMatchingScope(item: StageableWhatsAppMessage): boolean {
-    return (
-      this.#scopeIsFenced !== undefined &&
-      item.debts.some((rule) => this.#scopeIsFenced?.(scopeFor(rule, item.message.chatJid)) === true)
-    );
+    if (this.#scopeIsFenced === undefined) return false;
+    // The candidate's debts contain only currently active rules.  A pending new-only explicit-chat activation has no
+    // debt yet, but its durable chat fence still covers this tuple; accepting it through an overlapping all-allowed
+    // debt would permanently consume its occurrence identity before the new rule can admit it.  These are the only
+    // WhatsApp scope shapes that can cover one chat, and this predicate is re-run in the commit transaction below.
+    return this.#scopeIsFenced(`chat:${item.message.chatJid}`) || this.#scopeIsFenced('all-allowed');
   }
 
   private discardCandidateKeys(generation: number, messageIds: readonly string[]): void {

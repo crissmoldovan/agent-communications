@@ -1,5 +1,6 @@
 import { CommsError, canonicalJson } from '@agentcomms/core';
 import type { EventDatabase } from '../store/database.ts';
+import type { WhatsAppVisibilityRecheck } from './phase-d-whatsapp-seam.ts';
 
 export interface CurrentWhatsAppEventVisibility {
   /** The channel file format version; the daemon journal version is stored separately. */
@@ -94,26 +95,38 @@ export class WhatsAppVisibilityFence {
     });
   }
 
+  /**
+   * Applies current visibility under the held list lock, then makes one fresh asynchronous authority read before the
+   * synchronous final gate/write.  The callback is intentionally synchronous: there is no await after `recheck`.
+   */
+  async withCurrentVisibleWrite<T>(
+    input: Readonly<{ accountId: string; whatsappMessageId: string }>,
+    recheck: WhatsAppVisibilityRecheck,
+    write: () => T,
+  ): Promise<T | undefined> {
+    return this.withCurrentVisibility({ accountId: input.accountId }, async (visibility) => {
+      if (hidden(visibility, input.whatsappMessageId)) return undefined;
+      await recheck();
+      return write();
+    });
+  }
+
   /** The sealed-frame gate has no await after the final list check and invokes a hidden frame writer never. */
   async withCurrentSseFrameVisibility<T>(
     input: Readonly<{ accountId: string; whatsappMessageId: string }>,
+    recheck: WhatsAppVisibilityRecheck,
     writeFrame: () => T,
   ): Promise<T | undefined> {
-    return this.withCurrentVisibility({ accountId: input.accountId }, (visibility) => {
-      if (hidden(visibility, input.whatsappMessageId)) return undefined;
-      return writeFrame();
-    });
+    return this.withCurrentVisibleWrite(input, recheck, writeFrame);
   }
 
   /** A dry-run append or show has one synchronous final visibility callback under the live list lock. */
   async withCurrentDryRunVisibility<T>(
     input: Readonly<{ accountId: string; whatsappMessageId: string }>,
+    recheck: WhatsAppVisibilityRecheck,
     commit: () => T,
   ): Promise<T | undefined> {
-    return this.withCurrentVisibility({ accountId: input.accountId }, (visibility) => {
-      if (hidden(visibility, input.whatsappMessageId)) return undefined;
-      return commit();
-    });
+    return this.withCurrentVisibleWrite(input, recheck, commit);
   }
 
   /** Visible raw tuples alone may enter the candidate/head transaction. */

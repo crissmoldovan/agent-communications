@@ -11,6 +11,7 @@ import { createLoopbackTestTls } from './support/test-tls.ts';
 assertLoopbackSeal();
 const { WebhookDispatcher, classifyWebhookResponseStatus } = await import('../src/runtime/webhook-dispatcher.ts');
 const { openEventDatabase } = await import('../src/store/database.ts');
+const { WhatsAppVisibilityFence } = await import('../src/runtime/whatsapp-visibility.ts');
 
 const ACCOUNT = 'ibx_WEBHOOK_DISPATCH';
 const SIGNING_KEY = 'whsec_c3VwZXJzZWNyZXQ=';
@@ -159,6 +160,39 @@ function respondingSocket() {
 }
 
 test('P1: WhatsApp webhook bytes are written only under the live-list fence', { skip: WINDOWS_SKIP }, async (t) => {
+  await t.test('a list acquisition that removes the account rechecks before it writes webhook bytes', async () => {
+    const setup = await whatsappFixture();
+    const peer = respondingSocket();
+    let accountPresent = true;
+    try {
+      const visibilityFence = new WhatsAppVisibilityFence({
+        store: setup.store,
+        withCurrentEventVisibility: async (_input, work) => {
+          accountPresent = false;
+          return work({ version: 1, digest: 'a'.repeat(64), seesMessage: () => true });
+        },
+      });
+      assert.deepEqual(
+        await setup
+          .dispatcher({
+            tcpConnect: async () => peer.socket as never,
+            hasConcreteWhatsAppVisibilityFence: true,
+            whatsappVisibilityFence: visibilityFence,
+            config: {
+              load: async () =>
+                accountPresent ? { accounts: { whatsapp: { id: ACCOUNT, platform: 'whatsapp' } } } : { accounts: {} },
+            } as never,
+          })
+          .dispatch('delivery-webhook'),
+        { state: 'terminal', deliveryId: 'delivery-webhook' },
+      );
+      assert.deepEqual(peer.state.writes, []);
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  });
+
   await t.test('a chat hidden between claim and write sends no bytes and cancels content', async () => {
     const setup = await whatsappFixture();
     const peer = respondingSocket();
@@ -239,8 +273,9 @@ test('P1: WhatsApp webhook bytes are written only under the live-list fence', { 
             tcpConnect: async () => peer.socket as never,
             hasConcreteWhatsAppVisibilityFence: true,
             whatsappVisibilityFence: {
-              async withCurrentSseFrameVisibility(_input: unknown, write: () => void) {
+              async withCurrentSseFrameVisibility(_input: unknown, recheck: () => Promise<void>, write: () => void) {
                 gates += 1;
+                await recheck();
                 write();
               },
             },
