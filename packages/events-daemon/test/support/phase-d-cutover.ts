@@ -107,6 +107,8 @@ export class PhaseDCutoverFixture {
   #resendReceivedBaseline = 'empty';
   #resendReceivedReader: Pick<ResendEventReader, 'listReceived' | 'getReceived'> | undefined;
   #resendSentStatus = 'sent';
+  #resendSentItems: readonly Readonly<{ id: string; status: string }>[] | undefined;
+  #schedulerPointDecryptHook: (() => Promise<void> | void) | undefined;
 
   private constructor(input: {
     root: string;
@@ -198,6 +200,16 @@ export class PhaseDCutoverFixture {
 
   setResendSentStatus(status: string): void {
     this.#resendSentStatus = status;
+    this.#resendSentItems = undefined;
+  }
+
+  setResendSentItems(items: readonly Readonly<{ id: string; status: string }>[] | undefined): void {
+    this.#resendSentItems = items;
+  }
+
+  /** Holds the scheduler between its published-point read and cursor insert; used only for the D12 stale-point race. */
+  setSchedulerPointDecryptHook(hook: (() => Promise<void> | void) | undefined): void {
+    this.#schedulerPointDecryptHook = hook;
   }
 
   async activate(
@@ -362,9 +374,9 @@ export class PhaseDCutoverFixture {
     assert.equal(drains.length, old.length, 'only old-owned source scopes carry a replacement drain');
   }
 
-  async tighten(): Promise<void> {
+  async tighten(options: unknown = this.options()): Promise<void> {
     const versions = new ImmutableVersions(this.#store.database);
-    versions.createRule(this.rule(2, this.options(), 'safe', 30));
+    versions.createRule(this.rule(2, options, 'safe', 30));
     const completion = await this.runtime.prepareRule({ ruleId: 'rule-cutover', version: 2 });
     assert.equal(
       'derived' in completion && completion.derived,
@@ -422,13 +434,23 @@ export class PhaseDCutoverFixture {
       },
     };
     const dispatcher = new DeliveryDispatcher({ store: this.#store, dryrun, webhook: refuse, sse: refuse });
+    const schedulerCipher =
+      this.#schedulerPointDecryptHook === undefined
+        ? this.#cipher
+        : ({
+            encrypt: (...input: Parameters<EventRecordCipher['encrypt']>) => this.#cipher?.encrypt(...input),
+            decrypt: async (...input: Parameters<EventRecordCipher['decrypt']>) => {
+              await this.#schedulerPointDecryptHook?.();
+              return this.#cipher?.decrypt(...input);
+            },
+          } as never);
     const scheduler = new EventScheduler({
       store: this.#store,
       lifecycle: this.#lifecycle,
       activations: this.runtime,
       dispatcher,
       expiry: new EventExpiry(this.#store, () => this.now.value),
-      cipher: this.#cipher,
+      cipher: schedulerCipher,
       approvals: this.approvals,
       config: { load: async () => this.config } as never,
       taint: { record: async () => undefined } as never,
@@ -763,20 +785,18 @@ export class PhaseDCutoverFixture {
       listSent: async () => {
         await this.record('resend.listSent');
         return {
-          emails: [
-            {
-              id: IDS.resendId,
-              lastEvent: this.#resendSentStatus,
-              from: null,
-              to: [],
-              cc: [],
-              bcc: [],
-              subject: 'cutover status',
-              createdAt: '2026-10-09T12:00:00.000Z',
-              scheduledAt: null,
-              messageId: null,
-            },
-          ],
+          emails: (this.#resendSentItems ?? [{ id: IDS.resendId, status: this.#resendSentStatus }]).map((item) => ({
+            id: item.id,
+            lastEvent: item.status,
+            from: null,
+            to: [],
+            cc: [],
+            bcc: [],
+            subject: 'cutover status',
+            createdAt: '2026-10-09T12:00:00.000Z',
+            scheduledAt: null,
+            messageId: null,
+          })),
           next: null,
         };
       },
