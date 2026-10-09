@@ -700,6 +700,10 @@ export async function applyDerivedTightening(input: {
   const parentId = ruleVersionId(input.parent.ruleId, input.parent.version);
   const childId = ruleVersionId(input.child.ruleId, input.child.version);
   const changes = changedRetentions(input.parent.retention, input.child.retention);
+  // The kill switch as the tightening began: a disable-all (or a new generation) during the awaits below wins.
+  const switchAtStart = database
+    .prepare('SELECT enabled, switch_generation FROM event_settings WHERE singleton = 1')
+    .get() as { enabled: number; switch_generation: number } | undefined;
   // Encryption reserves its nonce with BEGIN IMMEDIATE. It must finish before the pointer/lifecycle transaction,
   // and the copied plaintext must be authenticated for the child row rather than moved as a parent-row ciphertext.
   const parentActivationId = (
@@ -743,8 +747,6 @@ export async function applyDerivedTightening(input: {
       }),
     })),
   );
-  // The decryption and encryption awaited: every account a copied point binds is read again from the configuration.
-  for (const accountId of new Set(preparedPoints.map((point) => point.accountId))) await input.accountLive?.(accountId);
   // Source stages may require a content decrypt/re-encrypt to preserve their continuation.  This has to happen
   // before BEGIN IMMEDIATE, but each prepared closure authenticates the exact old ciphertext and runs only after
   // the new deadline is made due in the pointer transaction below.
@@ -756,8 +758,22 @@ export async function applyDerivedTightening(input: {
           ingestRetentionMs: input.child.retention.ingestMs,
           now: input.now,
         })) ?? []);
+  // Every await is behind us: every account a copied point binds is read again from the configuration here, after the
+  // last one (a removed account's id is never live again, so a removal during any await is seen — K6).
+  for (const accountId of new Set(preparedPoints.map((point) => point.accountId))) await input.accountLive?.(accountId);
   database.exec('BEGIN IMMEDIATE');
   try {
+    const switchNow = database
+      .prepare('SELECT enabled, switch_generation FROM event_settings WHERE singleton = 1')
+      .get() as { enabled: number; switch_generation: number } | undefined;
+    if (
+      switchNow === undefined ||
+      switchAtStart === undefined ||
+      switchNow.enabled !== switchAtStart.enabled ||
+      switchNow.switch_generation !== switchAtStart.switch_generation
+    ) {
+      throw new CommsError('APPROVAL_VOID', 'the event switch changed while the derived tightening was prepared');
+    }
     const parent = database.prepare('SELECT state, approval_id FROM rule_versions WHERE id = ?').get(parentId) as
       | { state: string | null; approval_id: string | null }
       | undefined;
