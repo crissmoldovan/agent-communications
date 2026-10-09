@@ -176,7 +176,10 @@ test('B2-T4: v7 preserves a B1-only reset barrier and gives system-reset ciphert
        INSERT INTO reset_barriers (reset_epoch, target_id, target_version, state, reset_delivery_id)
        VALUES (2, 'target-migration', 1, 'closed', 'b1-reset');`,
     );
-    applyMigrations(database);
+    applyMigrations(
+      database,
+      EVENT_MIGRATIONS.filter((migration) => migration.version <= 7),
+    );
     assert.equal(
       (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
       '7',
@@ -212,6 +215,76 @@ test('B2-T4: v7 preserves a B1-only reset barrier and gives system-reset ciphert
         .byteLength > 0,
     );
     assert.throws(() => encodeAad('system_reset_outbox', 'encryptedRecord', []), /needs 1 primary-key components/);
+  } finally {
+    database.close();
+  }
+});
+
+test('B2-T5: v8 backfills one stable rule/account/target order across replacement versions', () => {
+  const database = new DatabaseSync(':memory:');
+  try {
+    applyMigrations(
+      database,
+      EVENT_MIGRATIONS.filter((migration) => migration.version <= 7),
+    );
+    database.exec(
+      `INSERT INTO rule_versions
+         (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+       VALUES
+         ('rule-migration@1', 'rule-migration', 1, '{}', 'digest', 'superseded', 'approval', 'activation', 1),
+         ('rule-migration@2', 'rule-migration', 2, '{}', 'digest', 'active', 'approval', 'activation', 2);
+       INSERT INTO target_versions (id, target_id, version, document, digest)
+       VALUES
+         ('target-migration@1', 'target-migration', 1, '{}', 'digest'),
+         ('target-migration@2', 'target-migration', 2, '{}', 'digest');
+       INSERT INTO ingest
+         (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
+       VALUES
+         ('event-migration-1', 'installation', 'example.event', 1, 'account-migration', 'dedupe-1', 1, 1, 1),
+         ('event-migration-2', 'installation', 'example.event', 1, 'account-migration', 'dedupe-2', 2, 2, 2);
+       INSERT INTO decisions
+         (id, event_id, account_id, rule_id, rule_version, outcome, metadata_expires_at, metadata_state)
+       VALUES
+         ('decision-migration-1', 'event-migration-1', 'account-migration', 'rule-migration', 1, 'matched', 999, 'retained'),
+         ('decision-migration-2', 'event-migration-2', 'account-migration', 'rule-migration', 2, 'matched', 999, 'retained');
+       INSERT INTO deliveries
+         (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version,
+          encrypted_record, expires_at, state, switch_generation, ordering_sequence)
+       VALUES
+         ('delivery-migration-1', 'decision-migration-1', 'account-migration', 'rule-migration', 1,
+          'webhook:target-migration:1', 'target-migration', 1, X'01', 999, 'queued', 0, 0),
+         ('delivery-migration-2', 'decision-migration-2', 'account-migration', 'rule-migration', 2,
+          'webhook:target-migration:2', 'target-migration', 2, X'01', 999, 'queued', 0, 0);`,
+    );
+    applyMigrations(database);
+    assert.equal(
+      (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
+      '8',
+    );
+    assert.deepEqual(
+      database
+        .prepare(
+          `SELECT id, ordering_sequence FROM deliveries
+           WHERE target_id = 'target-migration' ORDER BY ordering_sequence`,
+        )
+        .all()
+        .map((row) => ({ ...(row as Record<string, unknown>) })),
+      [
+        { id: 'delivery-migration-1', ordering_sequence: 0 },
+        { id: 'delivery-migration-2', ordering_sequence: 1 },
+      ],
+    );
+    assert.deepEqual(
+      {
+        ...(database
+          .prepare(
+            `SELECT next_sequence FROM delivery_order_counters
+             WHERE rule_id = 'rule-migration' AND account_id = 'account-migration' AND target_id = 'target-migration'`,
+          )
+          .get() as { next_sequence: number }),
+      },
+      { next_sequence: 2 },
+    );
   } finally {
     database.close();
   }

@@ -71,7 +71,11 @@ async function fixture() {
   store.database.exec('UPDATE event_settings SET enabled = 1, switch_generation = 7');
   const canonical = canonicalJson(rule);
   store.database
-    .prepare('INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
+    .prepare(
+      `INSERT INTO rule_versions
+       (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+       VALUES (?, ?, ?, ?, ?, 'active', 'approval', 'activation', 1)`,
+    )
     .run('rule-dispatch@1', rule.ruleId, rule.version, canonical, sha256Hex(canonical));
   const target = canonicalJson(rule.targets[0]);
   store.database
@@ -177,7 +181,7 @@ test('DEL-B1: one immediate boundary appends encrypted local work, charges its r
   }
 });
 
-test('DEL-B1: interruption before commit rolls back charge and append, and a recovered lease charges exactly once', {
+test('B2-T5: an interruption after claim retains its one charge, and a recovered lease never charges twice', {
   skip: WINDOWS_SKIP,
 }, async () => {
   const setup = await fixture();
@@ -192,7 +196,7 @@ test('DEL-B1: interruption before commit rolls back charge and append, and a rec
         })
         .dispatch('crash'),
     );
-    assert.equal(count(setup.store, 'delivery_cap_charges'), 0);
+    assert.equal(count(setup.store, 'delivery_cap_charges'), 1, 'the first claimed attempt keeps its cap charge');
     assert.equal(count(setup.store, 'dryrun_log'), 0);
     clock += 31_000;
     assert.deepEqual(await setup.dispatcher().dispatch('crash'), { state: 'delivered', deliveryId: 'crash' });
@@ -270,7 +274,7 @@ test('DEL-B1: dispatch and read refuse at the fence before decrypting sender con
   }
 });
 
-test('P1-B1: an account-removed dispatch refusal terminalises the lease and atomically purges account payloads', {
+test('B2-T5: an account-removed dispatch preflight creates no lease and atomically purges account payloads', {
   skip: WINDOWS_SKIP,
 }, async () => {
   const setup = await fixture();
@@ -295,7 +299,7 @@ test('P1-B1: an account-removed dispatch refusal terminalises the lease and atom
     const removed = setup.store.database
       .prepare("SELECT state, encrypted_record, lease_until FROM deliveries WHERE id = 'removed'")
       .get() as { state: string; encrypted_record: Uint8Array | null; lease_until: number | null };
-    assert.equal(removed.state, 'in-flight-at-account-removal');
+    assert.equal(removed.state, 'cancelled');
     assert.equal(removed.encrypted_record, null);
     assert.equal(removed.lease_until, null);
     assert.equal(count(setup.store, 'dryrun_log'), 0);
@@ -518,7 +522,11 @@ test("CAP-B1: a lowered cap counts the rule's whole rolling window, earlier vers
     assert.deepEqual(await setup.dispatcher().dispatch('earlier'), { state: 'delivered', deliveryId: 'earlier' });
     const v2 = canonicalJson({ ...rule, version: 2 });
     setup.store.database
-      .prepare('INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
+      .prepare(
+        `INSERT INTO rule_versions
+         (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+         VALUES (?, ?, ?, ?, ?, 'superseded', 'approval', 'activation', 2)`,
+      )
       .run('rule-dispatch@2', rule.ruleId, 2, v2, sha256Hex(v2));
     setup.insert('later');
     setup.store.database.exec("UPDATE decisions SET rule_version = 2 WHERE id = 'decision-later'");
@@ -625,7 +633,11 @@ test('DEL-B1: an account removed from the configuration during encryption append
     });
     assert.deepEqual(await dispatcher.dispatch('late-removal'), { state: 'terminal', deliveryId: 'late-removal' });
     assert.equal(count(setup.store, 'dryrun_log'), 0, 'nothing is appended for a removed account');
-    assert.equal(count(setup.store, 'delivery_cap_charges'), 0, 'no cap is charged for it');
+    assert.equal(
+      count(setup.store, 'delivery_cap_charges'),
+      1,
+      'a first claim retains its charge after a later removal',
+    );
     const row = setup.store.database
       .prepare("SELECT state, encrypted_record FROM deliveries WHERE id = 'late-removal'")
       .get() as { state: string; encrypted_record: Uint8Array | null };

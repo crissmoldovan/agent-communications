@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
 import {
+  claimSystemResetOutbox,
+  completeSystemResetClaim,
   createSystemResetOutbox,
   SYSTEM_RESET_ATTEMPT_LIMIT,
   SYSTEM_RESET_RETENTION_MS,
@@ -118,6 +120,67 @@ test('B2-T4: reset work is cap-free system work with a dedicated AAD and preserv
     }
     assert.ok(
       encodeAad('system_reset_outbox', 'encryptedRecord', [{ type: 'text', value: 'system-reset-1' }]).byteLength > 0,
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B2-T5: reset recovery replaces the attempt token without creating an ordinary cap charge', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-b2-reset-claim-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    store.database.exec(
+      `INSERT INTO target_versions (id, target_id, version, document, digest)
+       VALUES ('target-reset-claim@1', 'target-reset-claim', 1, '{}', 'digest');
+       INSERT INTO rule_versions
+         (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+       VALUES ('rule-reset-claim@1', 'rule-reset-claim', 1, '{}', 'digest', 'active', 'approval', 'activation', 1);`,
+    );
+    addActiveRuleTargetReferences(store.database, {
+      ruleId: 'rule-reset-claim',
+      ruleVersion: 1,
+      targets: [{ targetId: 'target-reset-claim', targetVersion: 1 }],
+      createdAt: 1,
+    });
+    createSystemResetOutbox(store, {
+      id: 'system-reset-claim',
+      resetEpoch: 1,
+      targetId: 'target-reset-claim',
+      targetVersion: 1,
+      encryptedRecord: Buffer.from('fixed reset bytes'),
+      createdAt: 1,
+    });
+    const first = claimSystemResetOutbox({
+      store,
+      outboxId: 'system-reset-claim',
+      now: 10,
+      leaseMs: 5,
+      newAttemptId: () => 'attempt-reset-1',
+      newLeaseToken: () => 'token-reset-1',
+    });
+    assert.equal(first.kind, 'claimed');
+    const recovered = claimSystemResetOutbox({
+      store,
+      outboxId: 'system-reset-claim',
+      now: 15,
+      leaseMs: 5,
+      newAttemptId: () => 'attempt-reset-2',
+      newLeaseToken: () => 'token-reset-2',
+    });
+    assert.equal(recovered.kind, 'claimed');
+    assert.equal(
+      completeSystemResetClaim(store, first.claim, { state: 'delivered' }),
+      false,
+      'the former reset owner cannot settle the recovered attempt',
+    );
+    assert.equal(completeSystemResetClaim(store, recovered.claim, { state: 'delivered' }), true);
+    assert.equal(
+      (store.database.prepare('SELECT count(*) AS count FROM delivery_cap_charges').get() as { count: number }).count,
+      0,
     );
   } finally {
     store.close();

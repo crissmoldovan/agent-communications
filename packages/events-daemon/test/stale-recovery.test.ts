@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { recoverDeliveryLeases } from '../src/runtime/recovery.ts';
 
 type InstanceModule = typeof import('../src/control/instance.ts');
 
@@ -35,4 +36,19 @@ test('CTRL-B1: stale recovery requires a dead owner and a failed authenticated p
   ]) {
     assert.equal(await instances.mayRecoverStaleInstance({ record, ...refusal }), false);
   }
+});
+
+test('B2-T5: delivery lease recovery reaches the shared target dispatcher exactly once', async () => {
+  let recoveries = 0;
+  const expected = [{ state: 'terminal' as const, deliveryId: 'expired-lease' }];
+  assert.deepEqual(
+    await recoverDeliveryLeases({
+      async recoverLeases() {
+        recoveries += 1;
+        return expected;
+      },
+    } as never),
+    expected,
+  );
+  assert.equal(recoveries, 1);
 });
