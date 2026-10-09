@@ -1,6 +1,7 @@
 import { CommsError } from '@agentcomms/core';
 import type { EventDatabase } from '../store/database.ts';
 import type { PreparedDelivery } from './deliveries.ts';
+import { addRetainedDeliveryTargetReference } from './target-version-references.ts';
 
 export interface DecisionCommitInput {
   readonly id: string;
@@ -67,8 +68,9 @@ export function commitDecisionOutbox(
         .prepare(
           `INSERT INTO deliveries
            (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version,
-            encrypted_record, expires_at, state, switch_generation, next_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)`,
+            target_kind, target_representation, subscriber_id, subscriber_version, encrypted_record, expires_at,
+            state, switch_generation, next_at, ordering_sequence)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, 0)`,
         )
         .run(
           delivery.id,
@@ -79,11 +81,23 @@ export function commitDecisionOutbox(
           delivery.targetKey,
           delivery.target.targetId,
           delivery.target.targetVersion,
+          delivery.target.kind,
+          delivery.representation,
+          delivery.target.kind === 'sse' ? delivery.target.subscriberId : null,
+          delivery.target.kind === 'sse' ? delivery.target.subscriberVersion : null,
           delivery.encryptedRecord,
           delivery.expiresAt,
           input.switchGeneration,
           0,
         );
+      addRetainedDeliveryTargetReference(store.database, {
+        deliveryId: delivery.id,
+        ruleId: input.ruleId,
+        ruleVersion: input.ruleVersion,
+        targetId: delivery.target.targetId,
+        targetVersion: delivery.target.targetVersion,
+        createdAt: Date.now(),
+      });
       failpoint?.('after-delivery');
     }
     store.database

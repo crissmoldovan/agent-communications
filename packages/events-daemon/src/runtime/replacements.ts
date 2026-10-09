@@ -2,6 +2,11 @@ import type { DatabaseSync } from 'node:sqlite';
 import { CommsError } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import { isWhitelistedTightening } from './disclosure-fence.ts';
+import {
+  addActiveRuleTargetReferences,
+  purgeUnreferencedSystemTargets,
+  removeRuleVersionTargetReferences,
+} from './target-version-references.ts';
 
 export type TighteningKind =
   | 'remove-target'
@@ -307,6 +312,10 @@ export function purgeRevokedRuleWork(database: DatabaseSync, ruleId: string, ver
       )
       .run(ruleId, version);
     database.prepare('DELETE FROM source_stage_rule_debts WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
+    const targets = removeRuleVersionTargetReferences(database, ruleId, version);
+    for (const target of targets) {
+      purgeUnreferencedSystemTargets(database, { ...target, now: Date.now() });
+    }
   }
 }
 
@@ -368,11 +377,44 @@ export function shortenRuleRetentionDeadlines(input: {
     retainedVersions.map((row) => [row.version, storedRetention(row.document)] as const),
   );
   const deliveries = database
-    .prepare('SELECT id, rule_version, expires_at, state FROM deliveries WHERE rule_id = ?')
-    .all(ruleId) as Array<{ id: string; rule_version: number; expires_at: number; state: string }>;
+    .prepare(
+      'SELECT id, rule_version, expires_at, state, dead_lettered_at, dead_letter_expires_at FROM deliveries WHERE rule_id = ?',
+    )
+    .all(ruleId) as Array<{
+    id: string;
+    rule_version: number;
+    expires_at: number;
+    state: string;
+    dead_lettered_at: number | null;
+    dead_letter_expires_at: number | null;
+  }>;
   for (const delivery of deliveries) {
     const prior = originalRetention.get(delivery.rule_version);
     if (!prior) continue;
+    if (
+      delivery.state === 'dead-lettered' &&
+      delivery.dead_lettered_at !== null &&
+      delivery.dead_letter_expires_at !== null
+    ) {
+      const deadLetterExpiresAt = Math.min(
+        delivery.dead_letter_expires_at,
+        delivery.dead_lettered_at + child.retention.deadLetterMs,
+      );
+      if (deadLetterExpiresAt <= now) {
+        database
+          .prepare(
+            `UPDATE deliveries
+             SET dead_letter_expires_at = ?, state = 'retention-expired', encrypted_record = NULL, lease_until = NULL
+             WHERE id = ?`,
+          )
+          .run(deadLetterExpiresAt, delivery.id);
+      } else {
+        database
+          .prepare('UPDATE deliveries SET dead_letter_expires_at = ? WHERE id = ?')
+          .run(deadLetterExpiresAt, delivery.id);
+      }
+      continue;
+    }
     const createdAt = delivery.expires_at - prior.deliveryMs;
     const expiresAt = Math.min(delivery.expires_at, createdAt + child.retention.deliveryMs);
     if (expiresAt <= now && ['queued', 'retryable'].includes(delivery.state)) {
@@ -576,6 +618,12 @@ export async function applyDerivedTightening(input: {
         "UPDATE active_versions SET version = ?, current_cutover_id = ?, activated_at = ? WHERE kind = 'rule' AND object_id = ?",
       )
       .run(input.child.version, childId, input.now, input.child.ruleId);
+    addActiveRuleTargetReferences(database, {
+      ruleId: input.child.ruleId,
+      ruleVersion: input.child.version,
+      targets: input.child.targets.map((target) => ({ targetId: target.targetId, targetVersion: target.version })),
+      createdAt: input.now,
+    });
     database.exec('COMMIT');
     return { editKind, versionId: childId };
   } catch (error) {

@@ -3,6 +3,7 @@ import { ImmutableVersions } from '../domain/versions.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { ActivationRuntime } from './activations.ts';
 import { purgeRevokedRuleWork } from './replacements.ts';
+import { purgeUnreferencedSystemTargets } from './target-version-references.ts';
 
 /** The revoking pointer mutations: they cancel any claimed completion they bind, then revoke in one transaction. */
 type Revoker = Pick<ActivationRuntime, 'cancelForRevocation'>;
@@ -53,6 +54,11 @@ export async function removeTarget(
       database.database
         .prepare('INSERT OR REPLACE INTO object_revocations (kind, object_id, version, revoked_at) VALUES (?, ?, ?, ?)')
         .run('target', targetId, row.version, revokedAt);
+      purgeUnreferencedSystemTargets(database.database, {
+        targetId,
+        targetVersion: row.version,
+        now: revokedAt,
+      });
     }
     const boundRules = database.database
       .prepare("SELECT rule_id, version, document FROM rule_versions WHERE state IN ('active', 'superseded')")
