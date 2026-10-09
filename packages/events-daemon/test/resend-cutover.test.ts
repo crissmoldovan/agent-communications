@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DURABLE_CUTOVER_EDGES } from '../src/runtime/cutover-failpoint.ts';
 import { IDS, PhaseDCutoverFixture } from './support/phase-d-cutover.ts';
+import {
+  activateAtResendDurableEdge,
+  assertResendAdmissions,
+  forEachResendDurableEdge,
+} from './support/phase-d-cutover-resend.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 const RECEIVED = { channel: 'resend', kinds: ['received'] };
@@ -11,6 +16,10 @@ const E0 = '22222222-2222-4222-8222-222222222222';
 const E1 = '33333333-3333-4333-8333-333333333333';
 const E2 = '44444444-4444-4444-8444-444444444444';
 const E3 = '55555555-5555-4555-8555-555555555555';
+const RECEIVED_AND_STATUS = { channel: 'resend', kinds: ['received', 'status'] };
+const OLD_ACCOUNT = 'acc_BBBBBBBBBBBBBBBB';
+const SHARED_ACCOUNT = 'acc_CCCCCCCCCCCCCCCC';
+const NEW_ACCOUNT = 'acc_DDDDDDDDDDDDDDDD';
 
 function receivedCandidate(emailId: string) {
   return {
@@ -53,8 +62,25 @@ const cells = [
   'R:deadline-at-P-after-P-and-finalise-settles-without-write',
 ] as const;
 
+const realCells: ReadonlySet<(typeof cells)[number]> = new Set([
+  'R:first-enabled-received-and-status',
+  'R:replace-old-only-drains-received-and-status',
+  'R:replace-new-only-baselines-at-anchor',
+  'R:replace-shared-one-version-per-occurrence',
+  'R:enable-all-rebaselines-readded-account',
+  'R:timeout-keeps-anchor-and-retries',
+  'R:initial-anchor-and-status-start-atomic',
+  'R:initial-cursor-rechecks-points-under-received-and-status-locks',
+  'R:tighten-transfers-received-and-status-debts-stale-scan-writes-nothing',
+  'R:swap-drops-old-only-received-and-status-debts',
+] as const);
+
 for (const name of cells) {
   test(name, { skip: WINDOWS_SKIP }, async () => {
+    if (realCells.has(name)) {
+      await forEachResendDurableEdge(name, async (fixture, edge) => runRealResendCell(name, fixture, edge));
+      return;
+    }
     const fixture = await PhaseDCutoverFixture.create('resend');
     try {
       if (name === 'R:first-disabled-seeds-anchor-and-status') {
@@ -165,6 +191,501 @@ for (const name of cells) {
       await fixture.dispose();
     }
   });
+}
+
+async function runRealResendCell(
+  name: (typeof cells)[number],
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+): Promise<void> {
+  switch (name) {
+    case 'R:first-enabled-received-and-status':
+      return firstEnabledReceivedAndStatus(fixture, edge);
+    case 'R:replace-old-only-drains-received-and-status':
+      return replacementOldOnlyDrains(fixture, edge);
+    case 'R:replace-new-only-baselines-at-anchor':
+      return replacementNewOnlyBaselines(fixture, edge);
+    case 'R:replace-shared-one-version-per-occurrence':
+      return replacementSharedAdmitsOneVersion(fixture, edge);
+    case 'R:enable-all-rebaselines-readded-account':
+      return enableAllRebaselinesReaddedAccount(fixture, edge);
+    case 'R:timeout-keeps-anchor-and-retries':
+      return timeoutKeepsAnchorAndRetries(fixture, edge);
+    case 'R:initial-anchor-and-status-start-atomic':
+      return initialAnchorAndStatusStartAtomic(fixture, edge);
+    case 'R:initial-cursor-rechecks-points-under-received-and-status-locks':
+      return initialCursorRechecksPublishedPoints(fixture, edge);
+    case 'R:tighten-transfers-received-and-status-debts-stale-scan-writes-nothing':
+      return tighteningTransfersReceivedAndStatusDebts(fixture, edge);
+    case 'R:swap-drops-old-only-received-and-status-debts':
+      return swapDropsOldOnlyDebts(fixture, edge);
+    default:
+      return assert.fail(`unimplemented real Resend matrix cell: ${name}`);
+  }
+}
+
+async function firstEnabledReceivedAndStatus(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+): Promise<void> {
+  fixture.setResendReceivedBaseline(P);
+  fixture.setResendReceivedReader(receivedReader([P]));
+  await activateAtResendDurableEdge(fixture, 'R:first-enabled-received-and-status', edge, () =>
+    fixture.activate(1, RECEIVED_AND_STATUS),
+  );
+  assert.equal(fixture.calls.length, 0, 'the disabled first activation calls neither Resend reader');
+  await fixture.enable();
+  await primeResendCursors(fixture, 2);
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+
+  fixture.now.value += 1;
+  fixture.setResendReceivedReader(receivedReader([E1, P, E0]));
+  fixture.setResendSentStatus('delivered');
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+
+  assertResendAdmissions(fixture, [
+    receivedAdmission(fixture.accountId, E1, 1),
+    statusAdmission(fixture, fixture.accountId, 'sent', 'delivered', 1),
+  ]);
+  fixture.oracle({ raw: 2, admissions: 2, versions: [1, 1] });
+}
+
+async function replacementOldOnlyDrains(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+): Promise<void> {
+  await beginScopedResendReplacement(fixture, edge, 'R:replace-old-only-drains-received-and-status');
+  fixture.setResendReceivedReader(receivedReader([E1, P, E0, X0]));
+  fixture.setResendSentStatus('delivered');
+  await fixture.sourceTurn(receivedScope(OLD_ACCOUNT));
+  await fixture.sourceTurn(statusScopeFor(OLD_ACCOUNT));
+
+  assertResendAdmissions(fixture, [receivedAdmission(OLD_ACCOUNT, P, 1), receivedAdmission(OLD_ACCOUNT, E0, 1)]);
+  assertDrained(fixture, OLD_ACCOUNT, 'status', true);
+  assertDrained(fixture, OLD_ACCOUNT, 'received', true);
+  fixture.oracle({ raw: 2, admissions: 2, versions: [1, 1] });
+}
+
+async function replacementNewOnlyBaselines(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+): Promise<void> {
+  await beginScopedResendReplacement(fixture, edge, 'R:replace-new-only-baselines-at-anchor');
+  assert.equal(
+    fixture.store.database
+      .prepare(
+        "SELECT 1 FROM activation_baselines WHERE source = 'resend' AND account_id = ? AND position_scope = 'received'",
+      )
+      .get(NEW_ACCOUNT) !== undefined,
+    true,
+    'the new-only received account has its independently sampled anchor before the swap',
+  );
+  await completeScopedReceivedDrain(fixture);
+  await fixture.runtime.resumeClaimedCompletions();
+
+  fixture.setResendReceivedReader(receivedReader([P]));
+  await primeResendCursors(fixture, 4);
+  fixture.setResendReceivedReader(receivedReader([E1, P, E0, X0]));
+  await fixture.sourceTurn(receivedScope(NEW_ACCOUNT));
+  await fixture.sourceTurn(statusScopeFor(NEW_ACCOUNT)); // seeds the P status state without admitting it
+  fixture.now.value += 1;
+  fixture.setResendSentStatus('bounced');
+  await fixture.sourceTurn(statusScopeFor(NEW_ACCOUNT));
+
+  assertResendAdmissions(fixture, [
+    receivedAdmission(OLD_ACCOUNT, P, 1),
+    receivedAdmission(OLD_ACCOUNT, E0, 1),
+    receivedAdmission(SHARED_ACCOUNT, P, 1),
+    receivedAdmission(SHARED_ACCOUNT, E0, 1),
+    statusAdmissionAt(SHARED_ACCOUNT, 'sent', 'delivered', fixture.now.value - 1, 2),
+    receivedAdmission(NEW_ACCOUNT, E1, 2),
+    statusAdmission(fixture, NEW_ACCOUNT, 'delivered', 'bounced', 2),
+  ]);
+}
+
+async function replacementSharedAdmitsOneVersion(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+): Promise<void> {
+  await beginScopedResendReplacement(fixture, edge, 'R:replace-shared-one-version-per-occurrence');
+  await completeScopedReceivedDrain(fixture);
+  await fixture.runtime.resumeClaimedCompletions();
+
+  fixture.setResendReceivedReader(receivedReader([E2, E1, P, E0, X0]));
+  await fixture.sourceTurn(receivedScope(SHARED_ACCOUNT));
+  await fixture.sourceTurn(statusScopeFor(SHARED_ACCOUNT));
+  fixture.now.value += 1;
+  fixture.setResendSentStatus('bounced');
+  await fixture.sourceTurn(statusScopeFor(SHARED_ACCOUNT));
+
+  assertResendAdmissions(fixture, [
+    receivedAdmission(OLD_ACCOUNT, P, 1),
+    receivedAdmission(OLD_ACCOUNT, E0, 1),
+    receivedAdmission(SHARED_ACCOUNT, P, 1),
+    receivedAdmission(SHARED_ACCOUNT, E0, 1),
+    receivedAdmission(SHARED_ACCOUNT, E1, 2),
+    receivedAdmission(SHARED_ACCOUNT, E2, 2),
+    statusAdmission(fixture, SHARED_ACCOUNT, 'delivered', 'bounced', 2),
+  ]);
+}
+
+async function enableAllRebaselinesReaddedAccount(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+): Promise<void> {
+  fixture.setResendReceivedBaseline(X0);
+  fixture.setResendReceivedReader(receivedReader([X0]));
+  await fixture.activate(1, RECEIVED_AND_STATUS);
+  await fixture.enable();
+  await primeResendCursors(fixture, 2);
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+  await fixture.disableAll();
+  fixture.removeAccount();
+  fixture.readdAccount();
+  fixture.now.value += 1;
+  fixture.setResendReceivedBaseline(P);
+  await activateAtResendDurableEdge(fixture, 'R:enable-all-rebaselines-readded-account', edge, () => fixture.enable(), {
+    providerFenced: false,
+    allowUnreachedEdge: true,
+  });
+
+  fixture.setResendReceivedReader(receivedReader([E1, P, E0, X0]));
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+  fixture.now.value += 1;
+  fixture.setResendSentStatus('delivered');
+  await fixture.sourceTurn(statusScope(fixture));
+  assertResendAdmissions(fixture, [
+    receivedAdmission(fixture.accountId, E1, 1),
+    statusAdmission(fixture, fixture.accountId, 'sent', 'delivered', 1),
+  ]);
+}
+
+async function timeoutKeepsAnchorAndRetries(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+): Promise<void> {
+  fixture.setResendReceivedBaseline(X0);
+  fixture.setResendReceivedReader(receivedReader([X0]));
+  await fixture.activate(1, RECEIVED_AND_STATUS);
+  await fixture.enable();
+  await primeResendCursors(fixture, 2);
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+  fixture.setResendReceivedBaseline(P);
+  await beginReplacementAtEdge(fixture, edge, 'R:timeout-keeps-anchor-and-retries');
+  fixture.now.value += 3_600_001;
+  const callsBeforeTimeout = fixture.calls.length;
+  await fixture.recover();
+  assert.equal(fixture.failedCompletions(), 1, 'the incomplete replacement is settled at its original deadline');
+  assert.equal(fixture.calls.length, callsBeforeTimeout, 'timeout performs no provider retry before settlement');
+
+  fixture.setResendReceivedReader(receivedReader([E1, P, X0]));
+  await fixture.sourceTurn();
+  assertResendAdmissions(fixture, [
+    receivedAdmission(fixture.accountId, P, 1),
+    receivedAdmission(fixture.accountId, E1, 1),
+  ]);
+}
+
+async function initialAnchorAndStatusStartAtomic(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+): Promise<void> {
+  fixture.setResendReceivedBaseline(P);
+  await activateAtResendDurableEdge(fixture, 'R:initial-anchor-and-status-start-atomic', edge, () =>
+    fixture.activate(1, RECEIVED_AND_STATUS),
+  );
+  const points = fixture.store.database
+    .prepare(
+      "SELECT position_scope FROM rule_activation_points WHERE source = 'resend' AND account_id = ? ORDER BY position_scope",
+    )
+    .all(fixture.accountId)
+    .map((row) => (row as { position_scope: string }).position_scope);
+  assert.deepEqual(points, ['received', 'status'], 'received anchor and status start publish as one first activation');
+  assert.equal(fixture.calls.length, 0, 'the disabled atomic initial publication made no provider call');
+  fixture.setResendReceivedReader(receivedReader([P]));
+  await fixture.enable();
+  await fixture.schedulerTurn();
+  await fixture.schedulerTurn();
+  const cursors = fixture.store.database
+    .prepare("SELECT cursor_scope FROM cursors WHERE source = 'resend' AND account_id = ? ORDER BY cursor_scope")
+    .all(fixture.accountId)
+    .map((row) => (row as { cursor_scope: string }).cursor_scope);
+  assert.deepEqual(cursors, ['received', 'status'], 'both initial cursors are installed with the published points');
+}
+
+async function initialCursorRechecksPublishedPoints(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+): Promise<void> {
+  fixture.setResendReceivedBaseline(X0);
+  fixture.setResendReceivedReader(receivedReader([X0]));
+  await activateAtResendDurableEdge(
+    fixture,
+    'R:initial-cursor-rechecks-points-under-received-and-status-locks',
+    edge,
+    () => fixture.activate(1, RECEIVED_AND_STATUS),
+  );
+  await fixture.enable();
+  fixture.setResendReceivedBaseline(P);
+  let concurrentPointPublications = 0;
+  fixture.setSchedulerPointDecryptHook(async () => {
+    if (concurrentPointPublications >= 2) return;
+    concurrentPointPublications += 1;
+    await fixture.activateAdditionalRule(`rule-later-${concurrentPointPublications}`, RECEIVED_AND_STATUS);
+  });
+  // A production scheduler source turn obtains its point set, decrypts it, and
+  // then lets the concurrent activation publish a newer received/status pair
+  // before the cursor insert transaction re-reads that set. Run one turn for
+  // each Resend scope so neither installs a stale initial cursor.
+  await fixture.schedulerTurn();
+  fixture.now.value += 60_000;
+  await fixture.schedulerTurn();
+  fixture.setSchedulerPointDecryptHook(undefined);
+  assert.equal(concurrentPointPublications, 2, 'the received and status cursor attempts both raced a publication');
+  const staleCursors = fixture.store.database
+    .prepare("SELECT cursor_scope FROM cursors WHERE source = 'resend' AND account_id = ? ORDER BY cursor_scope")
+    .all(fixture.accountId);
+  assert.deepEqual(staleCursors, [], 'neither scope persists the point set it read before the concurrent publication');
+
+  fixture.setResendReceivedReader(receivedReader([P, X0]));
+  await primeResendCursors(fixture, 4);
+  fixture.setResendReceivedReader(receivedReader([E1, P, E0, X0]));
+  await fixture.sourceTurn();
+  fixture.setResendSentStatus('delivered');
+  fixture.now.value += 1;
+  await fixture.sourceTurn(statusScope(fixture));
+  assertResendAdmissions(fixture, [
+    receivedAdmission(fixture.accountId, P, 1),
+    receivedAdmission(fixture.accountId, E1, 1),
+    receivedAdmission(fixture.accountId, E1, 1),
+    receivedAdmission(fixture.accountId, E1, 1),
+    statusAdmission(fixture, fixture.accountId, 'sent', 'delivered', 1),
+    statusAdmission(fixture, fixture.accountId, 'sent', 'delivered', 1),
+    statusAdmission(fixture, fixture.accountId, 'sent', 'delivered', 1),
+  ]);
+}
+
+async function tighteningTransfersReceivedAndStatusDebts(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+): Promise<void> {
+  fixture.setResendReceivedBaseline(X0);
+  fixture.setResendReceivedReader(receivedReader([X0]));
+  await activateAtResendDurableEdge(
+    fixture,
+    'R:tighten-transfers-received-and-status-debts-stale-scan-writes-nothing',
+    edge,
+    () => fixture.activate(1, RECEIVED_AND_STATUS),
+  );
+  await fixture.enable();
+  await primeResendCursors(fixture, 2);
+  await fixture.sourceTurn(statusScope(fixture));
+  fixture.setResendReceivedReader(receivedReader([E1, X0]));
+  fixture.setResendSentStatus('delivered');
+  await fixture.setFailpoint((at) => {
+    if (at === 'after-stage') throw new Error('received debt staged before tightening');
+  });
+  await assert.rejects(() => fixture.sourceTurn(), /received debt staged before tightening/);
+  await assert.rejects(() => fixture.sourceTurn(statusScope(fixture)), /received debt staged before tightening/);
+  await fixture.setFailpoint(undefined);
+  await fixture.tighten(RECEIVED_AND_STATUS);
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+  assertResendAdmissions(fixture, [
+    receivedAdmission(fixture.accountId, E1, 2),
+    statusAdmission(fixture, fixture.accountId, 'sent', 'delivered', 2),
+  ]);
+}
+
+async function swapDropsOldOnlyDebts(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+): Promise<void> {
+  await beginScopedResendReplacement(fixture, edge, 'R:swap-drops-old-only-received-and-status-debts', {
+    stageOldStatusDebt: true,
+  });
+  fixture.setResendReceivedReader(receivedReader([E1, P, E0, X0]));
+  await completeScopedReceivedDrain(fixture, { includeStatus: false });
+  assertDrained(fixture, OLD_ACCOUNT, 'received', true);
+
+  // The old cursor has certified P but its pointer has not swapped yet. A
+  // later old-only stage is therefore real owed work until finalisation; the
+  // swap must discard it, for both Resend representations, rather than retain
+  // an unreachable encrypted row forever.
+  fixture.now.value += 1;
+  fixture.setResendReceivedReader(receivedReader([E2, E1, P, E0, X0]));
+  await fixture.setFailpoint((at) => {
+    if (at === 'after-stage') throw new Error('old-only debt staged before swap');
+  });
+  await assert.rejects(() => fixture.sourceTurn(receivedScope(OLD_ACCOUNT)), /old-only debt staged before swap/);
+  await fixture.setFailpoint(undefined);
+  await fixture.runtime.resumeClaimedCompletions();
+  assert.equal(
+    fixture.store.database
+      .prepare(
+        `SELECT 1 FROM source_stage_rule_debts debt
+          JOIN source_scan_state stage ON stage.id = debt.stage_id
+         WHERE stage.source = 'resend' AND stage.account_id = ?`,
+      )
+      .get(OLD_ACCOUNT),
+    undefined,
+    'the completed swap deletes every old-only received and status debt',
+  );
+}
+
+async function beginScopedResendReplacement(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  cell: string,
+  input: Readonly<{ stageOldStatusDebt?: boolean }> = {},
+): Promise<void> {
+  for (const accountId of [OLD_ACCOUNT, SHARED_ACCOUNT, NEW_ACCOUNT])
+    fixture.config.accounts[`replacement-${accountId}`] = { id: accountId, platform: 'resend' } as never;
+  fixture.setResendReceivedBaseline(X0);
+  fixture.setResendReceivedReader(receivedReader([X0]));
+  await fixture.activate(1, RECEIVED_AND_STATUS, 'safe', [OLD_ACCOUNT, SHARED_ACCOUNT]);
+  await fixture.enable();
+  await primeResendCursors(fixture, 4);
+  for (const accountId of [OLD_ACCOUNT, SHARED_ACCOUNT]) {
+    await fixture.sourceTurn(receivedScope(accountId));
+    await fixture.sourceTurn(statusScopeFor(accountId));
+  }
+  if (input.stageOldStatusDebt === true) {
+    fixture.setResendSentItems([
+      { id: IDS.resendId, status: 'sent' },
+      { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', status: 'sent' },
+    ]);
+    await fixture.sourceTurn(statusScopeFor(OLD_ACCOUNT));
+    fixture.setResendSentItems([
+      { id: IDS.resendId, status: 'sent' },
+      { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', status: 'delivered' },
+    ]);
+    await fixture.setFailpoint((at) => {
+      if (at === 'after-stage') throw new Error('old-only status debt staged before replacement');
+    });
+    await assert.rejects(
+      () => fixture.sourceTurn(statusScopeFor(OLD_ACCOUNT)),
+      /old-only status debt staged before replacement/,
+    );
+    await fixture.setFailpoint(undefined);
+    fixture.setResendSentStatus('sent');
+  }
+  fixture.now.value += 1;
+  fixture.setResendReceivedBaseline(P);
+  await beginReplacementAtEdge(fixture, edge, cell, [NEW_ACCOUNT, SHARED_ACCOUNT]);
+}
+
+async function beginReplacementAtEdge(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  cell: string,
+  accounts: readonly string[] = [fixture.accountId],
+): Promise<void> {
+  await activateAtResendDurableEdge(
+    fixture,
+    cell,
+    edge,
+    async () => {
+      try {
+        await fixture.activate(2, RECEIVED_AND_STATUS, 'changed', accounts);
+      } catch (error: unknown) {
+        if ((error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING') return;
+        throw error;
+      }
+    },
+    // D12 leaves an enabled replacement's old version running through P;
+    // unlike an unpublished first activation, that old drain is not fenced.
+    { providerFenced: false, allowUnreachedEdge: true },
+  );
+}
+
+async function completeScopedReceivedDrain(
+  fixture: PhaseDCutoverFixture,
+  input: Readonly<{ includeStatus?: boolean }> = {},
+): Promise<void> {
+  fixture.setResendReceivedReader(receivedReader([E1, P, E0, X0]));
+  if (input.includeStatus !== false) fixture.setResendSentStatus('delivered');
+  for (const accountId of [OLD_ACCOUNT, SHARED_ACCOUNT]) {
+    await fixture.sourceTurn(receivedScope(accountId));
+    if (input.includeStatus !== false) await fixture.sourceTurn(statusScopeFor(accountId));
+  }
+}
+
+async function primeResendCursors(fixture: PhaseDCutoverFixture, turns: number): Promise<void> {
+  for (let turn = 0; turn < turns; turn += 1) {
+    // Resend's declared fair-poll floor is one minute; each turn must become
+    // eligible again so the scheduler reaches the next scope instead of
+    // repeatedly observing the same not-yet-ready row.
+    fixture.now.value += 60_000;
+    await fixture.schedulerTurn();
+  }
+}
+
+function receivedReader(ids: readonly string[]) {
+  return {
+    listReceived: async () => ({ emails: ids.map((id) => ({ id })), next: null }),
+    getReceived: async (id: string) => receivedCandidate(id),
+  };
+}
+
+function receivedScope(accountId: string) {
+  return { source: 'resend' as const, accountId, scopeId: 'received' as const };
+}
+
+function statusScope(fixture: PhaseDCutoverFixture) {
+  return statusScopeFor(fixture.accountId);
+}
+
+function statusScopeFor(accountId: string) {
+  return { source: 'resend' as const, accountId, scopeId: 'status' as const };
+}
+
+function receivedAdmission(accountId: string, dedupeKey: string, ruleVersion: number) {
+  return { accountId, dedupeKey, ruleVersion, type: 'resend.email.received' as const };
+}
+
+function statusAdmission(
+  fixture: PhaseDCutoverFixture,
+  accountId: string,
+  previous: string,
+  current: string,
+  ruleVersion: number,
+) {
+  return statusAdmissionAt(accountId, previous, current, fixture.now.value, ruleVersion);
+}
+
+function statusAdmissionAt(
+  accountId: string,
+  previous: string,
+  current: string,
+  observedAt: number,
+  ruleVersion: number,
+) {
+  return {
+    accountId,
+    dedupeKey: JSON.stringify([IDS.resendId, previous, current, new Date(observedAt).toISOString()]),
+    ruleVersion,
+    type: 'resend.email.status_changed' as const,
+  };
+}
+
+function assertDrained(
+  fixture: PhaseDCutoverFixture,
+  accountId: string,
+  scope: 'received' | 'status',
+  drained: boolean,
+): void {
+  const row = fixture.store.database
+    .prepare(
+      "SELECT drained_at FROM replacement_drains WHERE source = 'resend' AND account_id = ? AND position_scope = ?",
+    )
+    .get(accountId, scope) as { drained_at: number | null } | undefined;
+  assert.equal(row !== undefined && (row.drained_at !== null) === drained, true, `${accountId}/${scope} drain state`);
 }
 
 test('R: every received/status durable edge reopens the same source state and fake journal', {
