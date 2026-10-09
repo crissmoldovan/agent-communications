@@ -28,6 +28,7 @@ test('D11: the D owner composition always creates a concrete visibility fence be
     let writes = 0;
     const visible = await composition.visibilityFence.withCurrentSseFrameVisibility(
       { accountId: 'wa_composition', whatsappMessageId: '["wa-msg","chat@example.test","sender@example.test","one"]' },
+      async () => {},
       () => {
         writes += 1;
       },

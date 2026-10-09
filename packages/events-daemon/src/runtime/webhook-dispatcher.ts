@@ -302,11 +302,23 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
         return { state: 'terminal', deliveryId: claim.id };
       }
       let writeGate: DispatchResult | null = null;
+      const recheckRefused = Symbol('webhook-write-recheck-refused');
       let wrote = false;
       let ran = false;
+      let recheckStarted = false;
+      let recheckCompleted = false;
       try {
         await this.#whatsappVisibilityFence.withCurrentSseFrameVisibility(
           { accountId: claim.accountId, whatsappMessageId },
+          async () => {
+            recheckStarted = true;
+            const fresh = await this.#prepareGate(claim, target, 'write');
+            if (fresh !== null) {
+              writeGate = fresh;
+              throw recheckRefused;
+            }
+            recheckCompleted = true;
+          },
           () => {
             ran = true;
             // The final gate and physical write are synchronous under D's live-list lock: no await may intervene.
@@ -318,8 +330,12 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
         );
       } catch (error) {
         socket.destroy();
+        if (error === recheckRefused && writeGate !== null) return writeGate;
         // The gate or write itself failed: that is not a list decision, so it is not turned into a cancellation.
         if (ran) throw error;
+        // Match the pre-list write gate: a fresh authority check that rejects propagates its own result.  A failure
+        // before that callback remains an unreadable-list retry, with no network bytes written.
+        if (recheckStarted && !recheckCompleted) throw error;
         // D-6: an unreadable list hides all — nothing is sent — but it purges nothing merely because the file could
         // not be read. The claim is released with its retained record so a later turn retries once the list reads.
         this.#release(claim);

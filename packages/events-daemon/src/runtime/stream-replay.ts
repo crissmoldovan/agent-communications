@@ -16,6 +16,7 @@ export async function writeReplaySseFrame(input: SealedSseFrameWrite): Promise<b
   let wrote = false;
   await input.visibilityGate.withCurrentSseFrameVisibility(
     { accountId: input.accountId, whatsappMessageId: input.whatsappMessageId },
+    input.recheck ?? (async () => {}),
     () => {
       input.writeFrame(input.frame);
       wrote = true;
@@ -103,20 +104,42 @@ export class StreamReplay {
       return false;
     }
     let written = false;
-    const accepted = await writeLiveSseFrame({
-      frame: input.frame,
-      accountId: row.account_id,
-      whatsappMessageId: row.whatsapp_message_id,
-      visibilityGate: this.#visibilityGate,
-      hasConcreteWhatsAppVisibilityFence: this.#hasConcreteWhatsAppVisibilityFence,
-      writeFrame: (frame) => {
-        this.#store.immediate(() => {
-          if (!this.#isFrameCurrent(row) || !input.isStreamCurrent()) return;
-          input.writeFrame(frame);
-          written = true;
-        });
-      },
-    });
+    let accepted: boolean;
+    let recheckStarted = false;
+    let recheckCompleted = false;
+    try {
+      accepted = await writeLiveSseFrame({
+        frame: input.frame,
+        accountId: row.account_id,
+        whatsappMessageId: row.whatsapp_message_id,
+        visibilityGate: this.#visibilityGate,
+        hasConcreteWhatsAppVisibilityFence: this.#hasConcreteWhatsAppVisibilityFence,
+        writeFrame: (frame) => {
+          this.#store.immediate(() => {
+            if (!this.#isFrameCurrent(row) || !input.isStreamCurrent()) return;
+            input.writeFrame(frame);
+            written = true;
+          });
+        },
+        recheck: async () => {
+          recheckStarted = true;
+          await this.#recheck(row);
+          recheckCompleted = true;
+        },
+      });
+    } catch (error) {
+      if (isRemovedAccountError(error))
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            { source: sourceOfStreamRow(this.#store, row), accountId: row.account_id },
+            this.#now(),
+          ),
+        );
+      else if (recheckStarted && !recheckCompleted) return false;
+      else throw error;
+      return false;
+    }
     return accepted && written;
   }
 
@@ -184,17 +207,42 @@ export class StreamReplay {
       const allowed = this.#store.immediate(() => this.#isFrameCurrent(row));
       if (!allowed) continue;
       // Task 9 passes the physical socket callback through writeReplaySseFrame; this Task 8 path is non-WhatsApp only.
-      if (
-        await writeReplaySseFrame({
+      let wrote = false;
+      let recheckStarted = false;
+      let recheckCompleted = false;
+      try {
+        const accepted = await writeReplaySseFrame({
           frame,
           accountId: row.account_id,
           whatsappMessageId: row.whatsapp_message_id,
           visibilityGate: this.#visibilityGate,
           hasConcreteWhatsAppVisibilityFence: this.#hasConcreteWhatsAppVisibilityFence,
-          writeFrame: input.writeFrame,
-        })
-      )
-        delivered += 1;
+          recheck: async () => {
+            recheckStarted = true;
+            await this.#recheck(row);
+            recheckCompleted = true;
+          },
+          writeFrame: (frame) => {
+            this.#store.immediate(() => {
+              if (!this.#isFrameCurrent(row)) return;
+              input.writeFrame(frame);
+              wrote = true;
+            });
+          },
+        });
+        if (accepted && wrote) delivered += 1;
+      } catch (error) {
+        if (isRemovedAccountError(error))
+          this.#store.immediate(() =>
+            purgeRemovedAccountWork(
+              this.#store.database,
+              { source: sourceOfStreamRow(this.#store, row), accountId: row.account_id },
+              this.#now(),
+            ),
+          );
+        else if (recheckStarted && !recheckCompleted) continue;
+        else throw error;
+      }
     }
     return delivered;
   }
@@ -271,6 +319,14 @@ export class StreamReplay {
       event_id: '',
       whatsapp_message_id: null,
       whatsapp_visibility_version: null,
+    });
+  }
+
+  async #recheck(row: StreamLogRow): Promise<void> {
+    await this.#fence(this.#fenceRequest(row));
+    await assertLiveEventAccount(this.#config, {
+      source: sourceOfStreamRow(this.#store, row),
+      accountId: row.account_id,
     });
   }
 

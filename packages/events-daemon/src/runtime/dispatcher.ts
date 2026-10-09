@@ -289,13 +289,33 @@ export class DryRunDispatcher {
       throw error;
     }
     // A WhatsApp row appends only inside D's live-list gate (D6); a newly hidden row is never appended.
-    const appended = await this.#withCurrentWhatsAppDryRunVisibility(
-      {
-        account_id: row.accountId,
-        whatsapp_message_id: deliveryById(this.#store, row.id)?.whatsapp_message_id ?? null,
-      },
-      () => this.#append(row, target, localRecord),
-    );
+    let appended: DispatchResult | undefined;
+    try {
+      appended = await this.#withCurrentWhatsAppDryRunVisibility(
+        {
+          account_id: row.accountId,
+          whatsapp_message_id: deliveryById(this.#store, row.id)?.whatsapp_message_id ?? null,
+        },
+        async () => {
+          await this.#fence(this.#fenceRequest(row));
+          await assertLiveEventAccount(this.#config, { source: rule.source.channel, accountId: row.accountId });
+        },
+        () => this.#append(row, target, localRecord),
+      );
+    } catch (error) {
+      if (isRemovedAccountError(error)) {
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            { source: rule.source.channel, accountId: row.accountId },
+            this.#now(),
+          ),
+        );
+        return { state: 'terminal', deliveryId };
+      }
+      releaseDeliveryClaim(this.#store, row);
+      throw error;
+    }
     return appended ?? { state: 'terminal', deliveryId };
   }
 
@@ -393,6 +413,25 @@ export class DryRunDispatcher {
     await fenced();
     const result = await this.#withCurrentWhatsAppDryRunVisibility(
       { account_id: String(row.account_id), whatsapp_message_id: (row.whatsapp_message_id as string | null) ?? null },
+      async () => {
+        try {
+          await fenced();
+          await assertLiveEventAccount(this.#config, {
+            source: rule.source.channel,
+            accountId: String(row.account_id),
+          });
+        } catch (error) {
+          if (isRemovedAccountError(error))
+            this.#store.immediate(() =>
+              purgeRemovedAccountWork(
+                this.#store.database,
+                { source: rule.source.channel, accountId: String(row.account_id) },
+                this.#now(),
+              ),
+            );
+          throw error;
+        }
+      },
       () => {
         const still = this.#store.database
           .prepare('SELECT 1 AS present FROM dryrun_log WHERE delivery_id = ?')
@@ -540,8 +579,11 @@ export class DryRunDispatcher {
 
   async #withCurrentWhatsAppDryRunVisibility<T>(
     row: Pick<CurrentDeliveryRow, 'account_id' | 'whatsapp_message_id'>,
+    recheck: () => Promise<void>,
     commit: () => T,
   ): Promise<T | undefined> {
+    // The list acquisition race exists only for persisted WhatsApp tuples.  Non-WhatsApp callers already made their
+    // D9 recheck immediately above, so do not add a third, unrelated authority read to their established boundary.
     if (row.whatsapp_message_id === null) return commit();
     if (this.#whatsappVisibilityFence === undefined)
       throw new CommsError(
@@ -550,6 +592,7 @@ export class DryRunDispatcher {
       );
     return this.#whatsappVisibilityFence.withCurrentDryRunVisibility(
       { accountId: row.account_id, whatsappMessageId: row.whatsapp_message_id },
+      recheck,
       commit,
     );
   }

@@ -8,6 +8,7 @@ import { EventLifecycle } from '../src/runtime/lifecycle.ts';
 import { SseDispatcher } from '../src/runtime/sse-dispatcher.ts';
 import { StreamReplay } from '../src/runtime/stream-replay.ts';
 import { SubscriberStreams } from '../src/runtime/subscriber-streams.ts';
+import { WhatsAppVisibilityFence } from '../src/runtime/whatsapp-visibility.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
@@ -118,6 +119,38 @@ function sseCipher() {
 }
 
 test('P1: WhatsApp SSE append occurs only inside the live-list fence', { skip: WINDOWS_SKIP }, async (t) => {
+  await t.test('a list acquisition that removes the account rechecks before stream-log append', async () => {
+    const setup = await whatsappFixture();
+    let accountPresent = true;
+    try {
+      const fence = new WhatsAppVisibilityFence({
+        store: setup.store,
+        withCurrentEventVisibility: async (_input, work) => {
+          accountPresent = false;
+          return work({ version: 1, digest: 'a'.repeat(64), seesMessage: () => true });
+        },
+      });
+      const dispatcher = new SseDispatcher({
+        store: setup.store,
+        cipher: sseCipher(),
+        approvals: { get: async () => null },
+        config: {
+          load: async () =>
+            accountPresent ? { accounts: { whatsapp: { id: ACCOUNT, platform: 'whatsapp' } } } : { accounts: {} },
+        } as never,
+        fence: async () => undefined,
+        hasConcreteWhatsAppVisibilityFence: true,
+        visibilityGate: fence,
+        now: () => 100,
+      });
+      assert.deepEqual(await dispatcher.dispatch('delivery-sse'), { state: 'terminal', deliveryId: 'delivery-sse' });
+      assert.equal((setup.store.database.prepare('SELECT count(*) AS n FROM stream_log').get() as { n: number }).n, 0);
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  });
+
   await t.test('a chat hidden between claim and append leaves no stream row or payload', async () => {
     const setup = await whatsappFixture();
     let gates = 0;
@@ -206,8 +239,9 @@ test('P1: WhatsApp SSE append occurs only inside the live-list fence', { skip: W
         fence: async () => undefined,
         hasConcreteWhatsAppVisibilityFence: true,
         visibilityGate: {
-          async withCurrentSseFrameVisibility(_input, append) {
+          async withCurrentSseFrameVisibility(_input, recheck, append) {
             gates += 1;
+            await recheck();
             return append();
           },
         },

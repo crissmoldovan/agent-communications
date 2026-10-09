@@ -89,10 +89,13 @@ async function fixture() {
   let visible = false;
   let digest = 'a'.repeat(64);
   let unreadable = false;
+  let accountPresent = true;
+  let removeWhenListAcquired = false;
   const hiddenFence = new WhatsAppVisibilityFence({
     store,
     withCurrentEventVisibility: async (_input, work) => {
       if (unreadable) throw new Error('the list is unreadable');
+      if (removeWhenListAcquired) accountPresent = false;
       return work({ version: 1, digest, seesMessage: () => visible });
     },
   });
@@ -103,7 +106,12 @@ async function fixture() {
       decrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
     },
     approvals: { get: async () => null },
-    config: { load: async () => ({ inboxes: {}, accounts: { whatsapp: { id: accountId, platform: 'whatsapp' } } }) },
+    config: {
+      load: async () => ({
+        inboxes: {},
+        accounts: accountPresent ? { whatsapp: { id: accountId, platform: 'whatsapp' } } : {},
+      }),
+    },
     fence: async () => ({
       switchGeneration: 7,
       approvalId: 'approval',
@@ -128,6 +136,9 @@ async function fixture() {
     makeListUnreadable: () => {
       unreadable = true;
     },
+    removeAtNextListAcquire: () => {
+      removeWhenListAcquired = true;
+    },
   };
 }
 
@@ -149,6 +160,42 @@ test('D9: a WhatsApp dry-run append rechecks the live list after encryption and 
   } finally {
     setup.store.close();
     await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
+
+test('P1: dry-run append and show re-read a removed WhatsApp account while the list lock is held', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const append = await fixture();
+  try {
+    append.showEverything();
+    append.removeAtNextListAcquire();
+    assert.deepEqual(await append.dispatcher.dispatch(deliveryId), { state: 'terminal', deliveryId });
+    assert.equal(append.store.database.prepare('SELECT 1 FROM dryrun_log').get(), undefined);
+  } finally {
+    append.store.close();
+    await rm(append.stateDir, { recursive: true, force: true });
+  }
+
+  const show = await fixture();
+  try {
+    show.showEverything();
+    assert.deepEqual(await show.dispatcher.dispatch(deliveryId), { state: 'delivered', deliveryId });
+    show.removeAtNextListAcquire();
+    await assert.rejects(
+      () => show.dispatcher.read(deliveryId),
+      (error: unknown) => {
+        return (
+          error instanceof Error &&
+          'details' in error &&
+          (error as { details?: { reason?: string } }).details?.reason === 'ACCOUNT_REMOVED'
+        );
+      },
+    );
+    assert.equal(show.store.database.prepare('SELECT 1 FROM dryrun_log').get(), undefined);
+  } finally {
+    show.store.close();
+    await rm(show.stateDir, { recursive: true, force: true });
   }
 });
 

@@ -82,6 +82,9 @@ export function purgeRemovedAccountWork(
   const scope: EventAccountScope = typeof account === 'string' ? { source: 'gmail', accountId: account } : account;
   const { accountId, source } = scope;
   if (source === 'whatsapp') {
+    // stream_log carries the optional WhatsApp occurrence foreign key, so retained frames must go before their parent
+    // occurrence ledger when a re-check observes account removal under the list lock.
+    database.prepare('DELETE FROM stream_log WHERE account_id = ?').run(accountId);
     database.prepare('DELETE FROM whatsapp_rule_admissions WHERE account_id = ?').run(accountId);
     database.prepare('DELETE FROM whatsapp_snapshot_keys WHERE account_id = ?').run(accountId);
     database.prepare('DELETE FROM whatsapp_snapshot_heads WHERE account_id = ?').run(accountId);
@@ -98,7 +101,7 @@ export function purgeRemovedAccountWork(
     .prepare('DELETE FROM ingest_rules WHERE event_id IN (SELECT event_id FROM ingest WHERE account_id = ?)')
     .run(accountId);
   database.prepare('DELETE FROM dryrun_log WHERE account_id = ?').run(accountId);
-  database.prepare('DELETE FROM stream_log WHERE account_id = ?').run(accountId);
+  if (source !== 'whatsapp') database.prepare('DELETE FROM stream_log WHERE account_id = ?').run(accountId);
   database
     .prepare(
       "UPDATE deliveries SET state = 'in-flight-at-account-removal', encrypted_record = NULL, lease_until = NULL, next_at = NULL WHERE account_id = ? AND state = 'disclosing'",

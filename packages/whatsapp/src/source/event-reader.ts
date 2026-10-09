@@ -42,14 +42,16 @@ export function readRawEventMessages(database: DatabaseSync, _report: SchemaRepo
     )
     .all() as Record<string, unknown>[];
   return rows.map((row) => {
-    const chatJid = text(row.chatJid)?.trim() || null;
+    // D-2/D-5 identity is the exact raw source tuple.  Do not normalise identity fields here: surrounding
+    // whitespace and even a non-empty all-whitespace value distinguish occurrences.
+    const chatJid = text(row.chatJid) || null;
     const type = numeric(row.typeCode);
     return {
       sourceOrder: numeric(row.sourceOrder) ?? 0,
       chatJid,
       chatKind: chatJid === null ? null : chatKindOf(chatJid),
-      senderJidRaw: text(row.senderJidRaw)?.trim() || null,
-      stanzaId: text(row.stanzaId)?.trim() || null,
+      senderJidRaw: text(row.senderJidRaw) || null,
+      stanzaId: text(row.stanzaId) || null,
       fromMe: rawFromMe(row.fromMe),
       at: coreDataToIso(numeric(row.at)),
       kind: kindOf(type).kind,

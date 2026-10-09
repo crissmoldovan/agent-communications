@@ -55,6 +55,47 @@ test('D6: a WhatsApp source commits one raw-key occurrence and ignores sent or u
   }
 });
 
+test('P1: two WhatsApp raw tuples differing only in trailing whitespace remain distinct byte-for-byte identities', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-raw-space-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    store.database
+      .prepare('INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, ?, 1, ?, ?)')
+      .run('raw-space@1', 'raw-space', '{}', 'raw-space-digest');
+    const worker = new WhatsAppSourceWorker({
+      store,
+      accountId: 'wa_raw_space',
+      snapshot: async (work) =>
+        work({
+          visibility: { version: 1, digest: 'e'.repeat(64), seesMessage: () => true },
+          messages: [
+            { chatJid: 'chat@example.test', senderJidRaw: 'sender@example.test', stanzaId: 'same', fromMe: false },
+            { chatJid: 'chat@example.test', senderJidRaw: 'sender@example.test', stanzaId: 'same ', fromMe: false },
+          ],
+        }),
+      stage: async () => Buffer.from('first representation'),
+      rules: () => [{ ruleId: 'raw-space', ruleVersion: 1, ingestRetentionMs: 500, activationId: 'activation' }],
+    });
+    await worker.scan();
+    assert.deepEqual(
+      (
+        store.database.prepare('SELECT message_id FROM whatsapp_occurrences ORDER BY message_id').all() as Array<{
+          message_id: string;
+        }>
+      ).map((row) => row.message_id),
+      [
+        '["wa-msg","chat@example.test","sender@example.test","same "]',
+        '["wa-msg","chat@example.test","sender@example.test","same"]',
+      ],
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('D6: raw sender differences are distinct identities even when a stanza id is the same', {
   skip: WINDOWS_SKIP,
 }, async () => {
@@ -145,6 +186,7 @@ test('P1: a fenced matching WhatsApp scope delays an account snapshot tuple with
   const store = await openEventDatabase({ stateDir });
   const chatJid = 'chat-a@example.test';
   let fenced = true;
+  let explicitChatActivationComplete = false;
   try {
     for (const ruleId of ['rule-all', 'rule-chat']) {
       store.database
@@ -169,14 +211,18 @@ test('P1: a fenced matching WhatsApp scope delays an account snapshot tuple with
           options: { channel: 'whatsapp' as const, chats: 'all-allowed' as const },
           activationPointIdentities: new Map([['all-allowed', new Set<string>()]]),
         },
-        {
-          ruleId: 'rule-chat',
-          ruleVersion: 1,
-          ingestRetentionMs: 500,
-          activationId: 'activation-chat',
-          options: { channel: 'whatsapp' as const, chats: [chatJid] },
-          activationPointIdentities: new Map([[`chat:${chatJid}`, new Set<string>()]]),
-        },
+        ...(explicitChatActivationComplete
+          ? [
+              {
+                ruleId: 'rule-chat',
+                ruleVersion: 1,
+                ingestRetentionMs: 500,
+                activationId: 'activation-chat',
+                options: { channel: 'whatsapp' as const, chats: [chatJid] },
+                activationPointIdentities: new Map([[`chat:${chatJid}`, new Set<string>()]]),
+              },
+            ]
+          : []),
       ],
       scopeIsFenced: (scopeId: string) => fenced && scopeId === `chat:${chatJid}`,
     });
@@ -191,14 +237,25 @@ test('P1: a fenced matching WhatsApp scope delays an account snapshot tuple with
     );
 
     fenced = false;
+    explicitChatActivationComplete = true;
     await worker.scan();
     assert.equal(
       (store.database.prepare('SELECT count(*) AS n FROM whatsapp_occurrences').get() as { n: number }).n,
       1,
     );
-    assert.equal(
-      (store.database.prepare('SELECT count(*) AS n FROM whatsapp_rule_admissions').get() as { n: number }).n,
-      2,
+    assert.deepEqual(
+      store.database
+        .prepare(
+          `SELECT rule_id, rule_version, admission
+             FROM whatsapp_rule_admissions
+            ORDER BY rule_id, rule_version`,
+        )
+        .all()
+        .map((row) => ({ ...(row as Record<string, unknown>) })),
+      [
+        { rule_id: 'rule-all', rule_version: 1, admission: 'admitted' },
+        { rule_id: 'rule-chat', rule_version: 1, admission: 'admitted' },
+      ],
     );
   } finally {
     store.close();
