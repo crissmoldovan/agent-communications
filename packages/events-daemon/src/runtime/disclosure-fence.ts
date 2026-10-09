@@ -17,8 +17,18 @@ import {
 import { classifyGmailSourceOptionChange } from '../domain/source-options.ts';
 import { assertLiveGmailAccount } from './account-fence.ts';
 
-/** Every plaintext boundary declares itself so the one resolver covers source, evaluation, dispatch, and terminal read. */
-export type DisclosureBoundary = 'activation' | 'recovery' | 'source' | 'evaluation' | 'dispatch' | 'read';
+/** Every plaintext boundary declares itself so the one resolver covers source, evaluation, every webhook byte gate and terminal read. */
+export type DisclosureBoundary =
+  | 'activation'
+  | 'recovery'
+  | 'source'
+  | 'evaluation'
+  | 'dispatch'
+  | 'webhook-dns'
+  | 'webhook-tcp'
+  | 'webhook-tls'
+  | 'webhook-write'
+  | 'read';
 
 interface FenceCommon {
   readonly database: DatabaseSync;

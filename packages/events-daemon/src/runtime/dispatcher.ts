@@ -60,6 +60,7 @@ export interface DryRunSummary {
 
 export type DispatchResult =
   | { readonly state: 'delivered'; readonly deliveryId: string }
+  | { readonly state: 'issued'; readonly deliveryId: string }
   | {
       readonly state:
         | 'waiting-cap'
