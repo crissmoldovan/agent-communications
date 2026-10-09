@@ -41,7 +41,10 @@ import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
 import { createB2RetainedContentParticipants } from './phase-d-b2-retention.ts';
-import { createPhaseDWhatsAppOwnerComposition } from './phase-d-whatsapp-owner-composition.ts';
+import {
+  createPhaseDWhatsAppOwnerComposition,
+  requirePhaseDWhatsAppVisibilitySeam,
+} from './phase-d-whatsapp-owner-composition.ts';
 import { recoverActivations } from './recovery.ts';
 import { GmailReplacementDrains, replacementIntentSummary } from './replacements.ts';
 import { disableRule, removeTarget } from './revocations.ts';
@@ -91,6 +94,8 @@ export interface EventOwnerOptions {
     | ((input: { readonly accountId: string; readonly alias: string }) => Promise<ResendEventReader>)
     | undefined;
   readonly whatsappEventOperations?: WhatsAppEventOperations | undefined;
+  /** Test seam only: replaces D's composition so the missing-seam refusal can be proven on the real start path. */
+  readonly phaseDComposition?: typeof createPhaseDWhatsAppOwnerComposition | undefined;
   readonly tickMs?: number | undefined;
   readonly pollIntervalMs?: number | undefined;
 }
@@ -103,7 +108,33 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
   assertSocketPathFits(controlEndpoint(paths));
   await verifyPrivateSocketDirectory(paths);
   const lock = await acquireWithStaleRecovery(paths);
+  const started = { owner: false };
+  let opened: { close(): void } | undefined;
+  try {
+    return await startOwnerWithLock(options, stateDir, paths, lock, started, (database) => {
+      opened = database;
+    });
+  } catch (error) {
+    // A start refused before the owner existed — a database, secret-store, composition or seam failure — releases
+    // what it took, so the next start is not blocked by this process; once the owner exists its stop() does that.
+    if (!started.owner) {
+      opened?.close();
+      await lock.release();
+    }
+    throw error;
+  }
+}
+
+async function startOwnerWithLock(
+  options: EventOwnerOptions,
+  stateDir: string,
+  paths: EventPaths,
+  lock: EventOwnerLock,
+  started: { owner: boolean },
+  onDatabase: (database: { close(): void }) => void,
+): Promise<EventOwner> {
   const database = await openEventDatabase({ stateDir });
+  onDatabase(database);
   const lifecycle = new EventLifecycle(database);
   const core = openCore({
     pathOverrides: {
@@ -121,10 +152,16 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
   // The concrete WhatsApp visibility fence is constructed in every production owner (D Task 7).
   const whatsappEventOperations =
     options.whatsappEventOperations ?? openWhatsAppEventOperations({ configDir: core.paths.configDir });
-  const whatsappComposition = createPhaseDWhatsAppOwnerComposition({
+  const whatsappComposition = (options.phaseDComposition ?? createPhaseDWhatsAppOwnerComposition)({
     database,
     eventOperations: whatsappEventOperations,
     createRetainedContentParticipants: createB2RetainedContentParticipants,
+  });
+  // D7: with D's WhatsApp source registered, a missing concrete fence refuses start here — before any dispatcher,
+  // scheduler or listener exists — and never falls back to B2's pre-D pass-through gate.
+  requirePhaseDWhatsAppVisibilitySeam({
+    hasWhatsAppSource: sourceRegistry.sources().includes('whatsapp'),
+    visibilityFence: whatsappComposition.visibilityFence,
   });
   const mailboxLock = new MailboxLock(new SourceScopeLock());
   const replacementDrains = new GmailReplacementDrains({
@@ -465,6 +502,7 @@ export async function startEventOwner(options: EventOwnerOptions = {}): Promise<
     },
   };
 
+  started.owner = true;
   try {
     await expiry.sweepAll();
     // Expired delivery leases are recovered by the scheduler's ticks, which claim nothing while paused or disabled.
