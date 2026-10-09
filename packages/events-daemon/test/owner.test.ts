@@ -19,13 +19,16 @@ async function pathsModule(): Promise<PathsModule | null> {
   return import('../src/runtime/paths.ts').catch(() => null);
 }
 
-test('B2-T6: the owner installs the fenced webhook adapter while retaining B1 dry-run and the deferred SSE refusal', async () => {
+test('B2-T8: the owner installs the SSE adapter through the pre-D structural default seam', async () => {
   const owner = await readFile(new URL('../src/runtime/owner.ts', import.meta.url), 'utf8');
   assert.match(owner, /const dryrun = new DryRunDispatcher/);
   assert.match(owner, /const webhook = new WebhookDispatcher/);
+  assert.match(owner, /const sse = new SseDispatcher/);
+  assert.match(owner, /PassThroughSseFrameVisibilityGate/);
+  assert.match(owner, /NoopDSourceRetentionHooks/);
   assert.match(owner, /const dispatcher = new DeliveryDispatcher/);
   assert.match(owner, /dryrun,\n {4}webhook,/);
-  assert.match(owner, /sse: unavailable/);
+  assert.match(owner, /sse,/);
 });
 
 test('CTRL-B1: only one foreground owner opens the event database and a graceful stop closes it', {

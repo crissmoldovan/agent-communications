@@ -63,6 +63,7 @@ export class EventLifecycle {
         )
         .all() as Array<{ id: string }>;
       database.exec('DELETE FROM dryrun_log');
+      database.exec('DELETE FROM stream_log');
       database.exec('DELETE FROM ingest_rules');
       database.exec('DELETE FROM source_scan_state');
       database.exec('DELETE FROM activation_baselines');

@@ -1,6 +1,7 @@
 export const HOUR_MS: number = 60 * 60 * 1000;
 export const DAY_MS: number = 24 * HOUR_MS;
 export const MAX_DRYRUN_RETENTION_MS: number = DAY_MS;
+export const MAX_SSE_REPLAY_RETENTION_MS: number = 7 * DAY_MS;
 
 export class RetentionError extends Error {
   constructor(message: string) {
@@ -43,6 +44,14 @@ export function stageDeadline(stagedAt: number, owedIngestRetentions: readonly n
 export function dryrunDeadline(appendedAt: number, retentionMs: number): number {
   if (checkedRetention(retentionMs, 'dry-run retention') > MAX_DRYRUN_RETENTION_MS) {
     throw new RetentionError('dry-run retention may not exceed 24 hours');
+  }
+  return fixedDeadline(appendedAt, retentionMs);
+}
+
+/** SSE replay is a separately retained content record, capped at seven days. */
+export function sseReplayDeadline(appendedAt: number, retentionMs: number): number {
+  if (checkedRetention(retentionMs, 'SSE replay retention') > MAX_SSE_REPLAY_RETENTION_MS) {
+    throw new RetentionError('SSE replay retention may not exceed seven days');
   }
   return fixedDeadline(appendedAt, retentionMs);
 }

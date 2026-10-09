@@ -142,7 +142,7 @@ test('APR-B1: a retention tightening moves every persisted B1 deadline only earl
       },
     };
     store.database.exec(
-      "INSERT INTO source_scan_state (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at) VALUES ('stage-retention', 'gmail', 'account-1', 'mailbox', 10, 1000, X'01', 10); INSERT INTO source_stage_rule_debts (stage_id, rule_id, rule_version) VALUES ('stage-retention', 'rule-tightening', 1); INSERT INTO ingest (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at) VALUES ('event-retention', 'install', 'gmail.message.received', 1, 'account-1', 'dedupe', 10, 10, 10); INSERT INTO ingest_rules (event_id, rule_id, rule_version, decision_deadline, encrypted_projection) VALUES ('event-retention', 'rule-tightening', 1, 1000, X'01'); INSERT INTO decisions (id, event_id, account_id, rule_id, rule_version, outcome, hold_expires_at, metadata_expires_at, metadata_state, encrypted_record) VALUES ('decision-retention', 'event-retention', 'account-1', 'rule-tightening', 1, 'hold', 1000, 1000, 'retained', X'01'); INSERT INTO deliveries (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, encrypted_record, expires_at, state, switch_generation) VALUES ('delivery-retention', 'decision-retention', 'account-1', 'rule-tightening', 1, 'target-tightening@1', 'target-tightening', 1, X'01', 604800010, 'queued', 0); INSERT INTO dryrun_log (delivery_id, rule_id, rule_version, target_id, target_version, event_id, account_id, encrypted_record, delivered_at, expires_at) VALUES ('delivery-retention', 'rule-tightening', 1, 'target-tightening', 1, 'event-retention', 'account-1', X'01', 10, 86400010)",
+      "INSERT INTO source_scan_state (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at) VALUES ('stage-retention', 'gmail', 'account-1', 'mailbox', 10, 1000, X'01', 10); INSERT INTO source_stage_rule_debts (stage_id, rule_id, rule_version) VALUES ('stage-retention', 'rule-tightening', 1); INSERT INTO ingest (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at) VALUES ('event-retention', 'install', 'gmail.message.received', 1, 'account-1', 'dedupe', 10, 10, 10); INSERT INTO ingest_rules (event_id, rule_id, rule_version, decision_deadline, encrypted_projection) VALUES ('event-retention', 'rule-tightening', 1, 1000, X'01'); INSERT INTO decisions (id, event_id, account_id, rule_id, rule_version, outcome, hold_expires_at, metadata_expires_at, metadata_state, encrypted_record) VALUES ('decision-retention', 'event-retention', 'account-1', 'rule-tightening', 1, 'hold', 1000, 1000, 'retained', X'01'); INSERT INTO deliveries (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, encrypted_record, expires_at, state, switch_generation) VALUES ('delivery-retention', 'decision-retention', 'account-1', 'rule-tightening', 1, 'target-tightening@1', 'target-tightening', 1, X'01', 604800010, 'queued', 0); INSERT INTO dryrun_log (delivery_id, rule_id, rule_version, target_id, target_version, event_id, account_id, encrypted_record, delivered_at, expires_at) VALUES ('delivery-retention', 'rule-tightening', 1, 'target-tightening', 1, 'event-retention', 'account-1', X'01', 10, 86400010); INSERT INTO stream_log (id, delivery_id, rule_id, rule_version, target_id, target_version, subscriber_id, subscriber_version, event_id, account_id, whatsapp_message_id, whatsapp_visibility_version, encrypted_record, delivered_at, expires_at, switch_generation) VALUES ('stream-retention', 'delivery-retention', 'rule-tightening', 1, 'target-tightening', 1, 'subscriber-retention', 1, 'event-retention', 'account-1', NULL, NULL, X'01', 10, 604800010, 0)",
     );
 
     shortenRuleRetentionDeadlines({ database: store.database, ruleId: base.ruleId, child, now: 0 });
@@ -176,6 +176,14 @@ test('APR-B1: a retention tightening moves every persisted B1 deadline only earl
         }
       ).expires_at,
       140,
+    );
+    assert.equal(
+      (
+        store.database.prepare('SELECT expires_at FROM stream_log WHERE id = ?').get('stream-retention') as {
+          expires_at: number;
+        }
+      ).expires_at,
+      150,
     );
   } finally {
     store.close();

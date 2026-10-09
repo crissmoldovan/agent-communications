@@ -38,6 +38,7 @@ export function purgeRemovedAccountWork(database: DatabaseSync, accountId: strin
     .prepare('DELETE FROM ingest_rules WHERE event_id IN (SELECT event_id FROM ingest WHERE account_id = ?)')
     .run(accountId);
   database.prepare('DELETE FROM dryrun_log WHERE account_id = ?').run(accountId);
+  database.prepare('DELETE FROM stream_log WHERE account_id = ?').run(accountId);
   database
     .prepare(
       "UPDATE deliveries SET state = 'in-flight-at-account-removal', encrypted_record = NULL, lease_until = NULL, next_at = NULL WHERE account_id = ? AND state = 'disclosing'",
@@ -62,7 +63,8 @@ export function purgeRemovedAccountWork(database: DatabaseSync, accountId: strin
     .prepare(
       `DELETE FROM ingest WHERE account_id = ?
          AND NOT EXISTS (SELECT 1 FROM decisions WHERE decisions.event_id = ingest.event_id)
-         AND NOT EXISTS (SELECT 1 FROM dryrun_log WHERE dryrun_log.event_id = ingest.event_id)`,
+         AND NOT EXISTS (SELECT 1 FROM dryrun_log WHERE dryrun_log.event_id = ingest.event_id)
+         AND NOT EXISTS (SELECT 1 FROM stream_log WHERE stream_log.event_id = ingest.event_id)`,
     )
     .run(accountId);
   // D9: every live rule version whose source scope names only that account is revoked, as a disable revokes it. A

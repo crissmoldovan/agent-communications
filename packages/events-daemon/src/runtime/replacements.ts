@@ -272,6 +272,7 @@ export function replacementIntentSummary(database: DatabaseSync): readonly {
 export function purgeRevokedRuleWork(database: DatabaseSync, ruleId: string, versions: readonly number[]): void {
   for (const version of versions) {
     database.prepare('DELETE FROM dryrun_log WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
+    database.prepare('DELETE FROM stream_log WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
     database.prepare('DELETE FROM ingest_rules WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
     database
       .prepare(
@@ -435,6 +436,14 @@ export function shortenRuleRetentionDeadlines(input: {
     if (expiresAt <= now) database.prepare('DELETE FROM dryrun_log WHERE delivery_id = ?').run(dryrun.delivery_id);
     else
       database.prepare('UPDATE dryrun_log SET expires_at = ? WHERE delivery_id = ?').run(expiresAt, dryrun.delivery_id);
+  }
+  const streams = database
+    .prepare('SELECT id, delivered_at, expires_at FROM stream_log WHERE rule_id = ?')
+    .all(ruleId) as Array<{ id: string; delivered_at: number; expires_at: number }>;
+  for (const stream of streams) {
+    const expiresAt = Math.min(stream.expires_at, stream.delivered_at + child.retention.sseReplayMs);
+    if (expiresAt <= now) database.prepare('DELETE FROM stream_log WHERE id = ?').run(stream.id);
+    else database.prepare('UPDATE stream_log SET expires_at = ? WHERE id = ?').run(expiresAt, stream.id);
   }
   database
     .prepare(
