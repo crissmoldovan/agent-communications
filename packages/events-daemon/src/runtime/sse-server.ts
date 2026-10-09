@@ -186,7 +186,8 @@ class LoopbackSseServer implements SseServer {
           subscriberVersion: this.#subscriber.document.version,
           generation: connection.generation,
           authorizedUntil: connection.authorizedUntil,
-        })
+        }) ||
+        !this.#bearerGenerationLive(connection.generation)
       ) {
         // A rotated or expired-overlap stream has lost its bearer authority: end it rather than keep it open.
         connection.close();
@@ -203,7 +204,8 @@ class LoopbackSseServer implements SseServer {
             subscriberVersion: this.#subscriber.document.version,
             generation: connection.generation,
             authorizedUntil: connection.authorizedUntil,
-          }),
+          }) &&
+          this.#bearerGenerationLive(connection.generation),
         writeFrame: (frame) => {
           connection.response.write(frame);
         },
@@ -305,7 +307,8 @@ class LoopbackSseServer implements SseServer {
         subscriberVersion: subscriber.version,
         generation,
         authorizedUntil,
-      })
+      }) ||
+      !this.#bearerGenerationLive(generation)
     ) {
       close();
       return;
@@ -330,7 +333,8 @@ class LoopbackSseServer implements SseServer {
             subscriberVersion: subscriber.version,
             generation,
             authorizedUntil,
-          })
+          }) &&
+          this.#bearerGenerationLive(generation)
         ) {
           response.write(frame);
         }
@@ -361,6 +365,26 @@ class LoopbackSseServer implements SseServer {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * The secret ledger, not this process's memory, says which bearer generations are live: a rotation persisted by
+   * any writer ends an older stream at its next frame. Read synchronously so it can sit directly before a write.
+   */
+  #bearerGenerationLive(generation: number): boolean {
+    const owner = this.#subscriber.owner;
+    const row = this.#options.store.database
+      .prepare(
+        `SELECT owner_digest, lifecycle, expires_at FROM event_secret_generations
+         WHERE owner_kind = 'subscriber' AND owner_id = ? AND owner_version = ? AND purpose = 'sse-bearer'
+           AND generation = ?`,
+      )
+      .get(owner.id, owner.version, generation) as
+      | { owner_digest: string; lifecycle: string; expires_at: number | null }
+      | undefined;
+    if (row === undefined || row.owner_digest !== owner.digest) return false;
+    if (row.lifecycle === 'current') return true;
+    return row.lifecycle === 'overlap' && row.expires_at !== null && row.expires_at > (this.#options.now ?? Date.now)();
   }
 }
 

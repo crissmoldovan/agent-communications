@@ -44,6 +44,15 @@ async function fixture() {
   store.database
     .prepare('INSERT INTO subscriber_versions (id, subscriber_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
     .run('subscriber-listener@1', subscriber.subscriberId, subscriber.version, document, sha256Hex(document));
+  // The secret ledger's lifecycle row is what a live stream's bearer generation is checked against at every frame.
+  store.database
+    .prepare(
+      `INSERT INTO event_secret_generations
+       (owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest, encrypted_ref, lifecycle,
+        expires_at, created_at)
+       VALUES ('subscriber', ?, ?, 'sse-bearer', 1, ?, 'secret-digest', X'00', 'current', NULL, 1)`,
+    )
+    .run(subscriber.subscriberId, subscriber.version, sha256Hex(document));
   store.database.exec(
     `INSERT INTO rule_versions
        (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
@@ -185,6 +194,63 @@ function appendLiveRow(store: Awaited<ReturnType<typeof fixture>>['store']): voi
     )
     .run(liveStreamId, accountId, now, now + 60_000);
 }
+
+test('B2-T9: a bearer rotation persisted in the secret ledger ends an open stream at its next frame, with no in-process rotate', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
+  let setup: Awaited<ReturnType<typeof fixture>>;
+  try {
+    setup = await fixture();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+      t.skip('the development sandbox blocks loopback listeners; the coordinator runs this listener proof outside it');
+      return;
+    }
+    throw error;
+  }
+  try {
+    const connected = request({
+      host: '127.0.0.1',
+      port: PORT,
+      path: '/v1/streams/subscriber-listener',
+      headers: { host: `127.0.0.1:${PORT}`, authorization: 'Bearer listener-token' },
+    });
+    const frames: string[] = [];
+    let ended = false;
+    const open = new Promise<void>((resolve, reject) => {
+      connected.once('response', (incoming) => {
+        incoming.on('data', (chunk: Buffer) => frames.push(chunk.toString('utf8')));
+        incoming.once('end', () => {
+          ended = true;
+        });
+        resolve();
+      });
+      connected.once('error', reject);
+    });
+    connected.end();
+    await open;
+    appendLiveRow(setup.store);
+    assert.equal(await setup.server.writeLive({ streamLogId: liveStreamId, frame: 'data: before\n\n' }), 1);
+    // Another writer rotates the ledger: generation 1 is retired and generation 2 is current. Nobody calls rotate().
+    setup.store.database.exec(
+      `UPDATE event_secret_generations SET lifecycle = 'retired' WHERE owner_kind = 'subscriber' AND generation = 1;
+       INSERT INTO event_secret_generations
+         (owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest, encrypted_ref,
+          lifecycle, expires_at, created_at)
+       SELECT owner_kind, owner_id, owner_version, purpose, 2, owner_digest, 'secret-digest-2', X'01', 'current',
+              NULL, 2
+       FROM event_secret_generations WHERE owner_kind = 'subscriber' AND generation = 1;`,
+    );
+    assert.equal(await setup.server.writeLive({ streamLogId: liveStreamId, frame: 'data: after\n\n' }), 0);
+    for (let waited = 0; !ended && waited < 2_000; waited += 5) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(frames, ['data: before\n\n']);
+    assert.equal(ended, true, 'the stream whose bearer generation the ledger retired is closed');
+  } finally {
+    await setup.server.close();
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
 
 test('B2-T9: rotation, pause and the per-frame writer gate prevent a registered old stream from receiving another frame', {
   skip: WINDOWS_SKIP,

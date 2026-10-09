@@ -136,6 +136,15 @@ export async function startBrowserSseFixture(): Promise<BrowserSseFixture> {
         subscriberDocument,
         sha256Hex(subscriberDocument),
       );
+    // The secret ledger's lifecycle row is what the stream's bearer generation is checked against at every frame.
+    store.database
+      .prepare(
+        `INSERT INTO event_secret_generations
+         (owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest, encrypted_ref,
+          lifecycle, expires_at, created_at)
+         VALUES ('subscriber', ?, ?, 'sse-bearer', 1, ?, 'secret-digest', X'00', 'current', NULL, 1)`,
+      )
+      .run(subscriber.subscriberId, subscriber.version, sha256Hex(subscriberDocument));
     // Frames are retained within the subscriber's 60-second replay window (stream_log allows at most seven days).
     const deliveredAt = Date.now();
     // Each retained frame names a real delivery, which names a decision on a real ingest record (stream_log's keys).
