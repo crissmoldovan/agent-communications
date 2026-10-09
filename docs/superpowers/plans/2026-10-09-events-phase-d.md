@@ -1589,3 +1589,10 @@ may exercise a case incidentally, but it is not a second owner.
 Commit this plan with:
 
 `docs(plan): local event emission — phase D, review round 2`
+
+## Decisions made during the build
+
+| Decision | Raised in | Question | Resolution |
+| --- | --- | --- | --- |
+| — (coordinator) | Task 1 build | Should the manifest's minimum polling interval be per channel rather than one shared 60 000 ms floor? | Keep the shared 60 000 ms floor. It matches the scheduler's default and Slack's documented conservative interval, and a per-channel floor could only make a source poll faster, raising provider load; nothing in D's safety or cut-over contract depends on it. A later phase may tune a channel's floor upward or downward against its provider's documented limits. |
+| — (coordinator) | Task 1 build | This branch predated B1's `zod` fix and its builder declared and externalised `zod` itself. | Dropped in favour of B1's accepted fix (a bundled devDependency, with the bundle-imports test in `test/events-daemon-package.test.mjs`), which the rebase onto B1's head brings in. |
