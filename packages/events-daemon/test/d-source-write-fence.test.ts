@@ -209,7 +209,7 @@ test('D9: held Slack history/reply provider, stage and cursor writes use their r
          VALUES ('d9-reply', 'replace', '{}', 'digest', 'exact', '[]', '[]', 'pending-completion', 1, 1)`,
       )
       .run();
-    const reply = deferred<{ nextCursor: null }>();
+    const reply = deferred<{ messages: []; nextCursor: null; retainedHistoryBoundary: false }>();
     const replyStarted = deferred<void>();
     const drains = new SlackReplyDrains({
       database: store.database,
@@ -224,13 +224,18 @@ test('D9: held Slack history/reply provider, stage and cursor writes use their r
       decryptState: async (value) => JSON.parse(Buffer.from(value).toString('utf8')),
       now: () => 1,
       nowTimestamp: () => '3.000000',
+      stage: {
+        scope,
+        debts: () => [{ ruleId: 'rule-test', ruleVersion: 1, ingestRetentionMs: 1_000 }],
+        admit: async () => 'terminal',
+      },
     });
     await drains.begin({ intentId: 'd9-reply', accountId, conversationId, through: '3.000000' });
     await drains.discoverParent({ intentId: 'd9-reply', accountId, conversationId, parentTs: '2.000000' });
     const replying = drains.resumeOne({ intentId: 'd9-reply', accountId, conversationId });
     await replyStarted.promise;
     store.database.exec('UPDATE event_settings SET paused = 1');
-    reply.resolve({ nextCursor: null });
+    reply.resolve({ messages: [], nextCursor: null, retainedHistoryBoundary: false });
     await assert.rejects(replying, { code: 'APPROVAL_VOID' });
     assert.deepEqual(
       {

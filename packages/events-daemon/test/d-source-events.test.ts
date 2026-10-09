@@ -161,6 +161,104 @@ test('D7b: a Slack IM reaches one validated dry-run delivery with its real conve
   }
 });
 
+test('P1: a reply to a recently observed Slack parent is admitted exactly once through the source owner', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const accountId = 'acc_CDEFGHIJKLMNOPQR';
+  const conversationId = 'C-recent-thread';
+  const scope: SourceScope = { source: 'slack', accountId, scopeId: `slack:${accountId}:${conversationId}` };
+  const setup = await fixture({ source: 'slack', accountId, ruleId: 'rule-slack-replies', scopeId: scope.scopeId });
+  try {
+    const parentTs = '1760000000.000000';
+    const replyTs = '1760000001.000000';
+    let replyCalls = 0;
+    const source: SlackEventSource = {
+      accountId,
+      accountAlias: 'events/slack',
+      workspaceId: 'T-d-source',
+      conversation: async () => ({ id: conversationId, name: 'recent-thread', kind: 'private_channel' }),
+      history: async () => ({
+        messages: [slackEventMessage({ ts: parentTs, threadTs: null, replyCount: 1, text: 'parent' })],
+        nextCursor: null,
+        retainedHistoryBoundary: false,
+      }),
+      replies: async () => {
+        replyCalls += 1;
+        return {
+          messages: [slackEventMessage({ ts: replyTs, threadTs: parentTs, replyCount: 0, text: 'reply' })],
+          nextCursor: null,
+          retainedHistoryBoundary: false,
+        };
+      },
+    };
+
+    await run(setup, scope, { slack: source });
+    await run(setup, scope, { slack: source });
+
+    assert.equal(replyCalls, 2, 'the second reconciliation starts from its durable reply watermark');
+    assert.equal(count(setup, 'ingest'), 2, 'the parent and its reply are both durable source occurrences');
+    assert.equal(count(setup, 'decisions'), 2, 'the reply is admitted once to the active rule version');
+    assert.deepEqual(
+      (
+        setup.store.database.prepare('SELECT dedupe_key FROM ingest ORDER BY dedupe_key').all() as Array<{
+          dedupe_key: string;
+        }>
+      ).map((row) => row.dedupe_key),
+      [`${conversationId}/${parentTs}`, `${conversationId}/${replyTs}`],
+      'the reply uses the ordinary Slack (conversationId, ts) identity',
+    );
+  } finally {
+    await setup.close();
+  }
+});
+
+test('P1: reconciliation drops a Slack parent after seven days and never infers its reply as new', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const accountId = 'acc_DEFGHIJKLMNOPQRS';
+  const conversationId = 'C-old-thread';
+  const scope: SourceScope = { source: 'slack', accountId, scopeId: `slack:${accountId}:${conversationId}` };
+  const setup = await fixture({ source: 'slack', accountId, ruleId: 'rule-slack-old-reply', scopeId: scope.scopeId });
+  try {
+    const parentTs = '1760000000.000000';
+    let exposeReply = false;
+    let replyCalls = 0;
+    const source: SlackEventSource = {
+      accountId,
+      accountAlias: 'events/slack',
+      workspaceId: 'T-d-source',
+      conversation: async () => ({ id: conversationId, name: 'old-thread', kind: 'private_channel' }),
+      history: async () => ({
+        messages: [slackEventMessage({ ts: parentTs, threadTs: null, replyCount: 1, text: 'parent' })],
+        nextCursor: null,
+        retainedHistoryBoundary: false,
+      }),
+      replies: async () => {
+        replyCalls += 1;
+        return {
+          messages: exposeReply
+            ? [slackEventMessage({ ts: '1760704801.000000', threadTs: parentTs, replyCount: 0, text: 'old reply' })]
+            : [],
+          nextCursor: null,
+          retainedHistoryBoundary: false,
+        };
+      },
+    };
+
+    await run(setup, scope, { slack: source });
+    assert.equal(replyCalls, 1, 'the initially recent parent gets its bounded reconciliation');
+    setup.advance(7 * 24 * 60 * 60 * 1_000 + 1);
+    exposeReply = true;
+    await run(setup, scope, { slack: source });
+
+    assert.equal(replyCalls, 1, 'the expired parent is pruned before another provider replies call');
+    assert.equal(count(setup, 'ingest'), 1, 'no reply to the old thread is inferred as a new occurrence');
+    assert.equal(count(setup, 'decisions'), 1);
+  } finally {
+    await setup.close();
+  }
+});
+
 test('D7b: a Resend received UUID reaches one validated dry-run delivery', { skip: WINDOWS_SKIP }, async () => {
   const accountId = 'acc_CDEFGHIJKLMNOPQR';
   const setup = await fixture({ source: 'resend', accountId, ruleId: 'rule-resend-received', scopeId: 'received' });
@@ -537,6 +635,25 @@ function slackReader(conversation: {
       retainedHistoryBoundary: false,
     }),
     replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+  };
+}
+
+function slackEventMessage(input: {
+  readonly ts: string;
+  readonly threadTs: string | null;
+  readonly replyCount: number;
+  readonly text: string;
+}) {
+  return {
+    ...input,
+    text: `<untrusted-content>${input.text}</untrusted-content>`,
+    author: { name: null, app: false, external: false },
+    truncated: false,
+    mismatch: false,
+    unrenderable: false,
+    editedTs: null,
+    mentions: [],
+    files: [],
   };
 }
 
