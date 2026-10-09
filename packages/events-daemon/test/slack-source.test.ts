@@ -8,6 +8,7 @@ import {
   compareSlackTimestamp,
   createSlackLocalEventSource,
   SlackHistorySource,
+  SlackHistoryStageExpiry,
   slackConversationScope,
 } from '../src/sources/slack.ts';
 import { openEventDatabase } from '../src/store/database.ts';
@@ -438,6 +439,7 @@ test('D4: Slack history keeps Task 4a’s first-stage shortest deadline and resu
       .run(ACCOUNT, scope.scopeId);
     store.database.prepare('UPDATE event_settings SET enabled = 1, switch_generation = 1 WHERE singleton = 1').run();
     let reads = 0;
+    let admissions = 0;
     const worker = new SlackHistorySource({
       store,
       accountId: ACCOUNT,
@@ -464,7 +466,10 @@ test('D4: Slack history keeps Task 4a’s first-stage shortest deadline and resu
         { ruleId: 'rule-long', ruleVersion: 1, ingestRetentionMs: 900 },
         { ruleId: 'rule-short', ruleVersion: 1, ingestRetentionMs: 200 },
       ],
-      admit: async () => 'pending',
+      admit: async () => {
+        admissions += 1;
+        return 'pending';
+      },
       encryptStage: async (value) => Buffer.from(JSON.stringify(value)),
       decryptStage: async (value) => JSON.parse(Buffer.from(value).toString('utf8')),
       now: () => 100,
@@ -483,13 +488,46 @@ test('D4: Slack history keeps Task 4a’s first-stage shortest deadline and resu
       },
       { staged_at: 100, stage_expires_at: 300 },
     );
-    assert.equal(new EventExpiry(store, () => 300).sweep().sourceStages, 1);
-    store.database.prepare('UPDATE event_settings SET enabled = 0, switch_generation = 2 WHERE singleton = 1').run();
-    assert.deepEqual(await worker.scan({ conversationId: CONVERSATION, latest: '9999999999.999999' }), {
+    store.database.prepare('UPDATE event_settings SET paused = 1 WHERE singleton = 1').run();
+    assert.equal(
+      (
+        await new EventExpiry(
+          store,
+          () => 300,
+          new SlackHistoryStageExpiry({
+            store,
+            lock: new SourceScopeLock(),
+            decrypt: async (value) => JSON.parse(Buffer.from(value).toString('utf8')),
+            encrypt: async (value) => Buffer.from(JSON.stringify(value)),
+            now: () => 300,
+          }),
+        ).sweepAll()
+      ).sourceStages,
+      1,
+    );
+    assert.deepEqual(
+      (
+        store.database
+          .prepare(
+            "SELECT occurrence_key, outcome FROM source_occurrence_resolutions WHERE source = 'slack' AND account_id = ?",
+          )
+          .all(ACCOUNT) as Array<{ occurrence_key: string; outcome: string }>
+      ).map((row) => ({ ...row })),
+      [
+        {
+          occurrence_key: JSON.stringify([CONVERSATION, '1700000001.000001']),
+          outcome: 'retention-expired',
+        },
+      ],
+      'the common expiry resolves the real Slack occurrence rather than its opaque stage id',
+    );
+    store.database.prepare('UPDATE event_settings SET paused = 0 WHERE singleton = 1').run();
+    assert.deepEqual(await worker.scan({ conversationId: CONVERSATION, latest: '1700000010.000000' }), {
       watermark: '1700000010.000000',
       pending: false,
     });
     assert.equal(reads, 1, 'the expired page advances content-free without a new provider read');
+    assert.equal(admissions, 1, 'the terminal retained occurrence is never admitted again');
   } finally {
     store.close();
     await rm(stateDir, { recursive: true, force: true });

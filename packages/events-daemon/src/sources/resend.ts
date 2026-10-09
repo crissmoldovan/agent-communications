@@ -1,6 +1,7 @@
 import { CommsError, neutralise, sanitizeHtmlToText, sanitizePlainText, stripInvisible } from '@agentcomms/core';
 import { normaliseResendSourceOptions } from '../domain/source-options.ts';
 import type { CutoverFailpoint } from '../runtime/cutover-failpoint.ts';
+import type { AsyncSourceStageExpiry } from '../runtime/expiry.ts';
 import type { EventDatabase } from '../store/database.ts';
 import { DAY_MS, resolveStageRetryDeadline } from '../store/retention.ts';
 import type { LocalEventSource, SourceScope, SourceStageDebt } from './contracts.ts';
@@ -78,6 +79,100 @@ interface ReceivedState {
 const RECEIVED_SCOPE = 'received';
 const EMPTY = 'empty';
 const MAX_PAGES = 10;
+
+/**
+ * Common start-up/tick expiry for Resend's encrypted received stages. It keeps only the durable anchor/cycle
+ * continuation, resolves every still-unsettled received id, and never asks the provider to reconstruct expired data.
+ */
+export class ResendReceivedStageExpiry implements AsyncSourceStageExpiry {
+  readonly #store: EventDatabase;
+  readonly #decrypt: (stored: Uint8Array, id: string) => Promise<unknown>;
+  readonly #encrypt: (value: ReceivedState, id: string) => Promise<Uint8Array>;
+  readonly #lock: SourceScopeLock;
+  readonly #now: () => number;
+
+  constructor(
+    input: Readonly<{
+      store: EventDatabase;
+      decrypt: (stored: Uint8Array, id: string) => Promise<unknown>;
+      encrypt: (value: ReceivedState, id: string) => Promise<Uint8Array>;
+      lock: SourceScopeLock;
+      now?: (() => number) | undefined;
+    }>,
+  ) {
+    this.#store = input.store;
+    this.#decrypt = input.decrypt;
+    this.#encrypt = input.encrypt;
+    this.#lock = input.lock;
+    this.#now = input.now ?? Date.now;
+  }
+
+  async sweep(): Promise<number> {
+    const accounts = this.#store.database
+      .prepare(
+        `SELECT DISTINCT account_id FROM source_scan_state
+         WHERE source = 'resend' AND cursor_scope = 'received'
+           AND stage_expires_at IS NOT NULL AND stage_expires_at <= ?`,
+      )
+      .all(this.#now()) as Array<{ account_id: string }>;
+    let expired = 0;
+    for (const { account_id: accountId } of accounts)
+      expired += await this.#lock.withScope({ source: 'resend', accountId, scopeId: RECEIVED_SCOPE }, () =>
+        this.#expireAccount(accountId),
+      );
+    return expired;
+  }
+
+  async #expireAccount(accountId: string): Promise<number> {
+    const id = sourceId(accountId);
+    const row = this.#store.database
+      .prepare(
+        `SELECT encrypted_record, stage_expires_at FROM source_scan_state
+         WHERE id = ? AND source = 'resend' AND account_id = ? AND cursor_scope = 'received'
+           AND stage_expires_at IS NOT NULL AND stage_expires_at <= ?`,
+      )
+      .get(id, accountId, this.#now()) as { encrypted_record: Uint8Array; stage_expires_at: number } | undefined;
+    if (row === undefined) return 0;
+    const state = (await this.#decrypt(row.encrypted_record, id)) as ReceivedState;
+    const terminal = receivedOccurrenceKeys(state);
+    const next: ReceivedState = { ...state, candidate: undefined, retry: undefined };
+    const encrypted = await this.#encrypt(next, id);
+    return this.#store.immediate(() => {
+      const present = this.#store.database
+        .prepare(
+          `SELECT 1 AS present FROM source_scan_state
+           WHERE id = ? AND encrypted_record = ? AND stage_expires_at = ? AND stage_expires_at <= ?`,
+        )
+        .get(id, row.encrypted_record, row.stage_expires_at, this.#now()) as { present: number } | undefined;
+      if (present === undefined) return 0;
+      const now = this.#now();
+      const resolution = this.#store.database.prepare(
+        `INSERT OR IGNORE INTO source_occurrence_resolutions
+         (source, account_id, occurrence_key, outcome, resolved_at, error_code)
+         VALUES ('resend', ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
+      );
+      for (const occurrenceKey of terminal) resolution.run(accountId, occurrenceKey, now);
+      const updated = this.#store.database
+        .prepare(
+          `UPDATE source_scan_state SET staged_at = NULL, stage_expires_at = NULL, encrypted_record = ?, updated_at = ?
+           WHERE id = ? AND encrypted_record = ? AND stage_expires_at = ?`,
+        )
+        .run(encrypted, now, id, row.encrypted_record, row.stage_expires_at);
+      if (Number(updated.changes) !== 1) return 0;
+      this.#store.database.prepare('DELETE FROM source_stage_rule_debts WHERE stage_id = ?').run(id);
+      this.#store.database
+        .prepare('INSERT OR IGNORE INTO operational_records (id, kind, created_at) VALUES (?, ?, ?)')
+        .run(`source-retention-expired:resend:${accountId}:${id}`, 'event.source.retention-expired', now);
+      return 1;
+    });
+  }
+}
+
+function receivedOccurrenceKeys(state: ReceivedState): readonly string[] {
+  return [state.candidate?.emailId, ...state.items]
+    .filter((value): value is string => value !== undefined && value !== EMPTY && value !== state.anchorId)
+    .filter((value, index, values) => values.indexOf(value) === index);
+}
 
 /** The registry adapter fixes the two source scopes without exposing a Resend transport. */
 export function createResendLocalEventSource(): LocalEventSource {
@@ -234,11 +329,11 @@ export class ResendReceivedSource {
         .get(id, this.#now()) as { encrypted_record: Uint8Array; stage_expires_at: number } | undefined;
       if (row === undefined) return 0;
       const state = (await this.#decrypt(row.encrypted_record, id)) as ReceivedState;
-      const occurrenceKey = state.candidate?.emailId ?? id;
+      const terminal = receivedOccurrenceKeys(state);
       const next: ReceivedState = {
         ...state,
         candidate: undefined,
-        items: state.candidate === undefined ? [] : state.items.slice(1),
+        retry: undefined,
       };
       const encrypted = await this.#encrypt(next, id);
       this.#store.immediate(() => {
@@ -249,13 +344,12 @@ export class ResendReceivedSource {
           .get(id, row.encrypted_record, row.stage_expires_at);
         if (present === undefined) throw new Error('stale Resend received expiry');
         const now = this.#now();
-        this.#store.database
-          .prepare(
-            `INSERT OR IGNORE INTO source_occurrence_resolutions
-             (source, account_id, occurrence_key, outcome, resolved_at, error_code)
-             VALUES ('resend', ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
-          )
-          .run(this.#accountId, occurrenceKey, now);
+        const resolution = this.#store.database.prepare(
+          `INSERT OR IGNORE INTO source_occurrence_resolutions
+           (source, account_id, occurrence_key, outcome, resolved_at, error_code)
+           VALUES ('resend', ?, ?, 'retention-expired', ?, 'STAGE_EXPIRED')`,
+        );
+        for (const occurrenceKey of terminal) resolution.run(this.#accountId, occurrenceKey, now);
         this.#store.database
           .prepare(
             `UPDATE source_scan_state SET staged_at = NULL, stage_expires_at = NULL, encrypted_record = ?, updated_at = ?
@@ -274,6 +368,10 @@ export class ResendReceivedSource {
       const state = await this.#load();
       if (state === null) throw new Error('the received source needs a baseline before scanning');
       if (state.candidate !== undefined) {
+        if (this.#isResolved(state.candidate.emailId)) {
+          await this.#save({ ...state, candidate: undefined, retry: undefined, items: state.items.slice(1) }, false);
+          continue;
+        }
         const admitted = await this.#admit(state.candidate);
         if (admitted === 'pending') return { pending: true, anchorId: this.anchorId() };
         await this.#save({ ...state, candidate: undefined, items: state.items.slice(1) }, state.items.length > 1);
@@ -285,6 +383,10 @@ export class ResendReceivedSource {
           const nextAnchor = state.cycleHeadId ?? state.anchorId;
           await this.#save({ anchorId: nextAnchor, cycleHeadId: null, after: null, pagesScanned: 0, items: [] }, false);
           return { pending: false, anchorId: nextAnchor === EMPTY ? null : nextAnchor };
+        }
+        if (item !== EMPTY && this.#isResolved(item)) {
+          await this.#save({ ...state, candidate: undefined, retry: undefined, items: state.items.slice(1) }, false);
+          continue;
         }
         const retry = state.retry?.emailId === item ? state.retry : undefined;
         if (retry !== undefined) {
@@ -407,6 +509,17 @@ export class ResendReceivedSource {
     if (row === undefined) return null;
     const value = await this.#decrypt(row.encrypted_record, sourceId(this.#accountId));
     return value as ReceivedState;
+  }
+
+  #isResolved(occurrenceKey: string): boolean {
+    return (
+      this.#store.database
+        .prepare(
+          `SELECT 1 AS present FROM source_occurrence_resolutions
+           WHERE source = 'resend' AND account_id = ? AND occurrence_key = ?`,
+        )
+        .get(this.#accountId, occurrenceKey) !== undefined
+    );
   }
 
   async #save(
