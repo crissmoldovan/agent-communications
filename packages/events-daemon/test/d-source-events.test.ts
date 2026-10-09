@@ -257,6 +257,87 @@ test('D7b: a WhatsApp direct chat reaches one validated dry-run delivery with a 
   }
 });
 
+test('P1: overlapping WhatsApp scopes admit a new chat tuple once to every matching rule whichever scope runs first', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
+  const accountId = 'acc_GHIJKLMNOPQRSTUV';
+  const chatJid = '447700900003@s.whatsapp.net';
+  for (const firstScope of [`all-allowed`, `chat:${chatJid}`] as const) {
+    await t.test(firstScope, async () => {
+      const setup = await fixture({
+        source: 'whatsapp',
+        accountId,
+        ruleId: 'rule-whatsapp-all',
+        scopeId: firstScope,
+        chatJid,
+        whatsappRules: [
+          { ruleId: 'rule-whatsapp-all', chats: 'all-allowed' },
+          { ruleId: 'rule-whatsapp-chat', chats: [chatJid] },
+        ],
+      });
+      try {
+        const reader = whatsappReader(accountId, chatJid, 'direct');
+        await run(setup, { source: 'whatsapp', accountId, scopeId: firstScope }, { whatsapp: reader });
+        await run(
+          setup,
+          { source: 'whatsapp', accountId, scopeId: firstScope === 'all-allowed' ? `chat:${chatJid}` : 'all-allowed' },
+          { whatsapp: reader },
+        );
+        assert.deepEqual(
+          (
+            setup.store.database
+              .prepare('SELECT rule_id, rule_version FROM whatsapp_rule_admissions ORDER BY rule_id, rule_version')
+              .all() as Array<{ rule_id: string; rule_version: number }>
+          ).map((row) => ({ ...row })),
+          [
+            { rule_id: 'rule-whatsapp-all', rule_version: 1 },
+            { rule_id: 'rule-whatsapp-chat', rule_version: 1 },
+          ],
+        );
+      } finally {
+        await setup.close();
+      }
+    });
+  }
+});
+
+test('P1: a WhatsApp tuple present at one rule activation point is admitted only to the rule whose point follows it', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const accountId = 'acc_HIJKLMNOPQRSTUVW';
+  const chatJid = '447700900004@s.whatsapp.net';
+  const messageId = `["wa-msg","${chatJid}","447700900002@s.whatsapp.net","direct-stanza"]`;
+  const setup = await fixture({
+    source: 'whatsapp',
+    accountId,
+    ruleId: 'rule-whatsapp-all-before',
+    scopeId: `chat:${chatJid}`,
+    chatJid,
+    whatsappRules: [
+      { ruleId: 'rule-whatsapp-all-before', chats: 'all-allowed' },
+      { ruleId: 'rule-whatsapp-chat-after', chats: [chatJid] },
+    ],
+    whatsappBaselineIdentities: { [`chat:${chatJid}`]: [messageId] },
+  });
+  try {
+    await run(
+      setup,
+      { source: 'whatsapp', accountId, scopeId: `chat:${chatJid}` },
+      { whatsapp: whatsappReader(accountId, chatJid, 'direct') },
+    );
+    assert.deepEqual(
+      (
+        setup.store.database.prepare('SELECT rule_id FROM whatsapp_rule_admissions ORDER BY rule_id').all() as Array<{
+          rule_id: string;
+        }>
+      ).map((row) => row.rule_id),
+      ['rule-whatsapp-all-before'],
+    );
+  } finally {
+    await setup.close();
+  }
+});
+
 type FixtureSource = 'slack' | 'resend' | 'whatsapp';
 
 async function fixture(input: {
@@ -265,6 +346,8 @@ async function fixture(input: {
   ruleId: string;
   scopeId: string;
   chatJid?: string;
+  whatsappRules?: readonly Readonly<{ ruleId: string; chats: 'all-allowed' | readonly string[] }>[];
+  whatsappBaselineIdentities?: Readonly<Record<string, readonly string[]>>;
 }) {
   const root = await shortTempDir(`aev-d-source-${input.source}-`);
   const stateDir = join(root, 'state');
@@ -301,12 +384,28 @@ async function fixture(input: {
         return { timestamp: '1759999999.000000', replyDrain: { through: '1759999999.000000' } };
       if (scope.source === 'resend')
         return scope.scopeId === 'received' ? { anchorId: 'empty' } : { startedAt: new Date(now.value).toISOString() };
-      return { capturedAt: new Date(now.value).toISOString(), baselineGeneration: 0, baselineIdentities: [] };
+      return {
+        capturedAt: new Date(now.value).toISOString(),
+        baselineGeneration: 0,
+        baselineIdentities: input.whatsappBaselineIdentities?.[scope.scopeId] ?? [],
+      };
     },
     encryptBaseline: async (_intent, _account, position) => Buffer.from(JSON.stringify(position)),
     decryptBaseline: async (_intent, _account, stored) => JSON.parse(Buffer.from(stored).toString('utf8')),
-    encryptPoint: async ({ position }) => Buffer.from(JSON.stringify(position)),
-    decryptPoint: async ({ stored }) => JSON.parse(Buffer.from(stored).toString('utf8')),
+    encryptPoint: async ({ activationId, ruleId, ruleVersion, accountId, positionScope, position }) =>
+      cipher.encrypt(
+        ruleActivationPointLocation(activationId, ruleId, ruleVersion, accountId, positionScope),
+        Buffer.from(JSON.stringify(position)),
+      ),
+    decryptPoint: async ({ activationId, ruleId, ruleVersion, accountId, positionScope, stored }) =>
+      JSON.parse(
+        (
+          await cipher.decrypt(
+            ruleActivationPointLocation(activationId, ruleId, ruleVersion, accountId, positionScope),
+            stored,
+          )
+        ).toString('utf8'),
+      ),
   });
   const options =
     input.source === 'slack'
@@ -333,22 +432,31 @@ async function fixture(input: {
         : { constant: 'safe' };
   const versions = new ImmutableVersions(store.database);
   versions.createTarget(target);
-  versions.createRule({
-    ruleId: input.ruleId,
-    version: 1,
-    source: { channel: input.source, accountIds: [input.accountId], options },
-    event: { type: event, version: 1 },
-    condition: { path: '/id', op: 'exists' },
-    mapping,
-    targets: [target],
-    subscribers: [],
-    judges: [],
-    deliveryRateCap: 60,
-    retention,
-  });
-  const preparedRule = await runtime.prepareRule({ ruleId: input.ruleId, version: 1 });
-  if (!('approvalId' in preparedRule)) throw new Error('a first rule activation must require approval');
-  await approve(runtime, preparedRule);
+  const ruleInputs =
+    input.source === 'whatsapp' && input.whatsappRules !== undefined
+      ? input.whatsappRules.map((rule) => ({
+          ruleId: rule.ruleId,
+          options: { channel: 'whatsapp' as const, chats: rule.chats },
+        }))
+      : [{ ruleId: input.ruleId, options }];
+  for (const ruleInput of ruleInputs) {
+    versions.createRule({
+      ruleId: ruleInput.ruleId,
+      version: 1,
+      source: { channel: input.source, accountIds: [input.accountId], options: ruleInput.options },
+      event: { type: event, version: 1 },
+      condition: { path: '/id', op: 'exists' },
+      mapping,
+      targets: [target],
+      subscribers: [],
+      judges: [],
+      deliveryRateCap: 60,
+      retention,
+    });
+    const preparedRule = await runtime.prepareRule({ ruleId: ruleInput.ruleId, version: 1 });
+    if (!('approvalId' in preparedRule)) throw new Error('a first rule activation must require approval');
+    await approve(runtime, preparedRule);
+  }
   await approve(runtime, await runtime.prepareEnableAll());
   if (input.source === 'slack') {
     // The production scheduler installs this approved activation point before the source's first turn.
@@ -555,4 +663,24 @@ async function assertDelivered(
 
 function count(setup: Awaited<ReturnType<typeof fixture>>, table: 'ingest' | 'decisions' | 'deliveries'): number {
   return (setup.store.database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
+}
+
+function ruleActivationPointLocation(
+  activationId: string,
+  ruleId: string,
+  ruleVersion: number,
+  accountId: string,
+  positionScope: string,
+) {
+  return {
+    table: 'rule_activation_points',
+    column: 'encryptedPosition',
+    key: [
+      { type: 'text' as const, value: activationId },
+      { type: 'text' as const, value: ruleId },
+      { type: 'integer' as const, value: ruleVersion },
+      { type: 'text' as const, value: accountId },
+      { type: 'text' as const, value: positionScope },
+    ],
+  };
 }

@@ -34,6 +34,7 @@ import { assertDisclosable } from './disclosure-fence.ts';
 import type { DeliveryDispatchHandler, DispatchResult } from './dispatcher.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 import { signStandardWebhook } from './webhook-signing.ts';
+import type { WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
 
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 20_000;
 const LEASE_MARGIN_MS = 2_000;
@@ -92,6 +93,10 @@ export interface WebhookDispatcherOptions {
   readonly tlsConnect?: ((options: PinnedTlsOptions) => Promise<tls.TLSSocket>) | undefined;
   /** Task 7 supplies the durable settlement; this adapter passes only a content-free outcome after bytes leave. */
   readonly onOutcome?: ((claim: ClaimedDelivery, outcome: WebhookOutcome) => Promise<void>) | undefined;
+  /** D's concrete fence is mandatory before a persisted WhatsApp tuple may write network bytes. */
+  readonly whatsappVisibilityFence?: Pick<WhatsAppVisibilityFence, 'withCurrentSseFrameVisibility'> | undefined;
+  /** Only D's ordinary owner composition may attest that the supplied fence is concrete. */
+  readonly hasConcreteWhatsAppVisibilityFence?: boolean | undefined;
   /** Test-only point before a gate; production supplies no hook. */
   readonly beforeGate?: ((phase: WebhookFencePhase, claim: ClaimedDelivery) => void | Promise<void>) | undefined;
   /** Test-only interruption seam. It cannot be enabled through a target, config, CLI or MCP input. */
@@ -117,6 +122,7 @@ interface DeliveryRow {
   readonly expires_at: number;
   readonly switch_generation: number;
   readonly target_key: string;
+  readonly whatsapp_message_id: string | null;
 }
 
 /**
@@ -138,6 +144,8 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
   readonly #tcpConnect: (options: PinnedTcpOptions) => Promise<net.Socket>;
   readonly #tlsConnect: (options: PinnedTlsOptions) => Promise<tls.TLSSocket>;
   readonly #onOutcome: ((claim: ClaimedDelivery, outcome: WebhookOutcome) => Promise<void>) | undefined;
+  readonly #whatsappVisibilityFence: Pick<WhatsAppVisibilityFence, 'withCurrentSseFrameVisibility'> | undefined;
+  readonly #hasConcreteWhatsAppVisibilityFence: boolean;
   readonly #beforeGate: ((phase: WebhookFencePhase, claim: ClaimedDelivery) => void | Promise<void>) | undefined;
   readonly #testFailpoint: ((point: WebhookCrashPoint, claim?: ClaimedDelivery) => void) | undefined;
 
@@ -155,6 +163,8 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
     this.#tcpConnect = options.tcpConnect ?? connectPinnedTcp;
     this.#tlsConnect = options.tlsConnect ?? connectPinnedTls;
     this.#onOutcome = options.onOutcome ?? ((claim, outcome) => this.#settleOutcome(claim, outcome));
+    this.#whatsappVisibilityFence = options.whatsappVisibilityFence;
+    this.#hasConcreteWhatsAppVisibilityFence = options.hasConcreteWhatsAppVisibilityFence ?? false;
     this.#beforeGate = options.beforeGate;
     this.#testFailpoint = options.testFailpoint;
   }
@@ -284,13 +294,57 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
       socket.destroy();
       return preparedWrite;
     }
-    const gateWrite = this.#finalGate(claim, target);
-    if (gateWrite !== null) {
-      socket.destroy();
-      return gateWrite;
+    const whatsappMessageId = delivery(this.#store, claim.id)?.whatsapp_message_id ?? null;
+    if (whatsappMessageId !== null) {
+      if (this.#whatsappVisibilityFence === undefined || !this.#hasConcreteWhatsAppVisibilityFence) {
+        socket.destroy();
+        this.#cancelContentFree(claim);
+        return { state: 'terminal', deliveryId: claim.id };
+      }
+      let writeGate: DispatchResult | null = null;
+      let wrote = false;
+      let ran = false;
+      try {
+        await this.#whatsappVisibilityFence.withCurrentSseFrameVisibility(
+          { accountId: claim.accountId, whatsappMessageId },
+          () => {
+            ran = true;
+            // The final gate and physical write are synchronous under D's live-list lock: no await may intervene.
+            writeGate = this.#finalGate(claim, target);
+            if (writeGate !== null) return;
+            socket.write(request);
+            wrote = true;
+          },
+        );
+      } catch (error) {
+        socket.destroy();
+        // The gate or write itself failed: that is not a list decision, so it is not turned into a cancellation.
+        if (ran) throw error;
+        // D-6: an unreadable list hides all — nothing is sent — but it purges nothing merely because the file could
+        // not be read. The claim is released with its retained record so a later turn retries once the list reads.
+        this.#release(claim);
+        throw new CommsError('TRANSIENT', 'the WhatsApp chat list could not be read; the delivery waits', {
+          cause: error,
+        });
+      }
+      if (writeGate !== null) {
+        socket.destroy();
+        return writeGate;
+      }
+      if (!wrote) {
+        socket.destroy();
+        this.#cancelContentFree(claim);
+        return { state: 'terminal', deliveryId: claim.id };
+      }
+    } else {
+      const gateWrite = this.#finalGate(claim, target);
+      if (gateWrite !== null) {
+        socket.destroy();
+        return gateWrite;
+      }
+      // The write is deliberately synchronous with its immediately preceding gate: no callback or await may intervene.
+      socket.write(request);
     }
-    // The write is deliberately synchronous with its immediately preceding gate: no callback or await may intervene.
-    socket.write(request);
     this.#testFailpoint?.('after-write', claim);
     // Only the status line matters; the socket is destroyed on every path once it is read, refused or overdue.
     const outcome = await beforeDeadline(responseStatus(socket), deadline)
@@ -525,6 +579,20 @@ export class WebhookDispatcher implements DeliveryDispatchHandler {
 
   #release(claim: ClaimedDelivery): void {
     this.#store.immediate(() => releaseDeliveryClaimInTransaction(this.#store.database, claim));
+  }
+
+  /** A WhatsApp list refusal happens before any bytes, so the claimed record is terminal and content-free, never retried. */
+  #cancelContentFree(claim: ClaimedDelivery): void {
+    this.#store.immediate(() => {
+      const cancelled = this.#store.database
+        .prepare(
+          `UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL, next_at = NULL
+           WHERE id = ? AND state = 'disclosing' AND switch_generation = ?
+             AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
+        )
+        .run(claim.id, claim.switchGeneration, claim.attemptId, claim.leaseToken, claim.leaseUntil).changes;
+      if (cancelled === 1) dropRetainedTargetReference(this.#store.database, claim.id, this.#now());
+    });
   }
 }
 
@@ -819,7 +887,7 @@ function delivery(store: EventDatabase, id: string): DeliveryRow | undefined {
   return store.database
     .prepare(
       `SELECT id, account_id, rule_id, rule_version, target_id, target_version, encrypted_record, expires_at,
-              switch_generation, target_key FROM deliveries WHERE id = ?`,
+              switch_generation, target_key, whatsapp_message_id FROM deliveries WHERE id = ?`,
     )
     .get(id) as DeliveryRow | undefined;
 }

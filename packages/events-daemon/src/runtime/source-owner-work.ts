@@ -5,7 +5,7 @@ import type { ResendEventReader } from '@agentcomms/resend';
 import type { SlackEventConversation, SlackEventSource } from '@agentcomms/slack';
 import { type ChatKind, chatKindOf, type WhatsAppEventOperations } from '@agentcomms/whatsapp';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
-import type { SourceOptions, WhatsAppSourceOptions } from '../domain/source-options.ts';
+import type { SourceOptions } from '../domain/source-options.ts';
 import {
   assertSourceWriteStillLive,
   type SourceScope,
@@ -24,6 +24,7 @@ import {
   type SlackSourceMessage,
 } from '../sources/slack.ts';
 import { SlackReplyDrains } from '../sources/slack-replies.ts';
+import { isSourceScopeFenced } from '../sources/source-scope-fence.ts';
 import { rawWhatsAppMessageId, type WhatsAppRawMessage, WhatsAppSourceWorker } from '../sources/whatsapp.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { EventRecordCipher } from '../store/records.ts';
@@ -279,6 +280,7 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
   // The latter supplies the current list visibility; a list edit between the copy and this lock is therefore a
   // tightening, never an opportunity to retain a row the new list hides.
   await accountLive();
+  const whatsappRules = await sourceRulesForWhatsAppAccount(input, scope.accountId);
   const captured = await input.whatsappEventOperations.withEventSnapshot(
     { accountId: scope.accountId },
     async (value) => value,
@@ -296,8 +298,19 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
         await accountLive();
         return encrypted;
       },
-      rules: () => rules().map((rule) => ({ ...rule, activationId: rule.activationId })),
-      sourceOptions: sourceOptionsForScope(rules(), scope),
+      // A WhatsApp snapshot is account-wide. Freeze debts for every active rule whose selector may cover a tuple,
+      // rather than only the scheduler scope that won this turn.
+      rules: () =>
+        whatsappRules.map((rule) => ({
+          ruleId: rule.ruleId,
+          ruleVersion: rule.ruleVersion,
+          ingestRetentionMs: rule.ingestRetentionMs,
+          activationId: rule.activationId,
+          options: rule.options.channel === 'whatsapp' ? rule.options : undefined,
+          activationPointIdentities: rule.activationPointIdentities,
+        })),
+      scopeIsFenced: (scopeId) =>
+        isSourceScopeFenced(input.store.database, { source: 'whatsapp', accountId: scope.accountId, scopeId }),
       assertWrite,
       now: input.now,
       failpoint: input.failpoint,
@@ -587,11 +600,6 @@ function resendStatusEvent(scope: SourceScope, change: ResendStatusChange): Reco
   };
 }
 
-function sourceOptionsForScope(rules: readonly RuleDebt[], _scope: SourceScope): WhatsAppSourceOptions | undefined {
-  const candidate = rules.find((rule) => rule.options.channel === 'whatsapp')?.options;
-  return candidate?.channel === 'whatsapp' ? candidate : undefined;
-}
-
 async function admitWhatsAppStages(
   input: SourceOwnerWorkOptions,
   scope: SourceScope,
@@ -638,6 +646,106 @@ async function admitWhatsAppStages(
         .run(id, scope.accountId, row.message_id);
     });
   }
+}
+
+interface WhatsAppRuleDebt extends RuleDebt {
+  readonly activationPointIdentities: ReadonlyMap<string, ReadonlySet<string>>;
+}
+
+/** Every active WhatsApp rule for this account contributes its own tuple debt, independent of scheduler scope. */
+async function sourceRulesForWhatsAppAccount(
+  input: SourceOwnerWorkOptions,
+  accountId: string,
+): Promise<readonly WhatsAppRuleDebt[]> {
+  const source = input.sourceRegistry.require('whatsapp');
+  const found = new Map<string, RuleDebt>();
+  for (const row of input.store.database
+    .prepare(
+      `SELECT rule_versions.document, active_versions.current_cutover_id
+         FROM active_versions JOIN rule_versions
+           ON rule_versions.rule_id = active_versions.object_id AND rule_versions.version = active_versions.version
+        WHERE active_versions.kind = 'rule'`,
+    )
+    .all() as unknown as Array<StoredRule & { current_cutover_id: string | null }>) {
+    const rule = JSON.parse(row.document) as CanonicalFullRuleDocument;
+    if (
+      rule.source.channel !== 'whatsapp' ||
+      !rule.source.accountIds.includes(accountId) ||
+      row.current_cutover_id === null
+    )
+      continue;
+    const options = source.canonicalise(rule.source.options);
+    const pointIdentities = new Map<string, ReadonlySet<string>>();
+    let malformed = false;
+    for (const scope of source.scopesFor({ accountId, options })) {
+      const point = input.store.database
+        .prepare(
+          `SELECT encrypted_position FROM rule_activation_points
+            WHERE activation_id = ? AND rule_id = ? AND rule_version = ? AND source = 'whatsapp'
+              AND account_id = ? AND position_scope = ?`,
+        )
+        .get(row.current_cutover_id, rule.ruleId, rule.version, accountId, scope.scopeId) as
+        | { encrypted_position: Uint8Array }
+        | undefined;
+      if (point === undefined) {
+        malformed = true;
+        break;
+      }
+      const position = JSON.parse(
+        (
+          await input.cipher.decrypt(
+            whatsappActivationPointLocation(
+              row.current_cutover_id,
+              rule.ruleId,
+              rule.version,
+              accountId,
+              scope.scopeId,
+            ),
+            point.encrypted_position,
+          )
+        ).toString('utf8'),
+      ) as { baselineIdentities?: unknown };
+      if (
+        !Array.isArray(position.baselineIdentities) ||
+        !position.baselineIdentities.every((identity) => typeof identity === 'string')
+      ) {
+        malformed = true;
+        break;
+      }
+      pointIdentities.set(scope.scopeId, new Set(position.baselineIdentities));
+    }
+    if (malformed) throw new CommsError('BAD_DATA', 'a WhatsApp rule activation point is malformed');
+    found.set(`${rule.ruleId}@${rule.version}`, {
+      ruleId: rule.ruleId,
+      ruleVersion: rule.version,
+      ingestRetentionMs: rule.retention.ingestMs,
+      eventType: rule.event.type,
+      activationId: row.current_cutover_id,
+      options,
+      activationPointIdentities: pointIdentities,
+    } as WhatsAppRuleDebt);
+  }
+  return [...found.values()] as WhatsAppRuleDebt[];
+}
+
+function whatsappActivationPointLocation(
+  activationId: string,
+  ruleId: string,
+  ruleVersion: number,
+  accountId: string,
+  positionScope: string,
+) {
+  return {
+    table: 'rule_activation_points',
+    column: 'encryptedPosition',
+    key: [
+      { type: 'text' as const, value: activationId },
+      { type: 'text' as const, value: ruleId },
+      { type: 'integer' as const, value: ruleVersion },
+      { type: 'text' as const, value: accountId },
+      { type: 'text' as const, value: positionScope },
+    ],
+  };
 }
 
 function whatsappEvent(scope: SourceScope, message: WhatsAppRawMessage, now: number): Record<string, unknown> {

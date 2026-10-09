@@ -233,6 +233,8 @@ async function startOwnerWithLock(
     cipher,
     approvals: core.approvals,
     config: core.config,
+    whatsappVisibilityFence: whatsappComposition.visibilityFence,
+    hasConcreteWhatsAppVisibilityFence: true,
     secretReader: async ({ targetId, targetVersion, targetDigest, purpose }) =>
       (
         await eventSecrets.readLiveGenerations({

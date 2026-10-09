@@ -35,8 +35,8 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
   {
     id: 'stage-after-pointer',
     file: 'sources/whatsapp.ts',
-    before: 'this.commitCandidate(snapshot.visibility, generation, stageable, debts, encrypted);',
-    after: 'this.commitCandidate(snapshot.visibility, generation, stageable, debts, new Map());',
+    before: 'this.commitCandidate(snapshot.visibility, generation, stageable, encrypted);',
+    after: 'this.commitCandidate(snapshot.visibility, generation, stageable, new Map());',
     cell: 'W:first-enabled-stages-before-copy-dispose',
     exportName: 'WhatsAppSourceWorker',
   },
@@ -44,7 +44,7 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
     id: 'whatsapp-early-head',
     file: 'sources/whatsapp.ts',
     before: 'const before = this.currentHead();',
-    after: `this.commitCandidate(snapshot.visibility, generation, [], debts, encrypted);
+    after: `this.commitCandidate(snapshot.visibility, generation, [], encrypted);
       const before = this.currentHead();`,
     cell: 'W:first-enabled-stages-before-copy-dispose',
     exportName: 'WhatsAppSourceWorker',
