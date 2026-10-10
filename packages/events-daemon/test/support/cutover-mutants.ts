@@ -420,11 +420,24 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
     exportName: 'SlackReplyReconciler',
   },
   {
-    id: 'slack-aged-drain-scans-from-null-cursor',
+    id: 'slack-drain-rejects-observed-old-parent-by-timestamp',
     file: 'sources/slack-replies.ts',
-    before: 'const aged = !isSlackReplyEligible(row.thread_ts, barrier.value.through, this.#nowTimestamp());',
-    after: 'const aged = false;',
-    cell: 'S:replace-aged-pending-reply-keeps-old-debt',
+    before: 'if (compareSlackTimestamp(input.parentTs, barrier.value.through) > 0) return;',
+    after: `if (
+      compareSlackTimestamp(input.parentTs, barrier.value.through) > 0 ||
+      !isSlackReplyEligible(input.parentTs, barrier.value.through, _wallClockSlackTimestamp(this.#now()))
+    )
+      return;`,
+    cell: 'S:replace-observed-old-parent-drains-replies',
+    exportName: 'SlackReplyDrains',
+  },
+  {
+    id: 'slack-aged-drain-derives-aged-from-timestamp',
+    file: 'sources/slack-replies.ts',
+    before: 'const aged = barrier.value.agedParents.includes(row.thread_ts);',
+    after:
+      'const aged = !isSlackReplyEligible(row.thread_ts, barrier.value.through, _wallClockSlackTimestamp(this.#now()));',
+    cell: 'S:replace-observed-old-parent-drains-replies',
     exportName: 'SlackReplyDrains',
   },
   {
