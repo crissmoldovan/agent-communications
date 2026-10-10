@@ -460,6 +460,175 @@
         "find": "if (!process.exitCode) process.stdout.write(`Verified ${cases.length} desktop mutation pair(s)\\n`);",
         "replace": "spawnSync(process.execPath, ['apps/desktop/test/mutations/run.mjs', '--all'], { cwd: root });\\nif (!process.exitCode) process.stdout.write(`Verified ${cases.length} desktop mutation pair(s)\\n`);"
       }
+    },
+    {
+      "id": "desktop-tag-isolation",
+      "group": "task-3",
+      "test": "test/desktop-workflows.test.mjs",
+      "testName": "desktop-tag-isolation",
+      "production": ".github/workflows/desktop-release.yml",
+      "import": "../.github/workflows/desktop-release.yml",
+      "mutation": {
+        "file": ".github/workflows/desktop-release.yml",
+        "find": "\"desktop-v*\"",
+        "replace": "\"v*\""
+      }
+    },
+    {
+      "id": "desktop-matrix-completeness",
+      "group": "task-3",
+      "test": "test/desktop-workflows.test.mjs",
+      "testName": "desktop-workflow-matrix",
+      "production": ".github/workflows/desktop.yml",
+      "import": "../.github/workflows/desktop.yml",
+      "mutation": {
+        "file": ".github/workflows/desktop.yml",
+        "find": "\"windows-latest\",\n            \"ubuntu-latest\"",
+        "replace": "\"windows-latest\""
+      }
+    },
+    {
+      "id": "desktop-workflow-public-registry",
+      "group": "task-3",
+      "test": "test/desktop-workflows.test.mjs",
+      "testName": "desktop-workflow-public-registry",
+      "production": ".github/workflows/desktop.yml",
+      "import": "../.github/workflows/desktop.yml",
+      "mutation": {
+        "file": ".github/workflows/desktop.yml",
+        "find": "pnpm config get registry",
+        "replace": "pnpm config get ignored-registry"
+      }
+    },
+    {
+      "id": "desktop-workflow-no-registry-token",
+      "group": "task-3",
+      "test": "test/desktop-workflows.test.mjs",
+      "testName": "desktop-workflow-no-registry-token",
+      "production": ".github/workflows/desktop.yml",
+      "import": "../.github/workflows/desktop.yml",
+      "mutation": {
+        "file": ".github/workflows/desktop.yml",
+        "find": "\"npm_config_registry\": \"https://registry.npmjs.org/\"",
+        "replace": "\"NODE_AUTH_TOKEN\": \"${{ secrets.REGISTRY_TOKEN }}\", \"npm_config_registry\": \"https://registry.npmjs.org/\""
+      }
+    },
+    {
+      "id": "desktop-workflow-no-private-registry",
+      "group": "task-3",
+      "test": "test/desktop-workflows.test.mjs",
+      "testName": "desktop-workflow-no-private-registry",
+      "production": ".github/workflows/desktop.yml",
+      "import": "../.github/workflows/desktop.yml",
+      "mutation": {
+        "file": ".github/workflows/desktop.yml",
+        "find": "\"npm_config_registry\": \"https://registry.npmjs.org/\"",
+        "replace": "\"npm_config_registry\": \"https://private.registry.example.test/\""
+      }
+    },
+    {
+      "id": "desktop-workflow-no-registry-auth",
+      "group": "task-3",
+      "test": "test/desktop-workflows.test.mjs",
+      "testName": "desktop-workflow-no-registry-auth",
+      "production": ".github/workflows/desktop.yml",
+      "import": "../.github/workflows/desktop.yml",
+      "mutation": {
+        "file": ".github/workflows/desktop.yml",
+        "find": "\"npm_config_registry\": \"https://registry.npmjs.org/\"",
+        "replace": "\"npm_config_registry\": \"https://user:pass@registry.npmjs.org/\""
+      }
+    },
+    {
+      "id": "desktop-prerelease-only",
+      "group": "task-3",
+      "test": "test/desktop-workflows.test.mjs",
+      "testName": "desktop-prerelease-only",
+      "production": ".github/workflows/desktop-release.yml",
+      "import": "../.github/workflows/desktop-release.yml",
+      "mutation": {
+        "file": ".github/workflows/desktop-release.yml",
+        "find": "--prerelease --latest=false --verify-tag",
+        "replace": "--latest=false --verify-tag"
+      }
+    },
+    {
+      "id": "desktop-no-signing-secret",
+      "group": "task-3",
+      "test": "test/desktop-workflows.test.mjs",
+      "testName": "desktop-no-signing-secret",
+      "production": ".github/workflows/desktop-release.yml",
+      "import": "../.github/workflows/desktop-release.yml",
+      "mutation": {
+        "file": ".github/workflows/desktop-release.yml",
+        "find": "\"GH_TOKEN\": \"${{ github.token }}\"",
+        "replace": "\"GH_TOKEN\": \"${{ github.token }}\", \"APPLE_CERTIFICATE\": \"${{ secrets.APPLE_CERTIFICATE }}\""
+      }
+    },
+    {
+      "id": "desktop-actions-pinned",
+      "group": "task-3",
+      "test": "test/desktop-workflows.test.mjs",
+      "testName": "desktop-actions-pinned",
+      "production": ".github/workflows/desktop-release.yml",
+      "import": "../.github/workflows/desktop-release.yml",
+      "mutation": {
+        "file": ".github/workflows/desktop-release.yml",
+        "find": "\"uses\": \"actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131\"",
+        "replace": "\"uses\": \"actions/download-artifact@v7\""
+      }
+    },
+    {
+      "id": "desktop-hash-asset",
+      "group": "task-3",
+      "test": "test/desktop-workflows.test.mjs",
+      "testName": "desktop-hash-asset",
+      "production": ".github/workflows/desktop-release.yml",
+      "import": "../.github/workflows/desktop-release.yml",
+      "mutation": {
+        "file": ".github/workflows/desktop-release.yml",
+        "find": "files.map((file) =>",
+        "replace": "files.slice(0, 1).map((file) =>"
+      }
+    },
+    {
+      "id": "desktop-no-linux-upload",
+      "group": "task-3",
+      "test": "test/desktop-workflows.test.mjs",
+      "testName": "desktop-no-linux-upload",
+      "production": ".github/workflows/desktop.yml",
+      "import": "../.github/workflows/desktop.yml",
+      "mutation": {
+        "file": ".github/workflows/desktop.yml",
+        "find": "\"steps\": [",
+        "replace": "\"steps\": [{ \"uses\": \"actions/upload-artifact@v6\", \"if\": \"runner.os == 'Linux'\", \"with\": { \"name\": \"linux\", \"path\": \"apps/desktop/src-tauri/target/release/bundle/deb/*\" } },"
+      }
+    },
+    {
+      "id": "desktop-launch-docs",
+      "group": "task-3",
+      "test": "apps/desktop/test/release-notes.test.mjs",
+      "testName": "desktop-launch-docs",
+      "production": "apps/desktop/RELEASE_NOTES.md",
+      "import": "../RELEASE_NOTES.md",
+      "mutation": {
+        "file": "apps/desktop/RELEASE_NOTES.md",
+        "find": "**Open Anyway**",
+        "replace": "**Open**"
+      }
+    },
+    {
+      "id": "desktop-windows-probe-launcher",
+      "group": "task-3",
+      "test": "test/desktop-workflows.test.mjs",
+      "testName": "desktop-windows-probe-launcher",
+      "production": ".github/workflows/desktop.yml",
+      "import": "../.github/workflows/desktop.yml",
+      "mutation": {
+        "file": ".github/workflows/desktop.yml",
+        "find": "export DESKTOP_PROBE_BINARY=",
+        "replace": "export DESKTOP_PROBE_UNUSED="
+      }
     }
   ]
 }

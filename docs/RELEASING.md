@@ -309,6 +309,79 @@ they import from `src/`.
   out from that commit, publishes nothing, proves nothing, confirms and makes the release. On any other commit it
   refuses.
 
+## Desktop prereleases
+
+The private desktop has its own version. Only a `desktop-v<version>` tag triggers `desktop-release.yml`; it must
+equal `desktop-v` followed by `apps/desktop/package.json`'s version and still resolve to the checked commit.
+The workflow repeats `desktop.yml`'s complete macOS, Windows and Linux gate, then bundles macOS universal
+with `signingIdentity: "-"` and Windows x64 NSIS unsigned. Only those two artifacts are downloaded by the single
+release job, which creates a sorted `SHA256SUMS` attachment and requires both first-launch sections in
+`apps/desktop/RELEASE_NOTES.md`, the exact notes source. Existing non-prereleases are refused; new and updated
+releases always set prerelease and explicitly disable latest. There are no dispatch inputs or alternate branches
+for wider publication. Tag checks are repeated immediately before publication; never move a released desktop tag.
+
+This does not change `release.yml`'s npm `v*` path or the event-package holds described above.
+Both desktop workflows name every action by the commit that was reviewed, never by a version tag a publisher can
+move: `actions/checkout` v7 is `3d3c42e5aac5ba805825da76410c181273ba90b1`, `actions/setup-node` v7
+`949feb2413d6458794dcd2491c4babbbce0c15c1`, `actions/upload-artifact` v6 `b7c566a772e6b6bfb58ed0dc250532a479d7789f`,
+`actions/download-artifact` v7 `37930b1c2abaa49bbe596cd826c3c89aef350131` and `pnpm/action-setup` v6
+`0977fd99725f1db4007ccb2928dbb4e90d06cc86` (resolved 2026-10-10). To move one, resolve the new tag's commit, review
+what changed, and update the pin; `desktop-actions-pinned` refuses a tag.
+Before tagging, review `apps/desktop/THIRD_PARTY_LICENSES`, generated offline from the checked-in pnpm and Cargo
+locks and cached sources. Its missing-text inventory currently names 37 crate archives that omit their licence
+files; obtain and review those original grants before distributing. The static CI inventory check does not prove
+those missing texts have been supplied.
+
+### Before installing
+
+This unsigned prerelease is for the owner and a few named colleagues. It requires a separate daemon installation
+and a running, compatible local event daemon; the desktop does not bundle, install or start that daemon.
+The event library and daemon remain held from npm release. Obtain the checked daemon build from the maintainer;
+do not interpret a desktop tag as lifting those holds. The current shell has inert Settings and Secrets windows;
+daemon attachment arrives in the later Phase C tasks.
+
+Download the artifact and `SHA256SUMS` from the same `desktop-v<version>` prerelease. Before opening or installing,
+compute its SHA-256 and compare the complete hexadecimal result with the line for that exact filename in
+`SHA256SUMS`. Stop if they differ. The checksum detects mismatched or corrupted downloads; it is not publisher
+code signing.
+
+On macOS:
+
+```sh
+shasum -a 256 desktop-macos-universal.app.zip
+```
+
+On Windows (PowerShell):
+
+```powershell
+Get-FileHash .\desktop-windows-x64-setup.exe -Algorithm SHA256
+```
+
+### macOS first launch
+
+Extract the universal app ZIP, move Agent Communications.app to Applications, open the app once and dismiss the
+warning. In **System Settings**, **Privacy & Security**, under Security, choose **Open Anyway** (offered for
+about an hour after that attempt) and enter the login password. A new version may need the same step again.
+The app is signed ad hoc, as Apple silicon requires, and is not notarised.
+
+### Windows first launch
+
+Run the x64 NSIS installer. At **Windows protected your PC**, choose **More info**, then **Run anyway**.
+Each new unsigned version starts with no SmartScreen reputation, so this step can recur. Enterprise policy can
+remove the choice. Windows 11's Smart App Control blocks unsigned files with no reputation: a machine with it on
+cannot run version 1. Do not disable organizational or operating-system protections to install it.
+
+### Version 1 distribution limits
+
+There is no in-app updater; download and install each new version by hand and compare its checksum again.
+There is no Linux version-1 artifact, although Linux must pass the same CI build and webview gates.
+
+Any wider release beyond the owner and named colleagues, including a non-prerelease, a link outside that group,
+a store listing or an auto-update, first requires an Apple Developer ID signature: notarise and staple the macOS
+bundle, and sign Windows with a code-signing certificate. Those future credentials belong only in a protected
+release environment. The current workflows contain no signing credentials and can publish only a prerelease,
+never mark it latest.
+
 ## Do not run agents in this checkout during a release
 
 Subagents share the working tree. One reading history with `git checkout` will move the branch under you, and a

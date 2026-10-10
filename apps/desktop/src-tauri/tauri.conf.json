@@ -9,6 +9,14 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420"
   },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "nsis", "deb"],
+    "createUpdaterArtifacts": false,
+    "resources": ["../THIRD_PARTY_LICENSES"],
+    "macOS": { "signingIdentity": "-" },
+    "windows": { "certificateThumbprint": null }
+  },
   "app": {
     "windows": [],
     "withGlobalTauri": true,

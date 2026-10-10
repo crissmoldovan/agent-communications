@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/workspace.test.mjs test/csp-navigation.test.mjs test/production-probe-parser.test.mjs",
+    "test": "node --test test/workspace.test.mjs test/csp-navigation.test.mjs test/production-probe-parser.test.mjs test/release-notes.test.mjs",
     "test:e2e": "node --import ../../test/helpers/loopback-seal-preload.mjs test/e2e/production-probe.mjs",
     "tauri:build": "tauri build"
   },

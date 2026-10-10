@@ -3,6 +3,14 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+The desktop now has macOS, Windows and Linux CI build and actual-webview checks. Desktop tags produce only
+unsigned prereleases for the owner and named colleagues: an ad-hoc-signed universal macOS app and an unsigned
+Windows x64 installer, with SHA-256 checksums and first-launch instructions. A separate compatible daemon is
+required; there is no in-app updater or Linux version-1 download. Wider distribution requires macOS Developer ID
+signing, notarisation and stapling plus Windows code signing. The npm release path and event-package holds are unchanged.
+
 ## 0.15.2
 
 **A Slack post, reaction, edit or deletion that Slack rate-limits waits and tries again, as Gmail and Resend sends do

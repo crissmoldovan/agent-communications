@@ -1,0 +1,107 @@
+{
+  "name": "Desktop",
+  "on": {
+    "push": {
+      "paths": [
+        "apps/desktop/**",
+        ".github/workflows/desktop*.yml",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "package.json",
+        "test/**",
+        "scripts/verify-desktop-mutations.mjs"
+      ]
+    },
+    "pull_request": {
+      "paths": [
+        "apps/desktop/**",
+        ".github/workflows/desktop*.yml",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "package.json",
+        "test/**",
+        "scripts/verify-desktop-mutations.mjs"
+      ]
+    },
+    "workflow_call": {}
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "jobs": {
+    "verify": {
+      "name": "Desktop checks",
+      "runs-on": "${{ matrix.os }}",
+      "strategy": {
+        "fail-fast": false,
+        "matrix": {
+          "os": [
+            "macos-latest",
+            "windows-latest",
+            "ubuntu-latest"
+          ]
+        }
+      },
+      "defaults": {
+        "run": {
+          "shell": "bash"
+        }
+      },
+      "env": {
+        "npm_config_registry": "https://registry.npmjs.org/"
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "persist-credentials": false,
+            "ref": "${{ github.sha }}"
+          }
+        },
+        {
+          "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86"
+        },
+        {
+          "uses": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+          "with": {
+            "node-version": "22.18.0",
+            "cache": "pnpm"
+          }
+        },
+        {
+          "name": "Assert public registry without credentials",
+          "run": "set -euo pipefail\ntest \"$(pnpm config get registry)\" = \"https://registry.npmjs.org/\"\nexport DESKTOP_NPM_USERCONFIG=\"$(pnpm config get userconfig)\"\nexport DESKTOP_NPM_GLOBALCONFIG=\"$(pnpm config get globalconfig)\"\nnode --input-type=module <<'NODE'\nimport { existsSync, readdirSync, readFileSync } from 'node:fs';\nimport { homedir } from 'node:os';\nimport { dirname, join, resolve } from 'node:path';\nconst publicRegistry = 'https://registry.npmjs.org/';\nfor (const [key, value] of Object.entries(process.env)) {\n  if (/(?:node|npm|yarn).*?(?:token|auth|password)/i.test(key)) throw new Error('Registry credentials are forbidden');\n  if (/(?:npm|yarn).*registry/i.test(key) && value !== publicRegistry) throw new Error('Private registry environment is forbidden');\n}\nconst configs = new Set([process.env.DESKTOP_NPM_USERCONFIG, process.env.DESKTOP_NPM_GLOBALCONFIG, join(homedir(), '.npmrc')]);\nfor (let directory = resolve('.');; directory = dirname(directory)) {\n  configs.add(join(directory, '.npmrc'));\n  if (directory === dirname(directory)) break;\n}\nfunction visit(directory) {\n  for (const entry of readdirSync(directory, { withFileTypes: true })) {\n    if (['node_modules', '.git', 'target', 'dist', '.pnpm-store'].includes(entry.name) || entry.isSymbolicLink()) continue;\n    const file = join(directory, entry.name);\n    if (entry.isDirectory()) visit(file);\n    else if (entry.name === '.npmrc') configs.add(file);\n  }\n}\nvisit('.');\nfor (const file of configs) {\n  if (!file || !existsSync(file)) continue;\n  for (const line of readFileSync(file, 'utf8').split(/\\r?\\n/)) {\n    const text = line.trim();\n    if (!text || /^[#;]/.test(text)) continue;\n    if (/auth|token|password|username|cert|keyfile/i.test(text)) throw new Error('Auth-bearing npm configuration is forbidden');\n    const [key, ...rest] = text.split('=');\n    if (/registry/i.test(key) && rest.join('=').trim() !== publicRegistry) throw new Error('Private registry configuration is forbidden');\n  }\n}\nNODE"
+        },
+        {
+          "run": "pnpm install --frozen-lockfile"
+        },
+        {
+          "name": "Linux Tauri system prerequisites",
+          "if": "runner.os == 'Linux'",
+          "run": "sudo apt-get update\nsudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf xvfb"
+        },
+        {
+          "name": "Rust toolchain",
+          "run": "rustup toolchain install stable --profile minimal --component rustfmt --component clippy\nrustup default stable"
+        },
+        {
+          "name": "Frontend gates",
+          "run": "pnpm --filter @agentcomms/desktop build\npnpm --filter @agentcomms/desktop typecheck\npnpm --filter @agentcomms/desktop test\nnode --test test/desktop-workflows.test.mjs apps/desktop/test/release-notes.test.mjs\nnode apps/desktop/test/mutations/run.mjs --group task-3"
+        },
+        {
+          "name": "Rust gates",
+          "working-directory": "apps/desktop/src-tauri",
+          "run": "cargo fmt --all -- --check\ncargo clippy --all-targets --all-features -- -D warnings\ncargo test --all-targets --all-features"
+        },
+        {
+          "name": "Bundled actual webview no-egress probe",
+          "run": "set -euo pipefail\ncase \"$RUNNER_OS\" in\n  macOS) bundle=app; probe=\"apps/desktop/src-tauri/target/release/bundle/macos/Agent Communications.app/Contents/MacOS/agentcomms-desktop\" ;;\n  Windows) bundle=nsis; probe=\"apps/desktop/src-tauri/target/release/agentcomms-desktop.exe\" ;;\n  Linux) bundle=deb; probe=\"apps/desktop/src-tauri/target/release/agentcomms-desktop\" ;;\n  *) exit 1 ;;\nesac\nVITE_NO_EGRESS_PROBE=1 CARGO_NET_OFFLINE=true pnpm --filter @agentcomms/desktop tauri:build --features no-egress-probe --no-sign --bundles \"$bundle\"\nprobe_binary=$(node -p 'require(\"node:path\").resolve(process.argv[1])' \"$probe\")\nexport DESKTOP_PROBE_BINARY=\"$probe_binary\"\nif [ \"$RUNNER_OS\" = Linux ]; then\n  xvfb-run -a pnpm --filter @agentcomms/desktop test:e2e -- --case no-egress\nelse\n  pnpm --filter @agentcomms/desktop test:e2e -- --case no-egress\nfi"
+        },
+        {
+          "name": "Unsigned production bundle",
+          "run": "case \"$RUNNER_OS\" in\n  macOS) bundle=app ;;\n  Windows) bundle=nsis ;;\n  Linux) bundle=deb ;;\n  *) exit 1 ;;\nesac\npnpm --filter @agentcomms/desktop tauri:build --no-sign --bundles \"$bundle\""
+        }
+      ]
+    }
+  }
+}

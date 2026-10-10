@@ -1,0 +1,181 @@
+{
+  "name": "Desktop prerelease",
+  "on": {
+    "push": {
+      "tags": [
+        "desktop-v*"
+      ]
+    }
+  },
+  "permissions": {},
+  "concurrency": {
+    "group": "desktop-release-${{ github.ref }}",
+    "cancel-in-progress": false
+  },
+  "jobs": {
+    "validate": {
+      "runs-on": "ubuntu-latest",
+      "permissions": {
+        "contents": "read"
+      },
+      "defaults": {
+        "run": {
+          "shell": "bash"
+        }
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "persist-credentials": false,
+            "ref": "${{ github.sha }}"
+          }
+        },
+        {
+          "name": "Validate desktop version and immutable tag",
+          "run": "set -euo pipefail\ntest \"$GITHUB_EVENT_NAME\" = push\ntest \"$GITHUB_REF_TYPE\" = tag\nversion=$(node -p \"require('./apps/desktop/package.json').version\")\ntest \"$GITHUB_REF_NAME\" = \"desktop-v$version\"\ntest \"$(git rev-parse HEAD)\" = \"$GITHUB_SHA\"\nremote=$(git ls-remote origin \"refs/tags/$GITHUB_REF_NAME\" \"refs/tags/$GITHUB_REF_NAME^{}\")\ncommit=$(printf '%s\\n' \"$remote\" | awk -v tag=\"refs/tags/$GITHUB_REF_NAME\" '$2 == tag { direct=$1 } $2 == tag \"^{}\" { peeled=$1 } END { print peeled ? peeled : direct }')\ntest -n \"$commit\"\ntest \"$commit\" = \"$GITHUB_SHA\""
+        }
+      ]
+    },
+    "verify": {
+      "needs": [
+        "validate"
+      ],
+      "permissions": {
+        "contents": "read"
+      },
+      "uses": "./.github/workflows/desktop.yml"
+    },
+    "bundle": {
+      "needs": [
+        "validate",
+        "verify"
+      ],
+      "runs-on": "${{ matrix.os }}",
+      "permissions": {
+        "contents": "read"
+      },
+      "strategy": {
+        "fail-fast": false,
+        "matrix": {
+          "os": [
+            "macos-latest",
+            "windows-latest"
+          ]
+        }
+      },
+      "defaults": {
+        "run": {
+          "shell": "bash"
+        }
+      },
+      "env": {
+        "npm_config_registry": "https://registry.npmjs.org/"
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "persist-credentials": false,
+            "ref": "${{ github.sha }}"
+          }
+        },
+        {
+          "uses": "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86"
+        },
+        {
+          "uses": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+          "with": {
+            "node-version": "22.18.0",
+            "cache": "pnpm"
+          }
+        },
+        {
+          "name": "Assert public registry without credentials",
+          "run": "set -euo pipefail\ntest \"$(pnpm config get registry)\" = \"https://registry.npmjs.org/\"\nexport DESKTOP_NPM_USERCONFIG=\"$(pnpm config get userconfig)\"\nexport DESKTOP_NPM_GLOBALCONFIG=\"$(pnpm config get globalconfig)\"\nnode --input-type=module <<'NODE'\nimport { existsSync, readdirSync, readFileSync } from 'node:fs';\nimport { homedir } from 'node:os';\nimport { dirname, join, resolve } from 'node:path';\nconst publicRegistry = 'https://registry.npmjs.org/';\nfor (const [key, value] of Object.entries(process.env)) {\n  if (/(?:node|npm|yarn).*?(?:token|auth|password)/i.test(key)) throw new Error('Registry credentials are forbidden');\n  if (/(?:npm|yarn).*registry/i.test(key) && value !== publicRegistry) throw new Error('Private registry environment is forbidden');\n}\nconst configs = new Set([process.env.DESKTOP_NPM_USERCONFIG, process.env.DESKTOP_NPM_GLOBALCONFIG, join(homedir(), '.npmrc')]);\nfor (let directory = resolve('.');; directory = dirname(directory)) {\n  configs.add(join(directory, '.npmrc'));\n  if (directory === dirname(directory)) break;\n}\nfunction visit(directory) {\n  for (const entry of readdirSync(directory, { withFileTypes: true })) {\n    if (['node_modules', '.git', 'target', 'dist', '.pnpm-store'].includes(entry.name) || entry.isSymbolicLink()) continue;\n    const file = join(directory, entry.name);\n    if (entry.isDirectory()) visit(file);\n    else if (entry.name === '.npmrc') configs.add(file);\n  }\n}\nvisit('.');\nfor (const file of configs) {\n  if (!file || !existsSync(file)) continue;\n  for (const line of readFileSync(file, 'utf8').split(/\\r?\\n/)) {\n    const text = line.trim();\n    if (!text || /^[#;]/.test(text)) continue;\n    if (/auth|token|password|username|cert|keyfile/i.test(text)) throw new Error('Auth-bearing npm configuration is forbidden');\n    const [key, ...rest] = text.split('=');\n    if (/registry/i.test(key) && rest.join('=').trim() !== publicRegistry) throw new Error('Private registry configuration is forbidden');\n  }\n}\nNODE"
+        },
+        {
+          "run": "pnpm install --frozen-lockfile"
+        },
+        {
+          "name": "Rust release toolchain",
+          "run": "rustup toolchain install stable --profile minimal\nrustup default stable"
+        },
+        {
+          "name": "macOS universal ad-hoc bundle",
+          "if": "runner.os == 'macOS'",
+          "run": "rustup target add aarch64-apple-darwin x86_64-apple-darwin\npnpm --filter @agentcomms/desktop tauri:build --target universal-apple-darwin --bundles app\nmkdir -p release-assets\nditto -c -k --sequesterRsrc --keepParent \"apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/Agent Communications.app\" release-assets/desktop-macos-universal.app.zip"
+        },
+        {
+          "name": "Windows unsigned x64 NSIS installer",
+          "if": "runner.os == 'Windows'",
+          "run": "rustup target add x86_64-pc-windows-msvc\npnpm --filter @agentcomms/desktop tauri:build --target x86_64-pc-windows-msvc --bundles nsis --no-sign\nmkdir -p release-assets\ninstallers=(apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe)\ntest \"${#installers[@]}\" -eq 1\ncp \"${installers[0]}\" release-assets/desktop-windows-x64-setup.exe"
+        },
+        {
+          "uses": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",
+          "with": {
+            "name": "desktop-${{ matrix.os }}",
+            "path": "release-assets/*",
+            "if-no-files-found": "error",
+            "retention-days": 7
+          }
+        }
+      ]
+    },
+    "release": {
+      "needs": [
+        "validate",
+        "verify",
+        "bundle"
+      ],
+      "runs-on": "ubuntu-latest",
+      "permissions": {
+        "contents": "write"
+      },
+      "defaults": {
+        "run": {
+          "shell": "bash"
+        }
+      },
+      "env": {
+        "GH_TOKEN": "${{ github.token }}",
+        "GH_REPO": "${{ github.repository }}"
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "persist-credentials": false,
+            "ref": "${{ github.sha }}"
+          }
+        },
+        {
+          "uses": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+          "with": {
+            "node-version": "22.18.0"
+          }
+        },
+        {
+          "uses": "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131",
+          "with": {
+            "pattern": "desktop-*",
+            "path": "release-assets",
+            "merge-multiple": true
+          }
+        },
+        {
+          "name": "Require both artifacts, deterministic SHA-256 and first-launch notes",
+          "run": "set -euo pipefail\nnode --input-type=module <<'NODE'\nimport assert from 'node:assert/strict';\nimport { createHash } from 'node:crypto';\nimport { readFileSync, readdirSync, writeFileSync } from 'node:fs';\nconst files = ['desktop-macos-universal.app.zip', 'desktop-windows-x64-setup.exe'].sort();\nassert.deepEqual(readdirSync('release-assets').sort(), files);\nconst lines = files.map((file) => createHash('sha256').update(readFileSync('release-assets/' + file)).digest('hex') + '  ' + file);\nwriteFileSync('release-assets/SHA256SUMS', lines.join('\\n') + '\\n');\nconst notes = readFileSync('apps/desktop/RELEASE_NOTES.md', 'utf8');\nfor (const phrase of ['SHA-256', 'macOS', 'Open Anyway', 'Windows protected your PC', 'More info', 'Run anyway', 'Smart App Control']) {\n  assert.ok(notes.includes(phrase), 'Release notes lack required launch instruction: ' + phrase);\n}\nNODE"
+        },
+        {
+          "name": "Recheck immutable tag immediately before publication",
+          "run": "set -euo pipefail\ntest \"$GITHUB_EVENT_NAME\" = push\ntest \"$GITHUB_REF_TYPE\" = tag\nversion=$(node -p \"require('./apps/desktop/package.json').version\")\ntest \"$GITHUB_REF_NAME\" = \"desktop-v$version\"\ntest \"$(git rev-parse HEAD)\" = \"$GITHUB_SHA\"\nremote=$(git ls-remote origin \"refs/tags/$GITHUB_REF_NAME\" \"refs/tags/$GITHUB_REF_NAME^{}\")\ncommit=$(printf '%s\\n' \"$remote\" | awk -v tag=\"refs/tags/$GITHUB_REF_NAME\" '$2 == tag { direct=$1 } $2 == tag \"^{}\" { peeled=$1 } END { print peeled ? peeled : direct }')\ntest -n \"$commit\"\ntest \"$commit\" = \"$GITHUB_SHA\""
+        },
+        {
+          "name": "Publish prerelease only; never latest",
+          "run": "set -euo pipefail\nif gh release view \"$GITHUB_REF_NAME\" --json isPrerelease > \"$RUNNER_TEMP/desktop-release.json\"; then\n  node --input-type=module - \"$RUNNER_TEMP/desktop-release.json\" <<'NODE'\nimport assert from 'node:assert/strict';\nimport { readFileSync } from 'node:fs';\nassert.equal(JSON.parse(readFileSync(process.argv[2], 'utf8')).isPrerelease, true, 'Refuse to update a non-prerelease');\nNODE\n  gh release edit \"$GITHUB_REF_NAME\" --prerelease --latest=false --notes-file apps/desktop/RELEASE_NOTES.md\n  gh release upload \"$GITHUB_REF_NAME\" release-assets/* --clobber\nelse\n  gh release create \"$GITHUB_REF_NAME\" release-assets/* --prerelease --latest=false --verify-tag --target \"$GITHUB_SHA\" --title \"$GITHUB_REF_NAME\" --notes-file apps/desktop/RELEASE_NOTES.md\nfi"
+        }
+      ]
+    }
+  }
+}
