@@ -398,6 +398,128 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
     cell: 'W:timeout-discards-candidate-not-head',
     exportName: 'ActivationRuntime',
   },
+  {
+    id: 'resend-first-received-anchor-prefix',
+    file: 'sources/resend.ts',
+    before: 'const effectivePageIds = foundAnchor ? pageIds.slice(0, pageIds.indexOf(state.anchorId) + 1) : pageIds;',
+    after: 'const effectivePageIds = foundAnchor ? [] : pageIds;',
+    cell: 'R:first-enabled-received-and-status',
+    exportName: 'ResendReceivedSource',
+  },
+  {
+    id: 'resend-disabled-status-scope',
+    file: 'sources/resend.ts',
+    before: "return selected.kinds.map((kind) => ({ source: 'resend', accountId, scopeId: kind }));",
+    after:
+      "return selected.kinds.filter((kind) => kind === 'received').map((kind) => ({ source: 'resend', accountId, scopeId: kind }));",
+    cell: 'R:first-disabled-seeds-anchor-and-status',
+    exportName: 'createResendLocalEventSource',
+  },
+  {
+    id: 'resend-old-only-drain-cap',
+    file: 'sources/resend.ts',
+    before: `const cap = this.#drainCap;
+      if (cap !== undefined && state.cycleCapId === undefined) {`,
+    after: `const cap = undefined;
+      if (cap !== undefined && state.cycleCapId === undefined) {`,
+    cell: 'R:replace-old-only-drains-received-and-status',
+    exportName: 'ResendReceivedSource',
+  },
+  {
+    id: 'resend-new-only-replacement-plan',
+    file: 'runtime/activations.ts',
+    before: 'const points = [...this.#pointsForRule(oldRule), ...this.#pointsForRule(newRule)];',
+    after: 'const points = [...this.#pointsForRule(oldRule)];',
+    cell: 'R:replace-new-only-baselines-at-anchor',
+    exportName: 'ActivationRuntime',
+  },
+  {
+    id: 'resend-shared-swap-pointer',
+    file: 'runtime/activations.ts',
+    before:
+      "UPDATE active_versions SET version = ?, current_cutover_id = ?, activated_at = ? WHERE kind = 'rule' AND object_id = ?",
+    after:
+      "UPDATE active_versions SET version = ?, current_cutover_id = ?, activated_at = ? WHERE kind = 'rule' AND object_id = ? AND 0 = 1",
+    cell: 'R:replace-shared-one-version-per-occurrence',
+    exportName: 'ActivationRuntime',
+  },
+  {
+    id: 'resend-disabled-replacement-leaves-drain-open',
+    file: 'runtime/activations.ts',
+    before: 'const disabled = !this.#switch().enabled;',
+    after: 'const disabled = false;',
+    cell: 'R:disabled-replacement-marks-drains-complete',
+    exportName: 'ActivationRuntime',
+  },
+  {
+    id: 'resend-enable-readd-live-account-points',
+    file: 'runtime/activations.ts',
+    before: 'points.push(...this.#pointsForRule(planned.rule).filter((point) => live.has(point.accountId)));',
+    after: 'points.push(...this.#pointsForRule(planned.rule).filter(() => false));',
+    cell: 'R:enable-all-rebaselines-readded-account',
+    exportName: 'ActivationRuntime',
+  },
+  {
+    id: 'resend-tightening-keeps-old-pointer',
+    file: 'runtime/replacements.ts',
+    before:
+      "UPDATE active_versions SET version = ?, current_cutover_id = ?, activated_at = ? WHERE kind = 'rule' AND object_id = ?",
+    after:
+      "UPDATE active_versions SET version = ?, current_cutover_id = ?, activated_at = ? WHERE kind = 'rule' AND object_id = ? AND 0 = 1",
+    cell: 'R:tighten-preserves-anchor-and-status-seed',
+    exportName: 'applyDerivedTightening',
+  },
+  {
+    id: 'resend-disable-retains-source-points',
+    file: 'runtime/revocations.ts',
+    before: 'purgeRevokedRuleWork(database.database, ruleId, live);',
+    after: 'void ruleId; void live;',
+    cell: 'R:disable-or-remove-cancels-and-purges',
+    exportName: 'disableRule',
+  },
+  {
+    id: 'resend-remove-readd-keeps-old-point',
+    file: 'runtime/account-fence.ts',
+    before: 'const { accountId, source } = scope;',
+    after: "if (scope.source === 'resend') return;\n  const { accountId, source } = scope;",
+    cell: 'R:remove-readd-stays-dark',
+    exportName: 'purgeRemovedAccountWork',
+  },
+  {
+    id: 'resend-claim-recovery-skips-completion',
+    file: 'runtime/activations.ts',
+    before: `    for (const storedIntent of rows) {
+      let intent = storedIntent;`,
+    after: `    for (const storedIntent of [] as IntentRow[]) {
+      let intent = storedIntent;`,
+    cell: 'R:claim-recovery-resumes-same-cycle',
+    exportName: 'ActivationRuntime',
+  },
+  {
+    id: 'resend-timeout-failure-write',
+    file: 'runtime/activations.ts',
+    before: "UPDATE activation_intents SET status = 'failed', failure_code = ?, updated_at = ? WHERE id = ?",
+    after: "UPDATE activation_intents SET status = 'failed', failure_code = ?, updated_at = ? WHERE id = ? AND 0 = 1",
+    cell: 'R:timeout-keeps-anchor-and-retries',
+    exportName: 'ActivationRuntime',
+  },
+  {
+    id: 'resend-source-scope-fence',
+    file: 'sources/source-scope-fence.ts',
+    before: "AND activation_intents.status = 'pending-completion'",
+    after: 'AND 1 = 0',
+    cell: 'R:claimed-P-fences-received-and-status-worker',
+    exportName: 'initialCursorStillCurrent',
+  },
+  {
+    id: 'resend-initial-status-scope',
+    file: 'sources/resend.ts',
+    before: "return selected.kinds.map((kind) => ({ source: 'resend', accountId, scopeId: kind }));",
+    after:
+      "return selected.kinds.filter((kind) => kind === 'received').map((kind) => ({ source: 'resend', accountId, scopeId: kind }));",
+    cell: 'R:initial-anchor-and-status-start-atomic',
+    exportName: 'createResendLocalEventSource',
+  },
 ];
 
 /** Keeps a new Slack matrix name from silently falling back to no destructive oracle. */
@@ -422,15 +544,31 @@ export interface MutantCopy {
   readonly module: Record<string, unknown>;
 }
 
+/**
+ * Task 8 makes a named matrix cell the only oracle for each Resend mutation.
+ * Keeping this beside the runner prevents a future R: cell from silently
+ * escaping mutation coverage or a mutation from being redirected to a smaller
+ * unit test.
+ */
+export function assertResendMutationCoverage(cells: readonly string[]): void {
+  const resendCells = cells.filter((cell) => cell.startsWith('R:'));
+  const resendMutations = CUTOVER_MUTATIONS.filter((mutation) => mutation.cell.startsWith('R:'));
+  const named = new Set(resendCells);
+  for (const mutation of resendMutations)
+    assert.ok(named.has(mutation.cell), `${mutation.id}: names a real Resend matrix cell`);
+  for (const cell of resendCells)
+    assert.ok(
+      resendMutations.some((mutation) => mutation.cell === cell),
+      `${cell}: needs at least one destructive Resend mutation`,
+    );
+}
+
 /** Runs the source's focused S/R/W matrix against the copied production tree. */
 export async function expectMatrixCellToKillMutant(copy: MutantCopy): Promise<void> {
   const copiedTests = join(copy.root, 'test');
   const sourceTest = (() => {
     switch (copy.mutation.id) {
-      case 'skip-published-point-reread':
-        return 'initial-cursor-fence.test.ts';
       case 'leave-transferred-debt-on-parent':
-      case 'retain-old-only-debt-at-swap':
         return 'd-source-replacement.test.ts';
       default:
         return copy.mutation.cell.startsWith('S:')
