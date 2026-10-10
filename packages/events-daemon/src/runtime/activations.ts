@@ -15,6 +15,7 @@ import {
   disclosureBindingFor,
 } from '../domain/activation-documents.ts';
 import { ACTIVATION_FAILURE, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
+import { assertJudgeKindEnabled } from '../domain/lifecycle.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { SourceScope } from '../sources/contracts.ts';
@@ -392,7 +393,8 @@ export class ActivationRuntime {
     const intent = this.#intentForApproval(input.approvalId);
     const binding = this.#liveBinding(intent);
     await this.#approvals.approveDisclosure(input.approvalId, binding, input.answer, via);
-    // Approving persisted an await boundary: bind the exact current plan again before this process can spend it.
+    // Approving persisted an await boundary: bind the exact current plan again before this process can spend it, so a
+    // judge kind disabled meanwhile, like any other changed pointer, cannot spend this disclosure approval.
     const finalIntent = this.#intentForApproval(input.approvalId);
     const finalBinding = this.#liveBinding(finalIntent);
     // This is the final event-store fence before the core claim. It re-reads the durable, challenge-bound deadline
@@ -734,6 +736,9 @@ export class ActivationRuntime {
       if (allowIssuingChallengeResidue) this.#assertApprovalIssuingChallengeResidue(intent.approval_id);
       if (row.status === 'cancelled')
         throw new CommsError('APPROVAL_VOID', 'the activation was cancelled before completion');
+      // Core claiming is another await boundary.  This transaction owns the local claim, so it must fence a judge
+      // kind disabled after the core claim but before any provider baseline or local state mutation.
+      this.#assertRuleJudgeKindEnabled(this.#document(row));
       // A stable id can be configured again after removal. The approval predates that removal, so it can never
       // authorise the re-added account even if an interrupted purge left this intent pending.
       const revoked = this.#store.database
@@ -986,6 +991,9 @@ export class ActivationRuntime {
         settled = new CommsError('APPROVAL_VOID', 'the activation completion deadline has passed');
         return;
       }
+      // Baseline and point encryption have awaited.  Check under the pointer-write transaction, not only when the
+      // rule was prepared or approved, so a disabled kind can never become effective through this final swap.
+      this.#assertRuleJudgeKindEnabled(document);
       const effect = JSON.parse(latest.effect) as ActivationEffect;
       const settings = this.#switch();
       if (settings.generation !== effect.switchGeneration) {
@@ -1199,6 +1207,14 @@ export class ActivationRuntime {
       }
     }
     return binding;
+  }
+
+  /** The absence of the sole judge-kind pointer is disabled; deterministic-only rules need no kind check. */
+  #assertRuleJudgeKindEnabled(document: ActivationDocumentV1): void {
+    if (document.kind !== 'rule' || document.rule.agentic === undefined) return;
+    const kind = document.rule.agentic.judge.kind;
+    const versions = new ImmutableVersions(this.#store.database);
+    assertJudgeKindEnabled(kind, versions.activeVersion('judge-kind', kind) !== null);
   }
 
   #document(intent: IntentRow): ActivationDocumentV1 {

@@ -4,17 +4,21 @@ import {
   type ActivationDocumentV1,
   type CanonicalFullRuleDocument,
   canonicalFullRuleDocument,
-  canonicalJudge,
   canonicalSubscriber,
   canonicalTarget,
-  type JudgeBudgetDocument,
-  type JudgeDocument,
-  type JudgeKindEnablementDocument,
   normaliseActivationDocument,
   type SubscriberDocument,
   type TargetDocument,
 } from './activation-documents.ts';
-import { assertJudgeKindEnabled, EventDomainError, isJudgeKind } from './lifecycle.ts';
+import {
+  type CanonicalJudgeBudgetDocument,
+  type CanonicalJudgeDocument,
+  type CanonicalJudgeKindEnablementDocument,
+  canonicalJudge,
+  canonicalJudgeBudget,
+  canonicalJudgeKindEnablement,
+} from './judges.ts';
+import { assertJudgeKindEnabled, EventDomainError } from './lifecycle.ts';
 
 export type ActiveVersionKind = 'rule' | 'judge-budget' | 'judge-kind';
 
@@ -34,30 +38,6 @@ function versionId(objectId: string, version: number): string {
 
 function documentRecord(value: unknown): Record<string, unknown> {
   return JSON.parse(canonicalJson(value)) as Record<string, unknown>;
-}
-
-function validateBudget(value: unknown): JudgeBudgetDocument {
-  const document = documentRecord(value);
-  if (
-    typeof document.budgetId !== 'string' ||
-    document.budgetId.length === 0 ||
-    !Number.isSafeInteger(document.version) ||
-    (document.version as number) < 1
-  ) {
-    throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'a judge budget document has its immutable identity');
-  }
-  return document as JudgeBudgetDocument;
-}
-
-function validateJudgeKind(value: unknown): JudgeKindEnablementDocument {
-  const document = documentRecord(value);
-  if (!isJudgeKind(document.kind) || !Number.isSafeInteger(document.version) || (document.version as number) < 1) {
-    throw new EventDomainError(
-      'VERSION_DOCUMENT_INVALID',
-      'a judge-kind document has a known kind and positive version',
-    );
-  }
-  return document as unknown as JudgeKindEnablementDocument;
 }
 
 /** SQLite repository for D2's immutable, initially inert version rows. */
@@ -99,18 +79,31 @@ export class ImmutableVersions {
     return this.insert('subscriber_versions', 'subscriber', document.subscriberId, document.version, document);
   }
 
-  createJudge(input: JudgeDocument): PendingVersion {
-    const document = canonicalJudge(input);
+  /** Validates a dormant judge version; this deliberately does not require an enabled kind. */
+  prepareJudge(input: unknown): CanonicalJudgeDocument {
+    return canonicalJudge(input);
+  }
+
+  createJudge(input: unknown): PendingVersion {
+    const document = this.prepareJudge(input);
     return this.insert('judge_versions', 'judge', document.judgeId, document.version, document);
   }
 
-  createJudgeBudget(input: JudgeBudgetDocument): PendingVersion {
-    const document = validateBudget(input);
+  prepareBudget(input: unknown): CanonicalJudgeBudgetDocument {
+    return canonicalJudgeBudget(input);
+  }
+
+  createJudgeBudget(input: unknown): PendingVersion {
+    const document = this.prepareBudget(input);
     return this.insert('judge_budget_versions', 'judge-budget', document.budgetId, document.version, document);
   }
 
-  createJudgeKind(input: JudgeKindEnablementDocument): PendingVersion {
-    const document = validateJudgeKind(input);
+  prepareJudgeKind(input: unknown): CanonicalJudgeKindEnablementDocument {
+    return canonicalJudgeKindEnablement(input);
+  }
+
+  createJudgeKind(input: unknown): PendingVersion {
+    const document = this.prepareJudgeKind(input);
     return this.insert('judge_kind_versions', 'judge-kind', document.kind, document.version, document);
   }
 
@@ -133,8 +126,11 @@ export class ImmutableVersions {
       throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'the requested rule version does not exist');
     const rule = canonicalFullRuleDocument(JSON.parse(row.document));
     this.assertEmbeddedVersions(rule);
-    for (const judge of rule.judges) {
-      assertJudgeKindEnabled(judge.kind, this.activeVersion('judge-kind', judge.kind) !== null);
+    if (rule.agentic !== undefined) {
+      assertJudgeKindEnabled(
+        rule.agentic.judge.kind,
+        this.activeVersion('judge-kind', rule.agentic.judge.kind) !== null,
+      );
     }
     return normaliseActivationDocument({ documentVersion: 1, kind: 'rule', rule }) as Extract<
       ActivationDocumentV1,
@@ -163,13 +159,17 @@ export class ImmutableVersions {
         version: subscriber.version,
         document: subscriber,
       })),
-      ...rule.judges.map((judge) => ({
-        table: 'judge_versions',
-        column: 'judge_id',
-        id: judge.judgeId,
-        version: judge.version,
-        document: judge,
-      })),
+      ...(rule.agentic === undefined
+        ? []
+        : [
+            {
+              table: 'judge_versions',
+              column: 'judge_id',
+              id: rule.agentic.judge.judgeId,
+              version: rule.agentic.judge.version,
+              document: rule.agentic.judge,
+            },
+          ]),
     ];
     for (const entry of embedded) {
       const row = this.#database

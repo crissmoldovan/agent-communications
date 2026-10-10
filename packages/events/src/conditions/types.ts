@@ -49,12 +49,24 @@ export type AuthoringCondition =
   | { readonly path: string; readonly op: 'gt' | 'gte' | 'lt' | 'lte'; readonly value: number | string }
   | { readonly path: string; readonly op: 'domainIs'; readonly value: string; readonly includeSubdomains: boolean };
 
+/** The portable JSON-shaped reference embedded by an agentic condition. The daemon validates its closed judge form. */
+export interface AgenticJudgeDocumentV1 {
+  readonly judgeId: string;
+  readonly version: number;
+  readonly [field: string]: unknown;
+}
+
 /** D5's pure, persisted part of an agentic condition. Execution belongs to phase E. */
 export interface AgenticConditionV1 {
-  readonly judgeId: string;
-  readonly judgeVersion: number;
+  /** The complete immutable judge document. Its daemon-side canonical bytes bind it to the stored version. */
+  readonly judge: AgenticJudgeDocumentV1;
   readonly question: string;
   readonly inputs: readonly string[];
   readonly threshold: number;
   readonly onUncertain: 'no-match' | 'hold';
+  readonly callsPerRollingHour: number;
+  readonly inputTokensPerRolling30Days: number;
+  readonly concurrency: number;
+  readonly maxInputTokens: number;
+  readonly maxOutputTokens: number;
 }
