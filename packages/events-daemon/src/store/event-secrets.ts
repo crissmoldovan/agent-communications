@@ -577,7 +577,7 @@ export class EventSecretStore {
       const materialDigest = sha256Hex(material);
       await this.#store.set(ref, material);
       try {
-        if ((await this.#store.get(ref)) !== material) {
+        if ((await readBackend(this.#store, ref)) !== material) {
           throw new EventSecretError(
             'EVENT_SECRET_REFERENCE',
             'event secret generation did not read back from the selected backend',
@@ -728,7 +728,7 @@ export class EventSecretStore {
       const ref = `event-secret:${randomBytes(12).toString('hex')}`;
       await this.#store.set(ref, canonical.value);
       try {
-        if ((await this.#store.get(ref)) !== canonical.value)
+        if ((await readBackend(this.#store, ref)) !== canonical.value)
           throw new EventSecretError(
             'EVENT_SECRET_REFERENCE',
             'the new target URL did not read back from the selected backend',
@@ -853,7 +853,7 @@ export class EventSecretStore {
     const value = randomBytes(32).toString('base64');
     await this.#store.set(ref, value);
     try {
-      if ((await this.#store.get(ref)) !== value)
+      if ((await readBackend(this.#store, ref)) !== value)
         throw new EventSecretError('EVENT_SECRET_SELECTOR', 'event keychain probe did not read back its value');
     } finally {
       await this.#store.delete(ref).catch(() => undefined);
@@ -867,7 +867,7 @@ export class EventSecretStore {
     const encoded = key.toString('base64');
     await this.#store.set(ref, encoded);
     try {
-      if ((await this.#store.get(ref)) !== encoded) {
+      if ((await readBackend(this.#store, ref)) !== encoded) {
         throw new EventSecretError('EVENT_SECRET_SELECTOR', 'event master did not read back from its selected backend');
       }
       this.#database.exec('BEGIN IMMEDIATE');
@@ -979,6 +979,16 @@ export async function storeSecretWebhookUrl(options: StoreSecretWebhookUrlOption
   });
 }
 
+/**
+ * Reads what the backend holds now. Core's keychain store answers `get` from a cache its own `set` fills, so a read-back
+ * or a migration check through it would otherwise see what this process last wrote rather than the keychain item, which
+ * another process, or a keychain reset, may have changed since.
+ */
+async function readBackend(store: SecretStore, ref: string): Promise<string | null> {
+  store.invalidate(ref);
+  return store.get(ref);
+}
+
 /** Opens only the backend selected by SQLite; an unselected installation tries keychain and never falls back. */
 export async function openEventSecretStore(options: OpenEventSecretStoreOptions): Promise<EventSecretStore> {
   const recorded = selectedKind(options.database);
@@ -993,6 +1003,9 @@ export async function openEventSecretStore(options: OpenEventSecretStoreOptions)
  */
 export async function migrateEventSecrets(options: EventSecretMigrationOptions): Promise<EventSecretMigrationResult> {
   if (options.from === options.to) return { moved: 0, leftovers: [] };
+  // A source and target wired the wrong way round, or one store passed as both, would delete the only copies.
+  if (options.source === options.target || options.source.kind !== options.from || options.target.kind !== options.to)
+    throw new EventSecretError('EVENT_SECRET_SELECTOR', 'event secret migration stores do not match its backends');
   return withEventSecretsLock(options.paths, async () => {
     const selected = selectedKind(options.database);
     // Once the selector names the destination, retrying the original request
@@ -1007,8 +1020,10 @@ export async function migrateEventSecrets(options: EventSecretMigrationOptions):
       // reopening the old backend through that stale instance.
       const references = await referencesForSelectedTarget(options.database, options.target);
       const snapshot = referenceSnapshot(options.database);
+      // Only copies the old backend still holds are deleted, and only their failures are reported as leftovers.
+      const present: string[] = [];
       for (const ref of references) {
-        const selectedValue = await options.target.get(ref);
+        const selectedValue = await readBackend(options.target, ref);
         if (selectedValue === null)
           throw new EventSecretError(
             'EVENT_MASTER_LOST',
@@ -1017,12 +1032,13 @@ export async function migrateEventSecrets(options: EventSecretMigrationOptions):
         // An old copy is deleted only while the selected backend holds exactly the bytes it was copied from. A selected
         // copy changed since the migration verified it leaves every old copy in place: the leftover may be the only
         // correct one.
-        const leftover = await options.source.get(ref);
+        const leftover = await readBackend(options.source, ref);
         if (leftover !== null && leftover !== selectedValue)
           throw new EventSecretError(
             'EVENT_SECRET_SELECTOR',
             'a selected event secret no longer matches its migration source; old migration leftovers are retained',
           );
+        if (leftover !== null) present.push(ref);
       }
       options.database.exec('BEGIN IMMEDIATE');
       try {
@@ -1037,7 +1053,7 @@ export async function migrateEventSecrets(options: EventSecretMigrationOptions):
         throw error;
       }
       const leftovers: string[] = [];
-      for (const ref of references) {
+      for (const ref of present) {
         try {
           if (!(await options.source.delete(ref))) leftovers.push(ref);
         } catch {
@@ -1054,13 +1070,13 @@ export async function migrateEventSecrets(options: EventSecretMigrationOptions):
     const copied: string[] = [];
     try {
       for (const ref of references) {
-        const value = await options.source.get(ref);
+        const value = await readBackend(options.source, ref);
         if (value === null) {
           throw new EventSecretError('EVENT_MASTER_LOST', 'a referenced event secret is unavailable');
         }
         copied.push(ref);
         await options.target.set(ref, value);
-        if ((await options.target.get(ref)) !== value) {
+        if ((await readBackend(options.target, ref)) !== value) {
           throw new EventSecretError(
             'EVENT_SECRET_SELECTOR',
             `event secret ${ref} did not verify in the destination backend`,
@@ -1102,7 +1118,7 @@ async function referencesForSelectedTarget(database: DatabaseSync, target: Secre
     .all() as Array<{ key_id: string; secret_ref: string }>;
   const masterByKey = new Map<string, Buffer>();
   for (const master of masters) {
-    const encoded = await target.get(master.secret_ref);
+    const encoded = await readBackend(target, master.secret_ref);
     if (encoded === null)
       throw new EventSecretError('EVENT_MASTER_LOST', 'a selected event master is unavailable during leftover cleanup');
     const key = Buffer.from(encoded, 'base64');
