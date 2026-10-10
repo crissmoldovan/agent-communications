@@ -56,17 +56,30 @@
     },
     {
       "kind": "agentic",
-      "name": "agentic static form defaults onUncertain without deduplicating inputs",
+      "name": "E1: agentic static form defaults onUncertain without deduplicating inputs",
       "type": "slack.message.posted",
       "prefilter": { "path": "/text", "op": "contains", "value": "hello" },
       "agentic": {
-        "judgeId": "judge",
-        "judgeVersion": 1,
+        "judge": {
+          "judgeId": "judge",
+          "version": 1,
+          "kind": "typesafe",
+          "provider": "typesafe",
+          "model": "jev",
+          "endpoint": "https://api.typesafe.ai/v1/systemone",
+          "promptTemplate": "typesafe-jev-noul-v1",
+          "protocol": "noul"
+        },
         "question": "",
         "inputs": ["/text", "/text"],
-        "threshold": 0
+        "threshold": 0,
+        "callsPerRollingHour": 1,
+        "inputTokensPerRolling30Days": 1,
+        "concurrency": 1,
+        "maxInputTokens": 1,
+        "maxOutputTokens": 1
       },
-      "expected": "{\"inputs\":[\"/text\",\"/text\"],\"judgeId\":\"judge\",\"judgeVersion\":1,\"onUncertain\":\"no-match\",\"question\":\"\",\"threshold\":0}"
+      "expected": "{\"callsPerRollingHour\":1,\"concurrency\":1,\"inputTokensPerRolling30Days\":1,\"inputs\":[\"/text\",\"/text\"],\"judge\":{\"endpoint\":\"https://api.typesafe.ai/v1/systemone\",\"judgeId\":\"judge\",\"kind\":\"typesafe\",\"model\":\"jev\",\"promptTemplate\":\"typesafe-jev-noul-v1\",\"protocol\":\"noul\",\"provider\":\"typesafe\",\"version\":1},\"maxInputTokens\":1,\"maxOutputTokens\":1,\"onUncertain\":\"no-match\",\"question\":\"\",\"threshold\":0}"
     },
     {
       "kind": "evaluate",

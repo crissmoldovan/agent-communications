@@ -153,7 +153,7 @@ test('D2/D4: canonical rule documents bind every Phase-D source option under its
   );
 });
 
-test('APR-B1: every standalone activation authority field is bound into its digest', async () => {
+test('E1: every agentic, judge, budget and protocol authority field is bound into a digest or refused', async () => {
   const enableAll = (await vectors()).find((vector) => vector.name === 'enable-all');
   const budget = (await vectors()).find((vector) => vector.name === 'judge-budget');
   const judgeKind = (await vectors()).find((vector) => vector.name === 'judge-kind');
@@ -192,10 +192,7 @@ test('APR-B1: every standalone activation authority field is bound into its dige
   );
   const judgeKindDocument = copy(judgeKind.document);
   (judgeKindDocument.enablement as { endpoint: string }).endpoint = 'http://127.0.0.1:9001';
-  assert.notEqual(
-    activationDocumentDigest(judgeKindDocument as ActivationDocumentV1),
-    activationDocumentDigest(judgeKind.document),
-  );
+  assert.throws(() => activationDocumentDigest(judgeKindDocument as ActivationDocumentV1));
 });
 
 test('APR-B1: disclosure versions are derived only from the canonical document, never supplied beside it', async () => {
@@ -239,7 +236,7 @@ function changedLeaf(value: unknown): unknown {
   return 'changed';
 }
 
-test('APR-B1: no field of a rule document is dropped from its digest — each leaf changes the digest or is refused', async () => {
+test('E1: no agentic, judge, token or protocol field is dropped from a rule digest — each leaf changes it or is refused', async () => {
   const rule = (await vectors()).find((vector) => vector.name === 'rule');
   assert.ok(rule);
   const base = JSON.parse(JSON.stringify(rule.document)) as Record<string, unknown>;

@@ -15,10 +15,31 @@
         },
         "event": { "type": "gmail.message.received", "version": 1 },
         "condition": { "path": "/subject", "op": "exists" },
+        "agentic": {
+          "judge": {
+            "judgeId": "judge-1",
+            "version": 2,
+            "kind": "typesafe",
+            "provider": "typesafe",
+            "model": "jev",
+            "endpoint": "https://api.typesafe.ai/v1/systemone",
+            "promptTemplate": "typesafe-jev-noul-v1",
+            "protocol": "noul"
+          },
+          "question": "Is this relevant?",
+          "inputs": ["/subject"],
+          "threshold": 0.5,
+          "onUncertain": "no-match",
+          "callsPerRollingHour": 20,
+          "inputTokensPerRolling30Days": 100000,
+          "concurrency": 2,
+          "maxInputTokens": 512,
+          "maxOutputTokens": 64
+        },
         "mapping": { "constant": "safe" },
         "targets": [{ "targetId": "target-1", "version": 3, "kind": "dry-run", "retentionMs": 86400000 }],
         "subscribers": [],
-        "judges": [{ "judgeId": "judge-1", "version": 2, "kind": "typesafe", "provider": "local", "model": "fixture" }],
+        "judges": [],
         "deliveryRateCap": 60,
         "retention": {
           "ingestMs": 604800000,
@@ -31,8 +52,8 @@
         }
       }
     },
-    "canonical": "{\"documentVersion\":1,\"kind\":\"rule\",\"rule\":{\"condition\":{\"op\":\"exists\",\"path\":\"/subject\"},\"deliveryRateCap\":60,\"event\":{\"type\":\"gmail.message.received\",\"version\":1},\"judges\":[{\"judgeId\":\"judge-1\",\"kind\":\"typesafe\",\"model\":\"fixture\",\"provider\":\"local\",\"version\":2}],\"mapping\":{\"constant\":\"safe\"},\"retention\":{\"deadLetterMs\":604800000,\"decisionMetadataMs\":7776000000,\"deliveryMs\":604800000,\"dryrunMs\":86400000,\"holdMs\":604800000,\"ingestMs\":604800000,\"sseReplayMs\":604800000},\"ruleId\":\"rule-1\",\"source\":{\"accountIds\":[\"account-1\",\"account-2\"],\"channel\":\"gmail\",\"options\":{\"channel\":\"gmail\",\"includeSpamTrash\":false,\"labels\":[\"label-a\",\"label-z\"]}},\"subscribers\":[],\"targets\":[{\"kind\":\"dry-run\",\"retentionMs\":86400000,\"targetId\":\"target-1\",\"version\":3}],\"version\":2}}",
-    "digest": "39bcf243c2d2ed10f008d9a78038cb3b48f608d1163d708d5a05a35a6ee0898e",
+    "canonical": "{\"documentVersion\":1,\"kind\":\"rule\",\"rule\":{\"agentic\":{\"callsPerRollingHour\":20,\"concurrency\":2,\"inputTokensPerRolling30Days\":100000,\"inputs\":[\"/subject\"],\"judge\":{\"endpoint\":\"https://api.typesafe.ai/v1/systemone\",\"judgeId\":\"judge-1\",\"kind\":\"typesafe\",\"model\":\"jev\",\"promptTemplate\":\"typesafe-jev-noul-v1\",\"protocol\":\"noul\",\"provider\":\"typesafe\",\"version\":2},\"maxInputTokens\":512,\"maxOutputTokens\":64,\"onUncertain\":\"no-match\",\"question\":\"Is this relevant?\",\"threshold\":0.5},\"condition\":{\"op\":\"exists\",\"path\":\"/subject\"},\"deliveryRateCap\":60,\"event\":{\"type\":\"gmail.message.received\",\"version\":1},\"judges\":[],\"mapping\":{\"constant\":\"safe\"},\"retention\":{\"deadLetterMs\":604800000,\"decisionMetadataMs\":7776000000,\"deliveryMs\":604800000,\"dryrunMs\":86400000,\"holdMs\":604800000,\"ingestMs\":604800000,\"sseReplayMs\":604800000},\"ruleId\":\"rule-1\",\"source\":{\"accountIds\":[\"account-1\",\"account-2\"],\"channel\":\"gmail\",\"options\":{\"channel\":\"gmail\",\"includeSpamTrash\":false,\"labels\":[\"label-a\",\"label-z\"]}},\"subscribers\":[],\"targets\":[{\"kind\":\"dry-run\",\"retentionMs\":86400000,\"targetId\":\"target-1\",\"version\":3}],\"version\":2}}",
+    "digest": "59f59992abd854ca3af22d70b9a703c3689c65d4f88eb81c7b60d889839d33b0",
     "versions": [
       { "kind": "judge", "id": "judge-1", "version": 2 },
       { "kind": "rule", "id": "rule-1", "version": 2 },
@@ -46,17 +67,17 @@
       "documentVersion": 1,
       "kind": "judge-budget",
       "budget": {
-        "budgetId": "default",
+        "budgetId": "judge-budget",
         "version": 1,
         "global": { "callsPerRollingHour": 20, "inputTokensPerRolling30Days": 100000, "concurrency": 2 },
         "providers": [
-          { "provider": "local", "callsPerRollingHour": 10, "inputTokensPerRolling30Days": 50000, "concurrency": 1 }
+          { "provider": "typesafe", "callsPerRollingHour": 10, "inputTokensPerRolling30Days": 50000, "concurrency": 1 }
         ]
       }
     },
-    "canonical": "{\"budget\":{\"budgetId\":\"default\",\"global\":{\"callsPerRollingHour\":20,\"concurrency\":2,\"inputTokensPerRolling30Days\":100000},\"providers\":[{\"callsPerRollingHour\":10,\"concurrency\":1,\"inputTokensPerRolling30Days\":50000,\"provider\":\"local\"}],\"version\":1},\"documentVersion\":1,\"kind\":\"judge-budget\"}",
-    "digest": "eb43875c6773e2c21efa7bec3d6080cf95e0830f1600792476ae47a9bcd85c6b",
-    "versions": [{ "kind": "judge-budget", "id": "default", "version": 1 }]
+    "canonical": "{\"budget\":{\"budgetId\":\"judge-budget\",\"global\":{\"callsPerRollingHour\":20,\"concurrency\":2,\"inputTokensPerRolling30Days\":100000},\"providers\":[{\"callsPerRollingHour\":10,\"concurrency\":1,\"inputTokensPerRolling30Days\":50000,\"provider\":\"typesafe\"}],\"version\":1},\"documentVersion\":1,\"kind\":\"judge-budget\"}",
+    "digest": "ba6074684e5277bae80dc21059c7962088af02fc510100393cff931364708ec9",
+    "versions": [{ "kind": "judge-budget", "id": "judge-budget", "version": 1 }]
   },
   {
     "name": "judge-kind",
@@ -64,10 +85,15 @@
     "document": {
       "documentVersion": 1,
       "kind": "judge-kind",
-      "enablement": { "kind": "typesafe", "version": 1, "endpoint": "http://127.0.0.1:11434" }
+      "enablement": {
+        "id": "judge-kind:typesafe",
+        "kind": "typesafe",
+        "version": 1,
+        "endpoint": "https://api.typesafe.ai/v1/systemone"
+      }
     },
-    "canonical": "{\"documentVersion\":1,\"enablement\":{\"endpoint\":\"http://127.0.0.1:11434\",\"kind\":\"typesafe\",\"version\":1},\"kind\":\"judge-kind\"}",
-    "digest": "ac47b745d8532e50ea68b7d7fb168660a7fe859c8144e2960d0e205f5ffdd90a",
+    "canonical": "{\"documentVersion\":1,\"enablement\":{\"endpoint\":\"https://api.typesafe.ai/v1/systemone\",\"id\":\"judge-kind:typesafe\",\"kind\":\"typesafe\",\"version\":1},\"kind\":\"judge-kind\"}",
+    "digest": "98b9921be2acc3f6479d625df6244781db5eb69e025830138a3fa7225b48cb19",
     "versions": [{ "kind": "judge-kind", "id": "typesafe", "version": 1 }]
   },
   {
