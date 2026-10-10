@@ -12,6 +12,7 @@ import {
 import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 const RECEIVED = { channel: 'resend', kinds: ['received'] };
+const STATUS = { channel: 'resend', kinds: ['status'] };
 const X0 = '00000000-0000-4000-8000-000000000000';
 const P = '11111111-1111-4111-8111-111111111111';
 const E0 = '22222222-2222-4222-8222-222222222222';
@@ -418,6 +419,7 @@ async function replacementNewOnlyBaselines(
     true,
     'the new-only received account has its independently sampled anchor before the swap',
   );
+  const sharedStatusObservedAt = fixture.now.value;
   await completeScopedReceivedDrain(fixture);
   await fixture.runtime.resumeClaimedCompletions();
 
@@ -435,7 +437,7 @@ async function replacementNewOnlyBaselines(
     receivedAdmission(OLD_ACCOUNT, E0, 1),
     receivedAdmission(SHARED_ACCOUNT, P, 1),
     receivedAdmission(SHARED_ACCOUNT, E0, 1),
-    statusAdmissionAt(SHARED_ACCOUNT, 'sent', 'delivered', fixture.now.value - 1, 2),
+    statusAdmissionAt(SHARED_ACCOUNT, 'sent', 'delivered', sharedStatusObservedAt, 2),
     receivedAdmission(NEW_ACCOUNT, E1, 2),
     statusAdmission(fixture, NEW_ACCOUNT, 'delivered', 'bounced', 2),
   ]);
@@ -464,8 +466,10 @@ async function replacementSharedAdmitsOneVersion(
     receivedAdmission(SHARED_ACCOUNT, E0, 1),
     receivedAdmission(SHARED_ACCOUNT, E1, 2),
     receivedAdmission(SHARED_ACCOUNT, E2, 2),
+    statusAdmissionAt(SHARED_ACCOUNT, 'sent', 'delivered', fixture.now.value - 1, 2),
     statusAdmission(fixture, SHARED_ACCOUNT, 'delivered', 'bounced', 2),
   ]);
+  if (edge === undefined) await assertLaterReceivedDrainWaitsForOwnCap();
 }
 
 async function enableAllRebaselinesReaddedAccount(
@@ -608,6 +612,7 @@ async function claimedPFencesReceivedAndStatusWorker(
   fixture.now.value += 60_000;
   await fixture.schedulerTurn();
   assert.ok(fixture.calls.length > callsBeforeNormalCollection, 'both workers collect normally after publication');
+  if (edge === undefined) await assertRollbackAfterStatusPointCannotAdmitToOldVersion();
 }
 
 async function deadlineAtPAfterPAndFinaliseSettlesWithoutWrite(
@@ -761,6 +766,15 @@ async function swapDropsOldOnlyDebts(
   fixture.setResendReceivedReader(receivedReader([E1, P, E0, X0]));
   await completeScopedReceivedDrain(fixture, { includeStatus: false });
   assertDrained(fixture, OLD_ACCOUNT, 'received', true);
+  // R2 changed the round-4 reading: a status stage already bound to the old version is real old work, so its
+  // status drain remains open until this scan admits it. Only then may the exact replacement be finalised.
+  fixture.setResendSentItems([
+    { id: IDS.resendId, status: 'sent' },
+    { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', status: 'delivered' },
+  ]);
+  await fixture.sourceTurn(statusScopeFor(OLD_ACCOUNT));
+  assertDrained(fixture, OLD_ACCOUNT, 'status', true);
+  fixture.setResendSentStatus('sent');
 
   // The old cursor has certified P but its pointer has not swapped yet. A
   // later old-only stage is therefore real owed work until finalisation; the
@@ -785,6 +799,7 @@ async function swapDropsOldOnlyDebts(
     undefined,
     'the completed swap deletes every old-only received and status debt',
   );
+  if (edge === undefined) await assertStagedStatusRemainsOwedToOldVersion();
 }
 
 async function beginScopedResendReplacement(
@@ -1836,3 +1851,252 @@ test('R: a post-P status change waits for the new version while a received drain
     await fixture.dispose();
   }
 });
+
+test(
+  'R1: a later shared received replacement remains open behind the earlier drain cap',
+  {
+    skip: WINDOWS_SKIP,
+  },
+  () => assertLaterReceivedDrainWaitsForOwnCap(),
+);
+
+async function assertLaterReceivedDrainWaitsForOwnCap(): Promise<void> {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  const p1 = '11111111-1111-4111-8111-111111111111';
+  const middle = '22222222-2222-4222-8222-222222222222';
+  const p2 = '33333333-3333-4333-8333-333333333333';
+  try {
+    fixture.setResendReceivedBaseline(X0);
+    fixture.setResendReceivedReader(receivedReader([X0]));
+    await fixture.activate(1, RECEIVED);
+    await fixture.enable();
+    await fixture.schedulerTurn();
+    await fixture.activateAdditionalRule('rule-later', RECEIVED);
+    await fixture.schedulerTurn();
+
+    fixture.now.value += 1;
+    fixture.setResendReceivedBaseline(p1);
+    await assert.rejects(
+      () => fixture.activate(2, RECEIVED, 'changed'),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+    );
+    fixture.now.value += 1;
+    fixture.setResendReceivedBaseline(p2);
+    await assert.rejects(
+      () => fixture.replaceAdditionalRule('rule-later', 2, RECEIVED),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+    );
+
+    let phase: 'capped' | 'later' = 'capped';
+    fixture.setResendReceivedReader({
+      listReceived: async () =>
+        phase === 'capped'
+          ? { emails: [p2, middle, p1, X0].map((id) => ({ id })), next: null }
+          : { emails: [p2, middle, p1].map((id) => ({ id })), next: null },
+      getReceived: async (id) => receivedCandidate(id),
+    });
+
+    await fixture.sourceTurn();
+    const drains = fixture.store.database
+      .prepare(
+        `SELECT versions.rule_id, replacement_drains.drained_at
+           FROM replacement_drains
+           JOIN activation_intents ON activation_intents.id = replacement_drains.intent_id
+           JOIN rule_versions AS versions ON versions.id = activation_intents.replacement_of_version
+          ORDER BY versions.rule_id`,
+      )
+      .all()
+      .map((row) => ({ ...row }));
+    assert.deepEqual(drains, [
+      { rule_id: 'rule-cutover', drained_at: fixture.now.value },
+      { rule_id: 'rule-later', drained_at: null },
+    ]);
+
+    await fixture.runtime.resumeClaimedCompletions();
+    phase = 'later';
+    await fixture.sourceTurn();
+
+    const decisions = fixture.store.database
+      .prepare(
+        `SELECT ingest.dedupe_key, decisions.rule_id, decisions.rule_version
+           FROM decisions JOIN ingest ON ingest.event_id = decisions.event_id
+          WHERE ingest.dedupe_key IN (?, ?)
+          ORDER BY ingest.dedupe_key, decisions.rule_id, decisions.rule_version`,
+      )
+      .all(p2, middle)
+      .map((row) => ({ ...row }));
+    assert.ok(
+      decisions.some((row) => row.dedupe_key === p2 && row.rule_id === 'rule-later' && row.rule_version === 1),
+      'the later P remains owned by its old version until its own capped cycle completes',
+    );
+    assert.ok(
+      decisions.some((row) => row.dedupe_key === middle && row.rule_id === 'rule-later' && row.rule_version === 1),
+      'mail between P1 and P2 reaches B@1',
+    );
+    assert.ok(
+      decisions.some((row) => row.dedupe_key === middle && row.rule_id === 'rule-cutover' && row.rule_version === 2),
+      'mail after P1 reaches A@2',
+    );
+  } finally {
+    await fixture.dispose();
+  }
+}
+
+test(
+  'R2: a crashed pre-P status stage remains owed to the old version until it is admitted',
+  {
+    skip: WINDOWS_SKIP,
+  },
+  () => assertStagedStatusRemainsOwedToOldVersion(),
+);
+
+async function assertStagedStatusRemainsOwedToOldVersion(): Promise<void> {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  try {
+    await fixture.activate(1, STATUS);
+    await fixture.enable();
+    await fixture.schedulerTurn();
+    fixture.now.value += 1;
+    fixture.setResendSentStatus('sent');
+    await fixture.sourceTurn(statusScope(fixture));
+    fixture.now.value += 1;
+    fixture.setResendSentStatus('delivered');
+    let fired = false;
+    await fixture.setFailpoint((edge) => {
+      if (edge === 'before-finalise' && !fired) {
+        fired = true;
+        throw new Error('crash after status staging');
+      }
+    });
+    await assert.rejects(() => fixture.sourceTurn(statusScope(fixture)), /crash after status staging/);
+    await fixture.restart();
+
+    fixture.now.value += 1;
+    await assert.rejects(
+      () => fixture.activate(2, STATUS, 'changed'),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+    );
+    await fixture.sourceTurn(statusScope(fixture));
+    await fixture.runtime.resumeClaimedCompletions();
+
+    const versions = fixture.store.database
+      .prepare(
+        `SELECT decisions.rule_version
+           FROM decisions JOIN ingest ON ingest.event_id = decisions.event_id
+          WHERE ingest.type = 'resend.email.status_changed'
+          ORDER BY decisions.rule_version`,
+      )
+      .all()
+      .map((row) => (row as { rule_version: number }).rule_version);
+    assert.deepEqual(versions, [1], 'the staged pre-P status change has exactly one old-version decision');
+    assert.equal(
+      fixture.store.database
+        .prepare(
+          `SELECT 1 FROM decisions
+             JOIN ingest ON ingest.event_id = decisions.event_id
+            WHERE ingest.type = 'resend.email.status_changed' AND decisions.rule_version = 2`,
+        )
+        .get(),
+      undefined,
+      'the replacement version may not consume the old stage',
+    );
+  } finally {
+    await fixture.dispose();
+  }
+}
+
+test(
+  'R3: a rollback before replacement does not backfill a crashed pre-P status stage to v2',
+  {
+    skip: WINDOWS_SKIP,
+  },
+  () => assertRollbackBeforeReplacementDoesNotBackfillStatusStage(),
+);
+
+async function assertRollbackBeforeReplacementDoesNotBackfillStatusStage(): Promise<void> {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  try {
+    await fixture.activate(1, STATUS);
+    await fixture.enable();
+    await fixture.schedulerTurn();
+    fixture.now.value += 1;
+    fixture.setResendSentStatus('sent');
+    await fixture.sourceTurn(statusScope(fixture));
+    fixture.now.value += 3_600_000;
+    fixture.setResendSentStatus('delivered');
+    let fired = false;
+    await fixture.setFailpoint((edge) => {
+      if (edge === 'before-finalise' && !fired) {
+        fired = true;
+        throw new Error('crash at pre-P status stage');
+      }
+    });
+    await assert.rejects(() => fixture.sourceTurn(statusScope(fixture)), /crash at pre-P status stage/);
+    await fixture.restart();
+    fixture.now.value -= 1_800_000;
+
+    await assert.rejects(
+      () => fixture.activate(2, STATUS, 'changed'),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+    );
+    await fixture.sourceTurn(statusScope(fixture));
+    assert.equal(
+      fixture.store.database
+        .prepare(
+          `SELECT 1 FROM decisions
+             JOIN ingest ON ingest.event_id = decisions.event_id
+            WHERE ingest.type = 'resend.email.status_changed' AND decisions.rule_version = 2`,
+        )
+        .get(),
+      undefined,
+      'a stage from before P must never be backfilled to v2 after wall-clock rollback',
+    );
+  } finally {
+    await fixture.dispose();
+  }
+}
+
+test(
+  'R3: rollback after P cannot admit the post-P status change to the old version',
+  {
+    skip: WINDOWS_SKIP,
+  },
+  () => assertRollbackAfterStatusPointCannotAdmitToOldVersion(),
+);
+
+async function assertRollbackAfterStatusPointCannotAdmitToOldVersion(): Promise<void> {
+  const fixture = await PhaseDCutoverFixture.create('resend');
+  try {
+    fixture.setResendReceivedBaseline(X0);
+    fixture.setResendReceivedReader(receivedReader([X0]));
+    await fixture.activate(1, RECEIVED_AND_STATUS);
+    await fixture.enable();
+    await fixture.schedulerTurn();
+    await fixture.schedulerTurn();
+    await fixture.sourceTurn(statusScope(fixture));
+
+    fixture.now.value += 3_600_000;
+    fixture.setResendReceivedBaseline(P);
+    await assert.rejects(
+      () => fixture.activate(2, RECEIVED_AND_STATUS, 'changed'),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
+    );
+
+    fixture.now.value -= 1_800_000;
+    fixture.setResendSentStatus('delivered');
+    await fixture.sourceTurn(statusScope(fixture));
+    assert.equal(
+      fixture.store.database
+        .prepare(
+          `SELECT 1 FROM decisions
+             JOIN ingest ON ingest.event_id = decisions.event_id
+            WHERE ingest.type = 'resend.email.status_changed' AND decisions.rule_version = 1`,
+        )
+        .get(),
+      undefined,
+      'the old version may not admit an observation after its P, even when the wall clock rolled back',
+    );
+  } finally {
+    await fixture.dispose();
+  }
+}

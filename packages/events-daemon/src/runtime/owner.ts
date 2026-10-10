@@ -30,7 +30,7 @@ import { ImmutableVersions } from '../domain/versions.ts';
 import { MailboxLock } from '../sources/mailbox-lock.ts';
 import { type LocalEventSourceRegistry, phaseDSourceRegistry } from '../sources/registry.ts';
 import { ResendReceivedStageExpiry } from '../sources/resend.ts';
-import { ResendStatusStageExpiry } from '../sources/resend-status.ts';
+import { advanceResendStatusHighWater, ResendStatusStageExpiry } from '../sources/resend-status.ts';
 import { SourceScopeLock } from '../sources/scope-lock.ts';
 import { SlackHistoryStageExpiry } from '../sources/slack.ts';
 import { SlackReplyStageExpiry } from '../sources/slack-replies.ts';
@@ -102,6 +102,8 @@ export interface EventOwnerOptions {
   readonly phaseDComposition?: typeof createPhaseDWhatsAppOwnerComposition | undefined;
   readonly tickMs?: number | undefined;
   readonly pollIntervalMs?: number | undefined;
+  /** Test/embedding clock; every status P sample must use the same injected clock as the owner loop. */
+  readonly now?: (() => number) | undefined;
 }
 
 export async function startEventOwner(options: EventOwnerOptions = {}): Promise<EventOwner> {
@@ -139,7 +141,8 @@ async function startOwnerWithLock(
 ): Promise<EventOwner> {
   const database = await openEventDatabase({ stateDir });
   onDatabase(database);
-  const lifecycle = new EventLifecycle(database);
+  const now = options.now ?? Date.now;
+  const lifecycle = new EventLifecycle(database, now);
   const core = openCore({
     pathOverrides: {
       stateDir,
@@ -248,13 +251,14 @@ async function startOwnerWithLock(
       decrypt: decryptSourceStage,
     }),
   ]);
-  const expiry = new EventExpiry(database, Date.now, sourceStageExpiry);
+  const expiry = new EventExpiry(database, now, sourceStageExpiry);
   const dryrun = new DryRunDispatcher({
     store: database,
     cipher,
     approvals: core.approvals,
     config: core.config,
     expiry,
+    now,
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
   });
   const webhook = new WebhookDispatcher({
@@ -264,6 +268,7 @@ async function startOwnerWithLock(
     config: core.config,
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
     hasConcreteWhatsAppVisibilityFence: true,
+    now,
     secretReader: async ({ targetId, targetVersion, targetDigest, purpose }) =>
       (
         await eventSecrets.readLiveGenerations({
@@ -286,6 +291,7 @@ async function startOwnerWithLock(
     visibilityGate: whatsappComposition.visibilityFence,
     hasConcreteWhatsAppVisibilityFence: true,
     retentionHooks: whatsappComposition.retainedContentHooks,
+    now,
   });
   const dispatcher = new DeliveryDispatcher({
     store: database,
@@ -379,7 +385,7 @@ async function startOwnerWithLock(
       if (source === 'resend') {
         const reader = await resendReaderFor(accountId);
         if (scopeId === 'received') return { anchorId: (await reader.listReceived()).emails[0]?.id ?? 'empty' };
-        return { startedAt: new Date().toISOString() };
+        return advanceResendStatusHighWater(database, accountId, now());
       }
       return stageWhatsAppBaselineSnapshot(
         {
@@ -461,6 +467,7 @@ async function startOwnerWithLock(
     mailboxLock,
     sourceRegistry,
     retainedContentHooks: whatsappComposition.retainedContentHooks,
+    now,
   });
   const scheduler = new EventScheduler({
     store: database,
@@ -487,6 +494,7 @@ async function startOwnerWithLock(
           resendReaderFor,
           whatsappEventOperations,
           whatsappVisibilityFence: whatsappComposition.visibilityFence,
+          now,
         },
         scope,
       );
@@ -495,6 +503,7 @@ async function startOwnerWithLock(
     mailboxLock,
     sourceRegistry,
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
+    now,
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
     ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
   });

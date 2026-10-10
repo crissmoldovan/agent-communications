@@ -76,6 +76,7 @@ test('Resend status seeds its first observed state, emits only deltas, and prune
           previous: 'scheduled',
           current: 'delivered',
           observedAt: new Date(now).toISOString(),
+          scanGeneration: 3,
           from: { address: 'sender@fixture.test', name: 'Fixture Sender' },
           to: ['recipient@fixture.test'],
           cc: [],

@@ -703,6 +703,18 @@ export class ActivationRuntime {
                 // A Resend status observer has no cursor range to drain. Its durable P instant is the boundary:
                 // pre-P observations belong to the old rule, and the new status state seeds at P without emitting.
                 const statusScope = scope.source === 'resend' && scope.scopeId === 'status';
+                const statusStageOwedByOld =
+                  statusScope &&
+                  this.#store.database
+                    .prepare(
+                      `SELECT 1 AS present
+                         FROM source_stage_rule_debts AS debt
+                         JOIN source_scan_state AS stage ON stage.id = debt.stage_id
+                         JOIN rule_versions AS old_version ON old_version.id = ?
+                        WHERE debt.rule_id = old_version.rule_id AND debt.rule_version = old_version.version
+                          AND stage.source = ? AND stage.account_id = ? AND stage.cursor_scope = 'status'`,
+                    )
+                    .get(current.replacement_of_version, scope.source, scope.accountId) !== undefined;
                 // A new-only scope gets its own P activation point but owes no old-version occurrence, so it must not
                 // leave an impossible drain open waiting for a worker that never ran the old rule there.
                 if (oldInScope) {
@@ -719,7 +731,7 @@ export class ActivationRuntime {
                       scope.scopeId,
                       1,
                       newInScope ? 1 : 0,
-                      disabled || statusScope ? this.#now() : null,
+                      disabled || (statusScope && !statusStageOwedByOld) ? this.#now() : null,
                     );
                 }
                 if (disabled) {

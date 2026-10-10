@@ -23,6 +23,7 @@ import { runSourceOwnerWork, stageWhatsAppBaselineSnapshot } from '../../src/run
 import type { SourceScope } from '../../src/sources/contracts.ts';
 import { MailboxLock } from '../../src/sources/mailbox-lock.ts';
 import { phaseDSourceRegistry } from '../../src/sources/registry.ts';
+import { advanceResendStatusHighWater } from '../../src/sources/resend-status.ts';
 import { SourceScopeLock } from '../../src/sources/scope-lock.ts';
 import { type EventDatabase, openEventDatabase } from '../../src/store/database.ts';
 import { openEventSecretStore, selectEventSecretStore } from '../../src/store/event-secrets.ts';
@@ -263,6 +264,21 @@ export class PhaseDCutoverFixture {
     const versions = new ImmutableVersions(this.#store.database);
     versions.createRule(this.rule(1, options, mapping, 60, accountIds, ruleId));
     const prepared = await this.runtime.prepareRule({ ruleId, version: 1 });
+    if (!('approvalId' in prepared)) return;
+    await this.#approve(prepared);
+  }
+
+  /** Replaces one independently active rule while preserving the production drain path. */
+  async replaceAdditionalRule(
+    ruleId: string,
+    version = 2,
+    options: unknown = this.options(),
+    mapping = 'changed',
+    accountIds: readonly string[] = [this.accountId],
+  ): Promise<void> {
+    const versions = new ImmutableVersions(this.#store.database);
+    versions.createRule(this.rule(version, options, mapping, 60, accountIds, ruleId));
+    const prepared = await this.runtime.prepareRule({ ruleId, version });
     if (!('approvalId' in prepared)) return;
     await this.#approve(prepared);
   }
@@ -686,7 +702,7 @@ export class PhaseDCutoverFixture {
       sourceRegistry: phaseDSourceRegistry(),
       mailboxLock: new MailboxLock(new SourceScopeLock()),
       sourceBaselineFor: async (scope) => {
-        if (scope.source !== 'whatsapp') return this.baseline(scope.source, scope.scopeId);
+        if (scope.source !== 'whatsapp') return this.baseline(scope.source, scope.scopeId, scope.accountId);
         if (!this.#whatsapp) throw new Error('cut-over WhatsApp composition is closed');
         return stageWhatsAppBaselineSnapshot(
           {
@@ -736,7 +752,7 @@ export class PhaseDCutoverFixture {
     });
   }
 
-  private async baseline(source: CutoverSource | 'gmail', scope: string): Promise<unknown> {
+  private async baseline(source: CutoverSource | 'gmail', scope: string, accountId = this.accountId): Promise<unknown> {
     this.baselineCalls += 1;
     if (source === 'slack')
       return {
@@ -746,7 +762,7 @@ export class PhaseDCutoverFixture {
     if (source === 'resend')
       return scope === 'received'
         ? { anchorId: this.#resendReceivedBaseline }
-        : { startedAt: new Date(this.now.value).toISOString() };
+        : advanceResendStatusHighWater(this.#store, accountId, this.now.value);
     return { capturedAt: new Date(this.now.value).toISOString(), baselineGeneration: 0, baselineIdentities: [] };
   }
 

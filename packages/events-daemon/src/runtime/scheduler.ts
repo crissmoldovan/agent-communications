@@ -792,10 +792,31 @@ function initialCursorFor(scope: SourceScope, positions: readonly unknown[]): st
       // record used by the owner’s eligibility and restart recovery.
       return anchors[0] as string;
     }
-    const starts = positions.map((position) => (position as { startedAt?: unknown }).startedAt);
-    if (!starts.every((start) => typeof start === 'string' && Number.isFinite(Date.parse(start))))
-      throw new CommsError('BAD_DATA', 'an active Resend status point has no activation start');
-    return [...(starts as string[])].sort()[0] as string;
+    const starts = positions.map((position) => ({
+      startedAt: (position as { startedAt?: unknown }).startedAt,
+      scanGeneration: (position as { scanGeneration?: unknown }).scanGeneration,
+    }));
+    if (
+      !starts.every(
+        (position) =>
+          typeof position.startedAt === 'string' &&
+          Number.isFinite(Date.parse(position.startedAt)) &&
+          (position.scanGeneration === undefined ||
+            (Number.isSafeInteger(position.scanGeneration) && (position.scanGeneration as number) >= 0)),
+      )
+    )
+      throw new CommsError('BAD_DATA', 'an active Resend status point has no activation start and scan generation');
+    const first = starts
+      .map((position) => ({
+        startedAt: position.startedAt as string,
+        scanGeneration: (position.scanGeneration as number | undefined) ?? 0,
+      }))
+      .sort((left, right) =>
+        left.startedAt === right.startedAt
+          ? left.scanGeneration - right.scanGeneration
+          : left.startedAt.localeCompare(right.startedAt),
+      )[0];
+    return JSON.stringify(first);
   }
   // WhatsApp's baseline generation and raw identities remain encrypted in the activation point.  The scheduler
   // needs only a content-free scan marker; the worker opens the checked-copy snapshot under the visibility fence.

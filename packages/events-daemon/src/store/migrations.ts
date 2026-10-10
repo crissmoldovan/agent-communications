@@ -358,6 +358,20 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '11' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // D-C: an account's status observer keeps an ordering witness independent of a rollback-prone wall clock.
+    version: 12,
+    name: 'resend-status-high-water-v1',
+    statements: [
+      `CREATE TABLE resend_status_high_water (
+        account_id TEXT PRIMARY KEY,
+        high_water_at TEXT NOT NULL CHECK (high_water_at <> ''),
+        scan_generation INTEGER NOT NULL CHECK (scan_generation > 0),
+        updated_at INTEGER NOT NULL
+      ) STRICT`,
+      "UPDATE meta SET value = '12' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

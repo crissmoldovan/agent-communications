@@ -168,6 +168,12 @@ test('D9: account removal purges every D-owned row for that source/account while
         .run(accountId);
       database
         .prepare(
+          `INSERT INTO resend_status_high_water (account_id, high_water_at, scan_generation, updated_at)
+           VALUES (?, '2026-10-10T12:00:00.000Z', 1, 1)`,
+        )
+        .run(accountId);
+      database
+        .prepare(
           `INSERT INTO rule_activation_points
            (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at)
            VALUES (?, ?, 1, 'slack', ?, 'conversation-1', X'01', 1)`,
@@ -228,6 +234,11 @@ test('D9: account removal purges every D-owned row for that source/account while
       1,
       'a different source keeps its own durable state',
     );
+    assert.equal(
+      count(database, 'resend_status_high_water WHERE account_id = ?', REMOVED),
+      1,
+      'a different source keeps its status high-water witness',
+    );
     const held = database
       .prepare('SELECT outcome, encrypted_record FROM decisions WHERE id = ?')
       .get('held-removed') as {
@@ -245,6 +256,7 @@ test('D9: account removal purges every D-owned row for that source/account while
     assert.equal(count(database, 'source_scan_state WHERE source = ? AND account_id = ?', 'slack', REMOVED), 0);
     assert.equal(count(database, 'slack_reply_drains WHERE account_id = ?', REMOVED), 0);
     assert.equal(count(database, 'resend_status_state WHERE account_id = ?', REMOVED), 0);
+    assert.equal(count(database, 'resend_status_high_water WHERE account_id = ?', REMOVED), 0);
   } finally {
     store.close();
     await rm(stateDir, { recursive: true, force: true });
