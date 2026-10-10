@@ -21,11 +21,13 @@ export interface PinnedConnection {
   readonly tls: { readonly rejectUnauthorized: true; readonly servername?: string; readonly certificateHost: string };
 }
 
-export interface PreparePinnedConnectionOptions extends AddressPolicyOptions {
+const TYPESAFE_GLOBAL_ONLY_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
+
+export type PreparePinnedConnectionOptions = AddressPolicyOptions & {
   readonly url: URL | string;
   readonly resolver?: AddressResolver;
   readonly approvedAddressSetDigest?: string;
-}
+};
 
 export interface PinnedTcpOptions {
   readonly host: string;
@@ -87,18 +89,26 @@ function assertPinnedUrl(url: URL): void {
 export async function preparePinnedConnection(options: PreparePinnedConnectionOptions): Promise<PinnedConnection> {
   const url = typeof options.url === 'string' ? new URL(options.url) : new URL(options.url.href);
   assertPinnedUrl(url);
-  if (
-    options.approvedAddressSetDigest !== undefined &&
-    options.approvedAddressSetDigest !== addressSetDigest(options.approvedAddressSet)
-  )
-    throw new AddressPolicyError('approvedAddressSet fingerprint does not match before resolution');
-  assertApprovedAddressSet(options.approvedAddressSet);
+  const globalOnly = options.addressMode === 'global-only';
+  if (globalOnly) {
+    if (url.href !== TYPESAFE_GLOBAL_ONLY_ENDPOINT)
+      throw new AddressPolicyError('global-only address mode is reserved for the fixed TypeSafe endpoint');
+    if (options.approvedAddressSetDigest !== undefined)
+      throw new AddressPolicyError('global-only address mode does not accept an approvedAddressSet fingerprint');
+  } else {
+    if (
+      options.approvedAddressSetDigest !== undefined &&
+      options.approvedAddressSetDigest !== addressSetDigest(options.approvedAddressSet)
+    )
+      throw new AddressPolicyError('approvedAddressSet fingerprint does not match before resolution');
+    assertApprovedAddressSet(options.approvedAddressSet);
+  }
 
   const hostname = hostWithoutBrackets(url.hostname);
   const literal = isLiteral(hostname);
   if (url.protocol === 'http:' && (!literal || (hostname !== '127.0.0.1' && hostname !== '::1')))
     throw new AddressPolicyError('HTTP requires literal 127.0.0.1 or ::1');
-  if (url.protocol === 'http:' && !isSoleApprovedLiteral(options.approvedAddressSet, hostname))
+  if (url.protocol === 'http:' && !globalOnly && !isSoleApprovedLiteral(options.approvedAddressSet, hostname))
     throw new AddressPolicyError('HTTP requires its one exact approved literal loopback address');
 
   const answers = await resolveHost(hostname, options.resolver ?? systemAddressResolver);

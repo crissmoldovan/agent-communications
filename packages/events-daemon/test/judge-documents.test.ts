@@ -5,7 +5,7 @@ import {
   canonicalJudge,
   normaliseActivationDocument,
 } from '../src/domain/activation-documents.ts';
-import { judgeKindDefinition } from '../src/domain/judges.ts';
+import * as judges from '../src/domain/judges.ts';
 import { EventDomainError } from '../src/domain/lifecycle.ts';
 
 const target = { targetId: 'target-e1', version: 1, kind: 'dry-run' as const, retentionMs: 86_400_000 };
@@ -14,7 +14,7 @@ const typesafeJudge = {
   version: 1,
   kind: 'typesafe',
   provider: 'typesafe',
-  model: 'jev',
+  model: 'jev-1.13.0',
   endpoint: 'https://api.typesafe.ai/v1/systemone',
   promptTemplate: 'typesafe-jev-noul-v1',
   protocol: 'noul',
@@ -67,8 +67,24 @@ test('E1: canonical rules require a deterministic condition and retain an option
   assert.deepEqual(canonical.agentic, agentic);
 });
 
-test('E1: judge documents are closed discriminated forms with a concrete local score pointer', () => {
+test('E6-M: TypeSafe documents name only concrete provider-record models, never aliases', () => {
+  assert.deepEqual((judges as { readonly APPROVED_TYPESAFE_MODELS?: readonly string[] }).APPROVED_TYPESAFE_MODELS, [
+    'jev-1.13.0',
+  ]);
   assert.deepEqual(canonicalJudge(typesafeJudge), typesafeJudge);
+  for (const model of ['jev', 'jev-latest', 'jev-preview', 'jev-99.0.0']) {
+    assert.throws(
+      () => canonicalJudge({ ...typesafeJudge, model }),
+      (error: unknown) =>
+        error instanceof EventDomainError &&
+        error.code === 'VERSION_DOCUMENT_INVALID' &&
+        /concrete.*provider record/i.test(error.message),
+      model,
+    );
+  }
+});
+
+test('E1: judge documents are closed discriminated forms with a concrete local score pointer', () => {
   const local = {
     judgeId: 'judge-local-e1',
     version: 1,
@@ -124,7 +140,7 @@ test('E1: judge budgets use only the judge-budget singleton and canonical kind d
       enablement: { kind: 'typesafe', version: 1, endpoint: 'http://127.0.0.1:11434' },
     }),
   );
-  assert.equal(judgeKindDefinition('laya').availability, 'unavailable');
+  assert.equal(judges.judgeKindDefinition('laya').availability, 'unavailable');
   assert.throws(
     () =>
       normaliseActivationDocument({

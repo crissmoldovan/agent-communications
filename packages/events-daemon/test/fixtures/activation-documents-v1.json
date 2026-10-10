@@ -21,7 +21,7 @@
             "version": 2,
             "kind": "typesafe",
             "provider": "typesafe",
-            "model": "jev",
+            "model": "jev-1.13.0",
             "endpoint": "https://api.typesafe.ai/v1/systemone",
             "promptTemplate": "typesafe-jev-noul-v1",
             "protocol": "noul"
@@ -52,8 +52,8 @@
         }
       }
     },
-    "canonical": "{\"documentVersion\":1,\"kind\":\"rule\",\"rule\":{\"agentic\":{\"callsPerRollingHour\":20,\"concurrency\":2,\"inputTokensPerRolling30Days\":100000,\"inputs\":[\"/subject\"],\"judge\":{\"endpoint\":\"https://api.typesafe.ai/v1/systemone\",\"judgeId\":\"judge-1\",\"kind\":\"typesafe\",\"model\":\"jev\",\"promptTemplate\":\"typesafe-jev-noul-v1\",\"protocol\":\"noul\",\"provider\":\"typesafe\",\"version\":2},\"maxInputTokens\":512,\"maxOutputTokens\":64,\"onUncertain\":\"no-match\",\"question\":\"Is this relevant?\",\"threshold\":0.5},\"condition\":{\"op\":\"exists\",\"path\":\"/subject\"},\"deliveryRateCap\":60,\"event\":{\"type\":\"gmail.message.received\",\"version\":1},\"judges\":[],\"mapping\":{\"constant\":\"safe\"},\"retention\":{\"deadLetterMs\":604800000,\"decisionMetadataMs\":7776000000,\"deliveryMs\":604800000,\"dryrunMs\":86400000,\"holdMs\":604800000,\"ingestMs\":604800000,\"sseReplayMs\":604800000},\"ruleId\":\"rule-1\",\"source\":{\"accountIds\":[\"account-1\",\"account-2\"],\"channel\":\"gmail\",\"options\":{\"channel\":\"gmail\",\"includeSpamTrash\":false,\"labels\":[\"label-a\",\"label-z\"]}},\"subscribers\":[],\"targets\":[{\"kind\":\"dry-run\",\"retentionMs\":86400000,\"targetId\":\"target-1\",\"version\":3}],\"version\":2}}",
-    "digest": "59f59992abd854ca3af22d70b9a703c3689c65d4f88eb81c7b60d889839d33b0",
+    "canonical": "{\"documentVersion\":1,\"kind\":\"rule\",\"rule\":{\"agentic\":{\"callsPerRollingHour\":20,\"concurrency\":2,\"inputTokensPerRolling30Days\":100000,\"inputs\":[\"/subject\"],\"judge\":{\"endpoint\":\"https://api.typesafe.ai/v1/systemone\",\"judgeId\":\"judge-1\",\"kind\":\"typesafe\",\"model\":\"jev-1.13.0\",\"promptTemplate\":\"typesafe-jev-noul-v1\",\"protocol\":\"noul\",\"provider\":\"typesafe\",\"version\":2},\"maxInputTokens\":512,\"maxOutputTokens\":64,\"onUncertain\":\"no-match\",\"question\":\"Is this relevant?\",\"threshold\":0.5},\"condition\":{\"op\":\"exists\",\"path\":\"/subject\"},\"deliveryRateCap\":60,\"event\":{\"type\":\"gmail.message.received\",\"version\":1},\"judges\":[],\"mapping\":{\"constant\":\"safe\"},\"retention\":{\"deadLetterMs\":604800000,\"decisionMetadataMs\":7776000000,\"deliveryMs\":604800000,\"dryrunMs\":86400000,\"holdMs\":604800000,\"ingestMs\":604800000,\"sseReplayMs\":604800000},\"ruleId\":\"rule-1\",\"source\":{\"accountIds\":[\"account-1\",\"account-2\"],\"channel\":\"gmail\",\"options\":{\"channel\":\"gmail\",\"includeSpamTrash\":false,\"labels\":[\"label-a\",\"label-z\"]}},\"subscribers\":[],\"targets\":[{\"kind\":\"dry-run\",\"retentionMs\":86400000,\"targetId\":\"target-1\",\"version\":3}],\"version\":2}}",
+    "digest": "7b3117da685b2ccecb59deda4e9533e09ac941ac93171c50218e5ca38c2c00da",
     "versions": [
       { "kind": "judge", "id": "judge-1", "version": 2 },
       { "kind": "rule", "id": "rule-1", "version": 2 },

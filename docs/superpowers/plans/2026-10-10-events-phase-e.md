@@ -25,6 +25,13 @@ Before B3 is merged, the only permitted E work is unregistered, unreachable foun
 | E-G — adversarial corpus | Keep a synthetic, versioned JSONL corpus plus schema/hash manifest; execute each case through the real evaluator/coordinator/transport under the loopback seal and assert durable state plus a sealed network journal and no-real-data scan. | A corpus is useful only when it exercises the production trust boundary and cannot contain live data. |
 | E-H — Laya boundary | Follow cross-plan contract 5: list/doctor/app expose `laya` only as typed `E2_REQUIRED` unavailable. Model status/remove retain capability rows and return that same state; E has no enablement or runtime path. | E2 owns Laya activation, download, worker and network behavior. |
 
+## Decisions made during the build
+
+| Question | Decision | Reason |
+| --- | --- | --- |
+| E6-A — which addresses may the hosted judge reach? | The fixed endpoint is the approval: a `typesafe` call resolves `api.typesafe.ai` through B2's pinned path and connects only when every answer, and every address embedded in it (6to4, Teredo, NAT64), is globally reachable; a private, loopback, link-local, metadata or other special-purpose answer refuses the call before TCP. There is no person-approved IP set for this kind, and none is invented: the TLS certificate must validate for `api.typesafe.ai`, SNI and `Host` stay the hostname, and redirects are never followed. | D11 approves "the approved host" for `typesafe` and D7 keeps "the hosted TypeSafe judge … its fixed HTTPS endpoint"; only webhooks and local endpoints carry a person-approved address set. Refusing every hosted call for want of a set nobody approves would leave the kind unusable, while global-only answers keep DNS rebinding off internal addresses. |
+| E6-M — what model does a TypeSafe judge name? | A `typesafe` judge document's `model` is one concrete published version from the dated provider record (`jev-1.13.0`, read 2026-10-10); the moving aliases `jev-latest` and `jev-preview`, and any name the record does not list, are refused when the document is canonicalised. The transport sends exactly the approved document's `model`, so a different model is a new judge version and a new approval. | TypeSafe's models page lists `jev-1.13.0` with two aliases that "point to" it and can move; an approval must bind the model its decisions are made by, and decisions record "provider, model and judge versions" (D11). The bare `jev` the Task 1 document fixed is not a published identifier. |
+
 ## Decisions the spec leaves to the plan
 
 ### E-1 — kind model and proof of off-by-default
