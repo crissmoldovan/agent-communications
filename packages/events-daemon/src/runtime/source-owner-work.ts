@@ -19,7 +19,12 @@ import {
   type ResendReceivedPosition,
   ResendReceivedSource,
 } from '../sources/resend.ts';
-import { type ResendStatusChange, ResendStatusSource } from '../sources/resend-status.ts';
+import {
+  compareResendStatusPositions,
+  type ResendStatusChange,
+  ResendStatusSource,
+  resendStatusPosition,
+} from '../sources/resend-status.ts';
 import { SourceScopeLock } from '../sources/scope-lock.ts';
 import {
   assertSlackTimestamp,
@@ -54,7 +59,7 @@ interface RuleDebt extends SourceStageDebt {
 type CandidatePosition =
   | Readonly<{ source: 'slack'; timestamp: string }>
   | Readonly<{ source: 'resend-received'; position: ResendReceivedPosition }>
-  | Readonly<{ source: 'resend-status'; observedAt: string }>;
+  | Readonly<{ source: 'resend-status'; observedAt: string; scanGeneration: number }>;
 
 export interface SourceOwnerWorkOptions {
   readonly store: EventDatabase;
@@ -425,10 +430,19 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
         return JSON.parse(plaintext.toString('utf8'));
       },
       debts: rules,
-      admit: (change) =>
-        admit(resendStatusEvent(scope, change), rules(), {
-          position: { source: 'resend-status', observedAt: change.observedAt },
-        }),
+      admit: async (change, stageId) => {
+        const position = {
+          source: 'resend-status' as const,
+          observedAt: change.observedAt,
+          scanGeneration: change.scanGeneration,
+        };
+        const stagedDebts = sourceRulesForStage(input, scope, stageId);
+        // A stage with debts predates P and remains bound to its already-authorised version. A debt-free status
+        // stage is an after-P occurrence deliberately withheld until the child pointer is live.
+        const debts =
+          stagedDebts.length > 0 ? stagedDebts : await debtsAfterActivationPoint(input, scope, rules(), position);
+        return admit(resendStatusEvent(scope, change), debts, { stageId, position });
+      },
       assertWriteStillLive: assertWrite,
       scopeLock: new SourceScopeLock(),
       now: input.now,
@@ -497,6 +511,8 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
 
 interface PendingReplacementDrain {
   readonly intentId: string;
+  readonly oldRuleId: string;
+  readonly oldRuleVersion: number;
   readonly position: unknown;
   readonly capturedAt: number;
   readonly drainedAt: number | null;
@@ -513,9 +529,10 @@ async function pendingReplacementDrains(
   const rows = input.store.database
     .prepare(
       `SELECT replacement_drains.intent_id, replacement_drains.drained_at, activation_baselines.encrypted_position,
-              activation_baselines.response_at
+              activation_baselines.response_at, old_version.rule_id AS old_rule_id, old_version.version AS old_rule_version
          FROM replacement_drains
          JOIN activation_intents ON activation_intents.id = replacement_drains.intent_id
+         JOIN rule_versions AS old_version ON old_version.id = activation_intents.replacement_of_version
          JOIN activation_baselines
            ON activation_baselines.intent_id = replacement_drains.intent_id
           AND activation_baselines.source = replacement_drains.source
@@ -528,6 +545,8 @@ async function pendingReplacementDrains(
     )
     .all(scope.source, scope.accountId, scope.scopeId) as Array<{
     intent_id: string;
+    old_rule_id: string;
+    old_rule_version: number;
     drained_at: number | null;
     encrypted_position: Uint8Array;
     response_at: number;
@@ -535,6 +554,8 @@ async function pendingReplacementDrains(
   return Promise.all(
     rows.map(async (row) => ({
       intentId: row.intent_id,
+      oldRuleId: row.old_rule_id,
+      oldRuleVersion: row.old_rule_version,
       capturedAt: row.response_at,
       drainedAt: row.drained_at,
       position: JSON.parse(
@@ -575,15 +596,23 @@ async function completePendingReplacementDrains(
       const point = resendReceivedAnchor(drain.position);
       if (point === undefined) gap = true;
       else if (point !== 'empty') {
-        if (!cycle.orderedIds.includes(point)) {
+        const pointIndex = cycle.orderedIds.indexOf(point);
+        const advancedAnchorIndex = cycle.orderedIds.indexOf(cycle.advancedAnchorId);
+        if (pointIndex < 0) {
           if (cycle.startedAt < drain.capturedAt) continue;
           gap = true;
+        } else if (advancedAnchorIndex < 0 || pointIndex < advancedAnchorIndex) {
+          // A cap may have listed this later P but advanced only to an earlier one. It is not certified until its own
+          // cap is reached in a later chain; otherwise mail between the two points is silently skipped at the swap.
+          continue;
         } else if (cycle.anchorLost) {
           // The source re-baselined without materialising any part of the old interval, including P when present.
           gap = true;
         }
       }
     }
+    if (scope.source === 'resend' && scope.scopeId === 'status' && statusDrainHasStagedDebt(input.store, scope, drain))
+      continue;
     input.store.immediate(() => {
       if (gap)
         input.store.database
@@ -592,6 +621,20 @@ async function completePendingReplacementDrains(
       completeSourceReplacementDrain(input.store.database, { intentId: drain.intentId, scope, at });
     });
   }
+}
+
+function statusDrainHasStagedDebt(store: EventDatabase, scope: SourceScope, drain: PendingReplacementDrain): boolean {
+  return (
+    store.database
+      .prepare(
+        `SELECT 1 AS present
+           FROM source_stage_rule_debts AS debt
+           JOIN source_scan_state AS stage ON stage.id = debt.stage_id
+          WHERE debt.rule_id = ? AND debt.rule_version = ?
+            AND stage.source = ? AND stage.account_id = ? AND stage.cursor_scope = 'status'`,
+      )
+      .get(drain.oldRuleId, drain.oldRuleVersion, scope.source, scope.accountId) !== undefined
+  );
 }
 
 /** The first sampled Resend P is the oldest (and therefore strictest) cap while several old versions drain. */
@@ -621,16 +664,13 @@ function statusObservationBelongsToOldVersion(
   change: ResendStatusChange,
   drains: readonly PendingReplacementDrain[],
 ): boolean {
-  const observed = Date.parse(change.observedAt);
-  if (!Number.isFinite(observed)) return false;
+  const observed = resendStatusPosition({ startedAt: change.observedAt, scanGeneration: change.scanGeneration });
+  if (observed === undefined) return false;
   for (const drain of drains) {
-    const startedAt =
-      typeof drain.position === 'object' && drain.position !== null
-        ? (drain.position as { startedAt?: unknown }).startedAt
-        : undefined;
-    const point = typeof startedAt === 'string' ? Date.parse(startedAt) : Number.NaN;
+    const point = resendStatusPosition(drain.position);
     // Missing/malformed P or equality is a closed refusal. First observations at P seed state and emit nothing.
-    if (!Number.isFinite(point) || observed >= point) return false;
+    const comparison = point === undefined ? undefined : compareResendStatusPositions(observed, point);
+    if (comparison === undefined || comparison >= 0) return false;
   }
   return true;
 }
@@ -1019,12 +1059,14 @@ function candidateFollowsPoint(candidate: CandidatePosition, point: unknown): bo
     const pointIndex = orderedIds.indexOf(anchorId);
     return pointIndex > candidateIndex;
   }
-  const startedAt =
-    typeof point === 'object' && point !== null ? (point as { startedAt?: unknown }).startedAt : undefined;
-  if (typeof startedAt !== 'string') return false;
-  const observed = Date.parse(candidate.observedAt);
-  const activation = Date.parse(startedAt);
-  return Number.isFinite(observed) && Number.isFinite(activation) && observed > activation;
+  const observed = resendStatusPosition({
+    startedAt: candidate.observedAt,
+    scanGeneration: candidate.scanGeneration,
+  });
+  const activation = resendStatusPosition(point);
+  const comparison =
+    observed === undefined || activation === undefined ? undefined : compareResendStatusPositions(observed, activation);
+  return comparison !== undefined && comparison > 0;
 }
 
 function slackEvent(

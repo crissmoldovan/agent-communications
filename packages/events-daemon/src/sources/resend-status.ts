@@ -28,6 +28,8 @@ export interface ResendStatusChange {
   readonly previous: string;
   readonly current: string;
   readonly observedAt: string;
+  /** D-C's durable ordering tiebreaker; it never enters the public event payload. */
+  readonly scanGeneration: number;
   readonly from: ResendSentItem['from'];
   readonly to: ResendSentItem['to'];
   readonly cc: ResendSentItem['cc'];
@@ -36,6 +38,70 @@ export interface ResendStatusChange {
   readonly createdAt: string | null;
   readonly scheduledAt: string | null;
   readonly messageId: string | null;
+}
+
+export interface ResendStatusPosition {
+  readonly startedAt: string;
+  readonly scanGeneration: number;
+}
+
+/**
+ * Advances one account's durable status ordering witness. The instant never moves backwards, while the generation
+ * advances for every P sample and provider observation so equal instants still have a strict order after rollback.
+ */
+export function advanceResendStatusHighWater(
+  store: EventDatabase,
+  accountId: string,
+  now: number,
+): ResendStatusPosition {
+  if (!Number.isFinite(now)) throw new Error('a Resend status observation needs a finite clock instant');
+  const sampledAt = new Date(now).toISOString();
+  return store.immediate(() => {
+    const prior = store.database
+      .prepare('SELECT high_water_at, scan_generation FROM resend_status_high_water WHERE account_id = ?')
+      .get(accountId) as { high_water_at: string; scan_generation: number } | undefined;
+    const priorAt = prior === undefined ? Number.NaN : Date.parse(prior.high_water_at);
+    if (
+      prior !== undefined &&
+      (!Number.isFinite(priorAt) || !Number.isSafeInteger(prior.scan_generation) || prior.scan_generation < 1)
+    )
+      throw new Error('a Resend status high-water cursor is malformed');
+    const startedAt = prior !== undefined && priorAt >= now ? prior.high_water_at : sampledAt;
+    const scanGeneration = (prior?.scan_generation ?? 0) + 1;
+    store.database
+      .prepare(
+        `INSERT INTO resend_status_high_water (account_id, high_water_at, scan_generation, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(account_id) DO UPDATE SET high_water_at = excluded.high_water_at,
+           scan_generation = excluded.scan_generation, updated_at = excluded.updated_at`,
+      )
+      .run(accountId, startedAt, scanGeneration, now);
+    return { startedAt, scanGeneration };
+  });
+}
+
+/** Missing generations are legacy positions; they sort before every D-C position at the same instant. */
+export function resendStatusPosition(value: unknown): ResendStatusPosition | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const startedAt = (value as { startedAt?: unknown }).startedAt;
+  const scanGeneration = (value as { scanGeneration?: unknown }).scanGeneration;
+  if (typeof startedAt !== 'string' || !Number.isFinite(Date.parse(startedAt))) return undefined;
+  if (scanGeneration === undefined) return { startedAt, scanGeneration: 0 };
+  if (typeof scanGeneration !== 'number' || !Number.isSafeInteger(scanGeneration) || scanGeneration < 0)
+    return undefined;
+  return { startedAt, scanGeneration };
+}
+
+/** Compares the D-C status position tuple, failing callers closed when either instant is malformed. */
+export function compareResendStatusPositions(
+  left: ResendStatusPosition,
+  right: ResendStatusPosition,
+): number | undefined {
+  const leftAt = Date.parse(left.startedAt);
+  const rightAt = Date.parse(right.startedAt);
+  if (!Number.isFinite(leftAt) || !Number.isFinite(rightAt)) return undefined;
+  if (leftAt !== rightAt) return leftAt < rightAt ? -1 : 1;
+  return left.scanGeneration === right.scanGeneration ? 0 : left.scanGeneration < right.scanGeneration ? -1 : 1;
 }
 
 interface PendingStatusStage {
@@ -200,7 +266,7 @@ export class ResendStatusSource {
   readonly #store: EventDatabase;
   readonly #accountId: string;
   readonly #reader: ResendEventReader;
-  readonly #admit: (change: ResendStatusChange) => Promise<'terminal' | 'pending'>;
+  readonly #admit: (change: ResendStatusChange, stageId: string) => Promise<'terminal' | 'pending'>;
   readonly #encrypt: (value: StatusStoredRecord, id: string) => Promise<Uint8Array>;
   readonly #decrypt: (stored: Uint8Array, id: string) => Promise<unknown>;
   readonly #debts: () => readonly SourceStageDebt[];
@@ -216,7 +282,7 @@ export class ResendStatusSource {
       store: EventDatabase;
       accountId: string;
       reader: ResendEventReader;
-      admit: (change: ResendStatusChange) => Promise<'terminal' | 'pending'>;
+      admit: (change: ResendStatusChange, stageId: string) => Promise<'terminal' | 'pending'>;
       encrypt: (value: StatusStoredRecord, id: string) => Promise<Uint8Array>;
       decrypt: (stored: Uint8Array, id: string) => Promise<unknown>;
       debts: () => readonly SourceStageDebt[];
@@ -244,13 +310,13 @@ export class ResendStatusSource {
     this.#mayAdmit = input.mayAdmit ?? (() => true);
   }
 
-  async baseline(): Promise<string> {
+  async baseline(): Promise<ResendStatusPosition> {
     return this.#scopeLock.withScope(this.#scope, () => this.#baseline());
   }
 
-  async #baseline(): Promise<string> {
+  async #baseline(): Promise<ResendStatusPosition> {
     this.#assertUnfenced();
-    const start = new Date(this.#now()).toISOString();
+    const start = advanceResendStatusHighWater(this.#store, this.#accountId, this.#now());
     this.#store.immediate(() => {
       this.#assertWriteStillLive();
       this.#assertUnfenced();
@@ -259,7 +325,7 @@ export class ResendStatusSource {
           `INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at) VALUES ('resend', ?, 'status', ?, ?)
            ON CONFLICT(source, account_id, cursor_scope) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at`,
         )
-        .run(this.#accountId, start, this.#now());
+        .run(this.#accountId, JSON.stringify(start), this.#now());
     });
     return start;
   }
@@ -282,7 +348,13 @@ export class ResendStatusSource {
         if (created !== null && Number.isFinite(created) && created < this.#now() - WEEK_MS) continue;
         const pending = await this.#pending(item.id);
         if (pending !== null) {
-          const result = await this.#admit(pending.value.change);
+          // This provider item is still an observation even though its frozen change already has a stage record.
+          // Advance the witness before deciding whether that record remains held for a child pointer.
+          this.#observe();
+          // A post-P status is durably staged but is not old-version work.  Keep it encrypted until the replacement
+          // publishes its child, then let the child admit the same frozen change against its own point.
+          if (!this.#mayAdmit(pending.value.change)) continue;
+          const result = await this.#admit(pending.value.change, pending.id);
           if (result === 'terminal') {
             this.#settlePending(pending);
           }
@@ -299,12 +371,13 @@ export class ResendStatusSource {
           this.#writeState(item.id, item.lastEvent);
           continue;
         }
-        const observedAt = new Date(this.#now()).toISOString();
+        const position = this.#observe();
         const change: ResendStatusChange = {
           emailId: item.id,
           previous: existing.last_event,
           current: item.lastEvent,
-          observedAt,
+          observedAt: position.startedAt,
+          scanGeneration: position.scanGeneration,
           from: item.from,
           to: item.to,
           cc: item.cc,
@@ -315,15 +388,16 @@ export class ResendStatusSource {
           messageId: item.messageId,
         };
         // A status source has no ordered backlog. Once a replacement sampled P, an old rule may only seed its
-        // content-free P state; it cannot consume an observation at/after P. Leaving the old P state intact lets
-        // the new version, once installed, see this later change exactly once instead of silently losing it.
+        // content-free P state; it cannot consume an observation at/after P. Preserve that later change encrypted
+        // without an old-version debt until the replacement pointer makes the child active.
         if (!this.#mayAdmit(change)) {
+          await this.#stage(change, false);
           continue;
         }
         await this.#stage(change);
         const staged = await this.#pending(item.id);
         if (staged === null) continue;
-        const result = await this.#admit(staged.value.change);
+        const result = await this.#admit(staged.value.change, staged.id);
         if (result === 'terminal') {
           this.#settlePending(staged);
         }
@@ -452,7 +526,8 @@ export class ResendStatusSource {
   }
 
   #writeState(emailId: string, lastEvent: string): void {
-    const now = this.#now();
+    const position = this.#observe();
+    const observedAt = Date.parse(position.startedAt);
     this.#failpoint?.('before-move');
     this.#store.immediate(() => {
       this.#assertWriteStillLive();
@@ -463,9 +538,13 @@ export class ResendStatusSource {
            ON CONFLICT(account_id, email_id) DO UPDATE SET last_event = excluded.last_event, observed_at = excluded.observed_at,
              expires_at = excluded.expires_at`,
         )
-        .run(this.#accountId, emailId, lastEvent, now, now + WEEK_MS);
+        .run(this.#accountId, emailId, lastEvent, observedAt, observedAt + WEEK_MS);
     });
     this.#failpoint?.('after-move');
+  }
+
+  #observe(): ResendStatusPosition {
+    return advanceResendStatusHighWater(this.#store, this.#accountId, this.#now());
   }
 
   async #pending(emailId: string): Promise<LoadedPendingStatusStage | null> {
@@ -484,7 +563,7 @@ export class ResendStatusSource {
     };
   }
 
-  async #stage(change: ResendStatusChange): Promise<void> {
+  async #stage(change: ResendStatusChange, includeCurrentDebts = true): Promise<void> {
     this.#failpoint?.('before-stage');
     const id = this.#stageId(change.emailId);
     const encrypted = await this.#encrypt({ change }, id);
@@ -503,7 +582,7 @@ export class ResendStatusSource {
       const debt = this.#store.database.prepare(
         'INSERT OR IGNORE INTO source_stage_rule_debts (stage_id, rule_id, rule_version) VALUES (?, ?, ?)',
       );
-      for (const rule of this.#debts()) debt.run(id, rule.ruleId, rule.ruleVersion);
+      if (includeCurrentDebts) for (const rule of this.#debts()) debt.run(id, rule.ruleId, rule.ruleVersion);
     });
     this.#failpoint?.('after-stage');
   }
@@ -517,14 +596,20 @@ export class ResendStatusSource {
         .prepare('SELECT 1 AS present FROM source_scan_state WHERE id = ? AND encrypted_record = ?')
         .get(pending.id, pending.encryptedRecord) as { present: number } | undefined;
       if (present === undefined) throw new Error('stale Resend status stage');
-      const now = this.#now();
+      const observedAt = Date.parse(pending.value.change.observedAt);
       this.#store.database
         .prepare(
           `INSERT INTO resend_status_state (account_id, email_id, last_event, observed_at, expires_at) VALUES (?, ?, ?, ?, ?)
            ON CONFLICT(account_id, email_id) DO UPDATE SET last_event = excluded.last_event, observed_at = excluded.observed_at,
              expires_at = excluded.expires_at`,
         )
-        .run(this.#accountId, pending.value.change.emailId, pending.value.change.current, now, now + WEEK_MS);
+        .run(
+          this.#accountId,
+          pending.value.change.emailId,
+          pending.value.change.current,
+          observedAt,
+          observedAt + WEEK_MS,
+        );
       this.#store.database
         .prepare('DELETE FROM source_scan_state WHERE id = ? AND encrypted_record = ?')
         .run(pending.id, pending.encryptedRecord);
