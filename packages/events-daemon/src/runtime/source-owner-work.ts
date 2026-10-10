@@ -491,7 +491,8 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
           activationPointIdentities: rule.activationPointIdentities,
         })),
       scopeIsFenced: (scopeId) =>
-        isSourceScopeFenced(input.store.database, { source: 'whatsapp', accountId: scope.accountId, scopeId }),
+        isSourceScopeFenced(input.store.database, { source: 'whatsapp', accountId: scope.accountId, scopeId }) ||
+        hasPendingWhatsAppReplacementDrain(input.store.database, scope.accountId, scopeId),
       assertWrite,
       now: input.now,
       failpoint: input.failpoint,
@@ -634,6 +635,32 @@ function statusDrainHasStagedDebt(store: EventDatabase, scope: SourceScope, drai
             AND stage.source = ? AND stage.account_id = ? AND stage.cursor_scope = 'status'`,
       )
       .get(drain.oldRuleId, drain.oldRuleVersion, scope.source, scope.accountId) !== undefined
+  );
+}
+
+/**
+ * A WhatsApp old-side drain resolves only the P baseline that the activation's checked-copy pass already staged.
+ * Until the same completion publishes the child, a tuple first seen after P must stay out of the account snapshot
+ * head so the shared child can observe it as new (and an old-only child can never receive it).
+ */
+function hasPendingWhatsAppReplacementDrain(
+  database: EventDatabase['database'],
+  accountId: string,
+  scopeId: string,
+): boolean {
+  return (
+    database
+      .prepare(
+        `SELECT 1 AS present
+           FROM replacement_drains
+           JOIN activation_intents ON activation_intents.id = replacement_drains.intent_id
+          WHERE replacement_drains.source = 'whatsapp'
+            AND replacement_drains.account_id = ?
+            AND replacement_drains.position_scope = ?
+            AND replacement_drains.old_in_scope = 1
+            AND activation_intents.status = 'pending-completion'`,
+      )
+      .get(accountId, scopeId) !== undefined
   );
 }
 

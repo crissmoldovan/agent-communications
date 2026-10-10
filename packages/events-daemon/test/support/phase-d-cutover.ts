@@ -118,6 +118,15 @@ export class PhaseDCutoverFixture {
   #resendSentStatus = 'sent';
   #resendSentItems: readonly Readonly<{ id: string; status: string }>[] | undefined;
   #schedulerPointDecryptHook: (() => Promise<void> | void) | undefined;
+  #whatsappVisibility: Readonly<{
+    version: 1;
+    digest: string;
+    seesMessage: (chatJid: string, chatKind: string, senderJidRaw: string, fromMe: boolean) => boolean;
+  }> = {
+    version: 1,
+    digest: createHash('sha256').update('cutover').digest('hex'),
+    seesMessage: () => true,
+  };
   #whatsappMessages: readonly WhatsAppCutoverMessage[] = [
     {
       chatJid: 'chat-cutover',
@@ -232,6 +241,22 @@ export class PhaseDCutoverFixture {
   /** Replaces the next checked-copy snapshot without opening a provider connection. */
   setWhatsAppMessages(messages: readonly WhatsAppCutoverMessage[]): void {
     this.#whatsappMessages = messages;
+  }
+
+  /** Changes the synthetic list under the production composition's lock without starting a source turn. */
+  setWhatsAppVisibility(
+    seesMessage: (chatJid: string, chatKind: string, senderJidRaw: string, fromMe: boolean) => boolean,
+  ): void {
+    this.#whatsappVisibility = {
+      version: 1,
+      digest: createHash('sha256').update(this.#whatsappVisibility.digest).digest('hex'),
+      seesMessage,
+    };
+  }
+
+  async applyWhatsAppVisibility(): Promise<void> {
+    if (!this.#whatsapp) throw new Error('cut-over WhatsApp composition is closed');
+    await this.#whatsapp.visibilityFence.withCurrentVisibility({ accountId: this.accountId }, () => undefined);
   }
 
   async activate(
@@ -603,7 +628,18 @@ export class PhaseDCutoverFixture {
     assert.equal(count(database, 'ingest'), 0, 'deadline settlement retains no ingest content');
     assert.equal(count(database, 'ingest_rules'), 0, 'deadline settlement retains no projection content');
     assert.equal(count(database, 'source_scan_state'), 0, 'deadline settlement retains no staged source content');
-    assert.equal(count(database, 'whatsapp_occurrences'), 0, 'deadline settlement retains no WhatsApp occurrence');
+    if (this.source !== 'whatsapp')
+      assert.equal(count(database, 'whatsapp_occurrences'), 0, 'deadline settlement retains no WhatsApp occurrence');
+    else
+      assert.equal(
+        database
+          .prepare(
+            'SELECT 1 FROM whatsapp_occurrences WHERE staged_payload_ref IS NOT NULL OR stage_expires_at IS NOT NULL',
+          )
+          .get(),
+        undefined,
+        'a WhatsApp first-representation ledger row retains no content after deadline settlement',
+      );
     assert.equal(count(database, 'whatsapp_rule_admissions'), 0, 'deadline settlement retains no WhatsApp admission');
   }
 
@@ -858,19 +894,14 @@ export class PhaseDCutoverFixture {
   }
 
   private whatsappReader(): WhatsAppEventOperations {
-    const visibility = {
-      version: 1 as const,
-      digest: createHash('sha256').update('cutover').digest('hex'),
-      seesMessage: () => true,
-    };
     return {
-      withCurrentEventVisibility: async (_input, work) => work(visibility),
+      withCurrentEventVisibility: async (_input, work) => work(this.#whatsappVisibility),
       withEventSnapshot: async (_input, work) => {
         await this.record('whatsapp.snapshot');
         return work({
           accountId: this.accountId,
           accountName: 'cutover',
-          visibility,
+          visibility: this.#whatsappVisibility,
           messages: this.#whatsappMessages.map((message, index) => ({
             sourceOrder: index + 1,
             chatJid: message.chatJid,

@@ -54,7 +54,8 @@ export interface WhatsAppSourceRule {
   readonly activationPointIdentities?: ReadonlyMap<string, ReadonlySet<string>> | undefined;
 }
 
-interface StageableWhatsAppMessage {
+/** A visible first-representation candidate.  An empty debt set still needs its occurrence ledger row. */
+interface CandidateWhatsAppMessage {
   readonly messageId: string;
   readonly message: EligibleWhatsAppRawMessage;
   readonly debts: readonly WhatsAppSourceRule[];
@@ -127,23 +128,32 @@ export class WhatsAppSourceWorker {
       }
       const { generation, added } = this.prepareCandidate(snapshot.visibility, candidates);
       try {
-        // This is the owed-rule snapshot for the complete checked-copy pass. A later activation never turns an
-        // already observed key into a new backfill candidate.
-        const candidatesWithDebts = added.flatMap(([messageId, message]) => {
-          const debts = this.#rules().filter((rule) => owes(rule, messageId, message.chatJid));
-          return debts.length === 0 ? [] : [{ messageId, message, debts }];
-        });
-        const deferred = candidatesWithDebts.filter((item) => this.hasFencedMatchingScope(item));
+        // A matching P fence owns the raw identity before any active-rule calculation. In particular, a new-only
+        // chat is not yet an active debt, so deciding it is unowed first would consume the identity in this head and
+        // make the new version miss it after the swap.
+        const deferred = added.filter(([, message]) => this.hasFencedMatchingScope(message));
         if (deferred.length > 0)
           this.discardCandidateKeys(
             generation,
-            deferred.map((item) => item.messageId),
+            deferred.map(([messageId]) => messageId),
           );
-        const stageable = candidatesWithDebts.filter((item) => !this.hasFencedMatchingScope(item));
+        // This is the owed-rule snapshot for the complete checked-copy pass. A later activation never turns an
+        // already observed key into a new backfill candidate. Empty debts deliberately remain candidates: D4 gives
+        // their visible first representation a ledger row without staging content or an admission.
+        const candidatesWithDebts: CandidateWhatsAppMessage[] = added
+          .filter(([, message]) => !this.hasFencedMatchingScope(message))
+          .map(([messageId, message]) => ({
+            messageId,
+            message,
+            debts: this.#rules().filter((rule) => owes(rule, messageId, message.chatJid)),
+          }));
+        const stageable = candidatesWithDebts.filter((item) => item.debts.length > 0);
         const encrypted = new Map<string, Uint8Array>();
         this.#failpoint?.('before-stage');
         for (const item of stageable) encrypted.set(item.messageId, await this.#stage(item.message));
-        this.commitCandidate(snapshot.visibility, generation, stageable, encrypted);
+        // Include unowed candidates in the transactional fence re-check as well; a fence which appears during
+        // encryption must keep every covered key out of the head, not only the ones with a current debt.
+        this.commitCandidate(snapshot.visibility, generation, candidatesWithDebts, encrypted);
         this.#failpoint?.('after-stage');
         return { generation, newMessages: stageable.length };
       } catch (error) {
@@ -225,20 +235,20 @@ export class WhatsAppSourceWorker {
   private commitCandidate(
     visibility: WhatsAppEventVisibility,
     generation: number,
-    added: readonly StageableWhatsAppMessage[],
+    added: readonly CandidateWhatsAppMessage[],
     encrypted: ReadonlyMap<string, Uint8Array>,
   ): void {
     const now = this.#now();
     this.#failpoint?.('before-move');
     this.#store.immediate(() => {
       this.#assertWrite?.();
-      const deferred = added.filter((item) => this.hasFencedMatchingScope(item));
+      const deferred = added.filter((item) => this.hasFencedMatchingScope(item.message));
       if (deferred.length > 0)
         this.deleteCandidateKeys(
           generation,
           deferred.map((item) => item.messageId),
         );
-      const stageable = added.filter((item) => !this.hasFencedMatchingScope(item));
+      const committed = added.filter((item) => !this.hasFencedMatchingScope(item.message));
       const live = this.#store.database
         .prepare('SELECT version, lists_digest FROM whatsapp_visibility WHERE account_id = ?')
         .get(this.#accountId) as { version: number; lists_digest: string } | undefined;
@@ -247,30 +257,37 @@ export class WhatsAppSourceWorker {
       const before = this.currentHead();
       if ((before?.committed_generation ?? 0) !== generation - 1)
         throw new CommsError('APPROVAL_VOID', 'the WhatsApp snapshot head changed before the candidate could commit');
-      for (const { messageId, message, debts } of stageable) {
-        const retention = sourceStageRetentionForDebts(now, debts);
-        const stageId = stageIdFor(this.#accountId, messageId);
-        const record = encrypted.get(messageId);
-        if (record === undefined) throw new CommsError('BAD_DATA', 'a WhatsApp first representation was not staged');
-        this.#store.database
-          .prepare(
-            `INSERT OR IGNORE INTO source_scan_state
-              (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at)
-             VALUES (?, 'whatsapp', ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            stageId,
-            this.#accountId,
-            `chat:${message.chatJid}`,
-            retention.stagedAt,
-            retention.stageExpiresAt,
-            record,
-            now,
-          );
-        for (const debt of debts) {
+      for (const { messageId, message, debts } of committed) {
+        let stageId: string | null = null;
+        let stageExpiresAt: number | null = null;
+        if (debts.length > 0) {
+          const retention = sourceStageRetentionForDebts(now, debts);
+          stageId = stageIdFor(this.#accountId, messageId);
+          stageExpiresAt = retention.stageExpiresAt;
+          const record = encrypted.get(messageId);
+          if (record === undefined) throw new CommsError('BAD_DATA', 'a WhatsApp first representation was not staged');
           this.#store.database
-            .prepare(`INSERT OR IGNORE INTO source_stage_rule_debts (stage_id, rule_id, rule_version) VALUES (?, ?, ?)`)
-            .run(stageId, debt.ruleId, debt.ruleVersion);
+            .prepare(
+              `INSERT OR IGNORE INTO source_scan_state
+                (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at)
+               VALUES (?, 'whatsapp', ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              stageId,
+              this.#accountId,
+              `chat:${message.chatJid}`,
+              retention.stagedAt,
+              retention.stageExpiresAt,
+              record,
+              now,
+            );
+          for (const debt of debts) {
+            this.#store.database
+              .prepare(
+                `INSERT OR IGNORE INTO source_stage_rule_debts (stage_id, rule_id, rule_version) VALUES (?, ?, ?)`,
+              )
+              .run(stageId, debt.ruleId, debt.ruleVersion);
+          }
         }
         this.#store.database
           .prepare(
@@ -278,7 +295,7 @@ export class WhatsAppSourceWorker {
               (account_id, message_id, first_seen_generation, first_seen_at, visibility_version, staged_payload_ref, stage_expires_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(this.#accountId, messageId, generation, now, live.version, stageId, retention.stageExpiresAt);
+          .run(this.#accountId, messageId, generation, now, live.version, stageId, stageExpiresAt);
         insertWhatsAppRuleAdmissions(this.#store.database, {
           accountId: this.#accountId,
           messageId,
@@ -301,6 +318,11 @@ export class WhatsAppSourceWorker {
           )
           .run(generation, live.version, this.#accountId, before.committed_generation);
       }
+      // The new head alone names the authoritative raw snapshot. Candidate cleanup above handles failed futures;
+      // this post-switch cleanup bounds successful history and removes raw tuples hidden by a later generation.
+      this.#store.database
+        .prepare('DELETE FROM whatsapp_snapshot_keys WHERE account_id = ? AND generation < ?')
+        .run(this.#accountId, generation);
     });
     this.#failpoint?.('after-move');
   }
@@ -326,13 +348,13 @@ export class WhatsAppSourceWorker {
       .get(this.#accountId) as Head | undefined;
   }
 
-  private hasFencedMatchingScope(item: StageableWhatsAppMessage): boolean {
+  private hasFencedMatchingScope(message: EligibleWhatsAppRawMessage): boolean {
     if (this.#scopeIsFenced === undefined) return false;
     // The candidate's debts contain only currently active rules.  A pending new-only explicit-chat activation has no
     // debt yet, but its durable chat fence still covers this tuple; accepting it through an overlapping all-allowed
     // debt would permanently consume its occurrence identity before the new rule can admit it.  These are the only
     // WhatsApp scope shapes that can cover one chat, and this predicate is re-run in the commit transaction below.
-    return this.#scopeIsFenced(`chat:${item.message.chatJid}`) || this.#scopeIsFenced('all-allowed');
+    return this.#scopeIsFenced(`chat:${message.chatJid}`) || this.#scopeIsFenced('all-allowed');
   }
 
   private discardCandidateKeys(generation: number, messageIds: readonly string[]): void {
