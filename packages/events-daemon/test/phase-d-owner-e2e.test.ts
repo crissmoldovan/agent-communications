@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { emptyConfig } from '@agentcomms/core';
 import { EventControlClient } from '../src/control/client.ts';
 import { startEventOwner } from '../src/runtime/owner.ts';
+import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 /** The fake list file's digest has the real shape: lowercase SHA-256 of the list document. */
@@ -33,6 +34,128 @@ test('D7: a normal Phase-D owner registers all sources and exposes their content
     }
   } finally {
     await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B1: a Gmail alias swap is refused before the returned source can read or stage another mailbox', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const root = await shortTempDir('aev-b1-gmail-identity-');
+  const stateDir = join(root, 'state');
+  const configDir = join(root, 'config');
+  const firstId = 'ibx_AAAAAAAAAAAAAAAA';
+  const secondId = 'ibx_BBBBBBBBBBBBBBBB';
+  await mkdir(configDir, { recursive: true });
+  const config = emptyConfig();
+  const inbox = (id: string, email: string) => ({
+    id,
+    provider: 'gmail' as const,
+    email,
+    identity: 'oidc' as const,
+    client: 'client-1',
+    tier: 'read' as const,
+    contacts: false,
+    grantedScopes: [],
+    secretRef: `gmail:none:${id}`,
+    internalDomains: [],
+    createdAt: '2026-10-10T12:00:00.000Z',
+  });
+  const first = inbox(firstId, 'first@example.test');
+  const second = inbox(secondId, 'second@example.test');
+  config.inboxes['events/first'] = first;
+  config.inboxes['events/second'] = second;
+  await writeFile(join(configDir, 'config.json'), `${JSON.stringify(config)}\n`);
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const rule = {
+      ruleId: 'rule-gmail-identity',
+      version: 1,
+      source: {
+        channel: 'gmail',
+        accountIds: [firstId],
+        options: { channel: 'gmail', labels: 'inbox', includeSpamTrash: false },
+      },
+      event: { type: 'gmail.message.received', version: 1 },
+      condition: { path: '/id', op: 'exists' },
+      mapping: { constant: 'safe' },
+      targets: [],
+      subscribers: [],
+      judges: [],
+      deliveryRateCap: 1,
+      retention: {
+        ingestMs: 604_800_000,
+        holdMs: 604_800_000,
+        deliveryMs: 604_800_000,
+        dryrunMs: 86_400_000,
+        sseReplayMs: 604_800_000,
+        deadLetterMs: 604_800_000,
+        decisionMetadataMs: 7_776_000_000,
+      },
+    };
+    store.database
+      .prepare(
+        `INSERT INTO rule_versions
+         (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+         VALUES ('rule-gmail-identity@1', 'rule-gmail-identity', 1, ?, 'digest', 'active', 'approval', 'cutover', 1)`,
+      )
+      .run(JSON.stringify(rule));
+    store.database.exec(
+      `INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
+       VALUES ('rule', 'rule-gmail-identity', 1, 'cutover', 1);
+       INSERT INTO rule_activation_points
+       (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at)
+       VALUES ('cutover', 'rule-gmail-identity', 1, 'gmail', '${firstId}', 'mailbox', X'01', 1);
+       UPDATE event_settings SET enabled = 1, paused = 0;`,
+    );
+  } finally {
+    store.close();
+  }
+  let providerCalls = 0;
+  const owner = await startEventOwner({
+    stateDir,
+    configDir,
+    tickMs: 60_000,
+    gmailSourceFor: async ({ accountId, alias }) => {
+      assert.equal(accountId, firstId);
+      assert.equal(
+        alias,
+        'events/first',
+        'the owner first resolves the configured presentation alias for the stable id',
+      );
+      config.inboxes['events/first'] = second;
+      config.inboxes['events/second'] = first;
+      await writeFile(join(configDir, 'config.json'), `${JSON.stringify(config)}\n`);
+      return {
+        inboxId: secondId,
+        getProfile: async () => {
+          providerCalls += 1;
+          return { historyId: '2' };
+        },
+        listHistory: async () => {
+          providerCalls += 1;
+          return { historyId: '2', history: [], nextPageToken: undefined };
+        },
+      } as never;
+    },
+  });
+  try {
+    await owner.tick();
+    assert.equal(providerCalls, 0, 'the swapped mailbox never reaches a provider method');
+    const database = await openEventDatabase({ stateDir });
+    try {
+      assert.equal(database.database.prepare('SELECT 1 FROM source_scan_state').get(), undefined);
+      assert.equal(database.database.prepare('SELECT 1 FROM ingest').get(), undefined);
+      assert.equal(
+        database.database.prepare('SELECT 1 FROM rule_activation_points WHERE account_id = ?').get(secondId),
+        undefined,
+        'the swapped mailbox never becomes an activation anchor',
+      );
+    } finally {
+      database.close();
+    }
+  } finally {
+    await owner.stop();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -92,6 +215,7 @@ test('D7b: a normal owner approves all four injected fakes, interleaves source w
     pollIntervalMs: 1,
     gmailSourceFor: async () =>
       ({
+        inboxId: ids.gmail,
         getProfile: async () => ({ historyId: '1' }),
         listHistory: async () =>
           emit

@@ -168,6 +168,10 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
 
   if (scope.source === 'slack') {
     const reader = await input.slackSourceFor(scope.accountId);
+    if (reader.accountId !== scope.accountId)
+      throw new CommsError('CONFIG', 'the Slack event source resolved a different stable account id', {
+        details: { reason: 'ACCOUNT_CHANGED', accountId: scope.accountId, source: 'slack' },
+      });
     const conversationId = scope.scopeId.slice(`slack:${scope.accountId}:`.length);
     await accountLive();
     const conversation = await reader.conversation({ conversationId });

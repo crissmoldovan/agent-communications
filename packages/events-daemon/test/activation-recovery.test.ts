@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { ApprovalStore, CommsError, ConfigStore, canonicalJson, emptyConfig } from '@agentcomms/core';
 import { ImmutableVersions } from '../src/domain/versions.ts';
+import { purgeRemovedAccountWork } from '../src/runtime/account-fence.ts';
 import { ActivationRuntime, type PreparedActivation } from '../src/runtime/activations.ts';
 import { EventExpiry } from '../src/runtime/expiry.ts';
 import { EventLifecycle } from '../src/runtime/lifecycle.ts';
@@ -59,6 +60,8 @@ async function fixture(
       readonly accountId: string;
       readonly position: unknown;
     }) => Promise<Uint8Array>;
+    /** Fails selected baseline provider calls after the activation has durably claimed its approval. */
+    readonly failProfileCalls?: readonly number[];
   } = {},
 ) {
   const root = await shortTempDir('events-act-');
@@ -107,6 +110,7 @@ async function fixture(
       getProfile: async () => {
         profileCalls += 1;
         options.onProfile?.(store);
+        if (options.failProfileCalls?.includes(profileCalls)) throw new Error(`profile failure ${profileCalls}`);
         return { emailAddress: 'events@example.test', messagesTotal: 1, threadsTotal: 1, historyId: '202' };
       },
       listHistory: async () => {
@@ -1096,6 +1100,161 @@ const count = (setup: Awaited<ReturnType<typeof fixture>>, sql: string, ...value
       count: number;
     }
   ).count;
+
+test('P1/K6: removing a planned account cancels a used completion before recovery, resume, or a scheduler turn can revive it', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const cases = [
+    { name: 'first activation recovery', kind: 'first' as const, resume: 'recover' as const, failsAt: 1 },
+    { name: 'multi-account replacement resume', kind: 'replacement' as const, resume: 'claimed' as const, failsAt: 3 },
+    { name: 'enable-all scheduler turn', kind: 'enable-all' as const, resume: 'scheduler' as const, failsAt: 3 },
+  ];
+  for (const entry of cases) {
+    const setup = await fixture({ failProfileCalls: [entry.failsAt] });
+    try {
+      const versions = new ImmutableVersions(setup.store.database);
+      versions.createTarget(target);
+      let planned: PreparedActivation;
+      if (entry.kind === 'first') {
+        versions.createRule(rule);
+        planned = (await setup.runtime.prepareRule({
+          ruleId: rule.ruleId,
+          version: rule.version,
+        })) as PreparedActivation;
+      } else {
+        versions.createRule(multi);
+        const original = (await setup.runtime.prepareRule({ ruleId: multi.ruleId, version: 1 })) as PreparedActivation;
+        await setup.runtime.approve({
+          approvalId: original.approvalId,
+          answer: await setup.approvals.issueDisclosureChallenge(original.approvalId),
+        });
+        if (entry.kind === 'replacement') {
+          setup.store.database.prepare('UPDATE event_settings SET enabled = 1').run();
+          versions.createRule({ ...multi, version: 2, mapping: { constant: 'new cut-over' } });
+          planned = (await setup.runtime.prepareRule({ ruleId: multi.ruleId, version: 2 })) as PreparedActivation;
+        } else {
+          planned = await setup.runtime.prepareEnableAll();
+        }
+      }
+      const answer = await setup.approvals.issueDisclosureChallenge(planned.approvalId);
+      await assert.rejects(
+        () => setup.runtime.approve({ approvalId: planned.approvalId, answer }),
+        /profile failure/u,
+        `${entry.name}: the claimed baseline remains recoverable until account removal`,
+      );
+      assert.equal(
+        (
+          setup.store.database.prepare('SELECT status FROM activation_intents WHERE id = ?').get(planned.intentId) as {
+            status: string;
+          }
+        ).status,
+        'pending-completion',
+        `${entry.name}: the approval is used and its completion is pending`,
+      );
+
+      const configPath = join(setup.root, 'config', 'config.json');
+      const beforeRemoval = JSON.parse(await readFile(configPath, 'utf8')) as { inboxes: Record<string, unknown> };
+      const inbox = beforeRemoval.inboxes['events/gmail'];
+      await removeAccount(setup.root);
+      setup.store.immediate(() =>
+        purgeRemovedAccountWork(setup.store.database, { source: 'gmail', accountId: A }, setup.time.now()),
+      );
+      assert.deepEqual(
+        {
+          ...(setup.store.database
+            .prepare('SELECT status, failure_code FROM activation_intents WHERE id = ?')
+            .get(planned.intentId) as Record<string, unknown>),
+        },
+        { status: 'cancelled', failure_code: 'ACCOUNT_REMOVED' },
+        `${entry.name}: removal cancels its planned completion in the purge transaction`,
+      );
+      await readdAccount(setup.root, inbox);
+      setup.time.advance(60_000);
+
+      if (entry.resume === 'recover') await setup.runtime.recover();
+      else if (entry.resume === 'claimed') await setup.runtime.resumeClaimedCompletions();
+      else await stubScheduler(setup, []).tick();
+
+      assert.deepEqual(
+        {
+          ...(setup.store.database
+            .prepare('SELECT status, failure_code FROM activation_intents WHERE id = ?')
+            .get(planned.intentId) as Record<string, unknown>),
+        },
+        { status: 'cancelled', failure_code: 'ACCOUNT_REMOVED' },
+        `${entry.name}: a re-add cannot revive work approved before removal`,
+      );
+      assert.equal(
+        count(setup, 'activation_baselines WHERE intent_id = ?', planned.intentId),
+        0,
+        `${entry.name}: cancellation drops its baseline`,
+      );
+      assert.equal(
+        count(setup, 'replacement_drains WHERE intent_id = ?', planned.intentId),
+        0,
+        `${entry.name}: cancellation drops its drain`,
+      );
+      assert.equal(
+        count(setup, 'rule_activation_points WHERE activation_id = ?', planned.intentId),
+        0,
+        `${entry.name}: no new cut-over point is installed`,
+      );
+      assert.equal(
+        setup.profileCalls(),
+        entry.failsAt,
+        `${entry.name}: no later provider call reaches the re-added id`,
+      );
+      if (entry.kind === 'first')
+        assert.equal(versions.activeVersion('rule', rule.ruleId), null, 'the first activation never gains a pointer');
+      else
+        assert.equal(
+          versions.activeVersion('rule', multi.ruleId)?.version,
+          1,
+          `${entry.name}: no replacement or global re-enable changes the active version`,
+        );
+    } finally {
+      setup.store.close();
+      await rm(setup.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('P1: a later account revocation refuses a claimed completion even after that stable id is configured again', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture({ failProfileCalls: [1] });
+  try {
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createTarget(target);
+    versions.createRule(rule);
+    const planned = (await setup.runtime.prepareRule({
+      ruleId: rule.ruleId,
+      version: rule.version,
+    })) as PreparedActivation;
+    const answer = await setup.approvals.issueDisclosureChallenge(planned.approvalId);
+    await assert.rejects(() => setup.runtime.approve({ approvalId: planned.approvalId, answer }), /profile failure 1/u);
+    setup.store.immediate(() => {
+      setup.store.database
+        .prepare('INSERT INTO account_revocations (account_id, revoked_at) VALUES (?, ?)')
+        .run(A, setup.time.now());
+    });
+    setup.time.advance(60_000);
+    await setup.runtime.resumeClaimedCompletions();
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare('SELECT status, failure_code FROM activation_intents WHERE id = ?')
+          .get(planned.intentId) as Record<string, unknown>),
+      },
+      { status: 'cancelled', failure_code: 'ACCOUNT_REMOVED' },
+    );
+    assert.equal(setup.profileCalls(), 1, 'the revocation is checked before another provider boundary');
+    assert.equal(versions.activeVersion('rule', rule.ruleId), null);
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
 
 test('K6: an account re-added after its removal stays dark for a multi-account version until an approval re-samples it', {
   skip: WINDOWS_SKIP,

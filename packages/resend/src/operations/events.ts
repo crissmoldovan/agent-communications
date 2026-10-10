@@ -217,19 +217,36 @@ function sentItem(entry: Raw): ResendEventSentItem {
 async function readable<T>(
   context: ResendContext,
   name: string,
+  accountId: string | undefined,
   work: (transport: ResendTransport) => Promise<T>,
 ): Promise<T> {
-  const named: NamedAccount = await context.accounts.require(name);
+  const named: NamedAccount =
+    accountId === undefined
+      ? await context.accounts.require(name)
+      : ((await context.accounts.findById(accountId)) ??
+        (() => {
+          throw new CommsError('CONFIG', 'the Resend event account identity changed before its provider call', {
+            details: { reason: 'ACCOUNT_CHANGED', accountId },
+          });
+        })());
+  if (accountId !== undefined && named.account.id !== accountId)
+    throw new CommsError('CONFIG', 'the Resend event account identity changed before its provider call', {
+      details: { reason: 'ACCOUNT_CHANGED', accountId },
+    });
   if (keyPermissionOf(named.account) !== 'full_access')
     throw new CommsError('SOURCE_UNAVAILABLE', 'Resend event polling requires a full-access key');
   return work(await context.transport(named));
 }
 
 /** A structural read adapter: no permit, no sender, and each request is labelled background-event. */
-export function createResendEventReader(context: ResendContext, account: string): ResendEventReader {
+export function createResendEventReader(
+  context: ResendContext,
+  account: string,
+  accountId?: string,
+): ResendEventReader {
   return {
     async listReceived(after?: string) {
-      return readable(context, account, async (transport) => {
+      return readable(context, account, accountId, async (transport) => {
         const page = await resendRequest<Page<Raw>>(transport, 'GET', '/emails/receiving', {
           query: { limit: 100, after },
           throttlePriority: 'background-event',
@@ -241,7 +258,7 @@ export function createResendEventReader(context: ResendContext, account: string)
     async getReceived(id: string) {
       const emailId = resendId(id, 'received email id');
       try {
-        return await readable(context, account, async (transport) => {
+        return await readable(context, account, accountId, async (transport) => {
           const detail = await resendRequest<Raw>(transport, 'GET', `/emails/receiving/${emailId}`, {
             throttlePriority: 'background-event',
           });
@@ -253,7 +270,7 @@ export function createResendEventReader(context: ResendContext, account: string)
       }
     },
     async listSent(after?: string) {
-      return readable(context, account, async (transport) => {
+      return readable(context, account, accountId, async (transport) => {
         const page = await resendRequest<Page<Raw>>(transport, 'GET', '/emails', {
           query: { limit: 100, after },
           throttlePriority: 'background-event',
@@ -269,8 +286,14 @@ export function createResendEventReader(context: ResendContext, account: string)
 export function createResendEventReaderForPaths(
   input: Readonly<{
     account: string;
+    /** A daemon binding: resolve every request by this stable id, never by its presentation alias. */
+    accountId?: string | undefined;
     pathOverrides: PathOverrides;
   }>,
 ): ResendEventReader {
-  return createResendEventReader(new ResendContext({ pathOverrides: input.pathOverrides }), input.account);
+  return createResendEventReader(
+    new ResendContext({ pathOverrides: input.pathOverrides }),
+    input.account,
+    input.accountId,
+  );
 }

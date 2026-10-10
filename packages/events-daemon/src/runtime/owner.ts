@@ -305,14 +305,20 @@ async function startOwnerWithLock(
     // Gmail opens its own context, and so its own core with Gmail's caller, for the same folders: the commands its
     // errors tell a person to run are located from Gmail's installation. Handing it the daemon's core instead fails
     // before the first provider call, since only a suite package may be a caller.
-    if (options.gmailSourceFor) return options.gmailSourceFor({ accountId, alias });
-    return createGmailEventSource({
-      alias,
-      pathOverrides: {
-        stateDir,
-        ...(options.configDir === undefined ? {} : { configDir: options.configDir }),
-      },
-    });
+    const source = options.gmailSourceFor
+      ? await options.gmailSourceFor({ accountId, alias })
+      : await createGmailEventSource({
+          alias,
+          pathOverrides: {
+            stateDir,
+            ...(options.configDir === undefined ? {} : { configDir: options.configDir }),
+          },
+        });
+    if (source.inboxId !== accountId)
+      throw new CommsError('CONFIG', 'the Gmail event source resolved a different stable mailbox id', {
+        details: { reason: 'ACCOUNT_CHANGED', accountId, source: 'gmail' },
+      });
+    return source;
   };
   const sourceAliasFor = async (source: 'slack' | 'resend' | 'whatsapp', accountId: string): Promise<string> => {
     const config = await core.config.load();
@@ -327,17 +333,24 @@ async function startOwnerWithLock(
   };
   const slackSourceFor = async (accountId: string): Promise<SlackEventSource> => {
     const alias = await sourceAliasFor('slack', accountId);
-    if (options.slackSourceFor) return options.slackSourceFor({ accountId, alias });
-    return openSlackEventSourceForPaths({
-      alias,
-      pathOverrides: { stateDir, ...(options.configDir === undefined ? {} : { configDir: options.configDir }) },
-    });
+    const source = options.slackSourceFor
+      ? await options.slackSourceFor({ accountId, alias })
+      : await openSlackEventSourceForPaths({
+          alias,
+          pathOverrides: { stateDir, ...(options.configDir === undefined ? {} : { configDir: options.configDir }) },
+        });
+    if (source.accountId !== accountId)
+      throw new CommsError('CONFIG', 'the Slack event source resolved a different stable account id', {
+        details: { reason: 'ACCOUNT_CHANGED', accountId, source: 'slack' },
+      });
+    return source;
   };
   const resendReaderFor = async (accountId: string): Promise<ResendEventReader> => {
     const alias = await sourceAliasFor('resend', accountId);
     if (options.resendReaderFor) return options.resendReaderFor({ accountId, alias });
     return createResendEventReaderForPaths({
       account: alias,
+      accountId,
       pathOverrides: { stateDir, ...(options.configDir === undefined ? {} : { configDir: options.configDir }) },
     });
   };
