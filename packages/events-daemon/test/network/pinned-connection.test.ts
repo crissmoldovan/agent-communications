@@ -204,3 +204,21 @@ test('NET-B2: handshaken pinned TLS keeps an error sink after its handshake list
     tlsModule.connect = originalConnect;
   }
 });
+
+test('E6-A: global-only mode is reserved for the exact fixed TypeSafe endpoint', async () => {
+  let resolverCalls = 0;
+  const resolver = {
+    async lookup() {
+      resolverCalls += 1;
+      return ['8.8.8.8'];
+    },
+  };
+  for (const url of ['https://receiver.example.test/hook', 'http://127.0.0.1:11434/v1/systemone']) {
+    await assert.rejects(
+      () => preparePinnedConnection({ url, addressMode: 'global-only', resolver }),
+      (error: unknown) => error instanceof Error && /global-only.*TypeSafe|TypeSafe.*global-only/i.test(error.message),
+      url,
+    );
+  }
+  assert.equal(resolverCalls, 0, 'webhooks and local endpoints remain exact-set-only before DNS');
+});

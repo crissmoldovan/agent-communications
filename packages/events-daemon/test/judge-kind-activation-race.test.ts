@@ -16,7 +16,7 @@ const judge = {
   version: 1,
   kind: 'typesafe' as const,
   provider: 'typesafe',
-  model: 'jev',
+  model: 'jev-1.13.0',
   endpoint: 'https://api.typesafe.ai/v1/systemone',
   promptTemplate: 'typesafe-jev-noul-v1',
   protocol: 'noul' as const,

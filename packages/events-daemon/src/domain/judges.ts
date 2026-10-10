@@ -6,6 +6,9 @@ import { EventDomainError, JUDGE_KINDS, type JudgeKind } from './lifecycle.ts';
 
 export const TYPESAFE_SYSTEM_ONE_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 export const JUDGE_BUDGET_ID = 'judge-budget';
+/** Provider record: docs/superpowers/plans/2026-10-10-events-phase-e-provider-record.md, read 2026-10-10. */
+export const APPROVED_TYPESAFE_MODELS = ['jev-1.13.0'] as const;
+type ApprovedTypeSafeModel = (typeof APPROVED_TYPESAFE_MODELS)[number];
 
 export type JudgeProtocol =
   | { readonly protocol: 'noul' }
@@ -16,7 +19,7 @@ export interface TypeSafeJudgeDocument {
   readonly version: number;
   readonly kind: 'typesafe';
   readonly provider: 'typesafe';
-  readonly model: 'jev';
+  readonly model: ApprovedTypeSafeModel;
   readonly endpoint: typeof TYPESAFE_SYSTEM_ONE_ENDPOINT;
   readonly promptTemplate: string;
   readonly protocol: 'noul';
@@ -150,8 +153,9 @@ export function canonicalJudge(value: unknown): CanonicalJudgeDocument {
       ['judgeId', 'version', 'kind', 'provider', 'model', 'endpoint', 'promptTemplate', 'protocol'],
       'a typesafe judge document',
     );
-    if (judge.provider !== 'typesafe' || judge.model !== 'jev')
-      return fail('a typesafe judge names the TypeSafe Jev adapter');
+    if (judge.provider !== 'typesafe') return fail('a typesafe judge names the TypeSafe Jev adapter');
+    if (!(APPROVED_TYPESAFE_MODELS as readonly string[]).includes(judge.model as string))
+      return fail('a typesafe judge names one concrete model listed in the provider record');
     if (judge.endpoint !== TYPESAFE_SYSTEM_ONE_ENDPOINT)
       return fail('a typesafe judge has its fixed System One endpoint');
     const parsedProtocol = protocol({ protocol: judge.protocol }, 'a typesafe judge document');
@@ -160,7 +164,7 @@ export function canonicalJudge(value: unknown): CanonicalJudgeDocument {
       ...identity(judge, 'a typesafe judge'),
       kind: 'typesafe',
       provider: 'typesafe',
-      model: 'jev',
+      model: judge.model as ApprovedTypeSafeModel,
       endpoint: TYPESAFE_SYSTEM_ONE_ENDPOINT,
       promptTemplate: text(judge.promptTemplate, 'a typesafe judge prompt template'),
       protocol: 'noul',
