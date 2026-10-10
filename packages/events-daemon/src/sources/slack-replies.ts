@@ -797,7 +797,14 @@ export class SlackReplyDrains {
   }
 
   async discoverParent(
-    input: Readonly<{ intentId: string; accountId: string; conversationId: string; parentTs: string }>,
+    input: Readonly<{
+      intentId: string;
+      accountId: string;
+      conversationId: string;
+      parentTs: string;
+      /** An ordinary reconciler retained this otherwise-aged parent for its staged settlement. */
+      retainPastHorizon?: boolean;
+    }>,
   ): Promise<void> {
     assertSlackTimestamp(input.parentTs);
     const barrier = await this.#require(input);
@@ -813,7 +820,8 @@ export class SlackReplyDrains {
     if (existing !== undefined) return;
     if (barrier.value.topLevelCovered)
       throw new CommsError('APPROVAL_VOID', 'the Slack reply-parent set is frozen after top-level coverage');
-    if (!isSlackReplyEligible(input.parentTs, barrier.value.through, this.#nowTimestamp())) return;
+    if (!input.retainPastHorizon && !isSlackReplyEligible(input.parentTs, barrier.value.through, this.#nowTimestamp()))
+      return;
     this.#assertLive();
     this.#database
       .prepare(
@@ -1076,17 +1084,20 @@ export class SlackReplyReconciler {
    */
   async parentsAtOrBefore(
     input: Readonly<{ accountId: string; conversationId: string; through: string }>,
-  ): Promise<readonly string[]> {
+  ): Promise<readonly Readonly<{ parentTs: string; retainPastHorizon: boolean }>[]> {
     assertSlackTimestamp(input.through);
     const now = this.#now();
-    return (await this.#states(input))
-      .filter(
-        (state) =>
-          now - state.value.observedAt <= SEVEN_DAYS_MS &&
-          compareSlackTimestamp(state.value.parentTs, input.through) <= 0,
-      )
-      .map((state) => state.value.parentTs)
-      .sort(compareSlackTimestamp);
+    const parents = await Promise.all(
+      (await this.#states(input)).map(async (state) => {
+        if (compareSlackTimestamp(state.value.parentTs, input.through) > 0) return undefined;
+        const retainPastHorizon = now - state.value.observedAt > SEVEN_DAYS_MS;
+        if (retainPastHorizon && !(await this.#hasStagedSettlement(input, state))) return undefined;
+        return { parentTs: state.value.parentTs, retainPastHorizon };
+      }),
+    );
+    return parents
+      .filter((parent): parent is Readonly<{ parentTs: string; retainPastHorizon: boolean }> => parent !== undefined)
+      .sort((left, right) => compareSlackTimestamp(left.parentTs, right.parentTs));
   }
 
   async resumeOne(input: Readonly<{ accountId: string; conversationId: string; latest: string }>): Promise<boolean> {
