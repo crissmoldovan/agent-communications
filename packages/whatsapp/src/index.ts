@@ -19,5 +19,5 @@ export {
 } from './operations/events.ts';
 export type { RawEventMessage } from './source/event-reader.ts';
 export { type ChatKind, chatKindOf } from './source/types.ts';
-export { Visibility } from './visibility.ts';
+export { listKey, statusAuthor, Visibility, visibilityUnitKey } from './visibility.ts';
 export { VERSION };

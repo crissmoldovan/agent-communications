@@ -53,6 +53,7 @@ export interface WhatsAppCutoverMessage {
   readonly chatJid: string;
   readonly senderJidRaw: string;
   readonly stanzaId: string;
+  readonly at?: string | undefined;
   readonly body?: string | undefined;
 }
 
@@ -122,10 +123,12 @@ export class PhaseDCutoverFixture {
     version: 1;
     digest: string;
     seesMessage: (chatJid: string, chatKind: string, senderJidRaw: string, fromMe: boolean) => boolean;
+    seesUnit: (unitKey: string) => boolean;
   }> = {
     version: 1,
     digest: createHash('sha256').update('cutover').digest('hex'),
     seesMessage: () => true,
+    seesUnit: () => true,
   };
   #whatsappMessages: readonly WhatsAppCutoverMessage[] = [
     {
@@ -246,11 +249,13 @@ export class PhaseDCutoverFixture {
   /** Changes the synthetic list under the production composition's lock without starting a source turn. */
   setWhatsAppVisibility(
     seesMessage: (chatJid: string, chatKind: string, senderJidRaw: string, fromMe: boolean) => boolean,
+    seesUnit: (unitKey: string) => boolean = (unitKey) => seesMessage(unitKey, 'unknown', '', false),
   ): void {
     this.#whatsappVisibility = {
       version: 1,
       digest: createHash('sha256').update(this.#whatsappVisibility.digest).digest('hex'),
       seesMessage,
+      seesUnit,
     };
   }
 
@@ -729,6 +734,7 @@ export class PhaseDCutoverFixture {
     this.#whatsapp = createPhaseDWhatsAppOwnerComposition({
       database: this.#store,
       eventOperations: this.whatsappReader(),
+      now: () => this.now.value,
     });
     this.#runtime = new ActivationRuntime({
       store: this.#store,
@@ -909,7 +915,7 @@ export class PhaseDCutoverFixture {
             senderJidRaw: message.senderJidRaw,
             stanzaId: message.stanzaId,
             fromMe: false,
-            at: '2026-10-09T12:00:00.000Z',
+            at: message.at ?? '2026-10-09T12:00:00.000Z',
             kind: 'text',
             body: message.body ?? 'cutover',
           })),

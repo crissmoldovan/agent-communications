@@ -109,6 +109,7 @@ export function purgeRemovedAccountWork(
     database.prepare('DELETE FROM whatsapp_snapshot_keys WHERE account_id = ?').run(accountId);
     database.prepare('DELETE FROM whatsapp_snapshot_heads WHERE account_id = ?').run(accountId);
     database.prepare('DELETE FROM whatsapp_occurrences WHERE account_id = ?').run(accountId);
+    database.prepare('DELETE FROM whatsapp_visible_units WHERE account_id = ?').run(accountId);
     database.prepare('DELETE FROM whatsapp_visibility WHERE account_id = ?').run(accountId);
   }
   if (source === 'slack') database.prepare('DELETE FROM slack_reply_drains WHERE account_id = ?').run(accountId);
