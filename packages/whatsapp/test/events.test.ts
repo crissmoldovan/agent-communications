@@ -101,6 +101,10 @@ test('D6: an event snapshot rebuilds the checked-copy lifecycle before passing r
     const stanzaIds = await withEventSnapshot(harness.context(), { accountId }, async (current) => {
       assert.equal(current.accountName, 'acme/whatsapp');
       assert.ok(current.messages.some((message) => message.fromMe === false));
+      assert.ok(
+        current.messages.some((message) => message.fromMe === true),
+        'from-me rows establish event visibility units',
+      );
       return current.messages.map((message) => message.stanzaId);
     });
     assert.ok(stanzaIds.includes('3EB0TEST00000001'));
@@ -118,18 +122,22 @@ test('D6: the event visibility operation reads the list file afresh and supplies
     const before = await withCurrentEventVisibility(context, { accountId }, (visibility) => ({
       digest: visibility.digest,
       seesBob: visibility.seesMessage(BOB, 'direct', BOB, false),
+      seesBobUnit: visibility.seesUnit?.(BOB) ?? false,
     }));
     await context.lists.update(accountId, () => ({ allow: [ALICE], deny: [] }));
     const after = await withCurrentEventVisibility(context, { accountId }, (visibility) => ({
       digest: visibility.digest,
       seesAlice: visibility.seesMessage(ALICE, 'direct', ALICE, false),
       seesBob: visibility.seesMessage(BOB, 'direct', BOB, false),
+      seesBobUnit: visibility.seesUnit?.(BOB) ?? false,
     }));
     assert.match(before.digest, /^[0-9a-f]{64}$/u);
     assert.notEqual(after.digest, before.digest);
     assert.equal(before.seesBob, true);
+    assert.equal(before.seesBobUnit, true);
     assert.equal(after.seesAlice, true);
     assert.equal(after.seesBob, false);
+    assert.equal(after.seesBobUnit, false);
   } finally {
     await rm(harness.root, { recursive: true, force: true });
   }
@@ -150,5 +158,38 @@ test('D6: resetting every channel-owned index artifact rebuilds from raw rows wi
     assert.deepEqual(await ids(), before);
   } finally {
     await rm(harness.root, { recursive: true, force: true });
+  }
+});
+
+test('D9: a visibility unit is visible exactly when every message in it is, under every list', async () => {
+  const { Visibility, visibilityUnitKey } = await import('../src/visibility.ts');
+  const author = '447700900123@s.whatsapp.net';
+  const other = '447700900456@s.whatsapp.net';
+  const feed = 'status@broadcast';
+  const ownSession = '447700900123@status';
+  const listsCases = [
+    { allow: [], deny: [] },
+    { allow: [], deny: [feed] },
+    { allow: [], deny: [author] },
+    { allow: [feed], deny: [] },
+    { allow: [feed, author], deny: [] },
+    { allow: [other], deny: [] },
+    { allow: [], deny: [ownSession] },
+  ];
+  const messages: Array<[string, string, string | null]> = [
+    [feed, 'status', author],
+    [feed, 'status', null],
+    [ownSession, 'status', author],
+    [ownSession, 'status', null],
+    [author, 'direct', author],
+  ];
+  for (const lists of listsCases) {
+    const visibility = new Visibility(lists);
+    for (const [chat, kind, sender] of messages)
+      assert.equal(
+        visibility.seesUnit(visibilityUnitKey(chat, kind, sender)),
+        visibility.seesMessage(chat, kind, sender, false),
+        `${JSON.stringify(lists)} ${chat} ${kind} ${sender}: a unit hidden while one of its messages is visible, or the reverse, lets a widening backfill or a narrowing keep a hidden unit`,
+      );
   }
 });

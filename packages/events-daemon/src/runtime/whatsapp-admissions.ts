@@ -5,6 +5,7 @@ export interface WhatsAppRuleAdmissionDebt {
   readonly ruleId: string;
   readonly ruleVersion: number;
   readonly activationId: string;
+  readonly admission: 'admitted' | 'suppressed';
 }
 
 /**
@@ -26,13 +27,14 @@ export function insertWhatsAppRuleAdmissions(
       .prepare(
         `INSERT OR IGNORE INTO whatsapp_rule_admissions
           (account_id, message_id, rule_id, rule_version, admission, activation_id, visibility_version, admitted_at)
-         VALUES (?, ?, ?, ?, 'admitted', ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.accountId,
         input.messageId,
         debt.ruleId,
         debt.ruleVersion,
+        debt.admission,
         debt.activationId,
         input.visibilityVersion,
         input.admittedAt,
