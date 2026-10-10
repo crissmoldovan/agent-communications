@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { SourceOptions } from '../domain/source-options.ts';
+import { WriterQuiescer, withEventWriterLease } from '../runtime/writer-quiescer.ts';
 import { type AadComponent, encodeAad } from './aad.ts';
 import {
   decryptPackedRecord,
@@ -151,14 +152,25 @@ const MAX_ROTATION_PASSES = 32;
 export class EventRecordCipher {
   readonly #database: DatabaseSync;
   readonly #secrets: EventSecretStore;
+  readonly #quiescer: WriterQuiescer;
   readonly #tableKeys = new Map<string, Buffer>();
 
-  constructor(database: DatabaseSync, secrets: EventSecretStore) {
+  constructor(database: DatabaseSync, secrets: EventSecretStore, quiescer: WriterQuiescer) {
     this.#database = database;
     this.#secrets = secrets;
+    this.#quiescer = quiescer;
+  }
+
+  /** The B3 secret service must share this exact owner-wide lease, never a look-alike lock. */
+  get writerQuiescer(): WriterQuiescer {
+    return this.#quiescer;
   }
 
   async encrypt(location: EncryptedRecordLocation, plaintext: Uint8Array): Promise<Buffer> {
+    return withEventWriterLease(this.#quiescer, () => this.encryptHeld(location, plaintext));
+  }
+
+  private async encryptHeld(location: EncryptedRecordLocation, plaintext: Uint8Array): Promise<Buffer> {
     const master = await this.#secrets.currentMaster();
     this.reserveInvocation(master.keyId, location.table);
     return encryptPackedRecord({
@@ -170,6 +182,10 @@ export class EventRecordCipher {
   }
 
   async decrypt(location: EncryptedRecordLocation, stored: unknown): Promise<Buffer> {
+    return withEventWriterLease(this.#quiescer, () => this.decryptHeld(location, stored));
+  }
+
+  private async decryptHeld(location: EncryptedRecordLocation, stored: unknown): Promise<Buffer> {
     if (!(stored instanceof Uint8Array)) {
       throw new RecordStorageError('RECORD_STORAGE_CLASS', 'encrypted event records must be SQLite BLOB values');
     }
@@ -202,6 +218,12 @@ export class EventRecordCipher {
    * refuse while any record still names it (plan, "PR #59 review (Blocks)" row).
    */
   async rotateAndReencrypt(options: { readonly batchSize?: number | undefined } = {}): Promise<RotationResult> {
+    return this.#quiescer.withExclusive(() => this.rotateAndReencryptHeld(options));
+  }
+
+  private async rotateAndReencryptHeld(
+    options: { readonly batchSize?: number | undefined } = {},
+  ): Promise<RotationResult> {
     const batchSize = options.batchSize ?? 100;
     if (!Number.isSafeInteger(batchSize) || batchSize < 1)
       throw new RecordStorageError('NONCE_LIMIT', 'rotation batch size must be positive');

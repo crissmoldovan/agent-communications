@@ -14,6 +14,7 @@ import {
 } from '../src/store/event-secrets.ts';
 import { EventRecordCipher } from '../src/store/records.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
+import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 class PausableSecretStore implements SecretStore {
   readonly kind: EventSecretStoreKind = 'file';
@@ -77,7 +78,7 @@ test('B2-T3: an awaited secret write re-reads the exact live owner before it com
         configDir: '/srv/test',
         stores: { file: backend },
       });
-      const cipher = new EventRecordCipher(opened.database, secrets);
+      const cipher = new EventRecordCipher(opened.database, secrets, testWriterQuiescer());
       const writing = storeEventSecretGeneration({
         database: opened.database,
         paths: opened.paths,

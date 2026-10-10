@@ -11,6 +11,7 @@ import { openEventDatabase } from '../src/store/database.ts';
 import { openEventSecretStore, selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { EventRecordCipher, RecordStorageError } from '../src/store/records.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 const ACCOUNT = 'ibx_ABCDEFGHIJKLMNOP';
 let clock = 1_000;
@@ -368,6 +369,7 @@ test('P1-B1: a scheduler tick sees a removed config account and cancels queued w
       dispatcher: {} as never,
       expiry: new EventExpiry(setup.store, () => clock),
       cipher: {} as never,
+      writerQuiescer: testWriterQuiescer(),
       approvals: {} as never,
       config: { load: async () => ({ inboxes: {} }) } as never,
       taint: {} as never,
@@ -409,6 +411,7 @@ test('DEL-B1: the dispatcher writes packed encrypted dry-run bytes and decrypts 
         configDir: '/srv/config',
         stores: { file: new MemorySecretStore() },
       }),
+      testWriterQuiescer(),
     );
     const encrypted = await cipher.encrypt(
       { table: 'deliveries', column: 'encryptedRecord', key: [{ type: 'text', value: 'encrypted' }] },

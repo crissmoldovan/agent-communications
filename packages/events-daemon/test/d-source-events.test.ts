@@ -29,6 +29,7 @@ import { openEventDatabase } from '../src/store/database.ts';
 import { openEventSecretStore, selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { EventRecordCipher } from '../src/store/records.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 const target = { targetId: 'target-d-source-events', version: 1, kind: 'dry-run' as const, retentionMs: 86_400_000 };
 const retention = {
@@ -542,7 +543,7 @@ async function fixture(input: {
     configDir,
     stores: { file: new MemorySecretStore() },
   });
-  const cipher = new EventRecordCipher(store.database, secrets);
+  const cipher = new EventRecordCipher(store.database, secrets, testWriterQuiescer());
   const approvals = new ApprovalStore(join(root, 'approvals'), {
     now: () => new Date(now.value),
     loadConfig: async () => config,

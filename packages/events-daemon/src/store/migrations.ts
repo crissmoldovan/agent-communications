@@ -386,6 +386,43 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '13' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // B3 adds the hosted-judge credential slot without weakening the immutable owner/generation primary key.
+    version: 14,
+    name: 'event-secret-judge-slot-v1',
+    statements: [
+      'DROP INDEX event_secret_generations_current',
+      `CREATE TABLE event_secret_generations_v14 (
+        owner_kind TEXT NOT NULL CHECK (owner_kind IN ('target', 'subscriber', 'judge')),
+        owner_id TEXT NOT NULL,
+        owner_version INTEGER NOT NULL CHECK (owner_version > 0),
+        purpose TEXT NOT NULL CHECK (purpose IN ('secret-url', 'webhook-signing', 'sse-bearer', 'judge-key')),
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        owner_digest TEXT NOT NULL,
+        secret_digest TEXT NOT NULL,
+        encrypted_ref BLOB NOT NULL,
+        lifecycle TEXT NOT NULL CHECK (lifecycle IN ('current', 'overlap', 'retired')),
+        expires_at INTEGER,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_kind, owner_id, owner_version, purpose, generation),
+        CHECK (
+          (owner_kind = 'target' AND purpose IN ('secret-url', 'webhook-signing'))
+          OR (owner_kind = 'subscriber' AND purpose = 'sse-bearer')
+          OR (owner_kind = 'judge' AND purpose = 'judge-key')
+        )
+      ) STRICT`,
+      `INSERT INTO event_secret_generations_v14
+       SELECT owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest,
+              encrypted_ref, lifecycle, expires_at, created_at
+         FROM event_secret_generations`,
+      'DROP TABLE event_secret_generations',
+      'ALTER TABLE event_secret_generations_v14 RENAME TO event_secret_generations',
+      `CREATE UNIQUE INDEX event_secret_generations_current
+       ON event_secret_generations(owner_kind, owner_id, owner_version, purpose)
+       WHERE lifecycle = 'current'`,
+      "UPDATE meta SET value = '14' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

@@ -64,6 +64,14 @@ they are not deferred requests for an implementer to reinterpret.
 | C↔B3 6 — where is the E build/ship dependency proven? | B3 exports only the data-only contract and a consumer-fixture test. E imports its real code, lands its build/ship gate before registration or any callable judge, and requires B3 merged. | A temporary B3 package cannot prove a future E implementation actually depends on the contract. |
 | C↔B3 7 — who owns pending target testing? | B3 owns the pending-target owner operation and its activation-context selector; C invokes it from the approval screen only. | This keeps one approval-bound authority and rejects MCP and ordinary CLI. |
 
+## Decisions made during the build
+
+| Question | Decision | Reason |
+|---|---|---|
+| Task 2 review — which writers hold the shared lease? | Every path the owner starts that encrypts, decrypts or commits — scheduled timer ticks as well as the manual tick, startup expiry and recovery, activation completion — holds the shared writer lease from encrypt/decrypt through its own commit. The scheduler and the record cipher take the one owner quiescer as a required option; the writer-inventory check detects a writer-starting path outside the lease. | A scheduled tick that encrypted, awaited and then committed after an exclusive rotation retired the old key was the late write B1 assigned to B3. |
+| Task 2 review — when may a migration retry delete an old copy? | After the selector names the destination, a retry deletes an old copy only while the selected backend holds exactly the bytes that copy holds; an unavailable or different selected copy refuses the whole retry before any delete, and every leftover stays. | A selected copy changed after the migration verified it would otherwise turn a harmless leftover — then the only correct copy — into a lost secret. |
+| Task 2 review — which sinks does the leak scan read? | The boundaries that exist at Task 2: every operation's returned receipt (output) and everything the process writes to stdout/stderr while the operations run (log, captured at the stream), plus SQLite, WAL and free pages; a sentinel planted in any one sink alone is found. The daemon has no audit writer at Task 2: Tasks 5 and 6, which add CLI/MCP output and any audit entry, extend the same scan to those boundaries, and Task 10 runs it phase-wide. | Audit and log text built from the receipts in the test proved nothing about the real boundaries. |
+
 ## Decisions the spec leaves to the plan
 
 ### B3-1 — one owner operation is the only implementation path

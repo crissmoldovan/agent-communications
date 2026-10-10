@@ -10,6 +10,7 @@ import { openEventDatabase } from '../src/store/database.ts';
 import { openEventSecretStore, selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { EventRecordCipher } from '../src/store/records.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 /** The fake list file's digest has the real shape: lowercase SHA-256 of the list document. */
 const FAKE_LIST_DIGEST = createHash('sha256').update('{"lists":"fake-owner"}').digest('hex');
@@ -33,6 +34,7 @@ test('D-C: an owner behind the wall clock leaves unexpired Resend received and s
     const cipher = new EventRecordCipher(
       store.database,
       await openEventSecretStore({ database: store.database, paths: store.paths, configDir }),
+      testWriterQuiescer(),
     );
     const received = await cipher.encrypt(
       { table: 'source_scan_state', column: 'encryptedRecord', key: [{ type: 'text', value: receivedId }] },

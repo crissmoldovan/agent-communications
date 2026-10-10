@@ -144,6 +144,16 @@ export interface ActivationRuntimeOptions {
   readonly failpoint?: CutoverFailpoint | undefined;
   /** Optional test clock seam immediately before each completion-deadline check. */
   readonly deadlineFailpoint?: ActivationDeadlineFailpoint | undefined;
+  /** B3's exact immutable secret-slot fence, supplied only by the owner composition. */
+  readonly assertObjectSecretReady?:
+    | ((input: {
+        readonly owner: {
+          readonly kind: 'target' | 'subscriber' | 'judge';
+          readonly id: string;
+          readonly version: number;
+        };
+      }) => Promise<unknown>)
+    | undefined;
 }
 
 export type ActivationDeadlineFailpoint = (
@@ -169,6 +179,7 @@ export class ActivationRuntime {
   readonly #newIntentId: () => string;
   readonly #failpoint: CutoverFailpoint | undefined;
   readonly #deadlineFailpoint: ActivationDeadlineFailpoint | undefined;
+  readonly #assertObjectSecretReady: ActivationRuntimeOptions['assertObjectSecretReady'];
 
   constructor(options: ActivationRuntimeOptions) {
     this.#store = options.store;
@@ -196,6 +207,7 @@ export class ActivationRuntime {
     this.#newIntentId = options.newIntentId ?? (() => `act_${randomBytes(16).toString('hex')}`);
     this.#failpoint = options.failpoint;
     this.#deadlineFailpoint = options.deadlineFailpoint;
+    this.#assertObjectSecretReady = options.assertObjectSecretReady;
   }
 
   async prepareRule(input: { readonly ruleId: string; readonly version: number }): Promise<PreparedRuleActivation> {
@@ -204,6 +216,7 @@ export class ActivationRuntime {
     await this.assertNoCompletingMutation(input.ruleId);
     const versions = new ImmutableVersions(this.#store.database);
     const document = versions.prepareRule(input.ruleId, input.version);
+    await this.#assertDocumentSecretsReady(document.rule);
     this.#sourceRegistry.require(document.rule.source.channel);
     const active = versions.activeVersion('rule', input.ruleId);
     if (active !== null) {
@@ -321,6 +334,7 @@ export class ActivationRuntime {
     const points: PlannedPoint[] = [];
     for (const row of rows) {
       const planned = versions.prepareRule(row.object_id, row.version);
+      await this.#assertDocumentSecretsReady(planned.rule);
       this.#sourceRegistry.require(planned.rule.source.channel);
       const source = planned.rule.source.channel;
       const live = liveBySource.get(source) ?? (await liveEventAccountIds(this.#config, source));
@@ -624,6 +638,7 @@ export class ActivationRuntime {
       return Promise.reject(new CommsError('APPROVAL_VOID', 'the activation completion deadline has passed'));
     }
     const document = this.#document(current);
+    if (document.kind === 'rule') await this.#assertDocumentSecretsReady(document.rule);
     const points = this.#points(current);
     const baselineScopes = new Map<string, SourceScope>();
     for (const point of points) {
@@ -817,6 +832,9 @@ export class ActivationRuntime {
       }
     }
     this.#failpoint?.('before-finalise');
+    // All provider/baseline/encryption awaits are now behind us; re-read the
+    // exact immutable slot immediately before the pointer transaction.
+    if (document.kind === 'rule') await this.#assertDocumentSecretsReady(document.rule);
     this.#finalise(current, document, preparedPoints, usedAt);
     this.#failpoint?.('after-move');
     return { intentId: current.id, status: 'completed', usedAt };
@@ -1102,6 +1120,26 @@ export class ActivationRuntime {
         )
         .get(ruleId, version, scope.source, scope.accountId, scope.scopeId) !== undefined
     );
+  }
+
+  /** Read the exact immutable secret slots; callers repeat this after every await-heavy activation phase. */
+  async #assertDocumentSecretsReady(rule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule']): Promise<void> {
+    if (this.#assertObjectSecretReady === undefined) return;
+    for (const target of rule.targets) {
+      if (target.kind === 'webhook')
+        await this.#assertObjectSecretReady({
+          owner: { kind: 'target', id: target.targetId, version: target.version },
+        });
+    }
+    for (const subscriber of rule.subscribers) {
+      await this.#assertObjectSecretReady({
+        owner: { kind: 'subscriber', id: subscriber.subscriberId, version: subscriber.version },
+      });
+    }
+    for (const judge of rule.judges) {
+      if (judge.kind === 'typesafe')
+        await this.#assertObjectSecretReady({ owner: { kind: 'judge', id: judge.judgeId, version: judge.version } });
+    }
   }
 
   #pointsForRule(rule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule']): readonly PlannedPoint[] {

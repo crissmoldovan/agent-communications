@@ -10,6 +10,7 @@ import { ResendStatusSource } from '../src/sources/resend-status.ts';
 import { SourceScopeLock } from '../src/sources/scope-lock.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 const first = { source: 'resend' as const, accountId: 'acc_RESENDSOURCE001', scopeId: 'received' };
 const second = {
@@ -46,6 +47,7 @@ test('D7b: source turns are fair, persisted across restart, rate limited, and ne
         dispatcher: { recoverLeases: async () => undefined } as never,
         expiry: { sweepAll: async () => undefined } as never,
         cipher: { decrypt: async (_location: unknown, record: Uint8Array) => Buffer.from(record) } as never,
+        writerQuiescer: testWriterQuiescer(),
         approvals: {} as never,
         config: { load: async () => config } as never,
         taint: {} as never,
@@ -221,6 +223,7 @@ test('P1-D7: an unbounded Gmail history or Resend status list cannot monopolise 
           encrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
           decrypt: async (_location: unknown, record: Uint8Array) => Buffer.from(record),
         } as never,
+        writerQuiescer: testWriterQuiescer(),
         approvals: {} as never,
         config: { load: async () => config } as never,
         taint: {} as never,
@@ -302,6 +305,7 @@ test('D7b: a changed point set after decrypt installs no source cursor and makes
           return Buffer.from(record);
         },
       } as never,
+      writerQuiescer: testWriterQuiescer(),
       approvals: {} as never,
       config: {
         load: async () => ({ inboxes: {}, accounts: { slack: { id: second.accountId, platform: 'slack' } } }),
@@ -352,6 +356,7 @@ test('D7b: the owner re-reads live config after a provider await and purges a re
       dispatcher: { recoverLeases: async () => undefined } as never,
       expiry: { sweepAll: async () => undefined } as never,
       cipher: { decrypt: async (_location: unknown, record: Uint8Array) => Buffer.from(record) } as never,
+      writerQuiescer: testWriterQuiescer(),
       approvals: {} as never,
       config: { load: async () => current } as never,
       taint: {} as never,

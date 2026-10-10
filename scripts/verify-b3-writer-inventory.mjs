@@ -6,6 +6,40 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
+// Keep this list here as well as in the task manifest.  The manifest is the
+// mutation ledger; this independent expectation makes deleting an otherwise
+// quiet composition entry fail rather than silently narrowing the inventory.
+const REQUIRED_WRITER_INVENTORY = Object.freeze([
+  'packages/events-daemon/src/runtime/activations.ts',
+  'packages/events-daemon/src/runtime/scheduler.ts',
+  'packages/events-daemon/src/runtime/source-owner-work.ts',
+  'packages/events-daemon/src/runtime/projections.ts',
+  'packages/events-daemon/src/runtime/decisions.ts',
+  'packages/events-daemon/src/runtime/deliveries.ts',
+  'packages/events-daemon/src/runtime/dispatcher.ts',
+  'packages/events-daemon/src/runtime/webhook-dispatcher.ts',
+  'packages/events-daemon/src/runtime/sse-dispatcher.ts',
+  'packages/events-daemon/src/runtime/system-reset-outbox.ts',
+  'packages/events-daemon/src/runtime/expiry.ts',
+  'packages/events-daemon/src/runtime/revocations.ts',
+  'packages/events-daemon/src/runtime/recovery.ts',
+  'packages/events-daemon/src/runtime/reset.ts',
+  'packages/events-daemon/src/runtime/owner.ts',
+  'packages/events-daemon/src/runtime/b3-secret-control.ts',
+  'packages/events-daemon/src/runtime/sse-server.ts',
+  'packages/events-daemon/src/runtime/stream-replay.ts',
+  'packages/events-daemon/src/sources/source-worker.ts',
+  'packages/events-daemon/src/sources/gmail.ts',
+  'packages/events-daemon/src/sources/materialise.ts',
+  'packages/events-daemon/src/sources/resend.ts',
+  'packages/events-daemon/src/sources/resend-status.ts',
+  'packages/events-daemon/src/sources/slack.ts',
+  'packages/events-daemon/src/sources/slack-replies.ts',
+  'packages/events-daemon/src/sources/whatsapp.ts',
+  'packages/events-daemon/src/store/event-secrets.ts',
+  'packages/events-daemon/src/store/records.ts',
+]);
+
 async function filesBelow(root, directory = join(root, 'packages/events-daemon/src')) {
   const entries = await readdir(directory, { withFileTypes: true });
   return (
@@ -21,16 +55,108 @@ async function filesBelow(root, directory = join(root, 'packages/events-daemon/s
   ).flat();
 }
 
-export async function verifyB3WriterInventory({ root = ROOT, inventory = [], files = undefined } = {}) {
-  const listed = new Set(inventory.map((entry) => (typeof entry === 'string' ? entry : entry.entry)));
+async function manifestInventory(root) {
+  const text = await readFile(join(root, 'packages/events-daemon/test/b3-guard-manifests/secrets.json'), 'utf8');
+  const manifest = JSON.parse(text);
+  if (!Array.isArray(manifest.writerInventory)) return [];
+  return manifest.writerInventory;
+}
+
+export async function verifyB3WriterInventory({ root = ROOT, inventory = undefined, files = undefined } = {}) {
+  const declared = inventory ?? (await manifestInventory(root));
+  const listed = new Set(declared.map((entry) => (typeof entry === 'string' ? entry : entry.entry)));
   const problems = [];
+  // The fixture caller passes an explicit inventory, so it can isolate the
+  // discovery rule. The repository check also pins the complete B3 list.
+  if (inventory === undefined) {
+    const required = new Set(REQUIRED_WRITER_INVENTORY);
+    for (const entry of REQUIRED_WRITER_INVENTORY) {
+      if (!listed.has(entry)) problems.push(`${entry}: absent from the exact B3 writer inventory`);
+    }
+    for (const entry of listed) {
+      if (!required.has(entry)) problems.push(`${entry}: is not a permitted B3 writer inventory entry`);
+    }
+    for (const entry of REQUIRED_WRITER_INVENTORY) {
+      try {
+        await readFile(join(root, entry), 'utf8');
+      } catch {
+        problems.push(`${entry}: named B3 writer entrypoint does not exist`);
+      }
+    }
+  }
+  const centralLease = await readFile(join(root, 'packages/events-daemon/src/store/records.ts'), 'utf8').catch(
+    () => '',
+  );
+  const cipherLeaseIsMandatory =
+    /async encrypt[\s\S]*withEventWriterLease/.test(centralLease) &&
+    /async decrypt[\s\S]*withEventWriterLease/.test(centralLease);
+  const scheduler = 'packages/events-daemon/src/runtime/scheduler.ts';
   for (const file of files ?? (await filesBelow(root))) {
     const text = await readFile(join(root, file), 'utf8');
     if (!/\b(?:cipher\.(?:encrypt|decrypt)|secret(?:Store|Backend)?\.(?:set|get|delete))\s*\(/.test(text)) continue;
     if (!listed.has(file))
       problems.push(`${file}: cipher/secret writer is absent from the explicit B3 lease inventory`);
-    else if (!/withEventWriterLease\s*\(/.test(text))
+    // Cipher access is deliberately leased at its one implementation boundary
+    // so the lease cannot be dropped between a caller's decrypt/encrypt pair.
+    // EventSecretStore is entered only by B3 service methods that acquire the
+    // same lease (and recursively from EventRecordCipher while that lease is
+    // held). This recognizes those two audited central boundaries instead of
+    // accepting an unreviewable caller-local imitation.
+    else if (
+      !/withEventWriterLease\s*\(/.test(text) &&
+      !(cipherLeaseIsMandatory && /cipher\.(?:encrypt|decrypt)\s*\(/.test(text))
+    )
       problems.push(`${file}: listed cipher/secret writer does not acquire withEventWriterLease`);
+  }
+  // The interval callback enters through `tick()`, not the owner's public
+  // control wrapper.  Central cipher leasing ends when encrypt/decrypt returns,
+  // so this composition entry must keep the shared lease until the tick's own
+  // commits and purges settle.
+  if ((files ?? []).includes(scheduler) || (files === undefined && listed.has(scheduler))) {
+    const text = await readFile(join(root, scheduler), 'utf8').catch(() => '');
+    if (!/const work = withEventWriterLease\(this\.#writerQuiescer, \(\) => this\.#tick\(\)\)\.finally/.test(text))
+      problems.push(`${scheduler}: timer-started writer does not acquire the shared lease before #tick`);
+  }
+  if (inventory === undefined) {
+    const owner = await readFile(join(root, 'packages/events-daemon/src/runtime/owner.ts'), 'utf8').catch(() => '');
+    const control = await readFile(join(root, 'packages/events-daemon/src/runtime/b3-secret-control.ts'), 'utf8').catch(
+      () => '',
+    );
+    const schedulerText = await readFile(join(root, scheduler), 'utf8').catch(() => '');
+    const starts = [
+      [
+        'manual owner tick',
+        owner.includes('tick: () => withEventWriterLease(writerQuiescer, () => scheduler.tick()),'),
+      ],
+      [
+        'startup expiry recovery',
+        owner.includes('await withEventWriterLease(writerQuiescer, () => expiry.sweepAll());'),
+      ],
+      [
+        'startup activation recovery',
+        owner.includes('await withEventWriterLease(writerQuiescer, () => recoverActivations(activations));'),
+      ],
+      [
+        'control activation completion',
+        owner.includes('return withEventWriterLease(writerQuiescer, () =>\n        activations.approve({'),
+      ],
+      [
+        'scheduled expiry/source/activation/dispatcher/SSE/webhook loop',
+        schedulerText.includes('await this.#expiry.sweepAll();') &&
+          schedulerText.includes('await this.#activations.resumeClaimedCompletions();') &&
+          schedulerText.includes('await this.#pollReadyScope();') &&
+          schedulerText.includes('await recoverDeliveryLeases(this.#dispatcher);') &&
+          schedulerText.includes('await this.#dispatcher.dispatch(id);'),
+      ],
+      [
+        'human secret control operations',
+        control.includes('withEventWriterLease(this.#quiescer, async () =>') &&
+          control.includes('return this.#quiescer.withExclusive(async () =>'),
+      ],
+    ];
+    for (const [name, present] of starts) {
+      if (!present) problems.push(`writer start inventory: ${name} is not held by the shared owner lease`);
+    }
   }
   return problems;
 }

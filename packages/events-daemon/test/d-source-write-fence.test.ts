@@ -21,6 +21,7 @@ import { SlackReplyDrains } from '../src/sources/slack-replies.ts';
 import { WhatsAppSourceWorker } from '../src/sources/whatsapp.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 type DSource = 'slack' | 'resend' | 'whatsapp';
 
@@ -684,6 +685,7 @@ test('D9: scheduler provider-result writes re-read core config for every D sourc
         dispatcher: { recoverLeases: async () => undefined } as never,
         expiry: { sweepAll: async () => undefined } as never,
         cipher: {} as never,
+        writerQuiescer: testWriterQuiescer(),
         approvals: {} as never,
         config: { load: async () => current } as never,
         taint: {} as never,
