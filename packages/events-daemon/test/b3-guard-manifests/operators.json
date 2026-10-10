@@ -1,0 +1,197 @@
+{
+  "area": "operators",
+  "cases": [
+    {
+      "case": "e-unavailable-is-content-free",
+      "operation": "judgeUnavailable",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-judge-unavailable.ts",
+      "test": "packages/events-daemon/test/b3-e-phase-contract.test.ts",
+      "mutation": {
+        "from": "return unavailableE();",
+        "to": "return { kind: 'judge-document', document: { configured: true } } as never;"
+      },
+      "mutationTest": "B3 pre-E judge operations return only the E_REQUIRED unavailable result",
+      "loadedMarker": "e-unavailable-is-content-free"
+    },
+    {
+      "case": "e2-unavailable-is-content-free",
+      "operation": "judgeUnavailable",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-judge-unavailable.ts",
+      "test": "packages/events-daemon/test/b3-e-phase-contract.test.ts",
+      "mutation": {
+        "from": "if (operation === 'judgeModelStatus' || operation === 'removeJudgeModel') return unavailableE2();",
+        "to": "if (operation === 'judgeModelStatus' || operation === 'removeJudgeModel') return { kind: 'model-download', model: 'forbidden' } as never;"
+      },
+      "mutationTest": "B3 pre-E2 model operations return only the E2_REQUIRED unavailable result",
+      "loadedMarker": "e2-unavailable-is-content-free"
+    },
+    {
+      "case": "hold-decide-is-not-model-callable",
+      "operation": "decideHeldUnavailable",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-judge-unavailable.ts",
+      "test": "packages/events-daemon/test/b3-e-phase-contract.test.ts",
+      "mutation": {
+        "from": "return { kind: 'unavailable', code: 'HOLDS_UNAVAILABLE', phase: 'E' };",
+        "to": "return heldListUnavailable() as never;"
+      },
+      "mutationTest": "B3 held decision remains unavailable while the held list is typed empty",
+      "loadedMarker": "hold-decide-is-not-model-callable"
+    },
+    {
+      "case": "retry-only-changes-next-at",
+      "operation": "retryDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-delivery-control.test.ts",
+      "mutation": {
+        "from": "SET next_at = ?",
+        "to": "SET next_at = ?, attempts = attempts + 1"
+      },
+      "mutationTest": "B3 retry changes only nextAt",
+      "loadedMarker": "retry-only-changes-next-at"
+    },
+    {
+      "case": "retry-runs-inside-the-fence-transaction",
+      "operation": "retryDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-delivery-control.test.ts",
+      "mutation": {
+        "from": "      const row = this.#deliveryRow(deliveryId);\n      this.#assertRetryable(row);",
+        "to": "      const row = this.#store.immediate(() => this.#deliveryRow(deliveryId));\n      this.#assertRetryable(row);"
+      },
+      "mutationTest": "B3 retry changes only nextAt",
+      "loadedMarker": "retry-runs-inside-the-fence-transaction"
+    },
+    {
+      "case": "dead-letter-cannot-retry",
+      "operation": "retryDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-delivery-control.test.ts",
+      "mutation": {
+        "from": "if (row.state !== 'retryable')",
+        "to": "if (false)"
+      },
+      "mutationTest": "B3 retry refuses a dead-lettered delivery",
+      "loadedMarker": "dead-letter-cannot-retry"
+    },
+    {
+      "case": "drop-clears-retained-payload",
+      "operation": "dropDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-delivery-control.test.ts",
+      "mutation": {
+        "from": "SET encrypted_record = NULL, next_at = NULL, lease_until = NULL",
+        "to": "SET encrypted_record = encrypted_record, next_at = NULL, lease_until = NULL"
+      },
+      "mutationTest": "B3 drop clears its dead-letter retained payload",
+      "loadedMarker": "drop-clears-retained-payload"
+    },
+    {
+      "case": "retry-delegates-account-identity-fence",
+      "operation": "retryDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-delivery-control.test.ts",
+      "mutation": {
+        "from": "accountId: row.account_id,",
+        "to": "accountId: 'other-account',"
+      },
+      "mutationTest": "B3 retry delegates the account identity gate to the shared delivery write fence",
+      "loadedMarker": "retry-delegates-account-identity-fence"
+    },
+    {
+      "case": "retry-delegates-source-identity-fence",
+      "operation": "retryDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-delivery-control.test.ts",
+      "mutation": {
+        "from": "source: sourceFromRule(row.rule_document),",
+        "to": "source: 'gmail' as SourceOptions['channel'],"
+      },
+      "mutationTest": "B3 retry delegates the source identity gate to the shared delivery write fence",
+      "loadedMarker": "retry-delegates-source-identity-fence"
+    },
+    {
+      "case": "retry-delegates-exact-target-fence",
+      "operation": "retryDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-delivery-control.test.ts",
+      "mutation": {
+        "from": "targetId: row.target_id,",
+        "to": "targetId: 'target-mutation',"
+      },
+      "mutationTest": "B3 retry delegates the exact target revocation gate to the shared delivery write fence",
+      "loadedMarker": "retry-delegates-exact-target-fence"
+    },
+    {
+      "case": "retry-delegates-lineage-fence",
+      "operation": "retryDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-delivery-control.test.ts",
+      "mutation": {
+        "from": "ruleId: row.rule_id,",
+        "to": "ruleId: 'rule-mutation',"
+      },
+      "mutationTest": "B3 retry delegates the authorisation lineage gate to the shared delivery write fence",
+      "loadedMarker": "retry-delegates-lineage-fence"
+    },
+    {
+      "case": "retry-delegates-whatsapp-live-list-fence",
+      "operation": "retryDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-delivery-control.test.ts",
+      "mutation": {
+        "from": "whatsappMessageId: row.whatsapp_message_id,",
+        "to": "whatsappMessageId: null,"
+      },
+      "mutationTest": "B3 retry delegates the WhatsApp live-list gate to the shared delivery write fence",
+      "loadedMarker": "retry-delegates-whatsapp-live-list-fence"
+    },
+    {
+      "case": "retry-uses-canonical-source-normaliser",
+      "operation": "retryDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-delivery-control.test.ts",
+      "mutation": {
+        "from": "return normaliseSourceOptions(source.options).channel;",
+        "to": "return source.options?.channel === 'gmail' || source.options?.channel === 'slack' || source.options?.channel === 'resend' || source.options?.channel === 'whatsapp' ? source.options.channel : (() => { throw new Error('unknown source'); })();"
+      },
+      "mutationTest": "B3 retry derives source identity from the canonical source-options normaliser, not a local channel list",
+      "loadedMarker": "retry-uses-canonical-source-normaliser"
+    },
+    {
+      "case": "subscriber-removal-cancels-pending-activation-intents",
+      "operation": "removeSubscriber",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-purge-closure.test.ts",
+      "mutation": {
+        "from": "this.#cancelSubscriberActivationIntents(subscriberId, removedVersions, now);",
+        "to": "void removedVersions;"
+      },
+      "mutationTest": "B3 subscriber removal cancels and purges pending and claimed exact subscriber activation intents",
+      "loadedMarker": "subscriber-removal-cancels-pending-activation-intents"
+    },
+    {
+      "case": "subscriber-removal-closes-owner-stream-registry",
+      "operation": "removeSubscriber",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-purge-closure.test.ts",
+      "mutation": {
+        "from": "closeSubscriberStreams({ subscriberId, subscriberVersion: version });",
+        "to": "void subscriberId;"
+      },
+      "mutationTest": "B3 subscriber removal invokes the owner stream registry for its exact revoked version",
+      "loadedMarker": "subscriber-removal-closes-owner-stream-registry"
+    },
+    {
+      "case": "subscriber-removal-cancels-orphaned-work",
+      "operation": "removeSubscriber",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-purge-closure.test.ts",
+      "mutation": {
+        "from": "purgeRevokedRuleWork(this.#store.database, rule.rule_id, [rule.version]);",
+        "to": "if (false) purgeRevokedRuleWork(this.#store.database, rule.rule_id, [rule.version]);"
+      },
+      "mutationTest": "B3 subscriber removal cancels every orphaned retained or claimed row in one closure transaction",
+      "loadedMarker": "subscriber-removal-cancels-orphaned-work"
+    }
+  ]
+}
