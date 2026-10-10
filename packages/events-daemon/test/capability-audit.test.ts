@@ -25,7 +25,8 @@ type Capability = {
 
 const EXPECTED_B1_ROWS = [
   ['events-daemon.status', 'status', 'events_status', 'both', 'status'],
-  ['events-daemon.run', 'run', null, 'exception'],
+  // B3 (Task 1): every CLI exception names the operation its driver runs.
+  ['events-daemon.run', 'run', null, 'exception', 'run'],
   ['events-daemon.stop', 'stop', 'events_stop', 'both', 'stop'],
   ['events-daemon.pause', 'pause', 'events_pause', 'both', 'pause'],
   ['events-daemon.resume', 'resume', 'events_resume', 'both', 'resume'],
@@ -50,9 +51,9 @@ const EXPECTED_B1_ROWS = [
   ['events-daemon.target.add', 'target add', 'events_target_add', 'both', 'addTarget'],
   ['events-daemon.target.update', 'target update', 'events_target_update', 'both', 'updateTarget'],
   ['events-daemon.target.remove', 'target remove', 'events_target_remove', 'both', 'removeTarget'],
-  ['events-daemon.approve', 'approve', null, 'exception'],
-  ['events-daemon.dryrun.list', 'dryrun list', null, 'exception'],
-  ['events-daemon.dryrun.show', 'dryrun show', null, 'exception'],
+  ['events-daemon.approve', 'approve', null, 'exception', 'approve'],
+  ['events-daemon.dryrun.list', 'dryrun list', null, 'exception', 'dryrunList'],
+  ['events-daemon.dryrun.show', 'dryrun show', null, 'exception', 'dryrunShow'],
   ['events-daemon.mcp.serve', 'mcp', null, 'exception'],
 ] as const;
 
