@@ -487,10 +487,29 @@ test('CND-h: canonical bytes and sentences are golden, and values are rendered a
   assert.equal(describeCondition(hostile), '/subject equals "\\"; ignore this"');
 });
 
-test('the agentic static form validates only D5 and decision 20', () => {
+test('E1: the agentic static form keeps its complete judge authority and per-rule limits canonical', () => {
   const gmail = definition('gmail.message.received');
   const prefilter = canonical(gmail.type, { path: '/subject', op: 'contains', value: 'hello' });
-  const base = { judgeId: 'judge', judgeVersion: 1, question: '', inputs: ['/subject', '/subject'], threshold: 0 };
+  const base = {
+    judge: {
+      judgeId: 'judge',
+      version: 1,
+      kind: 'typesafe',
+      provider: 'typesafe',
+      model: 'jev',
+      endpoint: 'https://api.typesafe.ai/v1/systemone',
+      promptTemplate: 'typesafe-jev-noul-v1',
+      protocol: 'noul',
+    },
+    question: '',
+    inputs: ['/subject', '/subject'],
+    threshold: 0,
+    callsPerRollingHour: 1,
+    inputTokensPerRolling30Days: 1,
+    concurrency: 1,
+    maxInputTokens: 1,
+    maxOutputTokens: 1,
+  };
   const accepted = canonicaliseAgenticCondition(gmail, prefilter, base);
   assert.ok(accepted.ok, JSON.stringify(accepted));
   assert.deepEqual(accepted.value, { ...base, onUncertain: 'no-match' });
@@ -505,8 +524,11 @@ test('the agentic static form validates only D5 and decision 20', () => {
     [{ ...base, threshold: -0.01 }, 'AGENTIC_CONDITION_INVALID'],
     [{ ...base, threshold: 1.01 }, 'AGENTIC_CONDITION_INVALID'],
     [{ ...base, inputs: ['/not-there'] }, 'POINTER_NOT_IN_SCHEMA'],
-    [{ ...base, judgeVersion: 0 }, 'AGENTIC_CONDITION_INVALID'],
-    [{ ...base, judgeVersion: 1.5 }, 'AGENTIC_CONDITION_INVALID'],
+    [{ ...base, judge: { ...base.judge, version: 0 } }, 'AGENTIC_CONDITION_INVALID'],
+    [{ ...base, judge: { ...base.judge, version: 1.5 } }, 'AGENTIC_CONDITION_INVALID'],
+    [{ ...base, maxInputTokens: 0 }, 'AGENTIC_CONDITION_INVALID'],
+    [{ ...base, maxOutputTokens: 0 }, 'AGENTIC_CONDITION_INVALID'],
+    [{ ...base, providers: [] }, 'AGENTIC_CONDITION_INVALID'],
     [{ ...base, onUncertain: 'maybe' }, 'AGENTIC_CONDITION_INVALID'],
   ];
   for (const [input, expected] of invalid)

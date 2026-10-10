@@ -6,7 +6,9 @@ import {
   sha256Hex,
 } from '@agentcomms/core';
 import {
+  type AgenticConditionV1,
   type CanonicalCondition,
+  canonicaliseAgenticCondition,
   canonicaliseCondition,
   catalogueEntry,
   compileMapping,
@@ -15,7 +17,15 @@ import {
   TEST_CLOUD_EVENT,
   validateCloudEventType,
 } from '@agentcomms/events';
-import { EventDomainError, isJudgeKind, type JudgeKind } from './lifecycle.ts';
+import {
+  type CanonicalJudgeBudgetDocument,
+  type CanonicalJudgeDocument,
+  type CanonicalJudgeKindEnablementDocument,
+  canonicalJudge,
+  canonicalJudgeBudget,
+  canonicalJudgeKindEnablement,
+} from './judges.ts';
+import { EventDomainError } from './lifecycle.ts';
 import { normaliseSourceOptions, type SourceOptions } from './source-options.ts';
 import {
   canonicalSseSubscriber,
@@ -34,14 +44,11 @@ export interface DryRunTargetDocument {
 
 export type TargetDocument = DryRunTargetDocument | WebhookTargetDocument | SseTargetDocument;
 
-export interface JudgeDocument {
-  readonly judgeId: string;
-  readonly version: number;
-  readonly kind: JudgeKind;
-  readonly provider: string;
-  readonly model: string;
-  readonly [field: string]: unknown;
-}
+export type JudgeDocument = CanonicalJudgeDocument;
+
+export type CanonicalAgenticCondition = Omit<AgenticConditionV1, 'judge'> & {
+  readonly judge: CanonicalJudgeDocument;
+};
 
 export type SubscriberDocument = SseSubscriberDocument;
 
@@ -83,6 +90,8 @@ export interface CanonicalFullRuleDocument {
   readonly source: CanonicalRuleSource;
   readonly event: { readonly type: string; readonly version: number };
   readonly condition: CanonicalCondition;
+  /** An optional exact judge authority; deterministic matching remains mandatory without it. */
+  readonly agentic?: CanonicalAgenticCondition;
   readonly mapping: JsonValue;
   /** D2/D6: the optional exact CloudEvent `type` override, part of the approval when present; absent means the default. */
   readonly cloudEventType?: string;
@@ -93,17 +102,9 @@ export interface CanonicalFullRuleDocument {
   readonly retention: RuleRetentionDocument;
 }
 
-export interface JudgeBudgetDocument {
-  readonly budgetId: string;
-  readonly version: number;
-  readonly [field: string]: unknown;
-}
+export type JudgeBudgetDocument = CanonicalJudgeBudgetDocument;
 
-export interface JudgeKindEnablementDocument {
-  readonly kind: JudgeKind;
-  readonly version: number;
-  readonly [field: string]: unknown;
-}
+export type JudgeKindEnablementDocument = CanonicalJudgeKindEnablementDocument;
 
 export type ActivationDocumentV1 =
   | { readonly documentVersion: 1; readonly kind: 'rule'; readonly rule: CanonicalFullRuleDocument }
@@ -187,19 +188,7 @@ export function canonicalTarget(value: unknown): TargetDocument {
   }
 }
 
-/** The one canonical form of a judge version — stored, and embedded in every rule that names it. */
-export function canonicalJudge(value: unknown): JudgeDocument {
-  const judge = cloneJsonRecord(value, 'a judge document');
-  if (!isJudgeKind(judge.kind)) return fail('a judge document has a known judge kind');
-  return {
-    ...judge,
-    judgeId: requiredText(judge.judgeId, 'a judge id'),
-    version: positiveInteger(judge.version, 'a judge version'),
-    kind: judge.kind,
-    provider: requiredText(judge.provider, 'a judge provider'),
-    model: requiredText(judge.model, 'a judge model'),
-  };
-}
+export { canonicalJudge } from './judges.ts';
 
 /** The one canonical form of a subscriber version — stored, and embedded in every rule that names it. */
 export function canonicalSubscriber(value: unknown): SubscriberDocument {
@@ -264,6 +253,12 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
     return fail('a rule event type belongs to its source channel', 'SOURCE_CHANNEL_UNSUPPORTED');
   const condition = canonicaliseCondition(definition.value, rule.condition);
   if (!condition.ok) return fail(condition.issues[0]?.message ?? 'the rule condition is not valid');
+  let agentic: CanonicalAgenticCondition | undefined;
+  if (rule.agentic !== undefined) {
+    const canonical = canonicaliseAgenticCondition(definition.value, condition.value, rule.agentic);
+    if (!canonical.ok) return fail(canonical.issues[0]?.message ?? 'the rule agentic condition is not valid');
+    agentic = { ...canonical.value, judge: canonicalJudge(canonical.value.judge) };
+  }
   const mapping = canonicalJsonValue(rule.mapping, 'rule mapping');
   const compiledMapping = compileMapping(definition.value, mapping);
   if (!compiledMapping.ok) return fail(compiledMapping.issues[0]?.message ?? 'the rule mapping is not valid');
@@ -281,7 +276,9 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
     );
     if (bound === undefined) return fail('an SSE target embeds its exact subscriber version');
   }
+  /* Phase D carried an empty compatibility array. Agentic authority is now exclusively rule.agentic. */
   const judges = Array.isArray(rule.judges) ? rule.judges.map(canonicalJudge) : fail('rule judges are an array');
+  if (judges.length !== 0) return fail('rule judges are represented only by the optional agentic sibling');
   let cloudEventType: string | undefined;
   if (rule.cloudEventType !== undefined) {
     const chosen = validateCloudEventType(rule.cloudEventType);
@@ -294,6 +291,7 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
     source,
     event: { type: eventType, version: eventVersion },
     condition: condition.value,
+    ...(agentic === undefined ? {} : { agentic }),
     mapping,
     ...(cloudEventType === undefined ? {} : { cloudEventType }),
     targets,
@@ -302,21 +300,6 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
     deliveryRateCap: positiveInteger(rule.deliveryRateCap, 'rule delivery rate cap'),
     retention: canonicalRetention(rule.retention),
   };
-}
-
-function canonicalBudget(value: unknown): JudgeBudgetDocument {
-  const budget = cloneJsonRecord(value, 'a judge budget document');
-  return {
-    ...budget,
-    budgetId: requiredText(budget.budgetId, 'a judge budget id'),
-    version: positiveInteger(budget.version, 'a judge budget version'),
-  };
-}
-
-function canonicalEnablement(value: unknown): JudgeKindEnablementDocument {
-  const enablement = cloneJsonRecord(value, 'a judge-kind document');
-  if (!isJudgeKind(enablement.kind)) return fail('a judge-kind document has a known judge kind');
-  return { ...enablement, kind: enablement.kind, version: positiveInteger(enablement.version, 'a judge-kind version') };
 }
 
 function canonicalEnableAll(value: unknown): Extract<ActivationDocumentV1, { kind: 'enable-all' }> {
@@ -358,9 +341,13 @@ export function normaliseActivationDocument(value: unknown): ActivationDocumentV
     case 'rule':
       return { documentVersion: 1, kind: 'rule', rule: canonicalFullRuleDocument(document.rule) };
     case 'judge-budget':
-      return { documentVersion: 1, kind: 'judge-budget', budget: canonicalBudget(document.budget) };
+      return { documentVersion: 1, kind: 'judge-budget', budget: canonicalJudgeBudget(document.budget) };
     case 'judge-kind':
-      return { documentVersion: 1, kind: 'judge-kind', enablement: canonicalEnablement(document.enablement) };
+      return {
+        documentVersion: 1,
+        kind: 'judge-kind',
+        enablement: canonicalJudgeKindEnablement(document.enablement),
+      };
     case 'enable-all':
       return canonicalEnableAll(document);
     default:
@@ -397,7 +384,15 @@ function derivedVersions(document: ActivationDocumentV1): DisclosureVersion[] {
           id: subscriber.subscriberId,
           version: subscriber.version,
         })),
-        ...document.rule.judges.map((judge) => ({ kind: 'judge' as const, id: judge.judgeId, version: judge.version })),
+        ...(document.rule.agentic === undefined
+          ? []
+          : [
+              {
+                kind: 'judge' as const,
+                id: document.rule.agentic.judge.judgeId,
+                version: document.rule.agentic.judge.version,
+              },
+            ]),
       ];
     case 'judge-budget':
       return [{ kind: 'judge-budget', id: document.budget.budgetId, version: document.budget.version }];

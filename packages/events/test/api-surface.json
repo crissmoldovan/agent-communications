@@ -1,6 +1,7 @@
 [
   "AddressV1",
   "AgenticConditionV1",
+  "AgenticJudgeDocumentV1",
   "AnyEventDefinition",
   "AuthoringCondition",
   "BuildCloudEventInput",

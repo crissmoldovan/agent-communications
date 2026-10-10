@@ -1,5 +1,6 @@
 /** Stable domain failures that daemon operations translate unchanged at their control boundary. */
 export type EventDomainErrorCode =
+  | 'E2_REQUIRED'
   | 'EVENT_TYPE_NOT_SELECTABLE'
   | 'EVENT_TYPE_UNKNOWN'
   | 'EVENT_VERSION_UNKNOWN'
