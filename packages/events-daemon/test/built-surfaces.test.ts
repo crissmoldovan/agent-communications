@@ -14,7 +14,7 @@ const PACKAGE = new URL('..', import.meta.url).pathname;
 const CLI = join(PACKAGE, 'dist', 'cli.mjs');
 const PRELOAD = new URL('../../../test/helpers/loopback-seal-preload.mjs', import.meta.url).pathname;
 
-test('BOOT-B1: the built command has clean help and its MCP server exposes only the content-free control tools', async () => {
+test('BOOT-B1/B3: the built command has clean help and its MCP server exposes the paired content-free control tools', async () => {
   const state = await mkdtemp(join(tmpdir(), 'events-daemon-state-'));
   try {
     const env = { ...process.env, AGENT_COMMS_STATE_DIR: state, NO_COLOR: '1' };
@@ -23,8 +23,8 @@ test('BOOT-B1: the built command has clean help and its MCP server exposes only 
     assert.doesNotMatch(help.stdout, /ExperimentalWarning/, 'the command keeps its user-facing output on stdout clean');
     assert.doesNotMatch(
       help.stdout,
-      /^\s+(?:delivery|subscriber|judge|migrate)\b|^\s+target (?:test|resume|replay)\b/m,
-      'the built CLI keeps B3/E controls out of the B2 public boundary',
+      /^\s+migrate\b|^\s+target (?:resume|replay)\b|^\s+held decide\b/m,
+      'the built CLI keeps B3 human-only secret/resume/held-decision controls out of its paired boundary',
     );
 
     if (WINDOWS_SKIP) {
@@ -64,6 +64,29 @@ test('BOOT-B1: the built command has clean help and its MCP server exposes only 
           'events_enable_all',
           'events_doctor',
           'events_catalogue_list',
+          'events_approval_view',
+          'events_rule_test',
+          'events_target_test',
+          'events_subscribers_list',
+          'events_subscriber_add',
+          'events_subscriber_update',
+          'events_subscriber_remove',
+          'events_judges_list',
+          'events_judge_add',
+          'events_judge_update',
+          'events_judge_remove',
+          'events_judge_test',
+          'events_budget_show',
+          'events_budget_update',
+          'events_judge_kinds_list',
+          'events_judge_kind_enable',
+          'events_judge_kind_disable',
+          'events_judge_model_status',
+          'events_judge_model_remove',
+          'events_deliveries_list',
+          'events_delivery_retry',
+          'events_delivery_drop',
+          'events_held_list',
           'events_catalogue_show',
           'events_sources_list',
           'events_source_show',

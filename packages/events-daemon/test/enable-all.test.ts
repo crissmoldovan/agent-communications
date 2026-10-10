@@ -88,7 +88,7 @@ async function setup() {
     ruleId: rule.ruleId,
     version: rule.version,
   })) as import('../src/runtime/activations.ts').PreparedActivation;
-  const answer = await approvals.issueDisclosureChallenge(first.approvalId);
+  const answer = await runtime.issueChallenge(first.approvalId);
   assert.equal((await runtime.approve({ approvalId: first.approvalId, answer })).status, 'completed');
   profileCalls = 0;
   return { root, store, approvals, runtime, profileCalls: () => profileCalls };
@@ -116,7 +116,7 @@ test('APR-B1: enable-all refuses a changed pointer before authority use and othe
   const second = await setup();
   try {
     const prepared = await second.runtime.prepareEnableAll();
-    const challenge = await second.approvals.issueDisclosureChallenge(prepared.approvalId);
+    const challenge = await second.runtime.issueChallenge(prepared.approvalId);
     const completed = await second.runtime.approve({ approvalId: prepared.approvalId, answer: challenge });
     assert.equal(completed.status, 'completed');
     assert.equal(second.profileCalls(), 1, 'enable-all samples one new mailbox baseline, never history');

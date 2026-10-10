@@ -250,7 +250,7 @@ export function namedOperations(rows, operations) {
  * `limited` when it was stopped at `CALL_LIMIT`. `fatal` is set when a drive hung, after which nothing else is
  * driven.
  */
-export async function driveOperations(table, { dir }) {
+export async function driveOperations(table, { dir, packages = undefined }) {
   const home = join(dir, 'home');
   await mkdir(home, { recursive: true });
   const input = join(dir, 'drive-input.json');
@@ -258,7 +258,7 @@ export async function driveOperations(table, { dir }) {
   // Every command is run with the five suite folders pinned before its words (design 2026-10-04, D2): each a folder of
   // its own, none of them the environment's, so a command reaches its operation only by parsing them first.
   const pins = PATH_FLAGS.flatMap(([flag, name]) => [flag, join(dir, 'pinned', name)]);
-  await writeFile(input, JSON.stringify({ rows: table?.capabilities ?? [], pins }));
+  await writeFile(input, JSON.stringify({ rows: table?.capabilities ?? [], pins, packages }));
   // Nothing of the caller's environment but what starting Node needs: a token in it is not the drive's to see.
   const env = {
     NO_COLOR: '1',
@@ -397,11 +397,11 @@ export async function seal() {
  * Every function each package's operations modules export: `{ package: { name: [module] } }`, by module, and each
  * function itself by `<package>:<name>` (the first module's, when two export one name — which a row cannot name).
  */
-async function indexOperations() {
+async function indexOperations(packages = Object.keys(DRIVERS)) {
   const operations = {};
   const modules = new Map();
   const functions = new Map();
-  for (const pkg of Object.keys(DRIVERS)) {
+  for (const pkg of packages) {
     operations[pkg] = {};
     const dir = operationsDir(pkg);
     const files = (await readdir(dir)).filter((file) => file.endsWith('.ts') && !file.endsWith('.d.ts')).sort();
@@ -425,6 +425,7 @@ async function indexOperations() {
  * package rather than a relative path. Read by identity from the core's own index, so nothing is listed by hand.
  */
 async function coreReexports(modules) {
+  if (![...modules.values()].some((entry) => entry.pkg === 'core')) return [];
   const index = await import(pathToFileURL(join(ROOT, 'packages', 'core', 'src', 'index.ts')).href);
   const names = [];
   for (const [url, entry] of modules) {
@@ -475,11 +476,11 @@ function standInSource(real, { pkg, names }) {
 }
 
 /** Routes every import a surface makes of an operation to its stand-in, and refuses the keychain outright. */
-async function installHooks(modules, reexports) {
+async function installHooks(modules, reexports, packageParentPath) {
   const { registerHooks } = await import('node:module');
   const standIns = new Map([...modules].map(([url, entry]) => [url, { pkg: entry.pkg, names: entry.functions }]));
   // The MCP client is a dependency of the packages, not of the root: resolved as a package's own server resolves it.
-  const packageParent = pathToFileURL(join(ROOT, DRIVERS.core.server)).href;
+  const packageParent = pathToFileURL(join(ROOT, packageParentPath)).href;
   registerHooks({
     resolve(specifier, context, nextResolve) {
       if (specifier === '@napi-rs/keyring' || specifier.startsWith('@napi-rs/keyring/')) {
@@ -737,7 +738,11 @@ async function capturing(body) {
 
 async function drive(inputPath, outputPath) {
   await seal();
-  const { rows, pins } = JSON.parse(await readFile(inputPath, 'utf8'));
+  const { rows, pins, packages: requestedPackages } = JSON.parse(await readFile(inputPath, 'utf8'));
+  const packages =
+    Array.isArray(requestedPackages) && requestedPackages.every((pkg) => typeof pkg === 'string' && DRIVERS[pkg])
+      ? requestedPackages
+      : Object.keys(DRIVERS);
   // The file store, chosen, so nothing so much as asks which store to use: in the environment's configuration, which
   // the servers read, and in the one the commands are pinned to.
   const pinnedConfig = pins[pins.indexOf('--config-dir') + 1];
@@ -746,10 +751,10 @@ async function drive(inputPath, outputPath) {
     await writeFile(join(configDir, 'config.json'), `${JSON.stringify({ version: 2, secrets: { store: 'file' } })}\n`);
   }
 
-  const { operations, modules, functions } = await indexOperations();
+  const { operations, modules, functions } = await indexOperations(packages);
   const reexports = await coreReexports(modules);
   globalThis[Symbol.for('agentcomms.parity.stand-in')] = standIn;
-  await installHooks(modules, reexports);
+  await installHooks(modules, reexports, DRIVERS[packages[0] ?? 'core'].server);
 
   const { PassThrough } = await import('node:stream');
   const { Client } = await import('@modelcontextprotocol/client');
@@ -762,7 +767,8 @@ async function drive(inputPath, outputPath) {
   const clis = {};
   const tools = new Map();
   // Built outside any drive, so a stand-in called while a server starts runs nothing and records nothing.
-  for (const [pkg, driver] of Object.entries(DRIVERS)) {
+  for (const pkg of packages) {
+    const driver = DRIVERS[pkg];
     clis[pkg] = (await import(pathToFileURL(join(ROOT, driver.cli)).href))[driver.run];
     const factory = serverFactory(await import(pathToFileURL(join(ROOT, driver.server)).href), driver);
     const built = await factory({ env: process.env, keyring: null, fetch: blocked, probe: blocked });

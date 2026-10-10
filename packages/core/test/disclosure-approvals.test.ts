@@ -94,6 +94,24 @@ test('a disclosure is approved only by a terminal or trusted app challenge, then
   );
 });
 
+test('a disclosure claim leaves an approved record unconsumed when its caller-bound deadline is reached under the claim lock', async () => {
+  const time = clock();
+  const store = new ApprovalStore(tempDir(), { now: time.now });
+  const pending = await store.createDisclosure(BINDING);
+  const challenge = await store.issueDisclosureChallenge(pending.approvalId);
+  await store.approveDisclosure(pending.approvalId, BINDING, challenge, 'terminal');
+
+  await assert.rejects(
+    // The optional deadline is a specialised caller constraint; ordinary disclosure callers retain their current behaviour.
+    store.claimForDisclosure(pending.approvalId, BINDING, { deadlineMs: time.now().getTime() }),
+    (error: unknown) =>
+      error instanceof CommsError && error.code === 'APPROVAL_VOID' && error.details?.reason === 'CHALLENGE_EXPIRED',
+  );
+  const record = await store.get(pending.approvalId);
+  assert.equal(record?.form, 'v2');
+  if (record?.form === 'v2') assert.equal(record.record.state, 'approved');
+});
+
 test('a disclosure binding drift voids the record and concurrent claims use it exactly once', async () => {
   const time = clock();
   const directory = tempDir();

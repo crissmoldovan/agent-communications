@@ -101,7 +101,8 @@ async function fixture(
   let profileCalls = 0;
   let intentOrdinal = 0;
   const mailboxLock = new MailboxLock();
-  const runtime = new ActivationRuntime({
+  let runtime!: ActivationRuntime;
+  runtime = new ActivationRuntime({
     store,
     approvals,
     config: configStore,
@@ -131,7 +132,25 @@ async function fixture(
     decryptPoint: async ({ stored }) => JSON.parse(Buffer.from(stored).toString('utf8')),
     mailboxLock,
   });
-  return { root, store, approvals, configStore, runtime, time, mailboxLock, profileCalls: () => profileCalls };
+  // Test callers that model an ordinary terminal prompt must use the same row-recording path as the terminal does.
+  // The runtime itself still receives the raw core store, so `issueChallenge()` reaches core exactly once.
+  const terminalApprovals = new Proxy(approvals, {
+    get(target, property, receiver) {
+      if (property === 'issueDisclosureChallenge') return runtime.issueChallenge.bind(runtime);
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return {
+    root,
+    store,
+    approvals: terminalApprovals,
+    configStore,
+    runtime,
+    time,
+    mailboxLock,
+    profileCalls: () => profileCalls,
+  };
 }
 
 test('APR-B1: first Gmail activation creates and claims authority before one profile baseline and one pointer commit', {

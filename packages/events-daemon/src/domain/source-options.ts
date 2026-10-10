@@ -34,7 +34,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[], name: string): void {
   const unknown = Object.keys(value).find((key) => !keys.includes(key));
-  if (unknown !== undefined) fail(`${name} has no ${unknown} field`);
+  // The unknown key is the caller's text; the message names only what the schema defines.
+  if (unknown !== undefined) fail(`${name} has a field it does not define`);
   for (const key of keys) if (!Object.hasOwn(value, key)) fail(`${name} has a ${key} field`);
 }
 

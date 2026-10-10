@@ -73,7 +73,7 @@ test('D8: an absent cut-over failpoint is behaviour-free and a supplied callback
     if (!('approvalId' in prepared)) throw new Error('expected an approved activation');
     await runtime.approve({
       approvalId: prepared.approvalId,
-      answer: await approvals.issueDisclosureChallenge(prepared.approvalId),
+      answer: await runtime.issueChallenge(prepared.approvalId),
     });
     assert.deepEqual(
       [...edges].sort(),

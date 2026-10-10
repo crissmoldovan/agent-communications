@@ -179,11 +179,11 @@ async function setup(
   return { root, store, config, approvals, runtime, versions };
 }
 
-async function approve(runtime: ActivationRuntime, approvals: ApprovalStore, ruleId: string, version: number) {
+async function approve(runtime: ActivationRuntime, ruleId: string, version: number) {
   const prepared = (await runtime.prepareRule({ ruleId, version })) as PreparedActivation;
   return runtime.approve({
     approvalId: prepared.approvalId,
-    answer: await approvals.issueDisclosureChallenge(prepared.approvalId),
+    answer: await runtime.issueChallenge(prepared.approvalId),
   });
 }
 
@@ -195,11 +195,11 @@ test('D7b: every non-Gmail replacement gives old-only, new-only and shared scope
     try {
       fixture.versions.createRule(rule(entry, 1, true));
       fixture.versions.createRule(rule(entry, 2, false));
-      await approve(fixture.runtime, fixture.approvals, rule(entry, 1, true).ruleId, 1);
+      await approve(fixture.runtime, rule(entry, 1, true).ruleId, 1);
       fixture.store.database.prepare('UPDATE event_settings SET enabled = 1 WHERE singleton = 1').run();
 
       if (entry.source === 'resend' && entry.oldOnly.scopeId === 'status') {
-        await approve(fixture.runtime, fixture.approvals, rule(entry, 2, false).ruleId, 2);
+        await approve(fixture.runtime, rule(entry, 2, false).ruleId, 2);
         assert.equal(
           fixture.versions.activeVersion('rule', rule(entry, 1, true).ruleId)?.version,
           2,
@@ -218,7 +218,7 @@ test('D7b: every non-Gmail replacement gives old-only, new-only and shared scope
       }
 
       await assert.rejects(
-        () => approve(fixture.runtime, fixture.approvals, rule(entry, 2, false).ruleId, 2),
+        () => approve(fixture.runtime, rule(entry, 2, false).ruleId, 2),
         (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'REPLACEMENT_DRAINING',
         `${entry.name} waits for its old version`,
       );
@@ -305,9 +305,9 @@ test('D7b: a disabled non-Gmail replacement is immediately drain-settled and car
     try {
       fixture.versions.createRule(rule(entry, 1, true));
       fixture.versions.createRule(rule(entry, 2, false));
-      await approve(fixture.runtime, fixture.approvals, rule(entry, 1, true).ruleId, 1);
+      await approve(fixture.runtime, rule(entry, 1, true).ruleId, 1);
       // The default global switch is disabled. Completion must therefore not wait for a provider worker.
-      await approve(fixture.runtime, fixture.approvals, rule(entry, 2, false).ruleId, 2);
+      await approve(fixture.runtime, rule(entry, 2, false).ruleId, 2);
       assert.equal(fixture.versions.activeVersion('rule', rule(entry, 1, true).ruleId)?.version, 2, entry.name);
       assert.equal(
         (fixture.store.database.prepare('SELECT COUNT(*) AS count FROM replacement_drains').get() as { count: number })
@@ -363,7 +363,7 @@ test('D7b: every non-Gmail derived tightening transfers the staged debt, preserv
     try {
       fixture.versions.createRule(rule(parent, 1, true));
       fixture.versions.createRule(rule(parent, 2, false));
-      await approve(fixture.runtime, fixture.approvals, rule(parent, 1, true).ruleId, 1);
+      await approve(fixture.runtime, rule(parent, 1, true).ruleId, 1);
       const parentPoint = fixture.store.database
         .prepare('SELECT encrypted_position FROM rule_activation_points WHERE rule_id = ? AND rule_version = 1 LIMIT 1')
         .get(rule(parent, 1, true).ruleId) as { encrypted_position: Uint8Array };
@@ -477,7 +477,7 @@ test('K6/D7b: a removed then re-added non-Gmail account remains dark until anoth
     const fixture = await setup(readd);
     try {
       fixture.versions.createRule(rule(readd, 1, true));
-      await approve(fixture.runtime, fixture.approvals, rule(readd, 1, true).ruleId, 1);
+      await approve(fixture.runtime, rule(readd, 1, true).ruleId, 1);
       fixture.store.database.prepare('UPDATE event_settings SET enabled = 1 WHERE singleton = 1').run();
       delete fixture.config.accounts[`account-${removed}`];
       fixture.store.immediate(() =>
@@ -583,7 +583,7 @@ test('D7b: each non-Gmail source settles content-free at all three completion-de
           ruleId: rule(deadlineEntry, 1, true).ruleId,
           version: 1,
         })) as PreparedActivation;
-        const answer = await fixture.approvals.issueDisclosureChallenge(prepared.approvalId);
+        const answer = await fixture.runtime.issueChallenge(prepared.approvalId);
         await assert.rejects(
           () => fixture.runtime.approve({ approvalId: prepared.approvalId, answer }),
           () => true,

@@ -725,7 +725,7 @@ export class PhaseDCutoverFixture {
   async #approve(prepared: PreparedActivation): Promise<void> {
     await this.runtime.approve({
       approvalId: prepared.approvalId,
-      answer: await this.approvals.issueDisclosureChallenge(prepared.approvalId),
+      answer: await this.runtime.issueChallenge(prepared.approvalId),
     });
   }
 

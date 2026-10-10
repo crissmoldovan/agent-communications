@@ -2,14 +2,31 @@ import { createInterface } from 'node:readline/promises';
 import { agentMarker, CommsError, canPrompt, isCommsError } from '@agentcomms/core';
 import { Command, CommanderError } from 'commander';
 import { createEventsMcpServer } from '../mcp/server.ts';
+import { approvalView } from '../operations/approval-view.ts';
 import { approve, disclosureChallenge } from '../operations/approve.ts';
 import type { B3CliRegistrar } from '../operations/b3-contract.ts';
 import { catalogueList, catalogueShow } from '../operations/catalogue.ts';
+import { deliveriesList, dropDelivery, heldList, retryDelivery } from '../operations/deliveries.ts';
 import { disableAll } from '../operations/disable-all.ts';
 import { doctor } from '../operations/doctor.ts';
 import { dryrunList, dryrunShow } from '../operations/dryrun.ts';
 import { enableAll } from '../operations/enable-all.ts';
+import {
+  addJudge,
+  budgetShow,
+  disableJudgeKind,
+  enableJudgeKind,
+  judgeKindsList,
+  judgeModelStatus,
+  judgesList,
+  judgeTest,
+  removeJudge,
+  removeJudgeModel,
+  updateBudget,
+  updateJudge,
+} from '../operations/judges.ts';
 import { pause, resume } from '../operations/pause.ts';
+import { ruleTest } from '../operations/rule-test.ts';
 import {
   createRule,
   disableRule,
@@ -23,6 +40,8 @@ import { run as runOwner } from '../operations/run.ts';
 import { sourceShow, sourcesList } from '../operations/sources.ts';
 import { status } from '../operations/status.ts';
 import { stop } from '../operations/stop.ts';
+import { addSubscriber, removeSubscriber, subscribersList, updateSubscriber } from '../operations/subscribers.ts';
+import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
 import { assertHumanTerminal, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
 
@@ -112,6 +131,26 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       throw new CommsError('USAGE', `${name} must be valid JSON`);
     }
   };
+  const catalogueArgument = (
+    value: string,
+  ): { readonly type: string; readonly version: number; readonly exampleIndex: number } => {
+    const match = /^([a-z][a-z0-9]*(?:\.[a-z][a-z0-9-]*)+)@(\d+):(\d+)$/.exec(value);
+    if (!match) throw new CommsError('USAGE', 'catalogue example must be type@version:index');
+    const version = Number(match[2]);
+    const exampleIndex = Number(match[3]);
+    if (!Number.isSafeInteger(version) || version < 1 || !Number.isSafeInteger(exampleIndex) || exampleIndex < 0)
+      throw new CommsError('USAGE', 'catalogue example must contain a positive version and a non-negative index');
+    return { type: match[1] as string, version, exampleIndex };
+  };
+
+  const approval = program.command('approval').description('view the authoritative pending disclosure approval');
+  approval
+    .command('view <approval-id>')
+    .requiredOption('--digest <digest>')
+    .action(async (approvalId: string, options) => {
+      ran = true;
+      print(await approvalView(approvalId, options.digest as string, controlOptions(program)));
+    });
   const catalogue = program.command('catalogue').description('inspect the held local event catalogue');
   catalogue.command('list').action(async () => {
     ran = true;
@@ -167,6 +206,16 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       print(await operation(ruleId, controlOptions(program)));
     });
   }
+  rule.command('test <document> <catalogue-example>').action(async (document: string, catalogueExample: string) => {
+    ran = true;
+    print(
+      await ruleTest(
+        jsonArgument(document, 'rule document'),
+        catalogueArgument(catalogueExample),
+        controlOptions(program),
+      ),
+    );
+  });
 
   const targets = program.command('targets').description('inspect immutable local event target versions');
   targets.command('list').action(async () => {
@@ -186,6 +235,110 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   target.command('remove <target-id>').action(async (targetId: string) => {
     ran = true;
     print(await removeTarget(targetId, controlOptions(program)));
+  });
+  target
+    .command('test <target-id>')
+    .requiredOption('--version <version>')
+    .action(async (targetId: string, options) => {
+      ran = true;
+      print(await targetTest(targetId, parseVersion(options.version as string), controlOptions(program)));
+    });
+
+  const subscribers = program.command('subscribers').description('inspect immutable SSE subscriber versions');
+  subscribers.command('list').action(async () => {
+    ran = true;
+    print(await subscribersList(controlOptions(program)));
+  });
+  const subscriber = program.command('subscriber').description('create, update, and revoke immutable SSE subscribers');
+  subscriber.command('add <document>').action(async (document: string) => {
+    ran = true;
+    print(await addSubscriber(jsonArgument(document, 'subscriber document'), controlOptions(program)));
+  });
+  subscriber.command('update <document>').action(async (document: string) => {
+    ran = true;
+    print(await updateSubscriber(jsonArgument(document, 'subscriber document'), controlOptions(program)));
+  });
+  subscriber.command('remove <subscriber-id>').action(async (subscriberId: string) => {
+    ran = true;
+    print(await removeSubscriber(subscriberId, controlOptions(program)));
+  });
+
+  const judges = program.command('judges').description('inspect typed pre-Phase-E judge controls');
+  judges.command('list').action(async () => {
+    ran = true;
+    print(await judgesList(controlOptions(program)));
+  });
+  const judge = program.command('judge').description('use typed unavailable judge controls until Phase E');
+  judge.command('add <document>').action(async (document: string) => {
+    ran = true;
+    print(await addJudge(jsonArgument(document, 'judge document'), controlOptions(program)));
+  });
+  judge.command('update <document>').action(async (document: string) => {
+    ran = true;
+    print(await updateJudge(jsonArgument(document, 'judge document'), controlOptions(program)));
+  });
+  judge.command('remove <judge-id>').action(async (judgeId: string) => {
+    ran = true;
+    print(await removeJudge(judgeId, controlOptions(program)));
+  });
+  judge
+    .command('test <judge-id>')
+    .requiredOption('--version <version>')
+    .action(async (judgeId: string, options) => {
+      ran = true;
+      print(await judgeTest(judgeId, parseVersion(options.version as string), controlOptions(program)));
+    });
+  const budget = program.command('budget').description('use typed unavailable budget controls until Phase E');
+  budget.command('show').action(async () => {
+    ran = true;
+    print(await budgetShow(controlOptions(program)));
+  });
+  budget.command('update <document>').action(async (document: string) => {
+    ran = true;
+    print(await updateBudget(jsonArgument(document, 'budget document'), controlOptions(program)));
+  });
+  const judgeKinds = judge.command('kinds').description('list typed unavailable judge kinds until Phase E');
+  judgeKinds.command('list').action(async () => {
+    ran = true;
+    print(await judgeKindsList(controlOptions(program)));
+  });
+  const judgeKind = judge.command('kind').description('use typed unavailable judge kind controls until Phase E');
+  judgeKind.command('enable <kind>').action(async (kind: string) => {
+    ran = true;
+    print(await enableJudgeKind(kind, controlOptions(program)));
+  });
+  judgeKind.command('disable <kind>').action(async (kind: string) => {
+    ran = true;
+    print(await disableJudgeKind(kind, controlOptions(program)));
+  });
+  const judgeModel = judge.command('model').description('use typed unavailable Laya model controls until Phase E2');
+  judgeModel.command('status').action(async () => {
+    ran = true;
+    print(await judgeModelStatus(controlOptions(program)));
+  });
+  judgeModel.command('remove').action(async () => {
+    ran = true;
+    print(await removeJudgeModel(controlOptions(program)));
+  });
+
+  const deliveries = program.command('deliveries').description('inspect content-free delivery metadata');
+  deliveries.command('list').action(async () => {
+    ran = true;
+    print(await deliveriesList(controlOptions(program)));
+  });
+  const delivery = program.command('delivery').description('retry or drop one exact delivery');
+  delivery.command('retry <delivery-id>').action(async (deliveryId: string) => {
+    ran = true;
+    print(await retryDelivery(deliveryId, controlOptions(program)));
+  });
+  delivery.command('drop <delivery-id>').action(async (deliveryId: string) => {
+    ran = true;
+    print(await dropDelivery(deliveryId, controlOptions(program)));
+  });
+  const held = program.command('held').description('inspect typed held decisions');
+  held.command('list').action(async () => {
+    ran = true;
+    print(await heldList(controlOptions(program)));
   });
 
   const dryrun = program.command('dryrun').description('inspect retained local records at an interactive terminal');
