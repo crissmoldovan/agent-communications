@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DURABLE_CUTOVER_EDGES } from '../src/runtime/cutover-failpoint.ts';
+import { assertWhatsAppCutoverMutationContract } from './support/cutover-mutants.ts';
 import { PhaseDCutoverFixture } from './support/phase-d-cutover.ts';
 import {
+  assertWhatsAppDurableEdgeCoverage,
   assertWhatsAppMultiset,
   forEachWhatsAppDurableEdge,
   headGeneration,
@@ -53,9 +54,40 @@ async function beginReplacement(fixture: PhaseDCutoverFixture, next: readonly st
   assert.equal(waiting, true, 'the real exact replacement keeps the old pointer until its P drain completes');
 }
 
-async function finishReplacement(fixture: PhaseDCutoverFixture, chat: string): Promise<void> {
+async function finishReplacement(
+  fixture: PhaseDCutoverFixture,
+  chat: string,
+  attempt: Readonly<{ edge: string | undefined }>,
+): Promise<void> {
   await fixture.sourceTurn(scope(fixture, chat));
+  await resumeClaimedCompletion(fixture, attempt);
+}
+
+/** The completion pointer has its own durable edges after the source drain reaches P. */
+async function resumeClaimedCompletion(
+  fixture: PhaseDCutoverFixture,
+  attempt: Readonly<{ edge: string | undefined }>,
+): Promise<void> {
+  if (attempt.edge === undefined || !['before-move', 'after-move', 'before-finalise'].includes(attempt.edge)) {
+    await fixture.runtime.resumeClaimedCompletions();
+    return;
+  }
+  const edge = attempt.edge;
+  let fired = false;
+  await fixture.setFailpoint((at) => {
+    if (at !== edge) return;
+    fired = true;
+    throw new Error(`activation pointer crash at ${edge}`);
+  });
+  await assert.rejects(
+    () => fixture.runtime.resumeClaimedCompletions(),
+    new RegExp(`activation pointer crash at ${edge}`),
+  );
+  assert.equal(fired, true, `replacement completion reaches its ${edge} pointer edge`);
+  const journal = await fixture.journal();
+  await fixture.restart();
   await fixture.runtime.resumeClaimedCompletions();
+  assert.ok((await fixture.journal()).length >= journal.length, `restart at ${edge} keeps the fake provider journal`);
 }
 
 async function settle(fixture: PhaseDCutoverFixture): Promise<void> {
@@ -169,7 +201,7 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
       await fixture.setFailpoint(undefined);
       await beginReplacement(fixture, ['chat-new']);
       await attempt.sourceAtDurableEdge('chat-old');
-      await fixture.runtime.resumeClaimedCompletions();
+      await resumeClaimedCompletion(fixture, attempt);
       await settle(fixture);
       assertWhatsAppMultiset(fixture, {
         raw: [old],
@@ -188,7 +220,7 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
       await fixture.enable();
       fixture.setWhatsAppMessages([before]);
       await beginReplacement(fixture, ['chat-new']);
-      await finishReplacement(fixture, 'chat-old');
+      await finishReplacement(fixture, 'chat-old', attempt);
       fixture.setWhatsAppMessages([before, after]);
       await attempt.sourceAtDurableEdge('chat-new');
       await settle(fixture);
@@ -210,7 +242,7 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
       fixture.setWhatsAppMessages([before]);
       await fixture.sourceTurn(scope(fixture, 'chat-shared'));
       await beginReplacement(fixture, ['chat-shared']);
-      await finishReplacement(fixture, 'chat-shared');
+      await finishReplacement(fixture, 'chat-shared', attempt);
       fixture.setWhatsAppMessages([before, after]);
       await attempt.sourceAtDurableEdge('chat-shared');
       await settle(fixture);
@@ -484,14 +516,8 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
         if (edge === 'before-finalise') throw new Error('leave P unpublished');
       });
       await assert.rejects(() => fixture.activate(), /leave P unpublished/);
-      const calls = fixture.calls.length;
       await fixture.setFailpoint(undefined);
-      await attempt.sourceAtDurableEdge();
-      assert.equal(
-        fixture.calls.length,
-        calls + (attempt.edge === undefined ? 1 : 2),
-        'only the explicit fenced scan calls the fake',
-      );
+      await attempt.assertSourceEdgeUnreachable();
       fixture.oracle({ raw: 0, admissions: 0 });
     });
   },
@@ -562,7 +588,7 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
       await fixture.setFailpoint(undefined);
       await beginReplacement(fixture, ['chat-new']);
       await attempt.sourceAtDurableEdge('chat-old');
-      await fixture.runtime.resumeClaimedCompletions();
+      await resumeClaimedCompletion(fixture, attempt);
       await settle(fixture);
       assert.equal(
         fixture.store.database
@@ -620,6 +646,7 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
           await attempt.sourceAtDurableEdge();
           fixture.oracle({ raw: 0, admissions: 0 });
         },
+        { cell: 'W:deadline-at-P-after-P-and-finalise-settles-without-head-write' },
       );
     }
   },
@@ -627,29 +654,12 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
 
 for (const name of cells) test(name, { skip: WINDOWS_SKIP }, scenarios[name]);
 
-test('W: every snapshot durable edge reopens the authoritative head and fake journal', {
-  skip: WINDOWS_SKIP,
-}, async () => {
-  for (const edge of DURABLE_CUTOVER_EDGES) {
-    const fixture = await PhaseDCutoverFixture.create('whatsapp');
-    try {
-      fixture.setWhatsAppMessages([]);
-      await fixture.activate();
-      await fixture.enable();
-      fixture.setWhatsAppMessages([whatsappMessage(`edge-${edge}`)]);
-      await fixture.setFailpoint((at) => {
-        if (at === edge) throw new Error(`cut-over crash:${edge}`);
-      });
-      await assert.rejects(() => fixture.sourceTurn(), new RegExp(`cut-over crash:${edge}`));
-      const before = await fixture.journal();
-      await fixture.restart();
-      await fixture.sourceTurn();
-      fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
-      assert.ok((await fixture.journal()).length >= before.length, `${edge} retains the durable provider journal`);
-    } finally {
-      await fixture.dispose();
-    }
-  }
+test('W: every matrix cell records its no-crash and durable-edge probe', { skip: WINDOWS_SKIP }, () => {
+  assertWhatsAppDurableEdgeCoverage(cells);
+});
+
+test('W: every matrix cell owns a mutation run by its exact cut-over test name', { skip: WINDOWS_SKIP }, () => {
+  assertWhatsAppCutoverMutationContract(cells);
 });
 
 test('W: replacement has distinct old-only, new-only and shared chats', { skip: WINDOWS_SKIP }, async () => {

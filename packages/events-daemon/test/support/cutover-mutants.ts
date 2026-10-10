@@ -86,6 +86,66 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
     exportName: 'WhatsAppSourceWorker',
   },
   {
+    id: 'whatsapp-disabled-baseline-omits-first-head',
+    file: 'sources/whatsapp.ts',
+    before: 'if (before === undefined) {',
+    after: 'if (false) {',
+    cell: 'W:first-disabled-head-without-owed-stage',
+    exportName: 'WhatsAppSourceWorker',
+  },
+  {
+    id: 'whatsapp-disabled-replacement-omits-first-head',
+    file: 'sources/whatsapp.ts',
+    before: 'if (before === undefined) {',
+    after: 'if (false) {',
+    cell: 'W:disabled-replacement-no-owed-admission',
+    exportName: 'WhatsAppSourceWorker',
+  },
+  {
+    id: 'whatsapp-tightening-keeps-parent-pointer',
+    file: 'runtime/replacements.ts',
+    before:
+      "UPDATE active_versions SET version = ?, current_cutover_id = ?, activated_at = ? WHERE kind = 'rule' AND object_id = ?",
+    after:
+      "UPDATE active_versions SET version = ?, current_cutover_id = ?, activated_at = ? WHERE kind = 'rule' AND object_id = ? AND 0 = 1",
+    cell: 'W:tighten-preserves-raw-admission-boundary',
+    exportName: 'applyDerivedTightening',
+  },
+  {
+    id: 'whatsapp-target-removal-leaves-rule-work',
+    file: 'runtime/revocations.ts',
+    before: 'purgeRevokedRuleWork(database.database, rule.rule_id, [rule.version]);',
+    after: 'void rule;',
+    cell: 'W:disable-or-remove-cancels-and-purges-hidden-tuples',
+    exportName: 'removeTarget',
+  },
+  {
+    id: 'whatsapp-account-removal-keeps-raw-occurrence',
+    file: 'runtime/account-fence.ts',
+    before: "database.prepare('DELETE FROM whatsapp_occurrences WHERE account_id = ?').run(accountId);",
+    after: 'void accountId;',
+    cell: 'W:remove-readd-stays-dark-and-rechecks-list',
+    exportName: 'purgeRemovedAccountWork',
+  },
+  {
+    id: 'whatsapp-recovery-skips-claimed-completion',
+    file: 'runtime/activations.ts',
+    before:
+      "SELECT id, kind, document, digest, effect, replacement_of_version, status, approval_id, claimed_at, completion_deadline FROM activation_intents WHERE status IN ('pending', 'pending-completion')",
+    after:
+      'SELECT id, kind, document, digest, effect, replacement_of_version, status, approval_id, claimed_at, completion_deadline FROM activation_intents WHERE 1 = 0',
+    cell: 'W:claim-recovery-keeps-authoritative-head',
+    exportName: 'ActivationRuntime',
+  },
+  {
+    id: 'whatsapp-fenced-worker-reads-checked-copy',
+    file: 'runtime/source-owner-work.ts',
+    before: 'if (isSourceScopeFenced(input.store.database, scope)) return;',
+    after: 'if (false) return;',
+    cell: 'W:claimed-P-fences-snapshot-worker',
+    exportName: 'runSourceOwnerWork',
+  },
+  {
     id: 'unconditional-resend-anchor',
     file: 'sources/resend.ts',
     before: 'WHERE id = ? AND encrypted_record = ? AND staged_at IS ? AND stage_expires_at IS ?',
@@ -563,21 +623,30 @@ export function assertResendMutationCoverage(cells: readonly string[]): void {
     );
 }
 
+/** Keeps WhatsApp's matrix ownership total: every cell kills a named mutation in its own cut-over file. */
+export function assertWhatsAppCutoverMutationContract(cells: readonly string[]): void {
+  const matrixCells = new Set(cells);
+  const mutations = CUTOVER_MUTATIONS.filter((mutation) => mutation.cell.startsWith('W:'));
+  for (const mutation of mutations)
+    assert.ok(
+      matrixCells.has(mutation.cell),
+      `${mutation.id}: ${mutation.cell} names a WhatsApp matrix cell in whatsapp-cutover.test.ts`,
+    );
+  for (const cell of cells)
+    assert.ok(
+      mutations.some((mutation) => mutation.cell === cell),
+      `${cell}: owns at least one WhatsApp destructive mutation`,
+    );
+}
+
 /** Runs the source's focused S/R/W matrix against the copied production tree. */
 export async function expectMatrixCellToKillMutant(copy: MutantCopy): Promise<void> {
   const copiedTests = join(copy.root, 'test');
-  const sourceTest = (() => {
-    switch (copy.mutation.id) {
-      case 'leave-transferred-debt-on-parent':
-        return 'd-source-replacement.test.ts';
-      default:
-        return copy.mutation.cell.startsWith('S:')
-          ? 'slack-cutover.test.ts'
-          : copy.mutation.cell.startsWith('R:')
-            ? 'resend-cutover.test.ts'
-            : 'whatsapp-cutover.test.ts';
-    }
-  })();
+  const sourceTest = copy.mutation.cell.startsWith('S:')
+    ? 'slack-cutover.test.ts'
+    : copy.mutation.cell.startsWith('R:')
+      ? 'resend-cutover.test.ts'
+      : 'whatsapp-cutover.test.ts';
   if (copy.mutation.cell.startsWith('S:'))
     assert.equal(
       sourceTest,
@@ -588,6 +657,10 @@ export async function expectMatrixCellToKillMutant(copy: MutantCopy): Promise<vo
     sourceTest === 'whatsapp-cutover.test.ts' ||
     sourceTest === 'slack-cutover.test.ts' ||
     sourceTest === 'resend-cutover.test.ts';
+  if (copy.mutation.cell.startsWith('W:')) {
+    assert.equal(sourceTest, 'whatsapp-cutover.test.ts', `${copy.mutation.id}: runs only its WhatsApp matrix file`);
+    assert.equal(isMatrixCellTest, true, `${copy.mutation.id}: uses the exact matrix-cell name gate`);
+  }
   const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
   const result = await new Promise<{ code: number | null; output: string }>((resolve, reject) => {
     const child = spawn(
