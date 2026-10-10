@@ -258,6 +258,25 @@ class SlackReplyPageStager {
     return row === undefined ? null : this.#decode(row.id, row.encrypted_record);
   }
 
+  /** An expired page is terminal debt, not work that can retain an aged parent. */
+  async unexpired(input: {
+    readonly owner: string;
+    readonly accountId: string;
+    readonly conversationId: string;
+    readonly parentTs: string;
+    readonly generation: number;
+    readonly cursorBefore: string | null;
+  }): Promise<StoredReplyPage | null> {
+    const stage = await this.load(input);
+    if (stage === null) return null;
+    const row = this.#database.prepare('SELECT stage_expires_at FROM source_scan_state WHERE id = ?').get(stage.id) as
+      | { stage_expires_at: number | null }
+      | undefined;
+    if (row?.stage_expires_at === null || row?.stage_expires_at === undefined)
+      throw new CommsError('BAD_DATA', 'a Slack reply page stage has no deadline');
+    return row.stage_expires_at > this.#now() ? stage : null;
+  }
+
   /**
    * Finds an expired page's content-free continuation. Common expiry normally advances its owner atomically; this
    * fallback handles a page found exactly at the deadline without ever using a stage id as an occurrence key.
@@ -860,6 +879,11 @@ export class SlackReplyDrains {
       | { thread_ts: string; cursor: string | null; covered_through: string }
       | undefined;
     if (row === undefined) return true;
+    const aged = !isSlackReplyEligible(row.thread_ts, barrier.value.through, this.#nowTimestamp());
+    if (aged) {
+      if (this.#ordinaryStageIsUnexpired(input, row.thread_ts)) return false;
+      return this.#coverAgedParent(input, row, barrier);
+    }
     const owner = `drain:${input.intentId}`;
     const stager = this.#stager;
     const expired = await stager.expiredContinuation({
@@ -943,6 +967,53 @@ export class SlackReplyDrains {
       stager.clearInTransaction(stage);
     });
     return stage.value.nextCursor === null;
+  }
+
+  #ordinaryStageIsUnexpired(input: Readonly<{ accountId: string; conversationId: string }>, parentTs: string): boolean {
+    const now = this.#now();
+    const rows = this.#database
+      .prepare(
+        "SELECT id, stage_expires_at FROM source_scan_state WHERE source = 'slack' AND id LIKE 'slack-reply-page:%'",
+      )
+      .all() as Array<{ id: string; stage_expires_at: number | null }>;
+    return rows.some((row) => {
+      const identity = replyPageIdentity(row.id);
+      return (
+        identity?.owner.startsWith('reconcile:') === true &&
+        identity.accountId === input.accountId &&
+        identity.conversationId === input.conversationId &&
+        identity.parentTs === parentTs &&
+        row.stage_expires_at !== null &&
+        row.stage_expires_at > now
+      );
+    });
+  }
+
+  #coverAgedParent(
+    input: Readonly<{ intentId: string; accountId: string; conversationId: string }>,
+    row: Readonly<{ thread_ts: string; cursor: string | null; covered_through: string }>,
+    barrier: StoredBarrier,
+  ): boolean {
+    return immediate(this.#database, () => {
+      this.#assertLive();
+      const updated = this.#database
+        .prepare(
+          `UPDATE slack_reply_drains SET covered_through = ?, drained_at = ?
+           WHERE intent_id = ? AND account_id = ? AND conversation_id = ? AND thread_ts = ? AND cursor IS ? AND drained_at IS NULL`,
+        )
+        .run(
+          barrier.value.through,
+          this.#now(),
+          input.intentId,
+          input.accountId,
+          input.conversationId,
+          row.thread_ts,
+          row.cursor,
+        );
+      if (Number(updated.changes) !== 1)
+        throw new CommsError('APPROVAL_VOID', 'the aged Slack reply drain changed before it was covered');
+      return true;
+    });
   }
 
   async complete(input: Readonly<{ intentId: string; accountId: string; conversationId: string }>): Promise<boolean> {
@@ -1241,9 +1312,7 @@ export class SlackReplyReconciler {
       generation: state.value.generation,
       cursorBefore: state.value.cursor,
     };
-    if ((await this.#stager.load(stageInput)) !== null) return true;
-    const expired = await this.#stager.expiredContinuation(stageInput);
-    return expired !== null && !expired.retainedHistoryBoundary;
+    return (await this.#stager.unexpired(stageInput)) !== null;
   }
 
   #dropExpired(state: StoredReconciliation): void {
