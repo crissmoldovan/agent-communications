@@ -846,6 +846,17 @@ export async function expectMatrixCellToKillMutant(copy: MutantCopy): Promise<vo
     0,
     `${copy.mutation.id}: ${copy.mutation.cell} unexpectedly accepted mutant src/${copy.mutation.file}:${copy.changedLine}\n${result.output}`,
   );
+  // A crash before the named cell runs also exits non-zero; only the cell itself, run and failed, kills the mutant.
+  assert.match(
+    result.output,
+    /^# tests 1$/m,
+    `${copy.mutation.id}: exactly its named cell ran\n${result.output.slice(-2000)}`,
+  );
+  assert.match(
+    result.output,
+    /^# fail 1$/m,
+    `${copy.mutation.id}: its named cell failed\n${result.output.slice(-2000)}`,
+  );
 }
 
 const packageRoot = join(import.meta.dirname, '..', '..');
