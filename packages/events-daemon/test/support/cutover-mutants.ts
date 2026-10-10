@@ -412,6 +412,32 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
     exportName: 'runSourceOwnerWork',
   },
   {
+    id: 'slack-replacement-omits-aged-staged-parent',
+    file: 'sources/slack-replies.ts',
+    before: `const retainPastHorizon = now - state.value.observedAt > SEVEN_DAYS_MS;
+        if (retainPastHorizon && !(await this.#hasStagedSettlement(input, state))) return undefined;`,
+    after: `const retainPastHorizon = now - state.value.observedAt > SEVEN_DAYS_MS;
+        if (retainPastHorizon) return undefined;`,
+    cell: 'S:replace-aged-pending-reply-keeps-old-debt',
+    exportName: 'SlackReplyReconciler',
+  },
+  {
+    id: 'slack-staged-debt-follows-active-pointer',
+    file: 'runtime/source-owner-work.ts',
+    before: "              CASE WHEN rule_versions.state = 'active' THEN active_versions.current_cutover_id",
+    after: '              CASE WHEN 1 = 1 THEN active_versions.current_cutover_id',
+    cell: 'S:replace-aged-pending-reply-keeps-old-debt',
+    exportName: 'sourceRulesForStage',
+  },
+  {
+    id: 'slack-staged-debt-uses-stale-authorization',
+    file: 'runtime/source-owner-work.ts',
+    before: '                   ELSE (SELECT point.activation_id FROM rule_activation_points AS point',
+    after: '                   ELSE (SELECT rule_versions.authorization_activation_id FROM rule_activation_points AS point',
+    cell: 'S:replace-aged-pending-reply-keeps-old-debt',
+    exportName: 'sourceRulesForStage',
+  },
+  {
     id: 'whatsapp-raw-z-pk-identity',
     file: 'sources/whatsapp.ts',
     before: guards.rawKey,

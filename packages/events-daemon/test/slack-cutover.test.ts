@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DURABLE_CUTOVER_EDGES } from '../src/runtime/cutover-failpoint.ts';
+import { sourceRulesForStage } from '../src/runtime/source-owner-work.ts';
+import { phaseDSourceRegistry } from '../src/sources/registry.ts';
 import { assertSlackMatrixMutationCoverage } from './support/cutover-mutants.ts';
 import { IDS, PhaseDCutoverFixture } from './support/phase-d-cutover.ts';
 import {
@@ -19,6 +21,7 @@ const cells = [
   'S:first-enabled-page-and-reply-barrier',
   'S:first-disabled-baselines-without-content',
   'S:replace-old-only-drains-history-and-replies',
+  'S:replace-aged-pending-reply-keeps-old-debt',
   'S:replace-new-only-baselines-at-P',
   'S:replace-shared-one-version-per-occurrence',
   'S:disabled-replacement-marks-drains-complete',
@@ -72,6 +75,9 @@ async function runRequiredSlackMatrixCell(name: (typeof cells)[number]): Promise
       return;
     case 'S:replace-old-only-drains-history-and-replies':
       await replaceOldOnlyDrainsHistoryAndReplies();
+      return;
+    case 'S:replace-aged-pending-reply-keeps-old-debt':
+      await replaceAgedPendingReplyKeepsOldDebt();
       return;
     case 'S:replace-new-only-baselines-at-P':
       await replaceNewOnlyBaselinesAtP();
@@ -629,6 +635,142 @@ async function replaceOldOnlyDrainsHistoryAndReplies(): Promise<void> {
       fixture.store.database.prepare("SELECT 1 FROM ingest WHERE dedupe_key LIKE '%1760000003.000000%'").get(),
       undefined,
       'an old-only occurrence strictly after P is not projected before its scope ends',
+    );
+  });
+}
+
+/**
+ * A reply first staged while its parent is eligible remains old-version work
+ * even after that parent ages out of ordinary discovery. The temporary
+ * target-document drift deliberately reaches the evaluator's
+ * disclosure fence after projection persistence: unlike a revocation it does
+ * not purge the durable staged page.
+ */
+async function replaceAgedPendingReplyKeepsOldDebt(): Promise<void> {
+  await forEachSlackMatrixEdge('S:replace-aged-pending-reply-keeps-old-debt', async (fixture, edge) => {
+    const parent = '1760000000.000000';
+    const reply = '1760518401.000000';
+    const point = '1760691201.000000';
+    fixture.setIngestRetentionMs(14 * 24 * 60 * 60 * 1_000);
+    fixture.setSlackBaseline('1759999999.000000');
+    fixture.setSlackPages({
+      history: async () => ({
+        messages: [matrixSlackMessage({ ts: parent, replyCount: 1 })],
+        nextCursor: null,
+        retainedHistoryBoundary: false,
+      }),
+      replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+    });
+    await fixture.activate();
+    await fixture.enable();
+    // Enable-all re-baselined v1 (a second point under a new cut-over). That cut-over, not v1's original
+    // disabled-time authorization, is the point its staged work must keep being compared with after the swap.
+    const v1Cutover = (
+      fixture.store.database
+        .prepare("SELECT current_cutover_id FROM active_versions WHERE kind = 'rule' AND object_id = 'rule-cutover'")
+        .get() as { current_cutover_id: string }
+    ).current_cutover_id;
+    await fixture.schedulerTurn();
+    fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
+    const target = fixture.store.database
+      .prepare("SELECT document FROM target_versions WHERE id = 'target-cutover@1'")
+      .get() as { document: string };
+
+    // T0 + 6d: stage the reply, but leave it held behind a transient
+    // disclosure fence. This is an ordinary production reconciliation turn.
+    fixture.now.value += 6 * 24 * 60 * 60 * 1_000 + 1_000;
+    fixture.setSlackPages({
+      history: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+      replies: async () => ({
+        messages: [matrixSlackMessage({ ts: reply, threadTs: parent })],
+        nextCursor: null,
+        retainedHistoryBoundary: false,
+      }),
+    });
+    fixture.store.database.prepare("UPDATE target_versions SET document = '{}' WHERE id = 'target-cutover@1'").run();
+    await fixture.sourceTurn();
+    fixture.store.database
+      .prepare("UPDATE target_versions SET document = ? WHERE id = 'target-cutover@1'")
+      .run(target.document);
+    const stageStates = fixture.store.database
+      .prepare('SELECT id, cursor_scope, staged_at, stage_expires_at FROM source_scan_state ORDER BY id')
+      .all();
+    const staged = stageStates.filter((state) =>
+      String((state as { id: string }).id).startsWith('slack-reply-page:'),
+    ) as Array<{
+      id: string;
+      stage_expires_at: number;
+    }>;
+    assert.ok(
+      staged.some((stage) => stage.stage_expires_at > fixture.now.value),
+      `the ordinary reply page remains unexpired: ${JSON.stringify(stageStates)}`,
+    );
+
+    // T0 + 8d: the parent is past the ordinary seven-day discovery horizon,
+    // but its unexpired staged page still makes it a frozen drain parent.
+    fixture.now.value += 2 * 24 * 60 * 60 * 1_000;
+    fixture.setSlackBaseline(point);
+    await startExactSlackReplacement(fixture, fixture.options());
+    fixture.store.database.prepare("UPDATE target_versions SET document = '{}' WHERE id = 'target-cutover@1'").run();
+    await sourceTurnThroughSlackDurableEdge(fixture, edge);
+    assert.equal(
+      (
+        fixture.store.database.prepare('SELECT drained_at FROM replacement_drains').get() as {
+          drained_at: number | null;
+        }
+      ).drained_at,
+      null,
+      'the exact drain includes the aged parent while its ordinary reply page is still staged',
+    );
+    assert.equal(
+      activeRuleVersion(fixture),
+      1,
+      'the pointer cannot swap while the inherited staged reply is still fenced',
+    );
+
+    // The fence now allows the old, debt-recorded stage. It must be admitted
+    // exactly once to v1 before the drain can certify and v2 is published.
+    fixture.store.database
+      .prepare("UPDATE target_versions SET document = ? WHERE id = 'target-cutover@1'")
+      .run(target.document);
+    await fixture.sourceTurn();
+    await resumeClaimedSlackCompletionAtActivationEdge(fixture, 'S:replace-aged-pending-reply-keeps-old-debt', edge);
+    assert.equal(activeRuleVersion(fixture), 2, 'the replacement publishes only after old-version reply settlement');
+    fixture.oracle({ raw: 2, admissions: 2, versions: [1, 1] });
+    assertSlackOccurrences(fixture, [
+      { ts: parent, version: 1 },
+      { ts: reply, version: 1 },
+    ]);
+
+    // This is the production projection used immediately before a staged
+    // reply invokes admitEvent. A retained old-stage debt remains v1 after
+    // its exact replacement has moved the active pointer to v2.
+    const resumedStageId = 'slack-reply-page:post-swap-debt-projection';
+    fixture.store.database
+      .prepare(
+        `INSERT INTO source_scan_state
+         (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at)
+         VALUES (?, 'slack', ?, ?, ?, ?, X'00', ?)`,
+      )
+      .run(
+        resumedStageId,
+        fixture.accountId,
+        fixture.scope.scopeId,
+        fixture.now.value,
+        fixture.now.value + 1,
+        fixture.now.value,
+      );
+    fixture.store.database
+      .prepare('INSERT INTO source_stage_rule_debts (stage_id, rule_id, rule_version) VALUES (?, ?, ?)')
+      .run(resumedStageId, 'rule-cutover', 1);
+    assert.deepEqual(
+      sourceRulesForStage(
+        { store: fixture.store, sourceRegistry: phaseDSourceRegistry() },
+        fixture.scope,
+        resumedStageId,
+      ).map((debt) => ({ ruleId: debt.ruleId, ruleVersion: debt.ruleVersion, activationId: debt.activationId })),
+      [{ ruleId: 'rule-cutover', ruleVersion: 1, activationId: v1Cutover }],
+      'a staged Slack reply keeps its recorded, superseded version at the cut-over it last held, not its stale disabled-time authorization and not the new active pointer',
     );
   });
 }

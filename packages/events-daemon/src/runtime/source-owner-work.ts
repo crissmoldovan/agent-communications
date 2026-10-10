@@ -241,7 +241,7 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
           stage: replyStage,
         });
         await replies.begin({ intentId: drain.intentId, accountId: scope.accountId, conversationId, through });
-        for (const parentTs of await ordinaryReplies.parentsAtOrBefore({
+        for (const parent of await ordinaryReplies.parentsAtOrBefore({
           accountId: scope.accountId,
           conversationId,
           through,
@@ -250,7 +250,8 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
             intentId: drain.intentId,
             accountId: scope.accountId,
             conversationId,
-            parentTs,
+            parentTs: parent.parentTs,
+            retainPastHorizon: parent.retainPastHorizon,
           });
         }
         return { ...drain, through, replies };
@@ -824,7 +825,7 @@ function sourceRuleVersionsForWhatsAppAccount(store: EventDatabase, accountId: s
  * active when a restart reaches it. That keeps a pre-P ordinary reply stage from becoming a new-version admission
  * after an exact replacement has already certified the old side of P.
  */
-function sourceRulesForStage(
+export function sourceRulesForStage(
   input: Pick<SourceOwnerWorkOptions, 'store' | 'sourceRegistry'>,
   scope: SourceScope,
   stageId: string,
@@ -833,17 +834,26 @@ function sourceRulesForStage(
   const found = new Map<string, RuleDebt>();
   for (const row of input.store.database
     .prepare(
+      // An active version answers with its current cut-over (an enable-all re-baselines it). A version an exact
+      // replacement superseded keeps the work already staged for it — the drain counts a staged reply as covered — and
+      // answers with the last point it held for this scope. A revoked version owes nothing (its debts were purged).
       `SELECT source_stage_rule_debts.rule_id, source_stage_rule_debts.rule_version, rule_versions.document,
-              active_versions.current_cutover_id
+              CASE WHEN rule_versions.state = 'active' THEN active_versions.current_cutover_id
+                   ELSE (SELECT point.activation_id FROM rule_activation_points AS point
+                          WHERE point.rule_id = source_stage_rule_debts.rule_id
+                            AND point.rule_version = source_stage_rule_debts.rule_version
+                            AND point.source = ? AND point.account_id = ? AND point.position_scope = ?
+                          ORDER BY point.created_at DESC, point.rowid DESC LIMIT 1)
+              END AS current_cutover_id
          FROM source_stage_rule_debts JOIN rule_versions
            ON rule_versions.rule_id = source_stage_rule_debts.rule_id
           AND rule_versions.version = source_stage_rule_debts.rule_version
-         JOIN active_versions
+         LEFT JOIN active_versions
            ON active_versions.kind = 'rule' AND active_versions.object_id = source_stage_rule_debts.rule_id
           AND active_versions.version = source_stage_rule_debts.rule_version
-        WHERE source_stage_rule_debts.stage_id = ?`,
+        WHERE source_stage_rule_debts.stage_id = ? AND rule_versions.state IN ('active', 'superseded')`,
     )
-    .all(stageId) as Array<{
+    .all(scope.source, scope.accountId, scope.scopeId, stageId) as Array<{
     rule_id: string;
     rule_version: number;
     document: string;

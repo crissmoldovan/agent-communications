@@ -118,6 +118,7 @@ export class PhaseDCutoverFixture {
   #resendReceivedReader: Pick<ResendEventReader, 'listReceived' | 'getReceived'> | undefined;
   #resendSentStatus = 'sent';
   #resendSentItems: readonly Readonly<{ id: string; status: string }>[] | undefined;
+  #retention = retention;
   #schedulerPointDecryptHook: (() => Promise<void> | void) | undefined;
   #whatsappVisibility: Readonly<{
     version: 1;
@@ -216,6 +217,11 @@ export class PhaseDCutoverFixture {
   /** Test-only baseline seam for independent-version and enable-all cut-over cells. */
   setSlackBaseline(timestamp: string): void {
     this.#slackBaselineTimestamp = timestamp;
+  }
+
+  /** Test-only stage-retention seam for cut-over cells that cross Slack's seven-day reply horizon. */
+  setIngestRetentionMs(ingestMs: number): void {
+    this.#retention = { ...this.#retention, ingestMs };
   }
 
   /** Test-only received reader/baseline seam; production obtains both through the channel operation. */
@@ -684,7 +690,7 @@ export class PhaseDCutoverFixture {
       subscribers: [],
       judges: [],
       deliveryRateCap,
-      retention,
+      retention: this.#retention,
     } as never;
   }
 
