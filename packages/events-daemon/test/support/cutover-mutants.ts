@@ -156,10 +156,20 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
   {
     id: 'whatsapp-drain-omits-post-p-cap',
     file: 'runtime/source-owner-work.ts',
-    before: 'hasPendingWhatsAppReplacementDrain(input.store.database, scope.accountId, scopeId),',
-    after: 'false,',
+    before:
+      "isSourceScopeFenced(database, { source: 'whatsapp', accountId, scopeId }) ||\n    hasPendingWhatsAppReplacementDrain(database, accountId, scopeId)",
+    after: "isSourceScopeFenced(database, { source: 'whatsapp', accountId, scopeId })",
     cell: 'W:replacement-drain-caps-post-P-tuples',
     exportName: 'runSourceOwnerWork',
+  },
+  {
+    id: 'whatsapp-baseline-omits-replacement-drain-deferral',
+    file: 'runtime/source-owner-work.ts',
+    before:
+      "isSourceScopeFenced(database, { source: 'whatsapp', accountId, scopeId }) ||\n    hasPendingWhatsAppReplacementDrain(database, accountId, scopeId)",
+    after: "isSourceScopeFenced(database, { source: 'whatsapp', accountId, scopeId })",
+    cell: 'W:baseline-defers-pending-replacement-drain',
+    exportName: 'stageWhatsAppBaselineSnapshot',
   },
   {
     id: 'whatsapp-unowed-visible-key-omits-ledger',
