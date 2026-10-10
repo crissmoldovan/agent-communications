@@ -259,7 +259,7 @@ test('B2-T5: v8 backfills one stable rule/account/target order across replacemen
     applyMigrations(database);
     assert.equal(
       (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
-      '14',
+      '15',
     );
     assert.deepEqual(
       database
@@ -284,6 +284,21 @@ test('B2-T5: v8 backfills one stable rule/account/target order across replacemen
           .get() as { next_sequence: number }),
       },
       { next_sequence: 2 },
+    );
+    const targetTestChargeColumns = database
+      .prepare("SELECT name, type, pk FROM pragma_table_info('target_test_charges')")
+      .all() as Array<{ name: string; type: string; pk: number }>;
+    assert.deepEqual(
+      targetTestChargeColumns.map((column) => column.name),
+      ['id', 'target_id', 'charged_at'],
+    );
+    assert.equal(targetTestChargeColumns.find((column) => column.name === 'id')?.pk, 1);
+    assert.deepEqual(
+      database
+        .prepare("SELECT name FROM pragma_index_info('target_test_charges_target_window')")
+        .all()
+        .map((row) => ({ ...(row as { name: string }) })),
+      [{ name: 'target_id' }, { name: 'charged_at' }],
     );
   } finally {
     database.close();

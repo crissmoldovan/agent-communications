@@ -1,0 +1,293 @@
+{
+  "area": "retained-controls",
+  "cases": [
+    {
+      "case": "retained-post-decrypt-fence",
+      "operation": "RetainedRuleTestControl.test",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-retained-control.ts",
+      "test": "packages/events-daemon/test/b3-retained-read.test.ts",
+      "mutation": {
+        "from": "const after = this.#snapshot(selector);",
+        "to": "const after = before;"
+      },
+      "mutationTest": "B3 retained rule test rechecks exact saved authority after projection decryption",
+      "loadedMarker": "retained-post-decrypt-fence"
+    },
+    {
+      "case": "retained-list-never-opens-content",
+      "operation": "B3RetainedControl.list",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-retained-control.ts",
+      "test": "packages/events-daemon/test/b3-retained-read.test.ts",
+      "mutation": {
+        "from": "return renderDryRunList(this.#dispatcher.list());",
+        "to": "void this.#dispatcher.read(this.#dispatcher.list()[0]?.deliveryId ?? '');\n    return renderDryRunList(this.#dispatcher.list());"
+      },
+      "mutationTest": "B3 retained read uses the D dispatcher and only renders the fenced human result",
+      "loadedMarker": "retained-list-never-opens-content"
+    },
+    {
+      "case": "retained-rule-test-keeps-superseded-bound-version",
+      "operation": "createRetainedRuleTestControl",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-retained-control.ts",
+      "test": "packages/events-daemon/test/b3-retained-read.test.ts",
+      "mutation": {
+        "from": "rule.state IN ('active', 'superseded')",
+        "to": "rule.state = 'active'"
+      },
+      "mutationTest": "B3 retained rule test rechecks exact saved authority after projection decryption",
+      "loadedMarker": "retained-rule-test-keeps-superseded-bound-version"
+    },
+    {
+      "case": "retained-rule-test-keeps-whatsapp-live-list-gate",
+      "operation": "RetainedRuleTestControl.test",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-retained-control.ts",
+      "test": "packages/events-daemon/test/b3-retained-read.test.ts",
+      "mutation": {
+        "from": "if (before.reference.whatsappMessageId === null) return render();",
+        "to": "if (true) return render();"
+      },
+      "mutationTest": "B3 retained rule test refuses a WhatsApp projection hidden by the live-list gate",
+      "loadedMarker": "retained-rule-test-keeps-whatsapp-live-list-gate"
+    },
+    {
+      "case": "rule-test-rejects-retained-form",
+      "operation": "runCatalogueRuleTest",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-retained-control.ts",
+      "test": "packages/events-daemon/test/b3-rule-test.test.ts",
+      "mutation": {
+        "from": "if (!isCatalogueForm)",
+        "to": "if (false)"
+      },
+      "mutationTest": "B3 rule test rejects retained event and account selectors before any local evaluation",
+      "loadedMarker": "rule-test-rejects-retained-form"
+    },
+    {
+      "case": "rule-test-envelopes-sanitised-result",
+      "operation": "runCatalogueRuleTest",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-retained-control.ts",
+      "test": "packages/events-daemon/test/b3-rule-test.test.ts",
+      "mutation": {
+        "from": "const enveloped = wrapUntrusted(\n    canonicalJson(payload),\n    { field: 'catalogue-example', id: 'local-rule-test' },\n    boundary,\n  );",
+        "to": "const enveloped = canonicalJson(payload);"
+      },
+      "mutationTest": "B3 rule test accepts only a catalogue tuple and returns a singly enveloped local result",
+      "loadedMarker": "rule-test-envelopes-sanitised-result"
+    },
+    {
+      "case": "rule-test-never-double-wraps",
+      "operation": "runCatalogueRuleTest",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-retained-control.ts",
+      "test": "packages/events-daemon/test/b3-rule-test.test.ts",
+      "mutation": {
+        "from": "rendered: renderFencedBody(enveloped)",
+        "to": "rendered: renderFencedBody(enveloped + '\\n' + enveloped)"
+      },
+      "mutationTest": "B3 rule test accepts only a catalogue tuple and returns a singly enveloped local result",
+      "loadedMarker": "rule-test-never-double-wraps"
+    },
+    {
+      "case": "pending-target-origin-is-approval-only",
+      "operation": "verifyPendingTargetContext",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-pending-activation-context.ts",
+      "test": "packages/events-daemon/test/b3-pending-target-context.test.ts",
+      "mutation": {
+        "from": "if (!validOrigin(input.origin))",
+        "to": "if (false)"
+      },
+      "mutationTest": "B3 pending target context binds approval challenge to one pending activation and fixed target",
+      "loadedMarker": "pending-target-origin-is-approval-only"
+    },
+    {
+      "case": "pending-target-stale-challenge-binding",
+      "operation": "verifyPendingTargetContext",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-pending-activation-context.ts",
+      "test": "packages/events-daemon/test/b3-pending-target-context.test.ts",
+      "mutation": {
+        "from": "challenge.challenge !== input.selector.challenge",
+        "to": "false"
+      },
+      "mutationTest": "B3 pending target context refuses a stale challenge at the challenge binding guard",
+      "loadedMarker": "pending-target-stale-challenge-binding"
+    },
+    {
+      "case": "pending-target-digest-challenge-binding",
+      "operation": "verifyPendingTargetContext",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-pending-activation-context.ts",
+      "test": "packages/events-daemon/test/b3-pending-target-context.test.ts",
+      "mutation": {
+        "from": "challenge.digest !== input.selector.digest",
+        "to": "false"
+      },
+      "mutationTest": "B3 pending target context refuses a digest-mismatched challenge at the challenge binding guard",
+      "loadedMarker": "pending-target-digest-challenge-binding"
+    },
+    {
+      "case": "pending-target-expired-challenge-binding",
+      "operation": "verifyPendingTargetContext",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-pending-activation-context.ts",
+      "test": "packages/events-daemon/test/b3-pending-target-context.test.ts",
+      "mutation": {
+        "from": "challenge.expiresAt <= input.now()",
+        "to": "false"
+      },
+      "mutationTest": "B3 pending target context refuses an expired challenge at the challenge binding guard",
+      "loadedMarker": "pending-target-expired-challenge-binding"
+    },
+    {
+      "case": "pending-target-approval-challenge-binding",
+      "operation": "verifyPendingTargetContext",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-pending-activation-context.ts",
+      "test": "packages/events-daemon/test/b3-pending-target-context.test.ts",
+      "mutation": {
+        "from": "challenge.approvalId !== input.selector.approvalId",
+        "to": "false"
+      },
+      "mutationTest": "B3 pending target context refuses a challenge bound to another approval at the challenge binding guard",
+      "loadedMarker": "pending-target-approval-challenge-binding"
+    },
+    {
+      "case": "target-test-keeps-bound-revocation-check",
+      "operation": "B3TargetTestControl.test",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-target-test-control.ts",
+      "test": "packages/events-daemon/test/b3-target-test.test.ts",
+      "mutation": {
+        "from": "AND target.revoked_at IS NULL",
+        "to": "AND 1 = 1"
+      },
+      "mutationTest": "B3 target test refuses a revoked bound target instead of inferring safety from its active rule pointer",
+      "loadedMarker": "target-test-keeps-bound-revocation-check"
+    },
+    {
+      "case": "target-test-needs-exact-active-reference",
+      "operation": "B3TargetTestControl.test",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-target-test-control.ts",
+      "test": "packages/events-daemon/test/b3-target-test.test.ts",
+      "mutation": {
+        "from": "if (active === undefined) return refuse('the target has no active exact rule reference');",
+        "to": "if (false) return refuse('the target has no active exact rule reference');"
+      },
+      "mutationTest": "B3 target test refuses an unreferenced exact version before its synthetic transport",
+      "loadedMarker": "target-test-needs-exact-active-reference"
+    },
+    {
+      "case": "target-test-fixed-synthetic-body",
+      "operation": "B3TargetTestControl.test",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-target-test-control.ts",
+      "test": "packages/events-daemon/test/b3-target-test.test.ts",
+      "mutation": {
+        "from": "bytes: TEST_CLOUD_EVENT_BYTES",
+        "to": "bytes: 'caller-controlled-bytes'"
+      },
+      "mutationTest": "B3 target test sends exactly ten fixed synthetic attempts across versions, rejects caller content, and refuses the eleventh before transport",
+      "loadedMarker": "target-test-fixed-synthetic-body"
+    },
+    {
+      "case": "target-test-rejects-caller-content",
+      "operation": "B3TargetTestControl.test",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-target-test-control.ts",
+      "test": "packages/events-daemon/test/b3-target-test.test.ts",
+      "mutation": {
+        "from": "if (record.kind === 'active' && exact(['kind', 'targetId', 'targetVersion']))",
+        "to": "if (record.kind === 'active')"
+      },
+      "mutationTest": "B3 target test sends exactly ten fixed synthetic attempts across versions, rejects caller content, and refuses the eleventh before transport",
+      "loadedMarker": "target-test-rejects-caller-content"
+    },
+    {
+      "case": "target-test-cap-is-target-wide",
+      "operation": "B3TargetTestControl.test",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-target-test-control.ts",
+      "test": "packages/events-daemon/test/b3-target-test.test.ts",
+      "mutation": {
+        "from": "const attempts = this.#chargeTargetTestAttempt(ready.target.targetId, attemptAt);",
+        "to": "const attempts = this.#chargeTargetTestAttempt(`${ready.target.targetId}\\u0000${ready.target.version}`, attemptAt);"
+      },
+      "mutationTest": "B3 target test shares the durable cap across target versions but not other targets",
+      "loadedMarker": "target-test-cap-is-target-wide"
+    },
+    {
+      "case": "target-test-charge-precedes-transport",
+      "operation": "B3TargetTestControl.test",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-target-test-control.ts",
+      "test": "packages/events-daemon/test/b3-target-test.test.ts",
+      "mutation": {
+        "from": ".prepare('INSERT INTO target_test_charges (target_id, charged_at) VALUES (?, ?)')\n        .run(targetId, chargedAt);",
+        "to": ".prepare('SELECT 1')\n        .run();"
+      },
+      "mutationTest": "B3 target test commits its durable charge before synthetic transport",
+      "loadedMarker": "target-test-charge-precedes-transport"
+    },
+    {
+      "case": "target-test-failed-attempt-is-not-refunded",
+      "operation": "B3TargetTestControl.test",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-target-test-control.ts",
+      "test": "packages/events-daemon/test/b3-target-test.test.ts",
+      "mutation": {
+        "from": "await this.#transport.send({ target: ready.target, bytes: TEST_CLOUD_EVENT_BYTES });",
+        "to": "try {\n      await this.#transport.send({ target: ready.target, bytes: TEST_CLOUD_EVENT_BYTES });\n    } catch (error) {\n      this.#store.immediate(() => {\n        this.#store.database\n          .prepare('DELETE FROM target_test_charges WHERE target_id = ? AND charged_at = ?')\n          .run(ready.target.targetId, attemptAt);\n      });\n      throw error;\n    }"
+      },
+      "mutationTest": "B3 target test retains a failed synthetic attempt in its durable cap",
+      "loadedMarker": "target-test-failed-attempt-is-not-refunded"
+    },
+    {
+      "case": "target-test-cap-is-not-instance-only",
+      "operation": "B3TargetTestControl.test",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-target-test-control.ts",
+      "test": "packages/events-daemon/test/b3-target-test.test.ts",
+      "mutation": {
+        "from": "const attempts = this.#chargeTargetTestAttempt(ready.target.targetId, attemptAt);",
+        "to": "const counter = this as unknown as { __instanceAttempts?: Map<string, number> };\n    const instanceAttempts = (counter.__instanceAttempts ??= new Map<string, number>());\n    const attempts = (instanceAttempts.get(ready.target.targetId) ?? 0) + 1;\n    if (attempts > TARGET_TEST_LIMIT)\n      throw new CommsError('RATE_CAPPED', 'the target test limit is exhausted before transport');\n    instanceAttempts.set(ready.target.targetId, attempts);"
+      },
+      "mutationTest": "B3 target test durable cap survives a daemon restart",
+      "loadedMarker": "target-test-cap-is-not-instance-only"
+    },
+    {
+      "case": "target-resume-rechecks-final-reference",
+      "operation": "TargetResumeControl.resume",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-target-test-control.ts",
+      "test": "packages/events-daemon/test/b3-target-resume.test.ts",
+      "mutation": {
+        "from": "if (\n          !hasLiveSystemTargetReference(this.#store.database, {",
+        "to": "if (\n          false && !hasLiveSystemTargetReference(this.#store.database, {"
+      },
+      "mutationTest": "B3 target resume purges an orphaned degraded barrier when its final exact reference vanishes during encryption",
+      "loadedMarker": "target-resume-rechecks-final-reference"
+    },
+    {
+      "case": "target-resume-never-retries-old-reset",
+      "operation": "TargetResumeControl.resume",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-target-test-control.ts",
+      "test": "packages/events-daemon/test/b3-target-resume.test.ts",
+      "mutation": {
+        "from": "return ['dead-lettered', 'cancelled', 'retention-expired', 'content-unreadable'].includes(value);",
+        "to": "return ['dead-lettered', 'cancelled', 'retention-expired', 'content-unreadable', 'retryable'].includes(value);"
+      },
+      "mutationTest": "B3 target resume never rewrites retryable reset work as a new notice",
+      "loadedMarker": "target-resume-never-retries-old-reset"
+    },
+    {
+      "case": "target-resume-needs-unrevoked-target-before-seal",
+      "operation": "TargetResumeControl.resume",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-target-test-control.ts",
+      "test": "packages/events-daemon/test/b3-target-resume.test.ts",
+      "mutation": {
+        "from": "AND target.revoked_at IS NULL /* B3_TARGET_RESUME_UNREVOKED */",
+        "to": "AND 1 = 1 /* B3_TARGET_RESUME_UNREVOKED */"
+      },
+      "mutationTest": "B3 target resume refuses a revoked exact target before it can seal a replacement notice",
+      "loadedMarker": "target-resume-needs-unrevoked-target-before-seal"
+    },
+    {
+      "case": "target-resume-resets-attempt-and-deadline",
+      "operation": "TargetResumeControl.resume",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-target-test-control.ts",
+      "test": "packages/events-daemon/test/b3-target-resume.test.ts",
+      "mutation": {
+        "from": "SYSTEM_RESET_ATTEMPT_LIMIT,\n            now,",
+        "to": "SYSTEM_RESET_ATTEMPT_LIMIT - 1,\n            now,"
+      },
+      "mutationTest": "B3 target resume replaces only a degraded terminal reset with a fresh twenty-attempt 24-hour record",
+      "loadedMarker": "target-resume-resets-attempt-and-deadline"
+    }
+  ]
+}
