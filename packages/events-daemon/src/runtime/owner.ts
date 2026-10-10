@@ -168,6 +168,8 @@ export interface EventOwnerOptions {
   readonly startControlServer?: ((options: ControlServerOptions) => Promise<RunningControlServer>) | undefined;
   /** Task 1 seam: later B3 requests are owned here, not by a second CLI/MCP path. */
   readonly b3OwnerService?: B3OwnerService | undefined;
+  /** Test seam only: the normal production owner opens its own SQLite authority. */
+  readonly openDatabase?: typeof openEventDatabase | undefined;
 }
 
 /**
@@ -774,7 +776,7 @@ async function startOwnerWithLock(
   started: { owner: boolean },
   onDatabase: (database: { close(): void }) => void,
 ): Promise<EventOwner> {
-  const database = await openEventDatabase({ stateDir });
+  const database = await (options.openDatabase ?? openEventDatabase)({ stateDir });
   onDatabase(database);
   const now = options.now ?? Date.now;
   const lifecycle = new EventLifecycle(database, now);

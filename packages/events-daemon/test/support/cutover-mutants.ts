@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { cp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { runStrictMutationChild } from './strict-mutation-child.ts';
 
 export interface CutoverMutation {
   readonly id: string;
@@ -817,31 +817,21 @@ export async function expectMatrixCellToKillMutant(copy: MutantCopy): Promise<vo
     assert.equal(isMatrixCellTest, true, `${copy.mutation.id}: uses the exact matrix-cell name gate`);
   }
   const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
-  const result = await new Promise<{ code: number | null; output: string }>((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [
-        '--experimental-strip-types',
-        '--disable-warning=ExperimentalWarning',
-        '--test',
-        // The kill rule reads TAP's `# tests` / `# fail` summary; Node 24 defaults to the spec reporter when piped.
-        '--test-reporter=tap',
-        ...(isMatrixCellTest
-          ? ['--test-name-pattern', `^${copy.mutation.cell.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`]
-          : []),
-        join(copiedTests, sourceTest),
-      ],
-      { cwd: copy.root, env: environment, stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-    let output = '';
-    child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
-      output += chunk;
-    });
-    child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
-      output += chunk;
-    });
-    child.once('error', reject);
-    child.once('close', (code) => resolve({ code, output }));
+  const result = await runStrictMutationChild({
+    command: process.execPath,
+    args: [
+      '--experimental-strip-types',
+      '--disable-warning=ExperimentalWarning',
+      '--test',
+      // The kill rule reads TAP's `# tests` / `# fail` summary; Node 24 defaults to the spec reporter when piped.
+      '--test-reporter=tap',
+      ...(isMatrixCellTest
+        ? ['--test-name-pattern', `^${copy.mutation.cell.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`]
+        : []),
+      join(copiedTests, sourceTest),
+    ],
+    cwd: copy.root,
+    env: environment,
   });
   assert.notEqual(
     result.code,

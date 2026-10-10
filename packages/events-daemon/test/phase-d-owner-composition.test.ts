@@ -113,6 +113,7 @@ test('D7: a production owner with the WhatsApp source and no concrete fence refu
     passThroughCalls += 1;
     return original.apply(this, args);
   } as typeof original;
+  let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
   try {
     await assert.rejects(
       startEventOwner({
@@ -129,9 +130,9 @@ test('D7: a production owner with the WhatsApp source and no concrete fence refu
     );
     assert.equal(passThroughCalls, 0, "the refused owner never selected B2's pre-D pass-through gate");
     // The refused start left nothing held: a normal owner starts on the same state directory and stops cleanly.
-    const owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000 });
-    await owner.stop();
+    owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000 });
   } finally {
+    await owner?.stop();
     prototype.withCurrentSseFrameVisibility = original;
     await rm(root, { recursive: true, force: true });
   }

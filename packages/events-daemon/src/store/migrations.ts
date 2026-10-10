@@ -1,5 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { JUDGE_KINDS } from '../domain/lifecycle.ts';
 import { PHASE_E_DURABLE_SCHEMA_STATEMENTS, SCHEMA_V1_STATEMENTS } from './schema-v1.ts';
+
+const JUDGE_KIND_SQL_VALUES = JUDGE_KINDS.map((kind) => `'${kind.replaceAll("'", "''")}'`).join(', ');
 
 export interface EventMigration {
   readonly version: number;
@@ -468,6 +471,92 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
     version: 17,
     name: 'event-judge-hold-durability-v1',
     statements: [...PHASE_E_DURABLE_SCHEMA_STATEMENTS, "UPDATE meta SET value = '17' WHERE key = 'schema_version'"],
+  },
+  {
+    // Source projections and ingest records are purgeable. The durable, content-free ledger must outlive either so
+    // settled rolling-window audit rows can coexist with the atomic terminal projection purge (E-4/E-5).
+    version: 18,
+    name: 'event-judge-ledger-projection-detachment-v1',
+    statements: [
+      `CREATE TABLE judge_budget_reservations_v15 (
+        id TEXT PRIMARY KEY,
+        work_id TEXT NOT NULL UNIQUE,
+        work_scope TEXT NOT NULL CHECK (work_scope IN ('source-owned', 'synthetic-test')),
+        source TEXT,
+        account_id TEXT,
+        event_id TEXT,
+        rule_id TEXT,
+        rule_version INTEGER CHECK (rule_version > 0),
+        judge_id TEXT NOT NULL,
+        judge_version INTEGER NOT NULL CHECK (judge_version > 0),
+        judge_kind TEXT NOT NULL CHECK (judge_kind IN (${JUDGE_KIND_SQL_VALUES})),
+        test_work_id TEXT,
+        budget_version INTEGER NOT NULL REFERENCES judge_budget_versions(version),
+        provider TEXT,
+        global_ledger_key TEXT NOT NULL CHECK (global_ledger_key = 'installation'),
+        state TEXT NOT NULL CHECK (state IN ('reserved', 'in-flight', 'settled', 'released')),
+        estimated_input_tokens INTEGER NOT NULL CHECK (estimated_input_tokens >= 0),
+        actual_input_tokens INTEGER CHECK (actual_input_tokens >= 0),
+        concurrency_owned INTEGER NOT NULL CHECK (concurrency_owned IN (0, 1)),
+        reserved_at INTEGER NOT NULL,
+        in_flight_at INTEGER,
+        settled_at INTEGER,
+        released_at INTEGER,
+        switch_generation INTEGER NOT NULL CHECK (switch_generation >= 0),
+        FOREIGN KEY (rule_id, rule_version) REFERENCES rule_versions(rule_id, version),
+        FOREIGN KEY (judge_id, judge_version) REFERENCES judge_versions(judge_id, version),
+        CHECK (
+          (work_scope = 'source-owned'
+            AND source IS NOT NULL
+            AND source IN ('gmail', 'slack', 'resend', 'whatsapp')
+            AND account_id IS NOT NULL
+            AND event_id IS NOT NULL
+            AND rule_id IS NOT NULL
+            AND rule_version IS NOT NULL
+            AND test_work_id IS NULL
+            AND provider IS NOT NULL)
+          OR
+          (work_scope = 'synthetic-test'
+            AND source IS NULL
+            AND account_id IS NULL
+            AND event_id IS NULL
+            AND rule_id IS NULL
+            AND rule_version IS NULL
+            AND test_work_id IS NOT NULL
+            AND provider IS NULL)
+        )
+      ) STRICT`,
+      `INSERT INTO judge_budget_reservations_v15
+       (id, work_id, work_scope, source, account_id, event_id, rule_id, rule_version, judge_id, judge_version,
+        judge_kind, test_work_id, budget_version, provider, global_ledger_key, state, estimated_input_tokens,
+        actual_input_tokens, concurrency_owned, reserved_at, in_flight_at, settled_at, released_at, switch_generation)
+       SELECT id, work_id, work_scope, source, account_id, event_id, rule_id, rule_version, judge_id, judge_version,
+              judge_kind, test_work_id, budget_version, provider, global_ledger_key, state, estimated_input_tokens,
+              actual_input_tokens, concurrency_owned, reserved_at, in_flight_at, settled_at, released_at, switch_generation
+       FROM judge_budget_reservations`,
+      'DROP TABLE judge_budget_reservations',
+      'ALTER TABLE judge_budget_reservations_v15 RENAME TO judge_budget_reservations',
+      `CREATE UNIQUE INDEX judge_budget_reservations_synthetic_work_identity
+        ON judge_budget_reservations(test_work_id)
+        WHERE work_scope = 'synthetic-test'`,
+      `CREATE INDEX judge_budget_reservations_rule_rolling
+        ON judge_budget_reservations(rule_id, reserved_at)
+        WHERE work_scope = 'source-owned'`,
+      `CREATE INDEX judge_budget_reservations_provider_rolling
+        ON judge_budget_reservations(provider, reserved_at)
+        WHERE provider IS NOT NULL`,
+      `CREATE INDEX judge_budget_reservations_global_rolling
+        ON judge_budget_reservations(global_ledger_key, reserved_at)`,
+      `CREATE UNIQUE INDEX judge_budget_reservations_source_scope
+        ON judge_budget_reservations(source, account_id, event_id, rule_id, rule_version)
+        WHERE work_scope = 'source-owned'`,
+      `CREATE INDEX judge_budget_reservations_synthetic_scope
+        ON judge_budget_reservations(test_work_id, judge_id, judge_version)
+        WHERE work_scope = 'synthetic-test'`,
+      `CREATE INDEX judge_budget_reservations_kind_scope
+        ON judge_budget_reservations(judge_kind, work_scope, state)`,
+      "UPDATE meta SET value = '18' WHERE key = 'schema_version'",
+    ],
   },
 ];
 
