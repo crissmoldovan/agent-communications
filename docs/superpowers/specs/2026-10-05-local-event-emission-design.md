@@ -822,7 +822,8 @@ the raw key was observed once; it does **not** decide whether a rule version may
 instead writes its own D8 admission row: an activation writes `baseline` only for that version's
 `baselineIdentities`; for a key without that version's row, a later visible occurrence becomes `admitted` only when
 its ledger `firstSeenGeneration` is later than that version's `baselineGeneration` and its first representation's
-stored time is strictly after that version's `T`; otherwise it becomes `suppressed`. A key first seen at or before
+stored time is strictly after that version's `T` and, when a list change revealed the key's visibility unit, strictly
+after that unit's `visibleSince` (D9); otherwise it becomes `suppressed`. A key first seen at or before
 `baselineGeneration` is either in `baselineIdentities` or disappeared before that generation; in neither case is it
 this version's to deliver, and in an exact replacement it is the old version's to drain (D2, D12). Thus WhatsApp has no backfill, an out-of-order row whose first-seen stored time is after `T` is admitted once for that version even if
 it is older than a diagnostic high-water position, and a later generation cannot create a second admission for the
@@ -1879,7 +1880,14 @@ replayable. The fence is instead a recoverable protocol between the file and the
    dry-run rows and stream rows. Every newly hidden one is cancelled and purged in that transaction. Hidden tuples
    are removed from the next authoritative snapshot generation, and per-rule admission rows are removed only where
    purging the hidden work needs it, never an unrelated rule version's. A widening purges and backfills nothing:
-   what the lists hid was never collected (D4).
+   what the lists hid was never collected (D4), and a visibility unit the widening reveals — a chat, or for a status
+   post the pair of its status chat and author, since the lists can hide either — is owed only rows stored strictly
+   after the instant this transaction applied the list (`visibleSince`), exactly as a rule version is owed only
+   rows after its `T`. The daemon records `visibleSince`
+   only for visible units, in the candidate/head transaction of the first scan under the new list version, and
+   deletes a unit's row in the transaction that hides it, so hiding and revealing again sets a fresh floor. A
+   brand-new unit whose first rows arrive between the last committed scan and a list change is floored at that
+   change too; this fails closed.
 4. **When.** At start-up, before any source, worker, control request, dry-run read or SSE stream, in the same
    recovery phase as D2's activation-intent recovery; at the start of every daemon acquisition of the gate; and
    whenever the daemon's watcher finds the file's digest changed, which it checks each time it re-loads the account
