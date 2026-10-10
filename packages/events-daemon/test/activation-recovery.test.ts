@@ -15,6 +15,7 @@ import { MailboxLock } from '../src/sources/mailbox-lock.ts';
 import { type GmailSourceRule, GmailSourceWorker } from '../src/sources/source-worker.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 const target = { targetId: 'target-1', version: 1, kind: 'dry-run' as const, retentionMs: 86_400_000 };
 const rule = {
@@ -237,6 +238,7 @@ test('P1-B1: one enabled scheduler tick polls an active Gmail rule, evaluates it
       } as never,
       expiry: new EventExpiry(setup.store, setup.time.now),
       cipher: cipher as never,
+      writerQuiescer: testWriterQuiescer(),
       approvals: setup.approvals,
       config: setup.configStore,
       taint: { record: async () => undefined } as never,
@@ -494,6 +496,7 @@ test('P1-B1: the next owner tick resumes a claimed replacement after the real ma
       dispatcher: {} as never,
       expiry: new EventExpiry(setup.store),
       cipher: {} as never,
+      writerQuiescer: testWriterQuiescer(),
       approvals: setup.approvals,
       config: setup.configStore,
       taint: {} as never,
@@ -774,6 +777,7 @@ test('P1-B1: a mailbox cursor starts at the oldest active point, and each rule a
       } as never,
       expiry: new EventExpiry(setup.store, setup.time.now),
       cipher: plain as never,
+      writerQuiescer: testWriterQuiescer(),
       approvals: setup.approvals,
       config: setup.configStore,
       taint: { record: async () => undefined } as never,
@@ -1006,6 +1010,7 @@ test('P1-B1: an account removed from the configuration while its activation poin
           return Buffer.from(value);
         },
       } as never,
+      writerQuiescer: testWriterQuiescer(),
       approvals: setup.approvals,
       config: setup.configStore,
       taint: { record: async () => undefined } as never,
@@ -1070,6 +1075,7 @@ async function multiWithARemoved(setup: Awaited<ReturnType<typeof fixture>>, sou
       encrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
       decrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
     } as never,
+    writerQuiescer: testWriterQuiescer(),
     approvals: setup.approvals,
     config: setup.configStore,
     taint: { record: async () => undefined } as never,
@@ -1808,6 +1814,7 @@ function stubScheduler(setup: Awaited<ReturnType<typeof fixture>>, sources: stri
       encrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
       decrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
     } as never,
+    writerQuiescer: testWriterQuiescer(),
     approvals: setup.approvals,
     config: setup.configStore,
     taint: { record: async () => undefined } as never,
@@ -2106,6 +2113,7 @@ test('APR-B1: a point published while the initial cursor is being computed makes
           return Buffer.from(value);
         },
       } as never,
+      writerQuiescer: testWriterQuiescer(),
       approvals: setup.approvals,
       config: setup.configStore,
       taint: { record: async () => undefined } as never,

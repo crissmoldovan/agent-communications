@@ -9,6 +9,7 @@ import { openEventDatabase } from '../src/store/database.ts';
 import { openEventSecretStore, selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { EventRecordCipher } from '../src/store/records.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 class MemorySecretStore implements SecretStore {
   readonly kind = 'file' as const;
@@ -40,7 +41,7 @@ test('EVAL-B1: equal event identity repeats retain one projection for exactly on
       configDir: '/srv/config',
       stores: { file: new MemorySecretStore() },
     });
-    const cipher = new EventRecordCipher(store.database, secrets);
+    const cipher = new EventRecordCipher(store.database, secrets, testWriterQuiescer());
     const accountId = 'ibx_ABCDEFGHIJKLMNOP';
     const target = { targetId: 'target-identity', version: 1, kind: 'dry-run' as const, retentionMs: 3_600_000 };
     const rule = {

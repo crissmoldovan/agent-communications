@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import {
@@ -15,6 +16,9 @@ import {
 } from '@agentcomms/core';
 import { canonicalSecretWebhookUrl, type WebhookTargetDocument } from '../domain/webhook-target.ts';
 import type { EventPaths } from '../runtime/paths.ts';
+import type { WriterQuiescer } from '../runtime/writer-quiescer.ts';
+import { type AadComponent, encodeAad } from './aad.ts';
+import { decryptPackedRecord, deriveTableKey, packedRecordKeyId } from './crypto.ts';
 import type { EncryptedRecordLocation } from './records.ts';
 
 export type EventSecretStoreKind = 'keychain' | 'file';
@@ -25,7 +29,8 @@ export class EventSecretError extends Error {
     | 'EVENT_MASTER_UNKNOWN'
     | 'EVENT_SECRET_SELECTOR'
     | 'EVENT_SECRET_REFERENCE'
-    | 'EVENT_SECRET_OWNER_STALE';
+    | 'EVENT_SECRET_OWNER_STALE'
+    | 'RETIRED_MASTER_REFERENCED';
 
   constructor(code: EventSecretError['code'], message: string) {
     super(message);
@@ -62,8 +67,8 @@ export interface EventSecretMigrationResult {
   readonly leftovers: readonly string[];
 }
 
-export type EventSecretOwnerKind = 'target' | 'subscriber';
-export type EventSecretPurpose = 'secret-url' | 'webhook-signing' | 'sse-bearer';
+export type EventSecretOwnerKind = 'target' | 'subscriber' | 'judge';
+export type EventSecretPurpose = 'secret-url' | 'webhook-signing' | 'sse-bearer' | 'judge-key';
 
 export interface EventSecretOwner {
   readonly kind: EventSecretOwnerKind;
@@ -102,12 +107,22 @@ export interface StoreEventSecretGenerationOptions {
   readonly material: string;
   readonly expectedPriorGeneration: number | null;
   readonly overlapExpiresAt?: number | undefined;
+  /** Subscriber and hosted-key rotations invalidate rather than overlap the prior generation. */
+  readonly retirePrevious?: boolean | undefined;
+  /** Create/set operations require an entirely empty immutable slot, not merely no current generation. */
+  readonly requireEmpty?: boolean | undefined;
 }
 
 export interface StoreSecretWebhookUrlOptions
   extends Omit<StoreEventSecretGenerationOptions, 'owner' | 'purpose' | 'material'> {
   readonly document: WebhookTargetDocument;
   readonly completeUrl: string;
+}
+
+export interface CreateSecretUrlTargetVersionOptions {
+  readonly document: WebhookTargetDocument;
+  readonly completeUrl: string;
+  readonly cipher: EventSecretReferenceCipher;
 }
 
 interface StoredGeneration extends EventSecretGeneration {
@@ -147,7 +162,8 @@ function generationLocation(
 function assertPurpose(owner: EventSecretOwner, purpose: EventSecretPurpose): void {
   const valid =
     (owner.kind === 'target' && (purpose === 'secret-url' || purpose === 'webhook-signing')) ||
-    (owner.kind === 'subscriber' && purpose === 'sse-bearer');
+    (owner.kind === 'subscriber' && purpose === 'sse-bearer') ||
+    (owner.kind === 'judge' && purpose === 'judge-key');
   if (!valid) {
     throw new EventSecretError(
       'EVENT_SECRET_REFERENCE',
@@ -161,8 +177,11 @@ function asStoredGeneration(row: Record<string, unknown>): StoredGeneration {
   const purpose = row.purpose;
   const lifecycle = row.lifecycle;
   if (
-    (ownerKind !== 'target' && ownerKind !== 'subscriber') ||
-    (purpose !== 'secret-url' && purpose !== 'webhook-signing' && purpose !== 'sse-bearer') ||
+    (ownerKind !== 'target' && ownerKind !== 'subscriber' && ownerKind !== 'judge') ||
+    (purpose !== 'secret-url' &&
+      purpose !== 'webhook-signing' &&
+      purpose !== 'sse-bearer' &&
+      purpose !== 'judge-key') ||
     (lifecycle !== 'current' && lifecycle !== 'overlap' && lifecycle !== 'retired') ||
     typeof row.owner_id !== 'string' ||
     typeof row.owner_version !== 'number' ||
@@ -236,6 +255,21 @@ function setSelector(database: DatabaseSync, kind: EventSecretStoreKind): void {
       "INSERT INTO meta (key, value) VALUES ('event_secret_store', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     )
     .run(kind);
+}
+
+/** A synchronous transaction-safe representation of every reference migration is allowed to move. */
+function referenceSnapshot(database: DatabaseSync): string {
+  const masters = database
+    .prepare('SELECT key_id, secret_ref, retired_at FROM event_secret_masters ORDER BY key_id')
+    .all() as Array<{ key_id: string; secret_ref: string; retired_at: number | null }>;
+  const generations = database
+    .prepare(
+      `SELECT owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest,
+              hex(encrypted_ref) AS encrypted_ref, lifecycle, expires_at
+       FROM event_secret_generations ORDER BY owner_kind, owner_id, owner_version, purpose, generation`,
+    )
+    .all();
+  return canonicalJson({ masters, generations });
 }
 
 /** The core keychain namespace deliberately gains an events-only suffix. */
@@ -350,6 +384,76 @@ export class EventSecretStore {
   }
 
   /**
+   * A retired master may be physically deleted only once every packed record
+   * and encrypted opaque-reference column proves it no longer names that key.
+   * The caller owns the writer-quiescer exclusive lease; this method retains
+   * the secrets lock for the entire scan and deletion.
+   */
+  async destroyRetiredMaster(input: {
+    readonly keyId: string;
+    readonly cipher: EventSecretReferenceCipher;
+    readonly quiescer: WriterQuiescer;
+  }): Promise<void> {
+    input.quiescer.assertExclusive();
+    return this.withLock(async () => {
+      this.assertSelectedBackend();
+      const row = this.#database
+        .prepare('SELECT secret_ref, retired_at FROM event_secret_masters WHERE key_id = ?')
+        .get(input.keyId) as { secret_ref: string; retired_at: number | null } | undefined;
+      if (row === undefined || row.retired_at === null)
+        throw new EventSecretError('EVENT_MASTER_UNKNOWN', 'only a known retired event master may be destroyed');
+      const { RECORD_LAYOUTS } = await import('./records.ts');
+      for (const layout of RECORD_LAYOUTS) {
+        const records = this.#database
+          .prepare(`SELECT ${layout.sqlColumn} AS record FROM ${layout.table} WHERE ${layout.sqlColumn} IS NOT NULL`)
+          .all() as Array<{ record: unknown }>;
+        for (const record of records) {
+          if (!(record.record instanceof Uint8Array)) {
+            throw new EventSecretError('RETIRED_MASTER_REFERENCED', 'a packed record column is not a BLOB');
+          }
+          let keyId: string;
+          try {
+            keyId = packedRecordKeyId(record.record);
+          } catch {
+            throw new EventSecretError('RETIRED_MASTER_REFERENCED', 'a packed record cannot be proven independent');
+          }
+          if (keyId === input.keyId) {
+            throw new EventSecretError(
+              'RETIRED_MASTER_REFERENCED',
+              'a packed record still names the retired event master',
+            );
+          }
+        }
+      }
+      // Decrypting the derived reference set is also a fail-closed validation that no live secret slot was skipped.
+      await referencesFor(this.#database, input.cipher);
+      this.#database.exec('BEGIN IMMEDIATE');
+      try {
+        const current = this.#database
+          .prepare('SELECT retired_at FROM event_secret_masters WHERE key_id = ?')
+          .get(input.keyId) as { retired_at: number | null } | undefined;
+        if (current === undefined || current.retired_at === null)
+          throw new EventSecretError(
+            'RETIRED_MASTER_REFERENCED',
+            'the retired master changed during its destruction scan',
+          );
+        // Counter rows retain no content and cannot name a key after the scan
+        // proved every packed record has moved off it.
+        this.#database.prepare('DELETE FROM nonce_counters WHERE key_id = ?').run(input.keyId);
+        this.#database
+          .prepare('DELETE FROM event_secret_masters WHERE key_id = ? AND retired_at IS NOT NULL')
+          .run(input.keyId);
+        this.#database.exec('COMMIT');
+      } catch (error) {
+        this.#database.exec('ROLLBACK');
+        throw error;
+      }
+      if (!(await this.#store.delete(row.secret_ref)))
+        throw new EventSecretError('RETIRED_MASTER_REFERENCED', 'the retired event master could not be deleted');
+    });
+  }
+
+  /**
    * Resolves the current and still-valid overlap generations for one exact immutable owner. The opaque backend
    * reference stays inside this store; only the byte-boundary adapter receives material, and only in memory.
    */
@@ -421,7 +525,15 @@ export class EventSecretStore {
   async storeGeneration(
     options: Omit<StoreEventSecretGenerationOptions, 'database' | 'paths' | 'store'>,
   ): Promise<EventSecretGeneration> {
-    const { owner, purpose, material, expectedPriorGeneration, overlapExpiresAt } = options;
+    const {
+      owner,
+      purpose,
+      material,
+      expectedPriorGeneration,
+      overlapExpiresAt,
+      retirePrevious = false,
+      requireEmpty = false,
+    } = options;
     assertPurpose(owner, purpose);
     if (typeof material !== 'string' || material.length === 0) {
       throw new EventSecretError('EVENT_SECRET_REFERENCE', 'event secret generation material is non-empty');
@@ -437,6 +549,16 @@ export class EventSecretStore {
     }
     return this.withLock(async () => {
       this.assertSelectedBackend();
+      if (requireEmpty) {
+        const occupied = this.#database
+          .prepare(
+            `SELECT 1 AS present FROM event_secret_generations
+             WHERE owner_kind = ? AND owner_id = ? AND owner_version = ? AND purpose = ? LIMIT 1`,
+          )
+          .get(owner.kind, owner.id, owner.version, purpose);
+        if (occupied !== undefined)
+          throw new EventSecretError('EVENT_SECRET_OWNER_STALE', 'the exact immutable secret slot is not empty');
+      }
       const previous = this.currentGeneration(owner, purpose);
       if ((previous?.generation ?? null) !== expectedPriorGeneration) {
         throw new EventSecretError(
@@ -452,6 +574,7 @@ export class EventSecretStore {
         .get(owner.kind, owner.id, owner.version, purpose) as { maximum: number | null } | undefined;
       const generation = (maximum?.maximum ?? 0) + 1;
       const ref = `event-secret:${randomBytes(12).toString('hex')}`;
+      const materialDigest = sha256Hex(material);
       await this.#store.set(ref, material);
       try {
         if ((await this.#store.get(ref)) !== material) {
@@ -468,6 +591,19 @@ export class EventSecretStore {
         try {
           this.assertSelectedBackend();
           this.assertLiveOwner(owner);
+          if (requireEmpty) {
+            const occupied = this.#database
+              .prepare(
+                `SELECT 1 AS present FROM event_secret_generations
+                 WHERE owner_kind = ? AND owner_id = ? AND owner_version = ? AND purpose = ? LIMIT 1`,
+              )
+              .get(owner.kind, owner.id, owner.version, purpose);
+            if (occupied !== undefined)
+              throw new EventSecretError(
+                'EVENT_SECRET_OWNER_STALE',
+                'the exact immutable secret slot changed while writing',
+              );
+          }
           const current = this.currentGeneration(owner, purpose);
           if (
             (current?.generation ?? null) !== expectedPriorGeneration ||
@@ -480,32 +616,42 @@ export class EventSecretStore {
           }
           const now = Date.now();
           if (current !== null) {
-            const overlap = overlapExpiresAt ?? now + 5 * 60_000;
-            if (!Number.isSafeInteger(overlap) || overlap <= now || overlap > now + 5 * 60_000) {
-              throw new EventSecretError(
-                'EVENT_SECRET_REFERENCE',
-                'a rotating event secret generation has an overlap expiry within five minutes',
-              );
+            if (retirePrevious) {
+              this.#database
+                .prepare(
+                  `UPDATE event_secret_generations SET lifecycle = 'retired', expires_at = ?
+                   WHERE owner_kind = ? AND owner_id = ? AND owner_version = ? AND purpose = ? AND generation = ?
+                     AND lifecycle = 'current'`,
+                )
+                .run(now, owner.kind, owner.id, owner.version, purpose, current.generation);
+            } else {
+              const overlap = overlapExpiresAt ?? now + 5 * 60_000;
+              if (!Number.isSafeInteger(overlap) || overlap <= now || overlap > now + 5 * 60_000) {
+                throw new EventSecretError(
+                  'EVENT_SECRET_REFERENCE',
+                  'a rotating event secret generation has an overlap expiry within five minutes',
+                );
+              }
+              const overlaps = this.#database
+                .prepare(
+                  `SELECT COUNT(*) AS count FROM event_secret_generations
+                   WHERE owner_kind = ? AND owner_id = ? AND owner_version = ? AND purpose = ? AND lifecycle = 'overlap'`,
+                )
+                .get(owner.kind, owner.id, owner.version, purpose) as { count: number } | undefined;
+              if ((overlaps?.count ?? 0) !== 0) {
+                throw new EventSecretError(
+                  'EVENT_SECRET_REFERENCE',
+                  'an event secret slot already has its bounded overlap generation',
+                );
+              }
+              this.#database
+                .prepare(
+                  `UPDATE event_secret_generations SET lifecycle = 'overlap', expires_at = ?
+                   WHERE owner_kind = ? AND owner_id = ? AND owner_version = ? AND purpose = ? AND generation = ?
+                     AND lifecycle = 'current'`,
+                )
+                .run(overlap, owner.kind, owner.id, owner.version, purpose, current.generation);
             }
-            const overlaps = this.#database
-              .prepare(
-                `SELECT COUNT(*) AS count FROM event_secret_generations
-                 WHERE owner_kind = ? AND owner_id = ? AND owner_version = ? AND purpose = ? AND lifecycle = 'overlap'`,
-              )
-              .get(owner.kind, owner.id, owner.version, purpose) as { count: number } | undefined;
-            if ((overlaps?.count ?? 0) !== 0) {
-              throw new EventSecretError(
-                'EVENT_SECRET_REFERENCE',
-                'an event secret slot already has its bounded overlap generation',
-              );
-            }
-            this.#database
-              .prepare(
-                `UPDATE event_secret_generations SET lifecycle = 'overlap', expires_at = ?
-                 WHERE owner_kind = ? AND owner_id = ? AND owner_version = ? AND purpose = ? AND generation = ?
-                   AND lifecycle = 'current'`,
-              )
-              .run(overlap, owner.kind, owner.id, owner.version, purpose, current.generation);
           }
           this.#database
             .prepare(
@@ -520,7 +666,7 @@ export class EventSecretStore {
               purpose,
               generation,
               owner.digest,
-              sha256Hex(material),
+              materialDigest,
               encryptedRef,
               now,
             );
@@ -539,7 +685,92 @@ export class EventSecretStore {
         generation,
         lifecycle: 'current',
         expiresAt: null,
-        secretDigest: sha256Hex(material),
+        secretDigest: materialDigest,
+      };
+    });
+  }
+
+  /**
+   * The only factory that can turn hidden URL bytes into a new immutable target
+   * version.  It writes and verifies physical material before one compensated
+   * SQLite commit; an existing version is never an update target.
+   */
+  async createSecretUrlTargetVersion(options: CreateSecretUrlTargetVersionOptions): Promise<EventSecretGeneration> {
+    if (options.document.url.kind !== 'secret') {
+      throw new EventSecretError('EVENT_SECRET_REFERENCE', 'a new secret URL target needs a secret URL descriptor');
+    }
+    const canonical = canonicalSecretWebhookUrl(options.completeUrl);
+    if (
+      canonical.descriptor.scheme !== options.document.url.scheme ||
+      canonical.descriptor.host !== options.document.url.host ||
+      canonical.descriptor.port !== options.document.url.port ||
+      canonical.descriptor.sha256 !== options.document.url.sha256
+    ) {
+      throw new EventSecretError(
+        'EVENT_SECRET_REFERENCE',
+        'the hidden URL does not match the new immutable descriptor',
+      );
+    }
+    const document = canonicalJson(options.document);
+    const owner: EventSecretOwner = {
+      kind: 'target',
+      id: options.document.targetId,
+      version: options.document.version,
+      digest: sha256Hex(document),
+    };
+    return this.withLock(async () => {
+      this.assertSelectedBackend();
+      const existing = this.#database
+        .prepare('SELECT 1 AS present FROM target_versions WHERE target_id = ? AND version = ?')
+        .get(owner.id, owner.version);
+      if (existing !== undefined)
+        throw new EventSecretError('EVENT_SECRET_OWNER_STALE', 'the requested new target version already exists');
+      const ref = `event-secret:${randomBytes(12).toString('hex')}`;
+      await this.#store.set(ref, canonical.value);
+      try {
+        if ((await this.#store.get(ref)) !== canonical.value)
+          throw new EventSecretError(
+            'EVENT_SECRET_REFERENCE',
+            'the new target URL did not read back from the selected backend',
+          );
+        const encryptedRef = await options.cipher.encrypt(
+          generationLocation(owner, 'secret-url', 1),
+          Buffer.from(ref, 'utf8'),
+        );
+        this.#database.exec('BEGIN IMMEDIATE');
+        try {
+          this.assertSelectedBackend();
+          const raced = this.#database
+            .prepare('SELECT 1 AS present FROM target_versions WHERE target_id = ? AND version = ?')
+            .get(owner.id, owner.version);
+          if (raced !== undefined)
+            throw new EventSecretError('EVENT_SECRET_OWNER_STALE', 'the requested new target version already exists');
+          this.#database
+            .prepare('INSERT INTO target_versions (id, target_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
+            .run(`${owner.id}@${owner.version}`, owner.id, owner.version, document, owner.digest);
+          this.#database
+            .prepare(
+              `INSERT INTO event_secret_generations
+               (owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest, encrypted_ref, lifecycle, expires_at, created_at)
+               VALUES ('target', ?, ?, 'secret-url', 1, ?, ?, ?, 'current', NULL, ?)`,
+            )
+            .run(owner.id, owner.version, owner.digest, sha256Hex(canonical.value), encryptedRef, Date.now());
+          this.#database.exec('COMMIT');
+        } catch (error) {
+          this.#database.exec('ROLLBACK');
+          throw error;
+        }
+      } catch (error) {
+        await this.#store.delete(ref).catch(() => false);
+        throw error;
+      }
+      return {
+        owner,
+        purpose: 'secret-url',
+        generation: 1,
+        lifecycle: 'current',
+        expiresAt: null,
+        secretDigest: sha256Hex(canonical.value),
       };
     });
   }
@@ -683,8 +914,13 @@ export class EventSecretStore {
   }
 
   private assertLiveOwner(owner: EventSecretOwner): void {
-    const table = owner.kind === 'target' ? 'target_versions' : 'subscriber_versions';
-    const idColumn = owner.kind === 'target' ? 'target_id' : 'subscriber_id';
+    const table =
+      owner.kind === 'target'
+        ? 'target_versions'
+        : owner.kind === 'subscriber'
+          ? 'subscriber_versions'
+          : 'judge_versions';
+    const idColumn = owner.kind === 'target' ? 'target_id' : owner.kind === 'subscriber' ? 'subscriber_id' : 'judge_id';
     const row = this.#database
       .prepare(`SELECT digest, revoked_at FROM ${table} WHERE ${idColumn} = ? AND version = ?`)
       .get(owner.id, owner.version) as { digest: string; revoked_at: number | null } | undefined;
@@ -758,10 +994,63 @@ export async function openEventSecretStore(options: OpenEventSecretStoreOptions)
 export async function migrateEventSecrets(options: EventSecretMigrationOptions): Promise<EventSecretMigrationResult> {
   if (options.from === options.to) return { moved: 0, leftovers: [] };
   return withEventSecretsLock(options.paths, async () => {
-    if (selectedKind(options.database) !== options.from) {
+    const selected = selectedKind(options.database);
+    // Once the selector names the destination, retrying the original request
+    // is cleanup-only.  The database is still the authority for the exact
+    // opaque references: first prove every selected-backend copy remains
+    // readable, then re-check that set before deleting an old copy.  A target
+    // loss therefore never turns a harmless old leftover into data loss.
+    if (selected === options.to) {
+      // The owner still has the pre-migration EventSecretStore instance.  It
+      // intentionally refuses selector drift, so cleanup resolves references
+      // directly from the selected target copies rather than accidentally
+      // reopening the old backend through that stale instance.
+      const references = await referencesForSelectedTarget(options.database, options.target);
+      const snapshot = referenceSnapshot(options.database);
+      for (const ref of references) {
+        const selectedValue = await options.target.get(ref);
+        if (selectedValue === null)
+          throw new EventSecretError(
+            'EVENT_MASTER_LOST',
+            'a selected event secret is unavailable; old migration leftovers are retained',
+          );
+        // An old copy is deleted only while the selected backend holds exactly the bytes it was copied from. A selected
+        // copy changed since the migration verified it leaves every old copy in place: the leftover may be the only
+        // correct one.
+        const leftover = await options.source.get(ref);
+        if (leftover !== null && leftover !== selectedValue)
+          throw new EventSecretError(
+            'EVENT_SECRET_SELECTOR',
+            'a selected event secret no longer matches its migration source; old migration leftovers are retained',
+          );
+      }
+      options.database.exec('BEGIN IMMEDIATE');
+      try {
+        if (referenceSnapshot(options.database) !== snapshot || selectedKind(options.database) !== options.to)
+          throw new EventSecretError(
+            'EVENT_SECRET_SELECTOR',
+            'event secret references changed before leftover cleanup',
+          );
+        options.database.exec('COMMIT');
+      } catch (error) {
+        options.database.exec('ROLLBACK');
+        throw error;
+      }
+      const leftovers: string[] = [];
+      for (const ref of references) {
+        try {
+          if (!(await options.source.delete(ref))) leftovers.push(ref);
+        } catch {
+          leftovers.push(ref);
+        }
+      }
+      return { moved: 0, leftovers };
+    }
+    if (selected !== options.from) {
       throw new EventSecretError('EVENT_SECRET_SELECTOR', 'event secret migration source is not the selected backend');
     }
     const references = await referencesFor(options.database, options.referenceCipher);
+    const snapshot = referenceSnapshot(options.database);
     const copied: string[] = [];
     try {
       for (const ref of references) {
@@ -780,6 +1069,10 @@ export async function migrateEventSecrets(options: EventSecretMigrationOptions):
       }
       options.database.exec('BEGIN IMMEDIATE');
       try {
+        if (referenceSnapshot(options.database) !== snapshot)
+          throw new EventSecretError('EVENT_SECRET_SELECTOR', 'event secret references changed during migration');
+        if (selectedKind(options.database) !== options.from)
+          throw new EventSecretError('EVENT_SECRET_SELECTOR', 'event secret selector changed during migration');
         setSelector(options.database, options.to);
         options.database.exec('COMMIT');
       } catch (error) {
@@ -800,4 +1093,95 @@ export async function migrateEventSecrets(options: EventSecretMigrationOptions):
     }
     return { moved: references.length, leftovers };
   });
+}
+
+/** Resolves opaque generation references from the selected migration target without retaining an old-store handle. */
+async function referencesForSelectedTarget(database: DatabaseSync, target: SecretStore): Promise<readonly string[]> {
+  const masters = database
+    .prepare('SELECT key_id, secret_ref FROM event_secret_masters ORDER BY key_id')
+    .all() as Array<{ key_id: string; secret_ref: string }>;
+  const masterByKey = new Map<string, Buffer>();
+  for (const master of masters) {
+    const encoded = await target.get(master.secret_ref);
+    if (encoded === null)
+      throw new EventSecretError('EVENT_MASTER_LOST', 'a selected event master is unavailable during leftover cleanup');
+    const key = Buffer.from(encoded, 'base64');
+    if (key.length !== 32)
+      throw new EventSecretError('EVENT_MASTER_LOST', 'a selected event master is malformed during leftover cleanup');
+    masterByKey.set(master.key_id, key);
+  }
+  const rows = database
+    .prepare(
+      `SELECT owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest,
+              encrypted_ref, lifecycle, expires_at
+       FROM event_secret_generations
+       ORDER BY owner_kind, owner_id, owner_version, purpose, generation`,
+    )
+    .all() as Array<Record<string, unknown>>;
+  const references = masters.map((master) => master.secret_ref);
+  for (const row of rows) {
+    const generation = asStoredGeneration(row);
+    const keyId = packedRecordKeyId(generation.encryptedRef);
+    const master = masterByKey.get(keyId);
+    if (master === undefined)
+      throw new EventSecretError('EVENT_MASTER_LOST', 'an event secret reference names an unavailable selected master');
+    let reference: Buffer;
+    try {
+      reference = decryptPackedRecord({
+        record: generation.encryptedRef,
+        keyForId: (selectedKeyId) =>
+          selectedKeyId === keyId ? deriveTableKey(master, 'event_secret_generations') : null,
+        aad: encodeAad(
+          'event_secret_generations',
+          'encryptedReference',
+          generationLocation(generation.owner, generation.purpose, generation.generation)
+            .key as readonly AadComponent[],
+        ),
+      });
+    } catch {
+      throw new EventSecretError(
+        'EVENT_SECRET_REFERENCE',
+        'an event secret reference is unreadable during leftover cleanup',
+      );
+    }
+    const value = reference.toString('utf8');
+    if (!/^event-secret:[a-f0-9]{24}$/.test(value))
+      throw new EventSecretError(
+        'EVENT_SECRET_REFERENCE',
+        'an event secret reference is not an opaque event reference',
+      );
+    references.push(value);
+  }
+  return [...new Set(references)].sort();
+}
+
+/**
+ * Content-free persistence check used by B3's synthetic-sentinel tests.  The
+ * only allowed copy is the selected secret backend, which is deliberately not
+ * among these daemon SQLite files.
+ */
+export async function scanEventSecretPersistence(input: {
+  readonly paths: EventPaths;
+  readonly prohibited: readonly string[];
+  /** Serialized receipts captured at the real output/audit/log boundary under test. */
+  readonly receiptSinks?: Partial<Record<'output' | 'audit' | 'log', readonly string[]>> | undefined;
+}): Promise<readonly ('sqlite' | 'wal' | 'shm' | 'output' | 'audit' | 'log')[]> {
+  const files: ReadonlyArray<readonly ['sqlite' | 'wal' | 'shm', string]> = [
+    ['sqlite', input.paths.database],
+    ['wal', input.paths.databaseWal],
+    ['shm', input.paths.databaseShm],
+  ];
+  const findings: Array<'sqlite' | 'wal' | 'shm' | 'output' | 'audit' | 'log'> = [];
+  for (const [name, path] of files) {
+    const bytes = await readFile(path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return Buffer.alloc(0);
+      throw error;
+    });
+    if (input.prohibited.some((value) => bytes.includes(Buffer.from(value, 'utf8')))) findings.push(name);
+  }
+  for (const name of ['output', 'audit', 'log'] as const) {
+    const serialized = input.receiptSinks?.[name] ?? [];
+    if (serialized.some((value) => input.prohibited.some((secret) => value.includes(secret)))) findings.push(name);
+  }
+  return findings;
 }

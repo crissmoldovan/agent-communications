@@ -40,6 +40,7 @@ import { openEventDatabase } from '../store/database.ts';
 import { openEventSecretStore } from '../store/event-secrets.ts';
 import { EventRecordCipher } from '../store/records.ts';
 import { ActivationRuntime } from './activations.ts';
+import { createB3ControlPorts } from './b3-control-ports.ts';
 import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
 import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
@@ -57,6 +58,7 @@ import { EventScheduler } from './scheduler.ts';
 import { runSourceOwnerWork, stageWhatsAppBaselineSnapshot } from './source-owner-work.ts';
 import { SseDispatcher } from './sse-dispatcher.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
+import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
 export interface EventOwnerStatus extends EventLifecycleStatus {
   readonly owner: 'running';
@@ -157,7 +159,15 @@ async function startOwnerWithLock(
     paths: database.paths,
     configDir: core.paths.configDir,
   });
-  const cipher = new EventRecordCipher(database.database, eventSecrets);
+  const writerQuiescer = new WriterQuiescer();
+  const cipher = new EventRecordCipher(database.database, eventSecrets, writerQuiescer);
+  const b3Ports = createB3ControlPorts({
+    database: database.database,
+    paths: database.paths,
+    eventSecrets,
+    cipher,
+    quiescer: writerQuiescer,
+  });
   const sourceRegistry = phaseDSourceRegistry();
   // The concrete WhatsApp visibility fence is constructed in every production owner (D Task 7).
   const whatsappEventOperations =
@@ -306,6 +316,7 @@ async function startOwnerWithLock(
     dryrun,
     webhook,
     sse,
+    assertObjectSecretReady: b3Ports.assertObjectSecretReady,
   });
   const gmailSourceFor = async (accountId: string): Promise<GmailEventSource> => {
     const config = await core.config.load();
@@ -476,6 +487,7 @@ async function startOwnerWithLock(
     sourceRegistry,
     retainedContentHooks: whatsappComposition.retainedContentHooks,
     now,
+    assertObjectSecretReady: b3Ports.assertObjectSecretReady,
   });
   const scheduler = new EventScheduler({
     store: database,
@@ -511,6 +523,7 @@ async function startOwnerWithLock(
     mailboxLock,
     sourceRegistry,
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
+    writerQuiescer,
     now,
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
     ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
@@ -533,7 +546,7 @@ async function startOwnerWithLock(
       activationIntents: replacementIntentSummary(database.database),
     }),
     stopped: stoppedPromise,
-    tick: () => scheduler.tick(),
+    tick: () => withEventWriterLease(writerQuiescer, () => scheduler.tick()),
     async stop(): Promise<void> {
       if (stopped) return;
       stopped = true;
@@ -553,9 +566,9 @@ async function startOwnerWithLock(
 
   started.owner = true;
   try {
-    await expiry.sweepAll();
+    await withEventWriterLease(writerQuiescer, () => expiry.sweepAll());
     // Expired delivery leases are recovered by the scheduler's ticks, which claim nothing while paused or disabled.
-    await recoverActivations(activations);
+    await withEventWriterLease(writerQuiescer, () => recoverActivations(activations));
     await writeToken(paths, token);
     control = await startControlServer({
       endpoint: instance.endpoint,
@@ -569,6 +582,7 @@ async function startOwnerWithLock(
           activations,
           dryrun,
           sourceRegistry,
+          writerQuiescer,
           request,
           options.b3OwnerService,
         ),
@@ -610,6 +624,7 @@ async function handleControl(
   activations: ActivationRuntime,
   dispatcher: DryRunDispatcher,
   sourceRegistry: LocalEventSourceRegistry,
+  writerQuiescer: WriterQuiescer,
   request: ControlRequest,
   b3OwnerService: B3OwnerService | undefined,
 ): Promise<unknown> {
@@ -676,10 +691,12 @@ async function handleControl(
     case 'approve-challenge':
       return activations.issueChallenge(requiredText(request.args.approvalId, 'approval id'));
     case 'approve':
-      return activations.approve({
-        approvalId: requiredText(request.args.approvalId, 'approval id'),
-        answer: requiredText(request.args.answer, 'approval answer'),
-      });
+      return withEventWriterLease(writerQuiescer, () =>
+        activations.approve({
+          approvalId: requiredText(request.args.approvalId, 'approval id'),
+          answer: requiredText(request.args.answer, 'approval answer'),
+        }),
+      );
     default:
       throw new CommsError('USAGE', 'the local event control operation is not recognised');
   }

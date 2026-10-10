@@ -31,6 +31,7 @@ import { requirePhaseDWhatsAppVisibilitySeam } from './phase-d-whatsapp-owner-co
 import { recoverDeliveryLeases } from './recovery.ts';
 import { recordEventTaint } from './untrusted.ts';
 import type { WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
+import { type WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
 const DEFAULT_TICK_MS = 5_000;
 const DEFAULT_POLL_INTERVAL_MS = 60_000;
@@ -64,6 +65,8 @@ export interface EventSchedulerOptions {
   readonly sourceRegistry?: LocalEventSourceRegistry | undefined;
   /** Constructed by the owner before any future WhatsApp source work is admitted. */
   readonly whatsappVisibilityFence?: WhatsAppVisibilityFence | undefined;
+  /** The same owner-wide lease held by every timer and explicit scheduler tick. */
+  readonly writerQuiescer: WriterQuiescer;
   readonly tickMs?: number | undefined;
   readonly pollIntervalMs?: number | undefined;
   readonly deliveryBatchSize?: number | undefined;
@@ -86,6 +89,7 @@ export class EventScheduler {
   readonly #mailboxLock: MailboxLock;
   readonly #sourceRegistry: LocalEventSourceRegistry;
   readonly #whatsappVisibilityFence: WhatsAppVisibilityFence | undefined;
+  readonly #writerQuiescer: WriterQuiescer;
   readonly #tickMs: number;
   readonly #pollIntervalMs: number;
   readonly #deliveryBatchSize: number;
@@ -113,6 +117,9 @@ export class EventScheduler {
       hasWhatsAppSource: this.#sourceRegistry.sources().includes('whatsapp'),
       visibilityFence: options.whatsappVisibilityFence,
     });
+    this.#writerQuiescer = options.writerQuiescer;
+    if ('writerQuiescer' in options.cipher && this.#writerQuiescer !== options.cipher.writerQuiescer)
+      throw new Error('the scheduler and record cipher must use the same owner writer quiescer');
     this.#tickMs = positiveInterval(options.tickMs ?? DEFAULT_TICK_MS, 'tick interval');
     this.#pollIntervalMs = positiveInterval(options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS, 'poll interval');
     this.#deliveryBatchSize = positiveInterval(
@@ -139,7 +146,7 @@ export class EventScheduler {
   /** Test and embedding seam: runs one complete serial tick and waits for its account-isolated work. */
   async tick(): Promise<void> {
     if (this.#running !== undefined) return this.#running;
-    const work = this.#tick().finally(() => {
+    const work = withEventWriterLease(this.#writerQuiescer, () => this.#tick()).finally(() => {
       if (this.#running === work) this.#running = undefined;
     });
     this.#running = work;

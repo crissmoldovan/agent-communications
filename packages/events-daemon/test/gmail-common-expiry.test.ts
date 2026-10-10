@@ -13,6 +13,7 @@ import { openEventDatabase } from '../src/store/database.ts';
 import { openEventSecretStore, selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { EventRecordCipher } from '../src/store/records.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 const ACCOUNT = 'ibx_ABCDEFGHIJKLMNOP';
 const STAGE = 'gmail-history:ibx_ABCDEFGHIJKLMNOP:100:0';
@@ -95,6 +96,7 @@ test('D4a: the next paused owner tick terminalises an expired Gmail page without
       dispatcher: { recoverLeases: async () => undefined, dispatch: async () => undefined } as never,
       expiry: commonExpiry(store, mailboxLock, () => now),
       cipher: {} as never,
+      writerQuiescer: testWriterQuiescer(),
       approvals: {} as never,
       config: {
         load: async () => ({ inboxes: { gmail: { id: ACCOUNT, provider: 'gmail' } } }),
@@ -182,6 +184,7 @@ test('D4a: owner startup expires a Gmail page before a control request or worker
     const cipher = new EventRecordCipher(
       store.database,
       await openEventSecretStore({ database: store.database, paths: store.paths, configDir }),
+      testWriterQuiescer(),
     );
     const record = await cipher.encrypt(
       { table: 'source_scan_state', column: 'encryptedRecord', key: [{ type: 'text', value: STAGE }] },
@@ -442,6 +445,7 @@ test('D4a: paused common expiry preserves an expired page as a continuation unti
       dispatcher: { recoverLeases: async () => undefined, dispatch: async () => undefined } as never,
       expiry: commonExpiry(store, mailboxLock, () => now),
       cipher: {} as never,
+      writerQuiescer: testWriterQuiescer(),
       approvals: {} as never,
       config: { load: async () => ({ inboxes: { gmail: { id: ACCOUNT, provider: 'gmail' } } }) } as never,
       taint: {} as never,

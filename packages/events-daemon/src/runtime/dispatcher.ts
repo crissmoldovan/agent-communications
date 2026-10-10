@@ -88,6 +88,16 @@ export interface DeliveryDispatcherOptions {
   readonly webhook: DeliveryDispatchHandler;
   readonly sse: DeliveryDispatchHandler;
   readonly now?: (() => number) | undefined;
+  /** B3 exact-slot gate, checked before the handler claims or renders a delivery. */
+  readonly assertObjectSecretReady?:
+    | ((input: {
+        readonly owner: {
+          readonly kind: 'target' | 'subscriber' | 'judge';
+          readonly id: string;
+          readonly version: number;
+        };
+      }) => Promise<unknown>)
+    | undefined;
 }
 
 /**
@@ -100,6 +110,7 @@ export class DeliveryDispatcher {
   readonly #webhook: DeliveryDispatchHandler;
   readonly #sse: DeliveryDispatchHandler;
   readonly #now: () => number;
+  readonly #assertObjectSecretReady: DeliveryDispatcherOptions['assertObjectSecretReady'];
 
   constructor(options: DeliveryDispatcherOptions) {
     this.#store = options.store;
@@ -107,13 +118,34 @@ export class DeliveryDispatcher {
     this.#webhook = options.webhook;
     this.#sse = options.sse;
     this.#now = options.now ?? Date.now;
+    this.#assertObjectSecretReady = options.assertObjectSecretReady;
   }
 
   async dispatch(deliveryId: string): Promise<DispatchResult> {
-    const row = this.#store.database.prepare('SELECT target_key FROM deliveries WHERE id = ?').get(deliveryId) as
-      | { target_key: string }
+    const row = this.#store.database
+      .prepare(
+        'SELECT target_key, target_id, target_version, subscriber_id, subscriber_version FROM deliveries WHERE id = ?',
+      )
+      .get(deliveryId) as
+      | {
+          target_key: string;
+          target_id: string;
+          target_version: number;
+          subscriber_id: string | null;
+          subscriber_version: number | null;
+        }
       | undefined;
     if (row === undefined) return { state: 'missing', deliveryId };
+    if (this.#assertObjectSecretReady !== undefined) {
+      if (row.target_key.startsWith('webhook:'))
+        await this.#assertObjectSecretReady({
+          owner: { kind: 'target', id: row.target_id, version: row.target_version },
+        });
+      if (row.target_key.startsWith('sse:') && row.subscriber_id !== null && row.subscriber_version !== null)
+        await this.#assertObjectSecretReady({
+          owner: { kind: 'subscriber', id: row.subscriber_id, version: row.subscriber_version },
+        });
+    }
     return this.#handler(row.target_key).dispatch(deliveryId);
   }
 

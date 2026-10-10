@@ -29,6 +29,7 @@ import { type EventDatabase, openEventDatabase } from '../../src/store/database.
 import { openEventSecretStore, selectEventSecretStore } from '../../src/store/event-secrets.ts';
 import { EventRecordCipher } from '../../src/store/records.ts';
 import { shortTempDir } from './short-temp.ts';
+import { testWriterQuiescer } from './writer-quiescer.ts';
 
 export type CutoverSource = 'slack' | 'resend' | 'whatsapp';
 
@@ -106,6 +107,7 @@ export class PhaseDCutoverFixture {
   baselineCalls = 0;
   pointEncryptions = 0;
   #store: EventDatabase;
+  readonly #writerQuiescer = testWriterQuiescer();
   #cipher: EventRecordCipher | undefined;
   #runtime: ActivationRuntime | undefined;
   #lifecycle: EventLifecycle | undefined;
@@ -527,6 +529,7 @@ export class PhaseDCutoverFixture {
       dispatcher,
       expiry: new EventExpiry(this.#store, () => this.now.value),
       cipher: schedulerCipher,
+      writerQuiescer: this.#writerQuiescer,
       approvals: this.approvals,
       config: { load: async () => this.config } as never,
       taint: { record: async () => undefined } as never,
@@ -734,7 +737,7 @@ export class PhaseDCutoverFixture {
       configDir: this.configDir,
       stores: { file: this.secretStore },
     });
-    const cipher = new EventRecordCipher(this.#store.database, secrets);
+    const cipher = new EventRecordCipher(this.#store.database, secrets, this.#writerQuiescer);
     this.#cipher = cipher;
     this.#lifecycle = new EventLifecycle(this.#store, () => this.now.value);
     this.#whatsapp = createPhaseDWhatsAppOwnerComposition({

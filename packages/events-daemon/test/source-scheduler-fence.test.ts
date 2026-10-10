@@ -11,6 +11,7 @@ import { phaseDSourceRegistry } from '../src/sources/registry.ts';
 import { SourceScopeLock } from '../src/sources/scope-lock.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 test('D7: a removed non-Gmail source scope is purged before the scheduler can select it again', {
   skip: WINDOWS_SKIP,
@@ -36,6 +37,7 @@ test('D7: a removed non-Gmail source scope is purged before the scheduler can se
       dispatcher: {} as never,
       expiry: { sweepAll: async () => undefined } as never,
       cipher: {} as never,
+      writerQuiescer: testWriterQuiescer(),
       approvals: {} as never,
       config: { load: async () => ({ inboxes: {}, accounts: {} }) } as never,
       taint: {} as never,
@@ -72,6 +74,7 @@ test('D7b/W: the one scheduler owner refuses a WhatsApp source unless it holds t
           dispatcher: {} as never,
           expiry: { sweepAll: async () => undefined } as never,
           cipher: {} as never,
+          writerQuiescer: testWriterQuiescer(),
           approvals: {} as never,
           config: { load: async () => ({ inboxes: {}, accounts: {} }) } as never,
           taint: {} as never,

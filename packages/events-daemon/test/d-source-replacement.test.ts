@@ -16,6 +16,7 @@ import { LocalEventSourceRegistry, phaseDSourceRegistry } from '../src/sources/r
 import { SourceScopeLock } from '../src/sources/scope-lock.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 const target = {
   targetId: 'target-d-source-replacement',
@@ -494,6 +495,7 @@ test('K6/D7b: a removed then re-added non-Gmail account remains dark until anoth
         cipher: {
           decrypt: async (_location: unknown, record: Uint8Array) => Buffer.from(record),
         } as never,
+        writerQuiescer: testWriterQuiescer(),
         approvals: {} as never,
         config: { load: async () => fixture.config } as never,
         taint: {} as never,

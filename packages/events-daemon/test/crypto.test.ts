@@ -10,6 +10,7 @@ import { openEventDatabase } from '../src/store/database.ts';
 import { type EventSecretStore, openEventSecretStore, selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { EventRecordCipher, RecordStorageError } from '../src/store/records.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
+import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 interface AadVector {
   readonly name: string;
@@ -133,7 +134,7 @@ test('CRY-B1: durable nonce counters and BLOB-only records prevent plaintext and
         configDir: '/separate/config',
         stores: { file },
       });
-      const cipher = new EventRecordCipher(opened.database, secrets);
+      const cipher = new EventRecordCipher(opened.database, secrets, testWriterQuiescer());
       const location = {
         table: 'source_scan_state',
         column: 'encryptedRecord',
@@ -223,6 +224,7 @@ test('P1-B1: real record cipher encrypts an activation point for its own row and
           configDir: '/srv/config',
           stores: { file: new MemorySecretStore() },
         }),
+        testWriterQuiescer(),
       );
       const baseline = {
         table: 'activation_baselines',
@@ -272,7 +274,7 @@ test('CRY-B1: rotation never writes an older record back over a row a worker rep
         configDir: '/separate/config',
         stores: { file: new MemorySecretStore() },
       });
-      const worker = new EventRecordCipher(opened.database, secrets);
+      const worker = new EventRecordCipher(opened.database, secrets, testWriterQuiescer());
       const location = {
         table: 'source_scan_state',
         column: 'encryptedRecord',
@@ -301,7 +303,7 @@ test('CRY-B1: rotation never writes an older record back over a row a worker rep
           return key;
         },
       } as unknown as EventSecretStore;
-      const rotation = await new EventRecordCipher(opened.database, racing).rotateAndReencrypt();
+      const rotation = await new EventRecordCipher(opened.database, racing, testWriterQuiescer()).rotateAndReencrypt();
 
       assert.equal(raced, true);
       assert.equal(rotation.rewritten, 0, 'the replaced row is not counted as rewritten');
@@ -337,7 +339,7 @@ test('CRY-B1: rotation re-encrypts every remaining row when a worker deletes one
         configDir: '/separate/config',
         stores: { file: new MemorySecretStore() },
       });
-      const worker = new EventRecordCipher(opened.database, secrets);
+      const worker = new EventRecordCipher(opened.database, secrets, testWriterQuiescer());
       const location = (id: string) => ({
         table: 'source_scan_state',
         column: 'encryptedRecord',
@@ -365,7 +367,9 @@ test('CRY-B1: rotation re-encrypts every remaining row when a worker deletes one
           return key;
         },
       } as unknown as EventSecretStore;
-      const rotation = await new EventRecordCipher(opened.database, racing).rotateAndReencrypt({ batchSize: 1 });
+      const rotation = await new EventRecordCipher(opened.database, racing, testWriterQuiescer()).rotateAndReencrypt({
+        batchSize: 1,
+      });
 
       assert.equal(purged, true);
       const rows = opened.database
@@ -403,7 +407,7 @@ test('CRY-B1: rotation passes again for a record written under the old key while
         configDir: '/separate/config',
         stores: { file: new MemorySecretStore() },
       });
-      const worker = new EventRecordCipher(opened.database, secrets);
+      const worker = new EventRecordCipher(opened.database, secrets, testWriterQuiescer());
       const location = (id: string) => ({
         table: 'source_scan_state',
         column: 'encryptedRecord',
@@ -435,7 +439,9 @@ test('CRY-B1: rotation passes again for a record written under the old key while
           return key;
         },
       } as unknown as EventSecretStore;
-      const rotation = await new EventRecordCipher(opened.database, racing).rotateAndReencrypt({ batchSize: 1 });
+      const rotation = await new EventRecordCipher(opened.database, racing, testWriterQuiescer()).rotateAndReencrypt({
+        batchSize: 1,
+      });
 
       assert.equal(wrote, true);
       const rows = opened.database

@@ -8,6 +8,7 @@ import { EventLifecycle } from '../src/runtime/lifecycle.ts';
 import { EventScheduler } from '../src/runtime/scheduler.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 const ACCOUNT = 'account-1';
 
@@ -112,6 +113,7 @@ test('B2-T2: an owner scheduler tick routes every B2 kind without rebuilding its
       dispatcher,
       expiry: new EventExpiry(setup.store),
       cipher: {} as never,
+      writerQuiescer: testWriterQuiescer(),
       approvals: {} as never,
       config: { load: async () => ({ inboxes: { local: { id: ACCOUNT, provider: 'gmail' } } }) } as never,
       taint: {} as never,

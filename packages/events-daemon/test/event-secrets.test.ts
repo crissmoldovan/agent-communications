@@ -18,6 +18,7 @@ import {
 } from '../src/store/event-secrets.ts';
 import { EventRecordCipher } from '../src/store/records.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
+import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 class MemorySecretStore implements SecretStore {
   readonly values = new Map<string, string>();
@@ -300,7 +301,7 @@ test('B2-T3: event-secret migration copies masters and every current or overlap 
         configDir: '/srv/test',
         stores: { file, keychain },
       });
-      const cipher = new EventRecordCipher(opened.database, secrets);
+      const cipher = new EventRecordCipher(opened.database, secrets, testWriterQuiescer());
       await secrets.currentMaster();
       const target = { kind: 'target' as const, id: 'target-1', version: 1, digest: targetDigest };
       const subscriber = { kind: 'subscriber' as const, id: 'subscriber-1', version: 1, digest: subscriberDigest };
@@ -377,7 +378,7 @@ test('B2-T3: event-secret migration copies masters and every current or overlap 
         configDir: '/srv/test',
         stores: { file, keychain },
       });
-      const selectedCipher = new EventRecordCipher(opened.database, selected);
+      const selectedCipher = new EventRecordCipher(opened.database, selected, testWriterQuiescer());
       assert.deepEqual([...keychain.values.keys()].sort(), await selected.references(selectedCipher));
       assert.equal(JSON.stringify(signing).includes('hidden-signing-first'), false);
       assert.equal(JSON.stringify(bearer).includes('hidden-bearer-first'), false);
@@ -421,7 +422,7 @@ test('B2-T3: the internal secret-URL factory commits only a matching opaque gene
         database: opened.database,
         paths: opened.paths,
         store: secrets,
-        cipher: new EventRecordCipher(opened.database, secrets),
+        cipher: new EventRecordCipher(opened.database, secrets, testWriterQuiescer()),
         document,
         completeUrl: url,
         expectedPriorGeneration: null,
@@ -436,7 +437,7 @@ test('B2-T3: the internal secret-URL factory commits only a matching opaque gene
           database: opened.database,
           paths: opened.paths,
           store: secrets,
-          cipher: new EventRecordCipher(opened.database, secrets),
+          cipher: new EventRecordCipher(opened.database, secrets, testWriterQuiescer()),
           document,
           completeUrl: 'https://receiver.example.test/other-path?credential=fixture',
           expectedPriorGeneration: generation.generation,
@@ -473,7 +474,7 @@ test('B2-T3: migration locks create, rotation and reconciliation; it reads back 
         configDir: '/srv/test',
         stores: { file, keychain },
       });
-      const cipher = new EventRecordCipher(opened.database, secrets);
+      const cipher = new EventRecordCipher(opened.database, secrets, testWriterQuiescer());
       await secrets.currentMaster();
       const owner = { kind: 'target' as const, id: 'target-lock', version: 1, digest };
       await storeEventSecretGeneration({
@@ -603,7 +604,7 @@ test('B2-T3: reconciliation removes only expired retired generations after their
         configDir: '/srv/test',
         stores: { file },
       });
-      const cipher = new EventRecordCipher(opened.database, secrets);
+      const cipher = new EventRecordCipher(opened.database, secrets, testWriterQuiescer());
       const owner = { kind: 'target' as const, id: 'target-reconcile', version: 1, digest };
       const first = await storeEventSecretGeneration({
         database: opened.database,
@@ -692,7 +693,7 @@ test('SEC-B2: webhook and SSE bearer overlap generations are limited to five min
         configDir: '/srv/test',
         stores: { file },
       });
-      const cipher = new EventRecordCipher(opened.database, secrets);
+      const cipher = new EventRecordCipher(opened.database, secrets, testWriterQuiescer());
 
       const signing = await storeEventSecretGeneration({
         database: opened.database,
