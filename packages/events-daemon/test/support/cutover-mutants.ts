@@ -109,6 +109,116 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
     exportName: 'SlackReplyDrains',
   },
   {
+    id: 'slack-finalisation-installs-new-only-cursor',
+    file: 'runtime/activations.ts',
+    before: "this.#store.database.prepare('DELETE FROM activation_baselines WHERE intent_id = ?').run(intent.id);",
+    after: `for (const point of points) {
+        this.#store.database
+          .prepare(
+            \`INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at)
+             VALUES (?, ?, ?, '{}', ?)
+             ON CONFLICT(source, account_id, cursor_scope)
+             DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at\`,
+          )
+          .run(point.source, point.accountId, point.positionScope, this.#now());
+      }
+      this.#store.database.prepare('DELETE FROM activation_baselines WHERE intent_id = ?').run(intent.id);`,
+    cell: 'S:new-only replacement keeps the shared cursor at an earlier active rule point',
+    exportName: 'ActivationRuntime',
+  },
+  {
+    id: 'slack-omit-reply-coverage-guard',
+    file: 'runtime/replacements.ts',
+    before: `if (input.scope.source === 'slack' && (input.slack?.historyCovered !== true || input.slack.repliesCovered !== true))
+    return false;`,
+    after: 'if (false) return false;',
+    cell: 'S:replace-old-only-drains-history-and-replies',
+    exportName: 'completeSourceReplacementDrain',
+  },
+  {
+    id: 'slack-derived-debt-keeps-parent-version',
+    file: 'runtime/replacements.ts',
+    before: '.run(input.childVersion, input.ruleId, input.parentVersion);',
+    after: '.run(input.parentVersion, input.ruleId, input.parentVersion);',
+    cell: 'S:tighten-transfers-page-and-reply-debts-stale-scan-writes-nothing',
+    exportName: 'transferStageDebtToDerivedRule',
+  },
+  {
+    id: 'slack-swap-omits-old-only-debt-settlement',
+    file: 'runtime/activations.ts',
+    before: 'this.#settleOldOnlyStages(latest.replacement_of_version, points);',
+    after: 'void latest;',
+    cell: 'S:swap-drops-old-only-history-and-reply-debts',
+    exportName: 'ActivationRuntime',
+  },
+  {
+    id: 'slack-initial-cursor-selects-latest-baseline',
+    file: 'runtime/scheduler.ts',
+    before: `    })[0] as string;
+  }
+  if (scope.source === 'resend') {`,
+    after: `    }).at(-1) as string;
+  }
+  if (scope.source === 'resend') {`,
+    cell: 'S:initial-cursor-is-after-baseline',
+    exportName: 'EventScheduler',
+  },
+  {
+    id: 'slack-initial-cursor-selects-latest-under-lock',
+    file: 'runtime/scheduler.ts',
+    before: `    })[0] as string;
+  }
+  if (scope.source === 'resend') {`,
+    after: `    }).at(-1) as string;
+  }
+  if (scope.source === 'resend') {`,
+    cell: 'S:initial-cursor-rechecks-points-under-conversation-lock',
+    exportName: 'EventScheduler',
+  },
+  {
+    id: 'slack-replacement-omits-earliest-history-cap',
+    file: 'runtime/source-owner-work.ts',
+    before: `const latest = replyDrains
+      .slice(1)
+      .reduce(
+        (earliest, drain) => (compareSlackTimestamp(drain.through, earliest) < 0 ? drain.through : earliest),
+        replyDrains[0]?.through ?? slackTimestamp((input.now ?? Date.now)()),
+      );`,
+    after: 'const latest = slackTimestamp((input.now ?? Date.now)());',
+    cell: 'S:replace-shared-one-version-per-occurrence',
+    exportName: 'runSourceOwnerWork',
+  },
+  {
+    id: 'slack-admits-candidates-not-after-p',
+    file: 'runtime/source-owner-work.ts',
+    before:
+      'return compareSlackTimestamp(assertSlackTimestamp(candidate.timestamp), assertSlackTimestamp(timestamp)) > 0;',
+    after: 'return true;',
+    cell: 'S:enable-all-rebaselines-readded-scope',
+    exportName: 'runSourceOwnerWork',
+  },
+  {
+    id: 'slack-timeout-omits-deadline-settlement',
+    file: 'runtime/activations.ts',
+    before: `this.#store.database
+      .prepare("UPDATE activation_intents SET status = 'failed', failure_code = ?, updated_at = ? WHERE id = ?")
+      .run(code, this.#now(), intentId);
+    this.#store.database.prepare('DELETE FROM activation_baselines WHERE intent_id = ?').run(intentId);
+    this.#store.database.prepare('DELETE FROM replacement_drains WHERE intent_id = ?').run(intentId);`,
+    after: `void intentId;
+    void code;`,
+    cell: 'S:timeout-keeps-watermark-and-retries',
+    exportName: 'ActivationRuntime',
+  },
+  {
+    id: 'slack-omits-ordinary-reply-reconciliation',
+    file: 'runtime/source-owner-work.ts',
+    before: 'await ordinaryReplies.resumeOne({ accountId: scope.accountId, conversationId, latest });',
+    after: 'void latest;',
+    cell: 'S:first-enabled-page-and-reply-barrier',
+    exportName: 'runSourceOwnerWork',
+  },
+  {
     id: 'whatsapp-raw-z-pk-identity',
     file: 'sources/whatsapp.ts',
     before: guards.rawKey,
