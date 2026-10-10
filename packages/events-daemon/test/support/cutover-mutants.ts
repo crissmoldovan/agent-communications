@@ -412,6 +412,22 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
     exportName: 'runSourceOwnerWork',
   },
   {
+    id: 'slack-expired-stage-retains-aged-parent',
+    file: 'sources/slack-replies.ts',
+    before: 'return (await this.#stager.unexpired(stageInput)) !== null;',
+    after: 'return (await this.#stager.load(stageInput)) !== null;',
+    cell: 'S:replace-aged-pending-reply-keeps-old-debt',
+    exportName: 'SlackReplyReconciler',
+  },
+  {
+    id: 'slack-aged-drain-scans-from-null-cursor',
+    file: 'sources/slack-replies.ts',
+    before: 'const aged = !isSlackReplyEligible(row.thread_ts, barrier.value.through, this.#nowTimestamp());',
+    after: 'const aged = false;',
+    cell: 'S:replace-aged-pending-reply-keeps-old-debt',
+    exportName: 'SlackReplyDrains',
+  },
+  {
     id: 'slack-replacement-omits-aged-staged-parent',
     file: 'sources/slack-replies.ts',
     before: `const retainPastHorizon = now - state.value.observedAt > SEVEN_DAYS_MS;
@@ -433,7 +449,8 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
     id: 'slack-staged-debt-uses-stale-authorization',
     file: 'runtime/source-owner-work.ts',
     before: '                   ELSE (SELECT point.activation_id FROM rule_activation_points AS point',
-    after: '                   ELSE (SELECT rule_versions.authorization_activation_id FROM rule_activation_points AS point',
+    after:
+      '                   ELSE (SELECT rule_versions.authorization_activation_id FROM rule_activation_points AS point',
     cell: 'S:replace-aged-pending-reply-keeps-old-debt',
     exportName: 'sourceRulesForStage',
   },
