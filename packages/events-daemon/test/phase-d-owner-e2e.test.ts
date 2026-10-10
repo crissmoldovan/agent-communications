@@ -7,10 +7,124 @@ import { emptyConfig } from '@agentcomms/core';
 import { EventControlClient } from '../src/control/client.ts';
 import { startEventOwner } from '../src/runtime/owner.ts';
 import { openEventDatabase } from '../src/store/database.ts';
+import { openEventSecretStore, selectEventSecretStore } from '../src/store/event-secrets.ts';
+import { EventRecordCipher } from '../src/store/records.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 /** The fake list file's digest has the real shape: lowercase SHA-256 of the list document. */
 const FAKE_LIST_DIGEST = createHash('sha256').update('{"lists":"fake-owner"}').digest('hex');
+
+test('D-C: an owner behind the wall clock leaves unexpired Resend received and status stages encrypted', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const root = await shortTempDir('aev-dc-owner-clock-');
+  const stateDir = join(root, 'state');
+  const configDir = join(root, 'config');
+  const accountId = 'acc_RRRRRRRRRRRRRRRR';
+  const receivedId = `resend-received:${accountId}`;
+  const statusEmailId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const statusId = `resend-status:${accountId}:${statusEmailId}`;
+  const ownerNow = 19;
+  await mkdir(configDir, { recursive: true });
+  await writeFile(join(configDir, 'config.json'), `${JSON.stringify(emptyConfig())}\n`);
+  const store = await openEventDatabase({ stateDir });
+  try {
+    await selectEventSecretStore(store.database, 'file');
+    const cipher = new EventRecordCipher(
+      store.database,
+      await openEventSecretStore({ database: store.database, paths: store.paths, configDir }),
+    );
+    const received = await cipher.encrypt(
+      { table: 'source_scan_state', column: 'encryptedRecord', key: [{ type: 'text', value: receivedId }] },
+      Buffer.from(
+        JSON.stringify({
+          anchorId: 'anchor',
+          cycleHeadId: statusEmailId,
+          after: null,
+          pagesScanned: 1,
+          items: [statusEmailId],
+          candidate: { emailId: statusEmailId },
+        }),
+      ),
+    );
+    const status = await cipher.encrypt(
+      { table: 'source_scan_state', column: 'encryptedRecord', key: [{ type: 'text', value: statusId }] },
+      Buffer.from(
+        JSON.stringify({
+          change: {
+            emailId: statusEmailId,
+            previous: 'sent',
+            current: 'delivered',
+            observedAt: '1970-01-01T00:00:00.019Z',
+            scanGeneration: 1,
+            from: null,
+            to: [],
+            cc: [],
+            bcc: [],
+            subject: 'synthetic stage',
+            createdAt: null,
+            scheduledAt: null,
+            messageId: null,
+          },
+        }),
+      ),
+    );
+    store.database
+      .prepare(
+        `INSERT INTO source_scan_state
+         (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at)
+         VALUES (?, 'resend', ?, ?, 10, 20, ?, 10)`,
+      )
+      .run(receivedId, accountId, 'received', received);
+    store.database
+      .prepare(
+        `INSERT INTO source_scan_state
+         (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at)
+         VALUES (?, 'resend', ?, ?, 10, 20, ?, 10)`,
+      )
+      .run(statusId, accountId, 'status', status);
+  } finally {
+    store.close();
+  }
+
+  let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
+  try {
+    try {
+      owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000, now: () => ownerNow });
+    } catch (error) {
+      // The development sandbox denies Unix-domain listeners after start-up expiry. The rows below still verify the
+      // production owner composition that ran before listener creation; other errors remain test failures.
+      if (!(error instanceof Error) || !/EPERM/u.test(error.message)) throw error;
+    }
+    const afterStart = await openEventDatabase({ stateDir });
+    try {
+      assert.deepEqual(
+        afterStart.database
+          .prepare('SELECT id, staged_at, stage_expires_at FROM source_scan_state WHERE id IN (?, ?) ORDER BY id')
+          .all(receivedId, statusId)
+          .map((row) => ({ ...row })),
+        [
+          { id: receivedId, staged_at: 10, stage_expires_at: 20 },
+          { id: statusId, staged_at: 10, stage_expires_at: 20 },
+        ],
+        'the injected owner clock is before both stage deadlines, regardless of the wall clock',
+      );
+      assert.equal(
+        afterStart.database.prepare("SELECT 1 FROM source_occurrence_resolutions WHERE source = 'resend'").get(),
+        undefined,
+      );
+      assert.equal(
+        afterStart.database.prepare('SELECT 1 FROM resend_status_state WHERE account_id = ?').get(accountId),
+        undefined,
+      );
+    } finally {
+      afterStart.close();
+    }
+  } finally {
+    await owner?.stop();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('D7: a normal Phase-D owner registers all sources and exposes their content-free state', {
   skip: WINDOWS_SKIP,
