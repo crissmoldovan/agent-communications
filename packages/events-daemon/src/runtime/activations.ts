@@ -527,7 +527,25 @@ export class ActivationRuntime {
     const intentId = this.#newIntentId();
     const binding = disclosureBindingFor(intentId, document);
     const now = this.#now();
+    const plannedAccountIds = [...new Set(points.map((point) => point.accountId))];
     this.#store.immediate(() => {
+      // `revoked_at >= created_at` is deliberately inclusive: an intent planned before a same-millisecond removal
+      // must lose its authority.  Give an intent made after a re-add a logically later creation instant even when a
+      // low-resolution clock has not ticked.  This records the ordering needed to distinguish its fresh approval
+      // from an old approval that named the removed account.
+      const latestRevocation =
+        plannedAccountIds.length === 0
+          ? undefined
+          : ((
+              this.#store.database
+                .prepare(
+                  `SELECT MAX(revoked_at) AS revoked_at
+                 FROM account_revocations
+                 WHERE account_id IN (${plannedAccountIds.map(() => '?').join(', ')})`,
+                )
+                .get(...plannedAccountIds) as { revoked_at: number | null }
+            ).revoked_at ?? undefined);
+      const createdAt = Math.max(now, latestRevocation === undefined ? now : latestRevocation + 1);
       this.#store.database
         .prepare(
           `INSERT INTO activation_intents
@@ -543,8 +561,8 @@ export class ActivationRuntime {
           replacementOfVersion ?? null,
           canonicalJson(points),
           canonicalJson([...new Set(points.map((point) => `${point.accountId}:${point.positionScope}`))]),
-          now,
-          now,
+          createdAt,
+          createdAt,
         );
     });
     const approval = await this.#approvals.createDisclosure(binding);
@@ -567,10 +585,28 @@ export class ActivationRuntime {
     const claimedAt = Date.parse(usedAt);
     if (!Number.isFinite(claimedAt)) throw new CommsError('BAD_DATA', 'the disclosure usedAt is not an instant');
     const deadline = claimedAt + 3_600_000;
+    let revokedPlannedAccount = false;
     this.#store.immediate(() => {
       const row = this.#intent(intent.id);
       if (row.status === 'cancelled')
         throw new CommsError('APPROVAL_VOID', 'the activation was cancelled before completion');
+      // A stable id can be configured again after removal. The approval predates that removal, so it can never
+      // authorise the re-added account even if an interrupted purge left this intent pending.
+      const revoked = this.#store.database
+        .prepare(
+          `SELECT 1 AS present
+           FROM activation_intents AS planned
+           JOIN json_each(planned.required_points) AS point
+           JOIN account_revocations AS revocation ON revocation.account_id = json_extract(point.value, '$.accountId')
+           WHERE planned.id = ? AND revocation.revoked_at >= planned.created_at
+           LIMIT 1`,
+        )
+        .get(intent.id) as { present: number } | undefined;
+      if (revoked !== undefined) {
+        this.#cancel(intent.id, 'ACCOUNT_REMOVED');
+        revokedPlannedAccount = true;
+        return;
+      }
       if (row.claimed_at === null) {
         this.#store.database
           .prepare(
@@ -579,6 +615,8 @@ export class ActivationRuntime {
           .run(claimedAt, deadline, this.#now(), intent.id);
       }
     });
+    if (revokedPlannedAccount)
+      throw new CommsError('APPROVAL_VOID', 'an account planned by this activation was removed after its approval');
     const current = this.#intent(intent.id);
     this.#deadlineFailpoint?.('before-claim-deadline');
     if ((current.completion_deadline ?? deadline) <= this.#now()) {
@@ -613,7 +651,6 @@ export class ActivationRuntime {
       } catch (error) {
         if (isRemovedAccountError(error)) {
           this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, scope, this.#now()));
-          this.#cancel(current.id, 'ACCOUNT_REMOVED');
         }
         throw error;
       }
@@ -710,10 +747,7 @@ export class ActivationRuntime {
         this.#failpoint?.('after-stage');
       } catch (error) {
         if (isRemovedAccountError(error)) {
-          this.#store.immediate(() => {
-            purgeRemovedAccountWork(this.#store.database, scope, this.#now());
-            this.#cancel(current.id, 'ACCOUNT_REMOVED');
-          });
+          this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, scope, this.#now()));
         }
         throw error;
       }
@@ -765,10 +799,7 @@ export class ActivationRuntime {
         await assertLiveEventAccount(this.#config, scope);
       } catch (error) {
         if (isRemovedAccountError(error)) {
-          this.#store.immediate(() => {
-            purgeRemovedAccountWork(this.#store.database, scope, this.#now());
-            this.#cancel(current.id, 'ACCOUNT_REMOVED');
-          });
+          this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, scope, this.#now()));
         }
         throw error;
       }

@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { createResendEventReader, normaliseResendEventBody } from '../../src/operations/events.ts';
 import { type Harness, newHarness } from '../support/harness.ts';
@@ -12,6 +14,8 @@ afterEach(async () => {
 
 const RECEIVED_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const SENT_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const FIRST_KEY = 're_fakefirst_0123456789abcdef';
+const SECOND_KEY = 're_fakesecond_0123456789abcdef';
 
 test('event body normalisation preserves the reader truncation fact, repairs only its boundary, and rejects malformed scalar text', () => {
   const astralAtBoundary = `${'a'.repeat(19_999)}\uD83D`;
@@ -102,4 +106,55 @@ test('a missing received detail is a closed vanished fact rather than a provider
   const reader = createResendEventReader(harness.context(), 'fixture/resend');
   assert.deepEqual(await reader.getReceived(RECEIVED_ID), { kind: 'vanished' });
   assert.equal(harness.fake.sends().length, 0);
+});
+
+test('an event reader follows its stable Resend account id when aliases are swapped after construction', async () => {
+  harness = await newHarness();
+  harness.fake.keys.set(FIRST_KEY, { permission: 'full_access' });
+  harness.fake.keys.set(SECOND_KEY, { permission: 'full_access' });
+  const first = await harness.addAccount({ name: 'fixture/first', key: FIRST_KEY });
+  const second = await harness.addAccount({ name: 'fixture/second', key: SECOND_KEY });
+  const reader = createResendEventReader(harness.context(), 'fixture/first', first.id);
+  const path = join(harness.core.paths.configDir, 'config.json');
+  const config = JSON.parse(await readFile(path, 'utf8')) as { accounts: Record<string, unknown> };
+  const one = config.accounts['fixture/first'];
+  config.accounts['fixture/first'] = config.accounts['fixture/second'] as unknown;
+  config.accounts['fixture/second'] = one;
+  await writeFile(path, `${JSON.stringify(config)}\n`);
+
+  await reader.listReceived();
+  assert.equal(
+    harness.fake.requests.at(-1)?.headers.authorization,
+    `Bearer ${FIRST_KEY}`,
+    'the swapped alias never redirects a stable-id event reader to the other account',
+  );
+  assert.notEqual(first.id, second.id);
+});
+
+test('the stable-id reader resolves the intended account instead of its stale alias before a provider request', async () => {
+  const stable = {
+    id: 'acc_resend_stable',
+    platform: 'resend' as const,
+    grantedScopes: ['full_access'],
+    secretRef: 'resend:key:acc_resend_stable',
+  };
+  const swapped = { ...stable, id: 'acc_resend_swapped', secretRef: 'resend:key:acc_resend_swapped' };
+  let transportFor: string | undefined;
+  const context = {
+    accounts: {
+      require: async () => ({ name: 'events/resend', account: swapped }),
+      findById: async (id: string) => (id === stable.id ? { name: 'other/resend', account: stable } : null),
+    },
+    transport: async (named: { account: { id: string } }) => {
+      transportFor = named.account.id;
+      return {
+        key: 're_fake_stable_0123456789abcdef',
+        throttle: { before: async () => undefined, after: async () => undefined },
+        fetch: async () => new Response(JSON.stringify({ data: [], has_more: false }), { status: 200 }),
+      };
+    },
+  };
+  const reader = createResendEventReader(context as never, 'events/resend', stable.id);
+  assert.deepEqual(await reader.listReceived(), { emails: [], next: null });
+  assert.equal(transportFor, stable.id, 'the provider transport belongs to the stable account, not the swapped alias');
 });
