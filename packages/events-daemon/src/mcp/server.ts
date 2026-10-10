@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import type { B3McpRegistrar } from '../operations/b3-contract.ts';
 import { catalogueList, catalogueShow } from '../operations/catalogue.ts';
 import { disableAll } from '../operations/disable-all.ts';
 import { doctor } from '../operations/doctor.ts';
@@ -26,6 +27,8 @@ export interface EventsMcpServer {
 
 export interface EventsMcpOptions {
   readonly stateDir?: string | undefined;
+  /** Task 1 seam: later B3 tools share this typed owner path; it registers nothing yet. */
+  readonly b3Registrar?: B3McpRegistrar | undefined;
 }
 
 function reply(data: unknown) {

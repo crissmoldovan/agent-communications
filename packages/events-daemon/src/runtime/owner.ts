@@ -27,6 +27,7 @@ import type { ControlRequest } from '../control/protocol.ts';
 import { type RunningControlServer, startControlServer } from '../control/server.ts';
 import { EventDomainError } from '../domain/lifecycle.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
+import { type B3OwnerService, isB3ControlOperation } from '../operations/b3-contract.ts';
 import { MailboxLock } from '../sources/mailbox-lock.ts';
 import { type LocalEventSourceRegistry, phaseDSourceRegistry } from '../sources/registry.ts';
 import { ResendReceivedStageExpiry } from '../sources/resend.ts';
@@ -104,6 +105,8 @@ export interface EventOwnerOptions {
   readonly pollIntervalMs?: number | undefined;
   /** Test/embedding clock; every status P sample must use the same injected clock as the owner loop. */
   readonly now?: (() => number) | undefined;
+  /** Task 1 seam: later B3 requests are owned here, not by a second CLI/MCP path. */
+  readonly b3OwnerService?: B3OwnerService | undefined;
 }
 
 export async function startEventOwner(options: EventOwnerOptions = {}): Promise<EventOwner> {
@@ -567,6 +570,7 @@ async function startOwnerWithLock(
           dryrun,
           sourceRegistry,
           request,
+          options.b3OwnerService,
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -607,7 +611,12 @@ async function handleControl(
   dispatcher: DryRunDispatcher,
   sourceRegistry: LocalEventSourceRegistry,
   request: ControlRequest,
+  b3OwnerService: B3OwnerService | undefined,
 ): Promise<unknown> {
+  if (isB3ControlOperation(request.operation)) {
+    if (!b3OwnerService) throw new CommsError('USAGE', 'the local B3 control operation is not available');
+    return b3OwnerService.handle({ operation: request.operation, args: request.args });
+  }
   switch (request.operation) {
     case 'status':
       return owner.status();

@@ -1,0 +1,17 @@
+{
+  "area": "proof-substrate",
+  "cases": [
+    {
+      "case": "owner-b3-operation-closed-set",
+      "operation": "B3OwnerService.handle",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-mutation-runner.test.ts",
+      "mutation": {
+        "from": "if (isB3ControlOperation(request.operation))",
+        "to": "if (true)"
+      },
+      "mutationTest": "B3 mutation proof: a sealed owner dispatches only B3 contract operations",
+      "loadedMarker": "owner-b3-operation-closed-set"
+    }
+  ]
+}

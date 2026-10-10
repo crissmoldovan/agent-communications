@@ -1521,6 +1521,7 @@
       "cli": "run",
       "mcp": null,
       "status": "exception",
+      "operation": "run",
       "reason": "A tool cannot start the foreground owner and then use the control server it needs."
     },
     {
@@ -1753,6 +1754,7 @@
       "cli": "approve",
       "mcp": null,
       "status": "exception",
+      "operation": "approve",
       "reason": "Standing disclosure can be approved only by a person typing the challenge at an interactive terminal."
     },
     {
@@ -1761,6 +1763,7 @@
       "cli": "dryrun list",
       "mcp": null,
       "status": "exception",
+      "operation": "dryrunList",
       "reason": "Retained sender content may be selected only by a person outside model context at an interactive terminal."
     },
     {
@@ -1769,6 +1772,7 @@
       "cli": "dryrun show",
       "mcp": null,
       "status": "exception",
+      "operation": "dryrunShow",
       "reason": "Retained sender content may be rendered only for a person at an interactive terminal, never in model context."
     },
     {
@@ -1777,6 +1781,7 @@
       "cli": "mcp",
       "mcp": null,
       "status": "exception",
+      "unchecked": "It starts the MCP server that an MCP tool would need already running.",
       "reason": "It starts the service server that a tool would need already running."
     }
   ]

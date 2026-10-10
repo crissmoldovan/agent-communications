@@ -3,6 +3,7 @@ import { agentMarker, CommsError, canPrompt, isCommsError } from '@agentcomms/co
 import { Command, CommanderError } from 'commander';
 import { createEventsMcpServer } from '../mcp/server.ts';
 import { approve, disclosureChallenge } from '../operations/approve.ts';
+import type { B3CliRegistrar } from '../operations/b3-contract.ts';
 import { catalogueList, catalogueShow } from '../operations/catalogue.ts';
 import { disableAll } from '../operations/disable-all.ts';
 import { doctor } from '../operations/doctor.ts';
@@ -34,6 +35,8 @@ export interface EventsCliStreams {
 export interface EventsCliDeps {
   readonly streams?: EventsCliStreams | undefined;
   readonly startMcp?: (() => Promise<void>) | undefined;
+  /** Task 1 seam: later B3 commands share this typed owner path; it registers nothing yet. */
+  readonly b3Registrar?: B3CliRegistrar | undefined;
 }
 
 interface EventsCliOptions {

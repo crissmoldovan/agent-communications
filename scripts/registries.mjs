@@ -11,6 +11,7 @@
  * the package test suites do, so neither answer depends on a build being current.
  */
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -18,8 +19,16 @@ import { REGISTRY } from './channels.mjs';
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** How Node runs a TypeScript entry directly — the flags every package's own test script passes. */
-const TS_FLAGS = ['--experimental-strip-types', '--disable-warning=ExperimentalWarning'];
+/**
+ * How Node reads product surfaces. The registry only needs command metadata and MCP `tools/list`; a seal makes an
+ * accidental provider call fail before it leaves the child process while still allowing the stdio protocol.
+ */
+const SEAL = join(ROOT, 'test/helpers/loopback-seal-preload.mjs');
+const TS_FLAGS = [
+  ...(existsSync(SEAL) ? ['--import', SEAL] : []),
+  '--experimental-strip-types',
+  '--disable-warning=ExperimentalWarning',
+];
 
 /*
  * Every path the products could write to, pointed at one scratch directory.

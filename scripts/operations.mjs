@@ -94,6 +94,13 @@ const PATH_FLAGS = Object.freeze([
   ['--downloads-dir', 'downloads'],
 ]);
 
+/** B3's terminal-only daemon controls still have to reach their named operation in a sealed synthetic terminal. */
+const isCheckedB3Exception = (row) =>
+  row?.status === 'exception' &&
+  row.package === 'events-daemon' &&
+  row.unchecked === undefined &&
+  row.operation !== undefined;
+
 // ── Resolving a row's operation names ────────────────────────────────────────────────────────────────────────────
 
 /** A row's `operation` (or another of its name fields, `via`), as a list: a composite command names several. */
@@ -765,7 +772,7 @@ async function drive(inputPath, outputPath) {
     for (const tool of (await client.listTools()).tools) tools.set(tool.name, { pkg, tool, client });
   }
 
-  const runCli = (pkg, argv) => {
+  const runCli = (pkg, argv, terminal = false) => {
     // What the command is handed, recorded as it is handed: `ran` in the report.
     if (current) current.ran = [...argv];
     return capturing(async () => {
@@ -778,11 +785,11 @@ async function drive(inputPath, outputPath) {
       out.on('data', collect);
       err.on('data', collect);
       const stdin = new PassThrough();
-      stdin.end();
+      stdin.end(terminal ? 'parity\n' : undefined);
       const streams = {
-        stdout: Object.assign(out, { isTTY: false }),
-        stderr: Object.assign(err, { isTTY: false }),
-        stdin: Object.assign(stdin, { isTTY: false }),
+        stdout: Object.assign(out, { isTTY: terminal }),
+        stderr: Object.assign(err, { isTTY: terminal }),
+        stdin: Object.assign(stdin, { isTTY: terminal }),
       };
       // The core's `main(argv, env)`; a channel's `run(argv, deps)`.
       if (DRIVERS[pkg].run === 'main') await clis[pkg](argv, process.env);
@@ -807,7 +814,12 @@ async function drive(inputPath, outputPath) {
   const parameters = Object.fromEntries([...named.keys()].map((id) => [id, parameterNames(functions.get(id))]));
   const reports = {};
   for (const row of rows) {
-    if (row?.status !== 'both' || row.unchecked !== undefined || typeof row.cli !== 'string') continue;
+    if (
+      (row?.status !== 'both' && !isCheckedB3Exception(row)) ||
+      row.unchecked !== undefined ||
+      typeof row.cli !== 'string'
+    )
+      continue;
     const resolved = operationNames(row).map((name) => resolveOperation(operations, row.package, name));
     // A name that means nothing has nothing to drive toward; the check says so without running anything.
     if (resolved.some((entry) => !entry.id)) continue;
@@ -821,8 +833,17 @@ async function drive(inputPath, outputPath) {
       const options = [];
       let outcome;
       for (let attempt = 0; attempt < 8; attempt += 1) {
-        const argv = [...path, ...positionals, ...(row.argv ?? []), ...options, '--json'];
-        outcome = { argv, ...(await traced({ wanted }, () => runCli(row.package, [...pins, ...argv]))) };
+        const argv = [
+          ...path,
+          ...positionals,
+          ...(row.argv ?? []),
+          ...options,
+          ...(isCheckedB3Exception(row) ? [] : ['--json']),
+        ];
+        outcome = {
+          argv,
+          ...(await traced({ wanted }, () => runCli(row.package, [...pins, ...argv], isCheckedB3Exception(row)))),
+        };
         if (outcome.calls.length > 0 || !outcome.refusal) break;
         const argument = /missing required argument '([^']+)'/.exec(outcome.refusal);
         const option = /required option '(-[^' ]+)(?: <([^>]+)>)?' not specified/.exec(outcome.refusal);
