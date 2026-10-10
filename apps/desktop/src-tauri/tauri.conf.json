@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Agent Communications",
+  "version": "0.1.0",
+  "identifier": "com.agentcommunications.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420"
+  },
+  "app": {
+    "windows": [
+      { "label": "settings", "title": "Settings", "url": "settings.html" },
+      { "label": "secrets", "title": "Secrets", "url": "secrets.html", "visible": false }
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "identifier": "settings",
+  "description": "Settings window; no commands are granted yet.",
+  "windows": ["settings"],
+  "permissions": []
+}

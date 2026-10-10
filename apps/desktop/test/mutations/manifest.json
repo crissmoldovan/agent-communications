@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "desktop-workspace-private",
+      "group": "task-1",
+      "test": "apps/desktop/test/workspace.test.mjs",
+      "testName": "desktop is a private workspace member outside package publishing",
+      "production": "apps/desktop/package.json",
+      "import": "../package.json",
+      "mutation": {
+        "file": "apps/desktop/package.json",
+        "find": "\"private\": true",
+        "replace": "\"private\": false"
+      }
+    },
+    {
+      "id": "desktop-capability-settings-tracked",
+      "group": "task-1",
+      "test": "apps/desktop/test/workspace.test.mjs",
+      "testName": "desktop labelled capability files are present and Git-visible",
+      "production": ".gitignore",
+      "import": "../../../.gitignore",
+      "mutation": {
+        "file": ".gitignore",
+        "find": "!apps/desktop/src-tauri/capabilities/settings.json",
+        "replace": "# settings capability unignore removed"
+      }
+    },
+    {
+      "id": "desktop-root-verification",
+      "group": "task-1",
+      "test": "apps/desktop/test/workspace.test.mjs",
+      "testName": "root verification reaches desktop build, typecheck, and unit tests",
+      "production": "package.json",
+      "import": "../../../package.json",
+      "mutation": {
+        "file": "package.json",
+        "find": "    \"build\": \"pnpm -r --filter \\\"./packages/**\\\" --filter \\\"./apps/**\\\" run build\",",
+        "replace": "    \"build\": \"pnpm -r --filter \\\"./packages/**\\\" run build\","
+      }
+    },
+    {
+      "id": "desktop-lockfile-importer",
+      "group": "task-1",
+      "test": "apps/desktop/test/workspace.test.mjs",
+      "testName": "desktop dependency graph is pinned by the workspace lockfile",
+      "production": "pnpm-lock.yaml",
+      "import": "../../../pnpm-lock.yaml",
+      "mutation": {
+        "file": "pnpm-lock.yaml",
+        "find": "  apps/desktop:\n",
+        "replace": "  apps/desktop-missing:\n"
+      }
+    }
+  ]
+}

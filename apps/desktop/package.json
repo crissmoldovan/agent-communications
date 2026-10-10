@@ -1,0 +1,29 @@
+{
+  "name": "@agentcomms/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/workspace.test.mjs",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@cueplusplus/tokens": "0.20.1",
+    "@cueplusplus/theme-cue": "1.1.1",
+    "@cueplusplus/ui": "0.20.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/node": "catalog:",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "catalog:",
+    "vite": "^7.0.0"
+  }
+}

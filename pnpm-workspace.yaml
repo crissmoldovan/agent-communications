@@ -1,5 +1,6 @@
 packages:
   - packages/*
+  - apps/*
 
 # One version of each shared tool across every package.
 catalog:
@@ -12,4 +13,6 @@ catalog:
 # Supply-chain defaults (pnpm 11): refuse versions younger than a day, and build nothing
 # with install scripts unless it is listed here.
 minimumReleaseAge: 1440
-allowBuilds: {}
+# esbuild's install script only optimises how its binary is found; pnpm installs the platform binary as an optional
+# dependency, so the desktop build works without running it.
+allowBuilds: { esbuild: false }

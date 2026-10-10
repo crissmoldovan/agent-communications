@@ -19,6 +19,10 @@ tokens/
 .blocks/env.sh
 .tmp-reference-config/
 .mutants/
+.pnpm-store/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+!apps/desktop/src-tauri/capabilities/settings.json
 
 # The released 0.13.0 packages the mixed-version tests run, as published (CUE-404 Task 24): their dist is the fixture.
 !packages/core/test/fixtures/released-0.13.0/core/dist/
