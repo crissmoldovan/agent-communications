@@ -1,4 +1,5 @@
 import type { ErrorCode } from '@agentcomms/core';
+import type { B3ControlOperation } from '../operations/b3-contract.ts';
 
 export const CONTROL_PROTOCOL_VERSIONS: readonly number[] = [1];
 export const MAX_CONTROL_FRAME_BYTES: number = 64 * 1024;
@@ -49,6 +50,11 @@ export interface ControlRequest {
   readonly session: string;
   readonly operation: string;
   readonly args: Record<string, unknown>;
+}
+
+/** The future B3 request subset is typed at the authenticated protocol boundary without a public CLI or MCP registration. */
+export interface B3ControlRequest extends ControlRequest {
+  readonly operation: B3ControlOperation;
 }
 
 export interface VersionNegotiated {

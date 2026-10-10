@@ -83,6 +83,13 @@ const FIELDS = new Set([
 /** The fields that describe what a row's two sides run, which only a row with two sides can have. */
 const OPERATION_FIELDS = Object.freeze(['operation', 'via', 'after', 'argv', 'args', 'expect', 'unchecked']);
 
+/**
+ * Phase B3 turns the daemon's CLI-only entries into checked exceptions: each human command still reaches exactly one
+ * owner operation. Other packages retain their already-shipped, deliberately asymmetric rows (notably the Gmail
+ * approval-form probe, which is MCP-only), so this narrower rule does not rewrite their protocol.
+ */
+const isB3Exception = (row) => row?.status === 'exception' && row.package === 'events-daemon';
+
 /** An `expect` key: a parameter's name, or a path of keys into it. */
 const EXPECT_KEY = /^[A-Za-z_$][\w$]*(\.[\w$]+)*$/;
 
@@ -282,6 +289,36 @@ export function checkParity(table, registries, { strict = false } = {}) {
       if (row.expect !== undefined && row.operation === undefined) {
         problems.push(`${at} has "expect" but no "operation"; "expect" is what that operation receives`);
       }
+    } else if (isB3Exception(row)) {
+      if (!cli) problems.push(`${at} is a B3 exception but names no CLI command`);
+      if (mcp)
+        problems.push(
+          `${at} is a B3 exception but names MCP tool "${mcp}"; B3 exceptions assert that their MCP side is absent`,
+        );
+      if (cli && row.operation === undefined && row.unchecked === undefined) {
+        problems.push(
+          `${at} is an exception with a CLI command but no "operation": name the function of ${operationsPath(row.package)} that its command reaches`,
+        );
+      }
+      if (row.operation !== undefined && row.unchecked !== undefined) {
+        problems.push(`${at} names an "operation" and says it is "unchecked"; it is one or the other`);
+      }
+      if (row.unchecked !== undefined && cli !== 'mcp') {
+        problems.push(`${at} is unchecked, but only the daemon MCP-server start exception may be unchecked`);
+      }
+      if (row.via !== undefined && row.operation === undefined) {
+        problems.push(
+          `${at} has "via" but no "operation"; "via" is what its CLI reaches before the exception operation`,
+        );
+      }
+      if (row.after !== undefined && row.operation === undefined) {
+        problems.push(
+          `${at} has "after" but no "operation"; "after" is what its CLI reaches after the exception operation`,
+        );
+      }
+      if (row.expect !== undefined && row.operation === undefined) {
+        problems.push(`${at} has "expect" but no "operation"; "expect" is what that exception operation receives`);
+      }
     } else if (STATUSES.includes(row.status)) {
       for (const key of OPERATION_FIELDS) {
         if (row[key] !== undefined) {
@@ -381,7 +418,8 @@ export function checkOperations(table, registries, driven) {
   const expectations = new Map();
 
   rows.forEach((row, index) => {
-    if (row?.status !== 'both' || row.unchecked !== undefined) return;
+    const checkedException = isB3Exception(row) && row.unchecked === undefined && row.operation !== undefined;
+    if ((row?.status !== 'both' && !checkedException) || row.unchecked !== undefined) return;
     const names = operationNames(row);
     const at = typeof row.id === 'string' && row.id ? `row "${row.id}"` : `row ${index + 1}`;
     if (names.length === 0) {
@@ -635,7 +673,7 @@ export async function verifyParity({ table, registries, strict = false, dir }) {
 /** The rows whose operation is not checked, with why: printed on every run, so none of them goes quiet. */
 export function uncheckedRows(table) {
   return (Array.isArray(table?.capabilities) ? table.capabilities : []).filter(
-    (row) => row?.status === 'both' && typeof row.unchecked === 'string',
+    (row) => typeof row?.unchecked === 'string' && (row.status === 'both' || (isB3Exception(row) && row.cli === 'mcp')),
   );
 }
 
@@ -672,7 +710,9 @@ if (invoked === realpathSync(fileURLToPath(import.meta.url))) {
     }
     const unchecked = uncheckedRows(table);
     if (unchecked.length > 0) {
-      console.log(`\nNot checked for one operation (${unchecked.length}), each saying why in capabilities.json:`);
+      console.log(
+        `\nNot checked for one operation or server start (${unchecked.length}), each saying why in capabilities.json:`,
+      );
       for (const row of unchecked) console.log(`  - ${row.id}`);
     }
   } finally {

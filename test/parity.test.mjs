@@ -804,6 +804,48 @@ test('an exception without a reason fails', () => {
   );
 });
 
+test('B3 CLI exceptions name their operation and strict parity rejects every MCP counterpart', () => {
+  const f = fixture();
+  f.registries['events-daemon'] = {
+    binary: 'agent-events',
+    commands: ['run'],
+    groups: [],
+    tools: ['events_status'],
+  };
+  f.table.capabilities.push({
+    id: 'events-daemon.run',
+    package: 'events-daemon',
+    cli: 'run',
+    mcp: null,
+    status: 'exception',
+    reason: 'A tool cannot start the foreground owner it needs.',
+  });
+
+  assertNamed(
+    checkParity(f.table, f.registries, { strict: true }),
+    'row "events-daemon.run" is an exception with a CLI command but no "operation"',
+  );
+
+  f.table.capabilities.at(-1).operation = 'run';
+  f.table.capabilities.at(-1).mcp = 'events_status';
+  assertNamed(
+    checkParity(f.table, f.registries, { strict: true }),
+    'row "events-daemon.run" is "exception" but names both sides',
+  );
+
+  f.table.capabilities.at(-1).cli = null;
+  assertNamed(
+    checkParity(f.table, f.registries, { strict: true }),
+    'row "events-daemon.run" is a B3 exception but names MCP tool "events_status"; B3 exceptions assert that their MCP side is absent',
+  );
+});
+
+test('B3 exception parity rejects a CLI recorder swapped to another owner operation', () => {
+  const changed = structuredClone(driven);
+  changed.reports['events-daemon.run'].cli.calls = ['events-daemon:stop'];
+  assertNamed(checkOperations(table, registries, changed), 'row "events-daemon.run"', 'reaches stop');
+});
+
 test('a pending row without a phase, or with one the design does not have, fails', () => {
   assertNamed(
     breaking(({ row }) => {
