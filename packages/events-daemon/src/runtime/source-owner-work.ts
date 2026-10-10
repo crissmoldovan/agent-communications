@@ -119,7 +119,7 @@ export async function stageWhatsAppBaselineSnapshot(
               options: rule.options.channel === 'whatsapp' ? rule.options : undefined,
             }))
           : [],
-      scopeIsFenced: (scopeId) => isSourceScopeFenced(input.store.database, { source: 'whatsapp', accountId, scopeId }),
+      scopeIsFenced: (scopeId) => isWhatsAppWorkerScopeDeferred(input.store.database, accountId, scopeId),
       assertWrite,
       now: input.now,
     });
@@ -495,9 +495,7 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
           options: rule.options.channel === 'whatsapp' ? rule.options : undefined,
           activationPoints: rule.activationPoints,
         })),
-      scopeIsFenced: (scopeId) =>
-        isSourceScopeFenced(input.store.database, { source: 'whatsapp', accountId: scope.accountId, scopeId }) ||
-        hasPendingWhatsAppReplacementDrain(input.store.database, scope.accountId, scopeId),
+      scopeIsFenced: (scopeId) => isWhatsAppWorkerScopeDeferred(input.store.database, scope.accountId, scopeId),
       assertWrite,
       now: input.now,
       failpoint: input.failpoint,
@@ -666,6 +664,22 @@ function hasPendingWhatsAppReplacementDrain(
             AND activation_intents.status = 'pending-completion'`,
       )
       .get(accountId, scopeId) !== undefined
+  );
+}
+
+/**
+ * WhatsApp's account-wide snapshot must leave a tuple unseen while either a claimed baseline owns its scope or an
+ * old version is draining to its exact replacement point.  Baseline sampling and ordinary owner turns share this
+ * predicate so an unrelated activation cannot consume a draining rule's post-P tuple.
+ */
+function isWhatsAppWorkerScopeDeferred(
+  database: EventDatabase['database'],
+  accountId: string,
+  scopeId: string,
+): boolean {
+  return (
+    isSourceScopeFenced(database, { source: 'whatsapp', accountId, scopeId }) ||
+    hasPendingWhatsAppReplacementDrain(database, accountId, scopeId)
   );
 }
 

@@ -32,6 +32,7 @@ const cells = [
   'W:swap-drops-old-only-first-representation-debt',
   'W:fenced-new-only-tuple-remains-new-after-swap',
   'W:replacement-drain-caps-post-P-tuples',
+  'W:baseline-defers-pending-replacement-drain',
   'W:head-switch-cleans-superseded-snapshot-generations',
   'W:narrowing-purges-unowed-snapshot-keys',
   'W:admission-requires-post-T',
@@ -684,6 +685,44 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
         raw: [oldAtP, oldAfterP],
         admissions: [{ message: oldAtP, version: 1 }],
         decisions: [{ message: oldAtP, version: 1 }],
+      });
+    });
+  },
+
+  async 'W:baseline-defers-pending-replacement-drain'() {
+    const atP = whatsappMessage('baseline-drain-at-P', 'chat-a');
+    const afterP = whatsappMessage('baseline-drain-after-P', 'chat-a');
+    const baselineB = whatsappMessage('baseline-b-at-P', 'chat-b');
+    await forEachWhatsAppDurableEdge('W:baseline-defers-pending-replacement-drain', async (fixture, attempt) => {
+      fixture.setWhatsAppMessages([]);
+      await fixture.activate(1, options(['chat-a']));
+      await fixture.enable();
+      fixture.setWhatsAppMessages([atP]);
+      await beginReplacement(fixture, ['chat-a']);
+
+      // B's unrelated first activation takes an account-wide snapshot. It must
+      // establish B's P without consuming A's post-P tuple into A v1.
+      fixture.setWhatsAppMessages([atP, afterP, baselineB]);
+      await fixture.activateAdditionalRule('rule-baseline-b', options(['chat-b']));
+      assertWhatsAppMultiset(fixture, {
+        raw: [atP, baselineB],
+        admissions: [{ message: atP, version: 1 }],
+      });
+
+      await attempt.sourceAtDurableEdge('chat-a');
+      await resumeClaimedCompletion(fixture, attempt);
+      await fixture.sourceTurn(scope(fixture, 'chat-a'));
+      await settle(fixture);
+      assertWhatsAppMultiset(fixture, {
+        raw: [atP, afterP, baselineB],
+        admissions: [
+          { message: atP, version: 1 },
+          { message: afterP, version: 2 },
+        ],
+        decisions: [
+          { message: atP, version: 1 },
+          { message: afterP, version: 2 },
+        ],
       });
     });
   },
