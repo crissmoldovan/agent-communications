@@ -593,7 +593,7 @@ export class PhaseDCutoverFixture {
 
   options(): unknown {
     if (this.source === 'slack') return { channel: 'slack', conversations: ['C-cutover'] };
-    if (this.source === 'resend') return { channel: 'resend', kinds: ['received'] };
+    if (this.source === 'resend') return { channel: 'resend', kinds: ['received', 'status'] };
     return { channel: 'whatsapp', chats: ['chat-cutover'] };
   }
 
