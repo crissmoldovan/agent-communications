@@ -112,14 +112,14 @@ test('an event reader follows its stable Resend account id when aliases are swap
   harness = await newHarness();
   harness.fake.keys.set(FIRST_KEY, { permission: 'full_access' });
   harness.fake.keys.set(SECOND_KEY, { permission: 'full_access' });
-  const first = await harness.addAccount({ name: 'fixture/first', key: FIRST_KEY });
-  const second = await harness.addAccount({ name: 'fixture/second', key: SECOND_KEY });
-  const reader = createResendEventReader(harness.context(), 'fixture/first', first.id);
+  const first = await harness.addAccount({ name: 'first/resend', key: FIRST_KEY });
+  const second = await harness.addAccount({ name: 'second/resend', key: SECOND_KEY });
+  const reader = createResendEventReader(harness.context(), 'first/resend', first.id);
   const path = join(harness.core.paths.configDir, 'config.json');
   const config = JSON.parse(await readFile(path, 'utf8')) as { accounts: Record<string, unknown> };
-  const one = config.accounts['fixture/first'];
-  config.accounts['fixture/first'] = config.accounts['fixture/second'] as unknown;
-  config.accounts['fixture/second'] = one;
+  const one = config.accounts['first/resend'];
+  config.accounts['first/resend'] = config.accounts['second/resend'] as unknown;
+  config.accounts['second/resend'] = one;
   await writeFile(path, `${JSON.stringify(config)}\n`);
 
   await reader.listReceived();
