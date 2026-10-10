@@ -3,24 +3,64 @@ import type { DurableCutoverEdge } from '../../src/runtime/cutover-failpoint.ts'
 import { DURABLE_CUTOVER_EDGES } from '../../src/runtime/cutover-failpoint.ts';
 import { PhaseDCutoverFixture } from './phase-d-cutover.ts';
 
+/** The complete Task-8 Resend cut-over matrix; shared with mutation coverage. */
+export const RESEND_CUTOVER_CELLS = [
+  'R:first-enabled-received-and-status',
+  'R:first-disabled-seeds-anchor-and-status',
+  'R:replace-old-only-drains-received-and-status',
+  'R:replace-new-only-baselines-at-anchor',
+  'R:replace-shared-one-version-per-occurrence',
+  'R:disabled-replacement-marks-drains-complete',
+  'R:enable-all-rebaselines-readded-account',
+  'R:tighten-preserves-anchor-and-status-seed',
+  'R:disable-or-remove-cancels-and-purges',
+  'R:remove-readd-stays-dark',
+  'R:claim-recovery-resumes-same-cycle',
+  'R:timeout-keeps-anchor-and-retries',
+  'R:initial-anchor-and-status-start-atomic',
+  'R:claimed-P-fences-received-and-status-worker',
+  'R:initial-cursor-rechecks-points-under-received-and-status-locks',
+  'R:tighten-transfers-received-and-status-debts-stale-scan-writes-nothing',
+  'R:swap-drops-old-only-received-and-status-debts',
+  'R:deadline-at-P-after-P-and-finalise-settles-without-write',
+] as const;
+
 /**
  * The Resend matrix deliberately crashes the production activation path, then
  * reopens its real SQLite state and fake-provider journal.  Keeping that
  * ceremony here makes an omitted edge conspicuous in every named cell.
  */
 export async function forEachResendDurableEdge(
-  _cell: string,
-  scenario: (fixture: PhaseDCutoverFixture, edge: DurableCutoverEdge | undefined) => Promise<void>,
+  cell: string,
+  scenario: (
+    fixture: PhaseDCutoverFixture,
+    edge: DurableCutoverEdge | undefined,
+    report: (outcome: ResendDurableEdgeRun['outcome']) => void,
+  ) => Promise<void>,
+  record: (input: ResendDurableEdgeRun) => void,
 ): Promise<void> {
   for (const edge of [undefined, ...DURABLE_CUTOVER_EDGES] as const) {
     const fixture = await PhaseDCutoverFixture.create('resend');
     try {
-      await scenario(fixture, edge);
+      let reported = false;
+      await scenario(fixture, edge, (outcome) => {
+        assert.equal(reported, false, `${cell}: ${edge ?? 'no-crash'} may have only one durable-edge outcome`);
+        reported = true;
+        record({ cell, edge, outcome });
+      });
+      assert.equal(reported, true, `${cell}: ${edge ?? 'no-crash'} bypassed the durable-edge harness`);
     } finally {
       await fixture.dispose();
     }
   }
 }
+
+/** One independently asserted no-crash/crash-edge outcome for the matrix coverage ledger. */
+export type ResendDurableEdgeRun = Readonly<{
+  readonly cell: string;
+  readonly edge: DurableCutoverEdge | undefined;
+  readonly outcome: 'no-crash' | 'fired' | 'unreachable';
+}>;
 
 /**
  * Complete one real activation at a durable edge.  Before recovery we run a
@@ -33,10 +73,23 @@ export async function activateAtResendDurableEdge(
   cell: string,
   edge: DurableCutoverEdge | undefined,
   activation: () => Promise<void>,
-  input: Readonly<{ providerFenced?: boolean; allowUnreachedEdge?: boolean }> = {},
+  input: Readonly<{
+    providerFenced?: boolean;
+    /** A derived transition has no durable activation move to crash. */
+    assertUnreachable?: (() => void | Promise<void>) | undefined;
+    /**
+     * Exact replacements first return REPLACEMENT_DRAINING.  Pointer edges
+     * belong to that same claimed activation, so finish its real drain while
+     * the failpoint is still armed instead of accepting those edges unseen.
+     */
+    finishClaimedCompletion?: (() => Promise<void>) | undefined;
+    whileFenced?: (() => Promise<void>) | undefined;
+    report?: ((outcome: ResendDurableEdgeRun['outcome']) => void) | undefined;
+  }> = {},
 ): Promise<void> {
   if (edge === undefined) {
     await activation();
+    input.report?.('no-crash');
     return;
   }
 
@@ -50,24 +103,29 @@ export async function activateAtResendDurableEdge(
   let crashed = false;
   try {
     await activation();
+    if (!fired && input.finishClaimedCompletion !== undefined) await input.finishClaimedCompletion();
   } catch (error) {
     if (!new RegExp(`${cell}: crash at ${edge}`).test(String(error))) throw error;
     crashed = true;
   }
   if (!crashed) {
-    assert.equal(
-      input.allowUnreachedEdge,
-      true,
+    assert.notEqual(
+      input.assertUnreachable,
+      undefined,
       `${cell}: ${edge} was expected to crash, or to assert that this transition cannot reach it`,
     );
     assert.equal(fired, false, `${cell}: ${edge} is explicitly unreachable in this transition`);
+    await input.assertUnreachable?.();
     await fixture.setFailpoint(undefined);
+    input.report?.('unreachable');
     return;
   }
   assert.equal(fired, true, `${cell}: ${edge} must be reached by the real transition`);
 
   await fixture.restart();
-  if (input.providerFenced !== false) {
+  if (input.whileFenced !== undefined) {
+    await input.whileFenced();
+  } else if (input.providerFenced !== false) {
     const callsBeforeFenceProbe = fixture.calls.length;
     await assert.rejects(
       () => fixture.sourceTurn(),
@@ -80,6 +138,7 @@ export async function activateAtResendDurableEdge(
     );
   }
   await fixture.recover();
+  input.report?.('fired');
 }
 
 export type ResendAdmission = Readonly<{

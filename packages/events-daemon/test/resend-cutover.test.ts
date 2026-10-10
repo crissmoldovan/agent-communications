@@ -6,6 +6,8 @@ import {
   activateAtResendDurableEdge,
   assertResendAdmissions,
   forEachResendDurableEdge,
+  RESEND_CUTOVER_CELLS,
+  type ResendDurableEdgeRun,
 } from './support/phase-d-cutover-resend.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
 
@@ -41,184 +43,79 @@ function receivedCandidate(emailId: string) {
   };
 }
 
-const cells = [
-  'R:first-enabled-received-and-status',
-  'R:first-disabled-seeds-anchor-and-status',
-  'R:replace-old-only-drains-received-and-status',
-  'R:replace-new-only-baselines-at-anchor',
-  'R:replace-shared-one-version-per-occurrence',
-  'R:disabled-replacement-marks-drains-complete',
-  'R:enable-all-rebaselines-readded-account',
-  'R:tighten-preserves-anchor-and-status-seed',
-  'R:disable-or-remove-cancels-and-purges',
-  'R:remove-readd-stays-dark',
-  'R:claim-recovery-resumes-same-cycle',
-  'R:timeout-keeps-anchor-and-retries',
-  'R:initial-anchor-and-status-start-atomic',
-  'R:claimed-P-fences-received-and-status-worker',
-  'R:initial-cursor-rechecks-points-under-received-and-status-locks',
-  'R:tighten-transfers-received-and-status-debts-stale-scan-writes-nothing',
-  'R:swap-drops-old-only-received-and-status-debts',
-  'R:deadline-at-P-after-P-and-finalise-settles-without-write',
-] as const;
+const cells = RESEND_CUTOVER_CELLS;
 
-const realCells: ReadonlySet<(typeof cells)[number]> = new Set([
-  'R:first-enabled-received-and-status',
-  'R:replace-old-only-drains-received-and-status',
-  'R:replace-new-only-baselines-at-anchor',
-  'R:replace-shared-one-version-per-occurrence',
-  'R:enable-all-rebaselines-readded-account',
-  'R:timeout-keeps-anchor-and-retries',
-  'R:initial-anchor-and-status-start-atomic',
-  'R:initial-cursor-rechecks-points-under-received-and-status-locks',
-  'R:tighten-transfers-received-and-status-debts-stale-scan-writes-nothing',
-  'R:swap-drops-old-only-received-and-status-debts',
-] as const);
+const durableEdgeRuns: ResendDurableEdgeRun[] = [];
 
 for (const name of cells) {
   test(name, { skip: WINDOWS_SKIP }, async () => {
-    if (realCells.has(name)) {
-      await forEachResendDurableEdge(name, async (fixture, edge) => runRealResendCell(name, fixture, edge));
-      return;
-    }
-    const fixture = await PhaseDCutoverFixture.create('resend');
-    try {
-      if (name === 'R:first-disabled-seeds-anchor-and-status') {
-        await fixture.activate();
-        await fixture.schedulerTurn();
-        fixture.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
-        return;
-      }
-      if (name === 'R:claimed-P-fences-received-and-status-worker') {
-        await fixture.setFailpoint((edge) => {
-          if (edge === 'before-finalise') throw new Error('leave P unpublished');
-        });
-        await assert.rejects(() => fixture.activate(), /leave P unpublished/);
-        await fixture.schedulerTurn();
-        fixture.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
-        return;
-      }
-      if (name === 'R:deadline-at-P-after-P-and-finalise-settles-without-write') {
-        for (const [index, deadlineEdge] of [
-          'before-claim-deadline',
-          'before-baseline-deadline',
-          'before-finalise-deadline',
-        ].entries()) {
-          const attempt = index === 0 ? fixture : await PhaseDCutoverFixture.create('resend');
-          await attempt.setDeadlineFailpoint((edge) => {
-            if (edge === deadlineEdge) attempt.now.value += 3_600_001;
-          });
-          await assert.rejects(() => attempt.activate());
-          assert.equal(attempt.failedCompletions(), 1, `${deadlineEdge} settles the claimed completion`);
-          assert.equal(attempt.baselineCalls, index === 0 ? 0 : 1, `${deadlineEdge} stops at its own deadline gate`);
-          assert.equal(attempt.pointEncryptions, index === 2 ? 1 : 0, `${deadlineEdge} writes no later point`);
-          attempt.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
-          attempt.assertContentFreeSettlement();
-          if (attempt !== fixture) await attempt.dispose();
-        }
-        return;
-      }
-      if (name.includes('replace-old-only') || name.includes('replace-new-only') || name.includes('replace-shared')) {
-        await fixture.activate();
-        await fixture.enable();
-        await fixture.replace();
-        fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
-        return;
-      }
-      if (name === 'R:disabled-replacement-marks-drains-complete') {
-        await fixture.activate();
-        await fixture.replaceWhileDisabled();
-        fixture.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
-        return;
-      }
-      if (name === 'R:tighten-preserves-anchor-and-status-seed') {
-        await fixture.activate();
-        await fixture.enable();
-        await fixture.schedulerTurn();
-        await fixture.tighten();
-        await fixture.schedulerTurn();
-        fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
-        return;
-      }
-      if (name === 'R:disable-or-remove-cancels-and-purges') {
-        await fixture.activate();
-        await fixture.enable();
-        await fixture.schedulerTurn();
-        await fixture.revokeByTarget();
-        const calls = fixture.calls.length;
-        await fixture.schedulerTurn();
-        assert.equal(fixture.calls.length, calls, 'a removed target leaves no source work to call the provider');
-        fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
-        return;
-      }
-      if (name === 'R:claim-recovery-resumes-same-cycle') {
-        await fixture.setFailpoint((edge) => {
-          if (edge === 'after-stage') throw new Error('restart after durable baseline');
-        });
-        await assert.rejects(() => fixture.activate(), /restart after durable baseline/);
-        await fixture.restart();
-        await fixture.recover();
-        await fixture.enable();
-        await fixture.schedulerTurn();
-        fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
-        return;
-      }
-      if (name === 'R:remove-readd-stays-dark') {
-        await fixture.activate();
-        await fixture.enable();
-        await fixture.schedulerTurn();
-        fixture.removeAccount();
-        await fixture.schedulerTurn();
-        fixture.readdAccount();
-        const calls = fixture.calls.length;
-        await fixture.schedulerTurn();
-        assert.equal(fixture.calls.length, calls, 're-add has no resurrected source point');
-        fixture.oracle({ raw: 1, admissions: 1 });
-        return;
-      }
-      await fixture.activate();
-      await fixture.enable();
-      await fixture.schedulerTurn();
-      await fixture.restart();
-      await fixture.sourceTurn();
-      fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
-      assert.ok((await fixture.journal()).includes('resend.getReceived'));
-      const row = fixture.store.database
-        .prepare("SELECT dedupe_key FROM ingest WHERE type = 'resend.email.received'")
-        .get() as { dedupe_key: string } | undefined;
-      assert.ok(row?.dedupe_key.includes(IDS.resendId));
-    } finally {
-      await fixture.dispose();
-    }
+    await forEachResendDurableEdge(
+      name,
+      async (fixture, edge, report) => runResendCell(name, fixture, edge, report),
+      (run) => durableEdgeRuns.push(run),
+    );
   });
 }
 
-async function runRealResendCell(
+test('R: every matrix cell records the no-crash run and every durable edge', { skip: WINDOWS_SKIP }, () => {
+  for (const cell of cells) {
+    const runs = durableEdgeRuns.filter((run) => run.cell === cell);
+    assert.equal(
+      runs.filter((run) => run.edge === undefined && run.outcome === 'no-crash').length,
+      1,
+      `${cell}: no-crash`,
+    );
+    for (const edge of DURABLE_CUTOVER_EDGES) {
+      const run = runs.find((candidate) => candidate.edge === edge);
+      assert.notEqual(run, undefined, `${cell}: ${edge} was not run through the harness`);
+      assert.ok(run?.outcome === 'fired' || run?.outcome === 'unreachable', `${cell}: ${edge} records its outcome`);
+    }
+  }
+});
+
+async function runResendCell(
   name: (typeof cells)[number],
   fixture: PhaseDCutoverFixture,
   edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
 ): Promise<void> {
   switch (name) {
     case 'R:first-enabled-received-and-status':
-      return firstEnabledReceivedAndStatus(fixture, edge);
+      return firstEnabledReceivedAndStatus(fixture, edge, report);
+    case 'R:first-disabled-seeds-anchor-and-status':
+      return firstDisabledSeedsAnchorAndStatus(fixture, edge, report);
     case 'R:replace-old-only-drains-received-and-status':
-      return replacementOldOnlyDrains(fixture, edge);
+      return replacementOldOnlyDrains(fixture, edge, report);
     case 'R:replace-new-only-baselines-at-anchor':
-      return replacementNewOnlyBaselines(fixture, edge);
+      return replacementNewOnlyBaselines(fixture, edge, report);
     case 'R:replace-shared-one-version-per-occurrence':
-      return replacementSharedAdmitsOneVersion(fixture, edge);
+      return replacementSharedAdmitsOneVersion(fixture, edge, report);
+    case 'R:disabled-replacement-marks-drains-complete':
+      return disabledReplacementMarksDrainsComplete(fixture, edge, report);
     case 'R:enable-all-rebaselines-readded-account':
-      return enableAllRebaselinesReaddedAccount(fixture, edge);
+      return enableAllRebaselinesReaddedAccount(fixture, edge, report);
+    case 'R:tighten-preserves-anchor-and-status-seed':
+      return tighteningPreservesAnchorAndStatusSeed(fixture, edge, report);
+    case 'R:disable-or-remove-cancels-and-purges':
+      return disableOrRemoveCancelsAndPurges(fixture, edge, report);
+    case 'R:remove-readd-stays-dark':
+      return removeReaddStaysDark(fixture, edge, report);
+    case 'R:claim-recovery-resumes-same-cycle':
+      return claimRecoveryResumesSameCycle(fixture, edge, report);
     case 'R:timeout-keeps-anchor-and-retries':
-      return timeoutKeepsAnchorAndRetries(fixture, edge);
+      return timeoutKeepsAnchorAndRetries(fixture, edge, report);
     case 'R:initial-anchor-and-status-start-atomic':
-      return initialAnchorAndStatusStartAtomic(fixture, edge);
+      return initialAnchorAndStatusStartAtomic(fixture, edge, report);
+    case 'R:claimed-P-fences-received-and-status-worker':
+      return claimedPFencesReceivedAndStatusWorker(fixture, edge, report);
     case 'R:initial-cursor-rechecks-points-under-received-and-status-locks':
-      return initialCursorRechecksPublishedPoints(fixture, edge);
+      return initialCursorRechecksPublishedPoints(fixture, edge, report);
     case 'R:tighten-transfers-received-and-status-debts-stale-scan-writes-nothing':
-      return tighteningTransfersReceivedAndStatusDebts(fixture, edge);
+      return tighteningTransfersReceivedAndStatusDebts(fixture, edge, report);
     case 'R:swap-drops-old-only-received-and-status-debts':
-      return swapDropsOldOnlyDebts(fixture, edge);
+      return swapDropsOldOnlyDebts(fixture, edge, report);
+    case 'R:deadline-at-P-after-P-and-finalise-settles-without-write':
+      return deadlineAtPAfterPAndFinaliseSettlesWithoutWrite(fixture, edge, report);
     default:
       return assert.fail(`unimplemented real Resend matrix cell: ${name}`);
   }
@@ -227,11 +124,16 @@ async function runRealResendCell(
 async function firstEnabledReceivedAndStatus(
   fixture: PhaseDCutoverFixture,
   edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
 ): Promise<void> {
   fixture.setResendReceivedBaseline(P);
   fixture.setResendReceivedReader(receivedReader([P]));
-  await activateAtResendDurableEdge(fixture, 'R:first-enabled-received-and-status', edge, () =>
-    fixture.activate(1, RECEIVED_AND_STATUS),
+  await activateAtResendDurableEdge(
+    fixture,
+    'R:first-enabled-received-and-status',
+    edge,
+    () => fixture.activate(1, RECEIVED_AND_STATUS),
+    { report },
   );
   assert.equal(fixture.calls.length, 0, 'the disabled first activation calls neither Resend reader');
   await fixture.enable();
@@ -252,11 +154,244 @@ async function firstEnabledReceivedAndStatus(
   fixture.oracle({ raw: 2, admissions: 2, versions: [1, 1] });
 }
 
+async function firstDisabledSeedsAnchorAndStatus(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
+): Promise<void> {
+  fixture.setResendReceivedBaseline(P);
+  fixture.setResendReceivedReader(receivedReader([P]));
+  await activateAtResendDurableEdge(
+    fixture,
+    'R:first-disabled-seeds-anchor-and-status',
+    edge,
+    () => fixture.activate(1, RECEIVED_AND_STATUS),
+    { report },
+  );
+  const recorded = fixture.store.database
+    .prepare(
+      `SELECT position_scope, encrypted_position
+         FROM rule_activation_points
+        WHERE source = 'resend' AND account_id = ?
+        ORDER BY position_scope`,
+    )
+    .all(fixture.accountId) as Array<{ position_scope: string; encrypted_position: Uint8Array }>;
+  assert.deepEqual(
+    recorded.map((row) => row.position_scope),
+    ['received', 'status'],
+    'disabled activation records both the received anchor and status start point',
+  );
+  assert.ok(
+    recorded.every((row) => row.encrypted_position.byteLength > 0),
+    'both content-free points are durable',
+  );
+  fixture.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
+
+  await fixture.enable();
+  await primeResendCursors(fixture, 2);
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+  fixture.now.value += 1;
+  fixture.setResendReceivedReader(receivedReader([E1, P, E0]));
+  fixture.setResendSentStatus('delivered');
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+  assertResendAdmissions(fixture, [
+    receivedAdmission(fixture.accountId, E1, 1),
+    statusAdmission(fixture, fixture.accountId, 'sent', 'delivered', 1),
+  ]);
+}
+
+async function disabledReplacementMarksDrainsComplete(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
+): Promise<void> {
+  fixture.setResendReceivedBaseline(X0);
+  await activateAtResendDurableEdge(
+    fixture,
+    'R:disabled-replacement-marks-drains-complete',
+    edge,
+    () => fixture.activate(1, RECEIVED_AND_STATUS),
+    { report },
+  );
+  fixture.setResendReceivedBaseline(P);
+  await fixture.replaceWhileDisabled();
+  assert.deepEqual(
+    fixture.store.database
+      .prepare("SELECT 1 FROM replacement_drains WHERE source = 'resend' AND drained_at IS NULL")
+      .get(),
+    undefined,
+    'disabled replacement leaves no owed received/status drain',
+  );
+  assert.equal(
+    (
+      fixture.store.database
+        .prepare("SELECT version FROM active_versions WHERE kind = 'rule' AND object_id = 'rule-cutover'")
+        .get() as { version: number }
+    ).version,
+    2,
+    'disabled replacement publishes the completed successor without collection',
+  );
+  fixture.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
+}
+
+async function tighteningPreservesAnchorAndStatusSeed(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
+): Promise<void> {
+  fixture.setResendReceivedBaseline(P);
+  fixture.setResendReceivedReader(receivedReader([P]));
+  await activateAtResendDurableEdge(
+    fixture,
+    'R:tighten-preserves-anchor-and-status-seed',
+    edge,
+    () => fixture.activate(1, RECEIVED_AND_STATUS),
+    { report },
+  );
+  await fixture.enable();
+  await primeResendCursors(fixture, 2);
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+  const callsBeforeTightening = fixture.baselineCalls;
+  await fixture.tighten(RECEIVED_AND_STATUS);
+  assert.equal(fixture.baselineCalls, callsBeforeTightening, 'derived tightening does not sample a replacement point');
+  fixture.now.value += 1;
+  fixture.setResendReceivedReader(receivedReader([E1, P, E0]));
+  fixture.setResendSentStatus('delivered');
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+  assertResendAdmissions(fixture, [
+    receivedAdmission(fixture.accountId, E1, 2),
+    statusAdmission(fixture, fixture.accountId, 'sent', 'delivered', 2),
+  ]);
+}
+
+async function disableOrRemoveCancelsAndPurges(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
+): Promise<void> {
+  fixture.setResendReceivedBaseline(P);
+  fixture.setResendReceivedReader(receivedReader([P]));
+  await activateAtResendDurableEdge(
+    fixture,
+    'R:disable-or-remove-cancels-and-purges',
+    edge,
+    () => fixture.activate(1, RECEIVED_AND_STATUS),
+    { report },
+  );
+  await fixture.enable();
+  await primeResendCursors(fixture, 2);
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+  await fixture.revokeByRule();
+  const callsBeforeDisabledPoll = fixture.calls.length;
+  await advancePastResendPoll(fixture);
+  assert.equal(fixture.calls.length, callsBeforeDisabledPoll, 'a disabled rule polls neither Resend scope');
+  assert.equal(
+    fixture.store.database.prepare("SELECT 1 FROM rule_activation_points WHERE source = 'resend'").get(),
+    undefined,
+    'rule disable purges both source points',
+  );
+
+  fixture.setResendReceivedBaseline(P);
+  await fixture.activate(2, RECEIVED_AND_STATUS);
+  await primeResendCursors(fixture, 2);
+  fixture.setResendReceivedReader(receivedReader([E1, P, E0]));
+  fixture.now.value += 1;
+  fixture.setResendSentStatus('delivered');
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+  assertResendAdmissions(fixture, [
+    receivedAdmission(fixture.accountId, E1, 2),
+    statusAdmission(fixture, fixture.accountId, 'sent', 'delivered', 2),
+  ]);
+}
+
+async function removeReaddStaysDark(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
+): Promise<void> {
+  fixture.setResendReceivedBaseline(P);
+  fixture.setResendReceivedReader(receivedReader([P]));
+  await activateAtResendDurableEdge(
+    fixture,
+    'R:remove-readd-stays-dark',
+    edge,
+    () => fixture.activate(1, RECEIVED_AND_STATUS),
+    { report },
+  );
+  await fixture.enable();
+  await primeResendCursors(fixture, 2);
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+  fixture.removeAccount();
+  const callsBeforeRemovalPoll = fixture.calls.length;
+  await advancePastResendPoll(fixture);
+  assert.equal(fixture.calls.length, callsBeforeRemovalPoll, 'removed account has no eligible source poll');
+  fixture.readdAccount();
+  await advancePastResendPoll(fixture);
+  await advancePastResendPoll(fixture);
+  await advancePastResendPoll(fixture);
+  await advancePastResendPoll(fixture);
+  await assert.rejects(() => fixture.sourceTurn(), /no installed activation anchor/);
+  assert.equal(fixture.calls.length, callsBeforeRemovalPoll, 'K6 keeps a re-added account dark without a fresh point');
+
+  fixture.setResendReceivedBaseline(P);
+  await fixture.activate(2, RECEIVED_AND_STATUS);
+  await primeResendCursors(fixture, 2);
+  fixture.now.value += 1;
+  fixture.setResendReceivedReader(receivedReader([E1, P, E0]));
+  fixture.setResendSentStatus('delivered');
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+  assertResendAdmissions(fixture, [
+    receivedAdmission(fixture.accountId, E1, 2),
+    statusAdmission(fixture, fixture.accountId, 'sent', 'delivered', 2),
+  ]);
+}
+
+async function claimRecoveryResumesSameCycle(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
+): Promise<void> {
+  fixture.setResendReceivedBaseline(P);
+  fixture.setResendReceivedReader(receivedReader([P]));
+  await activateAtResendDurableEdge(
+    fixture,
+    'R:claim-recovery-resumes-same-cycle',
+    edge,
+    () => fixture.activate(1, RECEIVED_AND_STATUS),
+    { report },
+  );
+  assert.equal(
+    fixture.store.database.prepare("SELECT 1 FROM activation_intents WHERE status = 'pending-completion'").get(),
+    undefined,
+    'restart recovery completes the claimed activation before the scheduler gets another turn',
+  );
+  await fixture.enable();
+  await primeResendCursors(fixture, 2);
+  fixture.now.value += 1;
+  fixture.setResendReceivedReader(receivedReader([E1, P, E0]));
+  fixture.setResendSentStatus('delivered');
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+  assertResendAdmissions(fixture, [
+    receivedAdmission(fixture.accountId, E1, 1),
+    statusAdmission(fixture, fixture.accountId, 'sent', 'delivered', 1),
+  ]);
+}
+
 async function replacementOldOnlyDrains(
   fixture: PhaseDCutoverFixture,
   edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
 ): Promise<void> {
-  await beginScopedResendReplacement(fixture, edge, 'R:replace-old-only-drains-received-and-status');
+  await beginScopedResendReplacement(fixture, edge, 'R:replace-old-only-drains-received-and-status', {}, report);
   fixture.setResendReceivedReader(receivedReader([E1, P, E0, X0]));
   fixture.setResendSentStatus('delivered');
   await fixture.sourceTurn(receivedScope(OLD_ACCOUNT));
@@ -271,8 +406,9 @@ async function replacementOldOnlyDrains(
 async function replacementNewOnlyBaselines(
   fixture: PhaseDCutoverFixture,
   edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
 ): Promise<void> {
-  await beginScopedResendReplacement(fixture, edge, 'R:replace-new-only-baselines-at-anchor');
+  await beginScopedResendReplacement(fixture, edge, 'R:replace-new-only-baselines-at-anchor', {}, report);
   assert.equal(
     fixture.store.database
       .prepare(
@@ -308,8 +444,9 @@ async function replacementNewOnlyBaselines(
 async function replacementSharedAdmitsOneVersion(
   fixture: PhaseDCutoverFixture,
   edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
 ): Promise<void> {
-  await beginScopedResendReplacement(fixture, edge, 'R:replace-shared-one-version-per-occurrence');
+  await beginScopedResendReplacement(fixture, edge, 'R:replace-shared-one-version-per-occurrence', {}, report);
   await completeScopedReceivedDrain(fixture);
   await fixture.runtime.resumeClaimedCompletions();
 
@@ -334,6 +471,7 @@ async function replacementSharedAdmitsOneVersion(
 async function enableAllRebaselinesReaddedAccount(
   fixture: PhaseDCutoverFixture,
   edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
 ): Promise<void> {
   fixture.setResendReceivedBaseline(X0);
   fixture.setResendReceivedReader(receivedReader([X0]));
@@ -349,7 +487,7 @@ async function enableAllRebaselinesReaddedAccount(
   fixture.setResendReceivedBaseline(P);
   await activateAtResendDurableEdge(fixture, 'R:enable-all-rebaselines-readded-account', edge, () => fixture.enable(), {
     providerFenced: false,
-    allowUnreachedEdge: true,
+    report,
   });
 
   fixture.setResendReceivedReader(receivedReader([E1, P, E0, X0]));
@@ -367,6 +505,7 @@ async function enableAllRebaselinesReaddedAccount(
 async function timeoutKeepsAnchorAndRetries(
   fixture: PhaseDCutoverFixture,
   edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
 ): Promise<void> {
   fixture.setResendReceivedBaseline(X0);
   fixture.setResendReceivedReader(receivedReader([X0]));
@@ -376,7 +515,7 @@ async function timeoutKeepsAnchorAndRetries(
   await fixture.sourceTurn();
   await fixture.sourceTurn(statusScope(fixture));
   fixture.setResendReceivedBaseline(P);
-  await beginReplacementAtEdge(fixture, edge, 'R:timeout-keeps-anchor-and-retries');
+  await beginReplacementAtEdge(fixture, edge, 'R:timeout-keeps-anchor-and-retries', [fixture.accountId], report, false);
   fixture.now.value += 3_600_001;
   const callsBeforeTimeout = fixture.calls.length;
   await fixture.recover();
@@ -394,10 +533,15 @@ async function timeoutKeepsAnchorAndRetries(
 async function initialAnchorAndStatusStartAtomic(
   fixture: PhaseDCutoverFixture,
   edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
 ): Promise<void> {
   fixture.setResendReceivedBaseline(P);
-  await activateAtResendDurableEdge(fixture, 'R:initial-anchor-and-status-start-atomic', edge, () =>
-    fixture.activate(1, RECEIVED_AND_STATUS),
+  await activateAtResendDurableEdge(
+    fixture,
+    'R:initial-anchor-and-status-start-atomic',
+    edge,
+    () => fixture.activate(1, RECEIVED_AND_STATUS),
+    { report },
   );
   const points = fixture.store.database
     .prepare(
@@ -418,9 +562,104 @@ async function initialAnchorAndStatusStartAtomic(
   assert.deepEqual(cursors, ['received', 'status'], 'both initial cursors are installed with the published points');
 }
 
+async function claimedPFencesReceivedAndStatusWorker(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
+): Promise<void> {
+  // Keep v1 active on both scopes.  The new independent rule then owns an
+  // unpublished P for exactly the same source scopes, so this is a scheduler
+  // path that would otherwise invoke both workers rather than an empty scope.
+  fixture.setResendReceivedBaseline(X0);
+  fixture.setResendReceivedReader(receivedReader([X0]));
+  await fixture.activate(1, RECEIVED_AND_STATUS);
+  await fixture.enable();
+  await primeResendCursors(fixture, 2);
+  await fixture.sourceTurn();
+  await fixture.sourceTurn(statusScope(fixture));
+
+  fixture.now.value += 1;
+  fixture.setResendReceivedBaseline(P);
+  await activateAtResendDurableEdge(
+    fixture,
+    'R:claimed-P-fences-received-and-status-worker',
+    edge,
+    () => fixture.activateAdditionalRule(`rule-fence-edge-${edge ?? 'none'}`, RECEIVED_AND_STATUS),
+    { providerFenced: false, report },
+  );
+
+  // Every outer edge additionally proves the claimed-and-unpublished state:
+  // `before-stage` has not sampled P yet and `after-move` has already
+  // published it, so neither alone can make the source-fence assertion.
+  await fixture.setFailpoint((at) => {
+    if (at === 'before-finalise') throw new Error('claimed P remains unpublished for fence probe');
+  });
+  await assert.rejects(
+    () => fixture.activateAdditionalRule(`rule-fence-probe-${edge ?? 'none'}`, RECEIVED_AND_STATUS),
+    /claimed P remains unpublished for fence probe/,
+  );
+  await assertResendSchedulerFenced(fixture);
+  await fixture.restart();
+  await fixture.recover();
+
+  const callsBeforeNormalCollection = fixture.calls.length;
+  fixture.now.value += 60_000;
+  await fixture.schedulerTurn();
+  fixture.now.value += 60_000;
+  await fixture.schedulerTurn();
+  assert.ok(fixture.calls.length > callsBeforeNormalCollection, 'both workers collect normally after publication');
+}
+
+async function deadlineAtPAfterPAndFinaliseSettlesWithoutWrite(
+  fixture: PhaseDCutoverFixture,
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
+): Promise<void> {
+  // The outer activation is the cell's durable-edge/restart probe.  The three
+  // inner rule activations then make each deadline branch settle in the same
+  // database without creating source content.
+  fixture.setResendReceivedBaseline(P);
+  await activateAtResendDurableEdge(
+    fixture,
+    'R:deadline-at-P-after-P-and-finalise-settles-without-write',
+    edge,
+    () => fixture.activate(1, RECEIVED_AND_STATUS),
+    { report },
+  );
+  for (const [index, deadlineEdge] of [
+    'before-claim-deadline',
+    'before-baseline-deadline',
+    'before-finalise-deadline',
+  ].entries()) {
+    const callsBefore = fixture.baselineCalls;
+    const pointEncryptionsBefore = fixture.pointEncryptions;
+    await fixture.setDeadlineFailpoint((at) => {
+      if (at === deadlineEdge) fixture.now.value += 3_600_001;
+    });
+    await assert.rejects(() =>
+      fixture.activateAdditionalRule(`rule-deadline-${edge ?? 'none'}-${index}`, RECEIVED_AND_STATUS),
+    );
+    assert.equal(fixture.failedCompletions(), index + 1, `${deadlineEdge} settles its claimed completion`);
+    assert.equal(
+      fixture.baselineCalls - callsBefore,
+      index === 0 ? 0 : 2,
+      `${deadlineEdge} stops before its next source baseline write`,
+    );
+    assert.equal(
+      fixture.pointEncryptions - pointEncryptionsBefore,
+      index === 2 ? 2 : 0,
+      `${deadlineEdge} permits no later point encryption before its own deadline check`,
+    );
+    fixture.assertContentFreeSettlement();
+    await fixture.setDeadlineFailpoint(undefined);
+  }
+  fixture.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
+}
+
 async function initialCursorRechecksPublishedPoints(
   fixture: PhaseDCutoverFixture,
   edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
 ): Promise<void> {
   fixture.setResendReceivedBaseline(X0);
   fixture.setResendReceivedReader(receivedReader([X0]));
@@ -429,6 +668,7 @@ async function initialCursorRechecksPublishedPoints(
     'R:initial-cursor-rechecks-points-under-received-and-status-locks',
     edge,
     () => fixture.activate(1, RECEIVED_AND_STATUS),
+    { report },
   );
   await fixture.enable();
   fixture.setResendReceivedBaseline(P);
@@ -473,6 +713,7 @@ async function initialCursorRechecksPublishedPoints(
 async function tighteningTransfersReceivedAndStatusDebts(
   fixture: PhaseDCutoverFixture,
   edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
 ): Promise<void> {
   fixture.setResendReceivedBaseline(X0);
   fixture.setResendReceivedReader(receivedReader([X0]));
@@ -481,6 +722,7 @@ async function tighteningTransfersReceivedAndStatusDebts(
     'R:tighten-transfers-received-and-status-debts-stale-scan-writes-nothing',
     edge,
     () => fixture.activate(1, RECEIVED_AND_STATUS),
+    { report },
   );
   await fixture.enable();
   await primeResendCursors(fixture, 2);
@@ -505,10 +747,17 @@ async function tighteningTransfersReceivedAndStatusDebts(
 async function swapDropsOldOnlyDebts(
   fixture: PhaseDCutoverFixture,
   edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  report: (outcome: ResendDurableEdgeRun['outcome']) => void,
 ): Promise<void> {
-  await beginScopedResendReplacement(fixture, edge, 'R:swap-drops-old-only-received-and-status-debts', {
-    stageOldStatusDebt: true,
-  });
+  await beginScopedResendReplacement(
+    fixture,
+    edge,
+    'R:swap-drops-old-only-received-and-status-debts',
+    {
+      stageOldStatusDebt: true,
+    },
+    report,
+  );
   fixture.setResendReceivedReader(receivedReader([E1, P, E0, X0]));
   await completeScopedReceivedDrain(fixture, { includeStatus: false });
   assertDrained(fixture, OLD_ACCOUNT, 'received', true);
@@ -542,7 +791,8 @@ async function beginScopedResendReplacement(
   fixture: PhaseDCutoverFixture,
   edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
   cell: string,
-  input: Readonly<{ stageOldStatusDebt?: boolean }> = {},
+  input: Readonly<{ stageOldStatusDebt?: boolean; finishPointerEdges?: boolean }> = {},
+  report?: (outcome: ResendDurableEdgeRun['outcome']) => void,
 ): Promise<void> {
   for (const accountId of [OLD_ACCOUNT, SHARED_ACCOUNT, NEW_ACCOUNT])
     fixture.config.accounts[`replacement-${accountId}`] = { id: accountId, platform: 'resend' } as never;
@@ -577,7 +827,14 @@ async function beginScopedResendReplacement(
   }
   fixture.now.value += 1;
   fixture.setResendReceivedBaseline(P);
-  await beginReplacementAtEdge(fixture, edge, cell, [NEW_ACCOUNT, SHARED_ACCOUNT]);
+  await beginReplacementAtEdge(
+    fixture,
+    edge,
+    cell,
+    [NEW_ACCOUNT, SHARED_ACCOUNT],
+    report,
+    input.finishPointerEdges !== false,
+  );
 }
 
 async function beginReplacementAtEdge(
@@ -585,6 +842,8 @@ async function beginReplacementAtEdge(
   edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
   cell: string,
   accounts: readonly string[] = [fixture.accountId],
+  report?: (outcome: ResendDurableEdgeRun['outcome']) => void,
+  finishPointerEdges = true,
 ): Promise<void> {
   await activateAtResendDurableEdge(
     fixture,
@@ -600,7 +859,28 @@ async function beginReplacementAtEdge(
     },
     // D12 leaves an enabled replacement's old version running through P;
     // unlike an unpublished first activation, that old drain is not fenced.
-    { providerFenced: false, allowUnreachedEdge: true },
+    {
+      providerFenced: false,
+      report,
+      ...(finishPointerEdges
+        ? {
+            finishClaimedCompletion: async () => {
+              fixture.setResendReceivedReader(receivedReader([E1, P, E0, X0]));
+              fixture.setResendSentStatus('delivered');
+              await completeScopedReceivedDrain(fixture);
+              await fixture.runtime.resumeClaimedCompletions();
+            },
+          }
+        : {
+            assertUnreachable: () => {
+              assert.equal(
+                edge === 'before-move' || edge === 'after-move' || edge === 'before-finalise',
+                true,
+                `${cell}: only its deliberately incomplete pointer edges are unreachable`,
+              );
+            },
+          }),
+    },
   );
 }
 
@@ -624,6 +904,61 @@ async function primeResendCursors(fixture: PhaseDCutoverFixture, turns: number):
     fixture.now.value += 60_000;
     await fixture.schedulerTurn();
   }
+}
+
+async function advancePastResendPoll(fixture: PhaseDCutoverFixture): Promise<void> {
+  fixture.now.value += 60_000;
+  await fixture.schedulerTurn();
+}
+
+async function assertResendSchedulerFenced(fixture: PhaseDCutoverFixture): Promise<void> {
+  const callsBefore = fixture.calls.length;
+  const rawBefore = Number(
+    (
+      fixture.store.database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM ingest WHERE type IN ('resend.email.received', 'resend.email.status_changed')",
+        )
+        .get() as { count: number }
+    ).count,
+  );
+  const stagedBefore = Number(
+    (
+      fixture.store.database
+        .prepare("SELECT COUNT(*) AS count FROM source_scan_state WHERE source = 'resend'")
+        .get() as { count: number }
+    ).count,
+  );
+  // The fair scheduler reaches one due scope per tick.  Advance past its
+  // declared one-minute floor between ticks so received and status are both
+  // eligible opportunities, not a no-op on a future next slot.
+  await advancePastResendPoll(fixture);
+  await advancePastResendPoll(fixture);
+  assert.equal(fixture.calls.length, callsBefore, 'unpublished P fences both scheduler provider calls');
+  assert.equal(
+    Number(
+      (
+        fixture.store.database
+          .prepare(
+            "SELECT COUNT(*) AS count FROM ingest WHERE type IN ('resend.email.received', 'resend.email.status_changed')",
+          )
+          .get() as { count: number }
+      ).count,
+    ),
+    rawBefore,
+    'unpublished P writes no received/status occurrence',
+  );
+  assert.equal(
+    Number(
+      (
+        fixture.store.database
+          .prepare("SELECT COUNT(*) AS count FROM source_scan_state WHERE source = 'resend'")
+          .get() as { count: number }
+      ).count,
+    ),
+    stagedBefore,
+    'unpublished P writes no received/status stage',
+  );
 }
 
 function receivedReader(ids: readonly string[]) {
