@@ -2,7 +2,13 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
 import { CommsError } from '@agentcomms/core';
-import { isSlackReplyEligible, SlackReplyDrains, SlackReplyReconciler } from '../src/sources/slack-replies.ts';
+import { SourceScopeLock } from '../src/sources/scope-lock.ts';
+import {
+  isSlackReplyEligible,
+  SlackReplyDrains,
+  SlackReplyReconciler,
+  SlackReplyStageExpiry,
+} from '../src/sources/slack-replies.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
@@ -573,6 +579,216 @@ test('P1: an ordinary retained-history reply boundary holds its watermark withou
     const record = (await decryptState(state.encrypted_record)) as { watermark: string; latest: string | null };
     assert.equal(record.watermark, '1700000001.000000');
     assert.equal(record.latest, '1700000010.000000');
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('P1: an ordinary retained boundary yields its turn and expires after its staged page is swept', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-slack-reconcile-boundary-fairness-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const now = { value: 1_700_000_000_000 };
+    const parentA = '1700000001.000000';
+    const parentB = '1700000002.000000';
+    let aReads = 0;
+    let bReads = 0;
+    const reconciler = new SlackReplyReconciler({
+      database: store.database,
+      source: {
+        async replies(input) {
+          if (input.parentTs === parentA) {
+            aReads += 1;
+            return {
+              messages: [
+                {
+                  ts: '1700000006.000000',
+                  threadTs: parentA,
+                  replyCount: 0,
+                  text: '<untrusted-content>retained boundary</untrusted-content>',
+                },
+              ],
+              nextCursor: null,
+              retainedHistoryBoundary: true,
+            };
+          }
+          bReads += 1;
+          return {
+            messages: [
+              {
+                ts: bReads === 1 ? '1700000005.000000' : bReads === 2 ? '1700000015.000000' : '1700000025.000000',
+                threadTs: parentB,
+                replyCount: 0,
+                text: '<untrusted-content>other parent reply</untrusted-content>',
+              },
+            ],
+            nextCursor: null,
+            retainedHistoryBoundary: false,
+          };
+        },
+      },
+      assertLive: () => undefined,
+      encryptState,
+      decryptState,
+      now: () => now.value,
+      stage: {
+        scope: { source: 'slack', accountId: ACCOUNT, scopeId: `slack:${ACCOUNT}:${CONVERSATION}` },
+        debts: () => [{ ruleId: 'rule-active', ruleVersion: 1, ingestRetentionMs: 1_000 }],
+        admit: async () => 'terminal',
+      },
+    });
+    await reconciler.discoverParent({ accountId: ACCOUNT, conversationId: CONVERSATION, parentTs: parentB });
+    assert.equal(
+      await reconciler.resumeOne({ accountId: ACCOUNT, conversationId: CONVERSATION, latest: '1700000010.000000' }),
+      true,
+      'B completes its initial reply scan',
+    );
+    await reconciler.discoverParent({ accountId: ACCOUNT, conversationId: CONVERSATION, parentTs: parentA });
+    assert.equal(
+      await reconciler.resumeOne({ accountId: ACCOUNT, conversationId: CONVERSATION, latest: '1700000020.000000' }),
+      false,
+      'A retains its boundary without treating it as covered',
+    );
+    assert.equal(
+      await reconciler.resumeOne({ accountId: ACCOUNT, conversationId: CONVERSATION, latest: '1700000020.000000' }),
+      true,
+      'the next owner pass gives B its own reply turn',
+    );
+    assert.equal(bReads, 2, 'B is read again after A retained its boundary');
+
+    now.value += 1_001;
+    const expiry = new SlackReplyStageExpiry({
+      database: store.database,
+      lock: new SourceScopeLock(),
+      decrypt: decryptState,
+      encrypt: encryptState,
+      now: () => now.value,
+    });
+    assert.equal(await expiry.sweep(), 1, 'the boundary page reaches its retention deadline');
+    assert.equal(
+      await reconciler.resumeOne({ accountId: ACCOUNT, conversationId: CONVERSATION, latest: '1700000030.000000' }),
+      false,
+      'A keeps its expired retained boundary unresolved before its eligibility ends',
+    );
+    assert.equal(
+      await reconciler.resumeOne({ accountId: ACCOUNT, conversationId: CONVERSATION, latest: '1700000030.000000' }),
+      true,
+      'the expired retained-boundary continuation yields its turn to B',
+    );
+    assert.equal(bReads, 3, 'B remains fair after A resumes its expired boundary marker');
+
+    now.value += 8 * 24 * 60 * 60 * 1_000;
+    assert.equal(
+      await reconciler.resumeOne({ accountId: ACCOUNT, conversationId: CONVERSATION, latest: '1700700000.000000' }),
+      true,
+      'the seven-day ordinary-reconciliation cutoff drops the retained-boundary parent',
+    );
+    const states = store.database
+      .prepare("SELECT encrypted_record FROM source_scan_state WHERE id LIKE 'slack-reply-reconciliation:%'")
+      .all() as Array<{ encrypted_record: Uint8Array }>;
+    assert.equal(
+      (await Promise.all(states.map(async (state) => decryptState(state.encrypted_record)))).some(
+        (state) => (state as { parentTs: string }).parentTs === parentA,
+      ),
+      false,
+      'A is no longer retained after its boundary stage expires',
+    );
+    assert.equal(aReads, 1, 'expiry never retries the retained boundary from Slack');
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('P1: a pending ordinary reply page yields its turn to another eligible parent', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-slack-reconcile-pending-fairness-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const parentA = '1700000001.000000';
+    const parentB = '1700000002.000000';
+    let bReads = 0;
+    const admitted: string[] = [];
+    const reconciler = new SlackReplyReconciler({
+      database: store.database,
+      source: {
+        async replies(input) {
+          if (input.parentTs === parentA)
+            return {
+              messages: [
+                {
+                  ts: '1700000006.000000',
+                  threadTs: parentA,
+                  replyCount: 0,
+                  text: '<untrusted-content>pending reply</untrusted-content>',
+                },
+              ],
+              nextCursor: null,
+              retainedHistoryBoundary: false,
+            };
+          bReads += 1;
+          return {
+            messages: [
+              {
+                ts: bReads === 1 ? '1700000005.000000' : '1700000015.000000',
+                threadTs: parentB,
+                replyCount: 0,
+                text: '<untrusted-content>other parent reply</untrusted-content>',
+              },
+            ],
+            nextCursor: null,
+            retainedHistoryBoundary: false,
+          };
+        },
+      },
+      assertLive: () => undefined,
+      encryptState,
+      decryptState,
+      now: () => 1_700_000_000_000,
+      stage: {
+        scope: { source: 'slack', accountId: ACCOUNT, scopeId: `slack:${ACCOUNT}:${CONVERSATION}` },
+        debts: () => [{ ruleId: 'rule-active', ruleVersion: 1, ingestRetentionMs: 7 * 24 * 60 * 60 * 1_000 }],
+        admit: async ({ candidate }) => {
+          if (candidate.message.threadTs === parentA) return 'pending';
+          admitted.push(candidate.message.ts);
+          return 'terminal';
+        },
+      },
+    });
+    await reconciler.discoverParent({ accountId: ACCOUNT, conversationId: CONVERSATION, parentTs: parentB });
+    assert.equal(
+      await reconciler.resumeOne({ accountId: ACCOUNT, conversationId: CONVERSATION, latest: '1700000010.000000' }),
+      true,
+      'B completes its initial reply scan',
+    );
+    await reconciler.discoverParent({ accountId: ACCOUNT, conversationId: CONVERSATION, parentTs: parentA });
+    assert.equal(
+      await reconciler.resumeOne({ accountId: ACCOUNT, conversationId: CONVERSATION, latest: '1700000020.000000' }),
+      false,
+      'A keeps its disclosure-fenced page durable',
+    );
+    assert.equal(
+      await reconciler.resumeOne({ accountId: ACCOUNT, conversationId: CONVERSATION, latest: '1700000020.000000' }),
+      true,
+      'the next owner pass reads and stages B while A is still pending',
+    );
+    assert.equal(bReads, 2, 'B is read again rather than A monopolising owner turns');
+    assert.deepEqual(admitted, ['1700000005.000000', '1700000015.000000']);
+    assert.equal(
+      (
+        store.database
+          .prepare("SELECT COUNT(*) AS count FROM source_scan_state WHERE id LIKE 'slack-reply-page:%'")
+          .get() as {
+          count: number;
+        }
+      ).count,
+      1,
+      'A remains staged for a later terminal admission',
+    );
   } finally {
     store.close();
     await rm(stateDir, { recursive: true, force: true });

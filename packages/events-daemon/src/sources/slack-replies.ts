@@ -1127,7 +1127,10 @@ export class SlackReplyReconciler {
       cursorBefore: current.value.cursor,
     });
     if (expired !== null) {
-      if (expired.retainedHistoryBoundary) return false;
+      if (expired.retainedHistoryBoundary) {
+        await this.#replace(current, { ...current.value, turn });
+        return false;
+      }
       const next: SlackReplyReconciliationState = {
         ...current.value,
         cursor: expired.nextCursor,
@@ -1173,9 +1176,15 @@ export class SlackReplyReconciler {
       });
     }
     const admission = await this.#stager.admit({ stage, conversationId: input.conversationId });
-    if (admission.outcome === 'pending') return false;
+    if (admission.outcome === 'pending') {
+      await this.#replace(current, { ...current.value, turn });
+      return false;
+    }
     stage = admission.stage;
-    if (stage.value.retainedHistoryBoundary) return false;
+    if (stage.value.retainedHistoryBoundary) {
+      await this.#replace(current, { ...current.value, turn });
+      return false;
+    }
     const next: SlackReplyReconciliationState = {
       ...current.value,
       cursor: stage.value.nextCursor,
@@ -1222,7 +1231,8 @@ export class SlackReplyReconciler {
       cursorBefore: state.value.cursor,
     };
     if ((await this.#stager.load(stageInput)) !== null) return true;
-    return (await this.#stager.expiredContinuation(stageInput)) !== null;
+    const expired = await this.#stager.expiredContinuation(stageInput);
+    return expired !== null && !expired.retainedHistoryBoundary;
   }
 
   #dropExpired(state: StoredReconciliation): void {
