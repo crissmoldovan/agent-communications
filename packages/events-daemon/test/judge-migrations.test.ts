@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -98,7 +98,7 @@ const JUDGE_MIGRATION_MUTATIONS: Record<JudgeMigrationMutation, (statement: stri
 
 function judgeMigrationsWithMutation(mutation: JudgeMigrationMutation): readonly EventMigration[] {
   const mutate = JUDGE_MIGRATION_MUTATIONS[mutation];
-  return EVENT_MIGRATIONS.map((migration) => {
+  return EVENT_MIGRATIONS.filter((migration) => migration.version <= 14).map((migration) => {
     if (migration.name !== 'event-judge-hold-durability-v1') return migration;
     return {
       ...migration,
@@ -115,6 +115,54 @@ function judgeMigration(): EventMigration {
   assert.ok(migration, 'the Phase E durable judge migration is registered');
   return migration;
 }
+
+function ledgerDetachmentMigration(): EventMigration {
+  const migration = EVENT_MIGRATIONS.find(
+    (candidate) => candidate.name === 'event-judge-ledger-projection-detachment-v1',
+  );
+  assert.ok(migration, 'the Task 5 ledger detachment migration is registered');
+  return migration;
+}
+
+test('E5 schema: every fresh and upgraded judge-kind CHECK admits exactly JUDGE_KINDS', async () => {
+  const source = await readFile(new URL('../src/store/schema-v1.ts', import.meta.url), 'utf8');
+  assert.match(source, /import \{ JUDGE_KINDS \} from '..\/domain\/lifecycle\.ts';/u);
+  assert.match(
+    source,
+    /const JUDGE_KIND_SQL_VALUES = JUDGE_KINDS\.map\(\(kind\) => `'\$\{kind\.replaceAll\("'", "''"\)\}'`\)\.join\(', '\);/u,
+    'the schema must not freeze a second judge-kind vocabulary',
+  );
+  assert.match(
+    source,
+    /CREATE TABLE judge_kind_versions \([\s\S]*?kind TEXT NOT NULL CHECK \(kind IN \(\$\{JUDGE_KIND_SQL_VALUES\}\)\)/u,
+    'judge_kind_versions must derive its CHECK from the shared vocabulary',
+  );
+
+  for (const build of [
+    {
+      name: 'fresh',
+      apply(database: DatabaseSync) {
+        applyMigrations(database);
+      },
+    },
+    {
+      name: 'upgraded',
+      apply(database: DatabaseSync) {
+        applyMigrations(database, migrationsThrough(14));
+        applyMigrations(database);
+      },
+    },
+  ]) {
+    const database = new DatabaseSync(':memory:');
+    try {
+      database.exec('PRAGMA foreign_keys = ON');
+      build.apply(database);
+      assertJudgeVersionKinds(database);
+    } finally {
+      database.close();
+    }
+  }
+});
 
 function tableSql(database: DatabaseSync, table: string): string {
   const row = database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as
@@ -256,6 +304,18 @@ function assertReservationJudgeKinds(database: DatabaseSync): void {
   );
 }
 
+function assertJudgeVersionKinds(database: DatabaseSync): void {
+  const insert = database.prepare(
+    'INSERT INTO judge_kind_versions (id, kind, version, document, digest) VALUES (?, ?, 1, ?, ?)',
+  );
+  for (const judgeKind of JUDGE_KINDS)
+    insert.run(`judge-kind-${judgeKind}@1`, judgeKind, JSON.stringify({ kind: judgeKind }), `digest-${judgeKind}`);
+  assert.throws(
+    () => insert.run('judge-kind-unknown@1', 'unknown', '{}', 'digest-unknown'),
+    /CHECK constraint failed/u,
+  );
+}
+
 test('E2: v14 upgrades every B1, B2, and D fixture once without changing encrypted bytes', () => {
   const migration = judgeMigration();
   assert.equal(migration.version, 14, 'Task 2 owns the next integrated migration');
@@ -270,7 +330,7 @@ test('E2: v14 upgrades every B1, B2, and D fixture once without changing encrypt
       applyMigrations(database);
       assert.equal(
         (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
-        '14',
+        '15',
         fixture.name,
       );
       assert.deepEqual(
@@ -287,7 +347,7 @@ test('E2: v14 upgrades every B1, B2, and D fixture once without changing encrypt
       applyMigrations(database);
       assert.equal(
         (
-          database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 14').get() as {
+          database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 15').get() as {
             count: number;
           }
         ).count,
@@ -297,6 +357,52 @@ test('E2: v14 upgrades every B1, B2, and D fixture once without changing encrypt
     } finally {
       database.close();
     }
+  }
+});
+
+test('E5: v15 keeps source-owned ledger audit rows when their projection is terminally purged', () => {
+  const migration = ledgerDetachmentMigration();
+  assert.equal(migration.version, 15, "Task 5 owns E's next local migration");
+  const database = new DatabaseSync(':memory:');
+  try {
+    database.exec('PRAGMA foreign_keys = ON');
+    applyMigrations(database, migrationsThrough(14));
+    seedJudgeAuthority(database);
+    insertSourceReservation(database, {
+      id: 'projection-detached-reservation',
+      workId: 'projection-detached-work',
+      accountId: 'account-a',
+      eventId: 'judge-migration-event-a',
+      state: 'settled',
+    });
+
+    applyMigrations(database);
+    database
+      .prepare(
+        `DELETE FROM ingest_rules
+         WHERE event_id = 'judge-migration-event-a' AND rule_id = 'judge-migration-rule' AND rule_version = 1`,
+      )
+      .run();
+
+    assert.deepEqual(
+      (
+        database
+          .prepare('SELECT id, account_id, event_id, rule_id, state FROM judge_budget_reservations')
+          .all() as Array<Record<string, unknown>>
+      ).map((row) => ({ ...row })),
+      [
+        {
+          id: 'projection-detached-reservation',
+          account_id: 'account-a',
+          event_id: 'judge-migration-event-a',
+          rule_id: 'judge-migration-rule',
+          state: 'settled',
+        },
+      ],
+    );
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
+  } finally {
+    database.close();
   }
 });
 
@@ -481,7 +587,7 @@ test('E2: a fresh daemon database keeps secure-delete enabled across a reopen', 
       assert.equal(
         (first.database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string })
           .value,
-        '14',
+        '15',
       );
     } finally {
       first.close();
@@ -490,7 +596,7 @@ test('E2: a fresh daemon database keeps secure-delete enabled across a reopen', 
     try {
       assert.equal(
         (
-          reopened.database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 14').get() as {
+          reopened.database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 15').get() as {
             count: number;
           }
         ).count,

@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -16,6 +15,7 @@ import { MailboxLock } from '../src/sources/mailbox-lock.ts';
 import { type GmailSourceRule, GmailSourceWorker } from '../src/sources/source-worker.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { runStrictMutationChild } from './support/strict-mutation-child.ts';
 import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 const target = { targetId: 'target-1', version: 1, kind: 'dry-run' as const, retentionMs: 86_400_000 };
@@ -1393,28 +1393,18 @@ test('P1 (review round 13) mutation: omitting pending-intent accounts makes the 
     await writeFile(scheduler, source.replace(guard, omitPendingIntentAccounts ? 'WHERE 0 = 1' : guard));
 
     const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
-    const result = await new Promise<{ code: number | null; output: string }>((resolve, reject) => {
-      const child = spawn(
-        process.execPath,
-        [
-          '--import',
-          pathToFileURL(loopbackSealPreload).href,
-          '--test',
-          '--test-name-pattern',
-          '^P1 \\(review round 13\\): the scheduler cancels a pending first or replacement-new-only activation when its account is removed$',
-          join(root, 'test', 'activation-recovery.test.ts'),
-        ],
-        { cwd: root, env: environment, stdio: ['ignore', 'pipe', 'pipe'] },
-      );
-      let output = '';
-      child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
-        output += chunk;
-      });
-      child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
-        output += chunk;
-      });
-      child.once('error', reject);
-      child.once('close', (code) => resolve({ code, output }));
+    const result = await runStrictMutationChild({
+      command: process.execPath,
+      args: [
+        '--import',
+        pathToFileURL(loopbackSealPreload).href,
+        '--test',
+        '--test-name-pattern',
+        '^P1 \\(review round 13\\): the scheduler cancels a pending first or replacement-new-only activation when its account is removed$',
+        join(root, 'test', 'activation-recovery.test.ts'),
+      ],
+      cwd: root,
+      env: environment,
     });
     assert.notEqual(result.code, 0, `the pending-intent omission unexpectedly passed\n${result.output}`);
     assert.match(result.output, /scheduler sweep cancels the pending original approval/u);

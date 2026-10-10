@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { cp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { runStrictMutationChild } from './strict-mutation-child.ts';
 
 export interface JudgeKindMutation {
   readonly id: string;
@@ -133,30 +133,20 @@ export async function expectJudgeKindMutationToFail(mutation: JudgeKindMutation)
     const changedLine = original.slice(0, original.indexOf(mutation.before)).split('\n').length;
     await writeFile(target, original.replace(mutation.before, mutation.after), 'utf8');
     const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
-    const result = await new Promise<{ readonly code: number | null; readonly output: string }>((resolve, reject) => {
-      const child = spawn(
-        process.execPath,
-        [
-          '--import',
-          join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs'),
-          '--experimental-strip-types',
-          '--disable-warning=ExperimentalWarning',
-          '--test',
-          '--test-name-pattern',
-          exactTestName(mutation.testName),
-          join(root, 'test', mutation.testFile),
-        ],
-        { cwd: root, env: environment, stdio: ['ignore', 'pipe', 'pipe'] },
-      );
-      let output = '';
-      child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
-        output += chunk;
-      });
-      child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
-        output += chunk;
-      });
-      child.once('error', reject);
-      child.once('close', (code) => resolve({ code, output }));
+    const result = await runStrictMutationChild({
+      command: process.execPath,
+      args: [
+        '--import',
+        join(repositoryRoot, 'test/helpers/loopback-seal-preload.mjs'),
+        '--experimental-strip-types',
+        '--disable-warning=ExperimentalWarning',
+        '--test',
+        '--test-name-pattern',
+        exactTestName(mutation.testName),
+        join(root, 'test', mutation.testFile),
+      ],
+      cwd: root,
+      env: environment,
     });
     assertExactlyOneNamedMutationFailure(mutation, result);
     return changedLine;

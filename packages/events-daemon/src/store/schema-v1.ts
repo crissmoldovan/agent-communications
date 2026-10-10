@@ -73,7 +73,7 @@ export const SCHEMA_V1_STATEMENTS: readonly string[] = [
   ) STRICT`,
   `CREATE TABLE judge_kind_versions (
     id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL CHECK (kind IN ('typesafe', 'laya', 'local-endpoint')),
+    kind TEXT NOT NULL CHECK (kind IN (${JUDGE_KIND_SQL_VALUES})),
     version INTEGER NOT NULL CHECK (version > 0),
     document TEXT NOT NULL,
     digest TEXT NOT NULL,
