@@ -15,6 +15,31 @@ test('E1: every prepare, claim and finalise disabled-kind guard has one exact de
   );
 });
 
+test('E1: the mutation runner rejects copied-tree import crashes and mutants whose named test passes', async () => {
+  await assert.rejects(
+    expectJudgeKindMutationToFail({
+      id: 'e1-self-import-crash',
+      file: 'domain/versions.ts',
+      before: "import type { DatabaseSync } from 'node:sqlite';",
+      after: "import './missing-e1-self-test.ts';\nimport type { DatabaseSync } from 'node:sqlite';",
+      testFile: 'version-lifecycle.test.ts',
+      testName: 'E1: only a rule activation that names an agentic judge refuses its disabled kind with the stable code',
+    }),
+    /a different test ran/u,
+  );
+  await assert.rejects(
+    expectJudgeKindMutationToFail({
+      id: 'e1-self-passing-mutant',
+      file: 'domain/versions.ts',
+      before: "export type ActiveVersionKind = 'rule' | 'judge-budget' | 'judge-kind';",
+      after: "export type ActiveVersionKind = 'rule' | 'judge-budget' | 'judge-kind';",
+      testFile: 'version-lifecycle.test.ts',
+      testName: 'E1: only a rule activation that names an agentic judge refuses its disabled kind with the stable code',
+    }),
+    /unexpectedly accepted its mutant/u,
+  );
+});
+
 test('E1: each disabled-kind guard mutation fails its named production-path test', {
   skip: WINDOWS_SKIP,
 }, async (context) => {

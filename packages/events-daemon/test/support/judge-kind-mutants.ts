@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { cp, readFile, rm, writeFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { cp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, join, relative, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 export interface JudgeKindMutation {
   readonly id: string;
@@ -64,6 +65,56 @@ function exactTestName(name: string): string {
   return `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`;
 }
 
+async function rewriteCopiedCrossPackageImports(root: string): Promise<void> {
+  const copiedTests = join(root, 'test');
+  const originalTests = join(packageRoot, 'test');
+  const rewrite = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const copied = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await rewrite(copied);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith('.ts')) continue;
+      const original = join(originalTests, relative(copiedTests, copied));
+      const source = await readFile(copied, 'utf8');
+      const rewritten = source.replace(
+        /(\b(?:from|import)\s*(?:\()?\s*)(['"])([^'"]+)\2/gu,
+        (match, prefix: string, quote: string, specifier: string) => {
+          if (!specifier.startsWith('.')) return match;
+          const target = resolve(dirname(original), specifier);
+          if (!relative(packageRoot, target).startsWith('..')) return match;
+          return `${prefix}${quote}${pathToFileURL(target).href}${quote}`;
+        },
+      );
+      if (rewritten !== source) await writeFile(copied, rewritten, 'utf8');
+    }
+  };
+  await rewrite(copiedTests);
+}
+
+function assertExactlyOneNamedMutationFailure(
+  mutation: JudgeKindMutation,
+  result: { readonly code: number | null; readonly output: string },
+): void {
+  assert.notEqual(
+    result.code,
+    0,
+    `${mutation.id}: ${mutation.testName} unexpectedly accepted its mutant\n${result.output}`,
+  );
+  const summary = (name: 'tests' | 'fail'): number => {
+    const values = [...result.output.matchAll(new RegExp(`^# ${name} (\\d+)$`, 'gmu'))];
+    assert.equal(values.length, 1, `${mutation.id}: child emitted no unique TAP ${name} summary\n${result.output}`);
+    return Number(values[0]?.[1]);
+  };
+  assert.equal(summary('tests'), 1, `${mutation.id}: the child ran more than its one named test\n${result.output}`);
+  assert.equal(summary('fail'), 1, `${mutation.id}: the named test did not fail\n${result.output}`);
+  const subtests = [...result.output.matchAll(/^# Subtest: (.+)$/gmu)].map((match) => match[1]);
+  assert.deepEqual(subtests, [mutation.testName], `${mutation.id}: a different test ran\n${result.output}`);
+  const failures = [...result.output.matchAll(/^not ok \d+ - (.+)$/gmu)].map((match) => match[1]);
+  assert.deepEqual(failures, [mutation.testName], `${mutation.id}: its named test did not fail\n${result.output}`);
+}
+
 /** Runs one exact test against a one-edit copied production tree and proves its oracle rejects the absent guard. */
 export async function expectJudgeKindMutationToFail(mutation: JudgeKindMutation): Promise<number> {
   const root = join(mutantsRoot, mutation.id);
@@ -71,6 +122,7 @@ export async function expectJudgeKindMutationToFail(mutation: JudgeKindMutation)
   try {
     await cp(join(packageRoot, 'src'), join(root, 'src'), { recursive: true });
     await cp(join(packageRoot, 'test'), join(root, 'test'), { recursive: true });
+    await rewriteCopiedCrossPackageImports(root);
     const target = join(root, 'src', mutation.file);
     const original = await readFile(target, 'utf8');
     assert.equal(
@@ -106,11 +158,7 @@ export async function expectJudgeKindMutationToFail(mutation: JudgeKindMutation)
       child.once('error', reject);
       child.once('close', (code) => resolve({ code, output }));
     });
-    assert.notEqual(
-      result.code,
-      0,
-      `${mutation.id}: ${mutation.testName} unexpectedly accepted mutant src/${mutation.file}:${changedLine}\n${result.output}`,
-    );
+    assertExactlyOneNamedMutationFailure(mutation, result);
     return changedLine;
   } finally {
     await rm(root, { recursive: true, force: true });
