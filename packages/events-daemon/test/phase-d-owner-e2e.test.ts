@@ -181,6 +181,8 @@ test('B1: a Gmail alias swap is refused before the returned source can read or s
   await writeFile(join(configDir, 'config.json'), `${JSON.stringify(config)}\n`);
   const store = await openEventDatabase({ stateDir });
   try {
+    // A headless runner has no keychain; the file backend keeps this test off the platform's secret service.
+    await selectEventSecretStore(store.database, 'file');
     const rule = {
       ruleId: 'rule-gmail-identity',
       version: 1,
@@ -314,6 +316,14 @@ test('D7b: a normal owner approves all four injected fakes, interleaves source w
       createdAt: '2026-10-09T12:00:00.000Z',
     };
   await writeFile(join(configDir, 'config.json'), `${JSON.stringify(config)}\n`);
+  // Approving a rule writes event secrets. A headless runner has no keychain, so this database selects the file
+  // backend before the owner opens it, as every other test that writes event secrets does.
+  const selected = await openEventDatabase({ stateDir });
+  try {
+    await selectEventSecretStore(selected.database, 'file');
+  } finally {
+    selected.close();
+  }
 
   let emit = false;
   let status = 'sent';
