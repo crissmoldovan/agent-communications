@@ -123,7 +123,7 @@ test('D7b: a private Slack conversation reaches one validated dry-run delivery w
     scopeId: `slack:${accountId}:G-private`,
   });
   try {
-    const source = slackReader({ id: 'G-private', name: 'private-planning', kind: 'private_channel' });
+    const source = slackReader(accountId, { id: 'G-private', name: 'private-planning', kind: 'private_channel' });
     await run(setup, { source: 'slack', accountId, scopeId: `slack:${accountId}:G-private` }, { slack: source });
     await assertDelivered(setup, {
       type: 'slack.message.posted',
@@ -149,13 +149,57 @@ test('D7b: a Slack IM reaches one validated dry-run delivery with its real conve
     scopeId: `slack:${accountId}:D-im`,
   });
   try {
-    const source = slackReader({ id: 'D-im', name: null, kind: 'im' });
+    const source = slackReader(accountId, { id: 'D-im', name: null, kind: 'im' });
     await run(setup, { source: 'slack', accountId, scopeId: `slack:${accountId}:D-im` }, { slack: source });
     await assertDelivered(setup, {
       type: 'slack.message.posted',
       subject: 'D-im/1760000000.000000',
       data: { accountName: 'events/slack', channel: { id: 'D-im', name: null, kind: 'im' } },
     });
+  } finally {
+    await setup.close();
+  }
+});
+
+test('B1: a Slack source resolved through a swapped alias is refused before a provider call or source write', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const accountId = 'acc_CDEFGHIJKLMNOPQR';
+  const scope: SourceScope = { source: 'slack', accountId, scopeId: `slack:${accountId}:C-identity` };
+  const setup = await fixture({ source: 'slack', accountId, ruleId: 'rule-slack-identity', scopeId: scope.scopeId });
+  try {
+    let providerCalls = 0;
+    const otherAccountId = 'acc_DEFGHIJKLMNOPQRS';
+    const source: SlackEventSource = {
+      accountId: otherAccountId,
+      accountAlias: 'events/slack',
+      workspaceId: 'T-other',
+      conversation: async () => {
+        providerCalls += 1;
+        return { id: 'C-identity', name: null, kind: 'public_channel' };
+      },
+      history: async () => {
+        providerCalls += 1;
+        return { messages: [], nextCursor: null, retainedHistoryBoundary: false };
+      },
+      replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+    };
+    await assert.rejects(
+      () => run(setup, scope, { slack: source }),
+      (error: unknown) => (error as { details?: { reason?: string } }).details?.reason === 'ACCOUNT_CHANGED',
+    );
+    assert.equal(providerCalls, 0, 'the other account has no provider call');
+    assert.equal(count(setup, 'ingest'), 0, 'the other account has no occurrence or candidate write');
+    assert.equal(
+      setup.store.database.prepare('SELECT 1 FROM source_scan_state WHERE account_id = ?').get(otherAccountId),
+      undefined,
+      'the other account has no staged source state',
+    );
+    assert.equal(
+      setup.store.database.prepare('SELECT 1 FROM cursors WHERE account_id = ?').get(otherAccountId),
+      undefined,
+      'the other account has no durable scan anchor',
+    );
   } finally {
     await setup.close();
   }
@@ -605,13 +649,16 @@ async function approve(runtime: ActivationRuntime, prepared: PreparedActivation)
   await runtime.approve({ approvalId: prepared.approvalId, answer: await runtime.issueChallenge(prepared.approvalId) });
 }
 
-function slackReader(conversation: {
-  id: string;
-  name: string | null;
-  kind: 'private_channel' | 'im';
-}): SlackEventSource {
+function slackReader(
+  accountId: string,
+  conversation: {
+    id: string;
+    name: string | null;
+    kind: 'private_channel' | 'im';
+  },
+): SlackEventSource {
   return {
-    accountId: 'unused',
+    accountId,
     accountAlias: 'events/slack',
     workspaceId: 'T-d-source',
     conversation: async () => conversation,

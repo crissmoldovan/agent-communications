@@ -81,6 +81,26 @@ export function purgeRemovedAccountWork(
 ): void {
   const scope: EventAccountScope = typeof account === 'string' ? { source: 'gmail', accountId: account } : account;
   const { accountId, source } = scope;
+  // A used approval names the planned stable ids, not aliases. Cancel every unfinished intent that includes this
+  // source/account before removing its durable source state: a later re-add of the same id must require a new
+  // approval and a fresh point. Version-one plans omitted `source` for Gmail, so preserve that canonical default.
+  const plannedIntentIds = `
+    SELECT DISTINCT intent.id
+    FROM activation_intents AS intent
+    JOIN json_each(intent.required_points) AS point
+    WHERE intent.status IN ('pending', 'pending-completion')
+      AND json_extract(point.value, '$.accountId') = ?
+      AND COALESCE(json_extract(point.value, '$.source'), 'gmail') = ?
+  `;
+  database.prepare(`DELETE FROM activation_baselines WHERE intent_id IN (${plannedIntentIds})`).run(accountId, source);
+  database.prepare(`DELETE FROM replacement_drains WHERE intent_id IN (${plannedIntentIds})`).run(accountId, source);
+  database
+    .prepare(
+      `UPDATE activation_intents
+       SET status = 'cancelled', failure_code = 'ACCOUNT_REMOVED', updated_at = ?
+       WHERE id IN (${plannedIntentIds})`,
+    )
+    .run(now, accountId, source);
   if (source === 'whatsapp') {
     // stream_log carries the optional WhatsApp occurrence foreign key, so retained frames must go before their parent
     // occurrence ledger when a re-check observes account removal under the list lock.
