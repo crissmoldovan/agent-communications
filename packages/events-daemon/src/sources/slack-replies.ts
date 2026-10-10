@@ -16,6 +16,8 @@ interface SlackReplyBarrier {
   readonly kind: 'slack-reply-barrier-v1';
   readonly through: string;
   readonly topLevelCovered: boolean;
+  /** Parents ordinary reconciliation retained only for an unexpired staged reply page. */
+  readonly agedParents: readonly string[];
 }
 
 interface SlackReplyReconciliationState {
@@ -89,7 +91,7 @@ function timestampMicros(value: string): bigint {
   return BigInt(seconds) * 1_000_000n + BigInt(micros);
 }
 
-function wallClockSlackTimestamp(now: number): string {
+function _wallClockSlackTimestamp(now: number): string {
   if (!Number.isSafeInteger(now) || now < 0) throw new CommsError('BAD_DATA', 'the Slack reply clock is invalid');
   return `${Math.floor(now / 1_000)}.${String((now % 1_000) * 1_000).padStart(6, '0')}`;
 }
@@ -752,7 +754,6 @@ export class SlackReplyDrains {
   readonly #database: DatabaseSync;
   readonly #source: SlackRepliesReader;
   readonly #now: () => number;
-  readonly #nowTimestamp: () => string;
   readonly #assertLive: () => void;
   readonly #encrypt: (value: unknown, id: string) => Promise<Uint8Array>;
   readonly #decrypt: (record: Uint8Array, id: string) => Promise<unknown>;
@@ -774,7 +775,6 @@ export class SlackReplyDrains {
     this.#source = options.source;
     this.#assertLive = options.assertLive;
     this.#now = options.now ?? Date.now;
-    this.#nowTimestamp = options.nowTimestamp ?? (() => wallClockSlackTimestamp(this.#now()));
     this.#encrypt = options.encryptState;
     this.#decrypt = options.decryptState;
     this.#stager = new SlackReplyPageStager({
@@ -802,7 +802,7 @@ export class SlackReplyDrains {
       return;
     }
     const record = await this.#encrypt(
-      { kind: 'slack-reply-barrier-v1', through: input.through, topLevelCovered: false },
+      { kind: 'slack-reply-barrier-v1', through: input.through, topLevelCovered: false, agedParents: [] },
       id,
     );
     this.#assertLive();
@@ -837,18 +837,36 @@ export class SlackReplyDrains {
     // before top-level coverage. That idempotent no-op is safe; a distinct
     // parent after coverage would make the aggregate proof incomplete.
     if (existing !== undefined) return;
+    if (compareSlackTimestamp(input.parentTs, barrier.value.through) > 0) return;
     if (barrier.value.topLevelCovered)
       throw new CommsError('APPROVAL_VOID', 'the Slack reply-parent set is frozen after top-level coverage');
-    if (!input.retainPastHorizon && !isSlackReplyEligible(input.parentTs, barrier.value.through, this.#nowTimestamp()))
-      return;
+    const retainedPastHorizon = input.retainPastHorizon === true;
+    const nextBarrier = retainedPastHorizon
+      ? {
+          ...barrier.value,
+          agedParents: [...new Set([...barrier.value.agedParents, input.parentTs])].sort(compareSlackTimestamp),
+        }
+      : undefined;
+    const record = nextBarrier === undefined ? undefined : await this.#encrypt(nextBarrier, barrier.id);
     this.#assertLive();
-    this.#database
-      .prepare(
-        `INSERT OR IGNORE INTO slack_reply_drains
-         (intent_id, account_id, conversation_id, thread_ts, cursor, covered_through, drained_at)
-         VALUES (?, ?, ?, ?, NULL, ?, NULL)`,
-      )
-      .run(input.intentId, input.accountId, input.conversationId, input.parentTs, input.parentTs);
+    immediate(this.#database, () => {
+      this.#assertLive();
+      const inserted = this.#database
+        .prepare(
+          `INSERT OR IGNORE INTO slack_reply_drains
+           (intent_id, account_id, conversation_id, thread_ts, cursor, covered_through, drained_at)
+           VALUES (?, ?, ?, ?, NULL, ?, NULL)`,
+        )
+        .run(input.intentId, input.accountId, input.conversationId, input.parentTs, input.parentTs);
+      if (Number(inserted.changes) === 0 || record === undefined) return;
+      const updated = this.#database
+        .prepare(
+          'UPDATE source_scan_state SET encrypted_record = ?, updated_at = ? WHERE id = ? AND encrypted_record = ?',
+        )
+        .run(record, this.#now(), barrier.id, barrier.record);
+      if (Number(updated.changes) !== 1)
+        throw new CommsError('APPROVAL_VOID', 'the Slack reply barrier changed while its retained parent was recorded');
+    });
   }
 
   async topLevelCovered(
@@ -879,7 +897,7 @@ export class SlackReplyDrains {
       | { thread_ts: string; cursor: string | null; covered_through: string }
       | undefined;
     if (row === undefined) return true;
-    const aged = !isSlackReplyEligible(row.thread_ts, barrier.value.through, this.#nowTimestamp());
+    const aged = barrier.value.agedParents.includes(row.thread_ts);
     if (aged) {
       if (this.#ordinaryStageIsUnexpired(input, row.thread_ts)) return false;
       return this.#coverAgedParent(input, row, barrier);
@@ -1072,11 +1090,26 @@ export class SlackReplyDrains {
     if (
       value.kind !== 'slack-reply-barrier-v1' ||
       typeof value.through !== 'string' ||
-      typeof value.topLevelCovered !== 'boolean'
+      typeof value.topLevelCovered !== 'boolean' ||
+      (value.agedParents !== undefined &&
+        (!Array.isArray(value.agedParents) || value.agedParents.some((parent) => typeof parent !== 'string')))
     )
       throw new CommsError('BAD_DATA', 'a Slack reply barrier record is malformed');
     assertSlackTimestamp(value.through);
-    return { id, value: value as SlackReplyBarrier, record };
+    const agedParents = value.agedParents ?? [];
+    for (const parent of agedParents) assertSlackTimestamp(parent);
+    if (new Set(agedParents).size !== agedParents.length)
+      throw new CommsError('BAD_DATA', 'a Slack reply barrier retained a parent twice');
+    return {
+      id,
+      value: {
+        kind: 'slack-reply-barrier-v1',
+        through: value.through,
+        topLevelCovered: value.topLevelCovered,
+        agedParents,
+      },
+      record,
+    };
   }
 }
 
