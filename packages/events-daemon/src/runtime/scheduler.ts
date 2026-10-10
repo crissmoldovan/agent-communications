@@ -733,7 +733,18 @@ export class EventScheduler {
   async #purgeConfiguredAwayAccounts(): Promise<void> {
     const registered = new Set(this.#sourceRegistry.sources());
     const rows = this.#store.database
-      .prepare(`SELECT source, account_id FROM source_scan_state UNION SELECT source, account_id FROM cursors`)
+      .prepare(
+        `SELECT source, account_id FROM source_scan_state
+         UNION
+         SELECT source, account_id FROM cursors
+         UNION
+         SELECT COALESCE(json_extract(point.value, '$.source'), 'gmail') AS source,
+                json_extract(point.value, '$.accountId') AS account_id
+           FROM activation_intents
+           JOIN json_each(activation_intents.required_points) AS point
+          WHERE activation_intents.status IN ('pending', 'pending-completion')
+            AND json_type(point.value, '$.accountId') = 'text'`,
+      )
       .all()
       .filter((row) => registered.has((row as { source: string }).source as SourceScope['source'])) as Array<{
       source: 'gmail' | 'slack' | 'resend' | 'whatsapp';
