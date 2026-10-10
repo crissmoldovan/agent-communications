@@ -1087,7 +1087,7 @@ exist, or when a registered tool/command is documented nowhere.
   `scorecard.yml` (once public).
 - **Repo settings once public:** branch ruleset on `main` (PR + status checks, no force-push), secret
   scanning with push protection, private vulnerability reporting, immutable releases.
-- **`.blocks/`:** `post-clone.sh` (`pnpm install --frozen-lockfile`) and `review.md` (run `pnpm verify`; ask
+- **`.blocks/`:** `post-clone.sh` (`pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'`) and `review.md` (run `pnpm verify`; ask
   "what turns red when the thing it describes changes?").
 - **Skill verifier:** port `agent-skills/scripts/verify-skills.mjs` and its test; extend the secret scan with
   JSON-key forms (`"client_secret": "…"`, `"refresh_token": "…"`) and Google token prefixes (`GOCSPX-`,

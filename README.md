@@ -470,7 +470,7 @@ guarantee, not a shortcut around this one.
 ## Development
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'
 pnpm verify          # lint, typecheck, test, build, skills, packed-tarball consumer checks
 ```
 

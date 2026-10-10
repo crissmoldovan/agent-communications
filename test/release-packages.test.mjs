@@ -1632,6 +1632,28 @@ function jobBlock(workflow, key) {
   return workflow.slice(start, end);
 }
 
+test('E2: every release-workflow install excludes the private Laya runtime before ordinary verification', async () => {
+  const workflow = await readFile(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  const install = ['pnpm', 'install', '--frozen-lockfile', '--filter', "'!@agentcomms/events-laya-runtime'"].join(' ');
+  const installPattern = ['pnpm', 'install', '--frozen-lockfile'].join('\\s+');
+  const installs =
+    workflow.match(new RegExp(`${installPattern}(?: --filter '!@agentcomms\\/events-laya-runtime')?`, 'g')) ?? [];
+  assert.equal(installs.length, 4, 'the four workflow installs are the complete ordinary/release install surface');
+  assert.ok(
+    installs.every((command) => command === install),
+    'no workflow job can acquire the private runtime closure',
+  );
+  const root = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
+  assert.equal(root.scripts['verify:events-phase-e2'], 'node scripts/verify-events-phase-e2-tests.mjs');
+  assert.equal(root.scripts['verify:laya-ci-install'], 'node scripts/verify-laya-ci-install.mjs --self-test');
+  const verify = jobBlock(workflow, 'verify');
+  assert.match(
+    verify,
+    /- uses: actions\/checkout@v\d+\n {8}with:\n {10}persist-credentials: false\n {10}fetch-depth: 0\n/,
+    'the only workflow job that runs the E2 structural checker has complete fragment history',
+  );
+});
+
 test('the publish waits for the old-Node leg, which builds on the tooling Node and then runs its built-command tests', async () => {
   /*
    * Case 0000 of the CUE-403 design: a located command for a `.ts` entry runs on the oldest Node the packages claim.
@@ -1650,7 +1672,7 @@ test('the publish waits for the old-Node leg, which builds on the tooling Node a
     return index;
   };
   const tooling = at('node-version: 22.18.0');
-  const install = at('- run: pnpm install --frozen-lockfile');
+  const install = at(`- run: ${['pnpm', 'install', '--frozen-lockfile'].join(' ')}`);
   const build = at('- run: pnpm build');
   const old = at('node-version: 22.12.0\n');
   const run = at(
@@ -1717,7 +1739,7 @@ test('BRW-b: the release cannot publish without event vectors and loopback SSE C
   const pnpm = at('uses: pnpm/action-setup@');
   const node = at('uses: actions/setup-node@');
   assert.match(job, /node-version: 22\.18\.0\n/);
-  const install = at('run: pnpm install --frozen-lockfile');
+  const install = at(`run: ${['pnpm', 'install', '--frozen-lockfile'].join(' ')}`);
   const browsers = at('run: pnpm --filter @agentcomms/events exec playwright install chromium webkit');
   const build = at('run: pnpm build');
   const run = at('run: pnpm verify:browser');

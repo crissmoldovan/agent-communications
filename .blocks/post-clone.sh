@@ -44,7 +44,7 @@ if ! command -v pnpm >/dev/null 2>&1; then
   npm install -g pnpm@11 >/dev/null 2>&1 || true
 fi
 
-if ! pnpm install --frozen-lockfile; then
+if ! pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime'; then
   say "INSTALL FAILED. The suite cannot be run; say so in the review rather than"
   say "leaving a reader to infer it from a verdict that does not mention tests."
   exit 0

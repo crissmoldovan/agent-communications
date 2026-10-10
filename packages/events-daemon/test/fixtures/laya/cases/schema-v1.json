@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "fragmentPattern": "task-<positive-integer>.json",
+  "required": ["task", "owners", "section5", "traceability", "awaits", "fixtures", "mutations", "externalSources"]
+}

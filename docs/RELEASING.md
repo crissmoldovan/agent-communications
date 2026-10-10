@@ -76,7 +76,7 @@ every platform accepted. Then:
 
    ```bash
    git checkout vX.Y.Z
-   pnpm install --frozen-lockfile && pnpm build
+   pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime' && pnpm build
    pnpm --config.pnpmfile=scripts/record-git-head.cjs --filter @agentcomms/<name> publish --access public --no-git-checks --tag latest
    ```
 
@@ -230,7 +230,7 @@ earlier, if the owner decides to publish it on its own:
    changelog entry what the package is.
 2. Tag and push as usual. After every verify leg passes, the OIDC preflight stops with
    `✗ @agentcomms/<name>: never published`, prints the hand publish for the tagged commit, and sends nothing.
-3. The owner runs it in a terminal, in a checkout of the tag after `pnpm install --frozen-lockfile && pnpm build`
+3. The owner runs it in a terminal, in a checkout of the tag after `pnpm install --frozen-lockfile --filter '!@agentcomms/events-laya-runtime' && pnpm build`
    (npm asks for a one-time password to create a package):
    `pnpm --config.pnpmfile=scripts/record-git-head.cjs --filter @agentcomms/<name> publish --access public --no-git-checks --tag latest`.
 4. The owner adds its trusted publisher on npmjs.com → the package → Settings → Trusted publishing: this repository,
