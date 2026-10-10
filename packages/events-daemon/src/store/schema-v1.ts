@@ -1,3 +1,7 @@
+import { JUDGE_KINDS } from '../domain/lifecycle.ts';
+
+const JUDGE_KIND_SQL_VALUES = JUDGE_KINDS.map((kind) => `'${kind.replaceAll("'", "''")}'`).join(', ');
+
 export const SCHEMA_V1_STATEMENTS: readonly string[] = [
   `CREATE TABLE meta (
     key TEXT PRIMARY KEY,
@@ -316,4 +320,105 @@ export const SCHEMA_V1_STATEMENTS: readonly string[] = [
     kind TEXT NOT NULL,
     created_at INTEGER NOT NULL
   ) STRICT`,
+];
+
+/**
+ * Forward-only Phase E storage.  This lives beside the v1 declaration so a fresh install and an upgrade share one
+ * exact shape, while migration 1 itself remains byte-for-byte historical.
+ */
+export const PHASE_E_DURABLE_SCHEMA_STATEMENTS: readonly string[] = [
+  'ALTER TABLE decisions ADD COLUMN hold_created_at INTEGER',
+  'CREATE UNIQUE INDEX decisions_hold_claim_identity ON decisions(id, account_id, rule_id, rule_version)',
+  'CREATE UNIQUE INDEX ingest_event_account_identity ON ingest(event_id, account_id)',
+  `CREATE TABLE hold_resolution_claims (
+    decision_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    rule_id TEXT NOT NULL,
+    rule_version INTEGER NOT NULL CHECK (rule_version > 0),
+    claim_token BLOB NOT NULL UNIQUE CHECK (length(claim_token) = 32),
+    claimed_at INTEGER NOT NULL,
+    lease_expires_at INTEGER NOT NULL,
+    FOREIGN KEY (decision_id, account_id, rule_id, rule_version)
+      REFERENCES decisions(id, account_id, rule_id, rule_version) ON DELETE CASCADE,
+    CHECK (lease_expires_at > claimed_at)
+  ) STRICT`,
+  'CREATE INDEX hold_resolution_claims_lease_expiry ON hold_resolution_claims(lease_expires_at)',
+  `CREATE TABLE judge_budget_reservations (
+    id TEXT PRIMARY KEY,
+    work_id TEXT NOT NULL UNIQUE,
+    work_scope TEXT NOT NULL CHECK (work_scope IN ('source-owned', 'synthetic-test')),
+    source TEXT,
+    account_id TEXT,
+    event_id TEXT,
+    rule_id TEXT,
+    rule_version INTEGER CHECK (rule_version > 0),
+    judge_id TEXT NOT NULL,
+    judge_version INTEGER NOT NULL CHECK (judge_version > 0),
+    judge_kind TEXT NOT NULL CHECK (judge_kind IN (${JUDGE_KIND_SQL_VALUES})),
+    test_work_id TEXT,
+    budget_version INTEGER NOT NULL REFERENCES judge_budget_versions(version),
+    provider TEXT,
+    global_ledger_key TEXT NOT NULL CHECK (global_ledger_key = 'installation'),
+    state TEXT NOT NULL CHECK (state IN ('reserved', 'in-flight', 'settled', 'released')),
+    estimated_input_tokens INTEGER NOT NULL CHECK (estimated_input_tokens >= 0),
+    actual_input_tokens INTEGER CHECK (actual_input_tokens >= 0),
+    concurrency_owned INTEGER NOT NULL CHECK (concurrency_owned IN (0, 1)),
+    reserved_at INTEGER NOT NULL,
+    in_flight_at INTEGER,
+    settled_at INTEGER,
+    released_at INTEGER,
+    switch_generation INTEGER NOT NULL CHECK (switch_generation >= 0),
+    FOREIGN KEY (event_id, account_id) REFERENCES ingest(event_id, account_id),
+    FOREIGN KEY (event_id, rule_id, rule_version) REFERENCES ingest_rules(event_id, rule_id, rule_version),
+    FOREIGN KEY (rule_id, rule_version) REFERENCES rule_versions(rule_id, version),
+    FOREIGN KEY (judge_id, judge_version) REFERENCES judge_versions(judge_id, version),
+    CHECK (
+      (work_scope = 'source-owned'
+        AND source IS NOT NULL
+        AND source IN ('gmail', 'slack', 'resend', 'whatsapp')
+        AND account_id IS NOT NULL
+        AND event_id IS NOT NULL
+        AND rule_id IS NOT NULL
+        AND rule_version IS NOT NULL
+        AND test_work_id IS NULL
+        AND provider IS NOT NULL)
+      OR
+      (work_scope = 'synthetic-test'
+        AND source IS NULL
+        AND account_id IS NULL
+        AND event_id IS NULL
+        AND rule_id IS NULL
+        AND rule_version IS NULL
+        AND test_work_id IS NOT NULL
+        AND provider IS NULL)
+    )
+  ) STRICT`,
+  `CREATE UNIQUE INDEX judge_budget_reservations_synthetic_work_identity
+    ON judge_budget_reservations(test_work_id)
+    WHERE work_scope = 'synthetic-test'`,
+  `CREATE INDEX judge_budget_reservations_rule_rolling
+    ON judge_budget_reservations(rule_id, reserved_at)
+    WHERE work_scope = 'source-owned'`,
+  `CREATE INDEX judge_budget_reservations_provider_rolling
+    ON judge_budget_reservations(provider, reserved_at)
+    WHERE provider IS NOT NULL`,
+  `CREATE INDEX judge_budget_reservations_global_rolling
+    ON judge_budget_reservations(global_ledger_key, reserved_at)`,
+  `CREATE UNIQUE INDEX judge_budget_reservations_source_scope
+    ON judge_budget_reservations(source, account_id, event_id, rule_id, rule_version)
+    WHERE work_scope = 'source-owned'`,
+  `CREATE INDEX judge_budget_reservations_synthetic_scope
+    ON judge_budget_reservations(test_work_id, judge_id, judge_version)
+    WHERE work_scope = 'synthetic-test'`,
+  `CREATE INDEX judge_budget_reservations_kind_scope
+    ON judge_budget_reservations(judge_kind, work_scope, state)`,
+  `CREATE TABLE judge_test_charges (
+    judge_id TEXT NOT NULL,
+    judge_version INTEGER NOT NULL CHECK (judge_version > 0),
+    charged_at INTEGER NOT NULL,
+    work_id TEXT NOT NULL UNIQUE,
+    PRIMARY KEY (judge_id, judge_version, work_id),
+    FOREIGN KEY (judge_id, judge_version) REFERENCES judge_versions(judge_id, version)
+  ) STRICT`,
+  'CREATE INDEX judge_test_charges_rolling ON judge_test_charges(judge_id, judge_version, charged_at)',
 ];

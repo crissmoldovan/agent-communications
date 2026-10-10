@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import type { JudgeKind } from '../domain/lifecycle.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
 import { WriterQuiescer, withEventWriterLease } from '../runtime/writer-quiescer.ts';
 import { type AadComponent, encodeAad } from './aad.ts';
@@ -55,6 +56,65 @@ export interface RecordLayout {
 export interface SourceAccountRecord {
   readonly source: SourceOptions['channel'];
   readonly accountId: string;
+}
+
+/** The closed source/account/test/kind selector algebra for all future judge-ledger mutations. */
+export type JudgeWorkScope =
+  | {
+      readonly scope: 'source-owned';
+      readonly source: SourceOptions['channel'];
+      readonly accountId: string;
+      readonly eventId?: string;
+      readonly ruleId?: string;
+      readonly ruleVersion?: number;
+      readonly judgeId?: string;
+      readonly judgeVersion?: number;
+      readonly decisionId?: string;
+      readonly reservationId?: string;
+    }
+  | {
+      readonly scope: 'synthetic-test';
+      readonly testWorkId: string;
+      readonly judgeId: string;
+      readonly judgeVersion: number;
+    }
+  | { readonly scope: 'judge-kind'; readonly judgeKind: JudgeKind };
+
+export type JudgeReservationState = 'reserved' | 'in-flight' | 'settled' | 'released';
+
+export interface JudgeBudgetReservationRecord {
+  readonly id: string;
+  readonly workId: string;
+  readonly scope: Exclude<JudgeWorkScope, { readonly scope: 'judge-kind' }>;
+  readonly judgeKind: JudgeKind;
+  readonly budgetVersion: number;
+  readonly provider: string | null;
+  readonly state: JudgeReservationState;
+  readonly estimatedInputTokens: number;
+  readonly actualInputTokens: number | null;
+  readonly concurrencyOwned: boolean;
+  readonly reservedAt: number;
+  readonly inFlightAt: number | null;
+  readonly settledAt: number | null;
+  readonly releasedAt: number | null;
+  readonly switchGeneration: number;
+}
+
+export interface HoldResolutionClaimRecord {
+  readonly decisionId: string;
+  readonly accountId: string;
+  readonly ruleId: string;
+  readonly ruleVersion: number;
+  readonly claimToken: Uint8Array;
+  readonly claimedAt: number;
+  readonly leaseExpiresAt: number;
+}
+
+export interface JudgeTestChargeRecord {
+  readonly judgeId: string;
+  readonly judgeVersion: number;
+  readonly chargedAt: number;
+  readonly workId: string;
 }
 
 /** Typed D-owned state records keep provider cursors and raw identities out of untyped store calls. */

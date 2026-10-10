@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { SCHEMA_V1_STATEMENTS } from './schema-v1.ts';
+import { PHASE_E_DURABLE_SCHEMA_STATEMENTS, SCHEMA_V1_STATEMENTS } from './schema-v1.ts';
 
 export interface EventMigration {
   readonly version: number;
@@ -461,6 +461,13 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       ) STRICT`,
       "UPDATE meta SET value = '16' WHERE key = 'schema_version'",
     ],
+  },
+  {
+    // Phase E owns the next integrated number after B3's 14–16. Earlier migrations are recorded history and remain
+    // untouched.
+    version: 17,
+    name: 'event-judge-hold-durability-v1',
+    statements: [...PHASE_E_DURABLE_SCHEMA_STATEMENTS, "UPDATE meta SET value = '17' WHERE key = 'schema_version'"],
   },
 ];
 
