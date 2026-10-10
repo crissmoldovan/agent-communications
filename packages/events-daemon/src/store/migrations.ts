@@ -423,6 +423,21 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '14' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // D7 charges a target test before its synthetic transport, once per target across every immutable version.
+    version: 15,
+    name: 'target-test-charges-v1',
+    statements: [
+      `CREATE TABLE target_test_charges (
+        id INTEGER PRIMARY KEY,
+        target_id TEXT NOT NULL CHECK (target_id <> ''),
+        charged_at INTEGER NOT NULL
+      ) STRICT`,
+      `CREATE INDEX target_test_charges_target_window
+       ON target_test_charges(target_id, charged_at)`,
+      "UPDATE meta SET value = '15' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {
