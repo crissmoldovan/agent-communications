@@ -21,6 +21,7 @@ const cells = [
   'S:first-enabled-page-and-reply-barrier',
   'S:first-disabled-baselines-without-content',
   'S:replace-old-only-drains-history-and-replies',
+  'S:replace-observed-old-parent-drains-replies',
   'S:replace-aged-pending-reply-keeps-old-debt',
   'S:replace-new-only-baselines-at-P',
   'S:replace-shared-one-version-per-occurrence',
@@ -75,6 +76,9 @@ async function runRequiredSlackMatrixCell(name: (typeof cells)[number]): Promise
       return;
     case 'S:replace-old-only-drains-history-and-replies':
       await replaceOldOnlyDrainsHistoryAndReplies();
+      return;
+    case 'S:replace-observed-old-parent-drains-replies':
+      await replaceObservedOldParentDrainsReplies();
       return;
     case 'S:replace-aged-pending-reply-keeps-old-debt':
       await replaceAgedPendingReplyKeepsOldDebt();
@@ -640,6 +644,103 @@ async function replaceOldOnlyDrainsHistoryAndReplies(): Promise<void> {
 }
 
 /**
+ * Slack's timestamp does not decide the reply horizon: this parent is eight
+ * days old when history first observes it, so its ordinary reconciliation
+ * horizon starts now.  The replacement must inherit that observed parent,
+ * scan its replies through P, and hold the old pointer until the pending
+ * ordinary stage settles.
+ */
+async function replaceObservedOldParentDrainsReplies(): Promise<void> {
+  await forEachSlackMatrixEdge('S:replace-observed-old-parent-drains-replies', async (fixture, edge) => {
+    const parent = '1759308800.000000';
+    const reply = '1759308801.000000';
+    const point = '1760000000.000000';
+    fixture.setSlackBaseline('1759308799.000000');
+    await fixture.activate();
+    await fixture.enable();
+    const target = fixture.store.database
+      .prepare("SELECT document FROM target_versions WHERE id = 'target-cutover@1'")
+      .get() as { document: string };
+    let replyStaged = false;
+    fixture.setSlackPages({
+      history: async () => ({
+        messages: [matrixSlackMessage({ ts: parent, replyCount: 1 })],
+        nextCursor: null,
+        retainedHistoryBoundary: false,
+      }),
+      replies: async () => {
+        replyStaged = true;
+        // History has already admitted the parent.  Move only the reply's
+        // evaluator boundary so its ordinary page becomes a durable pending
+        // stage, just as it could after a concurrent disclosure change.
+        fixture.store.database
+          .prepare("UPDATE target_versions SET document = '{}' WHERE id = 'target-cutover@1'")
+          .run();
+        return {
+          messages: [matrixSlackMessage({ ts: reply, threadTs: parent })],
+          nextCursor: null,
+          retainedHistoryBoundary: false,
+        };
+      },
+    });
+    await fixture.schedulerTurn();
+    fixture.oracle({ raw: 2, admissions: 1, versions: [1] });
+    assert.equal(replyStaged, true, 'ordinary reconciliation reads the newly observed old parent');
+    fixture.setSlackPages({
+      history: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+      replies: async () => ({
+        messages: [matrixSlackMessage({ ts: reply, threadTs: parent })],
+        nextCursor: null,
+        retainedHistoryBoundary: false,
+      }),
+    });
+    assert.ok(
+      fixture.store.database.prepare("SELECT 1 FROM source_scan_state WHERE id LIKE 'slack-reply-page:%'").get(),
+      'ordinary reconciliation durably staged the pending reply',
+    );
+    const replyCallsBeforeReplacement = fixture.calls.filter((operation) => operation === 'slack.replies').length;
+
+    fixture.store.database
+      .prepare("UPDATE target_versions SET document = ? WHERE id = 'target-cutover@1'")
+      .run(target.document);
+    fixture.setSlackBaseline(point);
+    await startExactSlackReplacement(fixture, fixture.options());
+    fixture.store.database.prepare("UPDATE target_versions SET document = '{}' WHERE id = 'target-cutover@1'").run();
+    await sourceTurnThroughSlackDurableEdge(fixture, edge);
+    assert.ok(
+      fixture.calls.filter((operation) => operation === 'slack.replies').length > replyCallsBeforeReplacement,
+      'the replacement drain scans the observed-old parent through P',
+    );
+    assert.equal(
+      activeRuleVersion(fixture),
+      1,
+      'the aggregate barrier remains open until the pending old-version reply is admitted',
+    );
+    assert.equal(
+      (
+        fixture.store.database.prepare('SELECT drained_at FROM replacement_drains').get() as {
+          drained_at: number | null;
+        }
+      ).drained_at,
+      null,
+      'the parent reply cursor prevents replacement completion before the old stage settles',
+    );
+
+    fixture.store.database
+      .prepare("UPDATE target_versions SET document = ? WHERE id = 'target-cutover@1'")
+      .run(target.document);
+    await fixture.sourceTurn();
+    await resumeClaimedSlackCompletionAtActivationEdge(fixture, 'S:replace-observed-old-parent-drains-replies', edge);
+    assert.equal(activeRuleVersion(fixture), 2, 'the old reply is admitted before the replacement pointer swaps');
+    fixture.oracle({ raw: 2, admissions: 2, versions: [1, 1] });
+    assertSlackOccurrences(fixture, [
+      { ts: parent, version: 1 },
+      { ts: reply, version: 1 },
+    ]);
+  });
+}
+
+/**
  * A reply first staged while its parent is eligible remains old-version work
  * even after that parent ages out of ordinary discovery. The temporary
  * target-document drift deliberately reaches the evaluator's
@@ -937,6 +1038,7 @@ async function replaceSharedOneVersionPerOccurrence(): Promise<void> {
     });
     await startExactSlackReplacement(fixture, fixture.options());
     await sourceTurnThroughSlackDurableEdge(fixture, edge);
+    await finishSlackReplacementDrain(fixture, 'S:replace-shared-one-version-per-occurrence');
     await resumeClaimedSlackCompletionAtActivationEdge(fixture, 'S:replace-shared-one-version-per-occurrence', edge);
     fixture.now.value += 5_000;
     await fixture.sourceTurn();
