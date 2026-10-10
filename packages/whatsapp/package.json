@@ -84,6 +84,15 @@
     },
     "hosts": [],
     "approve": "agent-whatsapp approve",
+    "events": {
+      "types": [
+        "whatsapp.message.received"
+      ],
+      "minimumIntervalMs": 60000,
+      "access": {
+        "kind": "local-store"
+      }
+    },
     "skills": {
       "prefix": "whatsapp-",
       "contract": "skills/_shared/contract-whatsapp.md"

@@ -8,6 +8,7 @@ import { EventLifecycle } from '../src/runtime/lifecycle.ts';
 import { SseDispatcher } from '../src/runtime/sse-dispatcher.ts';
 import { StreamReplay } from '../src/runtime/stream-replay.ts';
 import { SubscriberStreams } from '../src/runtime/subscriber-streams.ts';
+import { WhatsAppVisibilityFence } from '../src/runtime/whatsapp-visibility.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
@@ -85,6 +86,176 @@ async function fixture() {
     );
   return { stateDir, store };
 }
+
+const WHATSAPP_MESSAGE = '["wa-msg","chat@example.test","sender@example.test","message-1"]';
+
+async function whatsappFixture() {
+  const setup = await fixture();
+  setup.store.database.exec(`
+    INSERT INTO whatsapp_visibility (account_id, version, lists_digest, changed_at)
+      VALUES ('${ACCOUNT}', 1, '${'a'.repeat(64)}', 1);
+    INSERT INTO whatsapp_occurrences
+      (account_id, message_id, first_seen_generation, first_seen_at, visibility_version)
+      VALUES ('${ACCOUNT}', '${WHATSAPP_MESSAGE}', 1, 1, 1);
+    UPDATE rule_versions
+       SET document = '{"deliveryRateCap":20,"source":{"channel":"whatsapp"}}'
+     WHERE id = 'rule-sse@1';
+    UPDATE deliveries
+       SET whatsapp_message_id = '${WHATSAPP_MESSAGE}', whatsapp_visibility_version = 1
+     WHERE id = 'delivery-sse';
+  `);
+  return setup;
+}
+
+function sseCipher() {
+  return {
+    async encrypt(_: unknown, bytes: Uint8Array) {
+      return Buffer.from(bytes);
+    },
+    async decrypt(_: unknown, bytes: Uint8Array) {
+      return Buffer.from(bytes);
+    },
+  };
+}
+
+test('P1: WhatsApp SSE append occurs only inside the live-list fence', { skip: WINDOWS_SKIP }, async (t) => {
+  await t.test('a list acquisition that removes the account rechecks before stream-log append', async () => {
+    const setup = await whatsappFixture();
+    let accountPresent = true;
+    try {
+      const fence = new WhatsAppVisibilityFence({
+        store: setup.store,
+        withCurrentEventVisibility: async (_input, work) => {
+          accountPresent = false;
+          return work({ version: 1, digest: 'a'.repeat(64), seesMessage: () => true });
+        },
+      });
+      const dispatcher = new SseDispatcher({
+        store: setup.store,
+        cipher: sseCipher(),
+        approvals: { get: async () => null },
+        config: {
+          load: async () =>
+            accountPresent ? { accounts: { whatsapp: { id: ACCOUNT, platform: 'whatsapp' } } } : { accounts: {} },
+        } as never,
+        fence: async () => undefined,
+        hasConcreteWhatsAppVisibilityFence: true,
+        visibilityGate: fence,
+        now: () => 100,
+      });
+      assert.deepEqual(await dispatcher.dispatch('delivery-sse'), { state: 'terminal', deliveryId: 'delivery-sse' });
+      assert.equal((setup.store.database.prepare('SELECT count(*) AS n FROM stream_log').get() as { n: number }).n, 0);
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('a chat hidden between claim and append leaves no stream row or payload', async () => {
+    const setup = await whatsappFixture();
+    let gates = 0;
+    try {
+      const dispatcher = new SseDispatcher({
+        store: setup.store,
+        cipher: sseCipher(),
+        approvals: { get: async () => null },
+        config: { load: async () => ({ accounts: { whatsapp: { id: ACCOUNT, platform: 'whatsapp' } } }) } as never,
+        fence: async () => undefined,
+        hasConcreteWhatsAppVisibilityFence: true,
+        visibilityGate: {
+          async withCurrentSseFrameVisibility() {
+            gates += 1;
+            return undefined;
+          },
+        },
+        now: () => 100,
+      });
+      assert.deepEqual(await dispatcher.dispatch('delivery-sse'), { state: 'terminal', deliveryId: 'delivery-sse' });
+      assert.equal(gates, 1);
+      assert.equal((setup.store.database.prepare('SELECT count(*) AS n FROM stream_log').get() as { n: number }).n, 0);
+      assert.deepEqual(
+        {
+          ...(setup.store.database
+            .prepare("SELECT state, encrypted_record FROM deliveries WHERE id = 'delivery-sse'")
+            .get() as object),
+        },
+        { state: 'cancelled', encrypted_record: null },
+      );
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test(
+    'an unreadable chat list appends nothing, purges nothing and releases the claim for a retry',
+    async () => {
+      const setup = await whatsappFixture();
+      try {
+        const dispatcher = new SseDispatcher({
+          store: setup.store,
+          cipher: sseCipher(),
+          approvals: { get: async () => null },
+          config: { load: async () => ({ accounts: { whatsapp: { id: ACCOUNT, platform: 'whatsapp' } } }) } as never,
+          fence: async () => undefined,
+          hasConcreteWhatsAppVisibilityFence: true,
+          visibilityGate: {
+            async withCurrentSseFrameVisibility() {
+              throw new Error('the chat list file is unreadable');
+            },
+          },
+          now: () => 100,
+        });
+        await assert.rejects(
+          dispatcher.dispatch('delivery-sse'),
+          (error: unknown) => error instanceof Error && 'code' in error && error.code === 'TRANSIENT',
+        );
+        assert.equal(
+          (setup.store.database.prepare('SELECT count(*) AS n FROM stream_log').get() as { n: number }).n,
+          0,
+        );
+        const row = setup.store.database
+          .prepare("SELECT state, encrypted_record, lease_until FROM deliveries WHERE id = 'delivery-sse'")
+          .get() as { state: string; encrypted_record: Uint8Array | null; lease_until: number | null };
+        assert.notEqual(row.state, 'cancelled', 'D-6: an unreadable list hides, it does not end the delivery');
+        assert.notEqual(row.encrypted_record, null, 'D-6: nothing is purged merely because the file could not be read');
+        assert.equal(row.lease_until, null, 'the claim is released so a later turn retries');
+      } finally {
+        setup.store.close();
+        await rm(setup.stateDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  await t.test('a visible chat appends once inside the fence', async () => {
+    const setup = await whatsappFixture();
+    let gates = 0;
+    try {
+      const dispatcher = new SseDispatcher({
+        store: setup.store,
+        cipher: sseCipher(),
+        approvals: { get: async () => null },
+        config: { load: async () => ({ accounts: { whatsapp: { id: ACCOUNT, platform: 'whatsapp' } } }) } as never,
+        fence: async () => undefined,
+        hasConcreteWhatsAppVisibilityFence: true,
+        visibilityGate: {
+          async withCurrentSseFrameVisibility(_input, recheck, append) {
+            gates += 1;
+            await recheck();
+            return append();
+          },
+        },
+        now: () => 100,
+      });
+      assert.deepEqual(await dispatcher.dispatch('delivery-sse'), { state: 'delivered', deliveryId: 'delivery-sse' });
+      assert.equal(gates, 1);
+      assert.equal((setup.store.database.prepare('SELECT count(*) AS n FROM stream_log').get() as { n: number }).n, 1);
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  });
+});
 
 test('B2-T8: SSE append and delivery settlement share one transaction, charge once, and replay without another charge', {
   skip: WINDOWS_SKIP,

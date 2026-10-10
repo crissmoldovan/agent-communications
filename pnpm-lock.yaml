@@ -104,6 +104,15 @@ importers:
       '@agentcomms/gmail':
         specifier: workspace:*
         version: link:../gmail
+      '@agentcomms/resend':
+        specifier: workspace:*
+        version: link:../resend
+      '@agentcomms/slack':
+        specifier: workspace:*
+        version: link:../slack
+      '@agentcomms/whatsapp':
+        specifier: workspace:*
+        version: link:../whatsapp
     devDependencies:
       '@modelcontextprotocol/client':
         specifier: 2.0.0

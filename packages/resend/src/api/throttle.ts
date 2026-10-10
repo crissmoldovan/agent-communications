@@ -46,7 +46,11 @@ interface ThrottleFile {
   next: number;
   /** Until when Resend asked for no requests at all. */
   blockedUntil: number;
+  /** When a background event read most recently used a slot. */
+  lastBackgroundAt?: number;
 }
+
+export type ThrottlePriority = 'interactive' | 'background-event';
 
 export interface ThrottleOptions {
   now?: () => number;
@@ -76,13 +80,11 @@ export class Throttle {
    * Counted per holder, a caller gives up only once one holder has kept the lock for five seconds: the stuck lock
    * the timeout is there for.
    *
-   * Each request takes the lock once, to reserve its slot, and does its waiting outside it, so the line is only the
-   * requests in flight. But the lock is polled, not queued: whoever looks first after a release takes it, and a
-   * request that keeps looking at the wrong moment watches later ones go ahead of it, for as long as later ones keep
-   * arriving — and several servers each paging through sent mail keep them arriving. So the wait also has an end
-   * that no hand-over moves, `LOCK_MAX_WAIT_MS`, and past it the request is refused as a busy lock rather than left
-   * hanging. `after` waits the same way, because a stop it gave up on recording is a 429 that every other account
-   * carries on into.
+   * An interactive request takes the lock once to reserve its slot and waits outside it. A background event read
+   * reserves nothing while it waits, so a person can always reserve the next free slot; it returns to the lock no
+   * more often than once per interval. The lock is polled, not queued, so its overall wait limit still ends a caller
+   * that keeps losing hand-overs to later callers. `after` waits the same way, because a stop it gave up on recording
+   * is a 429 that every other account carries on into.
    */
   readonly #lock: LockOptions;
 
@@ -105,6 +107,7 @@ export class Throttle {
       return {
         next: Number.isFinite(parsed.next) ? Number(parsed.next) : 0,
         blockedUntil: Number.isFinite(parsed.blockedUntil) ? Number(parsed.blockedUntil) : 0,
+        ...(Number.isFinite(parsed.lastBackgroundAt) ? { lastBackgroundAt: Number(parsed.lastBackgroundAt) } : {}),
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError) {
@@ -144,18 +147,48 @@ export class Throttle {
    * still waiting when that one comes back 429, and the stop Resend asked for covers it as much as anything asked
    * later.
    */
-  async before(): Promise<void> {
-    const wait = await this.#locked(async () => {
-      const state = await this.#read();
-      this.#refuseIfHeld(state);
-      const now = this.#now();
-      const slot = Math.max(now, state.next);
-      await writeFileAtomic(this.path, JSON.stringify({ ...state, next: slot + this.#interval }));
-      return slot - now;
-    });
-    if (wait > 0) {
-      await this.#sleep(wait);
-      this.#refuseIfHeld(await this.#read());
+  async before(priority: ThrottlePriority = 'interactive'): Promise<void> {
+    if (priority === 'interactive') {
+      const wait = await this.#locked(async () => {
+        const state = await this.#read();
+        this.#refuseIfHeld(state);
+        const now = this.#now();
+        const slot = Math.max(now, state.next);
+        await writeFileAtomic(
+          this.path,
+          JSON.stringify({
+            next: slot + this.#interval,
+            blockedUntil: state.blockedUntil,
+            ...(state.lastBackgroundAt === undefined ? {} : { lastBackgroundAt: state.lastBackgroundAt }),
+          }),
+        );
+        return slot - now;
+      });
+      if (wait > 0) {
+        await this.#sleep(wait);
+        this.#refuseIfHeld(await this.#read());
+      }
+      return;
+    }
+
+    for (;;) {
+      const decision = await this.#locked(async () => {
+        const state = await this.#read();
+        this.#refuseIfHeld(state);
+        const now = this.#now();
+        const backgroundWait =
+          state.lastBackgroundAt === undefined ? 0 : Math.max(0, state.lastBackgroundAt + 2 * this.#interval - now);
+        if (state.next <= now && backgroundWait === 0) {
+          await writeFileAtomic(
+            this.path,
+            JSON.stringify({ next: now + this.#interval, blockedUntil: state.blockedUntil, lastBackgroundAt: now }),
+          );
+          return { granted: true, wait: 0 };
+        }
+        return { granted: false, wait: Math.max(state.next - now, backgroundWait, this.#interval) };
+      });
+      if (decision.granted) return;
+      await this.#sleep(decision.wait);
     }
   }
 

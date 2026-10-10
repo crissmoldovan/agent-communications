@@ -102,6 +102,7 @@ export const whatsappMessageReceivedV1: DefinitionInternal<WhatsAppMessageReceiv
     { rule: 'identical', pointers: ['/workspaceId', '/account/id'] },
     { rule: 'whatsapp-message-key', pointers: ['/messageId', '/sender/id'] },
   ],
+  identityPointers: ['/chat/id', '/messageId'],
   subject: (event) => `${event.chat.id}/${event.messageId}`,
   dedupeKey: (event) => `${event.chat.id}/${event.messageId}`,
   examples: [

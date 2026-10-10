@@ -14,8 +14,8 @@ import {
   disclosureBindingFor,
   normaliseActivationDocument,
 } from '../domain/activation-documents.ts';
-import { classifyGmailSourceOptionChange } from '../domain/source-options.ts';
-import { assertLiveGmailAccount } from './account-fence.ts';
+import { classifySourceOptionChange } from '../domain/source-options.ts';
+import { assertLiveEventAccount } from './account-fence.ts';
 
 /** Every plaintext boundary declares itself so the one resolver covers source, evaluation, every webhook byte gate and terminal read. */
 export type DisclosureBoundary =
@@ -306,7 +306,7 @@ export function isWhitelistedTightening(
         restOf(parent, 'source') === restOf(child, 'source') &&
         parent.source.channel === child.source.channel &&
         sameJson(parent.source.accountIds, child.source.accountIds) &&
-        classifyGmailSourceOptionChange(parent.source.options, child.source.options) === 'tightening'
+        classifySourceOptionChange(parent.source.options, child.source.options) === 'tightening'
       );
     default:
       return false;
@@ -388,15 +388,22 @@ export async function assertDisclosable(request: DisclosableRequest): Promise<Di
     if (!['pending', 'pending-completion'].includes(pending.status))
       return refuse('ACTIVATION_NOT_RESUMABLE', 'the activation is no longer pending completion');
     const used = await usedBinding(request.approvals, pending);
-    const accountIsPlanned = (() => {
+    const plannedSources = (() => {
       try {
-        return (JSON.parse(pending.required_points) as Array<{ accountId?: unknown }>).some(
-          (point) => point.accountId === request.accountId,
-        );
+        // A point written before Phase D carries no source; B1's only source was Gmail, so that is what it means.
+        const points = JSON.parse(pending.required_points) as Array<{ accountId?: unknown; source?: unknown }>;
+        return [
+          ...new Set(
+            points
+              .filter((point) => point.accountId === request.accountId)
+              .map((point) => (point.source === undefined ? 'gmail' : point.source)),
+          ),
+        ];
       } catch {
-        return false;
+        return [];
       }
     })();
+    const accountIsPlanned = plannedSources.length > 0;
     const effect = JSON.parse(pending.effect) as { switchGeneration?: unknown };
     if (effect.switchGeneration !== live.generation || !accountIsPlanned)
       return refuse('STALE_GENERATION', 'the activation is no longer at its prepared global generation');
@@ -429,7 +436,19 @@ export async function assertDisclosable(request: DisclosableRequest): Promise<Di
     } else {
       return refuse('ACTIVATION_KIND_UNSUPPORTED', 'this activation has no Gmail baseline');
     }
-    await assertLiveGmailAccount(request.config, request.accountId);
+    if (used.document.kind === 'rule') {
+      await assertLiveEventAccount(request.config, {
+        source: used.document.rule.source.channel,
+        accountId: request.accountId,
+      });
+    } else {
+      // Enable-all spans every registered source: the account is live for each source its planned points name.
+      for (const source of plannedSources) {
+        if (source !== 'gmail' && source !== 'slack' && source !== 'resend' && source !== 'whatsapp')
+          return refuse('ACCOUNT_NOT_BOUND', 'the planned activation point names an unknown source');
+        await assertLiveEventAccount(request.config, { source, accountId: request.accountId });
+      }
+    }
     return {
       approvalId: used.approvalId,
       authorizationActivationId: pending.id,
@@ -452,7 +471,10 @@ export async function assertDisclosable(request: DisclosableRequest): Promise<Di
     )
   )
     return refuse('BOUND_OBJECT_REVOKED', 'the exact target version is not bound into this rule');
-  await assertLiveGmailAccount(request.config, request.accountId);
+  await assertLiveEventAccount(request.config, {
+    source: lineage.rule.source.channel,
+    accountId: request.accountId,
+  });
   return {
     approvalId: lineage.approvalId,
     authorizationActivationId: lineage.root.id,

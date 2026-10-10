@@ -249,6 +249,8 @@ export interface EventDefinition<T extends CatalogueEventV1 = CatalogueEventV1, 
   readonly handles: readonly { pattern: PointerPattern; workspace: PointerPattern }[];
   readonly formats: readonly { pattern: PointerPattern; format: SchemaFormat }[];
   readonly invariants: readonly CatalogueInvariant[];
+  /** Concrete event fields the catalogue subject or dedupe key reads; rule projections retain these independently of mapping. */
+  readonly identityPointers: readonly string[];
   readonly subject: (event: T) => string;
   readonly dedupeKey: (event: T, staging: S) => string;
   readonly examples: readonly T[];

@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { ApprovalStore, CommsError, ConfigStore, canonicalJson, emptyConfig } from '@agentcomms/core';
 import { ImmutableVersions } from '../src/domain/versions.ts';
+import { purgeRemovedAccountWork } from '../src/runtime/account-fence.ts';
 import { ActivationRuntime, type PreparedActivation } from '../src/runtime/activations.ts';
 import { EventExpiry } from '../src/runtime/expiry.ts';
 import { EventLifecycle } from '../src/runtime/lifecycle.ts';
@@ -48,16 +50,8 @@ function clock(start = Date.parse('2026-10-08T10:00:00.000Z')) {
 
 async function fixture(
   options: {
-    readonly encryptBaseline?: (
-      intentId: string,
-      accountId: string,
-      position: { readonly historyId: string },
-    ) => Promise<Uint8Array>;
-    readonly decryptBaseline?: (
-      intentId: string,
-      accountId: string,
-      stored: Uint8Array,
-    ) => Promise<{ readonly historyId: string }>;
+    readonly encryptBaseline?: (intentId: string, accountId: string, position: unknown) => Promise<Uint8Array>;
+    readonly decryptBaseline?: (intentId: string, accountId: string, stored: Uint8Array) => Promise<unknown>;
     /** Runs inside the baseline's profile call, between the authority check and the baseline write. */
     readonly onProfile?: (store: Awaited<ReturnType<typeof openEventDatabase>>) => void;
     readonly encryptPoint?: (input: {
@@ -65,8 +59,10 @@ async function fixture(
       readonly ruleId: string;
       readonly ruleVersion: number;
       readonly accountId: string;
-      readonly position: { readonly historyId: string };
+      readonly position: unknown;
     }) => Promise<Uint8Array>;
+    /** Fails selected baseline provider calls after the activation has durably claimed its approval. */
+    readonly failProfileCalls?: readonly number[];
   } = {},
 ) {
   const root = await shortTempDir('events-act-');
@@ -115,6 +111,7 @@ async function fixture(
       getProfile: async () => {
         profileCalls += 1;
         options.onProfile?.(store);
+        if (options.failProfileCalls?.includes(profileCalls)) throw new Error(`profile failure ${profileCalls}`);
         return { emailAddress: 'events@example.test', messagesTotal: 1, threadsTotal: 1, historyId: '202' };
       },
       listHistory: async () => {
@@ -1105,6 +1102,338 @@ const count = (setup: Awaited<ReturnType<typeof fixture>>, sql: string, ...value
     }
   ).count;
 
+test('P1/K6: removing a planned account cancels a used completion before recovery, resume, or a scheduler turn can revive it', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const cases = [
+    { name: 'first activation recovery', kind: 'first' as const, resume: 'recover' as const, failsAt: 1 },
+    { name: 'multi-account replacement resume', kind: 'replacement' as const, resume: 'claimed' as const, failsAt: 3 },
+    { name: 'enable-all scheduler turn', kind: 'enable-all' as const, resume: 'scheduler' as const, failsAt: 3 },
+  ];
+  for (const entry of cases) {
+    const setup = await fixture({ failProfileCalls: [entry.failsAt] });
+    try {
+      const versions = new ImmutableVersions(setup.store.database);
+      versions.createTarget(target);
+      let planned: PreparedActivation;
+      if (entry.kind === 'first') {
+        versions.createRule(rule);
+        planned = (await setup.runtime.prepareRule({
+          ruleId: rule.ruleId,
+          version: rule.version,
+        })) as PreparedActivation;
+      } else {
+        versions.createRule(multi);
+        const original = (await setup.runtime.prepareRule({ ruleId: multi.ruleId, version: 1 })) as PreparedActivation;
+        await setup.runtime.approve({
+          approvalId: original.approvalId,
+          answer: await setup.approvals.issueDisclosureChallenge(original.approvalId),
+        });
+        if (entry.kind === 'replacement') {
+          setup.store.database.prepare('UPDATE event_settings SET enabled = 1').run();
+          versions.createRule({ ...multi, version: 2, mapping: { constant: 'new cut-over' } });
+          planned = (await setup.runtime.prepareRule({ ruleId: multi.ruleId, version: 2 })) as PreparedActivation;
+        } else {
+          planned = await setup.runtime.prepareEnableAll();
+        }
+      }
+      const answer = await setup.approvals.issueDisclosureChallenge(planned.approvalId);
+      await assert.rejects(
+        () => setup.runtime.approve({ approvalId: planned.approvalId, answer }),
+        /profile failure/u,
+        `${entry.name}: the claimed baseline remains recoverable until account removal`,
+      );
+      assert.equal(
+        (
+          setup.store.database.prepare('SELECT status FROM activation_intents WHERE id = ?').get(planned.intentId) as {
+            status: string;
+          }
+        ).status,
+        'pending-completion',
+        `${entry.name}: the approval is used and its completion is pending`,
+      );
+
+      const configPath = join(setup.root, 'config', 'config.json');
+      const beforeRemoval = JSON.parse(await readFile(configPath, 'utf8')) as { inboxes: Record<string, unknown> };
+      const inbox = beforeRemoval.inboxes['events/gmail'];
+      await removeAccount(setup.root);
+      setup.store.immediate(() =>
+        purgeRemovedAccountWork(setup.store.database, { source: 'gmail', accountId: A }, setup.time.now()),
+      );
+      assert.deepEqual(
+        {
+          ...(setup.store.database
+            .prepare('SELECT status, failure_code FROM activation_intents WHERE id = ?')
+            .get(planned.intentId) as Record<string, unknown>),
+        },
+        { status: 'cancelled', failure_code: 'ACCOUNT_REMOVED' },
+        `${entry.name}: removal cancels its planned completion in the purge transaction`,
+      );
+      await readdAccount(setup.root, inbox);
+      setup.time.advance(60_000);
+
+      if (entry.resume === 'recover') await setup.runtime.recover();
+      else if (entry.resume === 'claimed') await setup.runtime.resumeClaimedCompletions();
+      else await stubScheduler(setup, []).tick();
+
+      assert.deepEqual(
+        {
+          ...(setup.store.database
+            .prepare('SELECT status, failure_code FROM activation_intents WHERE id = ?')
+            .get(planned.intentId) as Record<string, unknown>),
+        },
+        { status: 'cancelled', failure_code: 'ACCOUNT_REMOVED' },
+        `${entry.name}: a re-add cannot revive work approved before removal`,
+      );
+      assert.equal(
+        count(setup, 'activation_baselines WHERE intent_id = ?', planned.intentId),
+        0,
+        `${entry.name}: cancellation drops its baseline`,
+      );
+      assert.equal(
+        count(setup, 'replacement_drains WHERE intent_id = ?', planned.intentId),
+        0,
+        `${entry.name}: cancellation drops its drain`,
+      );
+      assert.equal(
+        count(setup, 'rule_activation_points WHERE activation_id = ?', planned.intentId),
+        0,
+        `${entry.name}: no new cut-over point is installed`,
+      );
+      assert.equal(
+        setup.profileCalls(),
+        entry.failsAt,
+        `${entry.name}: no later provider call reaches the re-added id`,
+      );
+      if (entry.kind === 'first')
+        assert.equal(versions.activeVersion('rule', rule.ruleId), null, 'the first activation never gains a pointer');
+      else
+        assert.equal(
+          versions.activeVersion('rule', multi.ruleId)?.version,
+          1,
+          `${entry.name}: no replacement or global re-enable changes the active version`,
+        );
+    } finally {
+      setup.store.close();
+      await rm(setup.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('P1 (review round 13): the scheduler cancels a pending first or replacement-new-only activation when its account is removed', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const cases = [
+    {
+      name: 'first activation',
+      prepare: async (setup: Awaited<ReturnType<typeof fixture>>, versions: ImmutableVersions) => {
+        versions.createRule(rule);
+        return (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: rule.version })) as PreparedActivation;
+      },
+      active: (versions: ImmutableVersions) => versions.activeVersion('rule', rule.ruleId),
+    },
+    {
+      name: 'first activation with a source-less legacy Gmail point',
+      sourceLessGmailPoint: true,
+      prepare: async (setup: Awaited<ReturnType<typeof fixture>>, versions: ImmutableVersions) => {
+        versions.createRule(rule);
+        return (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: rule.version })) as PreparedActivation;
+      },
+      active: (versions: ImmutableVersions) => versions.activeVersion('rule', rule.ruleId),
+    },
+    {
+      name: 'replacement new-only scope',
+      prepare: async (setup: Awaited<ReturnType<typeof fixture>>, versions: ImmutableVersions) => {
+        const oldRule = {
+          ...rule,
+          ruleId: 'rule-replacement-new-only',
+          source: { ...rule.source, accountIds: [B] },
+        };
+        const newRule = {
+          ...oldRule,
+          version: 2,
+          source: { ...oldRule.source, accountIds: [A, B] },
+          mapping: { constant: 'new-only account' },
+        };
+        versions.createRule(oldRule);
+        versions.createRule(newRule);
+        const original = (await setup.runtime.prepareRule({
+          ruleId: oldRule.ruleId,
+          version: oldRule.version,
+        })) as PreparedActivation;
+        await setup.runtime.approve({
+          approvalId: original.approvalId,
+          answer: await setup.approvals.issueDisclosureChallenge(original.approvalId),
+        });
+        return (await setup.runtime.prepareRule({
+          ruleId: newRule.ruleId,
+          version: newRule.version,
+        })) as PreparedActivation;
+      },
+      active: (versions: ImmutableVersions) => versions.activeVersion('rule', 'rule-replacement-new-only'),
+    },
+  ];
+  for (const entry of cases) {
+    const setup = await fixture();
+    try {
+      const versions = new ImmutableVersions(setup.store.database);
+      versions.createTarget(target);
+      const planned = await entry.prepare(setup, versions);
+      if (entry.sourceLessGmailPoint)
+        setup.store.database
+          .prepare(
+            "UPDATE activation_intents SET required_points = json_remove(required_points, '$[0].source') WHERE id = ?",
+          )
+          .run(planned.intentId);
+      assert.equal(
+        (
+          setup.store.database.prepare('SELECT status FROM activation_intents WHERE id = ?').get(planned.intentId) as {
+            status: string;
+          }
+        ).status,
+        'pending',
+        `${entry.name}: removal races the original disclosure approval`,
+      );
+
+      const inbox = await primaryInbox(setup.root);
+      await removeAccount(setup.root);
+      await stubScheduler(setup, []).tick();
+
+      assert.deepEqual(
+        {
+          ...(setup.store.database
+            .prepare('SELECT status, failure_code FROM activation_intents WHERE id = ?')
+            .get(planned.intentId) as Record<string, unknown>),
+        },
+        { status: 'cancelled', failure_code: 'ACCOUNT_REMOVED' },
+        `${entry.name}: the scheduler sweep cancels the pending original approval`,
+      );
+      assert.equal(
+        setup.store.database.prepare('SELECT 1 FROM account_revocations WHERE account_id = ?').get(A) !== undefined,
+        true,
+        `${entry.name}: the sweep writes the stable-id revocation tombstone`,
+      );
+
+      await readdAccount(setup.root, inbox);
+      const answer = await setup.approvals.issueDisclosureChallenge(planned.approvalId);
+      await assert.rejects(
+        () =>
+          setup.runtime.approve({
+            approvalId: planned.approvalId,
+            answer,
+          }),
+        (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_VOID',
+        `${entry.name}: the old approval cannot activate the re-added stable id`,
+      );
+      assert.deepEqual(
+        {
+          ...(setup.store.database
+            .prepare('SELECT status, failure_code FROM activation_intents WHERE id = ?')
+            .get(planned.intentId) as Record<string, unknown>),
+        },
+        { status: 'cancelled', failure_code: 'ACCOUNT_REMOVED' },
+      );
+      if (entry.name.startsWith('first activation'))
+        assert.equal(entry.active(versions), null, 'the first version stays inactive');
+      else assert.deepEqual(entry.active(versions), { version: 1, currentCutoverId: 'act_01HZZZZZZZZZZZZZZZZZZZZZZZ' });
+    } finally {
+      setup.store.close();
+      await rm(setup.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('P1 (review round 13) mutation: omitting pending-intent accounts makes the scheduler regression fail', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const packageRoot = join(import.meta.dirname, '..');
+  const root = join(packageRoot, '.mutants', 'pending-intent-account-sweep');
+  const scheduler = join(root, 'src', 'runtime', 'scheduler.ts');
+  const loopbackSealPreload = join(packageRoot, '..', '..', 'test', 'helpers', 'loopback-seal-preload.mjs');
+  const guard = "WHERE activation_intents.status IN ('pending', 'pending-completion')";
+  // This toggle belongs only to this non-matrix regression: it makes the copied production scheduler omit the new
+  // candidate set, while the test below proves its own scheduler path rejects that mutation.
+  const omitPendingIntentAccounts = true;
+  await rm(root, { recursive: true, force: true });
+  try {
+    await cp(join(packageRoot, 'src'), join(root, 'src'), { recursive: true });
+    await cp(join(packageRoot, 'test'), join(root, 'test'), { recursive: true });
+    const source = await readFile(scheduler, 'utf8');
+    assert.equal(
+      source.split(guard).length - 1,
+      1,
+      'the pending-intent query guard must remain a single mutation site',
+    );
+    await writeFile(scheduler, source.replace(guard, omitPendingIntentAccounts ? 'WHERE 0 = 1' : guard));
+
+    const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
+    const result = await new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        [
+          '--import',
+          loopbackSealPreload,
+          '--test',
+          '--test-name-pattern',
+          '^P1 \\(review round 13\\): the scheduler cancels a pending first or replacement-new-only activation when its account is removed$',
+          join(root, 'test', 'activation-recovery.test.ts'),
+        ],
+        { cwd: root, env: environment, stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      let output = '';
+      child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+        output += chunk;
+      });
+      child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
+        output += chunk;
+      });
+      child.once('error', reject);
+      child.once('close', (code) => resolve({ code, output }));
+    });
+    assert.notEqual(result.code, 0, `the pending-intent omission unexpectedly passed\n${result.output}`);
+    assert.match(result.output, /scheduler sweep cancels the pending original approval/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('P1: a later account revocation refuses a claimed completion even after that stable id is configured again', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture({ failProfileCalls: [1] });
+  try {
+    const versions = new ImmutableVersions(setup.store.database);
+    versions.createTarget(target);
+    versions.createRule(rule);
+    const planned = (await setup.runtime.prepareRule({
+      ruleId: rule.ruleId,
+      version: rule.version,
+    })) as PreparedActivation;
+    const answer = await setup.approvals.issueDisclosureChallenge(planned.approvalId);
+    await assert.rejects(() => setup.runtime.approve({ approvalId: planned.approvalId, answer }), /profile failure 1/u);
+    setup.store.immediate(() => {
+      setup.store.database
+        .prepare('INSERT INTO account_revocations (account_id, revoked_at) VALUES (?, ?)')
+        .run(A, setup.time.now());
+    });
+    setup.time.advance(60_000);
+    await setup.runtime.resumeClaimedCompletions();
+    assert.deepEqual(
+      {
+        ...(setup.store.database
+          .prepare('SELECT status, failure_code FROM activation_intents WHERE id = ?')
+          .get(planned.intentId) as Record<string, unknown>),
+      },
+      { status: 'cancelled', failure_code: 'ACCOUNT_REMOVED' },
+    );
+    assert.equal(setup.profileCalls(), 1, 'the revocation is checked before another provider boundary');
+    assert.equal(versions.activeVersion('rule', rule.ruleId), null);
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
 test('K6: an account re-added after its removal stays dark for a multi-account version until an approval re-samples it', {
   skip: WINDOWS_SKIP,
 }, async () => {
@@ -1649,6 +1978,15 @@ test('APR-B1: a completion that crosses its deadline during the baseline or poin
       versions.createTarget(target);
       versions.createRule(rule);
       const prepared = (await setup.runtime.prepareRule({ ruleId: rule.ruleId, version: 1 })) as PreparedActivation;
+      if (stage === 'baseline') {
+        // This trigger makes the baseline transaction's own deadline check observable. The later settlement removes
+        // baselines, so inspecting only the final database would not prove that an expired baseline was never written.
+        setup.store.database.exec(
+          `CREATE TRIGGER reject_expired_baseline BEFORE INSERT ON activation_baselines
+           WHEN NEW.intent_id = '${prepared.intentId}'
+           BEGIN SELECT RAISE(ABORT, 'EXPIRED_BASELINE_WRITE'); END`,
+        );
+      }
       await assert.rejects(
         () =>
           (async () =>

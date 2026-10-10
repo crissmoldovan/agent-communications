@@ -11,13 +11,15 @@ import {
 } from '../src/runtime/phase-d-whatsapp-seam.ts';
 import { SseDispatcher, writeLiveSseFrame } from '../src/runtime/sse-dispatcher.ts';
 import { StreamReplay, writeReplaySseFrame } from '../src/runtime/stream-replay.ts';
+import { WhatsAppVisibilityFence } from '../src/runtime/whatsapp-visibility.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 function recordingGate(trace: string[]): SseFrameVisibilityGate {
   return {
-    withCurrentSseFrameVisibility(input, writeFrame) {
+    async withCurrentSseFrameVisibility(input, recheck, writeFrame) {
       trace.push(`gate:${input.accountId}:${input.whatsappMessageId}`);
+      await recheck();
       const value = writeFrame();
       trace.push('gate-return');
       return value;
@@ -46,21 +48,25 @@ test('B2-T8: the pre-D seam has the Phase-D structural participant signatures wi
   hooks.registerRetentionTighteningParticipant(retentionParticipant);
 });
 
-test('B2-T8: the synchronous pass-through gate invokes a frame writer exactly once', () => {
+test('B2-T8: the async pass-through gate rechecks before it invokes its frame writer exactly once', async () => {
   const trace: string[] = [];
   const gate = new PassThroughSseFrameVisibilityGate();
   const returned = gate.withCurrentSseFrameVisibility(
     { accountId: 'account-1', whatsappMessageId: 'message-1' },
+    async () => {
+      trace.push('recheck');
+    },
     () => {
       trace.push('write');
       return 'written';
     },
   );
-  assert.equal(returned, 'written');
-  assert.deepEqual(trace, ['write']);
+  assert.deepEqual(trace, ['recheck']);
+  assert.equal(await returned, 'written');
+  assert.deepEqual(trace, ['recheck', 'write']);
 });
 
-test('B2-T9: each actual dispatcher/live and Last-Event-ID replay writer nests a WhatsApp sink write in the injected visibility gate', () => {
+test('B2-T9: each actual dispatcher/live and Last-Event-ID replay writer nests a WhatsApp sink write in the injected visibility gate', async () => {
   for (const kind of ['live', 'replay'] as const) {
     const trace: string[] = [];
     const input = {
@@ -69,27 +75,29 @@ test('B2-T9: each actual dispatcher/live and Last-Event-ID replay writer nests a
       whatsappMessageId: 'message-1',
       visibilityGate: recordingGate(trace),
       hasConcreteWhatsAppVisibilityFence: true,
+      recheck: async () => {
+        trace.push('recheck');
+      },
       writeFrame: (frame: string) => trace.push(`write:${frame}`),
     };
-    const accepted =
-      kind === 'live'
-        ? new SseDispatcher({
-            store: {} as never,
-            cipher: {} as never,
-            approvals: {} as never,
-            config: {} as never,
-            visibilityGate: input.visibilityGate,
-            hasConcreteWhatsAppVisibilityFence: true,
-          }).writeLive(input)
-        : writeReplaySseFrame(input);
+    const accepted = await (kind === 'live'
+      ? new SseDispatcher({
+          store: {} as never,
+          cipher: {} as never,
+          approvals: {} as never,
+          config: {} as never,
+          visibilityGate: input.visibilityGate,
+          hasConcreteWhatsAppVisibilityFence: true,
+        }).writeLive(input)
+      : writeReplaySseFrame(input));
     assert.equal(accepted, true);
-    assert.deepEqual(trace, ['gate:account-1:message-1', 'write:id: stream-1\ndata: {}\n\n', 'gate-return']);
+    assert.deepEqual(trace, ['gate:account-1:message-1', 'recheck', 'write:id: stream-1\ndata: {}\n\n', 'gate-return']);
   }
 });
 
-test('B2-T8: a persisted WhatsApp tuple fails closed when the owner lacks the D concrete seam', () => {
+test('B2-T8: a persisted WhatsApp tuple fails closed when the owner lacks the D concrete seam', async () => {
   const trace: string[] = [];
-  const accepted = writeLiveSseFrame({
+  const accepted = await writeLiveSseFrame({
     frame: 'id: stream-1\ndata: {}\n\n',
     accountId: 'account-1',
     whatsappMessageId: 'message-1',
@@ -101,9 +109,9 @@ test('B2-T8: a persisted WhatsApp tuple fails closed when the owner lacks the D 
   assert.deepEqual(trace, []);
 });
 
-test('B2-T8: non-WhatsApp frames use the ordinary writer path without entering the visibility gate', () => {
+test('B2-T8: non-WhatsApp frames use the ordinary writer path without entering the visibility gate', async () => {
   const trace: string[] = [];
-  const accepted = writeReplaySseFrame({
+  const accepted = await writeReplaySseFrame({
     frame: 'id: stream-1\ndata: {}\n\n',
     accountId: 'account-1',
     whatsappMessageId: null,
@@ -147,17 +155,24 @@ async function liveFrameFixture() {
              'subscriber-live-frame', 1, 'event-live-frame', '${accountId}', NULL, NULL, X'00', 1, 600000, 1);`,
   );
   let accountLive = true;
+  const config = {
+    load: async () =>
+      accountLive
+        ? {
+            inboxes: { inbox: { id: accountId, provider: 'gmail' } },
+            accounts: { whatsapp: { id: accountId, platform: 'whatsapp' } },
+          }
+        : { inboxes: {}, accounts: {} },
+  };
   const replay = new StreamReplay({
     store,
     cipher: { decrypt: async () => Buffer.alloc(0) },
     approvals: { get: async () => null },
-    config: {
-      load: async () => (accountLive ? { inboxes: { inbox: { id: accountId, provider: 'gmail' } } } : { inboxes: {} }),
-    } as never,
+    config: config as never,
     fence: async () => undefined,
     now: () => 2,
   });
-  return { stateDir, store, replay, removeAccount: () => (accountLive = false) };
+  return { stateDir, store, replay, config, removeAccount: () => (accountLive = false) };
 }
 
 test('B2-T9: a live SSE frame refuses a lost retained row, lineage, or account immediately before writing', {
@@ -186,6 +201,74 @@ test('B2-T9: a live SSE frame refuses a lost retained row, lineage, or account i
         `${lost} authority refuses the physical writer`,
       );
       assert.deepEqual(frames, []);
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('P1: live and Last-Event-ID replay frames recheck a WhatsApp account while the list lock is held', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  for (const boundary of ['live', 'replay'] as const) {
+    const setup = await liveFrameFixture();
+    try {
+      const messageId = '["wa-msg","chat@example.test","sender@example.test","frame"]';
+      setup.store.database.exec(
+        `INSERT INTO whatsapp_visibility (account_id, version, lists_digest, changed_at)
+           VALUES ('account-live-frame', 1, '${'a'.repeat(64)}', 1);
+         INSERT INTO whatsapp_occurrences
+           (account_id, message_id, first_seen_generation, first_seen_at, visibility_version)
+           VALUES ('account-live-frame', '${messageId}', 1, 1, 1);
+         UPDATE rule_versions SET document = '{"source":{"channel":"whatsapp"}}' WHERE id = 'rule-live-frame@1';
+         UPDATE stream_log SET whatsapp_message_id = '${messageId}', whatsapp_visibility_version = 1
+          WHERE id = 'stream-live-frame';`,
+      );
+      const visibilityFence = new WhatsAppVisibilityFence({
+        store: setup.store,
+        withCurrentEventVisibility: async (_input, work) => {
+          setup.removeAccount();
+          return work({ version: 1, digest: 'a'.repeat(64), seesMessage: () => true });
+        },
+      });
+      const replay = new StreamReplay({
+        store: setup.store,
+        cipher: { decrypt: async () => Buffer.from('{"id":"event-live-frame"}') },
+        approvals: { get: async () => null },
+        config: setup.config as never,
+        fence: async () => undefined,
+        visibilityGate: visibilityFence,
+        hasConcreteWhatsAppVisibilityFence: true,
+        now: () => 2,
+      });
+      const frames: string[] = [];
+      if (boundary === 'live') {
+        assert.equal(
+          await replay.writeLive({
+            streamLogId: 'stream-live-frame',
+            frame: 'data: hidden\n\n',
+            isStreamCurrent: () => true,
+            writeFrame: (frame) => frames.push(frame),
+          }),
+          false,
+        );
+      } else {
+        assert.equal(
+          await replay.replay({
+            subscriberId: 'subscriber-live-frame',
+            subscriberVersion: 1,
+            afterId: null,
+            writeFrame: (frame) => frames.push(frame),
+          }),
+          0,
+        );
+      }
+      assert.deepEqual(frames, []);
+      assert.equal(
+        setup.store.database.prepare("SELECT 1 FROM stream_log WHERE id = 'stream-live-frame'").get(),
+        undefined,
+      );
     } finally {
       setup.store.close();
       await rm(setup.stateDir, { recursive: true, force: true });

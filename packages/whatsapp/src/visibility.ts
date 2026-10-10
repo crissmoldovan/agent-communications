@@ -42,6 +42,35 @@ export function listKey(jid: string): string {
   return person ? `+${person[1]}` : id;
 }
 
+/**
+ * The one visibility unit a raw row belongs to.  The daemon persists this key, but only this channel defines the
+ * vocabulary: an ordinary chat is its list key; a status post is the pair of its status chat and its author (or no
+ * author), because the lists can hide either one — denying the status feed hides every author in it.
+ */
+export function visibilityUnitKey(chatId: string, chatKind: ChatKind | string, senderJid: string | null): string {
+  if (chatKind !== 'status') return listKey(chatId);
+  const author = statusAuthor(chatId, senderJid);
+  return JSON.stringify([STATUS_UNIT, listKey(chatId), author === null ? null : listKey(author)]);
+}
+
+const STATUS_UNIT = 'status-unit';
+
+function statusUnit(unitKey: string): { readonly chat: string; readonly author: string | null } | undefined {
+  if (!unitKey.startsWith(`["${STATUS_UNIT}",`)) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(unitKey);
+    if (
+      Array.isArray(parsed) &&
+      parsed.length === 3 &&
+      parsed[0] === STATUS_UNIT &&
+      typeof parsed[1] === 'string' &&
+      (parsed[2] === null || typeof parsed[2] === 'string')
+    )
+      return { chat: parsed[1], author: parsed[2] };
+  } catch {}
+  return undefined;
+}
+
 export class Visibility {
   readonly #allow: ReadonlySet<string>;
   readonly #deny: ReadonlySet<string>;
@@ -69,6 +98,16 @@ export class Visibility {
     return author === null ? !this.#hidesAnyone() : this.seesChat(author);
   }
 
+  /** Whether a durable source unit remains visible under these same lists. */
+  seesUnit(unitKey: string): boolean {
+    const status = statusUnit(unitKey);
+    if (unitKey.startsWith(`["${STATUS_UNIT}",`) && status === undefined) return false;
+    if (status === undefined) return this.seesChat(unitKey);
+    // The same decision `seesMessage` makes for every non-own post in the unit.
+    if (!this.seesChat(status.chat)) return false;
+    return status.author === null ? !this.#hidesAnyone() : this.seesChat(status.author);
+  }
+
   /** A status post someone else wrote with no author the lists can be checked against: hidden while they hide anyone. */
   unattributed(chatId: string, chatKind: ChatKind | string, senderJid: string | null, fromMe: boolean): boolean {
     return chatKind === 'status' && !fromMe && statusAuthor(chatId, senderJid) === null;
@@ -88,7 +127,7 @@ const OWN_STATUS = /^\d{7,15}@status$/;
  * The sender WhatsApp recorded, when it is a person (a number, or a hidden number); otherwise, in a contact's own
  * session, that contact. A group's, a feed's or a broadcast's id is no author.
  */
-function statusAuthor(chatId: string, senderJid: string | null): string | null {
+export function statusAuthor(chatId: string, senderJid: string | null): string | null {
   const sender = senderJid?.trim().toLowerCase() ?? '';
   if (sender !== '') {
     const kind = chatKindOf(sender);

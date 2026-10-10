@@ -1,0 +1,1005 @@
+import assert from 'node:assert/strict';
+import { rm } from 'node:fs/promises';
+import { test } from 'node:test';
+import { stageWhatsAppBaselineSnapshot } from '../src/runtime/source-owner-work.ts';
+import { WhatsAppVisibilityFence } from '../src/runtime/whatsapp-visibility.ts';
+import { phaseDSourceRegistry } from '../src/sources/registry.ts';
+import { rawWhatsAppMessageId, WhatsAppSourceWorker } from '../src/sources/whatsapp.ts';
+import { openEventDatabase } from '../src/store/database.ts';
+import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+
+test('D6: a WhatsApp source commits one raw-key occurrence and ignores sent or unknown rows', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-source-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    store.database
+      .prepare('INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, ?, 1, ?, ?)')
+      .run('rule@1', 'rule', '{}', 'rule-digest');
+    let stagedBeforeHead = false;
+    const worker = new WhatsAppSourceWorker({
+      store,
+      accountId: 'wa_source',
+      now: () => 1_000,
+      snapshot: async (work) =>
+        work({
+          visibility: { version: 1, digest: 'a'.repeat(64), seesMessage: () => true },
+          messages: [
+            { chatJid: 'chat@example.test', senderJidRaw: 'sender@example.test', stanzaId: 'one', fromMe: false },
+            { chatJid: 'chat@example.test', senderJidRaw: 'sender@example.test', stanzaId: 'two', fromMe: true },
+            { chatJid: 'chat@example.test', senderJidRaw: 'sender@example.test', stanzaId: 'three', fromMe: null },
+          ],
+        }),
+      stage: async (message) => {
+        stagedBeforeHead = store.database.prepare('SELECT 1 FROM whatsapp_snapshot_heads').get() === undefined;
+        return Buffer.from(message.stanzaId);
+      },
+      rules: () => [{ ruleId: 'rule', ruleVersion: 1, ingestRetentionMs: 500, activationId: 'activation' }],
+    });
+
+    assert.equal(
+      rawWhatsAppMessageId('chat@example.test', 'sender@example.test', 'one'),
+      '["wa-msg","chat@example.test","sender@example.test","one"]',
+    );
+    await worker.scan();
+    assert.equal(stagedBeforeHead, true);
+    assert.equal(
+      (store.database.prepare('SELECT COUNT(*) AS n FROM whatsapp_occurrences').get() as { n: number }).n,
+      1,
+    );
+    assert.equal(
+      (store.database.prepare('SELECT COUNT(*) AS n FROM whatsapp_rule_admissions').get() as { n: number }).n,
+      1,
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('D4 P1: a version admits only post-cut-over first representations, including a delayed row', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-admission-point-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const accountId = 'wa_admission_point';
+    const chatJid = 'chat@example.test';
+    store.database
+      .prepare('INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, ?, 1, ?, ?)')
+      .run('point-rule@1', 'point-rule', '{}', 'point-rule-digest');
+    store.database
+      .prepare('INSERT INTO whatsapp_visibility (account_id, version, lists_digest, changed_at) VALUES (?, 1, ?, 1)')
+      .run(accountId, 'a'.repeat(64));
+    store.database
+      .prepare(
+        'INSERT INTO whatsapp_snapshot_heads (account_id, committed_generation, visibility_version) VALUES (?, 1, 1)',
+      )
+      .run(accountId);
+    const worker = new WhatsAppSourceWorker({
+      store,
+      accountId,
+      snapshot: async (work) =>
+        work({
+          visibility: { version: 1, digest: 'a'.repeat(64), seesMessage: () => true },
+          messages: [
+            {
+              chatJid,
+              senderJidRaw: 'sender@example.test',
+              stanzaId: 'stored-before-T',
+              fromMe: false,
+              at: '2026-10-10T09:59:59.999Z',
+            },
+            {
+              chatJid,
+              senderJidRaw: 'sender@example.test',
+              stanzaId: 'delayed-after-T',
+              fromMe: false,
+              at: '2026-10-10T10:00:00.001Z',
+            },
+            {
+              chatJid,
+              senderJidRaw: 'sender@example.test',
+              stanzaId: 'ordinary-after-T',
+              fromMe: false,
+              at: '2026-10-10T10:00:00.002Z',
+            },
+          ],
+        }),
+      stage: async () => Buffer.from('first representation'),
+      rules: () => [
+        {
+          ruleId: 'point-rule',
+          ruleVersion: 1,
+          ingestRetentionMs: 500,
+          activationId: 'point-activation',
+          options: { channel: 'whatsapp' as const, chats: 'all-allowed' as const },
+          activationPoints: new Map([
+            [
+              'all-allowed',
+              {
+                capturedAt: Date.parse('2026-10-10T10:00:00.000Z'),
+                baselineGeneration: 1,
+                baselineIdentities: new Set<string>(),
+              },
+            ],
+          ]),
+        },
+      ],
+    });
+
+    await worker.scan();
+
+    assert.deepEqual(
+      store.database
+        .prepare('SELECT message_id, admission FROM whatsapp_rule_admissions ORDER BY message_id')
+        .all()
+        .map((row) => ({ ...(row as Record<string, unknown>) })),
+      [
+        {
+          message_id: rawWhatsAppMessageId(chatJid, 'sender@example.test', 'delayed-after-T'),
+          admission: 'admitted',
+        },
+        {
+          message_id: rawWhatsAppMessageId(chatJid, 'sender@example.test', 'ordinary-after-T'),
+          admission: 'admitted',
+        },
+        {
+          message_id: rawWhatsAppMessageId(chatJid, 'sender@example.test', 'stored-before-T'),
+          admission: 'suppressed',
+        },
+      ],
+      'the stored time, not arrival order, decides an unseen tuple at this version point',
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('D9 P1: a widened visible unit admits only rows stored after the list apply instant', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-visible-floor-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const accountId = 'wa_visible_floor';
+    const chatJid = 'chat-revealed@example.test';
+    store.database
+      .prepare('INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, ?, 1, ?, ?)')
+      .run('floor-rule@1', 'floor-rule', '{}', 'floor-rule-digest');
+    store.database
+      .prepare('INSERT INTO whatsapp_visibility (account_id, version, lists_digest, changed_at) VALUES (?, 3, ?, ?)')
+      .run(accountId, 'c'.repeat(64), Date.parse('2026-10-10T10:00:20.000Z'));
+    store.database
+      .prepare(
+        'INSERT INTO whatsapp_snapshot_heads (account_id, committed_generation, visibility_version) VALUES (?, 1, 1)',
+      )
+      .run(accountId);
+    const worker = new WhatsAppSourceWorker({
+      store,
+      accountId,
+      snapshot: async (work) =>
+        work({
+          visibility: { version: 1, digest: 'c'.repeat(64), seesMessage: () => true },
+          messages: [
+            {
+              chatJid,
+              senderJidRaw: 'sender@example.test',
+              stanzaId: 'hidden-period',
+              fromMe: false,
+              at: '2026-10-10T10:00:15.000Z',
+            },
+            {
+              chatJid,
+              senderJidRaw: 'sender@example.test',
+              stanzaId: 'after-widening',
+              fromMe: false,
+              at: '2026-10-10T10:00:20.001Z',
+            },
+          ],
+        }),
+      stage: async () => Buffer.from('first representation'),
+      rules: () => [
+        {
+          ruleId: 'floor-rule',
+          ruleVersion: 1,
+          ingestRetentionMs: 500,
+          activationId: 'floor-activation',
+          options: { channel: 'whatsapp' as const, chats: 'all-allowed' as const },
+          activationPoints: new Map([
+            [
+              'all-allowed',
+              {
+                capturedAt: Date.parse('2026-10-10T10:00:00.000Z'),
+                baselineGeneration: 1,
+                baselineIdentities: new Set<string>(),
+              },
+            ],
+          ]),
+        },
+      ],
+    });
+
+    await worker.scan();
+
+    assert.deepEqual(
+      store.database
+        .prepare('SELECT message_id, admission FROM whatsapp_rule_admissions ORDER BY message_id')
+        .all()
+        .map((row) => ({ ...(row as Record<string, unknown>) })),
+      [
+        {
+          message_id: rawWhatsAppMessageId(chatJid, 'sender@example.test', 'after-widening'),
+          admission: 'admitted',
+        },
+        {
+          message_id: rawWhatsAppMessageId(chatJid, 'sender@example.test', 'hidden-period'),
+          admission: 'suppressed',
+        },
+      ],
+      'the list-apply floor is independent from the older rule activation point',
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('D9 P1: floors follow list units for known chats, status authors, from-me rows, and a newly seen unit', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-unit-keys-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const accountId = 'wa_unit_keys';
+    const floor = Date.parse('2026-10-10T10:00:20.000Z');
+    const alwaysVisible = 'chat-always-visible@example.test';
+    const statusChat = 'status@broadcast';
+    const statusAuthor = '447700900123@s.whatsapp.net';
+    const fromMeChat = 'chat-from-me@example.test';
+    const brandNew = 'chat-brand-new@example.test';
+    store.database
+      .prepare('INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, ?, 1, ?, ?)')
+      .run('units-rule@1', 'units-rule', '{}', 'units-rule-digest');
+    store.database
+      .prepare('INSERT INTO whatsapp_visibility (account_id, version, lists_digest, changed_at) VALUES (?, 2, ?, ?)')
+      .run(accountId, 'd'.repeat(64), floor);
+    store.database
+      .prepare(
+        'INSERT INTO whatsapp_snapshot_heads (account_id, committed_generation, visibility_version) VALUES (?, 1, 1)',
+      )
+      .run(accountId);
+    store.database
+      .prepare('INSERT INTO whatsapp_visible_units (account_id, unit_key, visible_since) VALUES (?, ?, NULL)')
+      .run(accountId, alwaysVisible);
+    const worker = new WhatsAppSourceWorker({
+      store,
+      accountId,
+      snapshot: async (work) =>
+        work({
+          visibility: { version: 1, digest: 'd'.repeat(64), seesMessage: () => true },
+          messages: [
+            {
+              chatJid: alwaysVisible,
+              senderJidRaw: 'sender@example.test',
+              stanzaId: 'between-unrelated-edit',
+              fromMe: false,
+              at: '2026-10-10T10:00:15.000Z',
+            },
+            {
+              chatJid: statusChat,
+              chatKind: 'status',
+              senderJidRaw: statusAuthor,
+              stanzaId: 'status-hidden-period',
+              fromMe: false,
+              at: '2026-10-10T10:00:15.000Z',
+            },
+            {
+              chatJid: statusChat,
+              chatKind: 'status',
+              senderJidRaw: statusAuthor,
+              stanzaId: 'status-after-un-deny',
+              fromMe: false,
+              at: '2026-10-10T10:00:20.001Z',
+            },
+            {
+              chatJid: fromMeChat,
+              senderJidRaw: 'me@example.test',
+              stanzaId: 'from-me-establishes-unit',
+              fromMe: true,
+              at: '2026-10-10T10:00:20.001Z',
+            },
+            {
+              chatJid: fromMeChat,
+              senderJidRaw: 'sender@example.test',
+              stanzaId: 'incoming-after-list-edit',
+              fromMe: false,
+              at: '2026-10-10T10:00:20.001Z',
+            },
+            {
+              chatJid: brandNew,
+              senderJidRaw: 'sender@example.test',
+              stanzaId: 'brand-new-between-scan-and-edit',
+              fromMe: false,
+              at: '2026-10-10T10:00:15.000Z',
+            },
+          ],
+        }),
+      stage: async () => Buffer.from('first representation'),
+      rules: () => [
+        {
+          ruleId: 'units-rule',
+          ruleVersion: 1,
+          ingestRetentionMs: 500,
+          activationId: 'units-activation',
+          options: { channel: 'whatsapp' as const, chats: 'all-allowed' as const },
+          activationPoints: new Map([
+            [
+              'all-allowed',
+              {
+                capturedAt: Date.parse('2026-10-10T10:00:00.000Z'),
+                baselineGeneration: 1,
+                baselineIdentities: new Set<string>(),
+              },
+            ],
+          ]),
+        },
+      ],
+    });
+
+    await worker.scan();
+
+    assert.deepEqual(
+      store.database
+        .prepare('SELECT message_id, admission FROM whatsapp_rule_admissions ORDER BY message_id')
+        .all()
+        .map((row) => ({ ...(row as Record<string, unknown>) })),
+      [
+        {
+          message_id: rawWhatsAppMessageId(alwaysVisible, 'sender@example.test', 'between-unrelated-edit'),
+          admission: 'admitted',
+        },
+        {
+          message_id: rawWhatsAppMessageId(brandNew, 'sender@example.test', 'brand-new-between-scan-and-edit'),
+          admission: 'suppressed',
+        },
+        {
+          message_id: rawWhatsAppMessageId(fromMeChat, 'sender@example.test', 'incoming-after-list-edit'),
+          admission: 'admitted',
+        },
+        {
+          message_id: rawWhatsAppMessageId(statusChat, statusAuthor, 'status-after-un-deny'),
+          admission: 'admitted',
+        },
+        {
+          message_id: rawWhatsAppMessageId(statusChat, statusAuthor, 'status-hidden-period'),
+          admission: 'suppressed',
+        },
+      ],
+      'a null floor keeps always-visible history, while a new status author and brand-new unit fail closed at W',
+    );
+    assert.deepEqual(
+      store.database
+        .prepare('SELECT unit_key, visible_since FROM whatsapp_visible_units WHERE account_id = ? ORDER BY unit_key')
+        .all(accountId)
+        .map((row) => ({ ...(row as Record<string, unknown>) })),
+      [
+        { unit_key: '["status-unit","status@broadcast","+447700900123"]', visible_since: floor },
+        { unit_key: alwaysVisible, visible_since: null },
+        { unit_key: brandNew, visible_since: floor },
+        { unit_key: fromMeChat, visible_since: floor },
+      ],
+      'the channel-owned unit helper keys a status by author and includes an otherwise ineligible from-me row',
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('P1: two WhatsApp raw tuples differing only in trailing whitespace remain distinct byte-for-byte identities', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-raw-space-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    store.database
+      .prepare('INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, ?, 1, ?, ?)')
+      .run('raw-space@1', 'raw-space', '{}', 'raw-space-digest');
+    const worker = new WhatsAppSourceWorker({
+      store,
+      accountId: 'wa_raw_space',
+      snapshot: async (work) =>
+        work({
+          visibility: { version: 1, digest: 'e'.repeat(64), seesMessage: () => true },
+          messages: [
+            { chatJid: 'chat@example.test', senderJidRaw: 'sender@example.test', stanzaId: 'same', fromMe: false },
+            { chatJid: 'chat@example.test', senderJidRaw: 'sender@example.test', stanzaId: 'same ', fromMe: false },
+          ],
+        }),
+      stage: async () => Buffer.from('first representation'),
+      rules: () => [{ ruleId: 'raw-space', ruleVersion: 1, ingestRetentionMs: 500, activationId: 'activation' }],
+    });
+    await worker.scan();
+    assert.deepEqual(
+      (
+        store.database.prepare('SELECT message_id FROM whatsapp_occurrences ORDER BY message_id').all() as Array<{
+          message_id: string;
+        }>
+      ).map((row) => row.message_id),
+      [
+        '["wa-msg","chat@example.test","sender@example.test","same "]',
+        '["wa-msg","chat@example.test","sender@example.test","same"]',
+      ],
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('D6: raw sender differences are distinct identities even when a stanza id is the same', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-sender-key-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    store.database
+      .prepare('INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, ?, 1, ?, ?)')
+      .run('rule@1', 'rule', '{}', 'rule-digest');
+    const worker = new WhatsAppSourceWorker({
+      store,
+      accountId: 'wa_sender_key',
+      snapshot: async (work) =>
+        work({
+          visibility: { version: 1, digest: 'b'.repeat(64), seesMessage: () => true },
+          messages: [
+            { chatJid: 'chat@example.test', senderJidRaw: 'one@example.test', stanzaId: 'shared', fromMe: false },
+            { chatJid: 'chat@example.test', senderJidRaw: 'two@example.test', stanzaId: 'shared', fromMe: false },
+          ],
+        }),
+      stage: async () => Buffer.from('first representation'),
+      rules: () => [{ ruleId: 'rule', ruleVersion: 1, ingestRetentionMs: 500, activationId: 'activation' }],
+    });
+    await worker.scan();
+    const ids = store.database
+      .prepare('SELECT message_id FROM whatsapp_occurrences ORDER BY message_id')
+      .all()
+      .map((row) => (row as { message_id: string }).message_id);
+    assert.deepEqual(ids, [
+      '["wa-msg","chat@example.test","one@example.test","shared"]',
+      '["wa-msg","chat@example.test","two@example.test","shared"]',
+    ]);
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('D6: the shortest owed retention fixes the first-representation deadline', { skip: WINDOWS_SKIP }, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-deadline-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    for (const [id, rule] of [
+      ['rule-a@1', 'rule-a'],
+      ['rule-b@1', 'rule-b'],
+    ] as const) {
+      store.database
+        .prepare('INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, ?, 1, ?, ?)')
+        .run(id, rule, '{}', `${rule}-digest`);
+    }
+    const worker = new WhatsAppSourceWorker({
+      store,
+      accountId: 'wa_deadline',
+      now: () => 1_000,
+      snapshot: async (work) =>
+        work({
+          visibility: { version: 1, digest: 'c'.repeat(64), seesMessage: () => true },
+          messages: [
+            { chatJid: 'chat@example.test', senderJidRaw: 'sender@example.test', stanzaId: 'one', fromMe: false },
+          ],
+        }),
+      stage: async () => Buffer.from('first representation'),
+      rules: () => [
+        { ruleId: 'rule-a', ruleVersion: 1, ingestRetentionMs: 500, activationId: 'activation-a' },
+        { ruleId: 'rule-b', ruleVersion: 1, ingestRetentionMs: 100, activationId: 'activation-b' },
+      ],
+    });
+    await worker.scan();
+    assert.deepEqual(
+      {
+        ...(store.database.prepare('SELECT stage_expires_at FROM whatsapp_occurrences').get() as Record<
+          string,
+          unknown
+        >),
+      },
+      { stage_expires_at: 1_100 },
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('P1: a fenced matching WhatsApp scope delays an account snapshot tuple without observing it', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-overlap-fence-');
+  const store = await openEventDatabase({ stateDir });
+  const chatJid = 'chat-a@example.test';
+  let fenced = true;
+  let explicitChatActivationComplete = false;
+  try {
+    for (const ruleId of ['rule-all', 'rule-chat']) {
+      store.database
+        .prepare('INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, ?, 1, ?, ?)')
+        .run(`${ruleId}@1`, ruleId, '{}', `${ruleId}-digest`);
+    }
+    const worker = new WhatsAppSourceWorker({
+      store,
+      accountId: 'wa_overlap_fence',
+      snapshot: async (work) =>
+        work({
+          visibility: { version: 1, digest: 'd'.repeat(64), seesMessage: () => true },
+          messages: [{ chatJid, senderJidRaw: 'sender@example.test', stanzaId: 'one', fromMe: false }],
+        }),
+      stage: async () => Buffer.from('first representation'),
+      rules: () => [
+        {
+          ruleId: 'rule-all',
+          ruleVersion: 1,
+          ingestRetentionMs: 500,
+          activationId: 'activation-all',
+          options: { channel: 'whatsapp' as const, chats: 'all-allowed' as const },
+          activationPointIdentities: new Map([['all-allowed', new Set<string>()]]),
+        },
+        ...(explicitChatActivationComplete
+          ? [
+              {
+                ruleId: 'rule-chat',
+                ruleVersion: 1,
+                ingestRetentionMs: 500,
+                activationId: 'activation-chat',
+                options: { channel: 'whatsapp' as const, chats: [chatJid] },
+                activationPointIdentities: new Map([[`chat:${chatJid}`, new Set<string>()]]),
+              },
+            ]
+          : []),
+      ],
+      scopeIsFenced: (scopeId: string) => fenced && scopeId === `chat:${chatJid}`,
+    });
+    await worker.scan();
+    assert.equal(
+      (store.database.prepare('SELECT count(*) AS n FROM whatsapp_occurrences').get() as { n: number }).n,
+      0,
+    );
+    assert.equal(
+      (store.database.prepare('SELECT count(*) AS n FROM whatsapp_rule_admissions').get() as { n: number }).n,
+      0,
+    );
+
+    fenced = false;
+    explicitChatActivationComplete = true;
+    await worker.scan();
+    assert.equal(
+      (store.database.prepare('SELECT count(*) AS n FROM whatsapp_occurrences').get() as { n: number }).n,
+      1,
+    );
+    assert.deepEqual(
+      store.database
+        .prepare(
+          `SELECT rule_id, rule_version, admission
+             FROM whatsapp_rule_admissions
+            ORDER BY rule_id, rule_version`,
+        )
+        .all()
+        .map((row) => ({ ...(row as Record<string, unknown>) })),
+      [
+        { rule_id: 'rule-all', rule_version: 1, admission: 'admitted' },
+        { rule_id: 'rule-chat', rule_version: 1, admission: 'admitted' },
+      ],
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('P1 (review round 12): a fence defers a new-only tuple before the active rules can decide it is unowed', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-new-only-fence-');
+  const store = await openEventDatabase({ stateDir });
+  const chatA = 'chat-a@example.test';
+  const chatB = 'chat-b@example.test';
+  const messageId = rawWhatsAppMessageId(chatB, 'sender@example.test', 'new-only');
+  let fenced = true;
+  let replacementPublished = false;
+  try {
+    for (const [id, rule] of [
+      ['old@1', 'old'],
+      ['new@2', 'new'],
+    ] as const) {
+      store.database
+        .prepare('INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
+        .run(id, rule, id.endsWith('@1') ? 1 : 2, '{}', `${rule}-digest`);
+    }
+    const worker = new WhatsAppSourceWorker({
+      store,
+      accountId: 'wa_new_only_fence',
+      snapshot: async (work) =>
+        work({
+          visibility: { version: 1, digest: 'a'.repeat(64), seesMessage: () => true },
+          messages: [{ chatJid: chatB, senderJidRaw: 'sender@example.test', stanzaId: 'new-only', fromMe: false }],
+        }),
+      stage: async () => Buffer.from('first representation'),
+      rules: () =>
+        replacementPublished
+          ? [
+              {
+                ruleId: 'new',
+                ruleVersion: 2,
+                ingestRetentionMs: 500,
+                activationId: 'new-activation',
+                options: { channel: 'whatsapp' as const, chats: [chatB] },
+                activationPointIdentities: new Map([[`chat:${chatB}`, new Set<string>()]]),
+              },
+            ]
+          : [
+              {
+                ruleId: 'old',
+                ruleVersion: 1,
+                ingestRetentionMs: 500,
+                activationId: 'old-activation',
+                options: { channel: 'whatsapp' as const, chats: [chatA] },
+                activationPointIdentities: new Map([[`chat:${chatA}`, new Set<string>()]]),
+              },
+            ],
+      scopeIsFenced: (scopeId) => fenced && scopeId === `chat:${chatB}`,
+    });
+
+    await worker.scan();
+    assert.equal(
+      store.database.prepare('SELECT 1 FROM whatsapp_snapshot_keys WHERE chat_jid = ?').get(chatB),
+      undefined,
+      'the fenced new-only tuple is not moved into the candidate generation',
+    );
+    assert.equal(
+      store.database.prepare('SELECT 1 FROM whatsapp_occurrences WHERE message_id = ?').get(messageId),
+      undefined,
+    );
+
+    fenced = false;
+    replacementPublished = true;
+    await worker.scan();
+    assert.deepEqual(
+      store.database
+        .prepare('SELECT message_id, rule_id, rule_version FROM whatsapp_rule_admissions ORDER BY message_id')
+        .all()
+        .map((row) => ({ ...(row as Record<string, unknown>) })),
+      [{ message_id: messageId, rule_id: 'new', rule_version: 2 }],
+      'the post-swap rule sees the deferred tuple as new',
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('D4 (review round 12): a visible tuple no version owes gets a ledger row and cannot backfill on reappearance', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-unowed-ledger-');
+  const store = await openEventDatabase({ stateDir });
+  const chatJid = 'chat-ledger@example.test';
+  const messageId = rawWhatsAppMessageId(chatJid, 'sender@example.test', 'disabled-first');
+  let visible = true;
+  let enabled = false;
+  try {
+    store.database
+      .prepare('INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, ?, 1, ?, ?)')
+      .run('enabled@1', 'enabled', '{}', 'enabled-digest');
+    const worker = new WhatsAppSourceWorker({
+      store,
+      accountId: 'wa_unowed_ledger',
+      snapshot: async (work) =>
+        work({
+          visibility: { version: 1, digest: 'b'.repeat(64), seesMessage: () => true },
+          messages: visible
+            ? [{ chatJid, senderJidRaw: 'sender@example.test', stanzaId: 'disabled-first', fromMe: false }]
+            : [],
+        }),
+      stage: async () => Buffer.from('first representation'),
+      rules: () =>
+        enabled
+          ? [
+              {
+                ruleId: 'enabled',
+                ruleVersion: 1,
+                ingestRetentionMs: 500,
+                activationId: 'enabled-activation',
+                options: { channel: 'whatsapp' as const, chats: 'all-allowed' as const },
+                activationPointIdentities: new Map([['all-allowed', new Set<string>()]]),
+              },
+            ]
+          : [],
+    });
+
+    await worker.scan();
+    assert.deepEqual(
+      store.database
+        .prepare('SELECT message_id, staged_payload_ref, stage_expires_at FROM whatsapp_occurrences')
+        .all()
+        .map((row) => ({ ...(row as Record<string, unknown>) })),
+      [{ message_id: messageId, staged_payload_ref: null, stage_expires_at: null }],
+      'the no-debt first representation is recorded without retained content',
+    );
+
+    visible = false;
+    await worker.scan();
+    visible = true;
+    enabled = true;
+    await worker.scan();
+    assert.equal(
+      store.database.prepare('SELECT 1 FROM whatsapp_rule_admissions WHERE message_id = ?').get(messageId),
+      undefined,
+      'the already observed raw tuple never becomes a later enable-all admission',
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('D4 (review round 12): each head switch drops superseded snapshot generations', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-snapshot-cleanup-');
+  const store = await openEventDatabase({ stateDir });
+  let stanzaId = 'first';
+  try {
+    store.database
+      .prepare('INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES (?, ?, 1, ?, ?)')
+      .run('rule@1', 'rule', '{}', 'rule-digest');
+    const worker = new WhatsAppSourceWorker({
+      store,
+      accountId: 'wa_snapshot_cleanup',
+      snapshot: async (work) =>
+        work({
+          visibility: { version: 1, digest: 'c'.repeat(64), seesMessage: () => true },
+          messages: [{ chatJid: 'chat@example.test', senderJidRaw: 'sender@example.test', stanzaId, fromMe: false }],
+        }),
+      stage: async () => Buffer.from('first representation'),
+      rules: () => [{ ruleId: 'rule', ruleVersion: 1, ingestRetentionMs: 500, activationId: 'activation' }],
+    });
+    await worker.scan();
+    stanzaId = 'second';
+    await worker.scan();
+    stanzaId = 'third';
+    await worker.scan();
+
+    const head = store.database
+      .prepare('SELECT committed_generation FROM whatsapp_snapshot_heads WHERE account_id = ?')
+      .get('wa_snapshot_cleanup') as { committed_generation: number };
+    assert.deepEqual(
+      store.database
+        .prepare(
+          'SELECT generation, stanza_id FROM whatsapp_snapshot_keys WHERE account_id = ? ORDER BY generation, stanza_id',
+        )
+        .all('wa_snapshot_cleanup')
+        .map((row) => ({ ...(row as Record<string, unknown>) })),
+      [{ generation: head.committed_generation, stanza_id: 'third' }],
+      'only the authoritative snapshot generation retains raw tuple columns',
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('D5: a replacement baseline stages the old rule’s first representation before excluding the P tuple', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-baseline-stage-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const accountId = 'acc_ABCDEFGHIJKLMNOP';
+    const chatJid = 'chat-p@example.test';
+    const messageId = rawWhatsAppMessageId(chatJid, 'sender@example.test', 'present-at-p');
+    const rule = {
+      ruleId: 'old-rule',
+      version: 1,
+      source: { channel: 'whatsapp', accountIds: [accountId], options: { channel: 'whatsapp', chats: [chatJid] } },
+      event: { type: 'whatsapp.message.received', version: 1 },
+      retention: { ingestMs: 1_000 },
+    };
+    store.database.exec('UPDATE event_settings SET enabled = 1, paused = 0, switch_generation = 1');
+    store.database
+      .prepare(
+        `INSERT INTO rule_versions
+          (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+         VALUES ('old-rule@1', 'old-rule', 1, ?, 'digest', 'active', 'approval', 'activation-old', 1)`,
+      )
+      .run(JSON.stringify(rule));
+    store.database
+      .prepare(
+        "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'old-rule', 1, 'activation-old', 1)",
+      )
+      .run();
+    store.database
+      .prepare(
+        `INSERT INTO rule_activation_points
+          (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at)
+         VALUES ('activation-old', 'old-rule', 1, 'whatsapp', ?, ?, ?, 1)`,
+      )
+      .run(
+        accountId,
+        `chat:${chatJid}`,
+        Buffer.from(
+          JSON.stringify({
+            capturedAt: '1970-01-01T00:00:00.000Z',
+            baselineGeneration: 0,
+            baselineIdentities: [],
+          }),
+        ),
+      );
+    const visibilityFence = new WhatsAppVisibilityFence({
+      store,
+      withCurrentEventVisibility: async (_input, work) =>
+        work({ version: 1, digest: 'f'.repeat(64), seesMessage: () => true }),
+    });
+    const baseline = await stageWhatsAppBaselineSnapshot(
+      {
+        store,
+        cipher: {
+          encrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+          decrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+        } as never,
+        sourceRegistry: phaseDSourceRegistry(),
+        whatsappEventOperations: {
+          withEventSnapshot: async (_input: unknown, work: (snapshot: unknown) => unknown) =>
+            work({
+              messages: [
+                {
+                  chatJid,
+                  chatKind: 'unknown',
+                  senderJidRaw: 'sender@example.test',
+                  stanzaId: 'present-at-p',
+                  fromMe: false,
+                  at: '1970-01-01T00:00:00.011Z',
+                },
+              ],
+            } as never),
+        } as never,
+        whatsappVisibilityFence: visibilityFence,
+        now: () => 10,
+      },
+      accountId,
+    );
+
+    assert.deepEqual(baseline.baselineIdentities, [messageId]);
+    assert.equal(baseline.baselineGeneration, 1);
+    assert.deepEqual(
+      store.database
+        .prepare(
+          'SELECT rule_id, rule_version, admission FROM whatsapp_rule_admissions WHERE account_id = ? AND message_id = ?',
+        )
+        .all(accountId, messageId)
+        .map((row) => ({ ...(row as Record<string, unknown>) })),
+      [{ rule_id: 'old-rule', rule_version: 1, admission: 'admitted' }],
+      'the replacement rule can exclude the tuple only after the old version owns its first representation',
+    );
+    assert.ok(
+      store.database
+        .prepare('SELECT 1 FROM source_scan_state WHERE source = ? AND account_id = ?')
+        .get('whatsapp', accountId),
+      'the old version has durable ciphertext before the checked snapshot is disposed',
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('P1 (review round 8): a multi-account version with no point for a re-added account neither aborts nor owes it', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-whatsapp-k6-readd-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const removed = 'acc_REMOVEDREADDED00';
+    const retained = 'acc_RETAINEDACCOUNT0';
+    const chatJid = 'chat-k6@example.test';
+    const messageId = rawWhatsAppMessageId(chatJid, 'sender@example.test', 'after-readd');
+    const rule = {
+      ruleId: 'multi-rule',
+      version: 1,
+      source: {
+        channel: 'whatsapp',
+        accountIds: [removed, retained],
+        options: { channel: 'whatsapp', chats: [chatJid] },
+      },
+      event: { type: 'whatsapp.message.received', version: 1 },
+      retention: { ingestMs: 1_000 },
+    };
+    store.database.exec('UPDATE event_settings SET enabled = 1, paused = 0, switch_generation = 1');
+    store.database
+      .prepare(
+        `INSERT INTO rule_versions
+          (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+         VALUES ('multi-rule@1', 'multi-rule', 1, ?, 'digest', 'active', 'approval', 'activation-multi', 1)`,
+      )
+      .run(JSON.stringify(rule));
+    store.database
+      .prepare(
+        "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'multi-rule', 1, 'activation-multi', 1)",
+      )
+      .run();
+    // The removal purged the removed account's point (account-fence D9); the retained account keeps its own.
+    store.database
+      .prepare(
+        `INSERT INTO rule_activation_points
+          (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at)
+         VALUES ('activation-multi', 'multi-rule', 1, 'whatsapp', ?, ?, ?, 1)`,
+      )
+      .run(
+        retained,
+        `chat:${chatJid}`,
+        Buffer.from(
+          JSON.stringify({
+            capturedAt: '1970-01-01T00:00:00.000Z',
+            baselineGeneration: 0,
+            baselineIdentities: [],
+          }),
+        ),
+      );
+    const options = (positionOf: () => unknown) => ({
+      store,
+      cipher: {
+        encrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+        decrypt: async (_location: unknown, value: Uint8Array) => Buffer.from(value),
+      } as never,
+      sourceRegistry: phaseDSourceRegistry(),
+      whatsappEventOperations: {
+        withEventSnapshot: async (_input: unknown, work: (snapshot: unknown) => unknown) => work(positionOf() as never),
+      } as never,
+      whatsappVisibilityFence: new WhatsAppVisibilityFence({
+        store,
+        withCurrentEventVisibility: async (_input, work) =>
+          work({ version: 1, digest: 'c'.repeat(64), seesMessage: () => true }),
+      }),
+      now: () => 10,
+    });
+    const snapshot = () => ({
+      messages: [
+        { chatJid, chatKind: 'unknown', senderJidRaw: 'sender@example.test', stanzaId: 'after-readd', fromMe: false },
+      ],
+    });
+
+    // The approval that re-samples the re-added account runs this baseline; it must not abort on the dark version.
+    const baseline = await stageWhatsAppBaselineSnapshot(options(snapshot), removed);
+    assert.deepEqual(baseline.baselineIdentities, [messageId]);
+    assert.equal(
+      store.database.prepare('SELECT 1 FROM whatsapp_rule_admissions WHERE account_id = ?').get(removed),
+      undefined,
+      'a version dark for the re-added account owes it nothing, so the re-add never backfills',
+    );
+
+    // A point that is present but malformed is still corrupt authority, and still stops the pass.
+    store.database
+      .prepare(
+        `INSERT INTO rule_activation_points
+          (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at)
+         VALUES ('activation-multi', 'multi-rule', 1, 'whatsapp', ?, ?, ?, 1)`,
+      )
+      .run(removed, `chat:${chatJid}`, Buffer.from(JSON.stringify({})));
+    await assert.rejects(() => stageWhatsAppBaselineSnapshot(options(snapshot), removed), {
+      code: 'BAD_DATA',
+    });
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});

@@ -1,28 +1,13 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
-import { type EventOwner, startEventOwner } from '../src/runtime/owner.ts';
 import { createB2RetainedContentParticipants } from '../src/runtime/phase-d-b2-retention.ts';
-import { NoopDSourceRetentionHooks } from '../src/runtime/phase-d-whatsapp-seam.ts';
+import { createPhaseDWhatsAppOwnerComposition } from '../src/runtime/phase-d-whatsapp-owner-composition.ts';
 import { type EventDatabase, openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 const ACCOUNT = 'account-retention';
 const RULE = 'rule-retention';
-
-class RecordingNoopHooks extends NoopDSourceRetentionHooks {
-  readonly listParticipants: unknown[] = [];
-  readonly retentionParticipants: unknown[] = [];
-
-  override registerWhatsAppListChangeParticipant(participant: unknown): void {
-    this.listParticipants.push(participant);
-  }
-
-  override registerRetentionTighteningParticipant(participant: unknown): void {
-    this.retentionParticipants.push(participant);
-  }
-}
 
 async function createStore(prefix: string): Promise<{ readonly stateDir: string; readonly store: EventDatabase }> {
   const stateDir = await shortTempDir(prefix);
@@ -30,16 +15,24 @@ async function createStore(prefix: string): Promise<{ readonly stateDir: string;
 }
 
 function addDShapedDeliveryColumns(store: EventDatabase): void {
-  // Phase D owns its real migration.  This fixture models only the nullable columns the participant must use there.
-  store.database.exec(`
-    ALTER TABLE deliveries ADD COLUMN whatsapp_message_id TEXT;
-    ALTER TABLE deliveries ADD COLUMN whatsapp_visibility_version INTEGER;
-    CREATE TABLE test_d_visibility (account_id TEXT PRIMARY KEY, version INTEGER NOT NULL, digest TEXT NOT NULL);
-  `);
+  // Phase D v10 now owns these columns. The auxiliary row makes the caller transaction observable without forging D schema.
+  store.database.exec(
+    'CREATE TABLE test_d_visibility (account_id TEXT PRIMARY KEY, version INTEGER NOT NULL, digest TEXT NOT NULL)',
+  );
 }
 
 function seedRetainedContent(store: EventDatabase): void {
   store.database.exec(`
+    INSERT INTO whatsapp_visibility (account_id, version, lists_digest, changed_at) VALUES
+      ('${ACCOUNT}', 9, '${'a'.repeat(64)}', 1),
+      ('account-unrelated', 9, '${'b'.repeat(64)}', 1);
+    INSERT INTO whatsapp_occurrences
+      (account_id, message_id, first_seen_generation, first_seen_at, visibility_version)
+    VALUES
+      ('${ACCOUNT}', 'message-hidden', 1, 1, 9),
+      ('${ACCOUNT}', 'message-visible', 1, 1, 9),
+      ('${ACCOUNT}', 'message-revoked', 1, 1, 9),
+      ('account-unrelated', 'message-unrelated', 1, 1, 9);
     INSERT INTO ingest
       (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
     VALUES
@@ -96,44 +89,18 @@ function streamIds(store: EventDatabase): string[] {
   );
 }
 
-test('B2-T8a: the pre-D owner leaves the no-op participant registry empty and loads no D composition', {
+test('B2-T8a: the post-D production owner composes the B2 participant factory once through the D seam', {
   skip: WINDOWS_SKIP,
-}, async (t) => {
+}, async () => {
   const source = await import('node:fs/promises').then(({ readFile }) =>
     readFile(new URL('../src/runtime/owner.ts', import.meta.url), 'utf8'),
   );
-  assert.doesNotMatch(source, /createPhaseDWhatsAppOwnerComposition|whatsapp-visibility/);
+  assert.match(source, /createPhaseDWhatsAppOwnerComposition/);
+  assert.match(source, /createB2RetainedContentParticipants/);
   assert.doesNotMatch(
     source,
     /retentionHooks\.register(?:WhatsAppListChangeParticipant|RetentionTighteningParticipant)/,
   );
-
-  for (const suffix of ['one', 'two']) {
-    const stateDir = await shortTempDir(`events-b2-retention-owner-${suffix}-`);
-    const hooks = new RecordingNoopHooks();
-    try {
-      let owner: EventOwner | null = null;
-      try {
-        owner = await startEventOwner({ stateDir, dSourceRetentionHooks: hooks });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'EPERM') {
-          t.skip(
-            'the development sandbox blocks Unix-domain listeners; the coordinator runs this owner proof outside it',
-          );
-          return;
-        }
-        throw error;
-      }
-      try {
-        assert.deepEqual(hooks.listParticipants, []);
-        assert.deepEqual(hooks.retentionParticipants, []);
-      } finally {
-        await owner?.stop();
-      }
-    } finally {
-      await rm(stateDir, { recursive: true, force: true });
-    }
-  }
 });
 
 test('B2-T8a: list participant purges only matching retained content in the caller transaction and rolls back with it', {
@@ -362,12 +329,35 @@ test('B2-T8a: retention participant shortens active and superseded rows from the
   }
 });
 
-const finalDCompositionExists = existsSync(new URL('../src/runtime/whatsapp-visibility.ts', import.meta.url));
-
 test('B2-T8a: final-D production composition and crash/restart retention contract', {
-  skip: finalDCompositionExists
-    ? false
-    : 'Phase D Task 7 has not supplied the concrete WhatsApp visibility fence and owner composition yet',
-}, () => {
-  assert.fail('Phase D Task 7 must replace this guard with its concrete production-composition crash matrix');
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const { stateDir, store } = await createStore('events-b2-retention-composition-');
+  try {
+    let factoryCalls = 0;
+    const composition = createPhaseDWhatsAppOwnerComposition({
+      database: store,
+      eventOperations: {
+        withCurrentEventVisibility: async (_input, work) =>
+          work({ version: 1, digest: 'a'.repeat(64), seesMessage: () => true }),
+      },
+      createRetainedContentParticipants: (input) => {
+        factoryCalls += 1;
+        return createB2RetainedContentParticipants(input);
+      },
+    });
+    assert.equal(factoryCalls, 1, 'the D composition constructs B2 participants once');
+    assert.equal(
+      await composition.visibilityFence.withCurrentSseFrameVisibility(
+        { accountId: ACCOUNT, whatsappMessageId: '["wa-msg","chat","sender","message"]' },
+        async () => {},
+        () => 'written',
+      ),
+      'written',
+      'the concrete fence remains the production frame gate',
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
 });

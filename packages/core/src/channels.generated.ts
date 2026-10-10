@@ -84,6 +84,14 @@ export const CHANNEL_SNAPSHOT: readonly ChannelEntry[] = [
         contract: 'skills/_shared/contract-gmail.md',
       },
       approvalGrouping: 'draft',
+      events: {
+        types: ['gmail.message.received', 'gmail.message.sent', 'gmail.message.labelled'],
+        minimumIntervalMs: 60000,
+        access: {
+          kind: 'oauth-user',
+          requiredScopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+        },
+      },
     },
   },
   {
@@ -126,6 +134,13 @@ export const CHANNEL_SNAPSHOT: readonly ChannelEntry[] = [
         contract: 'skills/_shared/contract-resend.md',
       },
       approvalGrouping: 'draft',
+      events: {
+        types: ['resend.email.received', 'resend.email.status_changed'],
+        minimumIntervalMs: 60000,
+        access: {
+          kind: 'resend-full-access',
+        },
+      },
     },
   },
   {
@@ -168,6 +183,14 @@ export const CHANNEL_SNAPSHOT: readonly ChannelEntry[] = [
         contract: 'skills/_shared/contract-slack.md',
       },
       approvalGrouping: 'draft-revision-digest',
+      events: {
+        types: ['slack.message.posted'],
+        minimumIntervalMs: 60000,
+        access: {
+          kind: 'oauth-user',
+          requiredScopes: ['channels:history', 'groups:history', 'im:history', 'mpim:history'],
+        },
+      },
     },
   },
   {
@@ -208,6 +231,13 @@ export const CHANNEL_SNAPSHOT: readonly ChannelEntry[] = [
       skills: {
         prefix: 'whatsapp-',
         contract: 'skills/_shared/contract-whatsapp.md',
+      },
+      events: {
+        types: ['whatsapp.message.received'],
+        minimumIntervalMs: 60000,
+        access: {
+          kind: 'local-store',
+        },
       },
     },
   },

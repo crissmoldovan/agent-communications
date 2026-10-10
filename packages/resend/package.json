@@ -92,6 +92,16 @@
     ],
     "approve": "agent-resend approve",
     "approvalGrouping": "draft",
+    "events": {
+      "types": [
+        "resend.email.received",
+        "resend.email.status_changed"
+      ],
+      "minimumIntervalMs": 60000,
+      "access": {
+        "kind": "resend-full-access"
+      }
+    },
     "skills": {
       "prefix": "resend-",
       "contract": "skills/_shared/contract-resend.md"

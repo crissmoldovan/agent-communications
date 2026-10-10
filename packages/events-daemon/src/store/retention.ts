@@ -40,6 +40,51 @@ export function stageDeadline(stagedAt: number, owedIngestRetentions: readonly n
   );
 }
 
+/** The immutable timestamps assigned when source content first crosses the durable staging boundary. */
+export interface SourceStageRetention {
+  readonly stagedAt: number;
+  readonly stageExpiresAt: number;
+}
+
+/**
+ * Creates a source stage's one retention record. Callers that resume an existing row must reuse these stored values;
+ * recalculating from a later rule set is not permitted because it could extend the approved retention.
+ */
+export function createSourceStageRetention(
+  stagedAt: number,
+  owedIngestRetentions: readonly number[],
+): SourceStageRetention {
+  return {
+    stagedAt: checkedInstant(stagedAt, 'staged at'),
+    stageExpiresAt: stageDeadline(stagedAt, owedIngestRetentions),
+  };
+}
+
+export type StageRetryResolution =
+  | { readonly state: 'retry'; readonly deadline: number }
+  | { readonly state: 'unresolvable'; readonly deadline: number }
+  | { readonly state: 'retention-expired'; readonly deadline: number };
+
+/**
+ * Resolves the one boundary shared by a materialisation retry and its retained source stage. Equality belongs to
+ * retention expiry, the stricter terminal state, so no source call can follow the approved stage deadline.
+ */
+export function resolveStageRetryDeadline(input: {
+  readonly now: number;
+  readonly firstFailedAt: number;
+  readonly stageExpiresAt: number;
+  readonly retryWindowMs: number;
+}): StageRetryResolution {
+  const retryDeadline = fixedDeadline(input.firstFailedAt, input.retryWindowMs);
+  const stageExpiresAt = checkedInstant(input.stageExpiresAt, 'stage expiry');
+  const now = checkedInstant(input.now, 'current time');
+  const deadline = Math.min(retryDeadline, stageExpiresAt);
+  if (now < deadline) return { state: 'retry', deadline };
+  return stageExpiresAt <= retryDeadline
+    ? { state: 'retention-expired', deadline }
+    : { state: 'unresolvable', deadline };
+}
+
 /** Dry-run is local but is still a content record, capped by D8 at 24 hours. */
 export function dryrunDeadline(appendedAt: number, retentionMs: number): number {
   if (checkedRetention(retentionMs, 'dry-run retention') > MAX_DRYRUN_RETENTION_MS) {

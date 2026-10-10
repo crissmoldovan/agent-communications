@@ -1,17 +1,22 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { CommsError } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
+import type { SourceOptions } from '../domain/source-options.ts';
+import type { SourceScope } from '../sources/contracts.ts';
 import { isWhitelistedTightening } from './disclosure-fence.ts';
+import type { PreparedSourceStageTerminalisation } from './expiry.ts';
 import {
   purgeB2RetainedContentForRuleVersions,
   shortenB2DeadLetterDeadlines,
   shortenB2SseReplayDeadlines,
 } from './phase-d-b2-retention.ts';
+import type { DRetentionKind, DSourceRetentionTighteningDispatcher } from './retained-content-hooks.ts';
 import {
   addActiveRuleTargetReferences,
   purgeUnreferencedSystemTargets,
   removeRuleVersionTargetReferences,
 } from './target-version-references.ts';
+import { purgeWhatsAppStagedPayload } from './whatsapp-staged-payload.ts';
 
 export type TighteningKind =
   | 'remove-target'
@@ -43,6 +48,131 @@ interface DrainRow {
 
 function ruleVersionId(ruleId: string, version: number): string {
   return `${ruleId}@${version}`;
+}
+
+/**
+ * Commits one source scope's replacement-drain certificate.  Slack is deliberately stricter than the other ordered
+ * adapters: its top-level history cursor is only half of D-3's proof, so an aggregate reply barrier must also have
+ * reached the same P.  The caller has already made the source-specific provider/state observations; this function
+ * is the tiny synchronous final write that makes a stale or partial observation fail closed.
+ */
+export function completeSourceReplacementDrain(
+  database: DatabaseSync,
+  input: Readonly<{
+    intentId: string;
+    scope: SourceScope;
+    at: number;
+    slack?: Readonly<{ historyCovered: boolean; repliesCovered: boolean }> | undefined;
+  }>,
+): boolean {
+  if (input.scope.source === 'slack' && (input.slack?.historyCovered !== true || input.slack.repliesCovered !== true))
+    return false;
+  const updated = database
+    .prepare(
+      `UPDATE replacement_drains
+         SET drained_at = ?
+       WHERE intent_id = ? AND source = ? AND account_id = ? AND position_scope = ?
+         AND old_in_scope = 1 AND drained_at IS NULL
+         AND EXISTS (
+           SELECT 1 FROM activation_intents
+            WHERE activation_intents.id = replacement_drains.intent_id
+              AND activation_intents.status = 'pending-completion'
+         )`,
+    )
+    .run(input.at, input.intentId, input.scope.source, input.scope.accountId, input.scope.scopeId);
+  return Number(updated.changes) === 1;
+}
+
+/**
+ * Before derived tightening purges its parent, each source-stage debt becomes owed to the child as well. The worker's
+ * immutable rule-set snapshot then turns stale, so no page can mark the parent complete between this transfer and
+ * purge. This is source-neutral: adapters own their positions, not their lineage debt.
+ */
+export function transferStageDebtToDerivedRule(
+  database: DatabaseSync,
+  input: { readonly ruleId: string; readonly parentVersion: number; readonly childVersion: number },
+): void {
+  database
+    .prepare(
+      `INSERT OR IGNORE INTO source_stage_rule_debts (stage_id, rule_id, rule_version)
+       SELECT stage_id, rule_id, ? FROM source_stage_rule_debts WHERE rule_id = ? AND rule_version = ?`,
+    )
+    .run(input.childVersion, input.ruleId, input.parentVersion);
+}
+
+/**
+ * WhatsApp admission is driven by its own ledger, not by stage debts, and an observed raw tuple is never admitted a
+ * second time. So the child inherits each first representation its parent was owed and has not yet decided, beside the
+ * debt above; one the parent already decided stays the parent's, as a Gmail page the parent already processed does.
+ */
+export function transferWhatsAppAdmissionsToDerivedRule(
+  database: DatabaseSync,
+  input: {
+    readonly ruleId: string;
+    readonly parentVersion: number;
+    readonly childVersion: number;
+    readonly childActivationId: string;
+  },
+): void {
+  database
+    .prepare(
+      `INSERT OR IGNORE INTO whatsapp_rule_admissions
+        (account_id, message_id, rule_id, rule_version, admission, activation_id, visibility_version, admitted_at)
+       SELECT admission.account_id, admission.message_id, admission.rule_id, ?, 'admitted', ?,
+              admission.visibility_version, admission.admitted_at
+         FROM whatsapp_rule_admissions AS admission
+         JOIN whatsapp_occurrences AS occurrence
+           ON occurrence.account_id = admission.account_id AND occurrence.message_id = admission.message_id
+        WHERE admission.rule_id = ? AND admission.rule_version = ? AND admission.admission = 'admitted'
+          AND occurrence.staged_payload_ref IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM decisions
+             WHERE decisions.account_id = admission.account_id
+               AND decisions.whatsapp_message_id = admission.message_id
+               AND decisions.rule_id = admission.rule_id
+               AND decisions.rule_version = admission.rule_version
+          )`,
+    )
+    .run(input.childVersion, input.childActivationId, input.ruleId, input.parentVersion);
+}
+
+/**
+ * At a replacement swap, only the old-version debt in a scope absent from the new version becomes unowed. Keep any
+ * shared page until no rule debt remains; this intentionally works for every source/cursor scope rather than Gmail's
+ * mailbox singleton.
+ */
+export function settleOldOnlyStageDebts(
+  database: DatabaseSync,
+  input: { readonly ruleId: string; readonly oldVersion: number; readonly newScopes: readonly SourceScope[] },
+): void {
+  const stages = database
+    .prepare(
+      `SELECT debt.stage_id, stage.source, stage.account_id, stage.cursor_scope
+       FROM source_stage_rule_debts AS debt
+       JOIN source_scan_state AS stage ON stage.id = debt.stage_id
+       WHERE debt.rule_id = ? AND debt.rule_version = ?`,
+    )
+    .all(input.ruleId, input.oldVersion) as Array<{
+    stage_id: string;
+    source: SourceScope['source'];
+    account_id: string;
+    cursor_scope: string;
+  }>;
+  for (const stage of stages) {
+    const retained = input.newScopes.some(
+      (scope) =>
+        scope.source === stage.source && scope.accountId === stage.account_id && scope.scopeId === stage.cursor_scope,
+    );
+    if (retained) continue;
+    database
+      .prepare('DELETE FROM source_stage_rule_debts WHERE stage_id = ? AND rule_id = ? AND rule_version = ?')
+      .run(stage.stage_id, input.ruleId, input.oldVersion);
+    database
+      .prepare(
+        'DELETE FROM source_scan_state WHERE id = ? AND NOT EXISTS (SELECT 1 FROM source_stage_rule_debts WHERE stage_id = ?)',
+      )
+      .run(stage.stage_id, stage.stage_id);
+  }
 }
 
 function historyId(value: string, field: string): bigint {
@@ -184,8 +314,11 @@ export class GmailReplacementDrains {
     );
   }
 
-  /** The real page worker calls this only after it durably terminalises each old-version occurrence through the page. */
-  async markPageDrained(input: { readonly accountId: string; readonly historyId: string }): Promise<void> {
+  /** Resolves the drains a page covers before its terminal transaction starts, so that transaction does not await. */
+  async drainIntentIdsForPage(input: {
+    readonly accountId: string;
+    readonly historyId: string;
+  }): Promise<readonly string[]> {
     const covered = historyId(input.historyId, 'a Gmail page history id');
     const complete: string[] = [];
     for (const drain of this.#drains(input.accountId)) {
@@ -201,13 +334,21 @@ export class GmailReplacementDrains {
       );
       if (covered >= historyId(baseline.historyId, 'a replacement baseline history id')) complete.push(drain.intent_id);
     }
-    if (complete.length === 0) return;
-    const now = this.#now();
-    for (const intentId of complete) {
+    return complete;
+  }
+
+  /** Records page-drain settlement inside the caller's terminal transaction. */
+  recordPageDrained(intentIds: readonly string[], at: number): void {
+    for (const intentId of intentIds) {
       this.#database
         .prepare('UPDATE replacement_drains SET drained_at = ? WHERE intent_id = ? AND drained_at IS NULL')
-        .run(now, intentId);
+        .run(at, intentId);
     }
+  }
+
+  /** The real page worker calls this only after it durably terminalises each old-version occurrence through the page. */
+  async markPageDrained(input: { readonly accountId: string; readonly historyId: string }): Promise<void> {
+    this.recordPageDrained(await this.drainIntentIdsForPage(input), this.#now());
   }
 
   #drains(accountId: string, options: { readonly includeCompleted?: boolean } = {}): readonly DrainRow[] {
@@ -277,14 +418,28 @@ export function replacementIntentSummary(database: DatabaseSync): readonly {
 export function purgeRevokedRuleWork(database: DatabaseSync, ruleId: string, versions: readonly number[]): void {
   purgeB2RetainedContentForRuleVersions(database, { ruleId, ruleVersions: versions });
   for (const version of versions) {
+    const versionId = ruleVersionId(ruleId, version);
     database.prepare('DELETE FROM dryrun_log WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
     database.prepare('DELETE FROM ingest_rules WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
+    database
+      .prepare('DELETE FROM whatsapp_rule_admissions WHERE rule_id = ? AND rule_version = ?')
+      .run(ruleId, version);
+    database
+      .prepare(
+        `DELETE FROM slack_reply_drains
+         WHERE intent_id IN (SELECT id FROM activation_intents WHERE replacement_of_version = ?)`,
+      )
+      .run(versionId);
+    database.prepare('DELETE FROM rule_activation_points WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
     database
       .prepare(
         `UPDATE deliveries
          SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL, next_at = NULL
          WHERE rule_id = ? AND rule_version = ? AND state IN ('queued', 'retryable')`,
       )
+      .run(ruleId, version);
+    database
+      .prepare('UPDATE decisions SET encrypted_record = NULL WHERE rule_id = ? AND rule_version = ?')
       .run(ruleId, version);
     // A network operation that already owns a record cannot be recalled. The version becomes unable to start any
     // more, and its retained bytes are purged as the global/account revocation paths do.
@@ -329,6 +484,24 @@ function storedRetention(document: string): CanonicalFullRuleDocument['retention
   return (JSON.parse(document) as CanonicalFullRuleDocument).retention;
 }
 
+function changedRetentions(
+  parent: CanonicalFullRuleDocument['retention'],
+  child: CanonicalFullRuleDocument['retention'],
+): readonly Readonly<{ readonly retention: DRetentionKind; readonly durationMs: number }>[] {
+  const fields: readonly [DRetentionKind, keyof CanonicalFullRuleDocument['retention']][] = [
+    ['ingest', 'ingestMs'],
+    ['hold', 'holdMs'],
+    ['delivery', 'deliveryMs'],
+    ['dead-letter', 'deadLetterMs'],
+    ['dry-run', 'dryrunMs'],
+    ['sse-replay', 'sseReplayMs'],
+    ['decision-metadata', 'decisionMetadataMs'],
+  ];
+  return fields.flatMap(([retention, field]) =>
+    child[field] < parent[field] ? [{ retention, durationMs: child[field] }] : [],
+  );
+}
+
 /**
  * Retention shortening is deliberately monotonic. Where B1 has a persisted creation clock, each deadline moves only
  * to the child-version bound; already terminal content is reduced to content-free state in this same transaction.
@@ -345,6 +518,20 @@ export function shortenRuleRetentionDeadlines(input: {
       `UPDATE source_scan_state
        SET stage_expires_at = MIN(stage_expires_at, staged_at + ?)
        WHERE id IN (SELECT stage_id FROM source_stage_rule_debts WHERE rule_id = ?)`,
+    )
+    .run(child.retention.ingestMs, ruleId);
+  database
+    .prepare(
+      `UPDATE whatsapp_occurrences
+       SET stage_expires_at = MIN(stage_expires_at, first_seen_at + ?)
+       WHERE stage_expires_at IS NOT NULL
+         AND EXISTS (
+           SELECT 1
+           FROM whatsapp_rule_admissions AS admission
+           WHERE admission.account_id = whatsapp_occurrences.account_id
+             AND admission.message_id = whatsapp_occurrences.message_id
+             AND admission.rule_id = ?
+         )`,
     )
     .run(child.retention.ingestMs, ruleId);
   database
@@ -402,7 +589,7 @@ export function shortenRuleRetentionDeadlines(input: {
     if (delivery.state === 'dead-lettered') continue;
     const createdAt = delivery.expires_at - prior.deliveryMs;
     const expiresAt = Math.min(delivery.expires_at, createdAt + child.retention.deliveryMs);
-    if (expiresAt <= now && ['queued', 'retryable'].includes(delivery.state)) {
+    if (expiresAt <= now && ['queued', 'retryable', 'disclosing'].includes(delivery.state)) {
       database
         .prepare(
           "UPDATE deliveries SET expires_at = ?, state = 'retention-expired', encrypted_record = NULL, lease_until = NULL WHERE id = ?",
@@ -427,9 +614,75 @@ export function shortenRuleRetentionDeadlines(input: {
     durationMs: child.retention.sseReplayMs,
     at: now,
   });
+
+  const dueWhatsapp = database
+    .prepare(
+      `SELECT occurrence.account_id, occurrence.message_id
+       FROM whatsapp_occurrences AS occurrence
+       WHERE occurrence.stage_expires_at IS NOT NULL
+         AND occurrence.stage_expires_at <= ?
+         AND EXISTS (
+           SELECT 1
+           FROM whatsapp_rule_admissions AS admission
+           WHERE admission.account_id = occurrence.account_id
+             AND admission.message_id = occurrence.message_id
+             AND admission.rule_id = ?
+         )`,
+    )
+    .all(now, ruleId) as Array<{ account_id: string; message_id: string }>;
+  for (const occurrence of dueWhatsapp) {
+    database
+      .prepare(
+        `UPDATE whatsapp_rule_admissions
+         SET admission = 'expired', admitted_at = ?
+         WHERE account_id = ? AND message_id = ? AND admission != 'baseline'`,
+      )
+      .run(now, occurrence.account_id, occurrence.message_id);
+    purgeWhatsAppStagedPayload(database, {
+      accountId: occurrence.account_id,
+      messageId: occurrence.message_id,
+    });
+  }
+
+  const dueProjections = database
+    .prepare(
+      `SELECT projection.event_id, projection.rule_id, projection.rule_version, ingest.account_id
+       FROM ingest_rules AS projection
+       JOIN ingest ON ingest.event_id = projection.event_id
+       WHERE projection.rule_id = ? AND projection.decision_deadline <= ?`,
+    )
+    .all(ruleId, now) as Array<{ event_id: string; rule_id: string; rule_version: number; account_id: string }>;
+  for (const projection of dueProjections) {
+    database
+      .prepare(
+        `INSERT OR IGNORE INTO decisions
+         (id, event_id, account_id, rule_id, rule_version, outcome, metadata_expires_at, metadata_state)
+         VALUES (?, ?, ?, ?, ?, 'retention-expired', ?, 'retained')`,
+      )
+      .run(
+        `expired:${projection.event_id}:${projection.rule_id}:${projection.rule_version}`,
+        projection.event_id,
+        projection.account_id,
+        projection.rule_id,
+        projection.rule_version,
+        now,
+      );
+    database
+      .prepare(
+        `UPDATE decisions
+         SET outcome = 'retention-expired', hold_expires_at = NULL, hold_bound_by = NULL, encrypted_record = NULL
+         WHERE event_id = ? AND rule_id = ? AND rule_version = ?`,
+      )
+      .run(projection.event_id, projection.rule_id, projection.rule_version);
+    database
+      .prepare('DELETE FROM ingest_rules WHERE event_id = ? AND rule_id = ? AND rule_version = ?')
+      .run(projection.event_id, projection.rule_id, projection.rule_version);
+  }
   database
     .prepare(
-      'UPDATE decisions SET encrypted_record = NULL, purged_at = ? WHERE rule_id = ? AND metadata_expires_at <= ?',
+      `UPDATE decisions
+       SET encrypted_record = NULL, metadata_state = 'purged', purged_at = ?
+       WHERE rule_id = ? AND metadata_state != 'purged' AND metadata_expires_at <= ?`,
     )
     .run(now, ruleId, now);
 }
@@ -443,25 +696,36 @@ export async function applyDerivedTightening(input: {
   readonly parent: CanonicalFullRuleDocument;
   readonly child: CanonicalFullRuleDocument;
   readonly now: number;
+  /** Optional until the D owner composition is installed; when present it shares this exact pointer transaction. */
+  readonly retainedContentHooks?: DSourceRetentionTighteningDispatcher | undefined;
+  /**
+   * Decrypts and prepares due source stages before the pointer transaction.  Its closures use the same
+   * source-specific terminalisation as common expiry, inside the transaction that shortens their deadline.
+   */
+  readonly prepareSourceStageRetentionTightening?:
+    | ((
+        input: Readonly<{ ruleId: string; ingestRetentionMs: number; now: number }>,
+      ) => Promise<readonly PreparedSourceStageTerminalisation[]>)
+    | undefined;
   /** Reads a parent point using the parent row's own complete D8 AAD location. */
   readonly decryptPoint: (input: {
     readonly activationId: string;
     readonly ruleId: string;
     readonly ruleVersion: number;
-    readonly source: 'gmail';
+    readonly source: SourceOptions['channel'];
     readonly accountId: string;
-    readonly positionScope: 'mailbox';
+    readonly positionScope: string;
     readonly encryptedPosition: Uint8Array;
-  }) => Promise<BaselinePosition>;
+  }) => Promise<unknown>;
   /** Encrypts the inherited plaintext for the child's distinct D8 AAD location before the write transaction. */
   readonly encryptPoint: (input: {
     readonly activationId: string;
     readonly ruleId: string;
     readonly ruleVersion: number;
-    readonly source: 'gmail';
+    readonly source: SourceOptions['channel'];
     readonly accountId: string;
-    readonly positionScope: 'mailbox';
-    readonly position: BaselinePosition;
+    readonly positionScope: string;
+    readonly position: unknown;
   }) => Promise<Uint8Array>;
   /** D9: reads core's configuration for an account a copied point binds; throws ACCOUNT_REMOVED once it is gone. */
   readonly accountLive?: ((accountId: string) => Promise<void>) | undefined;
@@ -471,6 +735,11 @@ export async function applyDerivedTightening(input: {
   const database = input.database;
   const parentId = ruleVersionId(input.parent.ruleId, input.parent.version);
   const childId = ruleVersionId(input.child.ruleId, input.child.version);
+  const changes = changedRetentions(input.parent.retention, input.child.retention);
+  // The kill switch as the tightening began: a disable-all (or a new generation) during the awaits below wins.
+  const switchAtStart = database
+    .prepare('SELECT enabled, switch_generation FROM event_settings WHERE singleton = 1')
+    .get() as { enabled: number; switch_generation: number } | undefined;
   // Encryption reserves its nonce with BEGIN IMMEDIATE. It must finish before the pointer/lifecycle transaction,
   // and the copied plaintext must be authenticated for the child row rather than moved as a parent-row ciphertext.
   const parentActivationId = (
@@ -485,9 +754,9 @@ export async function applyDerivedTightening(input: {
        WHERE activation_id = ? AND rule_id = ? AND rule_version = ?`,
     )
     .all(parentActivationId ?? '', input.parent.ruleId, input.parent.version) as Array<{
-    source: 'gmail';
+    source: SourceOptions['channel'];
     account_id: string;
-    position_scope: 'mailbox';
+    position_scope: string;
     encrypted_position: Uint8Array;
   }>;
   const preparedPoints = await Promise.all(
@@ -514,10 +783,33 @@ export async function applyDerivedTightening(input: {
       }),
     })),
   );
-  // The decryption and encryption awaited: every account a copied point binds is read again from the configuration.
+  // Source stages may require a content decrypt/re-encrypt to preserve their continuation.  This has to happen
+  // before BEGIN IMMEDIATE, but each prepared closure authenticates the exact old ciphertext and runs only after
+  // the new deadline is made due in the pointer transaction below.
+  const dueSourceStages =
+    changes.length === 0
+      ? []
+      : ((await input.prepareSourceStageRetentionTightening?.({
+          ruleId: input.parent.ruleId,
+          ingestRetentionMs: input.child.retention.ingestMs,
+          now: input.now,
+        })) ?? []);
+  // Every await is behind us: every account a copied point binds is read again from the configuration here, after the
+  // last one (a removed account's id is never live again, so a removal during any await is seen — K6).
   for (const accountId of new Set(preparedPoints.map((point) => point.accountId))) await input.accountLive?.(accountId);
   database.exec('BEGIN IMMEDIATE');
   try {
+    const switchNow = database
+      .prepare('SELECT enabled, switch_generation FROM event_settings WHERE singleton = 1')
+      .get() as { enabled: number; switch_generation: number } | undefined;
+    if (
+      switchNow === undefined ||
+      switchAtStart === undefined ||
+      switchNow.enabled !== switchAtStart.enabled ||
+      switchNow.switch_generation !== switchAtStart.switch_generation
+    ) {
+      throw new CommsError('APPROVAL_VOID', 'the event switch changed while the derived tightening was prepared');
+    }
     const parent = database.prepare('SELECT state, approval_id FROM rule_versions WHERE id = ?').get(parentId) as
       | { state: string | null; approval_id: string | null }
       | undefined;
@@ -583,23 +875,50 @@ export async function applyDerivedTightening(input: {
           input.now,
         );
     }
-    if (editKind === 'shorten-retention') {
+    if (changes.length > 0) {
       shortenRuleRetentionDeadlines({
         database,
         ruleId: input.parent.ruleId,
         child: input.child,
         now: input.now,
       });
+      for (const stage of dueSourceStages) {
+        if (stage.terminaliseInTransaction() !== 1)
+          throw new CommsError(
+            'TRANSIENT',
+            'a source stage changed while its retention-tightening terminalisation was being prepared',
+          );
+      }
     }
+    const affectedVersionIds = database
+      .prepare(
+        `SELECT id FROM rule_versions
+         WHERE rule_id = ? AND state IN ('active', 'superseded')
+         ORDER BY version DESC`,
+      )
+      .all(input.parent.ruleId)
+      .map((row) => (row as { id: string }).id);
+    input.retainedContentHooks?.dispatchRetentionTighteningInTransaction(database, {
+      ruleId: input.parent.ruleId,
+      affectedVersionIds,
+      revokedVersionId: parentId,
+      at: new Date(input.now).toISOString(),
+      changes,
+    });
     // The child inherits the parent's points, so it inherits the raw pages the parent was owed: a page staged for the
     // parent survives the parent's purge and is processed for the child (an in-flight scan of it goes stale on the
     // rule-set change and writes nothing).
-    database
-      .prepare(
-        `INSERT OR IGNORE INTO source_stage_rule_debts (stage_id, rule_id, rule_version)
-         SELECT stage_id, rule_id, ? FROM source_stage_rule_debts WHERE rule_id = ? AND rule_version = ?`,
-      )
-      .run(input.child.version, input.parent.ruleId, input.parent.version);
+    transferStageDebtToDerivedRule(database, {
+      ruleId: input.parent.ruleId,
+      parentVersion: input.parent.version,
+      childVersion: input.child.version,
+    });
+    transferWhatsAppAdmissionsToDerivedRule(database, {
+      ruleId: input.parent.ruleId,
+      parentVersion: input.parent.version,
+      childVersion: input.child.version,
+      childActivationId: childId,
+    });
     purgeRevokedRuleWork(database, input.parent.ruleId, [input.parent.version]);
     database
       .prepare("UPDATE rule_versions SET state = 'revoked', revoked_at = ? WHERE id = ? AND state = 'active'")

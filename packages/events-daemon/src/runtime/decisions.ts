@@ -13,6 +13,7 @@ export interface DecisionCommitInput {
   readonly outcome: 'matched' | 'no-match' | 'mapping-rejected' | 'retention-expired';
   readonly metadataExpiresAt: number;
   readonly switchGeneration: number;
+  readonly whatsapp?: Readonly<{ messageId: string; visibilityVersion: number }> | undefined;
   readonly deliveries: readonly PreparedDelivery[];
 }
 
@@ -51,8 +52,8 @@ export function commitDecisionOutbox(
     store.database
       .prepare(
         `INSERT INTO decisions
-         (id, event_id, account_id, rule_id, rule_version, outcome, metadata_expires_at, metadata_state)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'retained')`,
+         (id, event_id, account_id, rule_id, rule_version, outcome, metadata_expires_at, metadata_state, whatsapp_message_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'retained', ?)`,
       )
       .run(
         input.id,
@@ -62,6 +63,7 @@ export function commitDecisionOutbox(
         input.ruleVersion,
         input.outcome,
         input.metadataExpiresAt,
+        input.whatsapp?.messageId ?? null,
       );
     failpoint?.('after-decision');
     for (const delivery of input.deliveries) {
@@ -77,8 +79,8 @@ export function commitDecisionOutbox(
           `INSERT INTO deliveries
            (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version,
             target_kind, target_representation, subscriber_id, subscriber_version, encrypted_record, expires_at,
-            state, switch_generation, next_at, ordering_sequence)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
+            state, switch_generation, next_at, ordering_sequence, whatsapp_visibility_version, whatsapp_message_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
         )
         .run(
           delivery.id,
@@ -98,6 +100,8 @@ export function commitDecisionOutbox(
           input.switchGeneration,
           0,
           orderingSequence,
+          input.whatsapp?.visibilityVersion ?? null,
+          input.whatsapp?.messageId ?? null,
         );
       addRetainedDeliveryTargetReference(store.database, {
         deliveryId: delivery.id,

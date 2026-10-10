@@ -1,23 +1,28 @@
 import type { ApprovalStore, ConfigStore } from '@agentcomms/core';
 import type { EventDatabase } from '../store/database.ts';
 import type { EventRecordCipher } from '../store/records.ts';
-import { assertLiveGmailAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
+import { assertLiveEventAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
 import { type ActiveDisclosableRequest, assertDisclosable } from './disclosure-fence.ts';
 import { PassThroughSseFrameVisibilityGate, type SseFrameVisibilityGate } from './phase-d-whatsapp-seam.ts';
 import { hasLiveSseLineage, type SealedSseFrameWrite, streamLocation, writeLiveSseFrame } from './sse-dispatcher.ts';
 
 /** Replay has its own writer entry point so Last-Event-ID frames cannot bypass the same synchronous D visibility seam. */
-export function writeReplaySseFrame(input: SealedSseFrameWrite): boolean {
+export async function writeReplaySseFrame(input: SealedSseFrameWrite): Promise<boolean> {
   if (input.whatsappMessageId === null) {
     input.writeFrame(input.frame);
     return true;
   }
   if (!input.hasConcreteWhatsAppVisibilityFence) return false;
-  input.visibilityGate.withCurrentSseFrameVisibility(
+  let wrote = false;
+  await input.visibilityGate.withCurrentSseFrameVisibility(
     { accountId: input.accountId, whatsappMessageId: input.whatsappMessageId },
-    () => input.writeFrame(input.frame),
+    input.recheck ?? (async () => {}),
+    () => {
+      input.writeFrame(input.frame);
+      wrote = true;
+    },
   );
-  return true;
+  return wrote;
 }
 
 interface StreamLogRow {
@@ -80,27 +85,61 @@ export class StreamReplay {
     if (row === undefined) return false;
     try {
       await this.#fence(this.#fenceRequest(row));
-      await assertLiveGmailAccount(this.#config, row.account_id);
+      await assertLiveEventAccount(this.#config, {
+        source: sourceOfStreamRow(this.#store, row),
+        accountId: row.account_id,
+      });
     } catch (error) {
       if (isRemovedAccountError(error))
-        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, row.account_id, this.#now()));
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            {
+              source: sourceOfStreamRow(this.#store, row),
+              accountId: row.account_id,
+            },
+            this.#now(),
+          ),
+        );
       return false;
     }
     let written = false;
-    const accepted = writeLiveSseFrame({
-      frame: input.frame,
-      accountId: row.account_id,
-      whatsappMessageId: row.whatsapp_message_id,
-      visibilityGate: this.#visibilityGate,
-      hasConcreteWhatsAppVisibilityFence: this.#hasConcreteWhatsAppVisibilityFence,
-      writeFrame: (frame) => {
-        this.#store.immediate(() => {
-          if (!this.#isFrameCurrent(row) || !input.isStreamCurrent()) return;
-          input.writeFrame(frame);
-          written = true;
-        });
-      },
-    });
+    let accepted: boolean;
+    let recheckStarted = false;
+    let recheckCompleted = false;
+    try {
+      accepted = await writeLiveSseFrame({
+        frame: input.frame,
+        accountId: row.account_id,
+        whatsappMessageId: row.whatsapp_message_id,
+        visibilityGate: this.#visibilityGate,
+        hasConcreteWhatsAppVisibilityFence: this.#hasConcreteWhatsAppVisibilityFence,
+        writeFrame: (frame) => {
+          this.#store.immediate(() => {
+            if (!this.#isFrameCurrent(row) || !input.isStreamCurrent()) return;
+            input.writeFrame(frame);
+            written = true;
+          });
+        },
+        recheck: async () => {
+          recheckStarted = true;
+          await this.#recheck(row);
+          recheckCompleted = true;
+        },
+      });
+    } catch (error) {
+      if (isRemovedAccountError(error))
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            { source: sourceOfStreamRow(this.#store, row), accountId: row.account_id },
+            this.#now(),
+          ),
+        );
+      else if (recheckStarted && !recheckCompleted) return false;
+      else throw error;
+      return false;
+    }
     return accepted && written;
   }
 
@@ -116,10 +155,22 @@ export class StreamReplay {
       const request = this.#fenceRequest(row);
       try {
         await this.#fence(request);
-        await assertLiveGmailAccount(this.#config, row.account_id);
+        await assertLiveEventAccount(this.#config, {
+          source: sourceOfStreamRow(this.#store, row),
+          accountId: row.account_id,
+        });
       } catch (error) {
         if (isRemovedAccountError(error))
-          this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, row.account_id, this.#now()));
+          this.#store.immediate(() =>
+            purgeRemovedAccountWork(
+              this.#store.database,
+              {
+                source: sourceOfStreamRow(this.#store, row),
+                accountId: row.account_id,
+              },
+              this.#now(),
+            ),
+          );
         continue;
       }
       // Do not decrypt a row that has already lost its retained-content authority. The same synchronous check repeats
@@ -134,27 +185,64 @@ export class StreamReplay {
       }
       try {
         await this.#fence(request);
-        await assertLiveGmailAccount(this.#config, row.account_id);
+        await assertLiveEventAccount(this.#config, {
+          source: sourceOfStreamRow(this.#store, row),
+          accountId: row.account_id,
+        });
       } catch (error) {
         if (isRemovedAccountError(error))
-          this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, row.account_id, this.#now()));
+          this.#store.immediate(() =>
+            purgeRemovedAccountWork(
+              this.#store.database,
+              {
+                source: sourceOfStreamRow(this.#store, row),
+                accountId: row.account_id,
+              },
+              this.#now(),
+            ),
+          );
         continue;
       }
       const frame = `id: ${row.id}\ndata: ${bytes.toString('utf8')}\n\n`;
       const allowed = this.#store.immediate(() => this.#isFrameCurrent(row));
       if (!allowed) continue;
       // Task 9 passes the physical socket callback through writeReplaySseFrame; this Task 8 path is non-WhatsApp only.
-      if (
-        writeReplaySseFrame({
+      let wrote = false;
+      let recheckStarted = false;
+      let recheckCompleted = false;
+      try {
+        const accepted = await writeReplaySseFrame({
           frame,
           accountId: row.account_id,
           whatsappMessageId: row.whatsapp_message_id,
           visibilityGate: this.#visibilityGate,
           hasConcreteWhatsAppVisibilityFence: this.#hasConcreteWhatsAppVisibilityFence,
-          writeFrame: input.writeFrame,
-        })
-      )
-        delivered += 1;
+          recheck: async () => {
+            recheckStarted = true;
+            await this.#recheck(row);
+            recheckCompleted = true;
+          },
+          writeFrame: (frame) => {
+            this.#store.immediate(() => {
+              if (!this.#isFrameCurrent(row)) return;
+              input.writeFrame(frame);
+              wrote = true;
+            });
+          },
+        });
+        if (accepted && wrote) delivered += 1;
+      } catch (error) {
+        if (isRemovedAccountError(error))
+          this.#store.immediate(() =>
+            purgeRemovedAccountWork(
+              this.#store.database,
+              { source: sourceOfStreamRow(this.#store, row), accountId: row.account_id },
+              this.#now(),
+            ),
+          );
+        else if (recheckStarted && !recheckCompleted) continue;
+        else throw error;
+      }
     }
     return delivered;
   }
@@ -229,6 +317,16 @@ export class StreamReplay {
       expires_at: current.expires_at,
       switch_generation: current.switch_generation,
       event_id: '',
+      whatsapp_message_id: null,
+      whatsapp_visibility_version: null,
+    });
+  }
+
+  async #recheck(row: StreamLogRow): Promise<void> {
+    await this.#fence(this.#fenceRequest(row));
+    await assertLiveEventAccount(this.#config, {
+      source: sourceOfStreamRow(this.#store, row),
+      accountId: row.account_id,
     });
   }
 
@@ -246,4 +344,20 @@ export class StreamReplay {
       switchGeneration: row.switch_generation,
     };
   }
+}
+
+function sourceOfStreamRow(
+  store: EventDatabase,
+  row: Pick<StreamLogRow, 'rule_id' | 'rule_version'>,
+): 'gmail' | 'slack' | 'resend' | 'whatsapp' {
+  const stored = store.database
+    .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
+    .get(row.rule_id, row.rule_version) as { document: string } | undefined;
+  if (stored === undefined) throw new Error('the stream row has no exact rule version');
+  const document = JSON.parse(stored.document) as { source?: { channel?: unknown } };
+  // Source-less B2 documents were Gmail-only before D introduced this union. Present malformed values are not legacy.
+  if (document.source === undefined) return 'gmail';
+  const source = document.source?.channel;
+  if (source === 'gmail' || source === 'slack' || source === 'resend' || source === 'whatsapp') return source;
+  throw new Error('the stream row has no recognised event source');
 }

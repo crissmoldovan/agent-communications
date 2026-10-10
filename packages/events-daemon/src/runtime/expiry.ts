@@ -3,6 +3,7 @@ import { fixedDeadline } from '../store/retention.ts';
 import { purgeExpiredB2StreamRecords } from './phase-d-b2-retention.ts';
 import { degradeResetBarrier } from './system-reset-outbox.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
+import { purgeWhatsAppStagedPayload } from './whatsapp-staged-payload.ts';
 
 export interface DeadLetterInput {
   readonly deliveryId: string;
@@ -43,16 +44,74 @@ export interface ExpirySweepResult {
   readonly streamRecords: number;
   readonly projections: number;
   readonly decisionMetadata: number;
+  readonly sourceStages: number;
+}
+
+/** Source-specific expiry that needs to decrypt a staged record before it can derive content-free terminal keys. */
+export interface AsyncSourceStageExpiry {
+  sweep(): Promise<number>;
+  /**
+   * Decrypts a stage before a retention-tightening transaction.  The returned closures run inside that pointer
+   * transaction, after its deadline update, so source-specific continuations and real occurrence keys survive the
+   * same atomic cut-over as the ciphertext purge.
+   */
+  prepareRetentionTightening?(
+    input: Readonly<{ ruleId: string; ingestRetentionMs: number; now: number }>,
+  ): Promise<readonly PreparedSourceStageTerminalisation[]>;
+}
+
+/** A decrypted source-stage expiry whose writes must share the derived-tightening transaction. */
+export interface PreparedSourceStageTerminalisation {
+  terminaliseInTransaction(): number;
+}
+
+/** Runs every source-specific decrypted expiry before any adapter can inspect a retained source record. */
+export class SourceStageExpiryGroup implements AsyncSourceStageExpiry {
+  readonly #sources: readonly AsyncSourceStageExpiry[];
+
+  constructor(sources: readonly AsyncSourceStageExpiry[]) {
+    this.#sources = sources;
+  }
+
+  async sweep(): Promise<number> {
+    let expired = 0;
+    for (const source of this.#sources) expired += await source.sweep();
+    return expired;
+  }
+
+  async prepareRetentionTightening(
+    input: Readonly<{ ruleId: string; ingestRetentionMs: number; now: number }>,
+  ): Promise<readonly PreparedSourceStageTerminalisation[]> {
+    const prepared: PreparedSourceStageTerminalisation[] = [];
+    for (const source of this.#sources) {
+      if (source.prepareRetentionTightening === undefined) continue;
+      prepared.push(...(await source.prepareRetentionTightening(input)));
+    }
+    return prepared;
+  }
 }
 
 /** Deletes B1 content at its durable deadline without waiting for a later delivery or read. */
 export class EventExpiry {
   readonly #store: EventDatabase;
   readonly #now: () => number;
+  readonly #asyncSourceStages: AsyncSourceStageExpiry | undefined;
 
-  constructor(store: EventDatabase, now: () => number = Date.now) {
+  constructor(
+    store: EventDatabase,
+    now: () => number = Date.now,
+    asyncSourceStages?: AsyncSourceStageExpiry | undefined,
+  ) {
     this.#store = store;
     this.#now = now;
+    this.#asyncSourceStages = asyncSourceStages;
+  }
+
+  /** Runs synchronous and decrypted source-stage expiry before the owner starts source, control, or replay work. */
+  async sweepAll(): Promise<ExpirySweepResult> {
+    const swept = this.sweep();
+    const sourceStages = (await this.#asyncSourceStages?.sweep()) ?? 0;
+    return { ...swept, sourceStages: swept.sourceStages + sourceStages };
   }
 
   sweep(): ExpirySweepResult {
@@ -136,7 +195,35 @@ export class EventExpiry {
           )
           .run(now, now).changes,
       );
-      return { deliveries, localRecords, streamRecords, projections, decisionMetadata };
+      const sourceStages = this.#expireSourceStages(database, now);
+      return { deliveries, localRecords, streamRecords, projections, decisionMetadata, sourceStages };
     });
+  }
+
+  /** Purges due source bytes before another source step could inspect or retry them. */
+  #expireSourceStages(database: EventDatabase['database'], now: number): number {
+    const whatsapp = database
+      .prepare(
+        `SELECT account_id, message_id
+         FROM whatsapp_occurrences
+         WHERE stage_expires_at IS NOT NULL AND stage_expires_at <= ?`,
+      )
+      .all(now) as Array<{ account_id: string; message_id: string }>;
+    for (const occurrence of whatsapp) {
+      database
+        .prepare(
+          `UPDATE whatsapp_rule_admissions
+           SET admission = 'expired', admitted_at = ?
+           WHERE account_id = ? AND message_id = ? AND admission != 'baseline'`,
+        )
+        .run(now, occurrence.account_id, occurrence.message_id);
+      purgeWhatsAppStagedPayload(database, {
+        accountId: occurrence.account_id,
+        messageId: occurrence.message_id,
+      });
+    }
+    // Gmail, Slack and Resend stages are decrypted by their registered source-specific sweepers. The old generic
+    // branch could only name an opaque stage id, which both lost the durable continuation and allowed re-admission.
+    return whatsapp.length;
   }
 }

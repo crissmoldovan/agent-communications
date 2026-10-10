@@ -182,6 +182,7 @@ function messageDefinition<T extends 'gmail.message.received' | 'gmail.message.s
       { rule: 'sorted-utf8', pattern: ['warnings', 'replyToDomains'] },
       { rule: 'same-instant', pointers: ['/date', '/occurredAt'] },
     ],
+    identityPointers: ['/messageId'],
     subject: (event) => event.messageId,
     dedupeKey: (event, staging) => {
       if (!/^[0-9]+$/u.test(staging.historyRecordId)) throw new Error('historyRecordId must be an unsigned decimal');
@@ -230,6 +231,7 @@ export const gmailMessageLabelledV1: DefinitionInternal<GmailMessageLabelledV1, 
     { rule: 'disjoint', pointers: ['/added', '/removed'] },
     { rule: 'identical', pointers: ['/occurredAt', '/observedAt'] },
   ],
+  identityPointers: ['/messageId'],
   subject: (event) => event.messageId,
   dedupeKey: (event, staging) => {
     if (!/^[0-9]+$/u.test(staging.historyRecordId)) throw new Error('historyRecordId must be an unsigned decimal');

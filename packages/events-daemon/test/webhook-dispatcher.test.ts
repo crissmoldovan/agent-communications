@@ -11,6 +11,7 @@ import { createLoopbackTestTls } from './support/test-tls.ts';
 assertLoopbackSeal();
 const { WebhookDispatcher, classifyWebhookResponseStatus } = await import('../src/runtime/webhook-dispatcher.ts');
 const { openEventDatabase } = await import('../src/store/database.ts');
+const { WhatsAppVisibilityFence } = await import('../src/runtime/whatsapp-visibility.ts');
 
 const ACCOUNT = 'ibx_WEBHOOK_DISPATCH';
 const SIGNING_KEY = 'whsec_c3VwZXJzZWNyZXQ=';
@@ -89,7 +90,12 @@ async function fixture(url: string) {
         },
       },
       approvals: { get: async () => null },
-      config: { load: async () => ({ inboxes: { inbox: { id: ACCOUNT, provider: 'gmail' } } }) } as never,
+      config: {
+        load: async () => ({
+          inboxes: { inbox: { id: ACCOUNT, provider: 'gmail' } },
+          accounts: { whatsapp: { id: ACCOUNT, platform: 'whatsapp' } },
+        }),
+      } as never,
       fence: async () => undefined,
       secretReader: async ({ purpose }: { readonly purpose: string }) =>
         purpose === 'webhook-signing'
@@ -108,6 +114,222 @@ async function fixture(url: string) {
     });
   return { stateDir, store, dispatcher };
 }
+
+const WHATSAPP_MESSAGE = '["wa-msg","chat@example.test","sender@example.test","message-1"]';
+
+async function whatsappFixture() {
+  const setup = await fixture('http://127.0.0.1:44444/whatsapp');
+  setup.store.database.exec(`
+    INSERT INTO whatsapp_visibility (account_id, version, lists_digest, changed_at)
+      VALUES ('${ACCOUNT}', 1, '${'a'.repeat(64)}', 1);
+    INSERT INTO whatsapp_occurrences
+      (account_id, message_id, first_seen_generation, first_seen_at, visibility_version)
+      VALUES ('${ACCOUNT}', '${WHATSAPP_MESSAGE}', 1, 1, 1);
+    UPDATE rule_versions
+       SET document = '{"deliveryRateCap":20,"source":{"channel":"whatsapp"}}'
+     WHERE id = 'rule-webhook@1';
+    UPDATE deliveries
+       SET whatsapp_message_id = '${WHATSAPP_MESSAGE}', whatsapp_visibility_version = 1
+     WHERE id = 'delivery-webhook';
+  `);
+  return setup;
+}
+
+function respondingSocket() {
+  const state = { writes: [] as Buffer[], destroyed: 0 };
+  const listeners = new Map<string, (value: Buffer | Error) => void>();
+  const socket = {
+    write(bytes: Uint8Array) {
+      state.writes.push(Buffer.from(bytes));
+      setImmediate(() => listeners.get('data')?.(Buffer.from('HTTP/1.1 204 No Content\r\n\r\n')));
+      return true;
+    },
+    destroy() {
+      state.destroyed += 1;
+    },
+    once(event: string, listener: (value: Buffer | Error) => void) {
+      listeners.set(event, listener);
+      return this;
+    },
+    on(event: string, listener: (value: Buffer | Error) => void) {
+      listeners.set(event, listener);
+      return this;
+    },
+  };
+  return { socket, state };
+}
+
+test('P1: WhatsApp webhook bytes are written only under the live-list fence', { skip: WINDOWS_SKIP }, async (t) => {
+  await t.test('a list acquisition that removes the account rechecks before it writes webhook bytes', async () => {
+    const setup = await whatsappFixture();
+    const peer = respondingSocket();
+    let accountPresent = true;
+    try {
+      const visibilityFence = new WhatsAppVisibilityFence({
+        store: setup.store,
+        withCurrentEventVisibility: async (_input, work) => {
+          accountPresent = false;
+          return work({ version: 1, digest: 'a'.repeat(64), seesMessage: () => true });
+        },
+      });
+      assert.deepEqual(
+        await setup
+          .dispatcher({
+            tcpConnect: async () => peer.socket as never,
+            hasConcreteWhatsAppVisibilityFence: true,
+            whatsappVisibilityFence: visibilityFence,
+            config: {
+              load: async () =>
+                accountPresent ? { accounts: { whatsapp: { id: ACCOUNT, platform: 'whatsapp' } } } : { accounts: {} },
+            } as never,
+          })
+          .dispatch('delivery-webhook'),
+        { state: 'terminal', deliveryId: 'delivery-webhook' },
+      );
+      assert.deepEqual(peer.state.writes, []);
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('a chat hidden between claim and write sends no bytes and cancels content', async () => {
+    const setup = await whatsappFixture();
+    const peer = respondingSocket();
+    let gates = 0;
+    try {
+      assert.deepEqual(
+        await setup
+          .dispatcher({
+            tcpConnect: async () => peer.socket as never,
+            hasConcreteWhatsAppVisibilityFence: true,
+            whatsappVisibilityFence: {
+              async withCurrentSseFrameVisibility() {
+                gates += 1;
+                return undefined;
+              },
+            },
+          })
+          .dispatch('delivery-webhook'),
+        { state: 'terminal', deliveryId: 'delivery-webhook' },
+      );
+      assert.equal(gates, 1);
+      assert.deepEqual(peer.state.writes, []);
+      assert.ok(peer.state.destroyed >= 1);
+      assert.deepEqual(
+        {
+          ...(setup.store.database
+            .prepare("SELECT state, encrypted_record FROM deliveries WHERE id = 'delivery-webhook'")
+            .get() as object),
+        },
+        { state: 'cancelled', encrypted_record: null },
+      );
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('an unreadable chat list sends nothing, purges nothing and releases the claim for a retry', async () => {
+    const setup = await whatsappFixture();
+    const peer = respondingSocket();
+    try {
+      await assert.rejects(
+        setup
+          .dispatcher({
+            tcpConnect: async () => peer.socket as never,
+            hasConcreteWhatsAppVisibilityFence: true,
+            whatsappVisibilityFence: {
+              async withCurrentSseFrameVisibility() {
+                throw new Error('the chat list file is unreadable');
+              },
+            },
+          })
+          .dispatch('delivery-webhook'),
+        (error: unknown) => error instanceof Error && 'code' in error && error.code === 'TRANSIENT',
+      );
+      assert.deepEqual(peer.state.writes, []);
+      assert.ok(peer.state.destroyed >= 1);
+      const row = setup.store.database
+        .prepare("SELECT state, encrypted_record, lease_until FROM deliveries WHERE id = 'delivery-webhook'")
+        .get() as { state: string; encrypted_record: Uint8Array | null; lease_until: number | null };
+      assert.notEqual(row.state, 'cancelled', 'D-6: an unreadable list hides, it does not end the delivery');
+      assert.notEqual(row.encrypted_record, null, 'D-6: nothing is purged merely because the file could not be read');
+      assert.equal(row.lease_until, null, 'the claim is released so a later turn retries');
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('a visible chat writes once inside the fence', async () => {
+    const setup = await whatsappFixture();
+    const peer = respondingSocket();
+    let gates = 0;
+    try {
+      assert.deepEqual(
+        await setup
+          .dispatcher({
+            tcpConnect: async () => peer.socket as never,
+            hasConcreteWhatsAppVisibilityFence: true,
+            whatsappVisibilityFence: {
+              async withCurrentSseFrameVisibility(_input: unknown, recheck: () => Promise<void>, write: () => void) {
+                gates += 1;
+                await recheck();
+                write();
+              },
+            },
+          })
+          .dispatch('delivery-webhook'),
+        { state: 'issued', deliveryId: 'delivery-webhook' },
+      );
+      assert.equal(gates, 1);
+      assert.equal(peer.state.writes.length, 1);
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('a non-WhatsApp delivery remains outside the list fence', async () => {
+    const setup = await fixture('http://127.0.0.1:44444/ordinary');
+    const peer = respondingSocket();
+    try {
+      assert.deepEqual(
+        await setup
+          .dispatcher({
+            tcpConnect: async () => peer.socket as never,
+            whatsappVisibilityFence: {
+              async withCurrentSseFrameVisibility() {
+                assert.fail('non-WhatsApp deliveries must not acquire the WhatsApp fence');
+              },
+            },
+          })
+          .dispatch('delivery-webhook'),
+        { state: 'issued', deliveryId: 'delivery-webhook' },
+      );
+      assert.equal(peer.state.writes.length, 1);
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('a WhatsApp delivery with no concrete fence fails closed', async () => {
+    const setup = await whatsappFixture();
+    const peer = respondingSocket();
+    try {
+      assert.deepEqual(
+        await setup.dispatcher({ tcpConnect: async () => peer.socket as never }).dispatch('delivery-webhook'),
+        { state: 'terminal', deliveryId: 'delivery-webhook' },
+      );
+      assert.deepEqual(peer.state.writes, []);
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  });
+});
 
 test('B2-T7: a webhook posts the prepared CloudEvent bytes and its default outcome seam settles the owned lease', {
   skip: WINDOWS_SKIP,

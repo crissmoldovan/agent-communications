@@ -4,7 +4,7 @@ import type { CanonicalFullRuleDocument, DryRunTargetDocument } from '../domain/
 import type { EventDatabase } from '../store/database.ts';
 import { type EventRecordCipher, RecordStorageError } from '../store/records.ts';
 import { dryrunDeadline } from '../store/retention.ts';
-import { assertLiveGmailAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
+import { assertLiveEventAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
 import type { DeliveryRecord } from './deliveries.ts';
 import {
   type ClaimedDelivery,
@@ -19,6 +19,7 @@ import { type ActiveDisclosableRequest, assertDisclosable } from './disclosure-f
 import { EventExpiry } from './expiry.ts';
 import { newLocalResetBarrier } from './reset.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
+import type { WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
 
 interface CurrentDeliveryRow {
   readonly id: string;
@@ -35,6 +36,7 @@ interface CurrentDeliveryRow {
   readonly attempt_id: string | null;
   readonly lease_token: string | null;
   readonly event_id: string;
+  readonly whatsapp_message_id: string | null;
 }
 
 export interface DryRunLogEntry {
@@ -143,6 +145,8 @@ export interface DryRunDispatcherOptions {
   readonly leaseMs?: number | undefined;
   /** Test-only interruption point: every effect remains in one immediate transaction. */
   readonly beforeCommit?: (() => void) | undefined;
+  /** The concrete D6 gate is mandatory for every WhatsApp append and retained-record read. */
+  readonly whatsappVisibilityFence?: Pick<WhatsAppVisibilityFence, 'withCurrentDryRunVisibility'> | undefined;
 }
 
 /**
@@ -160,6 +164,7 @@ export class DryRunDispatcher {
   readonly #now: () => number;
   readonly #leaseMs: number;
   readonly #beforeCommit: (() => void) | undefined;
+  readonly #whatsappVisibilityFence: Pick<WhatsAppVisibilityFence, 'withCurrentDryRunVisibility'> | undefined;
 
   constructor(options: DryRunDispatcherOptions) {
     this.#store = options.store;
@@ -171,6 +176,7 @@ export class DryRunDispatcher {
     this.#now = options.now ?? Date.now;
     this.#leaseMs = options.leaseMs ?? 30_000;
     this.#beforeCommit = options.beforeCommit;
+    this.#whatsappVisibilityFence = options.whatsappVisibilityFence;
   }
 
   async dispatch(deliveryId: string): Promise<DispatchResult> {
@@ -184,7 +190,13 @@ export class DryRunDispatcher {
         leaseMs: this.#leaseMs,
         newAttemptId: randomUUID,
         newLeaseToken: randomUUID,
-        assertAccountLive: (accountId) => assertLiveGmailAccount(this.#config, accountId),
+        assertAccountLive: (accountId) => {
+          const delivery = candidateRule(this.#store, deliveryId);
+          return assertLiveEventAccount(this.#config, {
+            source: sourceOfDelivery(this.#store, delivery?.rule_id, delivery?.rule_version),
+            accountId,
+          });
+        },
         preflight: async (row) => {
           await this.#fence({
             database: this.#store.database,
@@ -203,7 +215,16 @@ export class DryRunDispatcher {
     } catch (error) {
       const candidate = deliveryById(this.#store, deliveryId);
       if (candidate !== undefined && isRemovedAccountError(error)) {
-        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, candidate.account_id, this.#now()));
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            {
+              source: sourceOfDelivery(this.#store, candidate.rule_id, candidate.rule_version),
+              accountId: candidate.account_id,
+            },
+            this.#now(),
+          ),
+        );
         return { state: 'terminal', deliveryId };
       }
       throw error;
@@ -217,7 +238,13 @@ export class DryRunDispatcher {
       target = dryRunTarget(rule, row.targetId, row.targetVersion);
     } catch (error) {
       if (isRemovedAccountError(error)) {
-        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, row.accountId, this.#now()));
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            { source: sourceOfDelivery(this.#store, row.ruleId, row.ruleVersion), accountId: row.accountId },
+            this.#now(),
+          ),
+        );
         return { state: 'terminal', deliveryId };
       }
       releaseDeliveryClaim(this.#store, row);
@@ -246,16 +273,50 @@ export class DryRunDispatcher {
     // purged here, and nothing is appended for it.
     try {
       await this.#fence(this.#fenceRequest(row));
-      await assertLiveGmailAccount(this.#config, row.accountId);
+      await assertLiveEventAccount(this.#config, { source: rule.source.channel, accountId: row.accountId });
     } catch (error) {
       if (isRemovedAccountError(error)) {
-        this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, row.accountId, this.#now()));
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            { source: rule.source.channel, accountId: row.accountId },
+            this.#now(),
+          ),
+        );
         return { state: 'terminal', deliveryId };
       }
       releaseDeliveryClaim(this.#store, row);
       throw error;
     }
-    return this.#append(row, target, localRecord);
+    // A WhatsApp row appends only inside D's live-list gate (D6); a newly hidden row is never appended.
+    let appended: DispatchResult | undefined;
+    try {
+      appended = await this.#withCurrentWhatsAppDryRunVisibility(
+        {
+          account_id: row.accountId,
+          whatsapp_message_id: deliveryById(this.#store, row.id)?.whatsapp_message_id ?? null,
+        },
+        async () => {
+          await this.#fence(this.#fenceRequest(row));
+          await assertLiveEventAccount(this.#config, { source: rule.source.channel, accountId: row.accountId });
+        },
+        () => this.#append(row, target, localRecord),
+      );
+    } catch (error) {
+      if (isRemovedAccountError(error)) {
+        this.#store.immediate(() =>
+          purgeRemovedAccountWork(
+            this.#store.database,
+            { source: rule.source.channel, accountId: row.accountId },
+            this.#now(),
+          ),
+        );
+        return { state: 'terminal', deliveryId };
+      }
+      releaseDeliveryClaim(this.#store, row);
+      throw error;
+    }
+    return appended ?? { state: 'terminal', deliveryId };
   }
 
   list(): readonly DryRunLogEntry[] {
@@ -283,7 +344,7 @@ export class DryRunDispatcher {
     const row = this.#store.database
       .prepare(
         `SELECT l.delivery_id, l.rule_id, l.rule_version, l.target_id, l.target_version, l.event_id, l.account_id,
-                l.encrypted_record, l.delivered_at, l.expires_at, d.switch_generation
+                l.encrypted_record, l.delivered_at, l.expires_at, l.whatsapp_message_id, d.switch_generation
          FROM dryrun_log l JOIN deliveries d ON d.id = l.delivery_id WHERE l.delivery_id = ?`,
       )
       .get(deliveryId) as
@@ -318,7 +379,11 @@ export class DryRunDispatcher {
       } catch (error) {
         if (isRemovedAccountError(error))
           this.#store.immediate(() =>
-            purgeRemovedAccountWork(this.#store.database, String(row.account_id), this.#now()),
+            purgeRemovedAccountWork(
+              this.#store.database,
+              { source: rule.source.channel, accountId: String(row.account_id) },
+              this.#now(),
+            ),
           );
         throw error;
       }
@@ -346,11 +411,37 @@ export class DryRunDispatcher {
     // The decryption awaited: a disable, a revocation or an account removal may have purged this record meanwhile.
     // The fence runs again and the record must still be there before any of its content is returned.
     await fenced();
-    const still = this.#store.database
-      .prepare('SELECT 1 AS present FROM dryrun_log WHERE delivery_id = ?')
-      .get(deliveryId);
-    if (still === undefined) throw new CommsError('NOT_FOUND', 'the retained local record no longer exists');
-    return { ...entry(row), record: JSON.parse(plaintext.toString('utf8')) as DeliveryRecord };
+    const result = await this.#withCurrentWhatsAppDryRunVisibility(
+      { account_id: String(row.account_id), whatsapp_message_id: (row.whatsapp_message_id as string | null) ?? null },
+      async () => {
+        try {
+          await fenced();
+          await assertLiveEventAccount(this.#config, {
+            source: rule.source.channel,
+            accountId: String(row.account_id),
+          });
+        } catch (error) {
+          if (isRemovedAccountError(error))
+            this.#store.immediate(() =>
+              purgeRemovedAccountWork(
+                this.#store.database,
+                { source: rule.source.channel, accountId: String(row.account_id) },
+                this.#now(),
+              ),
+            );
+          throw error;
+        }
+      },
+      () => {
+        const still = this.#store.database
+          .prepare('SELECT 1 AS present FROM dryrun_log WHERE delivery_id = ?')
+          .get(deliveryId);
+        if (still === undefined) throw new CommsError('NOT_FOUND', 'the retained local record no longer exists');
+        return { ...entry(row), record: JSON.parse(plaintext.toString('utf8')) as DeliveryRecord };
+      },
+    );
+    if (result === undefined) throw new CommsError('NOT_FOUND', 'the retained local record is no longer visible');
+    return result;
   }
 
   /** Claims interrupted local work again; a committed append is already terminal and is never charged twice. */
@@ -416,8 +507,10 @@ export class DryRunDispatcher {
       this.#beforeCommit?.();
       this.#store.database
         .prepare(
-          `INSERT INTO dryrun_log (delivery_id, rule_id, rule_version, target_id, target_version, event_id, account_id, encrypted_record, delivered_at, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO dryrun_log
+            (delivery_id, rule_id, rule_version, target_id, target_version, event_id, account_id, encrypted_record,
+             delivered_at, expires_at, whatsapp_message_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           current.id,
@@ -430,6 +523,7 @@ export class DryRunDispatcher {
           encryptedRecord,
           now,
           logExpiresAt,
+          current.whatsapp_message_id,
         );
       const settled = this.#store.database
         .prepare(
@@ -482,6 +576,26 @@ export class DryRunDispatcher {
     for (const target of removeRetainedDeliveryTargetReference(this.#store.database, deliveryId))
       purgeUnreferencedSystemTargets(this.#store.database, { ...target, now });
   }
+
+  async #withCurrentWhatsAppDryRunVisibility<T>(
+    row: Pick<CurrentDeliveryRow, 'account_id' | 'whatsapp_message_id'>,
+    recheck: () => Promise<void>,
+    commit: () => T,
+  ): Promise<T | undefined> {
+    // The list acquisition race exists only for persisted WhatsApp tuples.  Non-WhatsApp callers already made their
+    // D9 recheck immediately above, so do not add a third, unrelated authority read to their established boundary.
+    if (row.whatsapp_message_id === null) return commit();
+    if (this.#whatsappVisibilityFence === undefined)
+      throw new CommsError(
+        'WHATSAPP_VISIBILITY_SEAM_REQUIRED',
+        'a WhatsApp dry-run boundary requires the concrete visibility fence',
+      );
+    return this.#whatsappVisibilityFence.withCurrentDryRunVisibility(
+      { accountId: row.account_id, whatsappMessageId: row.whatsapp_message_id },
+      recheck,
+      commit,
+    );
+  }
 }
 
 function deliveryById(store: EventDatabase, id: string): CurrentDeliveryRow | undefined {
@@ -489,10 +603,30 @@ function deliveryById(store: EventDatabase, id: string): CurrentDeliveryRow | un
     .prepare(
       `SELECT d.id, d.decision_id, d.account_id, d.rule_id, d.rule_version, d.target_id, d.target_version,
               d.encrypted_record, d.expires_at, d.state, d.switch_generation, d.lease_until, d.attempt_id,
-              d.lease_token, decision.event_id
+              d.lease_token, decision.event_id, d.whatsapp_message_id
        FROM deliveries d JOIN decisions decision ON decision.id = d.decision_id WHERE d.id = ?`,
     )
     .get(id) as CurrentDeliveryRow | undefined;
+}
+
+function candidateRule(
+  store: EventDatabase,
+  deliveryId: string,
+): { readonly rule_id: string; readonly rule_version: number } | undefined {
+  return store.database.prepare('SELECT rule_id, rule_version FROM deliveries WHERE id = ?').get(deliveryId) as
+    | { rule_id: string; rule_version: number }
+    | undefined;
+}
+
+/** The source a delivery's exact rule version reads; account liveness and purge are always source-specific. */
+function sourceOfDelivery(
+  store: EventDatabase,
+  ruleId: string | undefined,
+  ruleVersion: number | undefined,
+): CanonicalFullRuleDocument['source']['channel'] {
+  if (ruleId === undefined || ruleVersion === undefined)
+    throw new CommsError('APPROVAL_VOID', 'the exact rule for this retained delivery is missing');
+  return ruleFor(store, ruleId, ruleVersion).source.channel;
 }
 
 function ruleFor(store: EventDatabase, ruleId: string, ruleVersion: number): CanonicalFullRuleDocument {

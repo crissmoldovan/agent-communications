@@ -9,7 +9,9 @@ import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 const target = { targetId: 'target-tightening', version: 1, kind: 'dry-run' as const, retentionMs: 86_400_000 };
-const base: CanonicalFullRuleDocument = {
+const base: CanonicalFullRuleDocument & {
+  readonly source: Extract<CanonicalFullRuleDocument['source'], { readonly channel: 'gmail' }>;
+} = {
   ruleId: 'rule-tightening',
   version: 1,
   source: {
@@ -250,6 +252,78 @@ test('APR-B1: a derived tightening copies no point an account removal purged or 
         assert.equal(points(), 0, 'no point is copied for a removed account');
         assert.equal(versions.activeVersion('rule', 'rule-tightening')?.version, 1, 'and the pointer did not move');
       }
+    } finally {
+      store.close();
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('P1 (review round 7): an account removal or disable-all during the source-stage preparation stops the tightening', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  for (const change of ['account removed', 'disable-all'] as const) {
+    const stateDir = await shortTempDir('events-tightening-prepare-');
+    const store = await openEventDatabase({ stateDir });
+    try {
+      const versions = new ImmutableVersions(store.database);
+      versions.createTarget(target);
+      versions.createRule(base);
+      const child: CanonicalFullRuleDocument = {
+        ...base,
+        version: 2,
+        retention: {
+          ...base.retention,
+          ingestMs: base.retention.ingestMs - 1,
+          holdMs: Math.min(base.retention.holdMs, base.retention.ingestMs - 1),
+        },
+      };
+      versions.createRule(child);
+      store.database.exec(
+        "UPDATE event_settings SET enabled = 1; UPDATE rule_versions SET state = 'active', approval_id = 'ap_root', authorization_activation_id = 'act_root', activated_at = 1 WHERE id = 'rule-tightening@1'; INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', 'rule-tightening', 1, 'act_root', 1); INSERT INTO rule_activation_points (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at) VALUES ('act_root', 'rule-tightening', 1, 'gmail', 'account-1', 'mailbox', X'00', 1)",
+      );
+      let removed = false;
+      const run = applyDerivedTightening({
+        database: store.database,
+        parent: base,
+        child,
+        now: 2,
+        decryptPoint: async () => ({ historyId: '1' }),
+        encryptPoint: async ({ position }) => Buffer.from(JSON.stringify(position)),
+        // The last await before the pointer transaction: the race lands here.
+        prepareSourceStageRetentionTightening: async () => {
+          if (change === 'account removed') removed = true;
+          else store.database.exec('UPDATE event_settings SET enabled = 0, switch_generation = switch_generation + 1');
+          return [];
+        },
+        accountLive: async (accountId) => {
+          if (removed)
+            throw new CommsError('NOT_FOUND', 'the Gmail account bound to this event work is no longer connected', {
+              details: { reason: 'ACCOUNT_REMOVED', accountId },
+            });
+        },
+      });
+      await assert.rejects(run, (error: unknown) =>
+        change === 'account removed'
+          ? error instanceof CommsError && error.details?.reason === 'ACCOUNT_REMOVED'
+          : error instanceof CommsError && error.code === 'APPROVAL_VOID',
+      );
+      assert.equal(
+        (
+          store.database
+            .prepare('SELECT COUNT(*) AS count FROM rule_activation_points WHERE rule_version = 2')
+            .get() as {
+            count: number;
+          }
+        ).count,
+        0,
+        `${change}: no point is copied for the child`,
+      );
+      assert.equal(
+        versions.activeVersion('rule', 'rule-tightening')?.version,
+        1,
+        `${change}: the pointer did not move`,
+      );
     } finally {
       store.close();
       await rm(stateDir, { recursive: true, force: true });

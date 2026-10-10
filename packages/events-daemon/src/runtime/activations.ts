@@ -13,23 +13,30 @@ import {
   canonicalFullRuleDocument,
   disclosureBindingFor,
 } from '../domain/activation-documents.ts';
+import type { SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
+import type { SourceScope } from '../sources/contracts.ts';
 import type { MailboxLock } from '../sources/mailbox-lock.ts';
+import { gmailOnlySourceRegistry, type LocalEventSourceRegistry } from '../sources/registry.ts';
 import type { EventDatabase } from '../store/database.ts';
 import {
-  assertLiveGmailAccount,
+  assertLiveEventAccount,
   isRemovedAccountError,
-  liveGmailAccountIds,
+  liveEventAccountIds,
   purgeRemovedAccountWork,
 } from './account-fence.ts';
-import { persistGmailBaseline } from './baseline.ts';
+import { gmailBaseline, persistSourceBaseline } from './baseline.ts';
+import type { CutoverFailpoint } from './cutover-failpoint.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
+import type { AsyncSourceStageExpiry } from './expiry.ts';
 import {
   applyDerivedTightening,
   assertReplacementDrained,
+  settleOldOnlyStageDebts,
   type TighteningKind,
   tighteningKind,
 } from './replacements.ts';
+import type { DSourceRetentionTighteningDispatcher } from './retained-content-hooks.ts';
 import { addActiveRuleTargetReferences, removeActiveRuleTargetReferences } from './target-version-references.ts';
 
 type IntentKind = ActivationDocumentV1['kind'];
@@ -51,8 +58,8 @@ interface PlannedPoint {
   readonly ruleId: string;
   readonly ruleVersion: number;
   readonly accountId: string;
-  readonly source: 'gmail';
-  readonly positionScope: 'mailbox';
+  readonly source: SourceOptions['channel'];
+  readonly positionScope: string;
 }
 
 interface PreparedPoint extends PlannedPoint {
@@ -102,27 +109,46 @@ export interface ActivationRuntimeOptions {
   >;
   readonly config: Pick<ConfigStore, 'load'>;
   readonly gmailSourceFor: (accountId: string) => Promise<Pick<GmailEventSource, 'getProfile'>>;
+  /** The owner supplies one read-only baseline factory per registered source; Gmail remains the compatibility default. */
+  readonly sourceBaselineFor?:
+    | ((input: Readonly<{ source: SourceOptions['channel']; accountId: string; scopeId: string }>) => Promise<unknown>)
+    | undefined;
   readonly encryptBaseline: (
     intentId: string,
     accountId: string,
-    value: { readonly historyId: string },
+    value: unknown,
+    scope?: SourceScope,
   ) => Promise<Uint8Array>;
   /** Baseline and activation-point rows have distinct D8 AAD locations and cannot share ciphertext. */
   readonly decryptBaseline: (
     intentId: string,
     accountId: string,
     stored: Uint8Array,
-  ) => Promise<{ readonly historyId: string }>;
+    scope?: SourceScope,
+  ) => Promise<unknown>;
   readonly encryptPoint: (
-    input: PlannedPoint & { readonly activationId: string; readonly position: { readonly historyId: string } },
+    input: PlannedPoint & { readonly activationId: string; readonly position: unknown },
   ) => Promise<Uint8Array>;
   readonly decryptPoint: (
     input: PlannedPoint & { readonly activationId: string; readonly stored: Uint8Array },
-  ) => Promise<{ readonly historyId: string }>;
+  ) => Promise<unknown>;
   readonly mailboxLock: MailboxLock;
+  readonly sourceRegistry?: LocalEventSourceRegistry | undefined;
+  /** D4a's B2-independent seam; Task 7 supplies the normal owner composition. */
+  readonly retainedContentHooks?: DSourceRetentionTighteningDispatcher | undefined;
+  /** D4a: source-specific expiry prepares the content-free terminalisation before the derived pointer write. */
+  readonly sourceStageExpiry?: AsyncSourceStageExpiry | undefined;
   readonly now?: (() => number) | undefined;
   readonly newIntentId?: (() => string) | undefined;
+  /** Optional test seam; absent in production and therefore behaviour-free. */
+  readonly failpoint?: CutoverFailpoint | undefined;
+  /** Optional test clock seam immediately before each completion-deadline check. */
+  readonly deadlineFailpoint?: ActivationDeadlineFailpoint | undefined;
 }
+
+export type ActivationDeadlineFailpoint = (
+  edge: 'before-claim-deadline' | 'before-baseline-deadline' | 'before-finalise-deadline',
+) => void;
 
 /** D2/D12 recoverable standing-authority activation for Gmail first activations, exact replacements and enable-all. */
 export class ActivationRuntime {
@@ -130,26 +156,46 @@ export class ActivationRuntime {
   readonly #approvals: ActivationRuntimeOptions['approvals'];
   readonly #config: ActivationRuntimeOptions['config'];
   readonly #gmailSourceFor: ActivationRuntimeOptions['gmailSourceFor'];
+  readonly #sourceBaselineFor: NonNullable<ActivationRuntimeOptions['sourceBaselineFor']>;
   readonly #encryptBaseline: ActivationRuntimeOptions['encryptBaseline'];
   readonly #decryptBaseline: ActivationRuntimeOptions['decryptBaseline'];
   readonly #encryptPoint: ActivationRuntimeOptions['encryptPoint'];
   readonly #decryptPoint: ActivationRuntimeOptions['decryptPoint'];
   readonly #mailboxLock: MailboxLock;
+  readonly #sourceRegistry: LocalEventSourceRegistry;
+  readonly #retainedContentHooks: DSourceRetentionTighteningDispatcher | undefined;
+  readonly #sourceStageExpiry: AsyncSourceStageExpiry | undefined;
   readonly #now: () => number;
   readonly #newIntentId: () => string;
+  readonly #failpoint: CutoverFailpoint | undefined;
+  readonly #deadlineFailpoint: ActivationDeadlineFailpoint | undefined;
 
   constructor(options: ActivationRuntimeOptions) {
     this.#store = options.store;
     this.#approvals = options.approvals;
     this.#config = options.config;
     this.#gmailSourceFor = options.gmailSourceFor;
+    this.#sourceBaselineFor =
+      options.sourceBaselineFor ??
+      (async ({ source, accountId }) => {
+        if (source !== 'gmail')
+          throw new CommsError('SOURCE_UNAVAILABLE', 'the source has no activation baseline reader', {
+            details: { reason: 'SOURCE_UNAVAILABLE', source },
+          });
+        return gmailBaseline(await this.#gmailSourceFor(accountId));
+      });
     this.#encryptBaseline = options.encryptBaseline;
     this.#decryptBaseline = options.decryptBaseline;
     this.#encryptPoint = options.encryptPoint;
     this.#decryptPoint = options.decryptPoint;
     this.#mailboxLock = options.mailboxLock;
+    this.#sourceRegistry = options.sourceRegistry ?? gmailOnlySourceRegistry();
+    this.#retainedContentHooks = options.retainedContentHooks;
+    this.#sourceStageExpiry = options.sourceStageExpiry;
     this.#now = options.now ?? Date.now;
     this.#newIntentId = options.newIntentId ?? (() => `act_${randomBytes(16).toString('hex')}`);
+    this.#failpoint = options.failpoint;
+    this.#deadlineFailpoint = options.deadlineFailpoint;
   }
 
   async prepareRule(input: { readonly ruleId: string; readonly version: number }): Promise<PreparedRuleActivation> {
@@ -158,6 +204,7 @@ export class ActivationRuntime {
     await this.assertNoCompletingMutation(input.ruleId);
     const versions = new ImmutableVersions(this.#store.database);
     const document = versions.prepareRule(input.ruleId, input.version);
+    this.#sourceRegistry.require(document.rule.source.channel);
     const active = versions.activeVersion('rule', input.ruleId);
     if (active !== null) {
       const parentRow = this.#store.database
@@ -171,12 +218,22 @@ export class ActivationRuntime {
           parent,
           child: document.rule,
           now: this.#now(),
+          retainedContentHooks: this.#retainedContentHooks,
+          prepareSourceStageRetentionTightening: this.#sourceStageExpiry?.prepareRetentionTightening?.bind(
+            this.#sourceStageExpiry,
+          ),
           accountLive: async (accountId) => {
             try {
-              await assertLiveGmailAccount(this.#config, accountId);
+              await assertLiveEventAccount(this.#config, { source: parent.source.channel, accountId });
             } catch (error) {
               if (isRemovedAccountError(error))
-                this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, accountId, this.#now()));
+                this.#store.immediate(() =>
+                  purgeRemovedAccountWork(
+                    this.#store.database,
+                    { source: parent.source.channel, accountId },
+                    this.#now(),
+                  ),
+                );
               throw error;
             }
           },
@@ -187,7 +244,7 @@ export class ActivationRuntime {
               ruleVersion,
               accountId,
               positionScope,
-              source: 'gmail',
+              source: parent.source.channel,
               stored: encryptedPosition,
             }),
           encryptPoint: ({ activationId, ruleId, ruleVersion, accountId, positionScope, position }) =>
@@ -197,7 +254,7 @@ export class ActivationRuntime {
               ruleVersion,
               accountId,
               positionScope,
-              source: 'gmail',
+              source: parent.source.channel,
               position,
             }),
         });
@@ -224,17 +281,22 @@ export class ActivationRuntime {
       // the configuration. An account removed from it (and purged) is dark for it and owes nothing, so it neither
       // blocks this replacement nor gets a baseline; the new version's own accounts are always planned (a removed one
       // refuses at its baseline).
-      const live = await liveGmailAccountIds(this.#config);
-      const points = unionReplacementPoints(parent, document.rule).filter(
+      const live = await liveEventAccountIds(this.#config, parent.source.channel);
+      const points = this.#unionReplacementPoints(parent, document.rule).filter(
         (point) =>
           point.ruleVersion !== parent.version ||
-          (live.has(point.accountId) && this.#holdsActivePoint(parent.ruleId, parent.version, point.accountId)),
+          (live.has(point.accountId) &&
+            this.#holdsActivePoint(parent.ruleId, parent.version, {
+              source: point.source,
+              accountId: point.accountId,
+              scopeId: point.positionScope,
+            })),
       );
-      await this.#assertScopeConfigured(document.rule.source.accountIds);
+      await this.#assertScopeConfigured(document.rule.source.channel, document.rule.source.accountIds);
       return this.#prepare(document, points, { switchGeneration: this.#switch().generation }, oldId);
     }
-    await this.#assertScopeConfigured(document.rule.source.accountIds);
-    const points = pointsForRule(document.rule);
+    await this.#assertScopeConfigured(document.rule.source.channel, document.rule.source.accountIds);
+    const points = this.#pointsForRule(document.rule);
     return this.#prepare(document, points, { switchGeneration: this.#switch().generation });
   }
 
@@ -255,11 +317,16 @@ export class ActivationRuntime {
     const versions = new ImmutableVersions(this.#store.database);
     // K6: fresh points for every account still in the configuration; a removed one stays dark (it cannot be sampled),
     // and one re-added since its removal gets a fresh cut-over here, under this approval.
-    const live = await liveGmailAccountIds(this.#config);
-    const points = rows.flatMap((row) => {
+    const liveBySource = new Map<SourceOptions['channel'], ReadonlySet<string>>();
+    const points: PlannedPoint[] = [];
+    for (const row of rows) {
       const planned = versions.prepareRule(row.object_id, row.version);
-      return pointsForRule(planned.rule).filter((point) => live.has(point.accountId));
-    });
+      this.#sourceRegistry.require(planned.rule.source.channel);
+      const source = planned.rule.source.channel;
+      const live = liveBySource.get(source) ?? (await liveEventAccountIds(this.#config, source));
+      liveBySource.set(source, live);
+      points.push(...this.#pointsForRule(planned.rule).filter((point) => live.has(point.accountId)));
+    }
     return this.#prepare(document, points, {
       switchGeneration: current.generation,
       currentCutovers: rows.map((row) => ({
@@ -460,7 +527,25 @@ export class ActivationRuntime {
     const intentId = this.#newIntentId();
     const binding = disclosureBindingFor(intentId, document);
     const now = this.#now();
+    const plannedAccountIds = [...new Set(points.map((point) => point.accountId))];
     this.#store.immediate(() => {
+      // `revoked_at >= created_at` is deliberately inclusive: an intent planned before a same-millisecond removal
+      // must lose its authority.  Give an intent made after a re-add a logically later creation instant even when a
+      // low-resolution clock has not ticked.  This records the ordering needed to distinguish its fresh approval
+      // from an old approval that named the removed account.
+      const latestRevocation =
+        plannedAccountIds.length === 0
+          ? undefined
+          : ((
+              this.#store.database
+                .prepare(
+                  `SELECT MAX(revoked_at) AS revoked_at
+                 FROM account_revocations
+                 WHERE account_id IN (${plannedAccountIds.map(() => '?').join(', ')})`,
+                )
+                .get(...plannedAccountIds) as { revoked_at: number | null }
+            ).revoked_at ?? undefined);
+      const createdAt = Math.max(now, latestRevocation === undefined ? now : latestRevocation + 1);
       this.#store.database
         .prepare(
           `INSERT INTO activation_intents
@@ -476,8 +561,8 @@ export class ActivationRuntime {
           replacementOfVersion ?? null,
           canonicalJson(points),
           canonicalJson([...new Set(points.map((point) => `${point.accountId}:${point.positionScope}`))]),
-          now,
-          now,
+          createdAt,
+          createdAt,
         );
     });
     const approval = await this.#approvals.createDisclosure(binding);
@@ -500,10 +585,28 @@ export class ActivationRuntime {
     const claimedAt = Date.parse(usedAt);
     if (!Number.isFinite(claimedAt)) throw new CommsError('BAD_DATA', 'the disclosure usedAt is not an instant');
     const deadline = claimedAt + 3_600_000;
+    let revokedPlannedAccount = false;
     this.#store.immediate(() => {
       const row = this.#intent(intent.id);
       if (row.status === 'cancelled')
         throw new CommsError('APPROVAL_VOID', 'the activation was cancelled before completion');
+      // A stable id can be configured again after removal. The approval predates that removal, so it can never
+      // authorise the re-added account even if an interrupted purge left this intent pending.
+      const revoked = this.#store.database
+        .prepare(
+          `SELECT 1 AS present
+           FROM activation_intents AS planned
+           JOIN json_each(planned.required_points) AS point
+           JOIN account_revocations AS revocation ON revocation.account_id = json_extract(point.value, '$.accountId')
+           WHERE planned.id = ? AND revocation.revoked_at >= planned.created_at
+           LIMIT 1`,
+        )
+        .get(intent.id) as { present: number } | undefined;
+      if (revoked !== undefined) {
+        this.#cancel(intent.id, 'ACCOUNT_REMOVED');
+        revokedPlannedAccount = true;
+        return;
+      }
       if (row.claimed_at === null) {
         this.#store.database
           .prepare(
@@ -512,19 +615,27 @@ export class ActivationRuntime {
           .run(claimedAt, deadline, this.#now(), intent.id);
       }
     });
+    if (revokedPlannedAccount)
+      throw new CommsError('APPROVAL_VOID', 'an account planned by this activation was removed after its approval');
     const current = this.#intent(intent.id);
+    this.#deadlineFailpoint?.('before-claim-deadline');
     if ((current.completion_deadline ?? deadline) <= this.#now()) {
       this.#fail(intent.id, 'COMPLETION_TIMEOUT');
       return Promise.reject(new CommsError('APPROVAL_VOID', 'the activation completion deadline has passed'));
     }
     const document = this.#document(current);
     const points = this.#points(current);
-    for (const accountId of [...new Set(points.map((point) => point.accountId))]) {
+    const baselineScopes = new Map<string, SourceScope>();
+    for (const point of points) {
+      const scope: SourceScope = { source: point.source, accountId: point.accountId, scopeId: point.positionScope };
+      baselineScopes.set(`${scope.source}\u0000${scope.accountId}\u0000${scope.scopeId}`, scope);
+    }
+    for (const scope of baselineScopes.values()) {
       const committed = this.#store.database
         .prepare(
-          "SELECT 1 AS present FROM activation_baselines WHERE intent_id = ? AND source = 'gmail' AND account_id = ? AND position_scope = 'mailbox'",
+          'SELECT 1 AS present FROM activation_baselines WHERE intent_id = ? AND source = ? AND account_id = ? AND position_scope = ?',
         )
-        .get(current.id, accountId) as { present: number } | undefined;
+        .get(current.id, scope.source, scope.accountId, scope.scopeId) as { present: number } | undefined;
       if (committed !== undefined) continue;
       // A disabled switch is permitted only for this claimed, not-yet-effective activation. The account itself is
       // always re-read from core configuration immediately before the provider boundary.
@@ -534,27 +645,28 @@ export class ActivationRuntime {
           approvals: this.#approvals,
           config: this.#config,
           activationIntentId: current.id,
-          accountId,
+          accountId: scope.accountId,
           boundary: 'recovery',
         });
       } catch (error) {
         if (isRemovedAccountError(error)) {
-          this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, accountId, this.#now()));
-          this.#cancel(current.id, 'ACCOUNT_REMOVED');
+          this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, scope, this.#now()));
         }
         throw error;
       }
       try {
-        await persistGmailBaseline(
-          this.#mailboxLock,
-          accountId,
-          () => this.#gmailSourceFor(accountId),
+        this.#failpoint?.('before-stage');
+        await persistSourceBaseline(
+          this.#sourceRegistry.require(scope.source),
+          this.#mailboxLock.sourceScopeLock,
+          scope,
+          () => this.#sourceBaselineFor(scope),
           async (position) => {
             // Encryption (in production EventRecordCipher) completes before this write transaction reserves its own nonce.
-            const encrypted = await this.#encryptBaseline(current.id, accountId, position);
+            const encrypted = await this.#encryptBaseline(current.id, scope.accountId, position, scope);
             // D9: the account is read again immediately before the baseline is written (a removal during the profile
             // call or the encryption throws the ACCOUNT_REMOVED refusal, which purges and cancels below).
-            await assertLiveGmailAccount(this.#config, accountId);
+            await assertLiveEventAccount(this.#config, scope);
             this.#store.immediate(() => {
               // The provider call and encryption awaited: a disable-all or revocation may have cancelled this intent
               // and purged its baselines meanwhile. Write only while it is still the claimed work it was, at the same
@@ -571,17 +683,38 @@ export class ActivationRuntime {
                 .prepare(
                   `INSERT OR IGNORE INTO activation_baselines
                    (intent_id, source, account_id, position_scope, encrypted_position, response_at)
-                   VALUES (?, 'gmail', ?, 'mailbox', ?, ?)`,
+                   VALUES (?, ?, ?, ?, ?, ?)`,
                 )
-                .run(current.id, accountId, encrypted, this.#now());
+                .run(current.id, scope.source, scope.accountId, scope.scopeId, encrypted, this.#now());
               if (current.replacement_of_version !== null) {
                 const oldRule = current.replacement_of_version;
-                const oldInScope = this.#replacementIncludesAccount(oldRule, accountId);
-                const newInScope = document.kind === 'rule' && document.rule.source.accountIds.includes(accountId);
+                const oldInScope = this.#replacementIncludesScope(oldRule, scope);
+                const newInScope = points.some(
+                  (point) =>
+                    point.ruleVersion === (document.kind === 'rule' ? document.rule.version : -1) &&
+                    point.source === scope.source &&
+                    point.accountId === scope.accountId &&
+                    point.positionScope === scope.scopeId,
+                );
                 // D4 step 2: with the global switch disabled no source work runs to drain the old version, and
                 // `disable-all` already terminalised its old work — so every union scope is re-baselined to P and its
                 // drain is recorded drained in this same transaction.
                 const disabled = !this.#switch().enabled;
+                // A Resend status observer has no cursor range to drain. Its durable P instant is the boundary:
+                // pre-P observations belong to the old rule, and the new status state seeds at P without emitting.
+                const statusScope = scope.source === 'resend' && scope.scopeId === 'status';
+                const statusStageOwedByOld =
+                  statusScope &&
+                  this.#store.database
+                    .prepare(
+                      `SELECT 1 AS present
+                         FROM source_stage_rule_debts AS debt
+                         JOIN source_scan_state AS stage ON stage.id = debt.stage_id
+                         JOIN rule_versions AS old_version ON old_version.id = ?
+                        WHERE debt.rule_id = old_version.rule_id AND debt.rule_version = old_version.version
+                          AND stage.source = ? AND stage.account_id = ? AND stage.cursor_scope = 'status'`,
+                    )
+                    .get(current.replacement_of_version, scope.source, scope.accountId) !== undefined;
                 // A new-only scope gets its own P activation point but owes no old-version occurrence, so it must not
                 // leave an impossible drain open waiting for a worker that never ran the old rule there.
                 if (oldInScope) {
@@ -589,30 +722,44 @@ export class ActivationRuntime {
                     .prepare(
                       `INSERT OR IGNORE INTO replacement_drains
                        (intent_id, source, account_id, position_scope, old_in_scope, new_in_scope, drained_at)
-                       VALUES (?, 'gmail', ?, 'mailbox', ?, ?, ?)`,
+                       VALUES (?, ?, ?, ?, ?, ?, ?)`,
                     )
-                    .run(current.id, accountId, 1, newInScope ? 1 : 0, disabled ? this.#now() : null);
+                    .run(
+                      current.id,
+                      scope.source,
+                      scope.accountId,
+                      scope.scopeId,
+                      1,
+                      newInScope ? 1 : 0,
+                      disabled || (statusScope && !statusStageOwedByOld) ? this.#now() : null,
+                    );
                 }
                 if (disabled) {
                   this.#store.database
                     .prepare(
                       `INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at)
-                       VALUES ('gmail', ?, 'mailbox', ?, ?)
+                       VALUES (?, ?, ?, ?, ?)
                        ON CONFLICT(source, account_id, cursor_scope)
                        DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at`,
                     )
-                    .run(accountId, position.historyId, this.#now());
+                    .run(
+                      scope.source,
+                      scope.accountId,
+                      scope.scopeId,
+                      scope.source === 'gmail' && typeof (position as { historyId?: unknown }).historyId === 'string'
+                        ? (position as { historyId: string }).historyId
+                        : canonicalJson(position),
+                      this.#now(),
+                    );
                 }
               }
             });
           },
         );
+        this.#failpoint?.('after-stage');
       } catch (error) {
         if (isRemovedAccountError(error)) {
-          this.#store.immediate(() => {
-            purgeRemovedAccountWork(this.#store.database, accountId, this.#now());
-            this.#cancel(current.id, 'ACCOUNT_REMOVED');
-          });
+          this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, scope, this.#now()));
         }
         throw error;
       }
@@ -620,10 +767,12 @@ export class ActivationRuntime {
     // A baseline call that ended past the completion deadline wrote nothing; settle the timeout now rather than
     // leaving the intent waiting for a baseline that will never be written.
     const afterBaselines = this.#intent(current.id);
+    this.#deadlineFailpoint?.('before-baseline-deadline');
     if (afterBaselines.completion_deadline !== null && afterBaselines.completion_deadline <= this.#now()) {
       this.#fail(current.id, 'COMPLETION_TIMEOUT');
       throw new CommsError('APPROVAL_VOID', 'the activation completion deadline has passed');
     }
+    this.#failpoint?.('before-move');
     const preparedPoints = await Promise.all(
       points
         .filter((point) => document.kind !== 'rule' || point.ruleVersion === document.rule.version)
@@ -636,7 +785,11 @@ export class ActivationRuntime {
             | { encrypted_position: Uint8Array }
             | undefined;
           if (!baseline) throw new CommsError('TRANSIENT', 'the activation is waiting for a Gmail baseline');
-          const position = await this.#decryptBaseline(current.id, point.accountId, baseline.encrypted_position);
+          const position = await this.#decryptBaseline(current.id, point.accountId, baseline.encrypted_position, {
+            source: point.source,
+            accountId: point.accountId,
+            scopeId: point.positionScope,
+          });
           // EventRecordCipher reserves its nonce in its own BEGIN IMMEDIATE transaction. Prepare each destination
           // record before the synchronous pointer transaction below; ciphertext remains bound to this exact point row.
           const encryptedPosition = await this.#encryptPoint({
@@ -648,20 +801,24 @@ export class ActivationRuntime {
         }),
     );
     // D9: every account the points bind is read again immediately before the pointer transaction.
-    for (const accountId of new Set(preparedPoints.map((point) => point.accountId))) {
+    for (const scope of new Map(
+      preparedPoints.map((point) => [
+        `${point.source}\u0000${point.accountId}`,
+        { source: point.source, accountId: point.accountId },
+      ]),
+    ).values()) {
       try {
-        await assertLiveGmailAccount(this.#config, accountId);
+        await assertLiveEventAccount(this.#config, scope);
       } catch (error) {
         if (isRemovedAccountError(error)) {
-          this.#store.immediate(() => {
-            purgeRemovedAccountWork(this.#store.database, accountId, this.#now());
-            this.#cancel(current.id, 'ACCOUNT_REMOVED');
-          });
+          this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, scope, this.#now()));
         }
         throw error;
       }
     }
+    this.#failpoint?.('before-finalise');
     this.#finalise(current, document, preparedPoints, usedAt);
+    this.#failpoint?.('after-move');
     return { intentId: current.id, status: 'completed', usedAt };
   }
 
@@ -675,6 +832,7 @@ export class ActivationRuntime {
         throw new CommsError('APPROVAL_VOID', 'the activation was cancelled before its pointer effect committed');
       // The deadline is the completion boundary: a completion that started in time but reached here after it (a
       // slow profile call or encryption) installs nothing.
+      this.#deadlineFailpoint?.('before-finalise-deadline');
       if (latest.completion_deadline !== null && latest.completion_deadline <= this.#now()) {
         this.#failWithin(intent.id, 'COMPLETION_TIMEOUT');
         settled = new CommsError('APPROVAL_VOID', 'the activation completion deadline has passed');
@@ -759,7 +917,7 @@ export class ActivationRuntime {
               "UPDATE rule_versions SET state = 'superseded', superseded_at = ? WHERE id = ? AND state = 'active'",
             )
             .run(this.#now(), latest.replacement_of_version);
-          this.#settleOldOnlyStages(latest.replacement_of_version, document.rule.source.accountIds);
+          this.#settleOldOnlyStages(latest.replacement_of_version, points);
         }
         this.#store.database
           .prepare(
@@ -814,33 +972,20 @@ export class ActivationRuntime {
    * old version's debt on that account's raw pages (its withheld after-P work) is owed to nobody, so it is dropped, and
    * a page left owing nothing is deleted rather than kept for ever.
    */
-  #settleOldOnlyStages(oldVersionId: string, newAccountIds: readonly string[]): void {
+  #settleOldOnlyStages(oldVersionId: string, newPoints: readonly PlannedPoint[]): void {
     const old = this.#store.database
       .prepare('SELECT rule_id, version, document FROM rule_versions WHERE id = ?')
       .get(oldVersionId) as { rule_id: string; version: number; document: string } | undefined;
     if (!old) return;
-    const oldAccounts = canonicalFullRuleDocument(JSON.parse(old.document)).source.accountIds;
-    for (const accountId of oldAccounts.filter((id) => !newAccountIds.includes(id))) {
-      const stages = (
-        this.#store.database
-          .prepare(
-            `SELECT debt.stage_id FROM source_stage_rule_debts AS debt
-             JOIN source_scan_state AS stage ON stage.id = debt.stage_id
-             WHERE debt.rule_id = ? AND debt.rule_version = ? AND stage.account_id = ? AND stage.cursor_scope = 'mailbox'`,
-          )
-          .all(old.rule_id, old.version, accountId) as Array<{ stage_id: string }>
-      ).map((row) => row.stage_id);
-      for (const stageId of stages) {
-        this.#store.database
-          .prepare('DELETE FROM source_stage_rule_debts WHERE stage_id = ? AND rule_id = ? AND rule_version = ?')
-          .run(stageId, old.rule_id, old.version);
-        this.#store.database
-          .prepare(
-            'DELETE FROM source_scan_state WHERE id = ? AND NOT EXISTS (SELECT 1 FROM source_stage_rule_debts WHERE stage_id = ?)',
-          )
-          .run(stageId, stageId);
-      }
-    }
+    settleOldOnlyStageDebts(this.#store.database, {
+      ruleId: old.rule_id,
+      oldVersion: old.version,
+      newScopes: newPoints.map((point) => ({
+        source: point.source,
+        accountId: point.accountId,
+        scopeId: point.positionScope,
+      })),
+    });
   }
 
   #intentForApproval(approvalId: string): IntentRow {
@@ -915,15 +1060,15 @@ export class ActivationRuntime {
     return row ? (JSON.parse(row.required_points) as PlannedPoint[]) : [];
   }
 
-  #replacementIncludesAccount(versionId: string, accountId: string): boolean {
+  #replacementIncludesScope(versionId: string, scope: SourceScope): boolean {
     const row = this.#store.database
       .prepare('SELECT rule_id, version, document FROM rule_versions WHERE id = ?')
       .get(versionId) as { rule_id: string; version: number; document: string } | undefined;
     if (!row) throw new CommsError('BAD_DATA', 'the exact replacement predecessor no longer exists');
     // K6: named is not enough — a drain waits for the old version's worker, which runs only where it holds a point.
     return (
-      canonicalFullRuleDocument(JSON.parse(row.document)).source.accountIds.includes(accountId) &&
-      this.#holdsActivePoint(row.rule_id, row.version, accountId)
+      canonicalFullRuleDocument(JSON.parse(row.document)).source.accountIds.includes(scope.accountId) &&
+      this.#holdsActivePoint(row.rule_id, row.version, scope)
     );
   }
 
@@ -931,18 +1076,18 @@ export class ActivationRuntime {
    * K6: nothing is planned for an account outside core's configuration. A version naming one is refused before any
    * approval exists, rather than approved, claimed and then cancelled at its baseline.
    */
-  async #assertScopeConfigured(accountIds: readonly string[]): Promise<void> {
-    const live = await liveGmailAccountIds(this.#config);
+  async #assertScopeConfigured(source: SourceOptions['channel'], accountIds: readonly string[]): Promise<void> {
+    const live = await liveEventAccountIds(this.#config, source);
     const missing = accountIds.find((accountId) => !live.has(accountId));
     if (missing !== undefined) {
-      throw new CommsError('NOT_FOUND', 'the rule names a Gmail account that is not connected', {
+      throw new CommsError('NOT_FOUND', 'the rule names an account that is not connected for its source', {
         details: { reason: 'ACCOUNT_REMOVED', accountId: missing },
       });
     }
   }
 
   /** Whether a version is the active one and holds a cut-over point for an account at its current cut-over. */
-  #holdsActivePoint(ruleId: string, version: number, accountId: string): boolean {
+  #holdsActivePoint(ruleId: string, version: number, scope: SourceScope): boolean {
     return (
       this.#store.database
         .prepare(
@@ -952,10 +1097,39 @@ export class ActivationRuntime {
             AND rule_activation_points.rule_id = active_versions.object_id
             AND rule_activation_points.rule_version = active_versions.version
            WHERE active_versions.kind = 'rule' AND active_versions.object_id = ? AND active_versions.version = ?
-             AND rule_activation_points.account_id = ? AND rule_activation_points.position_scope = 'mailbox'`,
+             AND rule_activation_points.source = ?
+             AND rule_activation_points.account_id = ? AND rule_activation_points.position_scope = ?`,
         )
-        .get(ruleId, version, accountId) !== undefined
+        .get(ruleId, version, scope.source, scope.accountId, scope.scopeId) !== undefined
     );
+  }
+
+  #pointsForRule(rule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule']): readonly PlannedPoint[] {
+    const source = this.#sourceRegistry.require(rule.source.channel);
+    const options = source.canonicalise(rule.source.options);
+    return rule.source.accountIds.flatMap((accountId) =>
+      source.scopesFor({ accountId, options }).map((scope) => ({
+        ruleId: rule.ruleId,
+        ruleVersion: rule.version,
+        accountId: scope.accountId,
+        source: scope.source,
+        positionScope: scope.scopeId,
+      })),
+    );
+  }
+
+  #unionReplacementPoints(
+    oldRule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule'],
+    newRule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule'],
+  ): readonly PlannedPoint[] {
+    const points = [...this.#pointsForRule(oldRule), ...this.#pointsForRule(newRule)];
+    const seen = new Set<string>();
+    return points.filter((point) => {
+      const key = `${point.ruleId}@${point.ruleVersion}:${point.source}:${point.accountId}:${point.positionScope}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   #isRevokedBinding(
@@ -1010,28 +1184,4 @@ export class ActivationRuntime {
     this.#store.database.prepare('DELETE FROM activation_baselines WHERE intent_id = ?').run(intentId);
     this.#store.database.prepare('DELETE FROM replacement_drains WHERE intent_id = ?').run(intentId);
   }
-}
-
-function pointsForRule(rule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule']): readonly PlannedPoint[] {
-  return rule.source.accountIds.map((accountId) => ({
-    ruleId: rule.ruleId,
-    ruleVersion: rule.version,
-    accountId,
-    source: 'gmail',
-    positionScope: 'mailbox',
-  }));
-}
-
-function unionReplacementPoints(
-  oldRule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule'],
-  newRule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule'],
-): readonly PlannedPoint[] {
-  const points = [...pointsForRule(oldRule), ...pointsForRule(newRule)];
-  const seen = new Set<string>();
-  return points.filter((point) => {
-    const key = `${point.ruleId}@${point.ruleVersion}:${point.accountId}:${point.positionScope}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
