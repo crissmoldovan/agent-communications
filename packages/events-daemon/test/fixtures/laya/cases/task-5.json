@@ -1,0 +1,249 @@
+{
+  "schemaVersion": 1,
+  "task": 5,
+  "owners": [{ "id": "task-5" }],
+  "section5": [
+    {
+      "id": "e2-runtime-strict-archive",
+      "owner": "task-5",
+      "test": "E2 tar: extracts only listed package regular files"
+    },
+    {
+      "id": "e2-runtime-tree-verification",
+      "owner": "task-5",
+      "test": "E2 tree verifier: accepts the exact installed runtime tree"
+    }
+  ],
+  "traceability": [
+    {
+      "id": "d11-2258-2277-strict-runtime-archive",
+      "owner": "task-5",
+      "test": "E2 tar: rejects a symbolic-link archive entry"
+    },
+    {
+      "id": "d11-2301-2311-whole-tree-verification",
+      "owner": "task-5",
+      "test": "E2 tree verifier: reports an altered file after an earlier verification"
+    }
+  ],
+  "awaits": [
+    {
+      "id": "e2-runtime-promotion-after-extraction",
+      "owner": "task-5",
+      "test": "E2 runtime installer: promotes one complete verified partial tree by rename"
+    }
+  ],
+  "fixtures": [{ "path": "task-5.json", "owner": "task-5" }],
+  "externalSources": [],
+  "mutations": [
+    {
+      "id": "e2-tar-special-entry",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tar.ts",
+      "testFile": "packages/events-daemon/test/laya-tar.test.ts",
+      "testName": "E2 tar: rejects a symbolic-link archive entry",
+      "testPattern": "E2 tar: rejects a symbolic-link archive entry",
+      "before": "if (!isRegularFile(type)) throw new LayaTarError('TAR_ENTRY_TYPE');",
+      "after": "if (false) throw new LayaTarError('TAR_ENTRY_TYPE');"
+    },
+    {
+      "id": "e2-tar-header",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tar.ts",
+      "testFile": "packages/events-daemon/test/laya-tar.test.ts",
+      "testName": "E2 tar: rejects a malformed ustar header",
+      "testPattern": "E2 tar: rejects a malformed ustar header",
+      "before": "if (\n    !header.subarray(257, 263).equals(Buffer.from('ustar\\0', 'ascii')) ||\n    !header.subarray(263, 265).equals(Buffer.from('00'))\n  ) {",
+      "after": "if (false) {"
+    },
+    {
+      "id": "e2-tar-checksum-layout",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tar.ts",
+      "testFile": "packages/events-daemon/test/laya-tar.test.ts",
+      "testName": "E2 tar: rejects a wrong accepted-layout checksum before writing",
+      "testPattern": "E2 tar: rejects a wrong accepted-layout checksum before writing",
+      "before": "if (checksumField(header.subarray(148, 156)) !== headerChecksum(header)) throw new LayaTarError('TAR_CHECKSUM');",
+      "after": "if (false) throw new LayaTarError('TAR_CHECKSUM');"
+    },
+    {
+      "id": "e2-tar-strict-numeric-header",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tar.ts",
+      "testFile": "packages/events-daemon/test/laya-tar.test.ts",
+      "testName": "E2 tar: rejects malformed uid numeric headers before writing",
+      "testPattern": "E2 tar: rejects malformed uid numeric headers before writing",
+      "before": "const numeric = numericHeaderFields(header);",
+      "after": "const numeric = { mode: 0o644, size: 1 };"
+    },
+    {
+      "id": "e2-tar-filesystem-path-identity",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tar.ts",
+      "testFile": "packages/events-daemon/test/laya-tar.test.ts",
+      "testName": "E2 tar: rejects case-folded package path collision before writing",
+      "testPattern": "E2 tar: rejects case-folded package path collision before writing",
+      "before": "return path.toUpperCase().toLowerCase().normalize('NFC');",
+      "after": "return path;"
+    },
+    {
+      "id": "e2-tar-path-normalisation",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tar.ts",
+      "testFile": "packages/events-daemon/test/laya-tar.test.ts",
+      "testName": "E2 tar: rejects a dot-dot package path",
+      "testPattern": "E2 tar: rejects a dot-dot package path",
+      "before": "if (path.includes('\\\\') || !isSafeRelativePath(path)) throw new LayaTarError('TAR_PATH');",
+      "after": "if (false) throw new LayaTarError('TAR_PATH');"
+    },
+    {
+      "id": "e2-tar-duplicate-entry",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tar.ts",
+      "testFile": "packages/events-daemon/test/laya-tar.test.ts",
+      "testName": "E2 tar: rejects duplicate unlisted package entries",
+      "testPattern": "E2 tar: rejects duplicate unlisted package entries",
+      "before": "if (kind === 'file') throw new LayaTarError('TAR_DUPLICATE');",
+      "after": "if (false) throw new LayaTarError('TAR_DUPLICATE');"
+    },
+    {
+      "id": "e2-tar-unlisted-entry",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tar.ts",
+      "testFile": "packages/events-daemon/test/laya-tar.test.ts",
+      "testName": "E2 tar: extracts only listed package regular files",
+      "testPattern": "E2 tar: extracts only listed package regular files",
+      "before": "if (expected === undefined) {\n        return;\n      }\n      if (entry.size !== expected.size)",
+      "after": "if (false) {\n        return;\n      }\n      if (entry.size !== expected.size)"
+    },
+    {
+      "id": "e2-tar-whole-archive-preflight",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tar.ts",
+      "testFile": "packages/events-daemon/test/laya-tar.test.ts",
+      "testName": "E2 tar: refuses whole archive before staging a later malformed header",
+      "testPattern": "E2 tar: refuses whole archive before staging a later malformed header",
+      "before": "await validateExpectedPackageArchive(archive, expectedByPath);",
+      "after": "void expectedByPath;"
+    },
+    {
+      "id": "e2-tar-implied-directory-identity",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tar.ts",
+      "testFile": "packages/events-daemon/test/laya-tar.test.ts",
+      "testName": "E2 tar: refuses whole archive before staging a later implied-directory collision",
+      "testPattern": "E2 tar: refuses whole archive before staging a later implied-directory collision",
+      "before": "if (previous.path !== candidate || previous.kind !== kind) {\n      throw new LayaTarError('TAR_DUPLICATE');\n    }",
+      "after": "if (false) {\n      throw new LayaTarError('TAR_DUPLICATE');\n    }"
+    },
+    {
+      "id": "e2-runtime-owner-only-file",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tar.ts",
+      "testFile": "packages/events-daemon/test/laya-runtime-installer.test.ts",
+      "testName": "E2 runtime installer: writes owner-only files and directories",
+      "testPattern": "E2 runtime installer: writes owner-only files and directories",
+      "before": "const OWNER_ONLY_FILE_MODE = 0o600;",
+      "after": "const OWNER_ONLY_FILE_MODE = 0o644;"
+    },
+    {
+      "id": "e2-tree-extra-file",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tree-verifier.ts",
+      "testFile": "packages/events-daemon/test/laya-tree-verifier.test.ts",
+      "testName": "E2 tree verifier: reports an extra installed file without a path",
+      "testPattern": "E2 tree verifier: reports an extra installed file without a path",
+      "before": "if (expectedFile === undefined) return { ok: false, code: 'TREE_EXTRA' };",
+      "after": "if (false) return { ok: false, code: 'TREE_EXTRA' };"
+    },
+    {
+      "id": "e2-tree-expected-listing-identity",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tree-verifier.ts",
+      "testFile": "packages/events-daemon/test/laya-tree-verifier.test.ts",
+      "testName": "E2 tree verifier: refuses colliding expected directory prefixes before reading the tree",
+      "testPattern": "E2 tree verifier: refuses colliding expected directory prefixes before reading the tree",
+      "before": "if (expected === null) return { ok: false, code: 'TREE_EXPECTED' };",
+      "after": "if (false) return { ok: false, code: 'TREE_EXPECTED' };"
+    },
+    {
+      "id": "e2-tree-symlink",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tree-verifier.ts",
+      "testFile": "packages/events-daemon/test/laya-tree-verifier.test.ts",
+      "testName": "E2 tree verifier: reports a symlink hidden in an installed tree",
+      "testPattern": "E2 tree verifier: reports a symlink hidden in an installed tree",
+      "before": "if (!info.isFile()) return { ok: false, code: 'TREE_TYPE' };",
+      "after": "if (false) return { ok: false, code: 'TREE_TYPE' };"
+    },
+    {
+      "id": "e2-tree-executable",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tree-verifier.ts",
+      "testFile": "packages/events-daemon/test/laya-tree-verifier.test.ts",
+      "testName": "E2 tree verifier: reports a changed executable bit",
+      "testPattern": "E2 tree verifier: reports a changed executable bit",
+      "before": "if (executable !== expectedFile.executable) return { ok: false, code: 'TREE_EXECUTABLE' };",
+      "after": "if (false) return { ok: false, code: 'TREE_EXECUTABLE' };"
+    },
+    {
+      "id": "e2-tree-size",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tree-verifier.ts",
+      "testFile": "packages/events-daemon/test/laya-tree-verifier.test.ts",
+      "testName": "E2 tree verifier: reports a resized installed file",
+      "testPattern": "E2 tree verifier: reports a resized installed file",
+      "before": "if (info.size !== expectedFile.size) return { ok: false, code: 'TREE_SIZE' };",
+      "after": "if (false) return { ok: false, code: 'TREE_SIZE' };"
+    },
+    {
+      "id": "e2-tree-hash",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/src/runtime/laya/tree-verifier.ts",
+      "testFile": "packages/events-daemon/test/laya-tree-verifier.test.ts",
+      "testName": "E2 tree verifier: reports an altered file after an earlier verification",
+      "testPattern": "E2 tree verifier: reports an altered file after an earlier verification",
+      "before": "if (digest !== expectedFile.sha256) return { ok: false, code: 'TREE_HASH' };",
+      "after": "if (false) return { ok: false, code: 'TREE_HASH' };"
+    },
+    {
+      "id": "e2-mutation-all-task-fragments",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/test/support/laya-mutants.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: loads production mutants from every task fragment",
+      "testPattern": "E2 mutation: loads production mutants from every task fragment",
+      "before": "for (const { task, path: fragmentPath } of await taskFragments()) {",
+      "after": "for (const { task, path: fragmentPath } of (await taskFragments()).filter(({ task }) => task === 3)) {"
+    },
+    {
+      "id": "e2-mutation-execution-accounting",
+      "kind": "production",
+      "owner": "task-5",
+      "source": "packages/events-daemon/test/support/laya-mutants.ts",
+      "testFile": "packages/events-daemon/test/laya-mutations.test.ts",
+      "testName": "E2 mutation: a registered production mutant cannot be skipped",
+      "testPattern": "E2 mutation: a registered production mutant cannot be skipped",
+      "before": "const missing = mutations.find((mutation) => !executed.has(mutation.id));\n  if (missing !== undefined) throw new Error(`registered production mutant was never executed: ${missing.id}`);",
+      "after": "const missing = undefined;\n  if (missing !== undefined) throw new Error(`registered production mutant was never executed: ${missing.id}`);"
+    }
+  ]
+}

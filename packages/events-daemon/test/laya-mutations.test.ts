@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { expectLayaMutationToFail, loadLayaMutations } from './support/laya-mutants.ts';
+import { expectEveryLayaMutationToFail, loadLayaMutations } from './support/laya-mutants.ts';
 
 const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const checker = join(repositoryRoot, 'scripts', 'verify-events-phase-e2-tests.mjs');
@@ -581,9 +581,23 @@ test('E2 mutation: rejects a skipped production-copy mutant', async () => {
   });
 });
 
+test('E2 mutation: loads production mutants from every task fragment', async () => {
+  const mutations = await loadLayaMutations();
+  assert.ok(mutations.some((mutation) => mutation.owner === 'task-3'));
+  assert.ok(mutations.some((mutation) => mutation.owner === 'task-5'));
+});
+
+test('E2 mutation: a registered production mutant cannot be skipped', async () => {
+  const mutants = await import('./support/laya-mutants.ts');
+  const mutations = await loadLayaMutations();
+  assert.throws(
+    () => mutants.assertEveryLayaMutationExecuted(mutations, new Set()),
+    /registered production mutant was never executed/,
+  );
+});
+
 test('E2 mutation: copied production checker fails only its named oracle', async (context) => {
-  for (const mutation of await loadLayaMutations()) {
-    const changedLine = await expectLayaMutationToFail(mutation);
+  for (const { mutation, changedLine } of await expectEveryLayaMutationToFail()) {
     context.diagnostic(`${mutation.id}: ${mutation.source}:${changedLine} -> ${mutation.testName}`);
   }
 });
