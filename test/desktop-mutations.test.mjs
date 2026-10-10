@@ -43,3 +43,27 @@ test('a named desktop test without its own marker is rejected', async (t) => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /unpaired desktop guard: named test has no mutation marker/);
 });
+
+test('the structural checker rejects a declared Cargo test name that differs from its marker', async (t) => {
+  const temp = await mkdtemp(join(tmpdir(), 'desktop-manifest-'));
+  t.after(async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(temp, { recursive: true, force: true });
+  });
+  const document = JSON.parse(await readFile(manifest, 'utf8'));
+  const item = document.cases.find(({ id }) => id === 'desktop-supervisor-late-spawn');
+  item.test = {
+    kind: 'cargo',
+    manifest: 'apps/desktop/src-tauri/Cargo.toml',
+    cargoTestPath: '--test supervisor_lifecycle',
+    name: 'a_different_declared_test',
+  };
+  const altered = join(temp, 'manifest.json');
+  await writeFile(altered, JSON.stringify(document));
+  const result = spawnSync(process.execPath, [checker.pathname, '--manifest', altered], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /declared Cargo test name does not match its marker/);
+});

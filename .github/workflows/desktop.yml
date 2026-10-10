@@ -94,6 +94,16 @@
           "run": "cargo fmt --all -- --check\ncargo clippy --all-targets --all-features -- -D warnings\ncargo test --all-targets --all-features"
         },
         {
+          "name": "Unix Task-4 production mutation and Node/Rust control gates",
+          "if": "runner.os != 'Windows'",
+          "run": "set -euo pipefail\ncargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --bin control-probe\nexport DESKTOP_CONTROL_PROBE_BIN=\"$PWD/apps/desktop/src-tauri/target/debug/control-probe\"\nexport DESKTOP_REQUIRE_CONTROL_PROBE=1\nnode --import ./test/helpers/loopback-seal-preload.mjs --experimental-strip-types --disable-warning=ExperimentalWarning --test packages/events-daemon/test/control-server-compat.test.mjs\nnode apps/desktop/test/mutations/run.mjs --group task-4"
+        },
+        {
+          "name": "Windows public pre-read filesystem trap mutation gate",
+          "if": "runner.os == 'Windows'",
+          "run": "node apps/desktop/test/mutations/run.mjs --case desktop-windows-pre-read-refusal"
+        },
+        {
           "name": "Bundled actual webview no-egress probe",
           "run": "set -euo pipefail\ncase \"$RUNNER_OS\" in\n  macOS) bundle=app; probe=\"apps/desktop/src-tauri/target/release/bundle/macos/Agent Communications.app/Contents/MacOS/agentcomms-desktop\" ;;\n  Windows) bundle=nsis; probe=\"apps/desktop/src-tauri/target/release/agentcomms-desktop.exe\" ;;\n  Linux) bundle=deb; probe=\"apps/desktop/src-tauri/target/release/agentcomms-desktop\" ;;\n  *) exit 1 ;;\nesac\nVITE_NO_EGRESS_PROBE=1 CARGO_NET_OFFLINE=true pnpm --filter @agentcomms/desktop tauri:build --features no-egress-probe --no-sign --bundles \"$bundle\"\nprobe_binary=$(node -p 'require(\"node:path\").resolve(process.argv[1])' \"$probe\")\nexport DESKTOP_PROBE_BINARY=\"$probe_binary\"\nif [ \"$RUNNER_OS\" = Linux ]; then\n  xvfb-run -a pnpm --filter @agentcomms/desktop test:e2e -- --case no-egress\nelse\n  pnpm --filter @agentcomms/desktop test:e2e -- --case no-egress\nfi"
         },

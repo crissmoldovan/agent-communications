@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "fixture-stop-race",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test supervisor_lifecycle",
+        "name": "stop_epoch_prevents_clearing_newer_owner"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/supervisor.test.mjs",
+        "name": "fixture structural evidence"
+      },
+      "production": "apps/desktop/src-tauri/src/supervisor.rs",
+      "import": "../src-tauri/src/supervisor.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/supervisor.rs",
+        "find": "pub fn finish_stop()",
+        "replace": "pub fn erased_finish_stop()"
+      }
+    }
+  ]
+}

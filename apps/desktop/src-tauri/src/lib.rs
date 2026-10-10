@@ -1,6 +1,11 @@
+mod commands;
+pub mod control;
+pub mod preferences;
 pub mod security;
+pub mod supervisor;
 mod tray;
 
+use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 #[cfg(feature = "no-egress-probe")]
@@ -46,8 +51,19 @@ pub fn run() {
             }
         }
     });
+    #[cfg(not(feature = "no-egress-probe"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        commands::supervision::desktop_supervision_status,
+        commands::supervision::desktop_start_daemon,
+        commands::supervision::desktop_quit_daemon,
+        commands::supervision::desktop_open_secrets
+    ]);
     #[cfg(feature = "no-egress-probe")]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        commands::supervision::desktop_supervision_status,
+        commands::supervision::desktop_start_daemon,
+        commands::supervision::desktop_quit_daemon,
+        commands::supervision::desktop_open_secrets,
         desktop_probe_ping,
         desktop_probe_port,
         desktop_probe_report
@@ -56,6 +72,12 @@ pub fn run() {
         .setup(|app| {
             security::install_security_before_windows(app)?;
             tray::install_tray(app)?;
+            let preferences_path = app
+                .path()
+                .app_local_data_dir()?
+                .join("preferences")
+                .join("desktop.json");
+            app.manage(commands::supervision::DesktopService::new(preferences_path));
             WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
                 .title("Settings")
                 .on_navigation(|url| security::allow_window_navigation("settings", url))

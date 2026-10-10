@@ -34,7 +34,10 @@ test('root verification reaches desktop build, typecheck, and unit tests', async
   assert.match(rootManifest.scripts.test, /loopback-seal-preload\.mjs/);
   assert.match(desktopManifest.scripts.build, /vite build/);
   assert.match(desktopManifest.scripts.typecheck, /tsc/);
-  assert.match(desktopManifest.scripts.test, /node --test/);
+  assert.match(
+    desktopManifest.scripts.test,
+    /node --experimental-strip-types --disable-warning=ExperimentalWarning --test/,
+  );
   assert.match(rootManifest.scripts.verify, /verify:desktop-mutations/);
 });
 

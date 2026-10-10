@@ -91,8 +91,22 @@ test('desktop-workflow-matrix', async () => {
     'pnpm --filter @agentcomms/desktop tauri:build --no-sign',
   ])
     assert.ok(source.includes(command), `missing ${command}`);
+  const unixControl = job.steps.find(
+    (step) => step.name === 'Unix Task-4 production mutation and Node/Rust control gates',
+  );
+  assert.equal(unixControl?.if, "runner.os != 'Windows'");
+  assert.match(unixControl.run, /DESKTOP_REQUIRE_CONTROL_PROBE=1/);
+  assert.match(unixControl.run, /control-server-compat\.test\.mjs/);
+  assert.match(unixControl.run, /mutations\/run\.mjs --group task-4/);
+  assert.doesNotMatch(unixControl.run, /DESKTOP_ALLOW_SOCKET_SKIP/);
+  const windowsControl = job.steps.find(
+    (step) => step.name === 'Windows public pre-read filesystem trap mutation gate',
+  );
+  assert.equal(windowsControl?.if, "runner.os == 'Windows'");
+  assert.match(windowsControl.run, /mutations\/run\.mjs --case desktop-windows-pre-read-refusal/);
   for (const step of job.steps.filter((step) => step.run)) {
-    if (!/apt-get/.test(step.run)) assert.equal(step.if, undefined, `${step.name} must run on every OS`);
+    if (step !== unixControl && step !== windowsControl && !/apt-get/.test(step.run))
+      assert.equal(step.if, undefined, `${step.name} must run on every OS`);
     assert.equal(step['continue-on-error'], undefined);
   }
   assert.match(source, /xvfb-run/);

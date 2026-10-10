@@ -14,7 +14,10 @@ test('root desktop mutation verification is structural only', async () => {
   assert.doesNotMatch(source, /apps\/desktop\/test\/mutations\/run\.mjs/);
   assert.doesNotMatch(await readFile(rootMutationTests, 'utf8'), /apps\/desktop\/test\/mutations\/run\.mjs/);
   const document = JSON.parse(await readFile(manifest, 'utf8'));
-  for (const item of document.cases.filter((entry) => entry.test.includes('/e2e/'))) {
+  for (const item of document.cases.filter((entry) => {
+    const declared = typeof entry.test === 'string' ? entry.test : entry.test.file;
+    return typeof declared === 'string' && declared.includes('/e2e/');
+  })) {
     assert.equal(item.execution, 'desktop-e2e', `${item.id} must be marked for desktop-only execution`);
   }
   const result = spawnSync(process.execPath, [checker.pathname], { cwd: root, encoding: 'utf8' });

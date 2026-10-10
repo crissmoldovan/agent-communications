@@ -1,0 +1,5 @@
+import { test } from 'node:test';
+import '../src-tauri/src/supervisor.rs';
+
+// desktop-mutation: fixture-stop-race
+test('fixture structural evidence', () => {});

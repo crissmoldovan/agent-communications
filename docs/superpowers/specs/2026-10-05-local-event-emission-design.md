@@ -2363,9 +2363,10 @@ Only `agent-events run` opens the events database or provider sessions. Every ot
 the Rust app are clients of a local versioned control protocol.
 
 On Unix the socket is inside a `0700` directory, the socket/token files are owner-only, and the daemon verifies peer
-credentials have the same uid. On Windows it uses a named pipe whose ACL grants only the current user's SID. The
-random token is a second check on both platforms and is never logged or returned to a model. Event database, lock,
-token and state files receive an owner-only Windows ACL rather than relying on POSIX mode numbers.
+credentials have the same uid. The random token is a second check and is never logged or returned to a model.
+Under the current B1-G implementation, Windows daemon control is unconditionally unavailable before a client reads
+an instance or token path. An ACL-capable Windows daemon owner and same-user named pipe, with owner-only ACLs on its
+event database, lock, token and state files, belong to a future phase; a Rust client alone cannot establish that boundary.
 
 Protocol frames are length-prefixed JSON. A client first sends `hello { supportedVersions, token, client }`; the
 daemon selects one mutually supported version or returns `PROTOCOL_UNSUPPORTED`, then issues an in-memory session id.
@@ -2593,6 +2594,11 @@ no recursive delivery case.
 `secrets` window. `secrets` is a distinct Tauri window/webview and entry document, never a React route inside
 `settings`. The three CUE++ packages are public on npm under MIT (§2), so the app lives in this repository at
 `apps/desktop` and is built and released by this repository's CI (D14).
+
+**Current platform support:** macOS and Linux can use D12's authenticated Unix control endpoint. Windows continues
+to run the packaged UI, CSP and no-egress coverage, but desktop control returns typed
+`WINDOWS_CONTROL_UNAVAILABLE` before resolving a profile directory or opening any instance or token record, as B1-G
+requires. Windows collection remains unavailable until the future ACL-capable daemon owner and pipe boundary exist.
 
 **Screens:**
 

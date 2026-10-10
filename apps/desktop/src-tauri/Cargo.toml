@@ -19,3 +19,11 @@ no-egress-probe = []
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+hex = "0.4"

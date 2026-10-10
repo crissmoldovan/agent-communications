@@ -8,11 +8,7 @@
       "testName": "desktop is a private workspace member outside package publishing",
       "production": "apps/desktop/package.json",
       "import": "../package.json",
-      "mutation": {
-        "file": "apps/desktop/package.json",
-        "find": "\"private\": true",
-        "replace": "\"private\": false"
-      }
+      "mutation": { "file": "apps/desktop/package.json", "find": "\"private\": true", "replace": "\"private\": false" }
     },
     {
       "id": "desktop-capability-settings-tracked",
@@ -47,11 +43,7 @@
       "testName": "desktop dependency graph is pinned by the workspace lockfile",
       "production": "pnpm-lock.yaml",
       "import": "../../../pnpm-lock.yaml",
-      "mutation": {
-        "file": "pnpm-lock.yaml",
-        "find": "  apps/desktop:\n",
-        "replace": "  apps/desktop-missing:\n"
-      }
+      "mutation": { "file": "pnpm-lock.yaml", "find": "  apps/desktop:\n", "replace": "  apps/desktop-missing:\n" }
     },
     {
       "id": "desktop-csp-configured-default-src",
@@ -177,11 +169,7 @@
       "testName": "desktop-csp-exact secrets default-src",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": {
-        "file": "apps/desktop/secrets.html",
-        "find": "default-src 'none'",
-        "replace": "default-src *"
-      }
+      "mutation": { "file": "apps/desktop/secrets.html", "find": "default-src 'none'", "replace": "default-src *" }
     },
     {
       "id": "desktop-csp-secrets-script-src",
@@ -190,11 +178,7 @@
       "testName": "desktop-csp-exact secrets script-src",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": {
-        "file": "apps/desktop/secrets.html",
-        "find": "script-src 'self'",
-        "replace": "script-src *"
-      }
+      "mutation": { "file": "apps/desktop/secrets.html", "find": "script-src 'self'", "replace": "script-src *" }
     },
     {
       "id": "desktop-csp-secrets-style-src",
@@ -203,11 +187,7 @@
       "testName": "desktop-csp-exact secrets style-src",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": {
-        "file": "apps/desktop/secrets.html",
-        "find": "style-src 'self'",
-        "replace": "style-src *"
-      }
+      "mutation": { "file": "apps/desktop/secrets.html", "find": "style-src 'self'", "replace": "style-src *" }
     },
     {
       "id": "desktop-csp-secrets-img-src",
@@ -216,11 +196,7 @@
       "testName": "desktop-csp-exact secrets img-src",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": {
-        "file": "apps/desktop/secrets.html",
-        "find": "img-src 'none'",
-        "replace": "img-src *"
-      }
+      "mutation": { "file": "apps/desktop/secrets.html", "find": "img-src 'none'", "replace": "img-src *" }
     },
     {
       "id": "desktop-csp-secrets-connect-src",
@@ -242,11 +218,7 @@
       "testName": "desktop-csp-exact secrets frame-src",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": {
-        "file": "apps/desktop/secrets.html",
-        "find": "frame-src 'none'",
-        "replace": "frame-src *"
-      }
+      "mutation": { "file": "apps/desktop/secrets.html", "find": "frame-src 'none'", "replace": "frame-src *" }
     },
     {
       "id": "desktop-csp-secrets-object-src",
@@ -255,11 +227,7 @@
       "testName": "desktop-csp-exact secrets object-src",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": {
-        "file": "apps/desktop/secrets.html",
-        "find": "object-src 'none'",
-        "replace": "object-src *"
-      }
+      "mutation": { "file": "apps/desktop/secrets.html", "find": "object-src 'none'", "replace": "object-src *" }
     },
     {
       "id": "desktop-csp-secrets-form-action",
@@ -268,11 +236,7 @@
       "testName": "desktop-csp-exact secrets form-action",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": {
-        "file": "apps/desktop/secrets.html",
-        "find": "form-action 'none'",
-        "replace": "form-action *"
-      }
+      "mutation": { "file": "apps/desktop/secrets.html", "find": "form-action 'none'", "replace": "form-action *" }
     },
     {
       "id": "desktop-csp-secrets-base-uri",
@@ -281,11 +245,7 @@
       "testName": "desktop-csp-exact secrets base-uri",
       "production": "apps/desktop/secrets.html",
       "import": "../secrets.html",
-      "mutation": {
-        "file": "apps/desktop/secrets.html",
-        "find": "base-uri 'none'",
-        "replace": "base-uri *"
-      }
+      "mutation": { "file": "apps/desktop/secrets.html", "find": "base-uri 'none'", "replace": "base-uri *" }
     },
     {
       "id": "desktop-csp-asset-modification",
@@ -322,8 +282,8 @@
       "import": "../src-tauri/src/lib.rs",
       "mutation": {
         "file": "apps/desktop/src-tauri/src/lib.rs",
-        "find": "security::install_security_before_windows(app)?;\n            tray::install_tray(app)?;\n            WebviewWindowBuilder::new(app, \"settings\", WebviewUrl::App(\"settings.html\".into()))\n                .title(\"Settings\")\n                .on_navigation(|url| security::allow_window_navigation(\"settings\", url))\n                .on_new_window(|_, _| security::deny_new_window(\"settings\"))\n                .on_download(|_, _| security::deny_download(\"settings\"))\n                .build()?;",
-        "replace": "tray::install_tray(app)?;\n            WebviewWindowBuilder::new(app, \"settings\", WebviewUrl::App(\"settings.html\".into()))\n                .title(\"Settings\")\n                .on_navigation(|url| security::allow_window_navigation(\"settings\", url))\n                .on_new_window(|_, _| security::deny_new_window(\"settings\"))\n                .on_download(|_, _| security::deny_download(\"settings\"))\n                .build()?;\n            security::install_security_before_windows(app)?;"
+        "find": "security::install_security_before_windows(app)?;\n            tray::install_tray(app)?;",
+        "replace": "tray::install_tray(app)?;\n            security::install_security_before_windows(app)?;"
       }
     },
     {
@@ -376,11 +336,7 @@
       "testName": "desktop-custom-protocol-denial",
       "production": "apps/desktop/src-tauri/src/security.rs",
       "import": "../../src-tauri/src/security.rs",
-      "mutation": {
-        "file": "apps/desktop/src-tauri/src/security.rs",
-        "find": "_ => false,",
-        "replace": "_ => true,"
-      }
+      "mutation": { "file": "apps/desktop/src-tauri/src/security.rs", "find": "_ => false,", "replace": "_ => true," }
     },
     {
       "id": "desktop-http-opener-capability",
@@ -468,11 +424,7 @@
       "testName": "desktop-tag-isolation",
       "production": ".github/workflows/desktop-release.yml",
       "import": "../.github/workflows/desktop-release.yml",
-      "mutation": {
-        "file": ".github/workflows/desktop-release.yml",
-        "find": "\"desktop-v*\"",
-        "replace": "\"v*\""
-      }
+      "mutation": { "file": ".github/workflows/desktop-release.yml", "find": "\"desktop-v*\"", "replace": "\"v*\"" }
     },
     {
       "id": "desktop-matrix-completeness",
@@ -611,11 +563,7 @@
       "testName": "desktop-launch-docs",
       "production": "apps/desktop/RELEASE_NOTES.md",
       "import": "../RELEASE_NOTES.md",
-      "mutation": {
-        "file": "apps/desktop/RELEASE_NOTES.md",
-        "find": "**Open Anyway**",
-        "replace": "**Open**"
-      }
+      "mutation": { "file": "apps/desktop/RELEASE_NOTES.md", "find": "**Open Anyway**", "replace": "**Open**" }
     },
     {
       "id": "desktop-windows-probe-launcher",
@@ -628,6 +576,411 @@
         "file": ".github/workflows/desktop.yml",
         "find": "export DESKTOP_PROBE_BINARY=",
         "replace": "export DESKTOP_PROBE_UNUSED="
+      }
+    },
+    {
+      "id": "desktop-frame-bounds",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test control_frames",
+        "name": "malformed_and_oversized_frames_are_rejected"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/control-compat.test.mjs",
+        "name": "control-frame-bounds: Rust production decoder bounds exact big-endian frames"
+      },
+      "production": "apps/desktop/src-tauri/src/control/frame.rs",
+      "import": "../src-tauri/src/control/frame.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/control/frame.rs",
+        "find": "if length > MAX_FRAME_BYTES {",
+        "replace": "if false {"
+      }
+    },
+    {
+      "id": "desktop-no-overlap",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test control_frames",
+        "name": "negotiation_picks_highest_mutual_and_rejects_disjoint"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/control-compat.test.mjs",
+        "name": "control-no-overlap: Rust production negotiation refuses disjoint versions"
+      },
+      "production": "apps/desktop/src-tauri/src/control/frame.rs",
+      "import": "../src-tauri/src/control/frame.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/control/frame.rs",
+        "find": ".filter(|v| server.contains(v))",
+        "replace": ".filter(|_| true)"
+      }
+    },
+    {
+      "id": "desktop-token-redaction",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test control_frames",
+        "name": "control_error_never_exposes_token"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/control-compat.test.mjs",
+        "name": "control-token-redaction: public control errors do not display internal text"
+      },
+      "production": "apps/desktop/src-tauri/src/control/types.rs",
+      "import": "../src-tauri/src/control/types.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/control/types.rs",
+        "find": "write!(f, \"{}\", self.code)",
+        "replace": "write!(f, \"{}\", self.message)"
+      }
+    },
+    {
+      "id": "desktop-endpoint-proof",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test control_frames",
+        "name": "endpoint_is_proved_before_token_file_is_opened"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/control-compat.test.mjs",
+        "name": "control-endpoint-proof: Unix endpoint proof precedes token read"
+      },
+      "production": "apps/desktop/src-tauri/src/control/client.rs",
+      "import": "../src-tauri/src/control/client.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/control/client.rs",
+        "find": "verify_endpoint(&paths, &record)?;\n        let token = read_token(&paths, &record.token_fingerprint)?;",
+        "replace": "let token = read_token(&paths, &record.token_fingerprint)?;"
+      }
+    },
+    {
+      "id": "desktop-windows-pre-read-refusal",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test control_frames",
+        "name": "windows_refusal_does_not_open_token_even_if_read_error_is_discarded"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/windows-support-matrix.test.mjs",
+        "name": "windows-support-pre-read-refusal: public client rejects before profile resolution"
+      },
+      "production": "apps/desktop/src-tauri/src/control/client.rs",
+      "import": "../src-tauri/src/control/client.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/control/client.rs",
+        "find": "Err(ControlError::windows_unavailable())",
+        "replace": "let _ = std::fs::read(_profile.state_dir.join(\"events/control.token\"));\n        Err(ControlError::windows_unavailable())"
+      }
+    },
+    {
+      "id": "desktop-daemon-profile-drift",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test supervisor",
+        "name": "exact_selected_executable_runs_and_exited_child_is_not_adopted"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/daemon-profile.test.mjs",
+        "name": "daemon-profile-drift: launch uses exact executable and fixed run argv"
+      },
+      "production": "apps/desktop/src-tauri/src/supervisor.rs",
+      "import": "../src-tauri/src/supervisor.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/supervisor.rs",
+        "find": "Command::new(&profile.executable)",
+        "replace": "Command::new(\"agent-events\")"
+      }
+    },
+    {
+      "id": "desktop-preferences-private",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test preferences_security",
+        "name": "preferences_are_private_atomic_and_recover_only_complete_records"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/daemon-profile.test.mjs",
+        "name": "preferences-private: preference file owner and mode are verified"
+      },
+      "production": "apps/desktop/src-tauri/src/preferences.rs",
+      "import": "../src-tauri/src/preferences.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/preferences.rs",
+        "find": "metadata.mode() & 0o777 != 0o600\n    {",
+        "replace": "false\n    {"
+      }
+    },
+    {
+      "id": "desktop-preferences-symlink-reparse",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test preferences_security",
+        "name": "preferences_refuse_symlinked_ancestor_before_load_or_save"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/daemon-profile.test.mjs",
+        "name": "preferences-symlink-reparse: preferences reject symlink paths"
+      },
+      "production": "apps/desktop/src-tauri/src/preferences.rs",
+      "import": "../src-tauri/src/preferences.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/preferences.rs",
+        "find": "let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;",
+        "replace": "let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;"
+      }
+    },
+    {
+      "id": "desktop-preferences-atomic-recovery",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test preferences_security",
+        "name": "preferences_refuse_symlink_and_torn_record"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/daemon-profile.test.mjs",
+        "name": "preferences-atomic-recovery: preferences write complete tmp and rename"
+      },
+      "production": "apps/desktop/src-tauri/src/preferences.rs",
+      "import": "../src-tauri/src/preferences.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/preferences.rs",
+        "find": "let preferences: DesktopPreferences = serde_json::from_slice(&bytes)\n            .map_err(|_| ControlError::new(\"PREFERENCES_TORN\", \"preferences are incomplete\"))?;",
+        "replace": "let preferences: DesktopPreferences = serde_json::from_slice(&bytes).unwrap_or(DesktopPreferences { revision: 1, ..DesktopPreferences::default() });"
+      }
+    },
+    {
+      "id": "desktop-autostart-no-spawn",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test supervisor_lifecycle",
+        "name": "login_startup_never_calls_runtime_spawn"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/supervisor.test.mjs",
+        "name": "supervisor-autostart-no-spawn: default startup is inert"
+      },
+      "production": "apps/desktop/src-tauri/src/supervisor.rs",
+      "import": "../src-tauri/src/supervisor.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/supervisor.rs",
+        "find": "pub fn startup(&self) -> SupervisorStatus {\n        self.status()\n    }",
+        "replace": "pub fn startup(&self) -> SupervisorStatus {\n        let _ = self.runtime.spawn(&DaemonProfile { executable: \"/dev/null/agent-events\".into(), state_dir: \"/dev/null\".into(), config_dir: \"/dev/null\".into() });\n        self.status()\n    }"
+      }
+    },
+    {
+      "id": "desktop-preferences-race",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test supervisor_lifecycle",
+        "name": "start_rejects_external_revision_change_after_authenticated_status"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/supervisor.test.mjs",
+        "name": "supervisor-preferences-race: profile revision guards a start"
+      },
+      "production": "apps/desktop/src-tauri/src/supervisor.rs",
+      "import": "../src-tauri/src/supervisor.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/supervisor.rs",
+        "find": "let current = store.load()?;\n        if current.revision != expected_revision {\n            return Err(ControlError::new(\n                \"PREFERENCES_CHANGED\",\n                \"profile changed while starting\",\n            ));\n        }\n        let mut ledger = self.ledger.lock().expect(\"supervisor ledger\");\n        if ledger.epoch != epoch\n            || ledger.state != SupervisorState::Starting\n            || ledger.reservation.as_ref().is_none_or(|pending| {\n                pending.profile != profile || pending.expected_revision != expected_revision\n            })\n        {\n            return Err(ControlError::new(\n                \"SUPERVISOR_STALE\",\n                \"start reservation changed\",\n            ));\n        }\n        // This is the final commit point. Holding the supervisor ledger prevents Quit from\n        // superseding the selected epoch between the check and the atomic preference write.\n        if let Err(error) = store.save_if_revision(&preferences, expected_revision) {\n            drop(ledger);\n            return Err(error);\n        }",
+        "replace": "let _current = store.load()?;\n        let mut ledger = self.ledger.lock().expect(\"supervisor ledger\");\n        if ledger.epoch != epoch\n            || ledger.state != SupervisorState::Starting\n            || ledger.reservation.as_ref().is_none_or(|pending| {\n                pending.profile != profile || pending.expected_revision != expected_revision\n            })\n        {\n            return Err(ControlError::new(\n                \"SUPERVISOR_STALE\",\n                \"start reservation changed\",\n            ));\n        }"
+      }
+    },
+    {
+      "id": "desktop-supervisor-late-spawn",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test supervisor_lifecycle",
+        "name": "tray_quit_waits_for_cancelled_start_before_late_spawn"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/supervisor.test.mjs",
+        "name": "supervisor-late-spawn: epoch fences child adoption"
+      },
+      "production": "apps/desktop/src-tauri/src/supervisor.rs",
+      "import": "../src-tauri/src/supervisor.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/supervisor.rs",
+        "find": "let initial = self.runtime.status(&profile);",
+        "replace": "store.save_if_revision(&preferences, expected_revision)?;\n        let initial = self.runtime.status(&profile);"
+      }
+    },
+    {
+      "id": "desktop-supervisor-cancel-handoff",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--lib",
+        "name": "supervisor::cancellation_tests::cancelled_start_retains_reservation_until_quit_consumes_it"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/supervisor.test.mjs",
+        "name": "supervisor-cancel-handoff: cancelled Start retains Quit reservation"
+      },
+      "production": "apps/desktop/src-tauri/src/supervisor.rs",
+      "import": "../src-tauri/src/supervisor.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/supervisor.rs",
+        "find": "else if ledger.state == SupervisorState::Starting {",
+        "replace": "else if matches!(ledger.state, SupervisorState::Starting | SupervisorState::Cancelling) {"
+      }
+    },
+    {
+      "id": "desktop-supervisor-stop-race",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--lib",
+        "name": "supervisor::cancellation_tests::stop_epoch_prevents_clearing_newer_owner"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/supervisor.test.mjs",
+        "name": "supervisor-stop-race: stop epoch is checked before clearing ownership"
+      },
+      "production": "apps/desktop/src-tauri/src/supervisor.rs",
+      "import": "../src-tauri/src/supervisor.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/supervisor.rs",
+        "find": "if ledger.epoch != epoch\n            || ledger.state != SupervisorState::Stopping\n            || ledger.owner.as_ref().map(|owner| &owner.identity) != expected",
+        "replace": "if ledger.state != SupervisorState::Stopping\n            || ledger.owner.as_ref().map(|owner| &owner.identity) != expected"
+      }
+    },
+    {
+      "id": "desktop-control-stale-reply",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test control_frames",
+        "name": "reply_requires_exact_request_id"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/control-compat.test.mjs",
+        "name": "control-stale-reply: Rust production client validates request identity"
+      },
+      "production": "apps/desktop/src-tauri/src/control/types.rs",
+      "import": "../src-tauri/src/control/types.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/control/types.rs",
+        "find": "if request_id != expected {",
+        "replace": "if false {"
+      }
+    },
+    {
+      "id": "desktop-preferences-lock",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test preferences_security",
+        "name": "preferences_save_waits_for_held_sibling_lock"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/daemon-profile.test.mjs",
+        "name": "preferences-lock: preference replacement takes a sibling exclusive lock"
+      },
+      "production": "apps/desktop/src-tauri/src/preferences.rs",
+      "import": "../src-tauri/src/preferences.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/preferences.rs",
+        "find": "if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {",
+        "replace": "if false {"
+      }
+    },
+    {
+      "id": "desktop-supervisor-exact-identity",
+      "group": "task-4",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test supervisor_lifecycle",
+        "name": "replacement_owner_is_not_stopped_or_cleared"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/supervisor.test.mjs",
+        "name": "supervisor-exact-identity: stop cannot clear a different child"
+      },
+      "production": "apps/desktop/src-tauri/src/supervisor.rs",
+      "import": "../src-tauri/src/supervisor.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/supervisor.rs",
+        "find": "Ok(status) if status.identity == bound.identity => {}",
+        "replace": "Ok(_) => {}"
+      }
+    },
+    {
+      "id": "desktop-ui-command-surface",
+      "group": "task-4",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/supervision-ui.test.mjs",
+        "name": "supervision settings invokes only the four pre-B3 native commands"
+      },
+      "production": "apps/desktop/src/supervision.ts",
+      "import": "../src/supervision.ts",
+      "mutation": {
+        "file": "apps/desktop/src/supervision.ts",
+        "find": "'desktop_start_daemon'",
+        "replace": "'desktop_start_other'"
+      }
+    },
+    {
+      "id": "desktop-ui-stale-reply",
+      "group": "task-4",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/supervision-lifecycle.test.mjs",
+        "name": "supervision lifecycle: hidden or closed settings drops paused command replies"
+      },
+      "production": "apps/desktop/src/supervision.ts",
+      "import": "../src/supervision.ts",
+      "mutation": {
+        "file": "apps/desktop/src/supervision.ts",
+        "find": "return request.requestEpoch === this.#requestEpoch && request.lifecycleEpoch === this.#lifecycleEpoch;",
+        "replace": "return true;"
+      }
+    },
+    {
+      "id": "desktop-mutation-marker-global-scan",
+      "group": "task-4",
+      "test": {
+        "kind": "node",
+        "file": "test/desktop-mutation-marker-scan.test.mjs",
+        "name": "a copied fixture rejects unknown, duplicate, and mismatched mutation markers"
+      },
+      "production": "scripts/verify-desktop-mutations.mjs",
+      "import": "../scripts/verify-desktop-mutations.mjs",
+      "mutation": {
+        "file": "scripts/verify-desktop-mutations.mjs",
+        "find": "scanMutationMarkers();",
+        "replace": "// scanMutationMarkers();"
       }
     }
   ]

@@ -1,0 +1,5 @@
+use agentcomms_desktop::supervisor;
+
+// desktop-rust-mutation: fixture-stop-race | cargo --test supervisor_lifecycle | stop_epoch_prevents_clearing_newer_owner
+#[test]
+fn stop_epoch_prevents_clearing_newer_owner() {}

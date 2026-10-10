@@ -1,0 +1,32 @@
+{
+  "validHello": {
+    "hello": {
+      "supportedVersions": [1],
+      "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "client": { "name": "desktop-test" }
+    }
+  },
+  "validRequest": {
+    "version": 1,
+    "requestId": "fixture-request",
+    "session": "fixture-session",
+    "operation": "status",
+    "args": {}
+  },
+  "success": { "ok": true, "requestId": "fixture-request", "data": { "owner": "running" } },
+  "failure": {
+    "ok": false,
+    "requestId": "fixture-request",
+    "error": { "code": "AUTH_REQUIRED", "message": "local control session is required", "retryable": false }
+  },
+  "noOverlap": {
+    "hello": {
+      "supportedVersions": [2],
+      "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "client": { "name": "desktop-test" }
+    }
+  },
+  "malformedHex": "00000001ff",
+  "oversizePrefixHex": "00010001",
+  "simpleFrameHex": "0000000b7b226f6b223a747275657d"
+}

@@ -17,7 +17,19 @@ pub fn install_tray(app: &mut App) -> tauri::Result<()> {
                     let _ = settings.set_focus();
                 }
             }
-            "quit" => app.exit(0),
+            "quit" => {
+                #[cfg(unix)]
+                if let Some(service) =
+                    app.try_state::<crate::commands::supervision::DesktopService>()
+                {
+                    if service.supervisor.quit(&service.store).is_err() {
+                        return;
+                    }
+                }
+                // B1-G: Windows has no daemon control boundary yet. Tray exit must not
+                // resolve preferences, a profile, an instance record, or a token.
+                app.exit(0)
+            }
             _ => {}
         });
     if let Some(icon) = app.default_window_icon() {
