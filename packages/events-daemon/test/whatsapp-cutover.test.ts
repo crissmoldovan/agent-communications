@@ -34,6 +34,8 @@ const cells = [
   'W:replacement-drain-caps-post-P-tuples',
   'W:head-switch-cleans-superseded-snapshot-generations',
   'W:narrowing-purges-unowed-snapshot-keys',
+  'W:admission-requires-post-T',
+  'W:widening-floors-newly-visible-units',
   'W:deadline-at-P-after-P-and-finalise-settles-without-head-write',
 ] as const;
 
@@ -45,6 +47,10 @@ function options(chats: readonly string[]) {
 
 function scope(fixture: PhaseDCutoverFixture, chat: string) {
   return { source: 'whatsapp' as const, accountId: fixture.accountId, scopeId: `chat:${chat}` };
+}
+
+function timestamp(value: number): string {
+  return new Date(value).toISOString();
 }
 
 async function beginReplacement(fixture: PhaseDCutoverFixture, next: readonly string[]): Promise<void> {
@@ -745,8 +751,138 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
         undefined,
         'the narrowing removes every hidden raw snapshot key even with no occurrence ledger row',
       );
+      fixture.store.database
+        .prepare('INSERT INTO whatsapp_visible_units (account_id, unit_key, visible_since) VALUES (?, ?, NULL)')
+        .run(fixture.accountId, hidden.chatJid);
+      fixture.setWhatsAppVisibility((chatJid) => chatJid !== hidden.chatJid);
+      await fixture.applyWhatsAppVisibility();
+      assert.equal(
+        fixture.store.database
+          .prepare('SELECT 1 FROM whatsapp_visible_units WHERE account_id = ? AND unit_key = ?')
+          .get(fixture.accountId, hidden.chatJid),
+        undefined,
+        'the narrowing removes the hidden unit so a later widening creates a fresh floor',
+      );
       // The list assertion happens before the source turn; the harness still proves each normal worker durable edge.
       await attempt.sourceAtDurableEdge();
+    });
+  },
+
+  async 'W:admission-requires-post-T'() {
+    const beforeT = { ...whatsappMessage('stored-before-T'), at: '2020-01-01T00:00:00.000Z' };
+    const afterT = whatsappMessage('stored-after-T');
+    await forEachWhatsAppDurableEdge('W:admission-requires-post-T', async (fixture, attempt) => {
+      fixture.setWhatsAppMessages([]);
+      await fixture.activate();
+      await fixture.enable();
+      fixture.setWhatsAppMessages([beforeT, afterT]);
+      await attempt.sourceAtDurableEdge();
+      await settle(fixture);
+      assertWhatsAppMultiset(fixture, {
+        raw: [beforeT, afterT],
+        admissions: [{ message: afterT, version: 1 }],
+        decisions: [{ message: afterT, version: 1 }],
+      });
+    });
+  },
+
+  async 'W:widening-floors-newly-visible-units'() {
+    const chat = 'chat-revealed';
+    await forEachWhatsAppDurableEdge('W:widening-floors-newly-visible-units', async (fixture, attempt) => {
+      fixture.setWhatsAppMessages([]);
+      await fixture.activate(1, options([chat]));
+      await fixture.enable();
+      const hiddenAt = fixture.now.value + 1;
+      const hiddenPeriod = { ...whatsappMessage('hidden-period', chat), at: timestamp(hiddenAt) };
+      fixture.setWhatsAppVisibility((chatJid) => chatJid !== chat);
+      await fixture.applyWhatsAppVisibility();
+      fixture.setWhatsAppMessages([hiddenPeriod]);
+      await fixture.sourceTurn(scope(fixture, chat));
+      fixture.now.value += 20;
+      fixture.setWhatsAppVisibility(() => true);
+      await fixture.applyWhatsAppVisibility();
+      const afterWidening = {
+        ...whatsappMessage('after-widening', chat),
+        at: timestamp(fixture.now.value + 1),
+      };
+      fixture.setWhatsAppMessages([hiddenPeriod, afterWidening]);
+      await attempt.sourceAtDurableEdge(chat);
+      assert.deepEqual(
+        {
+          ...(fixture.store.database
+            .prepare('SELECT unit_key, visible_since FROM whatsapp_visible_units WHERE account_id = ?')
+            .get(fixture.accountId) as Record<string, unknown>),
+        },
+        { unit_key: chat, visible_since: fixture.now.value },
+        'the first visible scan after widening installs the list-change floor',
+      );
+      assert.deepEqual(
+        fixture.store.database
+          .prepare('SELECT message_id, admission FROM whatsapp_rule_admissions ORDER BY message_id')
+          .all()
+          .map((row) => ({ ...(row as Record<string, unknown>) })),
+        [
+          { message_id: whatsappRawKey(afterWidening), admission: 'admitted' },
+          { message_id: whatsappRawKey(hiddenPeriod), admission: 'suppressed' },
+        ],
+        'the widening records one terminal decision per raw tuple before generic admission consumes staged content',
+      );
+      await settle(fixture);
+      assertWhatsAppMultiset(fixture, {
+        raw: [hiddenPeriod, afterWidening],
+        admissions: [{ message: afterWidening, version: 1 }],
+        decisions: [{ message: afterWidening, version: 1 }],
+      });
+
+      fixture.now.value += 20;
+      fixture.setWhatsAppVisibility((chatJid) => chatJid !== chat);
+      await fixture.applyWhatsAppVisibility();
+      assert.equal(
+        fixture.store.database
+          .prepare('SELECT 1 FROM whatsapp_visible_units WHERE account_id = ? AND unit_key = ?')
+          .get(fixture.accountId, chat),
+        undefined,
+        'a narrowing discards the unit floor before a later widening',
+      );
+      const hiddenAgain = {
+        ...whatsappMessage('hidden-again', chat),
+        at: timestamp(fixture.now.value + 1),
+      };
+      fixture.setWhatsAppMessages([hiddenPeriod, afterWidening, hiddenAgain]);
+      await fixture.sourceTurn(scope(fixture, chat));
+      fixture.now.value += 20;
+      fixture.setWhatsAppVisibility(() => true);
+      await fixture.applyWhatsAppVisibility();
+      const afterRewidening = {
+        ...whatsappMessage('after-rewidening', chat),
+        at: timestamp(fixture.now.value + 1),
+      };
+      fixture.setWhatsAppMessages([hiddenPeriod, afterWidening, hiddenAgain, afterRewidening]);
+      await fixture.sourceTurn(scope(fixture, chat));
+      assert.deepEqual(
+        {
+          ...(fixture.store.database
+            .prepare('SELECT unit_key, visible_since FROM whatsapp_visible_units WHERE account_id = ?')
+            .get(fixture.accountId) as Record<string, unknown>),
+        },
+        { unit_key: chat, visible_since: fixture.now.value },
+        'the re-widening installs a fresh floor rather than retaining its former visibility',
+      );
+      assert.deepEqual(
+        fixture.store.database
+          .prepare(
+            `SELECT message_id, admission FROM whatsapp_rule_admissions
+             WHERE message_id IN (?, ?)
+             ORDER BY message_id`,
+          )
+          .all(whatsappRawKey(afterRewidening), whatsappRawKey(hiddenAgain))
+          .map((row) => ({ ...(row as Record<string, unknown>) })),
+        [
+          { message_id: whatsappRawKey(afterRewidening), admission: 'admitted' },
+          { message_id: whatsappRawKey(hiddenAgain), admission: 'suppressed' },
+        ],
+        'the fresh floor suppresses the second hidden interval but admits the later row exactly once',
+      );
     });
   },
 

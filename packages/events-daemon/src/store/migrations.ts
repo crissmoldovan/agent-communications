@@ -372,6 +372,20 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '12' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // Committee decision (review round 12): a unit a list widening reveals is owed only rows after the apply instant.
+    version: 13,
+    name: 'event-whatsapp-visible-units-v1',
+    statements: [
+      `CREATE TABLE whatsapp_visible_units (
+        account_id TEXT NOT NULL REFERENCES whatsapp_visibility(account_id),
+        unit_key TEXT NOT NULL CHECK (unit_key <> ''),
+        visible_since INTEGER,
+        PRIMARY KEY (account_id, unit_key)
+      ) STRICT`,
+      "UPDATE meta SET value = '13' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

@@ -25,6 +25,8 @@ export function createPhaseDWhatsAppOwnerComposition(
     createRetainedContentParticipants?:
       | ((input: Readonly<{ database: EventDatabase }>) => RetainedContentParticipants)
       | undefined;
+    /** Test seam; production deliberately uses the fence's wall clock. */
+    now?: (() => number) | undefined;
   }>,
 ): Readonly<{
   visibilityFence: WhatsAppVisibilityFence;
@@ -41,6 +43,7 @@ export function createPhaseDWhatsAppOwnerComposition(
     retainedContentHooks,
     withCurrentEventVisibility: (visibilityInput, work) =>
       input.eventOperations.withCurrentEventVisibility(visibilityInput, work),
+    now: input.now,
   });
   return { visibilityFence, retainedContentHooks };
 }

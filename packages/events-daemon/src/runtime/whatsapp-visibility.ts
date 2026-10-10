@@ -9,6 +9,8 @@ export interface CurrentWhatsAppEventVisibility {
   readonly version: number;
   readonly digest: string;
   readonly seesMessage: (chatJid: string, chatKind: string, senderJidRaw: string, fromMe: boolean) => boolean;
+  /** The channel supplies this for durable unit floors; the fallback preserves older test seams for ordinary chats. */
+  readonly seesUnit?: ((unitKey: string) => boolean) | undefined;
 }
 
 export type WithCurrentWhatsAppEventVisibility = <T>(
@@ -164,6 +166,13 @@ export class WhatsAppVisibilityFence {
         .all(accountId) as Array<{ message_id: string; staged_payload_ref: string | null }>;
       const hiddenRows = rows.filter((row) => hidden(visibility, row.message_id));
       const newlyHidden = hiddenRows.map((row) => row.message_id);
+      const newlyHiddenUnits = (
+        this.#store.database
+          .prepare('SELECT unit_key FROM whatsapp_visible_units WHERE account_id = ? ORDER BY unit_key')
+          .all(accountId) as Array<{ unit_key: string }>
+      )
+        .map((row) => row.unit_key)
+        .filter((unitKey) => !seesUnit(visibility, unitKey));
       // D9's raw snapshot is authoritative independently of the occurrence ledger: a key that no version owed
       // still has to disappear when a list narrowing hides it. Scan every retained generation defensively; ordinary
       // head switching keeps this set to the single current generation.
@@ -189,6 +198,10 @@ export class WhatsAppVisibilityFence {
           .prepare('UPDATE whatsapp_visibility SET version = ?, lists_digest = ?, changed_at = ? WHERE account_id = ?')
           .run(version, visibility.digest, at, accountId);
       }
+      for (const unitKey of newlyHiddenUnits)
+        this.#store.database
+          .prepare('DELETE FROM whatsapp_visible_units WHERE account_id = ? AND unit_key = ?')
+          .run(accountId, unitKey);
       // Snapshot keys retain their tuple columns, so the canonical id is compared by tuple rather than an index id.
       for (const key of hiddenSnapshotKeys) {
         this.#store.database
@@ -250,4 +263,8 @@ export class WhatsAppVisibilityFence {
       });
     });
   }
+}
+
+function seesUnit(visibility: CurrentWhatsAppEventVisibility, unitKey: string): boolean {
+  return visibility.seesUnit?.(unitKey) ?? visibility.seesMessage(unitKey, 'unknown', '', false);
 }

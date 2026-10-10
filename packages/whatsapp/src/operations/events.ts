@@ -35,6 +35,7 @@ export interface CurrentEventVisibility {
   readonly version: 1;
   readonly digest: string;
   readonly seesMessage: (chatJid: string, chatKind: string, senderJidRaw: string, fromMe: boolean) => boolean;
+  readonly seesUnit?: ((unitKey: string) => boolean) | undefined;
 }
 
 export interface EventSnapshot {
@@ -60,6 +61,7 @@ export async function withCurrentEventVisibility<T>(
       digest,
       seesMessage: (chatJid, chatKind, senderJidRaw, fromMe) =>
         visibility.seesMessage(chatJid, chatKind, senderJidRaw, fromMe),
+      seesUnit: (unitKey) => visibility.seesUnit(unitKey),
     });
   });
 }
@@ -93,13 +95,11 @@ export async function withEventSnapshot<T>(
     );
     if ((await context.accountById(account.id)) === null)
       throw new CommsError('NOT_FOUND', 'the account was removed while its event snapshot was being read');
+    // The source worker admits only incoming complete tuples, but it must receive visible from-me rows as well so
+    // their list unit has a durable visibility floor before a later incoming first representation arrives.
     const messages = readRawEventMessages(database, report).filter(
       (message) =>
-        message.fromMe === false &&
-        message.chatJid !== null &&
-        message.chatKind !== null &&
-        message.senderJidRaw !== null &&
-        message.stanzaId !== null,
+        (message.fromMe === false || message.fromMe === true) && message.chatJid !== null && message.chatKind !== null,
     );
     return withCurrentEventVisibility(context, { accountId: account.id }, (visibility) =>
       work({ accountId: account.id, accountName, visibility, messages }),

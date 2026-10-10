@@ -35,7 +35,12 @@ import {
 } from '../sources/slack.ts';
 import { SlackReplyDrains, SlackReplyReconciler, type SlackReplyStageHooks } from '../sources/slack-replies.ts';
 import { isSourceScopeFenced } from '../sources/source-scope-fence.ts';
-import { rawWhatsAppMessageId, type WhatsAppRawMessage, WhatsAppSourceWorker } from '../sources/whatsapp.ts';
+import {
+  rawWhatsAppMessageId,
+  type WhatsAppActivationPoint,
+  type WhatsAppRawMessage,
+  WhatsAppSourceWorker,
+} from '../sources/whatsapp.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { EventRecordCipher } from '../store/records.ts';
 import { assertLiveEventAccount } from './account-fence.ts';
@@ -488,7 +493,7 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
           ingestRetentionMs: rule.ingestRetentionMs,
           activationId: rule.activationId,
           options: rule.options.channel === 'whatsapp' ? rule.options : undefined,
-          activationPointIdentities: rule.activationPointIdentities,
+          activationPoints: rule.activationPoints,
         })),
       scopeIsFenced: (scopeId) =>
         isSourceScopeFenced(input.store.database, { source: 'whatsapp', accountId: scope.accountId, scopeId }) ||
@@ -1221,7 +1226,7 @@ async function admitWhatsAppStages(
 }
 
 interface WhatsAppRuleDebt extends RuleDebt {
-  readonly activationPointIdentities: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly activationPoints: ReadonlyMap<string, WhatsAppActivationPoint>;
 }
 
 /** Every active WhatsApp rule for this account contributes its own tuple debt, independent of scheduler scope. */
@@ -1230,7 +1235,7 @@ async function sourceRulesForWhatsAppAccount(
   accountId: string,
 ): Promise<readonly WhatsAppRuleDebt[]> {
   const source = input.sourceRegistry.require('whatsapp');
-  const found = new Map<string, RuleDebt>();
+  const found = new Map<string, WhatsAppRuleDebt>();
   for (const row of input.store.database
     .prepare(
       `SELECT rule_versions.document, active_versions.current_cutover_id
@@ -1247,7 +1252,7 @@ async function sourceRulesForWhatsAppAccount(
     )
       continue;
     const options = source.canonicalise(rule.source.options);
-    const pointIdentities = new Map<string, ReadonlySet<string>>();
+    const activationPoints = new Map<string, WhatsAppActivationPoint>();
     let malformed = false;
     for (const scope of source.scopesFor({ accountId, options })) {
       const point = input.store.database
@@ -1275,15 +1280,25 @@ async function sourceRulesForWhatsAppAccount(
             point.encrypted_position,
           )
         ).toString('utf8'),
-      ) as { baselineIdentities?: unknown };
+      ) as { capturedAt?: unknown; baselineGeneration?: unknown; baselineIdentities?: unknown };
+      const capturedAt = parsedUtcInstant(position.capturedAt);
+      const baselineGeneration = position.baselineGeneration;
       if (
+        capturedAt === null ||
+        typeof baselineGeneration !== 'number' ||
+        !Number.isSafeInteger(baselineGeneration) ||
+        baselineGeneration < 0 ||
         !Array.isArray(position.baselineIdentities) ||
         !position.baselineIdentities.every((identity) => typeof identity === 'string')
       ) {
         malformed = true;
         break;
       }
-      pointIdentities.set(scope.scopeId, new Set(position.baselineIdentities));
+      activationPoints.set(scope.scopeId, {
+        capturedAt,
+        baselineGeneration,
+        baselineIdentities: new Set(position.baselineIdentities),
+      });
     }
     if (malformed) throw new CommsError('BAD_DATA', 'a WhatsApp rule activation point is malformed');
     found.set(`${rule.ruleId}@${rule.version}`, {
@@ -1293,10 +1308,16 @@ async function sourceRulesForWhatsAppAccount(
       eventType: rule.event.type,
       activationId: row.current_cutover_id,
       options,
-      activationPointIdentities: pointIdentities,
-    } as WhatsAppRuleDebt);
+      activationPoints,
+    });
   }
   return [...found.values()] as WhatsAppRuleDebt[];
+}
+
+function parsedUtcInstant(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value ? parsed : null;
 }
 
 function whatsappActivationPointLocation(

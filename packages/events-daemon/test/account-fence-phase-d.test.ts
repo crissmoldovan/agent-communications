@@ -62,6 +62,9 @@ function seedWhatsAppState(
     .prepare('INSERT INTO whatsapp_visibility (account_id, version, lists_digest, changed_at) VALUES (?, 1, ?, 1)')
     .run(accountId, 'a'.repeat(64));
   database
+    .prepare('INSERT INTO whatsapp_visible_units (account_id, unit_key, visible_since) VALUES (?, ?, NULL)')
+    .run(accountId, 'chat-1');
+  database
     .prepare(
       'INSERT INTO whatsapp_snapshot_heads (account_id, committed_generation, visibility_version) VALUES (?, 1, 1)',
     )
@@ -206,6 +209,7 @@ test('D9: account removal purges every D-owned row for that source/account while
 
     for (const table of [
       'whatsapp_visibility',
+      'whatsapp_visible_units',
       'whatsapp_snapshot_heads',
       'whatsapp_snapshot_keys',
       'whatsapp_occurrences',

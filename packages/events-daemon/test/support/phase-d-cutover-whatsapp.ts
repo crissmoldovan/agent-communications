@@ -147,7 +147,9 @@ export function assertWhatsAppMultiset(
   assert.deepEqual(raw, expected.raw.map(whatsappRawKey).sort(), 'exact raw WhatsApp key multiset');
 
   const admissions = database
-    .prepare('SELECT message_id, rule_version FROM whatsapp_rule_admissions ORDER BY message_id, rule_version')
+    .prepare(
+      "SELECT message_id, rule_version FROM whatsapp_rule_admissions WHERE admission = 'admitted' ORDER BY message_id, rule_version",
+    )
     .all()
     .map((row) => {
       const value = row as { message_id: string; rule_version: number };

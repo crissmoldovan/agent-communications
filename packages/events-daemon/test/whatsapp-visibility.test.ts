@@ -266,3 +266,46 @@ test('P1 (review round 8): the fence classifies a raw status chat as intake does
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+test('D9: denying the status feed deletes its authors’ visibility units, so re-allowing floors them afresh', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const { Visibility, visibilityUnitKey } = await import('@agentcomms/whatsapp');
+  const stateDir = await shortTempDir('events-whatsapp-visibility-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const accountId = 'wa_status_units';
+    const author = '447700900123@s.whatsapp.net';
+    let lists: { allow: string[]; deny: string[] } = { allow: [], deny: [] };
+    const fence = new WhatsAppVisibilityFence({
+      store,
+      now: () => 3_000,
+      withCurrentEventVisibility: async (_input, work) => {
+        const visibility = new Visibility(lists);
+        return work({
+          version: 1,
+          digest: (lists.deny.length === 0 ? 'a' : 'b').repeat(64),
+          seesMessage: (chat, kind, sender, fromMe) => visibility.seesMessage(chat, kind, sender, fromMe),
+          seesUnit: (unitKey) => visibility.seesUnit(unitKey),
+        });
+      },
+    });
+    await fence.withCurrentVisibility({ accountId }, () => undefined);
+    const unit = visibilityUnitKey('status@broadcast', 'status', author);
+    store.database
+      .prepare('INSERT INTO whatsapp_visible_units (account_id, unit_key, visible_since) VALUES (?, ?, NULL)')
+      .run(accountId, unit);
+    lists = { allow: [], deny: ['status@broadcast'] };
+    await fence.withCurrentVisibility({ accountId }, () => undefined);
+    assert.equal(
+      store.database
+        .prepare('SELECT 1 FROM whatsapp_visible_units WHERE account_id = ? AND unit_key = ?')
+        .get(accountId, unit),
+      undefined,
+      'a denied status feed hides every author in it, so no author unit keeps its old floor',
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
