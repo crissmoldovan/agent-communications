@@ -62,8 +62,8 @@ test('B1: a Gmail alias swap is refused before the returned source can read or s
   });
   const first = inbox(firstId, 'first@example.test');
   const second = inbox(secondId, 'second@example.test');
-  config.inboxes['events/first'] = first;
-  config.inboxes['events/second'] = second;
+  config.inboxes['first/gmail'] = first;
+  config.inboxes['second/gmail'] = second;
   await writeFile(join(configDir, 'config.json'), `${JSON.stringify(config)}\n`);
   const store = await openEventDatabase({ stateDir });
   try {
@@ -105,6 +105,8 @@ test('B1: a Gmail alias swap is refused before the returned source can read or s
        INSERT INTO rule_activation_points
        (activation_id, rule_id, rule_version, source, account_id, position_scope, encrypted_position, created_at)
        VALUES ('cutover', 'rule-gmail-identity', 1, 'gmail', '${firstId}', 'mailbox', X'01', 1);
+       INSERT INTO cursors (source, account_id, cursor_scope, cursor, updated_at)
+       VALUES ('gmail', '${firstId}', 'mailbox', '1', 1);
        UPDATE event_settings SET enabled = 1, paused = 0;`,
     );
   } finally {
@@ -119,11 +121,11 @@ test('B1: a Gmail alias swap is refused before the returned source can read or s
       assert.equal(accountId, firstId);
       assert.equal(
         alias,
-        'events/first',
+        'first/gmail',
         'the owner first resolves the configured presentation alias for the stable id',
       );
-      config.inboxes['events/first'] = second;
-      config.inboxes['events/second'] = first;
+      config.inboxes['first/gmail'] = second;
+      config.inboxes['second/gmail'] = first;
       await writeFile(join(configDir, 'config.json'), `${JSON.stringify(config)}\n`);
       return {
         inboxId: secondId,
