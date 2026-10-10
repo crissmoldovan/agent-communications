@@ -164,6 +164,20 @@ export class WhatsAppVisibilityFence {
         .all(accountId) as Array<{ message_id: string; staged_payload_ref: string | null }>;
       const hiddenRows = rows.filter((row) => hidden(visibility, row.message_id));
       const newlyHidden = hiddenRows.map((row) => row.message_id);
+      // D9's raw snapshot is authoritative independently of the occurrence ledger: a key that no version owed
+      // still has to disappear when a list narrowing hides it. Scan every retained generation defensively; ordinary
+      // head switching keeps this set to the single current generation.
+      const hiddenSnapshotKeys = (
+        this.#store.database
+          .prepare(
+            `SELECT chat_jid, sender_jid_raw, stanza_id
+               FROM whatsapp_snapshot_keys
+              WHERE account_id = ?`,
+          )
+          .all(accountId) as Array<{ chat_jid: string; sender_jid_raw: string; stanza_id: string }>
+      )
+        .map((key) => ({ chatJid: key.chat_jid, senderJidRaw: key.sender_jid_raw, stanzaId: key.stanza_id }))
+        .filter((key) => hidden(visibility, canonicalJson(['wa-msg', key.chatJid, key.senderJidRaw, key.stanzaId])));
       if (current === undefined) {
         this.#store.database
           .prepare(
@@ -175,12 +189,8 @@ export class WhatsAppVisibilityFence {
           .prepare('UPDATE whatsapp_visibility SET version = ?, lists_digest = ?, changed_at = ? WHERE account_id = ?')
           .run(version, visibility.digest, at, accountId);
       }
-      if (newlyHidden.length === 0) return;
-      const marks = newlyHidden.map(() => '?').join(', ');
       // Snapshot keys retain their tuple columns, so the canonical id is compared by tuple rather than an index id.
-      for (const messageId of newlyHidden) {
-        const key = parseRawKey(messageId);
-        if (key === null) continue;
+      for (const key of hiddenSnapshotKeys) {
         this.#store.database
           .prepare(
             `DELETE FROM whatsapp_snapshot_keys
@@ -188,6 +198,8 @@ export class WhatsAppVisibilityFence {
           )
           .run(accountId, key.chatJid, key.senderJidRaw, key.stanzaId);
       }
+      if (newlyHidden.length === 0) return;
+      const marks = newlyHidden.map(() => '?').join(', ');
       for (const messageId of newlyHidden) purgeWhatsAppStagedPayload(this.#store.database, { accountId, messageId });
       this.#store.database
         .prepare(

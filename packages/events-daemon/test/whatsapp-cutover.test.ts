@@ -30,6 +30,10 @@ const cells = [
   'W:initial-cursor-rechecks-generation-under-chat-lock',
   'W:tighten-transfers-first-representation-admissions-stale-snapshot-writes-nothing',
   'W:swap-drops-old-only-first-representation-debt',
+  'W:fenced-new-only-tuple-remains-new-after-swap',
+  'W:replacement-drain-caps-post-P-tuples',
+  'W:head-switch-cleans-superseded-snapshot-generations',
+  'W:narrowing-purges-unowed-snapshot-keys',
   'W:deadline-at-P-after-P-and-finalise-settles-without-head-write',
 ] as const;
 
@@ -174,13 +178,13 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
       fixture.setWhatsAppMessages([before]);
       await fixture.activate();
       assert.equal(headGeneration(fixture), 1, 'disabled first activation atomically persists its authoritative head');
-      fixture.oracle({ raw: 0, admissions: 0 });
+      fixture.oracle({ raw: 1, admissions: 0 });
       await fixture.enable();
       fixture.setWhatsAppMessages([before, after]);
       await attempt.sourceAtDurableEdge();
       await settle(fixture);
       assertWhatsAppMultiset(fixture, {
-        raw: [after],
+        raw: [before, after],
         admissions: [{ message: after, version: 1 }],
         decisions: [{ message: after, version: 1 }],
       });
@@ -225,7 +229,7 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
       await attempt.sourceAtDurableEdge('chat-new');
       await settle(fixture);
       assertWhatsAppMultiset(fixture, {
-        raw: [after],
+        raw: [before, after],
         admissions: [{ message: after, version: 2 }],
         decisions: [{ message: after, version: 2 }],
       });
@@ -267,7 +271,7 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
       await fixture.activate(1, options(['chat-old']));
       await fixture.replaceWhileDisabled();
       await attempt.sourceAtDurableEdge('chat-replaced');
-      fixture.oracle({ raw: 0, admissions: 0 });
+      fixture.oracle({ raw: 1, admissions: 0 });
       assert.equal(headGeneration(fixture) !== undefined, true, 'disabled replacement advances an authoritative head');
     });
   },
@@ -291,7 +295,7 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
       await attempt.sourceAtDurableEdge();
       await settle(fixture);
       assertWhatsAppMultiset(fixture, {
-        raw: [afterEnable],
+        raw: [duringDisabled, afterEnable],
         admissions: [{ message: afterEnable, version: 1 }],
         decisions: [{ message: afterEnable, version: 1 }],
       });
@@ -342,7 +346,7 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
           calls + (attempt.edge === undefined ? 1 : 2),
           'only the explicit fenced probe reads',
         );
-        fixture.oracle({ raw: 1, admissions: 0 });
+        fixture.oracle({ raw: 2, admissions: 0 });
       },
     );
   },
@@ -361,7 +365,7 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
       fixture.readdAccount();
       fixture.setWhatsAppMessages([before, after]);
       await attempt.sourceAtDurableEdge();
-      fixture.oracle({ raw: 0, admissions: 0 });
+      fixture.oracle({ raw: 2, admissions: 0 });
     });
   },
 
@@ -381,7 +385,7 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
       await attempt.sourceAtDurableEdge();
       await settle(fixture);
       assertWhatsAppMultiset(fixture, {
-        raw: [after],
+        raw: [before, after],
         admissions: [{ message: after, version: 1 }],
         decisions: [{ message: after, version: 1 }],
       });
@@ -500,7 +504,7 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
         await attempt.sourceAtDurableEdge();
         await settle(fixture);
         assertWhatsAppMultiset(fixture, {
-          raw: [after],
+          raw: [beforeA, beforeB, after],
           admissions: [{ message: after, version: 1 }],
           decisions: [{ message: after, version: 1 }],
         });
@@ -518,7 +522,7 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
       await assert.rejects(() => fixture.activate(), /leave P unpublished/);
       await fixture.setFailpoint(undefined);
       await attempt.assertSourceEdgeUnreachable();
-      fixture.oracle({ raw: 0, admissions: 0 });
+      fixture.oracle({ raw: 1, admissions: 0 });
     });
   },
 
@@ -540,7 +544,7 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
         );
         await settle(fixture);
         assertWhatsAppMultiset(fixture, {
-          raw: [after],
+          raw: [before, after],
           admissions: [{ message: after, version: 1 }],
           decisions: [{ message: after, version: 1 }],
         });
@@ -605,6 +609,147 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
     });
   },
 
+  async 'W:fenced-new-only-tuple-remains-new-after-swap'() {
+    const afterP = whatsappMessage('new-only-after-P', 'chat-b');
+    await forEachWhatsAppDurableEdge('W:fenced-new-only-tuple-remains-new-after-swap', async (fixture, attempt) => {
+      fixture.setWhatsAppMessages([]);
+      await fixture.activate(1, options(['chat-a']));
+      await fixture.enable();
+      await fixture.sourceTurn(scope(fixture, 'chat-a'));
+      await beginReplacement(fixture, ['chat-a', 'chat-b']);
+      fixture.setWhatsAppMessages([afterP]);
+      // The old chat's drain owns no debt for chat-b, but the new-only chat's P fence still owns the raw key.
+      await attempt.sourceAtDurableEdge('chat-a');
+      await resumeClaimedCompletion(fixture, attempt);
+      await fixture.sourceTurn(scope(fixture, 'chat-b'));
+      await settle(fixture);
+      assertWhatsAppMultiset(fixture, {
+        raw: [afterP],
+        admissions: [{ message: afterP, version: 2 }],
+        decisions: [{ message: afterP, version: 2 }],
+      });
+    });
+  },
+
+  async 'W:replacement-drain-caps-post-P-tuples'() {
+    const before = whatsappMessage('shared-before-P', 'chat-shared');
+    const afterP = whatsappMessage('shared-after-P', 'chat-shared');
+    await forEachWhatsAppDurableEdge('W:replacement-drain-caps-post-P-tuples', async (fixture, attempt) => {
+      fixture.setWhatsAppMessages([]);
+      await fixture.activate(1, options(['chat-shared']));
+      await fixture.enable();
+      fixture.setWhatsAppMessages([before]);
+      await fixture.sourceTurn(scope(fixture, 'chat-shared'));
+      await beginReplacement(fixture, ['chat-shared']);
+      fixture.setWhatsAppMessages([before, afterP]);
+      await attempt.sourceAtDurableEdge('chat-shared');
+      await resumeClaimedCompletion(fixture, attempt);
+      await fixture.sourceTurn(scope(fixture, 'chat-shared'));
+      await settle(fixture);
+      assertWhatsAppMultiset(fixture, {
+        raw: [before, afterP],
+        admissions: [
+          { message: before, version: 1 },
+          { message: afterP, version: 2 },
+        ],
+        decisions: [
+          { message: before, version: 1 },
+          { message: afterP, version: 2 },
+        ],
+      });
+    });
+
+    const oldAtP = whatsappMessage('old-only-at-P', 'chat-old');
+    const oldAfterP = whatsappMessage('old-only-after-P', 'chat-old');
+    await forEachWhatsAppDurableEdge('W:replacement-drain-caps-post-P-tuples', async (fixture, attempt) => {
+      fixture.setWhatsAppMessages([]);
+      await fixture.activate(1, options(['chat-old']));
+      await fixture.enable();
+      fixture.setWhatsAppMessages([oldAtP]);
+      await fixture.sourceTurn(scope(fixture, 'chat-old'));
+      await beginReplacement(fixture, ['chat-new']);
+      fixture.setWhatsAppMessages([oldAtP, oldAfterP]);
+      await attempt.sourceAtDurableEdge('chat-old');
+      await resumeClaimedCompletion(fixture, attempt);
+      // The account-wide new-chat turn records the old-only tuple's first representation with no admission.
+      await fixture.sourceTurn(scope(fixture, 'chat-new'));
+      await settle(fixture);
+      assertWhatsAppMultiset(fixture, {
+        raw: [oldAtP, oldAfterP],
+        admissions: [{ message: oldAtP, version: 1 }],
+        decisions: [{ message: oldAtP, version: 1 }],
+      });
+    });
+  },
+
+  async 'W:head-switch-cleans-superseded-snapshot-generations'() {
+    const first = whatsappMessage('snapshot-first');
+    const second = whatsappMessage('snapshot-second');
+    await forEachWhatsAppDurableEdge(
+      'W:head-switch-cleans-superseded-snapshot-generations',
+      async (fixture, attempt) => {
+        fixture.setWhatsAppMessages([]);
+        await fixture.activate();
+        await fixture.enable();
+        fixture.setWhatsAppMessages([first]);
+        await fixture.sourceTurn();
+        fixture.setWhatsAppMessages([second]);
+        await attempt.sourceAtDurableEdge();
+        const head = headGeneration(fixture);
+        assert.notEqual(head, undefined, 'the scan switches an authoritative head');
+        assert.deepEqual(
+          fixture.store.database
+            .prepare(
+              'SELECT generation, stanza_id FROM whatsapp_snapshot_keys WHERE account_id = ? ORDER BY generation, stanza_id',
+            )
+            .all(fixture.accountId)
+            .map((row) => ({ ...(row as Record<string, unknown>) })),
+          [{ generation: head, stanza_id: second.stanzaId }],
+          'the snapshot table retains raw key columns only for the current head generation',
+        );
+      },
+    );
+  },
+
+  async 'W:narrowing-purges-unowed-snapshot-keys'() {
+    const hidden = whatsappMessage('hidden-without-ledger', 'chat-hidden');
+    await forEachWhatsAppDurableEdge('W:narrowing-purges-unowed-snapshot-keys', async (fixture, attempt) => {
+      fixture.setWhatsAppMessages([]);
+      await fixture.activate();
+      const head = headGeneration(fixture);
+      assert.notEqual(head, undefined, 'the disabled baseline has an authoritative raw head');
+      if (head === undefined) throw new Error('the disabled baseline has no head');
+      const visibility = fixture.store.database
+        .prepare('SELECT version FROM whatsapp_visibility WHERE account_id = ?')
+        .get(fixture.accountId) as { version: number };
+      fixture.store.database
+        .prepare(
+          `INSERT INTO whatsapp_snapshot_keys
+            (account_id, generation, visibility_version, chat_jid, sender_jid_raw, stanza_id)
+           VALUES ($accountId, $generation, $visibilityVersion, $chatJid, $senderJidRaw, $stanzaId)`,
+        )
+        .run({
+          $accountId: fixture.accountId,
+          $generation: head,
+          $visibilityVersion: visibility.version,
+          $chatJid: hidden.chatJid,
+          $senderJidRaw: hidden.senderJidRaw,
+          $stanzaId: hidden.stanzaId,
+        });
+      fixture.setWhatsAppVisibility((chatJid) => chatJid !== hidden.chatJid);
+      await fixture.applyWhatsAppVisibility();
+      assert.equal(
+        fixture.store.database
+          .prepare('SELECT 1 FROM whatsapp_snapshot_keys WHERE account_id = ? AND chat_jid = ?')
+          .get(fixture.accountId, hidden.chatJid),
+        undefined,
+        'the narrowing removes every hidden raw snapshot key even with no occurrence ledger row',
+      );
+      // The list assertion happens before the source turn; the harness still proves each normal worker durable edge.
+      await attempt.sourceAtDurableEdge();
+    });
+  },
+
   async 'W:deadline-at-P-after-P-and-finalise-settles-without-head-write'() {
     for (const deadlineEdge of [
       'before-claim-deadline',
@@ -644,7 +789,7 @@ const scenarios: Record<WhatsAppCell, () => Promise<void>> = {
           await fixture.setDeadlineFailpoint(undefined);
           fixture.setWhatsAppMessages([]);
           await attempt.sourceAtDurableEdge();
-          fixture.oracle({ raw: 0, admissions: 0 });
+          fixture.oracle({ raw: deadlineEdge === 'before-claim-deadline' ? 0 : 1, admissions: 0 });
         },
         { cell: 'W:deadline-at-P-after-P-and-finalise-settles-without-head-write' },
       );

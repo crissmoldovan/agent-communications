@@ -56,6 +56,14 @@ test('D6: a narrowed live list advances the journal and removes newly hidden sna
          VALUES (?, 1, 1, 'chat@example.test', 'sender@example.test', 'one')`,
       )
       .run('wa_visibility');
+    // This tuple has no occurrence row.  D9 still requires the list transaction to remove it: a raw snapshot must
+    // not retain content merely because no rule owed its first representation.
+    store.database
+      .prepare(
+        `INSERT INTO whatsapp_snapshot_keys (account_id, generation, visibility_version, chat_jid, sender_jid_raw, stanza_id)
+         VALUES (?, 2, 1, 'chat@example.test', 'sender@example.test', 'no-ledger')`,
+      )
+      .run('wa_visibility');
     store.database
       .prepare(
         `INSERT INTO whatsapp_occurrences
