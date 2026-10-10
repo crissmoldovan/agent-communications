@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "sources": {
+    "typesafe": {
+      "quickstart": {
+        "url": "https://docs.typesafe.ai/introduction/quickstart",
+        "read": "2026-10-10"
+      },
+      "models": {
+        "url": "https://docs.typesafe.ai/models",
+        "read": "2026-10-10"
+      }
+    },
+    "ollama": {
+      "url": "https://docs.ollama.com/capabilities/decision",
+      "read": "2026-10-10"
+    }
+  },
+  "vectors": {
+    "typesafe": {
+      "model": "jev-1.13.0",
+      "state": "{\"kind\":\"synthetic\",\"version\":1}",
+      "questionName": "judge",
+      "instructions": "Determine whether this synthetic event needs review.",
+      "body": "{\"model\":\"jev-1.13.0\",\"questions\":{\"judge\":{\"instructions\":\"Determine whether this synthetic event needs review.\",\"type\":\"noul\"}},\"state\":\"{\\\"kind\\\":\\\"synthetic\\\",\\\"version\\\":1}\"}",
+      "headers": {
+        "Authorization": "Bearer test-hosted-key",
+        "Content-Type": "application/json"
+      },
+      "response": "{\"answers\":{\"judge\":{\"noul\":0.75,\"type\":\"noul\"}},\"model\":\"jev-1.13.0\",\"usage\":{\"input_tokens\":11,\"output_tokens\":3}}"
+    },
+    "ollama": {
+      "model": "nimble",
+      "state": "{\"kind\":\"synthetic\",\"version\":1}",
+      "questionName": "judge",
+      "instructions": "Determine whether this synthetic event needs review.",
+      "body": "{\"model\":\"nimble\",\"questions\":{\"judge\":{\"instructions\":\"Determine whether this synthetic event needs review.\",\"type\":\"noul\"}},\"state\":\"{\\\"kind\\\":\\\"synthetic\\\",\\\"version\\\":1}\"}",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"answers\":{\"judge\":{\"noul\":0.25,\"type\":\"noul\"}},\"model\":\"nimble\",\"usage\":{\"input_tokens\":7,\"output_tokens\":2}}"
+    }
+  }
+}

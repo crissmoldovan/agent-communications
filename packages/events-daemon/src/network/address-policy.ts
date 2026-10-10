@@ -23,11 +23,21 @@ export interface ValidatedAddress {
   readonly embedded: readonly ParsedIpAddress[];
 }
 
-export interface AddressPolicyOptions {
-  readonly approvedAddressSet: readonly string[];
-  /** A test-only provisioned prefix. Production passes no value and therefore never guesses. */
-  readonly activeNat64Prefix?: string | readonly string[] | null;
-}
+export type AddressPolicyOptions =
+  | {
+      /** The B2 default for webhooks and local endpoints: every address has an exact approved-set member. */
+      readonly addressMode?: 'approved-address-set';
+      readonly approvedAddressSet: readonly string[];
+      /** A test-only provisioned prefix. Production passes no value and therefore never guesses. */
+      readonly activeNat64Prefix?: string | readonly string[] | null;
+    }
+  | {
+      /** Reserved by pinned-connection for the fixed hosted TypeSafe endpoint. */
+      readonly addressMode: 'global-only';
+      readonly approvedAddressSet?: never;
+      /** A test-only provisioned prefix. Production passes no value and therefore never guesses. */
+      readonly activeNat64Prefix?: string | readonly string[] | null;
+    };
 
 interface Cidr {
   readonly source: string;
@@ -297,7 +307,7 @@ function embeddedAddresses(address: ParsedIpAddress, options: AddressPolicyOptio
 
 function assertOne(
   address: ParsedIpAddress,
-  approved: readonly Cidr[],
+  approved: readonly Cidr[] | undefined,
   options: AddressPolicyOptions,
   seen: Set<string>,
 ): readonly ParsedIpAddress[] {
@@ -305,19 +315,27 @@ function assertOne(
   seen.add(`${address.family}:${address.value}`);
   if (isUnconditionallyDenied(address))
     throw new AddressPolicyError(`address ${address.address} is metadata or link-local and is always refused`);
-  const explicitlyApproved = approved.some((entry) => inCidr(address, entry));
-  if (!globallyReachable(address) && !explicitlyApproved)
-    throw new AddressPolicyError(`non-global address ${address.address} needs an exact approvedAddressSet entry`);
-  if (!explicitlyApproved) throw new AddressPolicyError(`address ${address.address} is not in the approvedAddressSet`);
+  if (options.addressMode === 'global-only') {
+    if (!globallyReachable(address))
+      throw new AddressPolicyError(`non-global address ${address.address} is refused by global-only policy`);
+  } else {
+    if (approved === undefined) throw new AddressPolicyError('approvedAddressSet was unavailable');
+    const explicitlyApproved = approved.some((entry) => inCidr(address, entry));
+    if (!globallyReachable(address) && !explicitlyApproved)
+      throw new AddressPolicyError(`non-global address ${address.address} needs an exact approvedAddressSet entry`);
+    if (!explicitlyApproved)
+      throw new AddressPolicyError(`address ${address.address} is not in the approvedAddressSet`);
+  }
   const nested = embeddedAddresses(address, options);
   for (const child of nested) assertOne(child, approved, options, seen);
   return nested;
 }
 
-/** Validates the literal itself and every embedded transition address against the exact approved set. */
+/** Validates the literal itself and every embedded transition address under the selected exact-set or global-only policy. */
 export function assertAddressAllowed(input: string, options: AddressPolicyOptions): ValidatedAddress {
   const address = parseIpLiteral(input);
-  const approved = parseApprovedAddressSet(options.approvedAddressSet);
+  const approved =
+    options.addressMode === 'global-only' ? undefined : parseApprovedAddressSet(options.approvedAddressSet);
   const embedded = assertOne(address, approved, options, new Set());
   return { address: address.address, family: address.family, embedded };
 }

@@ -7,6 +7,36 @@ import {
   validateAddress,
 } from '../../src/network/address-policy.ts';
 
+const globalOnly = { addressMode: 'global-only' } as const;
+
+test('E6-A: global-only policy accepts only globally reachable literals and every embedded transition address', () => {
+  assert.doesNotThrow(() => assertAddressAllowed('8.8.8.8', globalOnly));
+  for (const address of [
+    '127.0.0.1',
+    '10.0.0.1',
+    '169.254.169.254',
+    'fc00::1',
+    '192.0.2.1',
+    '2002:a00:1::',
+    '2001:0:a00:1::f7ff:fffe',
+  ]) {
+    assert.throws(
+      () => assertAddressAllowed(address, globalOnly),
+      (error: unknown) => error instanceof AddressPolicyError && error.code === 'NETWORK_ADDRESS_REFUSED',
+      address,
+    );
+  }
+  assert.throws(
+    () =>
+      assertAddressAllowed('64:ff9b::a00:1', {
+        addressMode: 'global-only',
+        activeNat64Prefix: '64:ff9b::/96',
+      }),
+    (error: unknown) => error instanceof AddressPolicyError && /global/i.test(error.message),
+    'a global NAT64 outer address cannot hide an RFC 1918 embedded address',
+  );
+});
+
 test('NET-B2: validates the outer and every embedded transition address', () => {
   assert.throws(
     () => assertAddressAllowed('::ffff:169.254.169.254', { approvedAddressSet: ['::ffff:0:0/96'] }),
