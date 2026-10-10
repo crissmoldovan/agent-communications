@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { chmod, lstat, readFile, rm, writeFile } from 'node:fs/promises';
-import { CommsError, openCore, resolvePaths } from '@agentcomms/core';
+import { type ApprovalStore, CommsError, type ConfigStore, openCore, resolvePaths } from '@agentcomms/core';
 import { CATALOGUE } from '@agentcomms/events';
 import { createGmailEventSource, type GmailEventSource } from '@agentcomms/gmail';
 import { createResendEventReaderForPaths, type ResendEventReader } from '@agentcomms/resend';
@@ -26,8 +26,9 @@ import {
 import type { ControlRequest } from '../control/protocol.ts';
 import { type RunningControlServer, startControlServer } from '../control/server.ts';
 import { EventDomainError } from '../domain/lifecycle.ts';
+import { normaliseSourceOptions, type SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
-import { type B3OwnerService, isB3ControlOperation } from '../operations/b3-contract.ts';
+import { type B3OwnerRequest, type B3OwnerService, isB3ControlOperation } from '../operations/b3-contract.ts';
 import { MailboxLock } from '../sources/mailbox-lock.ts';
 import { type LocalEventSourceRegistry, phaseDSourceRegistry } from '../sources/registry.ts';
 import { ResendReceivedStageExpiry } from '../sources/resend.ts';
@@ -39,8 +40,18 @@ import { GmailStageExpiry, type GmailStageRecord } from '../sources/source-worke
 import { openEventDatabase } from '../store/database.ts';
 import { openEventSecretStore } from '../store/event-secrets.ts';
 import { EventRecordCipher } from '../store/records.ts';
+import { assertLiveEventAccount } from './account-fence.ts';
 import { ActivationRuntime } from './activations.ts';
-import { createB3ControlPorts } from './b3-control-ports.ts';
+import { type B3ControlPorts, type B3DeliveryWriteFenceRequest, createB3ControlPorts } from './b3-control-ports.ts';
+import { B3OperatorControl } from './b3-operator-control.ts';
+import { runCatalogueRuleTest } from './b3-retained-control.ts';
+import {
+  B3TargetTestControl,
+  type FixedSyntheticTargetTransport,
+  TargetResumeControl,
+} from './b3-target-test-control.ts';
+import { hasLiveDeliveryLineage } from './delivery-claim.ts';
+import { assertDisclosable } from './disclosure-fence.ts';
 import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
 import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
@@ -57,6 +68,7 @@ import { disableRule, removeTarget } from './revocations.ts';
 import { EventScheduler } from './scheduler.ts';
 import { runSourceOwnerWork, stageWhatsAppBaselineSnapshot } from './source-owner-work.ts';
 import { SseDispatcher } from './sse-dispatcher.ts';
+import type { SseServer } from './sse-server.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
@@ -73,6 +85,16 @@ export interface EventOwner {
   status(): EventOwnerStatus;
   /** Runs one serial owner tick; intended for deterministic local embedding and tests. */
   tick(): Promise<void>;
+  /**
+   * Registers a live listener the owner started for one exact immutable subscriber version. The returned cleanup
+   * runs when that listener stops, so a later revocation closes only streams held by the matching listener(s).
+   */
+  registerSseListener(
+    input: Pick<SseServer, 'rotate'> & {
+      readonly subscriberId: string;
+      readonly subscriberVersion: number;
+    },
+  ): () => void;
   stop(): Promise<void>;
   readonly stopped: Promise<void>;
 }
@@ -109,6 +131,247 @@ export interface EventOwnerOptions {
   readonly now?: (() => number) | undefined;
   /** Task 1 seam: later B3 requests are owned here, not by a second CLI/MCP path. */
   readonly b3OwnerService?: B3OwnerService | undefined;
+}
+
+/**
+ * The owner owns the live loopback listeners rather than copying their stream state into an operator control. A
+ * removal closes only the exact immutable subscriber version, and a listener that unregisters while it is being
+ * closed is harmless.
+ */
+export class OwnerSseStreamRegistry {
+  readonly #listeners = new Map<string, Set<Pick<SseServer, 'rotate'>>>();
+
+  register(
+    input: Pick<SseServer, 'rotate'> & { readonly subscriberId: string; readonly subscriberVersion: number },
+  ): () => void {
+    const key = `${input.subscriberId}\u0000${input.subscriberVersion}`;
+    const listeners = this.#listeners.get(key) ?? new Set<Pick<SseServer, 'rotate'>>();
+    listeners.add(input);
+    this.#listeners.set(key, listeners);
+    return () => {
+      listeners.delete(input);
+      if (listeners.size === 0) this.#listeners.delete(key);
+    };
+  }
+
+  closeSubscriberStreams(input: { readonly subscriberId: string; readonly subscriberVersion: number }): void {
+    const key = `${input.subscriberId}\u0000${input.subscriberVersion}`;
+    const listeners = this.#listeners.get(key);
+    if (listeners === undefined) return;
+    // Generation zero cannot be a stored bearer generation; it invalidates every admitted stream synchronously.
+    for (const listener of [...listeners]) listener.rotate({ ...input, generation: 0 });
+  }
+}
+
+interface OwnerDeliveryFenceOptions {
+  readonly store: Awaited<ReturnType<typeof openEventDatabase>>;
+  readonly approvals: Pick<ApprovalStore, 'get'>;
+  readonly config: Pick<ConfigStore, 'load'>;
+  readonly whatsappVisibilityFence: {
+    withCurrentDryRunVisibility<T>(
+      input: { readonly accountId: string; readonly whatsappMessageId: string },
+      recheck: () => Promise<void>,
+      commit: () => T,
+    ): Promise<T | undefined>;
+  };
+}
+
+/**
+ * D2/D7/D9's one retry/drop fence. Configuration and approval stores are asynchronous, so their fresh reads happen
+ * immediately before the one IMMEDIATE transaction; the transaction then repeats every SQLite authority predicate
+ * before synchronously running the control work. WhatsApp adds its concrete list lock around that same transaction.
+ */
+export function createOwnerDeliveryWriteFence(
+  options: OwnerDeliveryFenceOptions,
+): <T>(request: B3DeliveryWriteFenceRequest, work: () => T) => Promise<T> {
+  return async <T>(request: B3DeliveryWriteFenceRequest, work: () => T): Promise<T> => {
+    const preflight = async (): Promise<void> => {
+      await assertLiveEventAccount(options.config, { source: request.source, accountId: request.accountId });
+      await assertDisclosable({
+        database: options.store.database,
+        approvals: options.approvals,
+        config: options.config,
+        accountId: request.accountId,
+        boundary: 'dispatch',
+        ruleId: request.ruleId,
+        ruleVersion: request.ruleVersion,
+        targetId: request.targetId,
+        targetVersion: request.targetVersion,
+        switchGeneration: request.switchGeneration,
+      });
+    };
+    const commit = (): T =>
+      options.store.immediate(() => {
+        assertLiveDeliveryControlAuthority(options.store.database, request);
+        return work();
+      });
+    if (request.source !== 'whatsapp' || request.whatsappMessageId === null) {
+      await preflight();
+      return commit();
+    }
+    const result = await options.whatsappVisibilityFence.withCurrentDryRunVisibility(
+      { accountId: request.accountId, whatsappMessageId: request.whatsappMessageId },
+      preflight,
+      commit,
+    );
+    if (result === undefined)
+      throw new CommsError('APPROVAL_VOID', 'the WhatsApp event is no longer visible to this subscriber control');
+    return result;
+  };
+}
+
+function assertLiveDeliveryControlAuthority(
+  database: Awaited<ReturnType<typeof openEventDatabase>>['database'],
+  request: B3DeliveryWriteFenceRequest,
+): void {
+  const row = database
+    .prepare(
+      `SELECT delivery.id, delivery.account_id, delivery.rule_id, delivery.rule_version, delivery.target_id,
+              delivery.target_version, delivery.subscriber_id, delivery.subscriber_version, delivery.switch_generation,
+              delivery.whatsapp_message_id, rule.document AS rule_document
+         FROM deliveries AS delivery
+         JOIN rule_versions AS rule ON rule.rule_id = delivery.rule_id AND rule.version = delivery.rule_version
+        WHERE delivery.id = ?`,
+    )
+    .get(request.deliveryId) as
+    | {
+        id: string;
+        account_id: string;
+        rule_id: string;
+        rule_version: number;
+        target_id: string;
+        target_version: number;
+        subscriber_id: string | null;
+        subscriber_version: number | null;
+        switch_generation: number;
+        whatsapp_message_id: string | null;
+        rule_document: string;
+      }
+    | undefined;
+  if (
+    row === undefined ||
+    row.account_id !== request.accountId ||
+    row.rule_id !== request.ruleId ||
+    row.rule_version !== request.ruleVersion ||
+    row.target_id !== request.targetId ||
+    row.target_version !== request.targetVersion ||
+    row.subscriber_id !== request.subscriberId ||
+    row.subscriber_version !== request.subscriberVersion ||
+    row.switch_generation !== request.switchGeneration ||
+    row.whatsapp_message_id !== request.whatsappMessageId ||
+    sourceOfDeliveryRule(row.rule_document) !== request.source ||
+    !hasLiveDeliveryLineage(database, row)
+  )
+    throw new CommsError('APPROVAL_VOID', 'the delivery authority changed before this control write');
+  const settings = database
+    .prepare('SELECT enabled, switch_generation FROM event_settings WHERE singleton = 1')
+    .get() as { enabled: number; switch_generation: number } | undefined;
+  if (settings?.enabled !== 1 || settings.switch_generation !== request.switchGeneration)
+    throw new CommsError('APPROVAL_VOID', 'the event switch changed before this control write');
+  if (request.subscriberId !== null) {
+    const subscriber = database
+      .prepare(
+        'SELECT 1 AS present FROM subscriber_versions WHERE subscriber_id = ? AND version = ? AND revoked_at IS NULL',
+      )
+      .get(request.subscriberId, request.subscriberVersion);
+    if (subscriber === undefined)
+      throw new CommsError('APPROVAL_VOID', 'the exact subscriber version changed before this control write');
+  }
+}
+
+function sourceOfDeliveryRule(document: string): SourceOptions['channel'] {
+  try {
+    return normaliseSourceOptions((JSON.parse(document) as { source?: { options?: unknown } }).source?.options).channel;
+  } catch {
+    throw new CommsError('APPROVAL_VOID', 'the delivery rule source is no longer valid');
+  }
+}
+
+interface OwnerB3ControlServiceOptions {
+  readonly store: Awaited<ReturnType<typeof openEventDatabase>>;
+  readonly ports: B3ControlPorts;
+  readonly activations: Pick<ActivationRuntime, 'issueApprovalViewChallenge'>;
+  readonly cipher: Pick<EventRecordCipher, 'encrypt'>;
+  readonly targetTestTransport?: FixedSyntheticTargetTransport | undefined;
+  readonly now?: (() => number) | undefined;
+}
+
+/** Composes every Task 3/4 control behind the authenticated owner; public adapters never reach a runtime class. */
+export function createOwnerB3ControlService(options: OwnerB3ControlServiceOptions): B3OwnerService {
+  const now = options.now ?? Date.now;
+  const operator = new B3OperatorControl({ store: options.store, ports: options.ports, now });
+  const target = new B3TargetTestControl({
+    store: options.store,
+    ports: options.ports,
+    // The owner has no target-specific synthetic transport before the real transport owner is selected. Dry-run
+    // tests are a sealed local success; a network target cannot be reached by this fallback.
+    transport:
+      options.targetTestTransport ??
+      (async ({ target: selected }: { readonly target: { readonly kind: string } }) => {
+        if (selected.kind !== 'dry-run')
+          throw new CommsError('CONFIG', 'the selected target has no owner-composed synthetic test transport');
+      }),
+    now,
+  });
+  const resume = new TargetResumeControl({
+    store: options.store,
+    ports: options.ports,
+    // TargetResumeControl holds the shared lease before calling this seal and through its immediate commit.
+    resetSealer: ({ id, plaintext }) =>
+      options.cipher.encrypt(
+        { table: 'system_reset_outbox', column: 'encryptedRecord', key: [{ type: 'text', value: id }] },
+        plaintext,
+      ),
+    now,
+  });
+  return {
+    async handle(request: B3OwnerRequest): Promise<unknown> {
+      switch (request.operation) {
+        case 'approvalView':
+          return approvalViewFromOwner(options.store, options.activations, now, request.args);
+        case 'ruleTest':
+          return runCatalogueRuleTest({ document: request.args.document, catalogue: request.args.catalogue as never });
+        case 'targetTest':
+          return target.test({
+            kind: 'active',
+            targetId: requiredText(request.args.targetId, 'target id'),
+            targetVersion: requiredVersion(request.args.targetVersion, 'target version'),
+          });
+        case 'targetResume':
+          return resume.resume({
+            targetId: requiredText(request.args.targetId, 'target id'),
+            targetVersion: requiredVersion(request.args.targetVersion, 'target version'),
+          });
+        default:
+          return operator.handle(request);
+      }
+    },
+  };
+}
+
+async function approvalViewFromOwner(
+  store: Awaited<ReturnType<typeof openEventDatabase>>,
+  activations: Pick<ActivationRuntime, 'issueApprovalViewChallenge'>,
+  now: () => number,
+  args: Readonly<Record<string, unknown>>,
+): Promise<unknown> {
+  const approvalId = requiredText(args.approvalId, 'approval id');
+  const digest = requiredText(args.digest, 'approval digest');
+  const row = store.database
+    .prepare('SELECT id, document, digest, status FROM activation_intents WHERE approval_id = ?')
+    .get(approvalId) as { id: string; document: string; digest: string; status: string } | undefined;
+  if (row === undefined || row.status !== 'pending') return { kind: 'STALE_APPROVAL' };
+  if (row.digest !== digest) return { kind: 'DIGEST_MISMATCH' };
+  const nextExpiry = now() + 5 * 60 * 1_000;
+  const challenge = await activations.issueApprovalViewChallenge(approvalId, nextExpiry);
+  if (challenge === null) return { kind: 'CHALLENGE_EXPIRED' };
+  return {
+    kind: 'READY',
+    approvalId,
+    digest: row.digest,
+    preview: JSON.parse(row.document),
+    challenge: { approvalId, digest: row.digest, challenge, expiresAt: nextExpiry },
+  };
 }
 
 export async function startEventOwner(options: EventOwnerOptions = {}): Promise<EventOwner> {
@@ -528,6 +791,30 @@ async function startOwnerWithLock(
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
     ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
   });
+  // Task 5 is the sole composition point for the operator ports deliberately left unbound in Task 4.  Public
+  // adapters can only reach this service through the authenticated control server below.
+  const sseStreams = new OwnerSseStreamRegistry();
+  const ownerB3Ports: B3ControlPorts = {
+    quiescer: b3Ports.quiescer,
+    secrets: b3Ports.secrets,
+    assertObjectSecretReady: b3Ports.assertObjectSecretReady,
+    withDeliveryWriteFence: createOwnerDeliveryWriteFence({
+      store: database,
+      approvals: core.approvals,
+      config: core.config,
+      whatsappVisibilityFence: whatsappComposition.visibilityFence,
+    }),
+    closeSubscriberStreams: (input) => sseStreams.closeSubscriberStreams(input),
+  };
+  const ownerB3Service =
+    options.b3OwnerService ??
+    createOwnerB3ControlService({
+      store: database,
+      ports: ownerB3Ports,
+      activations,
+      cipher,
+      now,
+    });
   const token = randomBytes(32).toString('hex');
   const instance = newInstanceRecord(controlEndpoint(paths), token);
   let control: RunningControlServer | undefined;
@@ -547,6 +834,7 @@ async function startOwnerWithLock(
     }),
     stopped: stoppedPromise,
     tick: () => withEventWriterLease(writerQuiescer, () => scheduler.tick()),
+    registerSseListener: (input) => sseStreams.register(input),
     async stop(): Promise<void> {
       if (stopped) return;
       stopped = true;
@@ -584,7 +872,7 @@ async function startOwnerWithLock(
           sourceRegistry,
           writerQuiescer,
           request,
-          options.b3OwnerService,
+          ownerB3Service,
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -630,7 +918,14 @@ async function handleControl(
 ): Promise<unknown> {
   if (isB3ControlOperation(request.operation)) {
     if (!b3OwnerService) throw new CommsError('USAGE', 'the local B3 control operation is not available');
-    return b3OwnerService.handle({ operation: request.operation, args: request.args });
+    try {
+      return await b3OwnerService.handle({ operation: request.operation, args: request.args });
+    } catch (error) {
+      // A document the domain refuses is the caller's input: its fixed reason goes back, as every other operation's does.
+      if (error instanceof EventDomainError)
+        throw new CommsError('BAD_DATA', error.message, { details: { reason: error.code } });
+      throw error;
+    }
   }
   switch (request.operation) {
     case 'status':

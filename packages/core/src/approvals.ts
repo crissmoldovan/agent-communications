@@ -1295,12 +1295,28 @@ export class ApprovalStore {
     return done.record as DisclosureApprovalRecord;
   }
 
-  /** Claims an approved disclosure once, persisting the exact `usedAt` that recovery must subsequently reuse. */
-  async claimForDisclosure(approvalId: string, liveBinding: DisclosureBinding): Promise<DisclosureApprovalRecord> {
+  /**
+   * Claims an approved disclosure once, persisting the exact `usedAt` that recovery must subsequently reuse.
+   * A specialised caller may impose a shorter deadline; it is evaluated while this record's transition lock is held,
+   * so a check made before waiting on that lock cannot accidentally consume the approval after it has expired.
+   */
+  async claimForDisclosure(
+    approvalId: string,
+    liveBinding: DisclosureBinding,
+    options: { readonly deadlineMs?: number | undefined } = {},
+  ): Promise<DisclosureApprovalRecord> {
+    if (options.deadlineMs !== undefined && (!Number.isSafeInteger(options.deadlineMs) || options.deadlineMs <= 0))
+      throw new CommsError('BAD_DATA', 'the disclosure claim deadline is not a readable instant');
     let failure: Failure | null = null;
     const done = await this.#transition(approvalId, { kind: 'disclosure' }, 'claim', (current, outcome) => {
       if (outcome.error) throw outcome.error;
-      const at = this.#now().toISOString();
+      const now = this.#now();
+      if (options.deadlineMs !== undefined && now.getTime() >= options.deadlineMs) {
+        throw new CommsError('APPROVAL_VOID', 'nothing was disclosed: the disclosure challenge expired before claim', {
+          details: { approvalId: current.approvalId, state: current.state, reason: 'CHALLENGE_EXPIRED' },
+        });
+      }
+      const at = now.toISOString();
       const binding = current.disclosure as DisclosureBinding;
       if (current.state === 'pending') {
         throw new CommsError('APPROVAL_PENDING', 'nothing was disclosed: the standing disclosure approval is pending', {

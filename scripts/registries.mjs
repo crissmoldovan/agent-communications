@@ -326,10 +326,14 @@ export async function serverTools(surface, { env = scratchEnv() } = {}) {
  * Derived rather than listed, so the core's server is read the moment `agentcomms mcp` exists, with nothing to
  * remember to add here.
  */
-export async function deriveRegistries({ env = scratchEnv() } = {}) {
+export async function deriveRegistries({ env = scratchEnv(), packages = undefined } = {}) {
+  const selected =
+    packages === undefined
+      ? SURFACES
+      : SURFACES.filter((surface) => Array.isArray(packages) && packages.includes(surface.package));
   // In parallel, but assembled in `SURFACES` order, so every report lists packages the same way on every run.
   const entries = await Promise.all(
-    SURFACES.map(async (surface) => {
+    selected.map(async (surface) => {
       const nodes = (await commandTree(surface, { env })).filter((node) => node.path.length > 0);
       const serves = nodes.some((node) => node.acts && node.path.join(' ') === 'mcp');
       return [

@@ -1758,6 +1758,230 @@
       "reason": "Standing disclosure can be approved only by a person typing the challenge at an interactive terminal."
     },
     {
+      "id": "events-daemon.approval.view",
+      "package": "events-daemon",
+      "cli": "approval view",
+      "mcp": "events_approval_view",
+      "status": "both",
+      "operation": "approvalView",
+      "argv": ["ap_00000000000000000000000000", "--digest", "digest-1"],
+      "args": { "approvalId": "ap_00000000000000000000000000", "digest": "digest-1" },
+      "expect": { "approvalId": "ap_00000000000000000000000000", "digest": "digest-1" }
+    },
+    {
+      "id": "events-daemon.rule.test",
+      "package": "events-daemon",
+      "cli": "rule test",
+      "mcp": "events_rule_test",
+      "status": "both",
+      "operation": "ruleTest",
+      "argv": ["{}", "gmail.message.received@1:0"],
+      "args": { "document": {}, "catalogue": { "type": "gmail.message.received", "version": 1, "exampleIndex": 0 } },
+      "expect": { "catalogue.type": "gmail.message.received", "catalogue.version": 1, "catalogue.exampleIndex": 0 }
+    },
+    {
+      "id": "events-daemon.target.test",
+      "package": "events-daemon",
+      "cli": "target test",
+      "mcp": "events_target_test",
+      "status": "both",
+      "operation": "targetTest",
+      "argv": ["target-1", "--version", "1"],
+      "args": { "targetId": "target-1", "targetVersion": 1 },
+      "expect": { "targetId": "target-1", "targetVersion": 1 }
+    },
+    {
+      "id": "events-daemon.subscribers.list",
+      "package": "events-daemon",
+      "cli": "subscribers list",
+      "mcp": "events_subscribers_list",
+      "status": "both",
+      "operation": "subscribersList"
+    },
+    {
+      "id": "events-daemon.subscriber.add",
+      "package": "events-daemon",
+      "cli": "subscriber add",
+      "mcp": "events_subscriber_add",
+      "status": "both",
+      "operation": "addSubscriber",
+      "argv": ["{}"],
+      "args": { "document": {} }
+    },
+    {
+      "id": "events-daemon.subscriber.update",
+      "package": "events-daemon",
+      "cli": "subscriber update",
+      "mcp": "events_subscriber_update",
+      "status": "both",
+      "operation": "updateSubscriber",
+      "argv": ["{}"],
+      "args": { "document": {} }
+    },
+    {
+      "id": "events-daemon.subscriber.remove",
+      "package": "events-daemon",
+      "cli": "subscriber remove",
+      "mcp": "events_subscriber_remove",
+      "status": "both",
+      "operation": "removeSubscriber",
+      "argv": ["subscriber-1"],
+      "args": { "subscriberId": "subscriber-1" },
+      "expect": { "subscriberId": "subscriber-1" }
+    },
+    {
+      "id": "events-daemon.judges.list",
+      "package": "events-daemon",
+      "cli": "judges list",
+      "mcp": "events_judges_list",
+      "status": "both",
+      "operation": "judgesList"
+    },
+    {
+      "id": "events-daemon.judge.add",
+      "package": "events-daemon",
+      "cli": "judge add",
+      "mcp": "events_judge_add",
+      "status": "both",
+      "operation": "addJudge",
+      "argv": ["{}"],
+      "args": { "document": {} }
+    },
+    {
+      "id": "events-daemon.judge.update",
+      "package": "events-daemon",
+      "cli": "judge update",
+      "mcp": "events_judge_update",
+      "status": "both",
+      "operation": "updateJudge",
+      "argv": ["{}"],
+      "args": { "document": {} }
+    },
+    {
+      "id": "events-daemon.judge.remove",
+      "package": "events-daemon",
+      "cli": "judge remove",
+      "mcp": "events_judge_remove",
+      "status": "both",
+      "operation": "removeJudge",
+      "argv": ["judge-1"],
+      "args": { "judgeId": "judge-1" },
+      "expect": { "judgeId": "judge-1" }
+    },
+    {
+      "id": "events-daemon.judge.test",
+      "package": "events-daemon",
+      "cli": "judge test",
+      "mcp": "events_judge_test",
+      "status": "both",
+      "operation": "judgeTest",
+      "argv": ["judge-1", "--version", "1"],
+      "args": { "judgeId": "judge-1", "version": 1 },
+      "expect": { "judgeId": "judge-1", "version": 1 }
+    },
+    {
+      "id": "events-daemon.budget.show",
+      "package": "events-daemon",
+      "cli": "budget show",
+      "mcp": "events_budget_show",
+      "status": "both",
+      "operation": "budgetShow"
+    },
+    {
+      "id": "events-daemon.budget.update",
+      "package": "events-daemon",
+      "cli": "budget update",
+      "mcp": "events_budget_update",
+      "status": "both",
+      "operation": "updateBudget",
+      "argv": ["{}"],
+      "args": { "document": {} }
+    },
+    {
+      "id": "events-daemon.judge-kinds.list",
+      "package": "events-daemon",
+      "cli": "judge kinds list",
+      "mcp": "events_judge_kinds_list",
+      "status": "both",
+      "operation": "judgeKindsList"
+    },
+    {
+      "id": "events-daemon.judge-kind.enable",
+      "package": "events-daemon",
+      "cli": "judge kind enable",
+      "mcp": "events_judge_kind_enable",
+      "status": "both",
+      "operation": "enableJudgeKind",
+      "argv": ["basic"],
+      "args": { "kind": "basic" },
+      "expect": { "kind": "basic" }
+    },
+    {
+      "id": "events-daemon.judge-kind.disable",
+      "package": "events-daemon",
+      "cli": "judge kind disable",
+      "mcp": "events_judge_kind_disable",
+      "status": "both",
+      "operation": "disableJudgeKind",
+      "argv": ["basic"],
+      "args": { "kind": "basic" },
+      "expect": { "kind": "basic" }
+    },
+    {
+      "id": "events-daemon.judge-model.status",
+      "package": "events-daemon",
+      "cli": "judge model status",
+      "mcp": "events_judge_model_status",
+      "status": "both",
+      "operation": "judgeModelStatus"
+    },
+    {
+      "id": "events-daemon.judge-model.remove",
+      "package": "events-daemon",
+      "cli": "judge model remove",
+      "mcp": "events_judge_model_remove",
+      "status": "both",
+      "operation": "removeJudgeModel"
+    },
+    {
+      "id": "events-daemon.deliveries.list",
+      "package": "events-daemon",
+      "cli": "deliveries list",
+      "mcp": "events_deliveries_list",
+      "status": "both",
+      "operation": "deliveriesList"
+    },
+    {
+      "id": "events-daemon.delivery.retry",
+      "package": "events-daemon",
+      "cli": "delivery retry",
+      "mcp": "events_delivery_retry",
+      "status": "both",
+      "operation": "retryDelivery",
+      "argv": ["delivery-1"],
+      "args": { "deliveryId": "delivery-1" },
+      "expect": { "deliveryId": "delivery-1" }
+    },
+    {
+      "id": "events-daemon.delivery.drop",
+      "package": "events-daemon",
+      "cli": "delivery drop",
+      "mcp": "events_delivery_drop",
+      "status": "both",
+      "operation": "dropDelivery",
+      "argv": ["delivery-1"],
+      "args": { "deliveryId": "delivery-1" },
+      "expect": { "deliveryId": "delivery-1" }
+    },
+    {
+      "id": "events-daemon.held.list",
+      "package": "events-daemon",
+      "cli": "held list",
+      "mcp": "events_held_list",
+      "status": "both",
+      "operation": "heldList"
+    },
+    {
       "id": "events-daemon.dryrun.list",
       "package": "events-daemon",
       "cli": "dryrun list",

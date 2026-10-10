@@ -3,7 +3,9 @@ import { rm } from 'node:fs/promises';
 import { createServer, request } from 'node:http';
 import { test } from 'node:test';
 import { canonicalJson, sha256Hex } from '@agentcomms/core';
+import { EventControlClient } from '../src/control/client.ts';
 import { B3OperatorControl } from '../src/runtime/b3-operator-control.ts';
+import { startEventOwner } from '../src/runtime/owner.ts';
 import { startSseServer } from '../src/runtime/sse-server.ts';
 import {
   addActiveRuleTargetReferences,
@@ -268,8 +270,10 @@ test('B3 subscriber removal closes every exact live SSE stream through the owner
 }, async (t) => {
   const stateDir = await shortTempDir('aev-b3-subscriber-stream-');
   let store: EventDatabase | undefined;
+  let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
   let server: Awaited<ReturnType<typeof startSseServer>> | undefined;
   let client: ReturnType<typeof request> | undefined;
+  let unregister: (() => void) | undefined;
   try {
     try {
       const port = await freeLoopbackPort();
@@ -286,6 +290,7 @@ test('B3 subscriber removal closes every exact live SSE stream through the owner
            VALUES ('subscriber', 'subscriber-purge', 1, 'sse-bearer', 1, ?, 'synthetic-bearer-digest', X'00', 'current', NULL, 1)`,
         )
         .run(subscriber.digest);
+      owner = await startEventOwner({ stateDir, tickMs: 60_000 });
       server = await startSseServer({
         store,
         subscriberId: 'subscriber-purge',
@@ -302,7 +307,7 @@ test('B3 subscriber removal closes every exact live SSE stream through the owner
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EPERM') {
         t.skip(
-          'the development sandbox blocks loopback listeners; the coordinator runs this listener proof outside it',
+          'EPERM: the development sandbox blocks loopback listeners; the coordinator runs this listener proof outside it',
         );
         return;
       }
@@ -329,13 +334,14 @@ test('B3 subscriber removal closes every exact live SSE stream through the owner
     });
     client.end();
     await opened;
-    const control = new B3OperatorControl({
-      store,
-      ports: subscriberRemovalPorts(({ subscriberId, subscriberVersion }) =>
-        server?.rotate({ subscriberId, subscriberVersion, generation: 0 }),
-      ),
+    unregister = owner.registerSseListener({
+      rotate: server.rotate.bind(server),
+      subscriberId: 'subscriber-purge',
+      subscriberVersion: 1,
     });
-    await control.handle({ operation: 'removeSubscriber', args: { subscriberId: 'subscriber-purge' } });
+    await new EventControlClient({ stateDir, clientName: 'events-b3-owner-sse-close' }).request('removeSubscriber', {
+      subscriberId: 'subscriber-purge',
+    });
     for (let waited = 0; !ended && waited < 2_000; waited += 5) await new Promise((resolve) => setTimeout(resolve, 5));
     assert.equal(ended, true, 'the real loopback SSE client is closed in the subscriber revocation transaction');
     const entries = store.database
@@ -343,8 +349,10 @@ test('B3 subscriber removal closes every exact live SSE stream through the owner
       .get('subscriber-purge') as { count: number };
     assert.equal(entries.count, 0, 'the revoked subscriber version has no replay entries');
   } finally {
+    unregister?.();
     client?.destroy();
     await server?.close();
+    await owner?.stop();
     store?.close();
     await rm(stateDir, { recursive: true, force: true });
   }

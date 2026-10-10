@@ -80,6 +80,10 @@ they are not deferred requests for an implementer to reinterpret.
 | Task 4 — is "alias re-resolution" covered? | Yes, as source-identity re-resolution: Task 4's controls accept no alias, so the mutation re-resolves the stable source/account identity instead. | The guard protects the same write-after-await property. |
 | Task 3 fix — how are charge rows keyed? | An opaque integer row id with an index on `(target_id, charged_at)`: ten attempts in one millisecond stay distinct rows, and every cap query is target-id-wide. | "Keyed by target id" names the cap's scope, not a composite primary key. |
 | Task 4 fix — what do retry, drop and subscriber removal do before Task 5 composes the owner ports? | They refuse with `CONFIG` until Task 5 supplies the owner's real dispatcher write fence and SSE stream-registry ports; an activation intent that references any revoked exact subscriber version is cancelled with it. Task 5's owner test proves the composed ports are the production ones. | Fail closed: a control with no fence must not act without one. |
+| Task 5 — where is the hostile-output proof for retained reads? | Task 6. Retained reads are human-only (terminal/app; no MCP tool), so their sanitised, single-envelope output is proven on Task 6's terminal surface; Task 5 proves it for `rule test` through both CLI and MCP. | The plan's matrix gives retained reads no paired surface; a proof belongs where the surface is created. |
+| Task 5 — how long is an approval-view challenge valid? | Five minutes from the view that issued it. The daemon records a row for **every** core-issued challenge: its `view` or `terminal` origin, issuing/active state and hash, plus a deadline only for `view`. A missing, interrupted or malformed row is `CHALLENGE_EXPIRED`, never an inferred terminal prompt. `approve`, startup recovery, claimed-completion recovery and final completion refuse it. For a view, activation passes the durable deadline to core's disclosure claim; core checks `now >= deadline` inside its per-record transition lock before changing `approved` to `used`. Thus a clock that crosses while claim waits leaves the core record approved. A terminal prompt has a durable `terminal` row and no five-minute deadline. The first view after expiry returns `CHALLENGE_EXPIRED`; a subsequent fresh view replaces it. | A missing view row must not silently widen authority, and an activation-side time check cannot remain valid while core waits for its own lock. The terminal has no view deadline, but it needs an origin row so absence is unambiguously unsafe. |
+| Task 5 — how does an invalid document reach the caller? | A domain refusal (`EventDomainError`) from any B3 operation becomes `BAD_DATA` with its fixed, content-free reason, as every other operation's does, never the opaque `UNEXPECTED`. | A person testing a rule must learn what is wrong with it. |
+| Task 5 — what does a rule test map? | The catalogue example after `sanitiseSenderFields`, exactly as a live event's projection, so a condition or mapping behaves in a test as it would live; the output then goes through the one untrusted envelope, which neutralises its whole body. | Parity with the live path; the envelope alone made the output safe but not equal to live. |
 
 ## Decisions the spec leaves to the plan
 
@@ -840,7 +844,9 @@ cancellation transaction.
 **Files**
 
 - Modify packages/events-daemon/src/cli/program.ts, src/mcp/server.ts,
-  src/runtime/owner.ts, src/control/protocol.ts, and operations modules only to
+  src/runtime/owner.ts, src/runtime/activations.ts, src/store/migrations.ts,
+  src/control/protocol.ts, operations modules, and
+  packages/core/src/approvals.ts only to
   wire Tasks 3/4 and add `operations/approval-view.ts`.
 - Modify root capabilities.json for all B3 both rows through held list, with
   concrete argv, args, and expect parity vectors.
@@ -853,7 +859,12 @@ cancellation transaction.
    and drive it through existing stand-ins: both sides reach exactly the listed
    operation with the same non-secret arguments. `approvalView` vectors prove
    authoritative preview, stale id, digest mismatch, daemon challenge, expiry,
-   and that `approve` still re-plans at its final fence.
+   a new runtime over the same database after the five-minute deadline cannot
+   approve or recover-claim the original challenge; deleting a view row makes
+   both approval and recovery refuse while a terminal-origin row still works;
+   and a clock crossing the deadline between activation's final fence and
+   core's claim leaves core `approved`, not `used`. `approve` still re-plans at
+   its final fence.
 2. Prove the paired target-test selector is active/approved only and has no
    pending-context field; judge/budget/kind commands return their typed E/E2
    unavailable results with zero network; typed empty holds are exact; and the
@@ -864,10 +875,16 @@ cancellation transaction.
 
 **Commands / passing**
 
-Run pnpm sync:reference, focused surface tests, pnpm verify:reference,
-pnpm verify:parity --strict, then pnpm verify. Passing means no unmapped
-Commander leaf/tool; shared operations have distinct argument vectors; generated
-references show no secret action.
+Run pnpm sync:reference, focused surface tests, every B3 guard-manifest case,
+pnpm verify:reference, pnpm verify:parity --strict, then pnpm verify. The
+mutation runner first expands and byte-verifies declared non-import input globs;
+the registry-parity cases additionally byte-verify a complete repository
+snapshot excluding `node_modules`, `dist`, `.git`, and disposable `.mutants`, so every filesystem input
+their baseline can name is overlay-owned. It then requires its exact named test
+to be green on that unmutated overlay and exactly that one test to fail
+(`# tests 1`, `# fail 1`) after the mutant-loaded marker. Passing means no
+unmapped Commander leaf/tool; shared operations have distinct argument vectors;
+generated references show no secret action.
 
 **Mutations**
 
@@ -875,7 +892,10 @@ Delete command/tool/row/export; swap tools; make one side reach another
 operation; loosen a Zod schema; accept a pending selector on paired CLI/MCP;
 accept stale/digest-mismatched `approvalView`; let an unavailable operation
 produce state or network; allow MCP claim; or mark target test local. Each
-fails its particular parity/semantic test.
+fails its particular parity/semantic test. Treat a missing challenge row as a
+terminal prompt, or check the view deadline only outside core's claim lock, and
+the named lost-row or clock-crossing test must fail; drop the persisted deadline
+or restart/recovery fence and its named deadline test must fail.
 
 **Commit:** feat(events-daemon): expose B3 paired control operations
 

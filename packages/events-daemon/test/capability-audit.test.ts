@@ -57,6 +57,33 @@ const EXPECTED_B1_ROWS = [
   ['events-daemon.mcp.serve', 'mcp', null, 'exception'],
 ] as const;
 
+/** Task 5 registers the whole non-secret paired B3 surface in the same change as its command/tool. */
+const EXPECTED_B3_BOTH_ROWS = [
+  ['events-daemon.approval.view', 'approval view', 'events_approval_view', 'both', 'approvalView'],
+  ['events-daemon.rule.test', 'rule test', 'events_rule_test', 'both', 'ruleTest'],
+  ['events-daemon.target.test', 'target test', 'events_target_test', 'both', 'targetTest'],
+  ['events-daemon.subscribers.list', 'subscribers list', 'events_subscribers_list', 'both', 'subscribersList'],
+  ['events-daemon.subscriber.add', 'subscriber add', 'events_subscriber_add', 'both', 'addSubscriber'],
+  ['events-daemon.subscriber.update', 'subscriber update', 'events_subscriber_update', 'both', 'updateSubscriber'],
+  ['events-daemon.subscriber.remove', 'subscriber remove', 'events_subscriber_remove', 'both', 'removeSubscriber'],
+  ['events-daemon.judges.list', 'judges list', 'events_judges_list', 'both', 'judgesList'],
+  ['events-daemon.judge.add', 'judge add', 'events_judge_add', 'both', 'addJudge'],
+  ['events-daemon.judge.update', 'judge update', 'events_judge_update', 'both', 'updateJudge'],
+  ['events-daemon.judge.remove', 'judge remove', 'events_judge_remove', 'both', 'removeJudge'],
+  ['events-daemon.judge.test', 'judge test', 'events_judge_test', 'both', 'judgeTest'],
+  ['events-daemon.budget.show', 'budget show', 'events_budget_show', 'both', 'budgetShow'],
+  ['events-daemon.budget.update', 'budget update', 'events_budget_update', 'both', 'updateBudget'],
+  ['events-daemon.judge-kinds.list', 'judge kinds list', 'events_judge_kinds_list', 'both', 'judgeKindsList'],
+  ['events-daemon.judge-kind.enable', 'judge kind enable', 'events_judge_kind_enable', 'both', 'enableJudgeKind'],
+  ['events-daemon.judge-kind.disable', 'judge kind disable', 'events_judge_kind_disable', 'both', 'disableJudgeKind'],
+  ['events-daemon.judge-model.status', 'judge model status', 'events_judge_model_status', 'both', 'judgeModelStatus'],
+  ['events-daemon.judge-model.remove', 'judge model remove', 'events_judge_model_remove', 'both', 'removeJudgeModel'],
+  ['events-daemon.deliveries.list', 'deliveries list', 'events_deliveries_list', 'both', 'deliveriesList'],
+  ['events-daemon.delivery.retry', 'delivery retry', 'events_delivery_retry', 'both', 'retryDelivery'],
+  ['events-daemon.delivery.drop', 'delivery drop', 'events_delivery_drop', 'both', 'dropDelivery'],
+  ['events-daemon.held.list', 'held list', 'events_held_list', 'both', 'heldList'],
+] as const;
+
 const rowShape = (row: Capability) => ({
   id: row.id,
   cli: row.cli,
@@ -65,13 +92,20 @@ const rowShape = (row: Capability) => ({
   ...(row.operation === undefined ? {} : { operation: row.operation }),
 });
 
-const expectedRows = EXPECTED_B1_ROWS.map(([id, cli, mcp, status, operation]) => ({
-  id,
-  cli,
-  mcp,
-  status,
-  ...(operation === undefined ? {} : { operation }),
-}));
+const shapedRows = (source: readonly (readonly [string, string, string | null, string, string?])[]) =>
+  source.map(([id, cli, mcp, status, operation]) => ({
+    id,
+    cli,
+    mcp,
+    status,
+    ...(operation === undefined ? {} : { operation }),
+  }));
+
+const expectedRows = [
+  ...shapedRows(EXPECTED_B1_ROWS.slice(0, 27)),
+  ...shapedRows(EXPECTED_B3_BOTH_ROWS),
+  ...shapedRows(EXPECTED_B1_ROWS.slice(27)),
+];
 
 function headings(page: string): string[] {
   return [...page.matchAll(/^### `([^`]+)`$/gm)].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
@@ -84,7 +118,7 @@ test('PAR-B1: capability audit freezes the completed Decision 6 inventory', asyn
   const rows = table.capabilities.filter((row) => row.package === 'events-daemon');
 
   assert.deepEqual(rows.map(rowShape), expectedRows);
-  assert.equal(new Set(rows.map((row) => row.id)).size, EXPECTED_B1_ROWS.length);
+  assert.equal(new Set(rows.map((row) => row.id)).size, expectedRows.length);
   assert.ok(rows.every((row) => row.status !== 'pending'));
 
   const exceptions = new Map(rows.filter((row) => row.status === 'exception').map((row) => [row.id, row]));
@@ -162,7 +196,7 @@ test('PAR-B1: generated daemon references exactly describe the B1 registries', a
   ]);
 });
 
-test('PAR-B2: doctor remains the paired B1 operation and no B3/E public boundary is exposed', async () => {
+test('PAR-B3: Task 5 exposes only its paired control surface and keeps human-only exceptions absent', async () => {
   const table = JSON.parse(await readFile(join(ROOT, 'capabilities.json'), 'utf8')) as {
     readonly capabilities: readonly Capability[];
   };
@@ -183,41 +217,77 @@ test('PAR-B2: doctor remains the paired B1 operation and no B3/E public boundary
   assert.ok(daemon.commands.includes('doctor'));
   assert.ok(daemon.tools.includes('events_doctor'));
 
-  const forbiddenCommands = [
+  const pairedCommands = [
+    'approval view',
+    'rule test',
+    'target test',
+    'subscriber add',
+    'subscriber remove',
+    'judge test',
+    'budget update',
     'delivery retry',
     'delivery drop',
+    'held list',
+  ];
+  const pairedTools = [
+    'events_approval_view',
+    'events_rule_test',
+    'events_target_test',
+    'events_subscriber_add',
+    'events_subscriber_remove',
+    'events_judge_test',
+    'events_budget_update',
+    'events_delivery_retry',
+    'events_delivery_drop',
+    'events_held_list',
+  ];
+  for (const command of pairedCommands) assert.ok(daemon.commands.includes(command), `${command} is paired in Task 5`);
+  for (const tool of pairedTools) assert.ok(daemon.tools.includes(tool), `${tool} is paired in Task 5`);
+
+  const humanOnlyCommands = [
     'delivery hold',
-    'subscriber list',
     'subscriber token create',
     'target secret create',
     'target url set',
-    'target test',
     'target resume',
-    'target replay',
-    'judge test',
+    'held decide',
+    'rule test-retained',
   ];
-  const forbiddenTools = [
-    'events_delivery_retry',
-    'events_delivery_drop',
+  const humanOnlyTools = [
     'events_delivery_hold',
-    'events_subscribers_list',
     'events_subscriber_token_create',
     'events_target_secret_create',
     'events_target_url_set',
-    'events_target_test',
+    'events_target_resume',
+    'events_held_decide',
+    'events_rule_test_retained',
+  ];
+  for (const command of humanOnlyCommands)
+    assert.ok(!daemon.commands.includes(command), `${command} stays Task 6 human-only work`);
+  for (const tool of humanOnlyTools) assert.ok(!daemon.tools.includes(tool), `${tool} stays absent from MCP`);
+  for (const row of rows.filter((row) => row.id.startsWith('events-daemon.'))) {
+    assert.ok(
+      !/\b(?:secret|token|migration|target\.resume|held\.decide|rule\.test-retained)\b/.test(row.id),
+      `${row.id} is not an early human-only exception row`,
+    );
+  }
+  const forbiddenCommands = [
+    'delivery hold',
+    'subscriber token create',
+    'target secret create',
+    'target url set',
+    'target resume',
+    'target replay',
+  ];
+  const forbiddenTools = [
+    'events_delivery_hold',
+    'events_subscriber_token_create',
+    'events_target_secret_create',
+    'events_target_url_set',
     'events_target_resume',
     'events_target_replay',
-    'events_judge_test',
   ];
   for (const command of forbiddenCommands)
     assert.ok(!daemon.commands.includes(command), `${command} remains deferred beyond B2`);
   for (const tool of forbiddenTools) assert.ok(!daemon.tools.includes(tool), `${tool} remains deferred beyond B2`);
-  for (const row of rows) {
-    assert.ok(
-      !/\b(?:delivery\.(?:retry|drop|hold)|subscriber|secret|migration|target\.(?:test|resume|replay)|judge)\b/.test(
-        row.id,
-      ),
-      `${row.id} exposes a deferred B3/E capability`,
-    );
-  }
 });

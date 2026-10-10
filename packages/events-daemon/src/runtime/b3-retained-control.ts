@@ -11,6 +11,7 @@ import {
 import type { DryRunDispatcher, DryRunLogEntry, DryRunRecord } from './dispatcher.ts';
 import { evaluateRuleProjection } from './mapping.ts';
 import type { EventProjectionStore, ProjectionReference, StoredProjection } from './projections.ts';
+import { sanitiseSenderFields } from './untrusted.ts';
 import type { WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
 
 type HumanTerminal = {
@@ -95,7 +96,8 @@ function exactCatalogueExample(selector: unknown, rule: CanonicalFullRuleDocumen
     return rejectRuleTestInput('the catalogue example must have the rule event type and version');
   const example = entry.value.examples[record.exampleIndex as number];
   if (example === undefined) return rejectRuleTestInput('the catalogue example index is unavailable');
-  return JSON.parse(canonicalJson(example)) as Record<string, unknown>;
+  // Every catalogue-declared untrusted field is neutralised before mapping, exactly as a live event's projection is.
+  return sanitiseSenderFields(entry.value, JSON.parse(canonicalJson(example)) as Record<string, unknown>);
 }
 
 /**

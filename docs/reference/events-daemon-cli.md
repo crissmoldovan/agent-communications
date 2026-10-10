@@ -43,6 +43,7 @@ Scripts should read these rather than parse output.
 | [`disable-all`](#agent-events-disable-all) | disable collection, advance the global generation and purge B1 work |
 | [`enable-all`](#agent-events-enable-all) | report the standing approval required before collection can be enabled |
 | [`doctor`](#agent-events-doctor) | report content-free owner, protocol and global switch health |
+| [`approval`](#agent-events-approval) | view the authoritative pending disclosure approval |
 | [`catalogue`](#agent-events-catalogue) | inspect the held local event catalogue |
 | [`sources`](#agent-events-sources) | inspect configured event sources |
 | [`source`](#agent-events-source) | inspect one configured event source |
@@ -50,6 +51,14 @@ Scripts should read these rather than parse output.
 | [`rule`](#agent-events-rule) | create, inspect and control immutable event rules |
 | [`targets`](#agent-events-targets) | inspect immutable local event target versions |
 | [`target`](#agent-events-target) | create, inspect and revoke immutable dry-run targets |
+| [`subscribers`](#agent-events-subscribers) | inspect immutable SSE subscriber versions |
+| [`subscriber`](#agent-events-subscriber) | create, update, and revoke immutable SSE subscribers |
+| [`judges`](#agent-events-judges) | inspect typed pre-Phase-E judge controls |
+| [`judge`](#agent-events-judge) | use typed unavailable judge controls until Phase E |
+| [`budget`](#agent-events-budget) | use typed unavailable budget controls until Phase E |
+| [`deliveries`](#agent-events-deliveries) | inspect content-free delivery metadata |
+| [`delivery`](#agent-events-delivery) | retry or drop one exact delivery |
+| [`held`](#agent-events-held) | inspect typed held decisions |
 | [`dryrun`](#agent-events-dryrun) | inspect retained local records at an interactive terminal |
 | [`approve`](#agent-events-approve) | approve a standing disclosure by typing its challenge at this terminal |
 | [`mcp`](#agent-events-mcp) | serve the MCP interface over standard input and output |
@@ -117,6 +126,24 @@ report content-free owner, protocol and global switch health
 ```
 agent-events doctor [options]
 ```
+
+### `agent-events approval`
+
+view the authoritative pending disclosure approval
+
+```
+agent-events approval [options] [command]
+```
+
+### `agent-events approval view`
+
+```
+agent-events approval view [options] <approval-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--digest <digest>` |  | — |
 
 ### `agent-events catalogue`
 
@@ -224,6 +251,12 @@ agent-events rule disable [options] <rule-id>
 agent-events rule remove [options] <rule-id>
 ```
 
+### `agent-events rule test`
+
+```
+agent-events rule test [options] <document> <catalogue-example>
+```
+
 ### `agent-events targets`
 
 inspect immutable local event target versions
@@ -262,6 +295,228 @@ agent-events target update [options] <document>
 
 ```
 agent-events target remove [options] <target-id>
+```
+
+### `agent-events target test`
+
+```
+agent-events target test [options] <target-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--version <version>` |  | — |
+
+### `agent-events subscribers`
+
+inspect immutable SSE subscriber versions
+
+```
+agent-events subscribers [options] [command]
+```
+
+### `agent-events subscribers list`
+
+```
+agent-events subscribers list [options]
+```
+
+### `agent-events subscriber`
+
+create, update, and revoke immutable SSE subscribers
+
+```
+agent-events subscriber [options] [command]
+```
+
+### `agent-events subscriber add`
+
+```
+agent-events subscriber add [options] <document>
+```
+
+### `agent-events subscriber update`
+
+```
+agent-events subscriber update [options] <document>
+```
+
+### `agent-events subscriber remove`
+
+```
+agent-events subscriber remove [options] <subscriber-id>
+```
+
+### `agent-events judges`
+
+inspect typed pre-Phase-E judge controls
+
+```
+agent-events judges [options] [command]
+```
+
+### `agent-events judges list`
+
+```
+agent-events judges list [options]
+```
+
+### `agent-events judge`
+
+use typed unavailable judge controls until Phase E
+
+```
+agent-events judge [options] [command]
+```
+
+### `agent-events judge add`
+
+```
+agent-events judge add [options] <document>
+```
+
+### `agent-events judge update`
+
+```
+agent-events judge update [options] <document>
+```
+
+### `agent-events judge remove`
+
+```
+agent-events judge remove [options] <judge-id>
+```
+
+### `agent-events judge test`
+
+```
+agent-events judge test [options] <judge-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--version <version>` |  | — |
+
+### `agent-events judge kinds`
+
+list typed unavailable judge kinds until Phase E
+
+```
+agent-events judge kinds [options] [command]
+```
+
+### `agent-events judge kinds list`
+
+```
+agent-events judge kinds list [options]
+```
+
+### `agent-events judge kind`
+
+use typed unavailable judge kind controls until Phase E
+
+```
+agent-events judge kind [options] [command]
+```
+
+### `agent-events judge kind enable`
+
+```
+agent-events judge kind enable [options] <kind>
+```
+
+### `agent-events judge kind disable`
+
+```
+agent-events judge kind disable [options] <kind>
+```
+
+### `agent-events judge model`
+
+use typed unavailable Laya model controls until Phase E2
+
+```
+agent-events judge model [options] [command]
+```
+
+### `agent-events judge model status`
+
+```
+agent-events judge model status [options]
+```
+
+### `agent-events judge model remove`
+
+```
+agent-events judge model remove [options]
+```
+
+### `agent-events budget`
+
+use typed unavailable budget controls until Phase E
+
+```
+agent-events budget [options] [command]
+```
+
+### `agent-events budget show`
+
+```
+agent-events budget show [options]
+```
+
+### `agent-events budget update`
+
+```
+agent-events budget update [options] <document>
+```
+
+### `agent-events deliveries`
+
+inspect content-free delivery metadata
+
+```
+agent-events deliveries [options] [command]
+```
+
+### `agent-events deliveries list`
+
+```
+agent-events deliveries list [options]
+```
+
+### `agent-events delivery`
+
+retry or drop one exact delivery
+
+```
+agent-events delivery [options] [command]
+```
+
+### `agent-events delivery retry`
+
+```
+agent-events delivery retry [options] <delivery-id>
+```
+
+### `agent-events delivery drop`
+
+```
+agent-events delivery drop [options] <delivery-id>
+```
+
+### `agent-events held`
+
+inspect typed held decisions
+
+```
+agent-events held [options] [command]
+```
+
+### `agent-events held list`
+
+```
+agent-events held list [options]
 ```
 
 ### `agent-events dryrun`

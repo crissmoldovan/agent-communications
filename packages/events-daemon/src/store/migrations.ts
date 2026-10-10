@@ -438,6 +438,30 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '15' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // Every issued B3 disclosure challenge has one durable origin row. A view row has its short deadline; a terminal
+    // row has none. The row starts as `issuing` before core receives the new challenge, so an interruption (or a lost
+    // row) can never be mistaken for an unrestricted terminal challenge.
+    version: 16,
+    name: 'activation-view-challenges-v1',
+    statements: [
+      `CREATE TABLE activation_view_challenges (
+        approval_id TEXT PRIMARY KEY,
+        state TEXT NOT NULL CHECK (state IN ('issuing', 'active', 'expired')),
+        origin TEXT NOT NULL CHECK (origin IN ('view', 'terminal')),
+        challenge_hash TEXT,
+        expires_at INTEGER,
+        updated_at INTEGER NOT NULL,
+        CHECK (
+          (state = 'issuing' AND challenge_hash IS NULL AND expires_at IS NULL)
+          OR (state = 'active' AND challenge_hash IS NOT NULL AND origin = 'terminal' AND expires_at IS NULL)
+          OR (state = 'active' AND challenge_hash IS NOT NULL AND origin = 'view' AND expires_at IS NOT NULL)
+          OR (state = 'expired' AND challenge_hash IS NOT NULL AND origin = 'view' AND expires_at IS NOT NULL)
+        )
+      ) STRICT`,
+      "UPDATE meta SET value = '16' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

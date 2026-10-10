@@ -1,0 +1,250 @@
+{
+  "area": "task-5-surface",
+  "cases": [
+    {
+      "case": "paired-cli-rule-test-command-is-registered",
+      "operation": "ruleTest",
+      "productionEntry": "packages/events-daemon/src/cli/program.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
+      "mutation": {
+        "from": "rule.command('test <document> <catalogue-example>').action(async (document: string, catalogueExample: string) => {",
+        "to": "rule.command('verify <document> <catalogue-example>').action(async (document: string, catalogueExample: string) => {"
+      },
+      "mutationTest": "B3 paired CLI and MCP controls drive every Task 5 capability through the same exported operation",
+      "loadedMarker": "paired-cli-rule-test-command-is-registered"
+    },
+    {
+      "case": "paired-mcp-rule-test-tool-is-registered",
+      "operation": "ruleTest",
+      "productionEntry": "packages/events-daemon/src/mcp/server.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "'events_rule_test',",
+        "to": "'events_rule_test_deleted',"
+      },
+      "mutationTest": "B3 paired CLI and MCP controls register approval view, local rule test, target test, operators, and holds",
+      "loadedMarker": "paired-mcp-rule-test-tool-is-registered"
+    },
+    {
+      "case": "paired-capability-contract-keeps-held-list-both",
+      "operation": "heldList",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
+      "mutation": {
+        "from": "both('events-daemon.held.list', 'held list', 'events_held_list', 'heldList'),",
+        "to": "exception('events-daemon.held.list', 'held list', 'heldList', 'lost public pairing'),"
+      },
+      "mutationTest": "B3 paired CLI and MCP controls drive every Task 5 capability through the same exported operation",
+      "loadedMarker": "paired-capability-contract-keeps-held-list-both"
+    },
+    {
+      "case": "paired-target-schema-rejects-pending-context",
+      "operation": "targetTest",
+      "productionEntry": "packages/events-daemon/src/mcp/server.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "inputSchema: z.strictObject({ targetId: z.string().min(1), targetVersion: z.number().int().positive() }),",
+        "to": "inputSchema: z.object({ targetId: z.string().min(1), targetVersion: z.number().int().positive() }),"
+      },
+      "mutationTest": "B3 paired CLI and MCP controls register approval view, local rule test, target test, operators, and holds",
+      "loadedMarker": "paired-target-schema-rejects-pending-context"
+    },
+    {
+      "case": "owner-delivery-fence-rechecks-live-lineage",
+      "operation": "retryDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "!hasLiveDeliveryLineage(database, row)",
+        "to": "false"
+      },
+      "mutationTest": "B3 owner composes the production delivery write fence: work is immediate and a live authority change refuses retry",
+      "loadedMarker": "owner-delivery-fence-rechecks-live-lineage"
+    },
+    {
+      "case": "owner-approval-view-rejects-digest-drift",
+      "operation": "approvalView",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "if (row.digest !== digest) return { kind: 'DIGEST_MISMATCH' };",
+        "to": "if (false) return { kind: 'DIGEST_MISMATCH' };"
+      },
+      "mutationTest": "B3 approval view returns authoritative ready, stale, digest, and expiry variants without claiming the final approval",
+      "loadedMarker": "owner-approval-view-rejects-digest-drift"
+    },
+    {
+      "case": "owner-reset-sealer-uses-system-reset-aad",
+      "operation": "targetResume",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "{ table: 'system_reset_outbox', column: 'encryptedRecord', key: [{ type: 'text', value: id }] },",
+        "to": "{ table: 'source_scan_state', column: 'encryptedRecord', key: [{ type: 'text', value: id }] },"
+      },
+      "mutationTest": "B3 owner composes the reset record sealer from its cipher while the shared writer lease spans seal through commit",
+      "loadedMarker": "owner-reset-sealer-uses-system-reset-aad"
+    },
+    {
+      "case": "owner-stream-registry-rotates-revoked-subscriber",
+      "operation": "removeSubscriber",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-purge-closure.test.ts",
+      "mutation": {
+        "from": "for (const listener of [...listeners]) listener.rotate({ ...input, generation: 0 });",
+        "to": "for (const listener of [...listeners]) void listener;"
+      },
+      "mutationTest": "B3 subscriber removal closes every exact live SSE stream through the owner registry port",
+      "loadedMarker": "owner-stream-registry-rotates-revoked-subscriber"
+    },
+    {
+      "case": "paired-mcp-cannot-register-held-decide",
+      "operation": "heldList",
+      "productionEntry": "packages/events-daemon/src/mcp/server.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "'events_held_list',",
+        "to": "'events_held_decide',"
+      },
+      "mutationTest": "B3 paired CLI and MCP controls register approval view, local rule test, target test, operators, and holds",
+      "loadedMarker": "paired-mcp-cannot-register-held-decide"
+    },
+    {
+      "case": "paired-target-test-is-open-world",
+      "operation": "targetTest",
+      "productionEntry": "packages/events-daemon/src/mcp/server.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "openWorldHint: true",
+        "to": "openWorldHint: false"
+      },
+      "mutationTest": "B3 paired CLI and MCP controls register approval view, local rule test, target test, operators, and holds",
+      "loadedMarker": "paired-target-test-is-open-world"
+    },
+    {
+      "case": "b3-domain-refusal-is-typed",
+      "operation": "ruleTest",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "      if (error instanceof EventDomainError)\n        throw new CommsError('BAD_DATA', error.message, { details: { reason: error.code } });",
+        "to": "      if (error === undefined)\n        throw new CommsError('BAD_DATA', error.message, { details: { reason: error.code } });"
+      },
+      "mutationTest": "B3 rule test refuses an invalid rule document with its fixed domain reason, not an opaque failure",
+      "loadedMarker": "b3-domain-refusal-is-typed"
+    },
+    {
+      "case": "rule-test-neutralises-untrusted-catalogue-fields",
+      "operation": "ruleTest",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-retained-control.ts",
+      "test": "packages/events-daemon/test/b3-rule-test.test.ts",
+      "mutation": {
+        "from": "return sanitiseSenderFields(entry.value, JSON.parse(canonicalJson(example)) as Record<string, unknown>);",
+        "to": "return JSON.parse(canonicalJson(example)) as Record<string, unknown>;"
+      },
+      "mutationTest": "B3 rule test evaluates a catalogue example as a live projection would: untrusted fields are neutralised first",
+      "loadedMarker": "rule-test-neutralises-untrusted-catalogue-fields"
+    },
+    {
+      "case": "paired-rule-test-root-schema-is-closed",
+      "operation": "ruleTest",
+      "productionEntry": "packages/events-daemon/src/mcp/server.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "  strictControlTool(\n    'events_rule_test',",
+        "to": "  controlTool(\n    'events_rule_test',"
+      },
+      "mutationTest": "B3 paired CLI and MCP controls register approval view, local rule test, target test, operators, and holds",
+      "loadedMarker": "paired-rule-test-root-schema-is-closed"
+    },
+    {
+      "case": "approval-view-runtime-approve-replans-before-claim",
+      "operation": "approvalView",
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "    const finalBinding = this.#liveBinding(finalIntent);",
+        "to": "    const finalBinding = binding;"
+      },
+      "mutationTest": "B3 approval view challenge reaches the production activation approve fence unchanged and refuses changed, stale, or expired approval state",
+      "loadedMarker": "approval-view-runtime-approve-replans-before-claim"
+    },
+    {
+      "case": "approval-view-deadline-is-atomic-with-core-claim",
+      "operation": "approvalView",
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "      input.approvalId,\n      finalBinding,\n      this.#claimOptions(challenge),\n    );",
+        "to": "      input.approvalId,\n      finalBinding,\n    );"
+      },
+      "mutationTest": "B3 approval view deadline is rechecked inside core claim, leaving the approval unconsumed when the clock crosses it",
+      "loadedMarker": "approval-view-deadline-is-atomic-with-core-claim"
+    },
+    {
+      "case": "approval-view-missing-row-cannot-be-terminal",
+      "operation": "approvalView",
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "if (row === undefined) throw this.#challengeExpired();",
+        "to": "if (row === undefined) return { origin: 'terminal', challengeHash: answer === undefined ? '' : hashChallenge(answer) };"
+      },
+      "mutationTest": "B3 approval challenges fail closed when their durable row is lost, while a terminal-prompt row remains valid",
+      "loadedMarker": "approval-view-missing-row-cannot-be-terminal"
+    },
+    {
+      "case": "paired-capability-row-cannot-be-deleted",
+      "operation": "approvalView",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
+      "mutation": {
+        "from": "  both(\n    'events-daemon.approval.view',\n    'approval view <approval-id> --digest <digest>',\n    'events_approval_view',\n    'approvalView',\n  ),\n",
+        "to": ""
+      },
+      "mutationTest": "B3 paired CLI and MCP controls drive every Task 5 capability through the same exported operation",
+      "loadedMarker": "paired-capability-row-cannot-be-deleted"
+    },
+    {
+      "case": "paired-mcp-rule-test-tool-cannot-be-deleted",
+      "operation": "ruleTest",
+      "productionEntry": "packages/events-daemon/src/mcp/server.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
+      "mutation": {
+        "from": "  strictControlTool(\n    'events_rule_test',",
+        "to": "  if (false)\n    strictControlTool(\n      'events_rule_test',"
+      },
+      "mutationTest": "B3 paired CLI and MCP controls register approval view, local rule test, target test, operators, and holds",
+      "loadedMarker": "paired-mcp-rule-test-tool-cannot-be-deleted"
+    },
+    {
+      "case": "paired-mcp-rule-test-cannot-cross-wire-another-operation",
+      "operation": "ruleTest",
+      "productionEntry": "packages/events-daemon/src/mcp/server.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
+      "mutation": {
+        "from": "      ruleTest(\n        args.document,",
+        "to": "      judgeKindsList(\n        args.document,"
+      },
+      "mutationTest": "B3 paired CLI and MCP controls drive every Task 5 capability through the same exported operation",
+      "loadedMarker": "paired-mcp-rule-test-cannot-cross-wire-another-operation"
+    },
+    {
+      "case": "pre-e-operation-cannot-produce-state",
+      "operation": "judgeUnavailable",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "    if (unavailable !== undefined) return unavailable;",
+        "to": "    if (unavailable !== undefined) {\n      this.#store.database.prepare(\"INSERT INTO target_test_charges (target_id, charged_at) VALUES ('forbidden-e-work', 0)\").run();\n      return unavailable;\n    }"
+      },
+      "mutationTest": "B3 owner keeps pre-E judge controls inert and held decisions unclaimable",
+      "loadedMarker": "pre-e-operation-cannot-produce-state"
+    }
+  ]
+}

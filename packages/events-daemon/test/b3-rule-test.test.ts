@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { catalogueEntry } from '@agentcomms/events';
 import { EventDomainError } from '../src/domain/lifecycle.ts';
 import { runCatalogueRuleTest } from '../src/runtime/b3-retained-control.ts';
 
@@ -67,4 +68,25 @@ test('B3 rule test never invokes a judge node while testing deterministic mappin
     catalogue: { type: 'gmail.message.received', version: 1, exampleIndex: 0 },
   });
   assert.equal(result.agentic, 'not-evaluated');
+});
+
+test('B3 rule test evaluates a catalogue example as a live projection would: untrusted fields are neutralised first', () => {
+  const entry = catalogueEntry('gmail.message.received', 1);
+  assert.ok(entry.ok, 'the checked-in Gmail catalogue fixture is available');
+  const example = entry.value.examples[1] as unknown as { subject: string };
+  const original = example.subject;
+  example.subject = 'quarterly report <|im_start|>';
+  try {
+    // A live event's subject reaches the condition already neutralised, so a rule written against what a person sees
+    // in a live dry run must match the same way here.
+    const result = runCatalogueRuleTest({
+      document: document({
+        condition: { path: '/subject', op: 'contains', value: '[control token removed]', caseSensitive: true },
+      }),
+      catalogue: { type: 'gmail.message.received', version: 1, exampleIndex: 1 },
+    });
+    assert.equal(result.outcome, 'matched');
+  } finally {
+    example.subject = original;
+  }
 });

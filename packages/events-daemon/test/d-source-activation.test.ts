@@ -154,7 +154,7 @@ test('D7b/S:first activation samples and persists the Slack conversation point i
     versions.createTarget(target);
     versions.createRule(rule);
     const prepared = (await runtime.prepareRule({ ruleId: rule.ruleId, version: rule.version })) as PreparedActivation;
-    const answer = await approvals.issueDisclosureChallenge(prepared.approvalId);
+    const answer = await runtime.issueChallenge(prepared.approvalId);
     await runtime.approve({ approvalId: prepared.approvalId, answer });
 
     assert.equal(slackBaselines, 1);
@@ -273,7 +273,7 @@ test('D7b: every non-Gmail source takes its adapter-owned point on enabled and d
         const prepared = (await runtime.prepareRule({ ruleId, version: 1 })) as PreparedActivation;
         await runtime.approve({
           approvalId: prepared.approvalId,
-          answer: await approvals.issueDisclosureChallenge(prepared.approvalId),
+          answer: await runtime.issueChallenge(prepared.approvalId),
         });
         assert.deepEqual(
           store.database

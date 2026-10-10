@@ -5,6 +5,7 @@ import {
   type ConfigStore,
   canonicalJson,
   type DisclosureBinding,
+  hashChallenge,
 } from '@agentcomms/core';
 import type { GmailEventSource } from '@agentcomms/gmail';
 import {
@@ -52,6 +53,19 @@ interface IntentRow {
   readonly replacement_of_version: string | null;
   readonly claimed_at: number | null;
   readonly completion_deadline: number | null;
+}
+
+interface ApprovalViewChallengeRow {
+  readonly state: string;
+  readonly origin: string;
+  readonly challenge_hash: string | null;
+  readonly expires_at: number | null;
+}
+
+interface ApprovalChallenge {
+  readonly origin: 'view' | 'terminal';
+  readonly expiresAt?: number | undefined;
+  readonly challengeHash: string;
 }
 
 interface PlannedPoint {
@@ -180,7 +194,6 @@ export class ActivationRuntime {
   readonly #failpoint: CutoverFailpoint | undefined;
   readonly #deadlineFailpoint: ActivationDeadlineFailpoint | undefined;
   readonly #assertObjectSecretReady: ActivationRuntimeOptions['assertObjectSecretReady'];
-
   constructor(options: ActivationRuntimeOptions) {
     this.#store = options.store;
     this.#approvals = options.approvals;
@@ -352,18 +365,59 @@ export class ActivationRuntime {
   }
 
   async approve(input: { readonly approvalId: string; readonly answer: string }): Promise<ActivationCompletion> {
+    this.#assertApprovalViewChallengeCurrent(input.approvalId, input.answer);
     const intent = this.#intentForApproval(input.approvalId);
     const binding = this.#liveBinding(intent);
     await this.#approvals.approveDisclosure(input.approvalId, binding, input.answer, 'terminal');
-    const used = await this.#approvals.claimForDisclosure(input.approvalId, binding);
+    // Approving persisted an await boundary: bind the exact current plan again before this process can spend it.
+    const finalIntent = this.#intentForApproval(input.approvalId);
+    const finalBinding = this.#liveBinding(finalIntent);
+    // This is the final event-store fence before the core claim. It re-reads the durable, challenge-bound deadline
+    // after the approval store await, so an owner restart or a slow terminal answer cannot spend an expired view.
+    const challenge = this.#assertApprovalViewChallengeCurrent(input.approvalId, input.answer);
+    const used = await this.#approvals.claimForDisclosure(
+      input.approvalId,
+      finalBinding,
+      this.#claimOptions(challenge),
+    );
     if (used.usedAt === undefined) throw new CommsError('BAD_DATA', 'the used disclosure approval has no usedAt value');
-    return this.#claimAndComplete(intent, used.usedAt);
+    return this.#claimAndComplete(finalIntent, used.usedAt);
   }
 
+  /** Issues the terminal's ordinary disclosure challenge, explicitly superseding any previously viewed short challenge. */
   async issueChallenge(approvalId: string): Promise<string> {
     const intent = this.#intentForApproval(approvalId);
     this.#liveBinding(intent);
-    return this.#approvals.issueDisclosureChallenge(approvalId);
+    this.#beginApprovalChallenge(approvalId, 'terminal');
+    const challenge = await this.#approvals.issueDisclosureChallenge(approvalId);
+    this.#activateApprovalChallenge(approvalId, 'terminal', hashChallenge(challenge));
+    return challenge;
+  }
+
+  /**
+   * Issues the challenge returned from B3 `approval view`. The database sentinel is intentionally written before the
+   * core challenge: if either half of that cross-store operation is interrupted, neither approval nor recovery can
+   * mistake the unresolved challenge for an unrestricted terminal one.
+   */
+  async issueApprovalViewChallenge(approvalId: string, expiresAt: number): Promise<string | null> {
+    const intent = this.#intentForApproval(approvalId);
+    this.#liveBinding(intent);
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= this.#now())
+      throw new CommsError('CONFIG', 'an approval-view challenge needs a future, readable deadline');
+    const existing = this.#approvalViewChallenge(approvalId);
+    if (existing !== undefined) {
+      if (existing.state === 'issuing') return null;
+      const current = this.#readApprovalChallenge(existing);
+      if (current.origin === 'view' && current.expiresAt !== undefined && current.expiresAt <= this.#now()) {
+        this.#expireApprovalViewChallenge(approvalId);
+        return null;
+      }
+      if (existing.state !== 'active' && existing.state !== 'expired') throw this.#challengeExpired();
+    }
+    this.#beginApprovalChallenge(approvalId, 'view');
+    const challenge = await this.#approvals.issueDisclosureChallenge(approvalId);
+    this.#activateApprovalChallenge(approvalId, 'view', hashChallenge(challenge), expiresAt);
+    return challenge;
   }
 
   /**
@@ -449,10 +503,21 @@ export class ActivationRuntime {
       if (record.record.state === 'approved') {
         const binding = this.#settleOnDrift(intent);
         if (binding === null) continue;
-        const used = await this.#approvals.claimForDisclosure(intent.approval_id, binding);
-        if (used.usedAt === undefined)
-          throw new CommsError('BAD_DATA', 'the used disclosure approval has no usedAt value');
-        await this.#claimAndComplete(intent, used.usedAt);
+        const challenge = this.#approvalViewChallengeMayClaim(intent.approval_id);
+        if (challenge === undefined) continue;
+        try {
+          const used = await this.#approvals.claimForDisclosure(
+            intent.approval_id,
+            binding,
+            this.#claimOptions(challenge),
+          );
+          if (used.usedAt === undefined)
+            throw new CommsError('BAD_DATA', 'the used disclosure approval has no usedAt value');
+          await this.#claimAndComplete(intent, used.usedAt);
+        } catch (error) {
+          if (this.#isChallengeExpired(error)) continue;
+          throw error;
+        }
         continue;
       }
       if (record.record.state !== 'used' || record.record.usedAt === undefined) continue;
@@ -462,6 +527,7 @@ export class ActivationRuntime {
         this.#cancel(intent.id, 'APPROVAL_BINDING_DRIFT');
         continue;
       }
+      if (!this.#approvalViewChallengeMayComplete(intent.approval_id, record.record.usedAt)) continue;
       try {
         await this.#claimAndComplete(intent, record.record.usedAt);
       } catch (error) {
@@ -503,6 +569,7 @@ export class ActivationRuntime {
         this.#cancel(intent.id, 'APPROVAL_BINDING_DRIFT');
         continue;
       }
+      if (!this.#approvalViewChallengeMayComplete(intent.approval_id, record.record.usedAt)) continue;
       try {
         await this.#claimAndComplete(intent, record.record.usedAt);
       } catch (error) {
@@ -596,6 +663,10 @@ export class ActivationRuntime {
   }
 
   async #claimAndComplete(intent: IntentRow, usedAt: string): Promise<ActivationCompletion> {
+    // Recovery reaches this method from a core record already marked used. Compare its immutable core timestamp with
+    // the persisted view deadline, rather than the recovery clock: a claim made before expiry may finish after a
+    // restart, but an approved view may never be claimed after expiry.
+    this.#assertApprovalViewChallengeClaimedInTime(intent.approval_id, usedAt);
     const claimedAt = Date.parse(usedAt);
     if (!Number.isFinite(claimedAt)) throw new CommsError('BAD_DATA', 'the disclosure usedAt is not an instant');
     const deadline = claimedAt + 3_600_000;
@@ -981,6 +1052,10 @@ export class ActivationRuntime {
       this.#store.database
         .prepare("UPDATE activation_intents SET status = 'completed', updated_at = ? WHERE id = ?")
         .run(this.#now(), intent.id);
+      if (intent.approval_id !== null)
+        this.#store.database
+          .prepare('DELETE FROM activation_view_challenges WHERE approval_id = ?')
+          .run(intent.approval_id);
     });
     if (settled !== undefined) throw settled;
   }
@@ -1208,6 +1283,147 @@ export class ActivationRuntime {
       .run(code, this.#now(), intentId);
     this.#store.database.prepare('DELETE FROM activation_baselines WHERE intent_id = ?').run(intentId);
     this.#store.database.prepare('DELETE FROM replacement_drains WHERE intent_id = ?').run(intentId);
+  }
+
+  /** Every issued core challenge has an origin row; its absence or invalid shape is never a terminal-prompt fallback. */
+  #assertApprovalViewChallengeCurrent(approvalId: string, answer?: string): ApprovalChallenge {
+    const row = this.#approvalViewChallenge(approvalId);
+    if (row === undefined) throw this.#challengeExpired();
+    const challenge = this.#readApprovalChallenge(row);
+    if (
+      row.state !== 'active' ||
+      (challenge.origin === 'view' && this.#viewChallengeDeadline(challenge) <= this.#now())
+    ) {
+      if (row.state === 'active' && challenge.origin === 'view') this.#expireApprovalViewChallenge(approvalId);
+      throw this.#challengeExpired();
+    }
+    if (answer !== undefined && hashChallenge(answer) !== challenge.challengeHash) throw this.#challengeExpired();
+    return challenge;
+  }
+
+  #assertApprovalViewChallengeClaimedInTime(approvalId: string | null, usedAt: string): void {
+    if (approvalId === null) throw this.#challengeExpired();
+    const row = this.#approvalViewChallenge(approvalId);
+    if (row === undefined) throw this.#challengeExpired();
+    const challenge = this.#readApprovalChallenge(row);
+    const claimedAt = Date.parse(usedAt);
+    if (
+      row.state !== 'active' ||
+      !Number.isFinite(claimedAt) ||
+      (challenge.origin === 'view' && claimedAt >= this.#viewChallengeDeadline(challenge))
+    )
+      throw this.#challengeExpired();
+  }
+
+  #approvalViewChallengeMayClaim(approvalId: string): ApprovalChallenge | undefined {
+    try {
+      return this.#assertApprovalViewChallengeCurrent(approvalId);
+    } catch (error) {
+      if (this.#isChallengeExpired(error)) return undefined;
+      throw error;
+    }
+  }
+
+  #approvalViewChallengeMayComplete(approvalId: string, usedAt: string): boolean {
+    try {
+      this.#assertApprovalViewChallengeClaimedInTime(approvalId, usedAt);
+      return true;
+    } catch (error) {
+      if (this.#isChallengeExpired(error)) return false;
+      throw error;
+    }
+  }
+
+  #approvalViewChallenge(approvalId: string): ApprovalViewChallengeRow | undefined {
+    return this.#store.database
+      .prepare('SELECT state, origin, challenge_hash, expires_at FROM activation_view_challenges WHERE approval_id = ?')
+      .get(approvalId) as ApprovalViewChallengeRow | undefined;
+  }
+
+  #readApprovalChallenge(row: ApprovalViewChallengeRow): ApprovalChallenge {
+    if (
+      (row.state !== 'active' && row.state !== 'expired') ||
+      typeof row.challenge_hash !== 'string' ||
+      !/^[a-f0-9]{64}$/u.test(row.challenge_hash) ||
+      (row.origin !== 'view' && row.origin !== 'terminal')
+    )
+      throw this.#challengeExpired();
+    if (row.origin === 'view') {
+      if (typeof row.expires_at !== 'number' || !Number.isSafeInteger(row.expires_at) || row.expires_at <= 0)
+        throw this.#challengeExpired();
+      return { origin: 'view', challengeHash: row.challenge_hash, expiresAt: row.expires_at };
+    }
+    if (row.state !== 'active' || row.expires_at !== null) throw this.#challengeExpired();
+    return { origin: 'terminal', challengeHash: row.challenge_hash };
+  }
+
+  #claimOptions(challenge: ApprovalChallenge): { readonly deadlineMs?: number | undefined } {
+    return challenge.origin === 'view' ? { deadlineMs: this.#viewChallengeDeadline(challenge) } : {};
+  }
+
+  #viewChallengeDeadline(challenge: ApprovalChallenge): number {
+    if (challenge.origin !== 'view' || challenge.expiresAt === undefined) throw this.#challengeExpired();
+    return challenge.expiresAt;
+  }
+
+  #isChallengeExpired(error: unknown): boolean {
+    return (
+      error instanceof CommsError && error.code === 'APPROVAL_VOID' && error.details?.reason === 'CHALLENGE_EXPIRED'
+    );
+  }
+
+  #beginApprovalChallenge(approvalId: string, origin: ApprovalChallenge['origin']): void {
+    this.#store.immediate(() => {
+      this.#store.database
+        .prepare(
+          `INSERT INTO activation_view_challenges (approval_id, state, origin, challenge_hash, expires_at, updated_at)
+           VALUES (?, 'issuing', ?, NULL, NULL, ?)
+           ON CONFLICT(approval_id) DO UPDATE SET state = 'issuing', origin = excluded.origin, challenge_hash = NULL, expires_at = NULL,
+             updated_at = excluded.updated_at`,
+        )
+        .run(approvalId, origin, this.#now());
+    });
+  }
+
+  #activateApprovalChallenge(
+    approvalId: string,
+    origin: ApprovalChallenge['origin'],
+    challengeHash: string,
+    expiresAt?: number,
+  ): void {
+    if ((origin === 'view' && expiresAt === undefined) || (origin === 'terminal' && expiresAt !== undefined))
+      throw this.#challengeExpired();
+    this.#store.immediate(() => {
+      this.#store.database
+        .prepare(
+          "UPDATE activation_view_challenges SET state = 'active', challenge_hash = ?, expires_at = ?, updated_at = ? WHERE approval_id = ? AND state = 'issuing' AND origin = ?",
+        )
+        .run(challengeHash, expiresAt ?? null, this.#now(), approvalId, origin);
+      const current = this.#approvalViewChallenge(approvalId);
+      if (
+        current?.state !== 'active' ||
+        current.origin !== origin ||
+        current.challenge_hash !== challengeHash ||
+        current.expires_at !== (expiresAt ?? null)
+      )
+        throw this.#challengeExpired();
+    });
+  }
+
+  #expireApprovalViewChallenge(approvalId: string): void {
+    this.#store.immediate(() => {
+      this.#store.database
+        .prepare(
+          "UPDATE activation_view_challenges SET state = 'expired', updated_at = ? WHERE approval_id = ? AND origin = 'view'",
+        )
+        .run(this.#now(), approvalId);
+    });
+  }
+
+  #challengeExpired(): CommsError {
+    return new CommsError('APPROVAL_VOID', 'the approval-view challenge expired before it could be approved', {
+      details: { reason: 'CHALLENGE_EXPIRED' },
+    });
   }
 
   #fail(intentId: string, code: string): void {
