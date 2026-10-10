@@ -442,6 +442,7 @@ export async function runSourceOwnerWork(input: SourceOwnerWorkOptions, scope: S
   // The latter supplies the current list visibility; a list edit between the copy and this lock is therefore a
   // tightening, never an opportunity to retain a row the new list hides.
   await accountLive();
+  if (isSourceScopeFenced(input.store.database, scope)) return;
   const whatsappRules = await sourceRulesForWhatsAppAccount(input, scope.accountId);
   const captured = await input.whatsappEventOperations.withEventSnapshot(
     { accountId: scope.accountId },
