@@ -647,6 +647,7 @@ async function replaceOldOnlyDrainsHistoryAndReplies(): Promise<void> {
  * not purge the durable staged page.
  */
 async function replaceAgedPendingReplyKeepsOldDebt(): Promise<void> {
+  await expiredAgedReplyIsNotRetainedByReplacement();
   await forEachSlackMatrixEdge('S:replace-aged-pending-reply-keeps-old-debt', async (fixture, edge) => {
     const parent = '1760000000.000000';
     const reply = '1760518401.000000';
@@ -705,6 +706,7 @@ async function replaceAgedPendingReplyKeepsOldDebt(): Promise<void> {
       staged.some((stage) => stage.stage_expires_at > fixture.now.value),
       `the ordinary reply page remains unexpired: ${JSON.stringify(stageStates)}`,
     );
+    const replyCallsBeforeReplacement = fixture.calls.filter((operation) => operation === 'slack.replies').length;
 
     // T0 + 8d: the parent is past the ordinary seven-day discovery horizon,
     // but its unexpired staged page still makes it a frozen drain parent.
@@ -713,6 +715,11 @@ async function replaceAgedPendingReplyKeepsOldDebt(): Promise<void> {
     await startExactSlackReplacement(fixture, fixture.options());
     fixture.store.database.prepare("UPDATE target_versions SET document = '{}' WHERE id = 'target-cutover@1'").run();
     await sourceTurnThroughSlackDurableEdge(fixture, edge);
+    assert.equal(
+      fixture.calls.filter((operation) => operation === 'slack.replies').length,
+      replyCallsBeforeReplacement,
+      'an aged drain waits on its ordinary staged page instead of opening a new Slack reply cursor',
+    );
     assert.equal(
       (
         fixture.store.database.prepare('SELECT drained_at FROM replacement_drains').get() as {
@@ -734,6 +741,11 @@ async function replaceAgedPendingReplyKeepsOldDebt(): Promise<void> {
       .prepare("UPDATE target_versions SET document = ? WHERE id = 'target-cutover@1'")
       .run(target.document);
     await fixture.sourceTurn();
+    assert.equal(
+      fixture.calls.filter((operation) => operation === 'slack.replies').length,
+      replyCallsBeforeReplacement,
+      'settling the ordinary staged page covers the aged drain without re-reading Slack',
+    );
     await resumeClaimedSlackCompletionAtActivationEdge(fixture, 'S:replace-aged-pending-reply-keeps-old-debt', edge);
     assert.equal(activeRuleVersion(fixture), 2, 'the replacement publishes only after old-version reply settlement');
     fixture.oracle({ raw: 2, admissions: 2, versions: [1, 1] });
@@ -773,6 +785,78 @@ async function replaceAgedPendingReplyKeepsOldDebt(): Promise<void> {
       'a staged Slack reply keeps its recorded, superseded version at the cut-over it last held, not its stale disabled-time authorization and not the new active pointer',
     );
   });
+}
+
+/** An unswept expired page is terminal debt, never a reason to reopen an aged parent. */
+async function expiredAgedReplyIsNotRetainedByReplacement(): Promise<void> {
+  const fixture = await PhaseDCutoverFixture.create('slack');
+  try {
+    const parent = '1760000000.000000';
+    const reply = '1760518401.000000';
+    const point = '1760691201.000000';
+    fixture.setSlackBaseline('1759999999.000000');
+    fixture.setSlackPages({
+      history: async () => ({
+        messages: [matrixSlackMessage({ ts: parent, replyCount: 1 })],
+        nextCursor: null,
+        retainedHistoryBoundary: false,
+      }),
+      replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+    });
+    await fixture.activate();
+    await fixture.enable();
+    await fixture.schedulerTurn();
+    const target = fixture.store.database
+      .prepare("SELECT document FROM target_versions WHERE id = 'target-cutover@1'")
+      .get() as { document: string };
+
+    fixture.now.value += 6 * 24 * 60 * 60 * 1_000 + 1_000;
+    fixture.setSlackPages({
+      history: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+      replies: async () => ({
+        messages: [matrixSlackMessage({ ts: reply, threadTs: parent })],
+        nextCursor: null,
+        retainedHistoryBoundary: false,
+      }),
+    });
+    fixture.store.database.prepare("UPDATE target_versions SET document = '{}' WHERE id = 'target-cutover@1'").run();
+    await fixture.sourceTurn();
+    fixture.store.database
+      .prepare("UPDATE target_versions SET document = ? WHERE id = 'target-cutover@1'")
+      .run(target.document);
+    const expiredStage = fixture.store.database
+      .prepare(
+        `SELECT id, stage_expires_at FROM source_scan_state
+          WHERE id LIKE 'slack-reply-page:%' AND stage_expires_at IS NOT NULL`,
+      )
+      .get() as { id: string; stage_expires_at: number } | undefined;
+    assert.ok(expiredStage, 'the ordinary reply page is durably staged before its deadline passes');
+
+    fixture.now.value += 2 * 24 * 60 * 60 * 1_000;
+    assert.ok(expiredStage.stage_expires_at <= fixture.now.value, 'the stage is expired but has not been swept');
+    fixture.setSlackBaseline(point);
+    await startExactSlackReplacement(fixture, fixture.options());
+    const replyCallsBeforeReplacement = fixture.calls.filter((operation) => operation === 'slack.replies').length;
+    await fixture.sourceTurn();
+
+    assert.equal(
+      fixture.store.database.prepare('SELECT 1 FROM slack_reply_drains').get(),
+      undefined,
+      'an expired ordinary page does not retain an aged parent into a reply-drain child',
+    );
+    assert.equal(
+      fixture.calls.filter((operation) => operation === 'slack.replies').length,
+      replyCallsBeforeReplacement,
+      'the expired parent is neither re-staged nor fetched again',
+    );
+    assert.equal(
+      (fixture.store.database.prepare('SELECT COUNT(*) AS count FROM decisions').get() as { count: number }).count,
+      1,
+      'the expired reply is not newly admitted before the expiry sweep terminalises it',
+    );
+  } finally {
+    await fixture.dispose();
+  }
 }
 
 async function replaceNewOnlyBaselinesAtP(): Promise<void> {
