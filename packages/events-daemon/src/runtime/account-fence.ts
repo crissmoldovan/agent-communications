@@ -112,7 +112,10 @@ export function purgeRemovedAccountWork(
     database.prepare('DELETE FROM whatsapp_visibility WHERE account_id = ?').run(accountId);
   }
   if (source === 'slack') database.prepare('DELETE FROM slack_reply_drains WHERE account_id = ?').run(accountId);
-  if (source === 'resend') database.prepare('DELETE FROM resend_status_state WHERE account_id = ?').run(accountId);
+  if (source === 'resend') {
+    database.prepare('DELETE FROM resend_status_state WHERE account_id = ?').run(accountId);
+    database.prepare('DELETE FROM resend_status_high_water WHERE account_id = ?').run(accountId);
+  }
   database.prepare('DELETE FROM source_scan_state WHERE source = ? AND account_id = ?').run(source, accountId);
   database.prepare('DELETE FROM cursors WHERE source = ? AND account_id = ?').run(source, accountId);
   database.prepare('DELETE FROM activation_baselines WHERE source = ? AND account_id = ?').run(source, accountId);
