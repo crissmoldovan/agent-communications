@@ -52,6 +52,414 @@
         "find": "  apps/desktop:\n",
         "replace": "  apps/desktop-missing:\n"
       }
+    },
+    {
+      "id": "desktop-csp-configured-default-src",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact configured default-src",
+      "production": "apps/desktop/src-tauri/tauri.conf.json",
+      "import": "../src-tauri/tauri.conf.json",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/tauri.conf.json",
+        "find": "default-src 'self'",
+        "replace": "default-src *"
+      }
+    },
+    {
+      "id": "desktop-csp-configured-script-src",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact configured script-src",
+      "production": "apps/desktop/src-tauri/tauri.conf.json",
+      "import": "../src-tauri/tauri.conf.json",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/tauri.conf.json",
+        "find": "script-src 'self'",
+        "replace": "script-src *"
+      }
+    },
+    {
+      "id": "desktop-csp-configured-style-src",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact configured style-src",
+      "production": "apps/desktop/src-tauri/tauri.conf.json",
+      "import": "../src-tauri/tauri.conf.json",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/tauri.conf.json",
+        "find": "style-src 'self'",
+        "replace": "style-src *"
+      }
+    },
+    {
+      "id": "desktop-csp-configured-img-src",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact configured img-src",
+      "production": "apps/desktop/src-tauri/tauri.conf.json",
+      "import": "../src-tauri/tauri.conf.json",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/tauri.conf.json",
+        "find": "img-src 'self' data:",
+        "replace": "img-src *"
+      }
+    },
+    {
+      "id": "desktop-csp-configured-connect-src",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact configured connect-src",
+      "production": "apps/desktop/src-tauri/tauri.conf.json",
+      "import": "../src-tauri/tauri.conf.json",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/tauri.conf.json",
+        "find": "connect-src ipc: http://ipc.localhost",
+        "replace": "connect-src *"
+      }
+    },
+    {
+      "id": "desktop-csp-configured-frame-src",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact configured frame-src",
+      "production": "apps/desktop/src-tauri/tauri.conf.json",
+      "import": "../src-tauri/tauri.conf.json",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/tauri.conf.json",
+        "find": "frame-src 'none'",
+        "replace": "frame-src *"
+      }
+    },
+    {
+      "id": "desktop-csp-configured-object-src",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact configured object-src",
+      "production": "apps/desktop/src-tauri/tauri.conf.json",
+      "import": "../src-tauri/tauri.conf.json",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/tauri.conf.json",
+        "find": "object-src 'none'",
+        "replace": "object-src *"
+      }
+    },
+    {
+      "id": "desktop-csp-configured-form-action",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact configured form-action",
+      "production": "apps/desktop/src-tauri/tauri.conf.json",
+      "import": "../src-tauri/tauri.conf.json",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/tauri.conf.json",
+        "find": "form-action 'none'",
+        "replace": "form-action *"
+      }
+    },
+    {
+      "id": "desktop-csp-configured-base-uri",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact configured base-uri",
+      "production": "apps/desktop/src-tauri/tauri.conf.json",
+      "import": "../src-tauri/tauri.conf.json",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/tauri.conf.json",
+        "find": "base-uri 'none'",
+        "replace": "base-uri *"
+      }
+    },
+    {
+      "id": "desktop-csp-secrets-default-src",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact secrets default-src",
+      "production": "apps/desktop/secrets.html",
+      "import": "../secrets.html",
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "default-src 'none'",
+        "replace": "default-src *"
+      }
+    },
+    {
+      "id": "desktop-csp-secrets-script-src",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact secrets script-src",
+      "production": "apps/desktop/secrets.html",
+      "import": "../secrets.html",
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "script-src 'self'",
+        "replace": "script-src *"
+      }
+    },
+    {
+      "id": "desktop-csp-secrets-style-src",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact secrets style-src",
+      "production": "apps/desktop/secrets.html",
+      "import": "../secrets.html",
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "style-src 'self'",
+        "replace": "style-src *"
+      }
+    },
+    {
+      "id": "desktop-csp-secrets-img-src",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact secrets img-src",
+      "production": "apps/desktop/secrets.html",
+      "import": "../secrets.html",
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "img-src 'none'",
+        "replace": "img-src *"
+      }
+    },
+    {
+      "id": "desktop-csp-secrets-connect-src",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact secrets connect-src",
+      "production": "apps/desktop/secrets.html",
+      "import": "../secrets.html",
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "connect-src ipc: http://ipc.localhost",
+        "replace": "connect-src *"
+      }
+    },
+    {
+      "id": "desktop-csp-secrets-frame-src",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact secrets frame-src",
+      "production": "apps/desktop/secrets.html",
+      "import": "../secrets.html",
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "frame-src 'none'",
+        "replace": "frame-src *"
+      }
+    },
+    {
+      "id": "desktop-csp-secrets-object-src",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact secrets object-src",
+      "production": "apps/desktop/secrets.html",
+      "import": "../secrets.html",
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "object-src 'none'",
+        "replace": "object-src *"
+      }
+    },
+    {
+      "id": "desktop-csp-secrets-form-action",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact secrets form-action",
+      "production": "apps/desktop/secrets.html",
+      "import": "../secrets.html",
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "form-action 'none'",
+        "replace": "form-action *"
+      }
+    },
+    {
+      "id": "desktop-csp-secrets-base-uri",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact secrets base-uri",
+      "production": "apps/desktop/secrets.html",
+      "import": "../secrets.html",
+      "mutation": {
+        "file": "apps/desktop/secrets.html",
+        "find": "base-uri 'none'",
+        "replace": "base-uri *"
+      }
+    },
+    {
+      "id": "desktop-csp-asset-modification",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact asset modification",
+      "production": "apps/desktop/src-tauri/tauri.conf.json",
+      "import": "../src-tauri/tauri.conf.json",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/tauri.conf.json",
+        "find": "\"dangerousDisableAssetCspModification\": false",
+        "replace": "\"dangerousDisableAssetCspModification\": true"
+      }
+    },
+    {
+      "id": "desktop-csp-null",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-csp-exact null policy",
+      "production": "apps/desktop/src-tauri/tauri.conf.json",
+      "import": "../src-tauri/tauri.conf.json",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/tauri.conf.json",
+        "find": "\"csp\": \"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'\"",
+        "replace": "\"csp\": null"
+      }
+    },
+    {
+      "id": "desktop-handler-order",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-handler-order",
+      "production": "apps/desktop/src-tauri/src/lib.rs",
+      "import": "../src-tauri/src/lib.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/lib.rs",
+        "find": "security::install_security_before_windows(app)?;\n            tray::install_tray(app)?;\n            WebviewWindowBuilder::new(app, \"settings\", WebviewUrl::App(\"settings.html\".into()))\n                .title(\"Settings\")\n                .on_navigation(|url| security::allow_window_navigation(\"settings\", url))\n                .on_new_window(|_, _| security::deny_new_window(\"settings\"))\n                .on_download(|_, _| security::deny_download(\"settings\"))\n                .build()?;",
+        "replace": "tray::install_tray(app)?;\n            WebviewWindowBuilder::new(app, \"settings\", WebviewUrl::App(\"settings.html\".into()))\n                .title(\"Settings\")\n                .on_navigation(|url| security::allow_window_navigation(\"settings\", url))\n                .on_new_window(|_, _| security::deny_new_window(\"settings\"))\n                .on_download(|_, _| security::deny_download(\"settings\"))\n                .build()?;\n            security::install_security_before_windows(app)?;"
+      }
+    },
+    {
+      "id": "desktop-navigation-denial",
+      "group": "task-2",
+      "execution": "desktop-e2e",
+      "test": "apps/desktop/test/e2e/production-probe.test.mjs",
+      "testName": "desktop-navigation-denial",
+      "production": "apps/desktop/src-tauri/src/lib.rs",
+      "import": "../../src-tauri/src/lib.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/lib.rs",
+        "find": ".on_navigation(|url| security::allow_window_navigation(\"settings\", url))",
+        "replace": ".on_navigation(|_| true)"
+      }
+    },
+    {
+      "id": "desktop-download-denial",
+      "group": "task-2",
+      "execution": "desktop-e2e",
+      "test": "apps/desktop/test/e2e/production-probe.test.mjs",
+      "testName": "desktop-download-denial",
+      "production": "apps/desktop/src-tauri/src/lib.rs",
+      "import": "../../src-tauri/src/lib.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/lib.rs",
+        "find": ".on_download(|_, _| security::deny_download(\"settings\"))",
+        "replace": ".on_download(|_, _| true)"
+      }
+    },
+    {
+      "id": "desktop-new-window-denial",
+      "group": "task-2",
+      "execution": "desktop-e2e",
+      "test": "apps/desktop/test/e2e/production-probe.test.mjs",
+      "testName": "desktop-new-window-denial",
+      "production": "apps/desktop/src-tauri/src/lib.rs",
+      "import": "../../src-tauri/src/lib.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/lib.rs",
+        "find": ".on_new_window(|_, _| security::deny_new_window(\"settings\"))",
+        "replace": ".on_new_window(|_, _| tauri::webview::NewWindowResponse::Allow)"
+      }
+    },
+    {
+      "id": "desktop-custom-protocol-denial",
+      "group": "task-2",
+      "execution": "desktop-e2e",
+      "test": "apps/desktop/test/e2e/production-probe.test.mjs",
+      "testName": "desktop-custom-protocol-denial",
+      "production": "apps/desktop/src-tauri/src/security.rs",
+      "import": "../../src-tauri/src/security.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/security.rs",
+        "find": "_ => false,",
+        "replace": "_ => true,"
+      }
+    },
+    {
+      "id": "desktop-http-opener-capability",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-http-opener-capability",
+      "production": "apps/desktop/src-tauri/capabilities/settings.json",
+      "import": "../src-tauri/capabilities/settings.json",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/capabilities/settings.json",
+        "find": "\"permissions\": []",
+        "replace": "\"permissions\": [\"http:default\", \"opener:default\"]"
+      }
+    },
+    {
+      "id": "desktop-window-labels",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-window-labels",
+      "production": "apps/desktop/src-tauri/src/lib.rs",
+      "import": "../src-tauri/src/lib.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/lib.rs",
+        "find": "\"secrets.html\"",
+        "replace": "\"settings.html\""
+      }
+    },
+    {
+      "id": "desktop-tray-lifecycle",
+      "group": "task-2",
+      "test": "apps/desktop/test/csp-navigation.test.mjs",
+      "testName": "desktop-tray-lifecycle",
+      "production": "apps/desktop/src-tauri/src/tray.rs",
+      "import": "../src-tauri/src/tray.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/tray.rs",
+        "find": "\"show\" => {",
+        "replace": "\"show-disabled\" => {"
+      }
+    },
+    {
+      "id": "desktop-probe-attack-completeness",
+      "group": "task-2",
+      "execution": "desktop-e2e",
+      "test": "apps/desktop/test/e2e/production-probe.test.mjs",
+      "testName": "desktop-production-no-egress",
+      "production": "apps/desktop/src/egress-probe.ts",
+      "import": "../../src/egress-probe.ts",
+      "mutation": {
+        "file": "apps/desktop/src/egress-probe.ts",
+        "find": "attempted('fetch', () => fetch",
+        "replace": "// attempted('fetch', () => fetch"
+      }
+    },
+    {
+      "id": "desktop-probe-report-fields",
+      "group": "task-2",
+      "test": "apps/desktop/test/production-probe-parser.test.mjs",
+      "testName": "desktop probe parser extracts and validates every emitted field",
+      "production": "apps/desktop/test/e2e/probe-report.mjs",
+      "import": "./e2e/probe-report.mjs",
+      "mutation": {
+        "file": "apps/desktop/test/e2e/probe-report.mjs",
+        "find": "const entries = value.split(',');",
+        "replace": "const entries = value.split('|');"
+      }
+    },
+    {
+      "id": "desktop-root-mutation-structural-only",
+      "group": "task-2",
+      "test": "test/desktop-mutation-structure.test.mjs",
+      "testName": "root desktop mutation verification is structural only",
+      "production": "scripts/verify-desktop-mutations.mjs",
+      "import": "../scripts/verify-desktop-mutations.mjs",
+      "mutation": {
+        "file": "scripts/verify-desktop-mutations.mjs",
+        "find": "if (!process.exitCode) process.stdout.write(`Verified ${cases.length} desktop mutation pair(s)\\n`);",
+        "replace": "spawnSync(process.execPath, ['apps/desktop/test/mutations/run.mjs', '--all'], { cwd: root });\\nif (!process.exitCode) process.stdout.write(`Verified ${cases.length} desktop mutation pair(s)\\n`);"
+      }
     }
   ]
 }

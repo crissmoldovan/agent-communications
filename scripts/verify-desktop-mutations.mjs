@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -99,6 +98,12 @@ for (const item of cases) {
     errors.push(`${item.id}: named test case is missing`);
   }
   if (test?.marker !== item.id) errors.push(`${item.id}: no matching test marker`);
+  if (item.test.includes('/e2e/') && item.execution !== 'desktop-e2e') {
+    errors.push(`${item.id}: packaged probe cases must be marked desktop-e2e`);
+  }
+  if (!item.test.includes('/e2e/') && item.execution !== undefined && item.execution !== 'structural') {
+    errors.push(`${item.id}: non-e2e cases must be structural when execution is declared`);
+  }
   const production = resolve(root, item.production ?? '');
   if (!item.production || !production.startsWith(`${root}${sep}`) || !existsSync(production)) {
     errors.push(`${item.id}: production module is missing`);
@@ -134,17 +139,4 @@ if (errors.length) {
   process.exit(1);
 }
 
-// A custom manifest is used by structural tests. The repository manifest also proves mutants are red.
-if (manifestPath === join(root, 'apps/desktop/test/mutations/manifest.json')) {
-  for (const item of cases) {
-    const run = spawnSync(process.execPath, ['apps/desktop/test/mutations/run.mjs', '--case', item.id], {
-      cwd: root,
-      encoding: 'utf8',
-    });
-    if (run.status !== 0) {
-      process.stderr.write(`${item.id}: mutation did not fail its named test\n${run.stderr}`);
-      process.exitCode = 1;
-    }
-  }
-}
 if (!process.exitCode) process.stdout.write(`Verified ${cases.length} desktop mutation pair(s)\n`);

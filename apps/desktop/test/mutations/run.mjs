@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cp, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +31,11 @@ if (selected.length === 0) {
           filter: (source) => !source.split(sep).some((part) => excluded.has(part)),
         });
       }
+      if (item.test.includes('/e2e/')) {
+        const kind = process.platform === 'win32' ? 'junction' : 'dir';
+        await symlink(join(root, 'node_modules'), join(temp, 'node_modules'), kind);
+        await symlink(join(root, 'apps/desktop/node_modules'), join(temp, 'apps/desktop/node_modules'), kind);
+      }
       const target = resolve(temp, item.mutation.file);
       if (!target.startsWith(`${temp}${sep}`) || isAbsolute(item.mutation.file) || item.mutation.file.includes('..')) {
         throw new Error(`${item.id}: mutation file escapes temporary copy`);
@@ -41,6 +46,16 @@ if (selected.length === 0) {
       }
       const gitDir = execFileSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: root, encoding: 'utf8' }).trim();
       const childEnv = { ...process.env, NODE_OPTIONS: '', GIT_DIR: gitDir, GIT_WORK_TREE: temp };
+      delete childEnv.DESKTOP_PROBE_BINARY;
+      // The copy excludes target/, so a packaged probe would rebuild every dependency for the baseline and again for
+      // the mutant. They share one dedicated cache instead: not the checkout's own target/, which keeps its real build.
+      if (item.test.includes('/e2e/')) {
+        childEnv.CARGO_TARGET_DIR = join(root, 'apps/desktop/src-tauri/target/desktop-mutations');
+        // The copy's node_modules are links to the checkout's. pnpm's check before `exec` and `run` would try to
+        // reinstall through them, and refuses to; the checkout's install is the one being tested.
+        childEnv.npm_config_verify_deps_before_run = 'false';
+        childEnv.pnpm_config_verify_deps_before_run = 'false';
+      }
       for (const key of Object.keys(childEnv)) {
         if (key.startsWith('NODE_TEST')) delete childEnv[key];
       }

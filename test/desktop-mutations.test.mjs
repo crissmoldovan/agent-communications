@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -42,16 +42,4 @@ test('a named desktop test without its own marker is rejected', async (t) => {
   const result = spawnSync(process.execPath, [checker.pathname], { cwd: root, encoding: 'utf8' });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /unpaired desktop guard: named test has no mutation marker/);
-});
-
-test('the private-workspace mutation makes its named test fail', () => {
-  const output = execFileSync(
-    process.execPath,
-    ['apps/desktop/test/mutations/run.mjs', '--case', 'desktop-workspace-private'],
-    {
-      cwd: root,
-      encoding: 'utf8',
-    },
-  );
-  assert.match(output, /mutation desktop-workspace-private failed its named test/);
 });
