@@ -331,7 +331,8 @@ test('D7b: a normal owner approves all four injected fakes, interleaves source w
                   senderJidRaw: 'sender-owner',
                   stanzaId: 'w-new',
                   fromMe: false,
-                  at: '2026-10-09T12:00:01.000Z',
+                  // D4: stored strictly after the activation's T, which this owner takes from the real clock.
+                  at: new Date(Date.now() + 1_000).toISOString(),
                   kind: 'unknown',
                   body: 'fake owner event',
                 },

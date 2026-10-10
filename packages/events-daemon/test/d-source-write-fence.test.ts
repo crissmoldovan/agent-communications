@@ -470,7 +470,13 @@ test('P1: a chat-A WhatsApp turn refuses its account-wide B write after B is rev
         .prepare(
           'UPDATE rule_activation_points SET encrypted_position = ? WHERE activation_id = ? AND rule_id = ? AND rule_version = 1',
         )
-        .run(Buffer.from(JSON.stringify({ baselineIdentities: [] })), `activation-${rule.ruleId}`, rule.ruleId);
+        .run(
+          Buffer.from(
+            JSON.stringify({ capturedAt: '1970-01-01T00:00:00.000Z', baselineGeneration: 0, baselineIdentities: [] }),
+          ),
+          `activation-${rule.ruleId}`,
+          rule.ruleId,
+        );
     store.database.exec('UPDATE event_settings SET enabled = 1, paused = 0, switch_generation = 1');
 
     const stageStarted = deferred<void>();
@@ -507,6 +513,7 @@ test('P1: a chat-A WhatsApp turn refuses its account-wide B write after B is rev
                   senderJidRaw: 'sender@example.test',
                   stanzaId: 'message-b',
                   fromMe: false,
+                  at: '1970-01-01T00:00:01.000Z',
                 },
               ],
             } as never),

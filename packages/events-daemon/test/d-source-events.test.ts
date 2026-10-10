@@ -469,11 +469,12 @@ test('P1: a WhatsApp tuple present at one rule activation point is admitted only
     );
     assert.deepEqual(
       (
-        setup.store.database.prepare('SELECT rule_id FROM whatsapp_rule_admissions ORDER BY rule_id').all() as Array<{
-          rule_id: string;
-        }>
-      ).map((row) => row.rule_id),
-      ['rule-whatsapp-all-before'],
+        setup.store.database
+          .prepare('SELECT rule_id, admission FROM whatsapp_rule_admissions ORDER BY rule_id')
+          .all() as Array<{ rule_id: string; admission: string }>
+      ).map((row) => `${row.rule_id}:${row.admission}`),
+      // D4: the later rule covers the chat but the tuple is in its baseline, so its row is `suppressed`, never admitted.
+      ['rule-whatsapp-all-before:admitted', 'rule-whatsapp-chat-after:suppressed'],
     );
   } finally {
     await setup.close();
@@ -761,7 +762,8 @@ function whatsappReader(accountId: string, chatJid: string, kind: 'group' | 'dir
             senderJidRaw: '447700900002@s.whatsapp.net',
             stanzaId: kind === 'group' ? 'group-stanza' : 'direct-stanza',
             fromMe: false,
-            at: '2026-10-09T12:00:00.000Z',
+            // D4: admitted only when stored strictly after the version's T (the fixture's clock).
+            at: '2026-10-09T12:00:01.000Z',
             kind: 'text',
             body: 'source event',
           },
