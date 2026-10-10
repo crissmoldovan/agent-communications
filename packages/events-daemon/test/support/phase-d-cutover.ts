@@ -395,10 +395,10 @@ export class PhaseDCutoverFixture {
     assert.equal(drains.length, old.length, 'only old-owned source scopes carry a replacement drain');
   }
 
-  async tighten(options: unknown = this.options()): Promise<void> {
+  async tighten(options: unknown = this.options(), version = 2): Promise<void> {
     const versions = new ImmutableVersions(this.#store.database);
-    versions.createRule(this.rule(2, options, 'safe', 30));
-    const completion = await this.runtime.prepareRule({ ruleId: 'rule-cutover', version: 2 });
+    versions.createRule(this.rule(version, options, 'safe', version === 2 ? 30 : 20));
+    const completion = await this.runtime.prepareRule({ ruleId: 'rule-cutover', version });
     assert.equal(
       'derived' in completion && completion.derived,
       true,
@@ -439,7 +439,8 @@ export class PhaseDCutoverFixture {
     );
   }
 
-  async schedulerTurn(): Promise<void> {
+  /** A concurrent source scan can observe a durable claimed P before the owner resumes that completion. */
+  async schedulerTurn(input: Readonly<{ skipActivationRecovery?: boolean }> = {}): Promise<void> {
     if (!this.#lifecycle || !this.#cipher || !this.#whatsapp) throw new Error('cut-over runtime is closed');
     const dryrun = new DryRunDispatcher({
       store: this.#store,
@@ -468,7 +469,9 @@ export class PhaseDCutoverFixture {
     const scheduler = new EventScheduler({
       store: this.#store,
       lifecycle: this.#lifecycle,
-      activations: this.runtime,
+      activations: input.skipActivationRecovery
+        ? ({ resumeClaimedCompletions: async () => undefined } as never)
+        : this.runtime,
       dispatcher,
       expiry: new EventExpiry(this.#store, () => this.now.value),
       cipher: schedulerCipher,

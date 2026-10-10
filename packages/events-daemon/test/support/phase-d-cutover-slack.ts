@@ -24,6 +24,91 @@ export async function forEachSlackDurableEdge(
   }
 }
 
+/**
+ * Crashes a real activation at one of its own durable edges.  Source scans use
+ * the helpers below; keeping this separate prevents a source-page edge from
+ * accidentally standing in for the activation pointer edge of a completion.
+ */
+export async function activateAtSlackDurableEdge(
+  fixture: PhaseDCutoverFixture,
+  cell: string,
+  edge: SlackDurableEdge,
+  activate: () => Promise<void>,
+): Promise<void> {
+  if (edge === undefined) {
+    await activate();
+    return;
+  }
+  let fired = false;
+  await fixture.setFailpoint((at) => {
+    if (at !== edge) return;
+    fired = true;
+    throw new Error(`${cell}: activation crash at ${edge}`);
+  });
+  await assert.rejects(activate, new RegExp(`${cell}: activation crash at ${edge}`), edge);
+  assert.equal(fired, true, `${cell}: the activation reaches ${edge}`);
+  await fixture.restart();
+}
+
+/**
+ * A replacement source turn and its activation-pointer finalisation are two
+ * durable state machines.  When the outer matrix iteration names a pointer
+ * edge, crash the latter as well: a source-worker crash at the same named edge
+ * is not evidence that resumeClaimedCompletions survives its own pointer
+ * transition.
+ */
+export async function resumeClaimedSlackCompletionAtActivationEdge(
+  fixture: PhaseDCutoverFixture,
+  cell: string,
+  edge: SlackDurableEdge,
+): Promise<void> {
+  if (edge !== 'before-move' && edge !== 'after-move' && edge !== 'before-finalise') {
+    await fixture.runtime.resumeClaimedCompletions();
+    return;
+  }
+  assert.equal(
+    Number(
+      (
+        fixture.store.database
+          .prepare("SELECT COUNT(*) AS count FROM activation_intents WHERE status = 'pending-completion'")
+          .get() as { count: number }
+      ).count,
+    ),
+    1,
+    `${cell}: a claimed completion remains to probe at its ${edge} pointer edge`,
+  );
+  assert.equal(
+    Number(
+      (
+        fixture.store.database
+          .prepare('SELECT COUNT(*) AS count FROM replacement_drains WHERE drained_at IS NULL')
+          .get() as { count: number }
+      ).count,
+    ),
+    0,
+    `${cell}: its source drain has settled before probing ${edge} pointer finalisation`,
+  );
+  let fired = false;
+  await fixture.setFailpoint((at) => {
+    if (at !== edge) return;
+    fired = true;
+    throw new Error(`${cell}: activation completion crash at ${edge}`);
+  });
+  await assert.rejects(
+    () => fixture.runtime.resumeClaimedCompletions(),
+    new RegExp(`${cell}: activation completion crash at ${edge}`),
+    edge,
+  );
+  assert.equal(fired, true, `${cell}: resumeClaimedCompletions reaches its ${edge} pointer edge`);
+  const journal = await fixture.journal();
+  await fixture.restart();
+  await fixture.recover();
+  assert.ok(
+    (await fixture.journal()).length >= journal.length,
+    `${cell}: pointer restart retains the fake-provider journal`,
+  );
+}
+
 /** Runs the production Slack worker, crashes it at one durable write edge, then reopens the same fixture. */
 export async function sourceTurnThroughSlackDurableEdge(
   fixture: PhaseDCutoverFixture,

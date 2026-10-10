@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { DURABLE_CUTOVER_EDGES } from '../src/runtime/cutover-failpoint.ts';
+import { assertSlackMatrixMutationCoverage } from './support/cutover-mutants.ts';
 import { IDS, PhaseDCutoverFixture } from './support/phase-d-cutover.ts';
 import {
+  activateAtSlackDurableEdge,
   assertSlackOccurrences,
   forEachSlackDurableEdge,
   slackMessage as matrixSlackMessage,
+  resumeClaimedSlackCompletionAtActivationEdge,
   schedulerTurnThroughSlackDurableEdge,
   slackScope,
   sourceTurnThroughSlackDurableEdge,
@@ -32,159 +36,90 @@ const cells = [
   'S:deadline-at-P-after-P-and-finalise-settles-without-write',
 ] as const;
 
-for (const name of cells) {
-  test(name, { skip: WINDOWS_SKIP }, async () => {
-    if (await runRequiredSlackMatrixCell(name)) return;
-    const fixture = await PhaseDCutoverFixture.create('slack');
-    try {
-      if (name === 'S:first-disabled-baselines-without-content') {
-        await fixture.activate();
-        await fixture.schedulerTurn();
-        fixture.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
-        return;
-      }
-      if (name === 'S:claimed-P-fences-history-and-reply-worker') {
-        await fixture.setFailpoint((edge) => {
-          if (edge === 'before-finalise') throw new Error('leave P unpublished');
-        });
-        await assert.rejects(() => fixture.activate(), /leave P unpublished/);
-        await fixture.schedulerTurn();
-        fixture.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
-        return;
-      }
-      if (name === 'S:deadline-at-P-after-P-and-finalise-settles-without-write') {
-        for (const [index, deadlineEdge] of [
-          'before-claim-deadline',
-          'before-baseline-deadline',
-          'before-finalise-deadline',
-        ].entries()) {
-          const attempt = index === 0 ? fixture : await PhaseDCutoverFixture.create('slack');
-          await attempt.setDeadlineFailpoint((edge) => {
-            if (edge === deadlineEdge) attempt.now.value += 3_600_001;
-          });
-          await assert.rejects(() => attempt.activate());
-          assert.equal(attempt.failedCompletions(), 1, `${deadlineEdge} settles the claimed completion`);
-          assert.equal(attempt.baselineCalls, index === 0 ? 0 : 1, `${deadlineEdge} stops at its own deadline gate`);
-          assert.equal(attempt.pointEncryptions, index === 2 ? 1 : 0, `${deadlineEdge} writes no later point`);
-          attempt.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
-          attempt.assertContentFreeSettlement();
-          if (attempt !== fixture) await attempt.dispose();
-        }
-        return;
-      }
-      if (name.includes('replace-old-only') || name.includes('replace-new-only') || name.includes('replace-shared')) {
-        await fixture.activate();
-        await fixture.enable();
-        await fixture.replace();
-        fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
-        return;
-      }
-      if (name === 'S:disabled-replacement-marks-drains-complete') {
-        await fixture.activate();
-        await fixture.replaceWhileDisabled();
-        fixture.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
-        return;
-      }
-      if (name === 'S:tighten-preserves-old-P-and-new-boundary') {
-        await fixture.activate();
-        await fixture.enable();
-        await fixture.schedulerTurn();
-        await fixture.tighten();
-        await fixture.schedulerTurn();
-        fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
-        return;
-      }
-      if (name === 'S:disable-or-remove-cancels-and-purges') {
-        await fixture.activate();
-        await fixture.enable();
-        await fixture.schedulerTurn();
-        await fixture.revokeByRule();
-        const calls = fixture.calls.length;
-        await fixture.schedulerTurn();
-        assert.equal(fixture.calls.length, calls, 'a revoked rule leaves no source work to call the provider');
-        fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
-        return;
-      }
-      if (name === 'S:claim-recovery-resumes-same-drain') {
-        await fixture.setFailpoint((edge) => {
-          if (edge === 'after-stage') throw new Error('restart after durable baseline');
-        });
-        await assert.rejects(() => fixture.activate(), /restart after durable baseline/);
-        await fixture.restart();
-        await fixture.recover();
-        await fixture.enable();
-        await fixture.schedulerTurn();
-        fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
-        return;
-      }
-      if (name === 'S:remove-readd-stays-dark') {
-        await fixture.activate();
-        await fixture.enable();
-        await fixture.schedulerTurn();
-        fixture.removeAccount();
-        await fixture.schedulerTurn();
-        fixture.readdAccount();
-        const calls = fixture.calls.length;
-        await fixture.schedulerTurn();
-        assert.equal(fixture.calls.length, calls, 're-add has no resurrected source point');
-        fixture.oracle({ raw: 1, admissions: 1 });
-        return;
-      }
-      await fixture.activate();
-      await fixture.enable();
-      await fixture.schedulerTurn();
-      await fixture.restart();
-      await fixture.sourceTurn();
-      fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
-      assert.equal(
-        (await fixture.journal()).filter((entry) => entry === 'slack.history').length >= 1,
-        true,
-        'the exact Slack timestamp was obtained through the real source reader',
-      );
-      const row = fixture.store.database
-        .prepare("SELECT dedupe_key FROM ingest WHERE type = 'slack.message.posted'")
-        .get() as { dedupe_key: string } | undefined;
-      assert.ok(row?.dedupe_key.includes(IDS.slackTs));
-    } finally {
-      await fixture.dispose();
+const matrixRuns = new Map<(typeof cells)[number], Set<string>>();
+
+async function forEachSlackMatrixEdge(
+  cell: (typeof cells)[number],
+  run: (fixture: PhaseDCutoverFixture, edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined) => Promise<void>,
+): Promise<void> {
+  await forEachSlackDurableEdge(async (fixture, edge) => {
+    await run(fixture, edge);
+    let runs = matrixRuns.get(cell);
+    if (runs === undefined) {
+      runs = new Set();
+      matrixRuns.set(cell, runs);
     }
+    // The edge helpers assert either that the failpoint fired, or that this
+    // particular continuation cannot reach it.  Recording only after the
+    // scenario returns makes a skipped crash observable to the final oracle.
+    runs.add(edge ?? 'no-crash');
   });
 }
 
-async function runRequiredSlackMatrixCell(name: (typeof cells)[number]): Promise<boolean> {
+for (const name of cells) {
+  test(name, { skip: WINDOWS_SKIP }, async () => {
+    await runRequiredSlackMatrixCell(name);
+  });
+}
+
+async function runRequiredSlackMatrixCell(name: (typeof cells)[number]): Promise<void> {
   switch (name) {
     case 'S:first-enabled-page-and-reply-barrier':
       await firstEnabledPageAndReplyBarrier();
-      return true;
+      return;
+    case 'S:first-disabled-baselines-without-content':
+      await firstDisabledBaselinesWithoutContent();
+      return;
     case 'S:replace-old-only-drains-history-and-replies':
       await replaceOldOnlyDrainsHistoryAndReplies();
-      return true;
+      return;
     case 'S:replace-new-only-baselines-at-P':
       await replaceNewOnlyBaselinesAtP();
-      return true;
+      return;
     case 'S:replace-shared-one-version-per-occurrence':
       await replaceSharedOneVersionPerOccurrence();
-      return true;
+      return;
+    case 'S:disabled-replacement-marks-drains-complete':
+      await disabledReplacementMarksDrainsComplete();
+      return;
     case 'S:enable-all-rebaselines-readded-scope':
       await enableAllRebaselinesReaddedScope();
-      return true;
+      return;
+    case 'S:tighten-preserves-old-P-and-new-boundary':
+      await tightenPreservesOldPAndNewBoundary();
+      return;
+    case 'S:disable-or-remove-cancels-and-purges':
+      await disableOrRemoveCancelsAndPurges();
+      return;
+    case 'S:remove-readd-stays-dark':
+      await removeReaddStaysDark();
+      return;
+    case 'S:claim-recovery-resumes-same-drain':
+      await claimRecoveryResumesSameDrain();
+      return;
     case 'S:timeout-keeps-watermark-and-retries':
       await timeoutKeepsWatermarkAndRetries();
-      return true;
+      return;
     case 'S:initial-cursor-is-after-baseline':
       await initialCursorIsAfterBaseline();
-      return true;
+      return;
+    case 'S:claimed-P-fences-history-and-reply-worker':
+      await claimedPFencesHistoryAndReplyWorker();
+      return;
     case 'S:initial-cursor-rechecks-points-under-conversation-lock':
       await initialCursorRechecksPointsUnderConversationLock();
-      return true;
+      return;
     case 'S:tighten-transfers-page-and-reply-debts-stale-scan-writes-nothing':
       await tightenTransfersPageAndReplyDebts();
-      return true;
+      return;
     case 'S:swap-drops-old-only-history-and-reply-debts':
       await swapDropsOldOnlyHistoryAndReplyDebts();
-      return true;
+      return;
+    case 'S:deadline-at-P-after-P-and-finalise-settles-without-write':
+      await deadlineAtPAfterPAndFinaliseSettlesWithoutWrite();
+      return;
     default:
-      return false;
+      return assert.fail(`unimplemented Slack cut-over matrix cell: ${name}`);
   }
 }
 
@@ -217,8 +152,67 @@ async function establishSlackCursor(
   await fixture.schedulerTurn();
 }
 
+async function activateAndRecoverAtSlackEdge(
+  fixture: PhaseDCutoverFixture,
+  cell: (typeof cells)[number],
+  edge: (typeof DURABLE_CUTOVER_EDGES)[number] | undefined,
+  activate: () => Promise<void>,
+): Promise<void> {
+  await activateAtSlackDurableEdge(fixture, cell, edge, activate);
+  await fixture.recover();
+}
+
+function activeRuleVersion(fixture: PhaseDCutoverFixture, ruleId = 'rule-cutover'): number | undefined {
+  return (
+    fixture.store.database
+      .prepare("SELECT version FROM active_versions WHERE kind = 'rule' AND object_id = ?")
+      .get(ruleId) as { version: number } | undefined
+  )?.version;
+}
+
+function hasPendingSlackPoint(fixture: PhaseDCutoverFixture): boolean {
+  return (
+    (fixture.store.database
+      .prepare(
+        `SELECT 1 AS present
+           FROM activation_baselines
+           JOIN activation_intents ON activation_intents.id = activation_baselines.intent_id
+          WHERE activation_baselines.source = 'slack'
+            AND activation_baselines.account_id = ?
+            AND activation_baselines.position_scope = ?
+            AND activation_intents.status = 'pending-completion'`,
+      )
+      .get(fixture.accountId, fixture.scope.scopeId) as { present: number } | undefined) !== undefined
+  );
+}
+
+async function finishSlackReplacementDrain(fixture: PhaseDCutoverFixture, cell: string): Promise<void> {
+  for (let turns = 0; turns < 4; turns += 1) {
+    const open = Number(
+      (
+        fixture.store.database
+          .prepare('SELECT COUNT(*) AS count FROM replacement_drains WHERE drained_at IS NULL')
+          .get() as { count: number }
+      ).count,
+    );
+    if (open === 0) return;
+    await fixture.sourceTurn();
+  }
+  assert.equal(
+    Number(
+      (
+        fixture.store.database
+          .prepare('SELECT COUNT(*) AS count FROM replacement_drains WHERE drained_at IS NULL')
+          .get() as { count: number }
+      ).count,
+    ),
+    0,
+    `${cell}: the bounded replacement reply drain settles before pointer finalisation`,
+  );
+}
+
 async function firstEnabledPageAndReplyBarrier(): Promise<void> {
-  await forEachSlackDurableEdge(async (fixture, edge) => {
+  await forEachSlackMatrixEdge('S:first-enabled-page-and-reply-barrier', async (fixture, edge) => {
     const parent = '1760000001.100000';
     const reply = '1760000001.200000';
     const post = '1760000002.000000';
@@ -253,11 +247,338 @@ async function firstEnabledPageAndReplyBarrier(): Promise<void> {
       { ts: reply, version: 1 },
       { ts: post, version: 1 },
     ]);
+
+    await assertFirstEnabledReplyBarrierAlsoFencesReplacementFinalisation();
+  });
+}
+
+async function assertFirstEnabledReplyBarrierAlsoFencesReplacementFinalisation(): Promise<void> {
+  const replacement = await PhaseDCutoverFixture.create('slack');
+  try {
+    const parent = '1760000001.000000';
+    const reply = '1760000001.500000';
+    const point = '1760000002.000000';
+    const afterPoint = '1760000003.000000';
+    await establishSlackCursor(replacement);
+    replacement.now.value += 5_000;
+    replacement.setSlackBaseline(point);
+    replacement.setSlackPages({
+      history: async () => ({
+        messages: [
+          matrixSlackMessage({ ts: parent, replyCount: 1 }),
+          matrixSlackMessage({ ts: point }),
+          matrixSlackMessage({ ts: afterPoint }),
+        ],
+        nextCursor: null,
+        retainedHistoryBoundary: false,
+      }),
+      replies: async ({ cursor }) =>
+        cursor === undefined || cursor === null
+          ? {
+              messages: [matrixSlackMessage({ ts: reply, threadTs: parent })],
+              nextCursor: 'replacement-reply-page-2',
+              retainedHistoryBoundary: false,
+            }
+          : { messages: [], nextCursor: null, retainedHistoryBoundary: false },
+    });
+    await startExactSlackReplacement(replacement, { channel: 'slack', conversations: ['C-new'] });
+    await replacement.sourceTurn();
+    await replacement.runtime.resumeClaimedCompletions();
+    assert.equal(
+      activeRuleVersion(replacement),
+      1,
+      'top-level coverage alone cannot finalise a replacement before the aggregate reply barrier reaches P',
+    );
+  } finally {
+    await replacement.dispose();
+  }
+}
+
+async function firstDisabledBaselinesWithoutContent(): Promise<void> {
+  await forEachSlackMatrixEdge('S:first-disabled-baselines-without-content', async (fixture, edge) => {
+    const point = '1760000002.000000';
+    const before = '1760000001.000000';
+    const between = '1760000003.000000';
+    const laterPoint = '1760000004.000000';
+    const after = '1760000005.000000';
+    fixture.setSlackBaseline(point);
+    await activateAndRecoverAtSlackEdge(fixture, 'S:first-disabled-baselines-without-content', edge, () =>
+      fixture.activate(),
+    );
+    const storedPoint = fixture.store.database
+      .prepare(
+        `SELECT encrypted_position
+           FROM rule_activation_points
+          WHERE source = 'slack' AND account_id = ? AND position_scope = ?
+            AND rule_id = 'rule-cutover' AND rule_version = 1`,
+      )
+      .get(fixture.accountId, fixture.scope.scopeId) as { encrypted_position: Uint8Array } | undefined;
+    assert.ok(storedPoint?.encrypted_position.byteLength, 'disabled activation records its encrypted Slack P');
+    fixture.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
+
+    fixture.setSlackPages(emptySlackPages());
+    await fixture.enable();
+    fixture.now.value += 2_000;
+    await fixture.schedulerTurn();
+    fixture.setSlackBaseline(laterPoint);
+    await fixture.activateAdditionalRule('rule-later');
+    fixture.setSlackPages({
+      history: async () => ({
+        messages: [
+          matrixSlackMessage({ ts: before }),
+          matrixSlackMessage({ ts: between }),
+          matrixSlackMessage({ ts: after }),
+        ],
+        nextCursor: null,
+        retainedHistoryBoundary: false,
+      }),
+      replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+    });
+    fixture.now.value += 2_000;
+    await fixture.schedulerTurn();
+    fixture.now.value += 2_000;
+    await fixture.schedulerTurn();
+    fixture.oracle({ raw: 2, admissions: 3, versions: [1, 1, 1] });
+    assertSlackOccurrences(fixture, [
+      { ts: between, version: 1 },
+      { ts: after, version: 1 },
+      { ts: after, version: 1 },
+    ]);
+    assert.equal(
+      fixture.store.database.prepare('SELECT 1 FROM ingest WHERE dedupe_key LIKE ?').get(`%${before}%`),
+      undefined,
+      'enable-all never admits a message strictly before the disabled-time point',
+    );
+  });
+}
+
+async function disabledReplacementMarksDrainsComplete(): Promise<void> {
+  await forEachSlackMatrixEdge('S:disabled-replacement-marks-drains-complete', async (fixture, edge) => {
+    fixture.setSlackPages(emptySlackPages());
+    await fixture.activate();
+    await activateAndRecoverAtSlackEdge(fixture, 'S:disabled-replacement-marks-drains-complete', edge, () =>
+      fixture.replaceWhileDisabled(),
+    );
+    assert.equal(activeRuleVersion(fixture), 2, 'a disabled replacement completes without waiting for a worker');
+    assert.equal(
+      Number(
+        (
+          fixture.store.database
+            .prepare("SELECT COUNT(*) AS count FROM replacement_drains WHERE source = 'slack'")
+            .get() as { count: number }
+        ).count,
+      ),
+      0,
+      'the disabled replacement leaves no durable Slack drain behind',
+    );
+    fixture.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
+  });
+}
+
+async function tightenPreservesOldPAndNewBoundary(): Promise<void> {
+  await forEachSlackMatrixEdge('S:tighten-preserves-old-P-and-new-boundary', async (fixture, edge) => {
+    const point = '1760000001.000000';
+    const after = '1760000002.000000';
+    fixture.setSlackBaseline(point);
+    fixture.setSlackPages(emptySlackPages());
+    await fixture.activate();
+    await fixture.enable();
+    await fixture.schedulerTurn();
+    const callsBeforeTightening = fixture.calls.length;
+    await fixture.tighten();
+    assert.equal(fixture.calls.length, callsBeforeTightening, 'a derived tightening makes no Slack provider call');
+    assert.equal(activeRuleVersion(fixture), 2, 'the derived pointer publishes the child with the inherited P');
+    fixture.now.value += 2_000;
+    fixture.setSlackPages({
+      history: async () => ({
+        messages: [matrixSlackMessage({ ts: after })],
+        nextCursor: null,
+        retainedHistoryBoundary: false,
+      }),
+      replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+    });
+    await sourceTurnThroughSlackDurableEdge(fixture, edge);
+    fixture.oracle({ raw: 1, admissions: 1, versions: [2] });
+    assertSlackOccurrences(fixture, [{ ts: after, version: 2 }]);
+  });
+}
+
+async function disableOrRemoveCancelsAndPurges(): Promise<void> {
+  await forEachSlackMatrixEdge('S:disable-or-remove-cancels-and-purges', async (fixture, edge) => {
+    fixture.setSlackPages(emptySlackPages());
+    await activateAndRecoverAtSlackEdge(fixture, 'S:disable-or-remove-cancels-and-purges', edge, () =>
+      fixture.activate(),
+    );
+    await fixture.enable();
+    await fixture.schedulerTurn();
+    await fixture.revokeByRule();
+    const callsBeforeRevokedTurn = fixture.calls.length;
+    fixture.now.value += 2_000;
+    await fixture.schedulerTurn();
+    assert.equal(
+      fixture.calls.length,
+      callsBeforeRevokedTurn,
+      'a newly due revoked scope makes no Slack provider call',
+    );
+    fixture.oracle({ raw: 0, admissions: 0, providerCalls: callsBeforeRevokedTurn });
+  });
+}
+
+async function removeReaddStaysDark(): Promise<void> {
+  await forEachSlackMatrixEdge('S:remove-readd-stays-dark', async (fixture, edge) => {
+    const oldPoint = '1760000001.000000';
+    const newPoint = '1760000003.000000';
+    const beforeReapproval = '1760000002.000000';
+    const afterReapproval = '1760000004.000000';
+    fixture.setSlackBaseline(oldPoint);
+    fixture.setSlackPages(emptySlackPages());
+    await fixture.activate();
+    await fixture.enable();
+    await fixture.schedulerTurn();
+    fixture.removeAccount();
+    const callsBeforeRemoval = fixture.calls.length;
+    fixture.now.value += 2_000;
+    await fixture.schedulerTurn();
+    assert.equal(fixture.calls.length, callsBeforeRemoval, 'a newly due removed account cannot call Slack');
+    fixture.oracle({ raw: 0, admissions: 0, providerCalls: callsBeforeRemoval });
+
+    fixture.readdAccount();
+    fixture.now.value += 2_000;
+    await fixture.schedulerTurn();
+    assert.equal(
+      fixture.calls.length,
+      callsBeforeRemoval,
+      'a newly due re-added account remains dark without a newly approved point',
+    );
+    fixture.oracle({ raw: 0, admissions: 0, providerCalls: callsBeforeRemoval });
+
+    fixture.setSlackBaseline(newPoint);
+    fixture.setSlackPages({
+      history: async () => ({
+        messages: [matrixSlackMessage({ ts: beforeReapproval }), matrixSlackMessage({ ts: afterReapproval })],
+        nextCursor: null,
+        retainedHistoryBoundary: false,
+      }),
+      replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+    });
+    await activateAndRecoverAtSlackEdge(fixture, 'S:remove-readd-stays-dark', edge, () => fixture.activate(2));
+    fixture.now.value += 2_000;
+    await fixture.schedulerTurn();
+    fixture.oracle({ raw: 1, admissions: 1, versions: [2] });
+    assertSlackOccurrences(fixture, [{ ts: afterReapproval, version: 2 }]);
+    assert.equal(
+      fixture.store.database.prepare('SELECT 1 FROM ingest WHERE dedupe_key LIKE ?').get(`%${beforeReapproval}%`),
+      undefined,
+      'the re-approval starts only at its freshly sampled point',
+    );
+  });
+}
+
+async function claimRecoveryResumesSameDrain(): Promise<void> {
+  await forEachSlackMatrixEdge('S:claim-recovery-resumes-same-drain', async (fixture, edge) => {
+    fixture.setSlackPages(emptySlackPages());
+    await activateAndRecoverAtSlackEdge(fixture, 'S:claim-recovery-resumes-same-drain', edge, () => fixture.activate());
+    assert.equal(activeRuleVersion(fixture), 1, 'restart resumes the same claimed activation to its active pointer');
+    await fixture.enable();
+    fixture.now.value += 2_000;
+    await fixture.schedulerTurn();
+    fixture.oracle({ raw: 0, admissions: 0, providerCalls: 1 });
+  });
+}
+
+async function claimedPFencesHistoryAndReplyWorker(): Promise<void> {
+  await forEachSlackMatrixEdge('S:claimed-P-fences-history-and-reply-worker', async (fixture, edge) => {
+    const oldPoint = '1760000000.000000';
+    const pendingPoint = '1760000002.000000';
+    const after = '1760000003.000000';
+    fixture.setSlackBaseline(oldPoint);
+    fixture.setSlackPages(emptySlackPages());
+    await fixture.activate();
+    await fixture.enable();
+    await fixture.schedulerTurn();
+    fixture.setSlackBaseline(pendingPoint);
+    // The no-source-crash control still needs a durable, unpublished P to
+    // exercise the fence. Pause that setup activation just after staging P;
+    // the actual source-edge probe below must remain unreachable while fenced.
+    await activateAtSlackDurableEdge(fixture, 'S:claimed-P-fences-history-and-reply-worker', 'after-stage', () =>
+      fixture.activateAdditionalRule('rule-pending'),
+    );
+
+    fixture.now.value += 2_000;
+    assert.equal(hasPendingSlackPoint(fixture), true, 'the additional rule retains its unpublished Slack P');
+    const callsBeforeFenceProbe = fixture.calls.length;
+    let sourceEdgeFired = false;
+    if (edge !== undefined)
+      await fixture.setFailpoint((at) => {
+        if (at === edge) sourceEdgeFired = true;
+      });
+    await fixture.schedulerTurn({ skipActivationRecovery: true });
+    assert.equal(
+      fixture.calls.length,
+      callsBeforeFenceProbe,
+      'an active scope is fenced before the scheduler can invoke its history/reply worker while P is unpublished',
+    );
+    assert.equal(sourceEdgeFired, false, `${edge ?? 'no-crash'} is unreachable because the fenced worker never starts`);
+    await fixture.setFailpoint(undefined);
+    fixture.oracle({ raw: 0, admissions: 0, providerCalls: callsBeforeFenceProbe });
+
+    await fixture.recover();
+    fixture.setSlackPages({
+      history: async () => ({
+        messages: [matrixSlackMessage({ ts: after })],
+        nextCursor: null,
+        retainedHistoryBoundary: false,
+      }),
+      replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+    });
+    fixture.now.value += 2_000;
+    await fixture.schedulerTurn();
+    fixture.oracle({ raw: 1, admissions: 2, versions: [1, 1] });
+    assertSlackOccurrences(fixture, [
+      { ts: after, version: 1 },
+      { ts: after, version: 1 },
+    ]);
+  });
+}
+
+async function deadlineAtPAfterPAndFinaliseSettlesWithoutWrite(): Promise<void> {
+  await forEachSlackMatrixEdge('S:deadline-at-P-after-P-and-finalise-settles-without-write', async (fixture, edge) => {
+    await activateAndRecoverAtSlackEdge(
+      fixture,
+      'S:deadline-at-P-after-P-and-finalise-settles-without-write',
+      edge,
+      () => fixture.activate(),
+    );
+    for (const [index, deadlineEdge] of [
+      'before-claim-deadline',
+      'before-baseline-deadline',
+      'before-finalise-deadline',
+    ].entries()) {
+      const baselineCallsBefore = fixture.baselineCalls;
+      await fixture.setDeadlineFailpoint((at) => {
+        if (at === deadlineEdge) fixture.now.value += 3_600_001;
+      });
+      await assert.rejects(() => fixture.activateAdditionalRule(`rule-deadline-${index}`));
+      if (deadlineEdge === 'before-claim-deadline')
+        assert.equal(
+          fixture.baselineCalls,
+          baselineCallsBefore,
+          'a completion expired before its claim cannot sample a Slack baseline before settling content-free',
+        );
+      assert.equal(
+        fixture.failedCompletions(),
+        index + 1,
+        `${deadlineEdge} settles its claimed completion rather than retaining P`,
+      );
+      fixture.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
+      fixture.assertContentFreeSettlement();
+      await fixture.setDeadlineFailpoint(undefined);
+    }
   });
 }
 
 async function replaceOldOnlyDrainsHistoryAndReplies(): Promise<void> {
-  await forEachSlackDurableEdge(async (fixture, edge) => {
+  await forEachSlackMatrixEdge('S:replace-old-only-drains-history-and-replies', async (fixture, edge) => {
     await establishSlackCursor(fixture);
     fixture.now.value += 5_000;
     const preP = '1760000001.000000';
@@ -296,8 +617,8 @@ async function replaceOldOnlyDrainsHistoryAndReplies(): Promise<void> {
       1,
       'top-level coverage alone cannot swap an old-only conversation past its reply barrier',
     );
-    await fixture.sourceTurn();
-    await fixture.runtime.resumeClaimedCompletions();
+    await finishSlackReplacementDrain(fixture, 'S:replace-old-only-drains-history-and-replies');
+    await resumeClaimedSlackCompletionAtActivationEdge(fixture, 'S:replace-old-only-drains-history-and-replies', edge);
     fixture.oracle({ raw: 3, admissions: 3, versions: [1, 1, 1] });
     assertSlackOccurrences(fixture, [
       { ts: preP, version: 1 },
@@ -313,7 +634,7 @@ async function replaceOldOnlyDrainsHistoryAndReplies(): Promise<void> {
 }
 
 async function replaceNewOnlyBaselinesAtP(): Promise<void> {
-  await forEachSlackDurableEdge(async (fixture, edge) => {
+  await forEachSlackMatrixEdge('S:replace-new-only-baselines-at-P', async (fixture, edge) => {
     await establishSlackCursor(fixture, { channel: 'slack', conversations: ['C-old'] });
     const preP = '1760000001.000000';
     const point = '1760000002.000000';
@@ -334,7 +655,7 @@ async function replaceNewOnlyBaselinesAtP(): Promise<void> {
     });
     await startExactSlackReplacement(fixture, fixture.options());
     await fixture.sourceTurn(slackScope(fixture, 'C-old'));
-    await fixture.runtime.resumeClaimedCompletions();
+    await resumeClaimedSlackCompletionAtActivationEdge(fixture, 'S:replace-new-only-baselines-at-P', edge);
     assert.equal(
       (
         fixture.store.database
@@ -370,7 +691,7 @@ async function replaceNewOnlyBaselinesAtP(): Promise<void> {
 }
 
 async function replaceSharedOneVersionPerOccurrence(): Promise<void> {
-  await forEachSlackDurableEdge(async (fixture, edge) => {
+  await forEachSlackMatrixEdge('S:replace-shared-one-version-per-occurrence', async (fixture, edge) => {
     await establishSlackCursor(fixture);
     const preP = '1760000001.000000';
     const atP = '1760000002.000000';
@@ -390,7 +711,7 @@ async function replaceSharedOneVersionPerOccurrence(): Promise<void> {
     });
     await startExactSlackReplacement(fixture, fixture.options());
     await sourceTurnThroughSlackDurableEdge(fixture, edge);
-    await fixture.runtime.resumeClaimedCompletions();
+    await resumeClaimedSlackCompletionAtActivationEdge(fixture, 'S:replace-shared-one-version-per-occurrence', edge);
     fixture.now.value += 5_000;
     await fixture.sourceTurn();
     fixture.oracle({ raw: 3, admissions: 3, versions: [1, 1, 2] });
@@ -403,7 +724,7 @@ async function replaceSharedOneVersionPerOccurrence(): Promise<void> {
 }
 
 async function enableAllRebaselinesReaddedScope(): Promise<void> {
-  await forEachSlackDurableEdge(async (fixture, edge) => {
+  await forEachSlackMatrixEdge('S:enable-all-rebaselines-readded-scope', async (fixture, edge) => {
     await establishSlackCursor(fixture);
     await fixture.disableAll();
     const callsWhileEnabled = fixture.calls.length;
@@ -431,7 +752,7 @@ async function enableAllRebaselinesReaddedScope(): Promise<void> {
 }
 
 async function timeoutKeepsWatermarkAndRetries(): Promise<void> {
-  await forEachSlackDurableEdge(async (fixture, edge) => {
+  await forEachSlackMatrixEdge('S:timeout-keeps-watermark-and-retries', async (fixture, edge) => {
     await establishSlackCursor(fixture);
     const preP = '1760000001.000000';
     const atP = '1760000002.000000';
@@ -469,7 +790,7 @@ async function timeoutKeepsWatermarkAndRetries(): Promise<void> {
 }
 
 async function initialCursorIsAfterBaseline(): Promise<void> {
-  await forEachSlackDurableEdge(async (fixture, edge) => {
+  await forEachSlackMatrixEdge('S:initial-cursor-is-after-baseline', async (fixture, edge) => {
     const baseline = '1759999999.000000';
     const before = '1760000000.250000';
     const laterBaseline = '1760000000.500000';
@@ -512,16 +833,34 @@ async function initialCursorIsAfterBaseline(): Promise<void> {
 }
 
 async function initialCursorRechecksPointsUnderConversationLock(): Promise<void> {
-  await forEachSlackDurableEdge(async (fixture, edge) => {
+  await forEachSlackMatrixEdge('S:initial-cursor-rechecks-points-under-conversation-lock', async (fixture, edge) => {
     const earlierPoint = '1759999999.000000';
     const laterPoint = '1760000001.000000';
     const between = '1760000000.000000';
-    const afterBoth = '1760000002.000000';
+    // The preceding scheduler turn closes an interval at its fake-clock
+    // latest (1760000003); keep the shared candidate in the next interval.
+    const afterBoth = '1760000004.000000';
     fixture.setSlackBaseline(earlierPoint);
+    fixture.setSlackPages(emptySlackPages());
     await fixture.activate();
     await fixture.enable();
     fixture.setSlackBaseline(laterPoint);
-    await fixture.activateAdditionalRule('rule-later');
+    let concurrentPointPublications = 0;
+    fixture.setSchedulerPointDecryptHook(async () => {
+      if (concurrentPointPublications > 0) return;
+      concurrentPointPublications += 1;
+      await fixture.activateAdditionalRule('rule-later');
+    });
+    await fixture.schedulerTurn();
+    fixture.setSchedulerPointDecryptHook(undefined);
+    assert.equal(concurrentPointPublications, 1, 'the scheduler cursor decrypt raced one new Slack point publication');
+    assert.equal(
+      fixture.store.database
+        .prepare("SELECT 1 FROM cursors WHERE source = 'slack' AND account_id = ? AND cursor_scope = ?")
+        .get(fixture.accountId, fixture.scope.scopeId),
+      undefined,
+      'the cursor insert abandons the stale point set inside the conversation lock',
+    );
     fixture.setSlackPages({
       history: async () => ({
         messages: [matrixSlackMessage({ ts: between })],
@@ -530,6 +869,7 @@ async function initialCursorRechecksPointsUnderConversationLock(): Promise<void>
       }),
       replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
     });
+    fixture.now.value += 3_000;
     await fixture.schedulerTurn();
     fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
     fixture.now.value += 3_000;
@@ -542,6 +882,7 @@ async function initialCursorRechecksPointsUnderConversationLock(): Promise<void>
       replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
     });
     await sourceTurnThroughSlackDurableEdge(fixture, edge);
+    await fixture.sourceTurn();
     fixture.oracle({ raw: 2, admissions: 3, versions: [1, 1, 1] });
     assert.deepEqual(
       fixture.store.database
@@ -563,35 +904,74 @@ async function initialCursorRechecksPointsUnderConversationLock(): Promise<void>
 }
 
 async function tightenTransfersPageAndReplyDebts(): Promise<void> {
-  await forEachSlackDurableEdge(async (fixture, edge) => {
-    await establishSlackCursor(fixture);
-    fixture.now.value += 5_000;
-    const staged = '1760000001.000000';
-    fixture.setSlackPages({
-      history: async () => ({
-        messages: [matrixSlackMessage({ ts: staged })],
-        nextCursor: null,
-        retainedHistoryBoundary: false,
-      }),
-      replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
-    });
-    fixture.now.value += 2_000;
-    await fixture.setFailpoint((at) => {
-      if (at === 'after-stage') throw new Error('stage is durable before derived pointer moves');
-    });
-    await assert.rejects(() => fixture.sourceTurn(), /stage is durable before derived pointer moves/);
-    await fixture.restart();
-    await fixture.tighten();
-    await sourceTurnThroughSlackDurableEdge(fixture, edge, undefined, {
-      expectFire: edge !== 'before-stage' && edge !== 'after-stage',
-    });
-    fixture.oracle({ raw: 1, admissions: 1, versions: [2] });
-    assertSlackOccurrences(fixture, [{ ts: staged, version: 2 }]);
-  });
+  await forEachSlackMatrixEdge(
+    'S:tighten-transfers-page-and-reply-debts-stale-scan-writes-nothing',
+    async (fixture, edge) => {
+      await establishSlackCursor(fixture);
+      fixture.now.value += 5_000;
+      const staged = '1760000001.000000';
+      fixture.setSlackPages({
+        history: async () => ({
+          messages: [matrixSlackMessage({ ts: staged })],
+          nextCursor: null,
+          retainedHistoryBoundary: false,
+        }),
+        replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+      });
+      fixture.now.value += 2_000;
+      await fixture.setFailpoint((at) => {
+        if (at === 'after-stage') throw new Error('stage is durable before derived pointer moves');
+      });
+      await assert.rejects(() => fixture.sourceTurn(), /stage is durable before derived pointer moves/);
+      await fixture.restart();
+      await fixture.tighten();
+      await sourceTurnThroughSlackDurableEdge(fixture, edge, undefined, {
+        expectFire: edge !== 'before-stage' && edge !== 'after-stage',
+      });
+      fixture.oracle({ raw: 1, admissions: 1, versions: [2] });
+      assertSlackOccurrences(fixture, [{ ts: staged, version: 2 }]);
+
+      // Hold a v2 source worker across the v3 derived-pointer move.  The
+      // history reader is awaited after the worker captured its rule snapshot,
+      // so a correct source write is refused; only a fresh v3 retry can stage
+      // and admit this occurrence.  This is the stale-write half of D12, rather
+      // than merely proving that a restart observes the child pointer.
+      const racing = '1760000008.000000';
+      let movedDuringRead = false;
+      fixture.now.value += 2_000;
+      fixture.setSlackPages({
+        history: async () => {
+          if (!movedDuringRead) {
+            movedDuringRead = true;
+            await fixture.tighten(fixture.options(), 3);
+          }
+          return {
+            messages: [matrixSlackMessage({ ts: racing })],
+            nextCursor: null,
+            retainedHistoryBoundary: false,
+          };
+        },
+        replies: async () => ({ messages: [], nextCursor: null, retainedHistoryBoundary: false }),
+      });
+      await assert.rejects(
+        () => fixture.sourceTurn(),
+        /stale source write/u,
+        'the in-flight v2 worker cannot persist after the v3 tightening moves its pointer',
+      );
+      assert.equal(movedDuringRead, true, 'the derived pointer moves while the source worker holds its old snapshot');
+      fixture.oracle({ raw: 1, admissions: 1, versions: [2] });
+      await fixture.sourceTurn();
+      fixture.oracle({ raw: 2, admissions: 2, versions: [2, 3] });
+      assertSlackOccurrences(fixture, [
+        { ts: staged, version: 2 },
+        { ts: racing, version: 3 },
+      ]);
+    },
+  );
 }
 
 async function swapDropsOldOnlyHistoryAndReplyDebts(): Promise<void> {
-  await forEachSlackDurableEdge(async (fixture, edge) => {
+  await forEachSlackMatrixEdge('S:swap-drops-old-only-history-and-reply-debts', async (fixture, edge) => {
     await establishSlackCursor(fixture);
     fixture.now.value += 5_000;
     const preP = '1760000001.000000';
@@ -620,7 +1000,7 @@ async function swapDropsOldOnlyHistoryAndReplyDebts(): Promise<void> {
     });
     await assert.rejects(() => fixture.sourceTurn(), /old-only post-P stage is durable before swap/);
     await fixture.restart();
-    await fixture.runtime.resumeClaimedCompletions();
+    await resumeClaimedSlackCompletionAtActivationEdge(fixture, 'S:swap-drops-old-only-history-and-reply-debts', edge);
     assert.equal(
       (
         fixture.store.database
@@ -1015,3 +1395,16 @@ function slackMessage(input: { ts: string; threadTs: string | null; replyCount: 
     files: [],
   };
 }
+
+test('S: every matrix cell records its no-crash and durable-edge run and has a named mutation', {
+  skip: WINDOWS_SKIP,
+}, () => {
+  const expected = new Set(['no-crash', ...DURABLE_CUTOVER_EDGES]);
+  for (const cell of cells)
+    assert.deepEqual(
+      matrixRuns.get(cell),
+      expected,
+      `${cell}: the matrix must run no-crash plus every durable edge (fired or explicitly unreachable)`,
+    );
+  assertSlackMatrixMutationCoverage(cells);
+});

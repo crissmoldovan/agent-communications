@@ -123,7 +123,7 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
           .run(point.source, point.accountId, point.positionScope, this.#now());
       }
       this.#store.database.prepare('DELETE FROM activation_baselines WHERE intent_id = ?').run(intent.id);`,
-    cell: 'S:new-only replacement keeps the shared cursor at an earlier active rule point',
+    cell: 'S:replace-new-only-baselines-at-P',
     exportName: 'ActivationRuntime',
   },
   {
@@ -196,6 +196,64 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
     after: 'return true;',
     cell: 'S:enable-all-rebaselines-readded-scope',
     exportName: 'runSourceOwnerWork',
+  },
+  {
+    id: 'slack-disabled-baseline-later-rule-admits-before-own-point',
+    file: 'runtime/source-owner-work.ts',
+    before:
+      'return compareSlackTimestamp(assertSlackTimestamp(candidate.timestamp), assertSlackTimestamp(timestamp)) > 0;',
+    after: 'return true;',
+    cell: 'S:first-disabled-baselines-without-content',
+    exportName: 'runSourceOwnerWork',
+  },
+  {
+    id: 'slack-disabled-replacement-leaves-drain-open',
+    file: 'runtime/activations.ts',
+    before: 'disabled || statusScope ? this.#now() : null,',
+    after: 'statusScope ? this.#now() : null,',
+    cell: 'S:disabled-replacement-marks-drains-complete',
+    exportName: 'ActivationRuntime',
+  },
+  {
+    id: 'slack-tightening-skips-child-pointer',
+    file: 'runtime/replacements.ts',
+    before:
+      '"UPDATE active_versions SET version = ?, current_cutover_id = ?, activated_at = ? WHERE kind = \'rule\' AND object_id = ?",',
+    after:
+      '"UPDATE active_versions SET version = ?, current_cutover_id = ?, activated_at = ? WHERE kind = \'rule\' AND object_id = ? AND 0 = 1",',
+    cell: 'S:tighten-preserves-old-P-and-new-boundary',
+    exportName: 'applyDerivedTightening',
+  },
+  {
+    id: 'slack-revocation-omits-active-scope-purge',
+    file: 'runtime/revocations.ts',
+    before: `database.database
+      .prepare(
+        "UPDATE rule_versions SET state = 'revoked', revoked_at = ? WHERE rule_id = ? AND state IN ('active', 'superseded')",
+      )
+      .run(Date.now(), ruleId);
+    purgeRevokedRuleWork(database.database, ruleId, live);
+    database.database.prepare("DELETE FROM active_versions WHERE kind = 'rule' AND object_id = ?").run(ruleId);`,
+    after: 'void ruleId; void live;',
+    cell: 'S:disable-or-remove-cancels-and-purges',
+    exportName: 'disableRule',
+  },
+  {
+    id: 'slack-readd-omits-account-purge',
+    file: 'runtime/account-fence.ts',
+    before:
+      "const scope: EventAccountScope = typeof account === 'string' ? { source: 'gmail', accountId: account } : account;",
+    after: 'void database; void account; void now; return;',
+    cell: 'S:remove-readd-stays-dark',
+    exportName: 'purgeRemovedAccountWork',
+  },
+  {
+    id: 'slack-recovery-skips-claimed-completion',
+    file: 'runtime/activations.ts',
+    before: "WHERE status IN ('pending', 'pending-completion')\",",
+    after: 'WHERE 1 = 0",',
+    cell: 'S:claim-recovery-resumes-same-drain',
+    exportName: 'ActivationRuntime',
   },
   {
     id: 'slack-timeout-omits-deadline-settlement',
@@ -342,6 +400,21 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
   },
 ];
 
+/** Keeps a new Slack matrix name from silently falling back to no destructive oracle. */
+export function assertSlackMatrixMutationCoverage(cells: readonly string[]): void {
+  const declared = new Set(cells);
+  const slack = CUTOVER_MUTATIONS.filter((mutation) => mutation.cell.startsWith('S:'));
+  for (const mutation of slack)
+    assert.equal(
+      declared.has(mutation.cell),
+      true,
+      `${mutation.id}: Slack mutations must name one of this source's matrix cells`,
+    );
+  const covered = new Set(slack.map((mutation) => mutation.cell));
+  for (const cell of cells)
+    assert.equal(covered.has(cell), true, `${cell}: every Slack matrix cell needs a destructive mutation`);
+}
+
 export interface MutantCopy {
   readonly root: string;
   readonly mutation: CutoverMutation;
@@ -354,19 +427,11 @@ export async function expectMatrixCellToKillMutant(copy: MutantCopy): Promise<vo
   const copiedTests = join(copy.root, 'test');
   const sourceTest = (() => {
     switch (copy.mutation.id) {
-      case 'slack-top-level-only-finalisation':
-        return 'slack-reply-drains.test.ts';
-      case 'source-scope-fence':
-        return 'source-scope-fence.test.ts';
-      case 'initial-cursor-outside-scope-lock':
-        return 'd-source-scheduler.test.ts';
       case 'skip-published-point-reread':
         return 'initial-cursor-fence.test.ts';
       case 'leave-transferred-debt-on-parent':
       case 'retain-old-only-debt-at-swap':
         return 'd-source-replacement.test.ts';
-      case 'stale-slack-scan-commits':
-        return 'slack-write-fence.test.ts';
       default:
         return copy.mutation.cell.startsWith('S:')
           ? 'slack-cutover.test.ts'
@@ -375,6 +440,12 @@ export async function expectMatrixCellToKillMutant(copy: MutantCopy): Promise<vo
             : 'whatsapp-cutover.test.ts';
     }
   })();
+  if (copy.mutation.cell.startsWith('S:'))
+    assert.equal(
+      sourceTest,
+      'slack-cutover.test.ts',
+      `${copy.mutation.id}: its Slack mutation must run only its named Slack matrix cell`,
+    );
   const isMatrixCellTest =
     sourceTest === 'whatsapp-cutover.test.ts' ||
     sourceTest === 'slack-cutover.test.ts' ||
