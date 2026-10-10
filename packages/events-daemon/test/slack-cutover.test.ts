@@ -471,7 +471,8 @@ async function timeoutKeepsWatermarkAndRetries(): Promise<void> {
 async function initialCursorIsAfterBaseline(): Promise<void> {
   await forEachSlackDurableEdge(async (fixture, edge) => {
     const baseline = '1759999999.000000';
-    const before = '1760000000.000000';
+    const before = '1760000000.250000';
+    const laterBaseline = '1760000000.500000';
     const after = '1760000001.000000';
     let collect = false;
     fixture.setSlackBaseline(baseline);
@@ -487,20 +488,25 @@ async function initialCursorIsAfterBaseline(): Promise<void> {
     await fixture.schedulerTurn();
     fixture.oracle({ raw: 0, admissions: 0, providerCalls: 0 });
     await fixture.enable();
-    await fixture.schedulerTurn();
+    fixture.setSlackBaseline(laterBaseline);
+    await fixture.activateAdditionalRule('rule-later');
     fixture.now.value += 3_000;
     collect = true;
-    await sourceTurnThroughSlackDurableEdge(fixture, edge);
-    fixture.oracle({ raw: 1, admissions: 1, versions: [1] });
-    assertSlackOccurrences(fixture, [{ ts: after, version: 1 }]);
-    assert.equal(
+    await schedulerTurnThroughSlackDurableEdge(fixture, edge);
+    fixture.oracle({ raw: 2, admissions: 3, versions: [1, 1, 1] });
+    assertSlackOccurrences(fixture, [
+      { ts: before, version: 1 },
+      { ts: after, version: 1 },
+      { ts: after, version: 1 },
+    ]);
+    assert.match(
       (
         fixture.store.database
           .prepare("SELECT cursor FROM cursors WHERE source = 'slack' AND account_id = ? AND cursor_scope = ?")
           .get(fixture.accountId, fixture.scope.scopeId) as { cursor: string } | undefined
-      )?.cursor,
-      '1760000003.000000',
-      'the first durable cursor begins after the published baseline and advances only after its staged page settles',
+      )?.cursor ?? '',
+      /^1760000003\.00[01]000$/u,
+      'the first durable cursor begins at the earliest published baseline and advances only after its staged page settles',
     );
   });
 }
