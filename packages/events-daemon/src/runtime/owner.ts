@@ -226,29 +226,34 @@ async function startOwnerWithLock(
         (await decryptSourceStage(stored, stageId)) as GmailStageRecord,
       encryptStage: encryptSourceStage,
       replacementDrains,
+      now,
     }),
     new SlackHistoryStageExpiry({
       store: database,
       lock: mailboxLock.sourceScopeLock,
       decrypt: decryptSourceStage,
       encrypt: encryptSourceStage,
+      now,
     }),
     new SlackReplyStageExpiry({
       database: database.database,
       lock: mailboxLock.sourceScopeLock,
       decrypt: decryptSourceStage,
       encrypt: encryptSourceStage,
+      now,
     }),
     new ResendReceivedStageExpiry({
       store: database,
       lock: mailboxLock.sourceScopeLock,
       decrypt: decryptSourceStage,
       encrypt: encryptSourceStage,
+      now,
     }),
     new ResendStatusStageExpiry({
       store: database,
       lock: mailboxLock.sourceScopeLock,
       decrypt: decryptSourceStage,
+      now,
     }),
   ]);
   const expiry = new EventExpiry(database, now, sourceStageExpiry);
