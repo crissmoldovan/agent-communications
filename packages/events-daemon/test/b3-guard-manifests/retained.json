@@ -288,6 +288,18 @@
       },
       "mutationTest": "B3 target resume replaces only a degraded terminal reset with a fresh twenty-attempt 24-hour record",
       "loadedMarker": "target-resume-resets-attempt-and-deadline"
+    },
+    {
+      "case": "target-resume-keeps-live-account-fence",
+      "operation": "TargetResumeControl.resume",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-target-test-control.ts",
+      "test": "packages/events-daemon/test/b3-target-resume.test.ts",
+      "mutation": {
+        "from": "    return liveSystemTargetReferenceAccountBindings(this.#store.database, input).some((binding) =>\n      live.get(binding.source)?.has(binding.accountId),\n    );",
+        "to": "    return true;"
+      },
+      "mutationTest": "B3 target resume refuses a still-referenced target when every bound source account was removed before its reset resume",
+      "loadedMarker": "target-resume-keeps-live-account-fence"
     }
   ]
 }

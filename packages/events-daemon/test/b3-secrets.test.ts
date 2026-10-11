@@ -1,18 +1,20 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { SecretStore } from '@agentcomms/core';
-import { canonicalJson, sha256Hex } from '@agentcomms/core';
+import { canonicalJson, emptyConfig, sha256Hex } from '@agentcomms/core';
+import { EventControlClient } from '../src/control/client.ts';
 import { HumanSecret } from '../src/domain/human-secret.ts';
 import { B3SecretControl } from '../src/runtime/b3-secret-control.ts';
+import { startEventOwner } from '../src/runtime/owner.ts';
 import { SubscriberStreams } from '../src/runtime/subscriber-streams.ts';
 import { WriterQuiescer } from '../src/runtime/writer-quiescer.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { type EventSecretStoreKind, openEventSecretStore, selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { EventRecordCipher } from '../src/store/records.ts';
-import { WINDOWS_SKIP } from './support/short-temp.ts';
+import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 class MemorySecretStore implements SecretStore {
   readonly kind: EventSecretStoreKind = 'file';
@@ -149,6 +151,99 @@ test('B3 secret slots create and rotate only exact immutable owners with content
     }
   } finally {
     await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B3 production owner closes and aborts an admitted SSE stream before subscriber-token rotation returns', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
+  const root = await shortTempDir('aev-b3-owner-subscriber-rotation-');
+  const stateDir = join(root, 'state');
+  const configDir = join(root, 'config');
+  let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
+  try {
+    await mkdir(configDir, { recursive: true });
+    await writeFile(join(configDir, 'config.json'), `${JSON.stringify(emptyConfig())}\n`);
+    const seeded = await openEventDatabase({ stateDir });
+    try {
+      const document = canonicalJson({
+        subscriberId: 'subscriber-owner-stream',
+        version: 1,
+        kind: 'sse',
+        authority: { host: '127.0.0.1', port: 43101 },
+        origins: ['https://console.invalid'],
+        retentionMs: 60_000,
+      });
+      seeded.database
+        .prepare(
+          'INSERT INTO subscriber_versions (id, subscriber_id, version, document, digest) VALUES (?, ?, ?, ?, ?)',
+        )
+        .run('subscriber-owner-stream@1', 'subscriber-owner-stream', 1, document, sha256Hex(document));
+      await selectEventSecretStore(seeded.database, 'file');
+      const secrets = await openEventSecretStore({
+        database: seeded.database,
+        paths: seeded.paths,
+        configDir,
+      });
+      const quiescer = new WriterQuiescer();
+      await new B3SecretControl({
+        database: seeded.database,
+        paths: seeded.paths,
+        secrets,
+        cipher: new EventRecordCipher(seeded.database, secrets, quiescer),
+        quiescer,
+      }).subscriberTokenCreate({ subscriberId: 'subscriber-owner-stream', version: 1 });
+    } finally {
+      seeded.close();
+    }
+
+    try {
+      owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+        t.skip(
+          'EPERM: the development sandbox blocks the owner Unix listener; the coordinator runs this owner proof outside it',
+        );
+        return;
+      }
+      throw error;
+    }
+
+    let streamClosed = false;
+    const socket = {
+      aborted: false,
+      abort() {
+        this.aborted = true;
+      },
+    };
+    owner.registerSseListener({
+      subscriberId: 'subscriber-owner-stream',
+      subscriberVersion: 1,
+      rotate: ({ generation }) => {
+        if (generation === 2) {
+          streamClosed = true;
+          socket.abort();
+        }
+      },
+    });
+    const client = new EventControlClient({ stateDir, clientName: 'interactive-terminal' });
+    const rotated = (await client.request('subscriberTokenRotate', {
+      subscriberId: 'subscriber-owner-stream',
+      version: 1,
+    })) as { readonly receipt?: unknown; readonly terminalReveal?: unknown };
+    assert.deepEqual(rotated.receipt, {
+      kind: 'subscriber-token',
+      subscriberId: 'subscriber-owner-stream',
+      version: 1,
+      generation: 2,
+    });
+    // The terminal shows the new token once; it is checked only for presence, never echoed by this test.
+    assert.ok(typeof rotated.terminalReveal === 'string' && rotated.terminalReveal.length > 0);
+    assert.equal(streamClosed, true, 'rotation synchronously closes the admitted stream without waiting for a frame');
+    assert.equal(socket.aborted, true, 'the listener aborts its socket before subscriber-token rotation returns');
+  } finally {
+    await owner?.stop();
+    await rm(root, { recursive: true, force: true });
   }
 });
 

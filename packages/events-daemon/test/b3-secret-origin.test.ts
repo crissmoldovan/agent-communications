@@ -26,6 +26,7 @@ test('B3 secret owner rejects every caller-selected app/window origin before the
       secrets: secrets as never,
       assertObjectSecretReady: async () => ({ ready: true as const }),
     },
+    config: { load: async () => ({ inboxes: {}, accounts: {} }) as never },
     activations: { issueApprovalViewChallenge: async () => null },
     cipher: { encrypt: async () => Buffer.alloc(0) },
   });
@@ -79,6 +80,7 @@ test('B3 same-user raw client holding the owner token may declare interactive-te
       } as never,
       assertObjectSecretReady: async () => ({ ready: true as const }),
     },
+    config: { load: async () => ({ inboxes: {}, accounts: {} }) as never },
     activations: { issueApprovalViewChallenge: async () => null },
     cipher: { encrypt: async () => Buffer.alloc(0) },
   });

@@ -146,6 +146,7 @@ test('B3 retained hostile output is neutralised in exactly one envelope on every
         secrets: {} as never,
         assertObjectSecretReady: async () => ({ ready: true as const }),
       },
+      config: { load: async () => ({ inboxes: {}, accounts: {} }) as never },
       activations: { issueApprovalViewChallenge: async () => null },
       cipher: { encrypt: async () => Buffer.alloc(0) },
       retainedRuleTest: createRetainedRuleTestControl({

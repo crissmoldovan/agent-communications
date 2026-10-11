@@ -178,11 +178,20 @@ export class OwnerSseStreamRegistry {
   }
 
   closeSubscriberStreams(input: { readonly subscriberId: string; readonly subscriberVersion: number }): void {
+    // Generation zero cannot be a stored bearer generation; it invalidates every admitted stream synchronously.
+    this.rotate({ ...input, generation: 0 });
+  }
+
+  /** For a token rotation, pass the persisted new generation to every live exact-version SSE listener synchronously. */
+  rotate(input: {
+    readonly subscriberId: string;
+    readonly subscriberVersion: number;
+    readonly generation: number;
+  }): void {
     const key = `${input.subscriberId}\u0000${input.subscriberVersion}`;
     const listeners = this.#listeners.get(key);
     if (listeners === undefined) return;
-    // Generation zero cannot be a stored bearer generation; it invalidates every admitted stream synchronously.
-    for (const listener of [...listeners]) listener.rotate({ ...input, generation: 0 });
+    for (const listener of [...listeners]) listener.rotate(input);
   }
 }
 
@@ -313,6 +322,8 @@ function sourceOfDeliveryRule(document: string): SourceOptions['channel'] {
 interface OwnerB3ControlServiceOptions {
   readonly store: Awaited<ReturnType<typeof openEventDatabase>>;
   readonly ports: B3ControlPorts;
+  /** The production owner gives target resume the same fresh core account registry as disclosure fencing. */
+  readonly config: Pick<ConfigStore, 'load'>;
   readonly activations: Pick<ActivationRuntime, 'issueApprovalViewChallenge'>;
   readonly cipher: Pick<EventRecordCipher, 'encrypt'>;
   /** A B3 secret command writes only this content-free receipt-shaped audit record. */
@@ -358,6 +369,7 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
   const resume = new TargetResumeControl({
     store: options.store,
     ports: options.ports,
+    config: options.config,
     // TargetResumeControl holds the shared lease before calling this seal and through its immediate commit.
     resetSealer: ({ id, plaintext }) =>
       options.cipher.encrypt(
@@ -696,12 +708,16 @@ async function startOwnerWithLock(
   });
   const writerQuiescer = new WriterQuiescer();
   const cipher = new EventRecordCipher(database.database, eventSecrets, writerQuiescer);
+  // The same registry backs `registerSseListener` and the secret port. It must exist before the port is made so a
+  // production subscriber-token rotation cannot silently omit closing old admitted streams.
+  const sseStreams = new OwnerSseStreamRegistry();
   const b3Ports = createB3ControlPorts({
     database: database.database,
     paths: database.paths,
     eventSecrets,
     cipher,
     quiescer: writerQuiescer,
+    subscriberStreams: sseStreams,
   });
   const sourceRegistry = phaseDSourceRegistry();
   // The concrete WhatsApp visibility fence is constructed in every production owner (D Task 7).
@@ -1065,7 +1081,6 @@ async function startOwnerWithLock(
   });
   // Task 5 is the sole composition point for the operator ports deliberately left unbound in Task 4.  Public
   // adapters can only reach this service through the authenticated control server below.
-  const sseStreams = new OwnerSseStreamRegistry();
   const ownerB3Ports: B3ControlPorts = {
     quiescer: b3Ports.quiescer,
     secrets: b3Ports.secrets,
@@ -1083,6 +1098,7 @@ async function startOwnerWithLock(
     createOwnerB3ControlService({
       store: database,
       ports: ownerB3Ports,
+      config: core.config,
       activations,
       cipher,
       audit: core.audit,

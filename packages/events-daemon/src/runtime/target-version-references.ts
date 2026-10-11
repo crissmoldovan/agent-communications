@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import type { SourceOptions } from '../domain/source-options.ts';
 
 export interface TargetVersionReference {
   readonly targetId: string;
@@ -169,14 +170,23 @@ export interface SystemTargetReferenceQuery {
   readonly now: number;
 }
 
-/**
- * D7's exact-version query. A current pointer never substitutes for a reference: an active rule and a still-live
- * superseded delivery have separate rows and are tested against their own immutable versions.
- */
-export function hasLiveSystemTargetReference(database: DatabaseSync, input: SystemTargetReferenceQuery): boolean {
-  const row = database
+export interface SystemTargetReferenceAccountBinding {
+  readonly source: SourceOptions['channel'];
+  readonly accountId: string;
+}
+
+interface LiveSystemTargetReferenceRow {
+  readonly document: string;
+}
+
+/** The one authoritative active/retained exact-reference predicate, shared by reset creation, claim and resume. */
+function liveSystemTargetReferenceRows(
+  database: DatabaseSync,
+  input: SystemTargetReferenceQuery,
+): readonly LiveSystemTargetReferenceRow[] {
+  return database
     .prepare(
-      `SELECT 1 AS present
+      `SELECT rule.document
        FROM target_version_references AS reference
        JOIN target_versions AS target
          ON target.target_id = reference.target_id AND target.version = reference.target_version
@@ -198,11 +208,42 @@ export function hasLiveSystemTargetReference(database: DatabaseSync, input: Syst
              AND delivery.state IN ('queued', 'retryable', 'disclosing', 'dead-lettered')
              AND COALESCE(delivery.dead_letter_expires_at, delivery.expires_at) > ?
            )
-         )
-       LIMIT 1`,
+         )`,
     )
-    .get(input.targetId, input.targetVersion, input.now);
-  return row !== undefined;
+    .all(input.targetId, input.targetVersion, input.now) as unknown as LiveSystemTargetReferenceRow[];
+}
+
+/**
+ * D7's exact-version query. A current pointer never substitutes for a reference: an active rule and a still-live
+ * superseded delivery have separate rows and are tested against their own immutable versions.
+ */
+export function hasLiveSystemTargetReference(database: DatabaseSync, input: SystemTargetReferenceQuery): boolean {
+  return liveSystemTargetReferenceRows(database, input).length > 0;
+}
+
+/** Extracts source/account identities only from references that the exact active/retained query already authorises. */
+export function liveSystemTargetReferenceAccountBindings(
+  database: DatabaseSync,
+  input: SystemTargetReferenceQuery,
+): readonly SystemTargetReferenceAccountBinding[] {
+  const bindings: SystemTargetReferenceAccountBinding[] = [];
+  for (const row of liveSystemTargetReferenceRows(database, input)) {
+    try {
+      const source = (JSON.parse(row.document) as { source?: { channel?: unknown; accountIds?: unknown } }).source;
+      if (
+        source === undefined ||
+        !['gmail', 'slack', 'resend', 'whatsapp'].includes(source.channel as string) ||
+        !Array.isArray(source.accountIds)
+      )
+        continue;
+      for (const accountId of source.accountIds)
+        if (typeof accountId === 'string' && accountId.length > 0)
+          bindings.push({ source: source.channel as SourceOptions['channel'], accountId });
+    } catch {
+      // A damaged rule document cannot establish a live-account authority for a replacement reset.
+    }
+  }
+  return bindings;
 }
 
 /**

@@ -409,7 +409,12 @@ export class ActivationRuntime {
     if (existing !== undefined) {
       if (existing.state === 'issuing') return null;
       const current = this.#readApprovalChallenge(existing);
-      if (current.origin === 'view' && current.expiresAt !== undefined && current.expiresAt <= this.#now()) {
+      if (
+        existing.state === 'active' &&
+        current.origin === 'view' &&
+        current.expiresAt !== undefined &&
+        current.expiresAt <= this.#now()
+      ) {
         this.#expireApprovalViewChallenge(approvalId);
         return null;
       }

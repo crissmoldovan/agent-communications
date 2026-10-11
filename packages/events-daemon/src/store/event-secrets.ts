@@ -65,6 +65,8 @@ export interface EventSecretMigrationOptions {
 export interface EventSecretMigrationResult {
   readonly moved: number;
   readonly leftovers: readonly string[];
+  /** The selector committed, but no source cleanup ran because a selected copy no longer matches its verified bytes. */
+  readonly code?: 'SELECTED_COPY_CHANGED_AFTER_MIGRATION' | undefined;
 }
 
 export type EventSecretOwnerKind = 'target' | 'subscriber' | 'judge';
@@ -384,7 +386,7 @@ export class EventSecretStore {
       if (current !== undefined)
         return {
           keyId: current.key_id,
-          key: parseMaster(current.secret_ref, await this.#store.get(current.secret_ref)),
+          key: parseMaster(current.secret_ref, await readBackend(this.#store, current.secret_ref)),
         };
       if (this.#selectorWasAbsent) await this.probeInitialBackend();
       return this.createMaster(undefined);
@@ -398,7 +400,7 @@ export class EventSecretStore {
         | { secret_ref: string }
         | undefined;
       if (row === undefined) throw new EventSecretError('EVENT_MASTER_UNKNOWN', `event master ${keyId} is unknown`);
-      return parseMaster(row.secret_ref, await this.#store.get(row.secret_ref));
+      return parseMaster(row.secret_ref, await readBackend(this.#store, row.secret_ref));
     });
   }
 
@@ -529,7 +531,7 @@ export class EventSecretStore {
             'event secret generation has an invalid opaque reference',
           );
         }
-        const material = await this.#store.get(ref);
+        const material = await readBackend(this.#store, ref);
         if (material === null || sha256Hex(material) !== generation.secretDigest) {
           throw new EventSecretError(
             'EVENT_SECRET_REFERENCE',
@@ -1103,14 +1105,14 @@ export async function migrateEventSecrets(options: EventSecretMigrationOptions):
     }
     const references = await referencesFor(options.database, options.referenceCipher);
     const snapshot = referenceSnapshot(options.database);
-    const copied: string[] = [];
+    const copied: Array<{ readonly ref: string; readonly value: string }> = [];
     try {
       for (const ref of references) {
         const value = await readBackend(options.source, ref);
         if (value === null) {
           throw new EventSecretError('EVENT_MASTER_LOST', 'a referenced event secret is unavailable');
         }
-        copied.push(ref);
+        copied.push({ ref, value });
         await options.target.set(ref, value);
         if ((await readBackend(options.target, ref)) !== value) {
           throw new EventSecretError(
@@ -1132,8 +1134,18 @@ export async function migrateEventSecrets(options: EventSecretMigrationOptions):
         throw error;
       }
     } catch (error) {
-      await Promise.all(copied.map((ref) => options.target.delete(ref).catch(() => false)));
+      await Promise.all(copied.map(({ ref }) => options.target.delete(ref).catch(() => false)));
       throw error;
+    }
+    // Selector commit does not make the earlier destination read-backs permanent. Before the first cleanup delete,
+    // read every selected copy again and keep all source copies when any one changed or disappeared in that interval.
+    // The stable result code deliberately names only the state transition, never the material that drifted.
+    if (!(await copiedTargetValuesMatch(options.target, copied))) {
+      return {
+        moved: references.length,
+        leftovers: references,
+        code: 'SELECTED_COPY_CHANGED_AFTER_MIGRATION',
+      };
     }
     const leftovers: string[] = [];
     for (const ref of references) {
@@ -1145,6 +1157,19 @@ export async function migrateEventSecrets(options: EventSecretMigrationOptions):
     }
     return { moved: references.length, leftovers };
   });
+}
+
+/** A post-selector cleanup may delete a source only if its selected counterpart still has the verified exact bytes. */
+async function copiedTargetValuesMatch(
+  target: SecretStore,
+  copied: readonly { readonly ref: string; readonly value: string }[],
+): Promise<boolean> {
+  try {
+    for (const { ref, value } of copied) if ((await readBackend(target, ref)) !== value) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Resolves opaque generation references from the selected migration target without retaining an old-store handle. */

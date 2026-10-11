@@ -1,15 +1,20 @@
 import { randomUUID } from 'node:crypto';
-import { CommsError, canonicalJson } from '@agentcomms/core';
+import { CommsError, type ConfigStore, canonicalJson } from '@agentcomms/core';
 import { TEST_CLOUD_EVENT_BYTES } from '@agentcomms/events';
 import { canonicalTarget, type TargetDocument } from '../domain/activation-documents.ts';
 import type { EventDatabase } from '../store/database.ts';
+import { liveEventAccountIds } from './account-fence.ts';
 import type { B3ControlPorts } from './b3-control-ports.ts';
 import {
   SYSTEM_RESET_ATTEMPT_LIMIT,
   SYSTEM_RESET_RETENTION_MS,
   systemResetControlData,
 } from './system-reset-outbox.ts';
-import { hasLiveSystemTargetReference, purgeUnreferencedSystemTarget } from './target-version-references.ts';
+import {
+  hasLiveSystemTargetReference,
+  liveSystemTargetReferenceAccountBindings,
+  purgeUnreferencedSystemTarget,
+} from './target-version-references.ts';
 import { withEventWriterLease } from './writer-quiescer.ts';
 
 const TARGET_TEST_LIMIT = 10;
@@ -262,6 +267,7 @@ export class TargetResumeControl {
   readonly #store: EventDatabase;
   readonly #resetSealer: ResetRecordSealer;
   readonly #ports: B3ControlPorts;
+  readonly #config: Pick<ConfigStore, 'load'>;
   readonly #now: () => number;
   readonly #newId: () => string;
 
@@ -271,12 +277,14 @@ export class TargetResumeControl {
       | ResetRecordSealer
       | ((input: { readonly id: string; readonly plaintext: Uint8Array }) => Promise<Buffer>);
     readonly ports: B3ControlPorts;
+    readonly config: Pick<ConfigStore, 'load'>;
     readonly now?: (() => number) | undefined;
     readonly newId?: (() => string) | undefined;
   }) {
     this.#store = options.store;
     this.#resetSealer = typeof options.resetSealer === 'function' ? { seal: options.resetSealer } : options.resetSealer;
     this.#ports = options.ports;
+    this.#config = options.config;
     this.#now = options.now ?? Date.now;
     this.#newId = options.newId ?? randomUUID;
   }
@@ -304,6 +312,18 @@ export class TargetResumeControl {
           ),
         ),
       });
+      // Read core only after sealing and before the commit. A rule reference does not authorise a reset replacement
+      // after every source account it names has left core configuration.
+      const liveAccounts = await this.#liveReferenceAccounts({ ...input, resetEpoch: before.resetEpoch });
+      if (
+        hasLiveSystemTargetReference(this.#store.database, {
+          ...input,
+          resetEpoch: before.resetEpoch,
+          now: this.#now(),
+        }) &&
+        !this.#hasLiveReferenceAccount({ ...input, resetEpoch: before.resetEpoch, now: this.#now() }, liveAccounts)
+      )
+        return this.#accountRemoved();
       // Encryption awaited under the owner-wide writer lease; this immediate transaction repeats every mutable
       // barrier/reference/switch check before it touches the old terminal record.
       const result = this.#store.immediate(() => {
@@ -329,6 +349,8 @@ export class TargetResumeControl {
           // safety outcome and must commit before the human receives the refusal.
           return null;
         }
+        if (!this.#hasLiveReferenceAccount({ ...input, resetEpoch: current.resetEpoch, now }, liveAccounts))
+          return 'account-removed' as const;
         const detached = this.#store.database
           .prepare(
             `UPDATE reset_barriers SET system_outbox_id = NULL
@@ -372,6 +394,7 @@ export class TargetResumeControl {
         return { id, resetEpoch: current.resetEpoch };
       });
       if (result === null) return refuse('the reset target lost its final exact-version reference');
+      if (result === 'account-removed') return this.#accountRemoved();
       return result;
     });
   }
@@ -424,5 +447,37 @@ export class TargetResumeControl {
     } catch {
       return refuse('the reset target immutable document is invalid');
     }
+  }
+
+  async #liveReferenceAccounts(input: {
+    readonly targetId: string;
+    readonly targetVersion: number;
+    readonly resetEpoch: number;
+  }): Promise<ReadonlyMap<string, ReadonlySet<string>>> {
+    const bindings = liveSystemTargetReferenceAccountBindings(this.#store.database, { ...input, now: this.#now() });
+    const live = new Map<string, ReadonlySet<string>>();
+    for (const source of new Set(bindings.map((binding) => binding.source)))
+      live.set(source, await liveEventAccountIds(this.#config, source));
+    return live;
+  }
+
+  #hasLiveReferenceAccount(
+    input: {
+      readonly targetId: string;
+      readonly targetVersion: number;
+      readonly resetEpoch: number;
+      readonly now: number;
+    },
+    live: ReadonlyMap<string, ReadonlySet<string>>,
+  ): boolean {
+    return liveSystemTargetReferenceAccountBindings(this.#store.database, input).some((binding) =>
+      live.get(binding.source)?.has(binding.accountId),
+    );
+  }
+
+  #accountRemoved(): never {
+    throw new CommsError('NOT_FOUND', 'the reset target has no source account still connected', {
+      details: { reason: 'ACCOUNT_REMOVED' },
+    });
   }
 }

@@ -86,7 +86,7 @@ export class B3SecretControl {
   readonly #secrets: EventSecretStore;
   readonly #cipher: EventRecordCipher;
   readonly #quiescer: WriterQuiescer;
-  readonly #subscriberStreams: SubscriberStreams | undefined;
+  readonly #subscriberStreams: Pick<SubscriberStreams, 'rotate'> | undefined;
   /** Test-only deterministic material seam; production always uses fresh random material below. */
   readonly #secretMaterial: Readonly<{ nextSigningSecret(): string; nextSubscriberToken(): string }> | undefined;
 
@@ -96,7 +96,7 @@ export class B3SecretControl {
     readonly secrets: EventSecretStore;
     readonly cipher: EventRecordCipher;
     readonly quiescer: WriterQuiescer;
-    readonly subscriberStreams?: SubscriberStreams | undefined;
+    readonly subscriberStreams?: Pick<SubscriberStreams, 'rotate'> | undefined;
     readonly secretMaterial?: Readonly<{ nextSigningSecret(): string; nextSubscriberToken(): string }> | undefined;
   }) {
     this.#database = input.database;
