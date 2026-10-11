@@ -1,0 +1,18 @@
+{
+  "name": "pending-target-approval-flow",
+  "request": {
+    "surface": "app-approval-screen",
+    "operation": "targetTest",
+    "selector": {
+      "kind": "pending-activation",
+      "activationId": "activation-1",
+      "ruleId": "rule-1",
+      "ruleVersion": 1,
+      "targetId": "target-1",
+      "targetVersion": 1,
+      "approvalId": "approval-1",
+      "digest": "digest-1",
+      "challenge": "challenge-1"
+    }
+  }
+}

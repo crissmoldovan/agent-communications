@@ -1,0 +1,41 @@
+[
+  {
+    "name": "approval-view-stale",
+    "request": {
+      "operation": "approvalView",
+      "args": {
+        "approvalId": "approval-1",
+        "digest": "digest-1"
+      }
+    },
+    "result": {
+      "kind": "STALE_APPROVAL"
+    }
+  },
+  {
+    "name": "approval-view-digest-mismatch",
+    "request": {
+      "operation": "approvalView",
+      "args": {
+        "approvalId": "approval-1",
+        "digest": "wrong"
+      }
+    },
+    "result": {
+      "kind": "DIGEST_MISMATCH"
+    }
+  },
+  {
+    "name": "approval-view-challenge-expired",
+    "request": {
+      "operation": "approvalView",
+      "args": {
+        "approvalId": "approval-1",
+        "digest": "digest-1"
+      }
+    },
+    "result": {
+      "kind": "CHALLENGE_EXPIRED"
+    }
+  }
+]

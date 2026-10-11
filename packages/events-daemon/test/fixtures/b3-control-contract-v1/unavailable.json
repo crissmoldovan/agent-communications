@@ -1,0 +1,12 @@
+{
+  "name": "judge-e-unavailable",
+  "request": {
+    "operation": "judgesList",
+    "args": {}
+  },
+  "result": {
+    "kind": "unavailable",
+    "code": "E_REQUIRED",
+    "phase": "E"
+  }
+}

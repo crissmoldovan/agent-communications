@@ -1,0 +1,15 @@
+{
+  "name": "held-decide-unavailable",
+  "request": {
+    "operation": "decideHeld",
+    "args": {
+      "decisionId": "held-1",
+      "decision": "accept"
+    }
+  },
+  "result": {
+    "kind": "unavailable",
+    "code": "HOLDS_UNAVAILABLE",
+    "phase": "E"
+  }
+}

@@ -1,21 +1,9 @@
-import type { B3ControlOperation } from '../operations/b3-contract.ts';
-
-export interface JudgeUnavailableV1 {
-  readonly kind: 'unavailable';
-  readonly code: 'E_REQUIRED' | 'E2_REQUIRED';
-  readonly phase: 'E' | 'E2';
-}
-
-export interface HeldListV1 {
-  readonly kind: 'held-list';
-  readonly decisions: readonly [];
-}
-
-export interface HoldsUnavailableV1 {
-  readonly kind: 'unavailable';
-  readonly code: 'HOLDS_UNAVAILABLE';
-  readonly phase: 'E';
-}
+import type {
+  B3ControlOperation,
+  B3HeldListV1,
+  B3HoldsUnavailableV1,
+  B3JudgeUnavailableV1,
+} from '../operations/b3-contract.ts';
 
 const E_OPERATIONS: ReadonlySet<B3ControlOperation> = new Set([
   'judgesList',
@@ -39,7 +27,7 @@ const E_OPERATIONS: ReadonlySet<B3ControlOperation> = new Set([
 export function judgeUnavailable(
   operation: B3ControlOperation,
   args: Readonly<Record<string, unknown>>,
-): JudgeUnavailableV1 | undefined {
+): B3JudgeUnavailableV1 | undefined {
   if (operation === 'judgeModelStatus' || operation === 'removeJudgeModel') return unavailableE2();
   if (!E_OPERATIONS.has(operation)) return undefined;
   if ((operation === 'enableJudgeKind' || operation === 'disableJudgeKind') && args.kind === 'laya')
@@ -47,18 +35,18 @@ export function judgeUnavailable(
   return unavailableE();
 }
 
-export function heldListUnavailable(): HeldListV1 {
+export function heldListUnavailable(): B3HeldListV1 {
   return { kind: 'held-list', decisions: [] };
 }
 
-export function decideHeldUnavailable(): HoldsUnavailableV1 {
+export function decideHeldUnavailable(): B3HoldsUnavailableV1 {
   return { kind: 'unavailable', code: 'HOLDS_UNAVAILABLE', phase: 'E' };
 }
 
-function unavailableE(): JudgeUnavailableV1 {
+function unavailableE(): B3JudgeUnavailableV1 {
   return { kind: 'unavailable', code: 'E_REQUIRED', phase: 'E' };
 }
 
-function unavailableE2(): JudgeUnavailableV1 {
+function unavailableE2(): B3JudgeUnavailableV1 {
   return { kind: 'unavailable', code: 'E2_REQUIRED', phase: 'E2' };
 }

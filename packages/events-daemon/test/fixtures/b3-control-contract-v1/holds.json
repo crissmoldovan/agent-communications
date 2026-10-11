@@ -1,0 +1,11 @@
+{
+  "name": "held-list-empty",
+  "request": {
+    "operation": "heldList",
+    "args": {}
+  },
+  "result": {
+    "kind": "held-list",
+    "decisions": []
+  }
+}

@@ -1,0 +1,4 @@
+{
+  "result": { "kind": "STALE_APPROVAL" },
+  "expected": { "kind": "STALE_APPROVAL", "structured": {}, "terminal": "Approval view: STALE_APPROVAL" }
+}

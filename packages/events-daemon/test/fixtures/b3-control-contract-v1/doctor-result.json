@@ -1,0 +1,52 @@
+{
+  "name": "doctor-result",
+  "request": {
+    "operation": "doctor",
+    "args": {}
+  },
+  "result": {
+    "schemaVersion": "doctor-v1",
+    "owner": {
+      "status": "running",
+      "protocolVersions": [1],
+      "installationId": "installation-1"
+    },
+    "switch": {
+      "status": "enabled",
+      "paused": false,
+      "generation": 1
+    },
+    "lineages": [],
+    "superseded": [],
+    "points": [],
+    "awaitingReapproval": [],
+    "activationIntents": [],
+    "sources": [],
+    "recovery": {
+      "leases": 0,
+      "held": 0,
+      "deadLetters": 0,
+      "deadlines": 0,
+      "resetBarriers": [],
+      "missingSecrets": []
+    },
+    "judgeBoundary": [
+      {
+        "kind": "typesafe",
+        "code": "E_REQUIRED",
+        "phase": "E"
+      },
+      {
+        "kind": "local-endpoint",
+        "code": "E_REQUIRED",
+        "phase": "E"
+      },
+      {
+        "kind": "laya",
+        "code": "E2_REQUIRED",
+        "phase": "E2"
+      }
+    ],
+    "whatsapp": []
+  }
+}

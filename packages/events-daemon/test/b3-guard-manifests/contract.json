@@ -1,0 +1,240 @@
+{
+  "area": "contract",
+  "cases": [
+    {
+      "case": "contract-operation-export-cannot-omit-capability",
+      "operation": "B3_CONTROL_V1_OPERATION_SPECS",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/b3-contract-type-drift.test.ts",
+      "overlayInputs": [
+        "capabilities.json",
+        "packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json",
+        "packages/events-daemon/src/operations/contracts/doctor-v1.schema.json",
+        "packages/events-daemon/test/fixtures/b3-control-contract-v1/**"
+      ],
+      "mutation": {
+        "from": "  B3_DESKTOP_CONTROL_OPERATIONS.map((operation) => ({",
+        "to": "  B3_DESKTOP_CONTROL_OPERATIONS.filter((operation) => operation !== 'targetTest').map((operation) => ({"
+      },
+      "mutationTest": "B3 v1 schema, exported operation types, and checked-in request/result/error vectors stay in lockstep",
+      "loadedMarker": "contract-operation-export-cannot-omit-capability"
+    },
+    {
+      "case": "contract-e2-discriminator-cannot-drift-from-schema",
+      "operation": "B3_JUDGE_UNAVAILABLE_VARIANTS",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/b3-contract-type-drift.test.ts",
+      "overlayInputs": [
+        "capabilities.json",
+        "packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json",
+        "packages/events-daemon/src/operations/contracts/doctor-v1.schema.json",
+        "packages/events-daemon/test/fixtures/b3-control-contract-v1/**"
+      ],
+      "mutation": {
+        "from": "  { code: 'E2_REQUIRED', phase: 'E2' },",
+        "to": "  { code: 'E_REQUIRED', phase: 'E2' },"
+      },
+      "mutationTest": "B3 v1 schema, exported operation types, and checked-in request/result/error vectors stay in lockstep",
+      "loadedMarker": "contract-e2-discriminator-cannot-drift-from-schema"
+    },
+    {
+      "case": "contract-ordinary-target-vector-cannot-carry-pending-selector",
+      "operation": "assertB3ControlContractVectorV1",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/b3-contract-type-drift.test.ts",
+      "overlayInputs": [
+        "capabilities.json",
+        "packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json",
+        "packages/events-daemon/src/operations/contracts/doctor-v1.schema.json",
+        "packages/events-daemon/test/fixtures/b3-control-contract-v1/**"
+      ],
+      "mutation": {
+        "from": "  if (\n    request.operation === 'targetTest' &&\n    Object.keys(args).some((key) => key !== 'targetId' && key !== 'targetVersion')\n  )",
+        "to": "  if (false)"
+      },
+      "mutationTest": "B3 v1 schema, exported operation types, and checked-in request/result/error vectors stay in lockstep",
+      "loadedMarker": "contract-ordinary-target-vector-cannot-carry-pending-selector"
+    },
+    {
+      "case": "contract-error-code-cannot-drift-from-schema",
+      "operation": "B3_CONTROL_ERROR_CODES",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/b3-contract-type-drift.test.ts",
+      "overlayInputs": [
+        "capabilities.json",
+        "packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json",
+        "packages/events-daemon/src/operations/contracts/doctor-v1.schema.json",
+        "packages/events-daemon/test/fixtures/b3-control-contract-v1/**"
+      ],
+      "mutation": {
+        "from": "Object.freeze(['USAGE', 'BAD_DATA', 'APPROVAL_VOID', 'NOT_FOUND', 'CONFIG'] as const)",
+        "to": "Object.freeze(['USAGE', 'BAD_DATA', 'APPROVAL_VOID', 'NOT_FOUND', 'CONFIG', 'NEW_CODE'] as const)"
+      },
+      "mutationTest": "B3 v1 schema, exported operation types, and checked-in request/result/error vectors stay in lockstep",
+      "loadedMarker": "contract-error-code-cannot-drift-from-schema"
+    },
+    {
+      "case": "contract-owner-wire-name-cannot-drift-from-dispatcher",
+      "operation": "OWNER_CONTROL_WIRE_OPERATIONS",
+      "productionEntry": "packages/events-daemon/src/runtime/control-operation-registry.ts",
+      "test": "packages/events-daemon/test/b3-contract-type-drift.test.ts",
+      "overlayInputs": [
+        "capabilities.json",
+        "packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json",
+        "packages/events-daemon/src/operations/contracts/doctor-v1.schema.json",
+        "packages/events-daemon/test/fixtures/b3-control-contract-v1/**"
+      ],
+      "mutation": {
+        "from": "  { capabilityOperation: 'disableAll', wireOperation: 'disable-all', desktopCallable: true, family: 'owner' },",
+        "to": "  { capabilityOperation: 'disableAll', wireOperation: 'disableAll', desktopCallable: true, family: 'owner' },"
+      },
+      "mutationTest": "B3 v1 schema, exported operation types, and checked-in request/result/error vectors stay in lockstep",
+      "loadedMarker": "contract-owner-wire-name-cannot-drift-from-dispatcher"
+    },
+    {
+      "case": "contract-result-coverage-cannot-omit-desktop-operation",
+      "operation": "B3_CONTROL_V1_RESULT_OPERATIONS",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/b3-contract-type-drift.test.ts",
+      "overlayInputs": [
+        "capabilities.json",
+        "packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json",
+        "packages/events-daemon/src/operations/contracts/doctor-v1.schema.json",
+        "packages/events-daemon/test/fixtures/b3-control-contract-v1/**"
+      ],
+      "mutation": {
+        "from": "export const B3_CONTROL_V1_RESULT_OPERATIONS: readonly B3DesktopControlOperation[] = B3_DESKTOP_CONTROL_OPERATIONS;",
+        "to": "export const B3_CONTROL_V1_RESULT_OPERATIONS: readonly B3DesktopControlOperation[] = B3_DESKTOP_CONTROL_OPERATIONS.filter((operation) => operation !== 'status');"
+      },
+      "mutationTest": "B3 v1 schema, exported operation types, and checked-in request/result/error vectors stay in lockstep",
+      "loadedMarker": "contract-result-coverage-cannot-omit-desktop-operation"
+    },
+    {
+      "case": "contract-success-document-cannot-skip-daemon-validator",
+      "operation": "assertSuccessfulB3RequestDocument",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/b3-contract-type-drift.test.ts",
+      "overlayInputs": [
+        "capabilities.json",
+        "packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json",
+        "packages/events-daemon/src/operations/contracts/doctor-v1.schema.json",
+        "packages/events-daemon/test/fixtures/b3-control-contract-v1/**"
+      ],
+      "mutation": {
+        "from": "      canonicalFullRuleDocument(args.document);",
+        "to": "      void args.document;"
+      },
+      "mutationTest": "B3 v1 successful vectors use the daemon canonical document validators",
+      "loadedMarker": "contract-success-document-cannot-skip-daemon-validator"
+    },
+    {
+      "case": "contract-unavailable-pairs-cannot-be-widened",
+      "operation": "assertB3ControlContractVectorV1",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/b3-contract-type-drift.test.ts",
+      "overlayInputs": [
+        "packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json",
+        "packages/events-daemon/src/operations/contracts/doctor-v1.schema.json"
+      ],
+      "mutation": {
+        "from": "  if (B3_JUDGE_UNAVAILABLE_VARIANTS.some((variant) => variant.code === value.code && variant.phase === value.phase)) {",
+        "to": "  if (value.code === 'E_REQUIRED' || value.code === 'E2_REQUIRED') {"
+      },
+      "mutationTest": "B3 v1 keeps each E/E2 unavailable code paired with its owning phase",
+      "loadedMarker": "contract-unavailable-pairs-cannot-be-widened"
+    },
+    {
+      "case": "contract-cannot-export-secret-value-type",
+      "operation": "B3ControlRequestArgumentsV1",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/b3-consumer-contract.test.ts",
+      "overlayInputs": ["packages/events-daemon/test/fixtures/b3-control-contract-v1/**"],
+      "mutation": {
+        "from": "    readonly newVersion: number;",
+        "to": "    readonly newVersion: number; readonly hiddenUrl: string;"
+      },
+      "mutationTest": "B3 data-only consumer vectors drive real owner results and retain the C/E boundary",
+      "loadedMarker": "contract-cannot-export-secret-value-type"
+    },
+    {
+      "case": "contract-app-origin-cannot-reach-secret-operation",
+      "operation": "createOwnerB3ControlService",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-consumer-contract.test.ts",
+      "overlayInputs": ["packages/events-daemon/test/fixtures/b3-control-contract-v1/**"],
+      "mutation": {
+        "from": "if (request.origin !== B3_SECRET_TERMINAL_ORIGIN) {",
+        "to": "if (false) {"
+      },
+      "mutationTest": "B3 data-only consumer vectors drive real owner results and retain the C/E boundary",
+      "loadedMarker": "contract-app-origin-cannot-reach-secret-operation"
+    },
+    {
+      "case": "contract-preview-rendering-cannot-drift-from-shared-fixture",
+      "operation": "renderB3ApprovalPreviewV1",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/b3-preview-fixtures.test.ts",
+      "overlayInputs": ["packages/events-daemon/test/fixtures/b3-approval-preview-v1/**"],
+      "mutation": {
+        "from": "      `Approval ${value.approvalId}`,",
+        "to": "      `Approval preview ${value.approvalId}`,"
+      },
+      "mutationTest": "B3 terminal approval renderer consumes every shared language-neutral preview fixture",
+      "loadedMarker": "contract-preview-rendering-cannot-drift-from-shared-fixture"
+    },
+    {
+      "case": "contract-ordinary-result-runtime-cannot-reopen-a-generic-object-branch",
+      "operation": "assertB3OrdinaryControlResultV1",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/b3-contract-type-drift.test.ts",
+      "overlayInputs": [
+        "capabilities.json",
+        "packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json",
+        "packages/events-daemon/src/operations/contracts/doctor-v1.schema.json",
+        "packages/events-daemon/test/fixtures/b3-control-contract-v1/**"
+      ],
+      "mutation": {
+        "from": "  if (B3_ORDINARY_RESULT_ARRAY_OPERATIONS.has(operation)) {",
+        "to": "  if (operation === 'status') return;\n  if (B3_ORDINARY_RESULT_ARRAY_OPERATIONS.has(operation)) {"
+      },
+      "mutationTest": "B3 v1 gives every desktop wire a closed result schema that rejects empty and unknown result objects",
+      "loadedMarker": "contract-ordinary-result-runtime-cannot-reopen-a-generic-object-branch"
+    },
+    {
+      "case": "contract-ordinary-result-vector-cannot-drift-from-real-owner-status",
+      "operation": "startEventOwner",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-contract-type-drift.test.ts",
+      "overlayInputs": [
+        "capabilities.json",
+        "packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json",
+        "packages/events-daemon/src/operations/contracts/doctor-v1.schema.json",
+        "packages/events-daemon/test/fixtures/b3-control-contract-v1/**"
+      ],
+      "mutation": {
+        "from": "      owner: 'running',",
+        "to": "      owner: 'not-running' as 'running',"
+      },
+      "mutationTest": "B3 v1 regenerates every ordinary result vector byte-for-byte from its real owner wire",
+      "loadedMarker": "contract-ordinary-result-vector-cannot-drift-from-real-owner-status"
+    },
+    {
+      "case": "contract-closed-union-tuple-cannot-widen-without-schema",
+      "operation": "B3_HELD_DECISIONS",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/b3-contract-type-drift.test.ts",
+      "overlayInputs": [
+        "capabilities.json",
+        "packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json",
+        "packages/events-daemon/src/operations/contracts/doctor-v1.schema.json",
+        "packages/events-daemon/test/fixtures/b3-control-contract-v1/**"
+      ],
+      "mutation": {
+        "from": "Object.freeze(['accept', 'reject'] as const)",
+        "to": "Object.freeze(['accept', 'reject', 'defer'] as const)"
+      },
+      "mutationTest": "B3 v1 schema, exported operation types, and checked-in request/result/error vectors stay in lockstep",
+      "loadedMarker": "contract-closed-union-tuple-cannot-widen-without-schema"
+    }
+  ]
+}
