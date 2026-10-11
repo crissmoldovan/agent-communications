@@ -2,7 +2,7 @@
   "validHello": {
     "hello": {
       "supportedVersions": [1],
-      "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "token": "fake-owner-token",
       "client": { "name": "desktop-test" }
     }
   },
@@ -22,7 +22,7 @@
   "noOverlap": {
     "hello": {
       "supportedVersions": [2],
-      "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "token": "fake-owner-token",
       "client": { "name": "desktop-test" }
     }
   },

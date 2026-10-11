@@ -47,6 +47,8 @@ const ignoredDirectories = new Set([
   'dist',
   'node_modules',
   'out',
+  // Cargo's build output for the desktop app: gigabytes of generated files, never source.
+  'target',
   'tmp',
 ]);
 // Values that are obviously placeholders, so fixtures and docs can show the shape of a credential.
@@ -80,13 +82,13 @@ function fail(message) {
   failures.push(message);
 }
 
-function walk(directory) {
-  if (!existsSync(directory)) return [];
-  const entries = [];
+/** Every file under `directory`, depth-first. One shared list, never a spread: a tree can hold any number of files. */
+function walk(directory, entries = []) {
+  if (!existsSync(directory)) return entries;
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (entry.isDirectory() && ignoredDirectories.has(entry.name)) continue;
     const path = resolve(directory, entry.name);
-    if (entry.isDirectory()) entries.push(...walk(path));
+    if (entry.isDirectory()) walk(path, entries);
     else if (entry.isFile()) entries.push(path);
   }
   return entries;
