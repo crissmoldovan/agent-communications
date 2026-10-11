@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { EventControlClient } from '../src/control/client.ts';
 import { startEventOwner } from '../src/runtime/owner.ts';
-import { runB3Mutation } from './support/b3-mutants.ts';
+import { copyRepositorySnapshot, runB3Mutation } from './support/b3-mutants.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 const ROOT = join(import.meta.dirname, '../../..');
@@ -107,6 +108,35 @@ test('B3 mutation runner copies declared glob inputs, snapshots every non-genera
     true,
     'a parity baseline owns every non-generated repository input it might name with fs',
   );
+});
+
+test('B3 repository snapshot copies source and leaves installed modules and build output, including Cargo target, behind', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentcomms-b3-snapshot-root-'));
+  const overlay = await mkdtemp(join(tmpdir(), 'agentcomms-b3-snapshot-overlay-'));
+  try {
+    const write = async (path: string, text: string): Promise<void> => {
+      await mkdir(dirname(join(root, path)), { recursive: true });
+      await writeFile(join(root, path), text);
+    };
+    await write('packages/p/src/kept.ts', 'export const kept = 1;\n');
+    await write('scripts/kept.mjs', 'export {};\n');
+    await write('apps/desktop/src-tauri/target/debug/build-output.o', 'generated');
+    await write('node_modules/m/index.js', 'installed');
+    await write('packages/p/dist/out.js', 'built');
+    await write('packages/p/.mutants/case/src/x.ts', 'another test');
+    await copyRepositorySnapshot(root, overlay, { case: 'snapshot-skips-build-output' });
+    assert.equal(await readFile(join(overlay, 'packages/p/src/kept.ts'), 'utf8'), 'export const kept = 1;\n');
+    assert.equal(await readFile(join(overlay, 'scripts/kept.mjs'), 'utf8'), 'export {};\n');
+    for (const skipped of ['apps/desktop/src-tauri/target', 'node_modules', 'packages/p/dist', 'packages/p/.mutants'])
+      await assert.rejects(
+        () => stat(join(overlay, skipped)),
+        { code: 'ENOENT' },
+        `${skipped} stays outside the snapshot`,
+      );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(overlay, { recursive: true, force: true });
+  }
 });
 
 test('B3 mutation runner refuses a case whose unmutated named test is not green', async () => {
