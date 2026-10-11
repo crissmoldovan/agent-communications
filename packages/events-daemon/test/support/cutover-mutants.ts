@@ -832,6 +832,9 @@ export async function expectMatrixCellToKillMutant(copy: MutantCopy): Promise<vo
     ],
     cwd: copy.root,
     env: environment,
+    // A matrix cell runs D's whole cut-over harness; under a full parallel verify it can take tens of seconds. The
+    // bound stops a hung mutant; it does not grade speed.
+    timeoutMs: 120_000,
   });
   assert.notEqual(
     result.code,
