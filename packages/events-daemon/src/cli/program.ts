@@ -3,11 +3,12 @@ import { agentMarker, CommsError, canPrompt, escapeForDisplay, isCommsError, isD
 import { Command, CommanderError } from 'commander';
 import { createEventsMcpServer } from '../mcp/server.ts';
 import { approvalView } from '../operations/approval-view.ts';
-import { approve, disclosureChallenge } from '../operations/approve.ts';
+import { approve, disclosureChallenge, pendingTargetTest, type TerminalApprovalStart } from '../operations/approve.ts';
 import {
   B3_SECRET_TERMINAL_ORIGIN,
   type B3CliRegistrar,
   type B3ControlOperation,
+  type B3PendingTargetSelectorV1,
   isB3SecretOperation,
   renderB3ApprovalPreviewV1,
 } from '../operations/b3-contract.ts';
@@ -106,6 +107,30 @@ export function terminalSafeJson(value: unknown): string {
 /** The approval preview a person reads before deciding: the B3 terminal renderer, with every dangerous character shown. */
 export function renderApprovalViewForTerminal(result: unknown): string {
   return escapeForDisplay(renderB3ApprovalPreviewV1(result).terminal);
+}
+
+/** Runs the only interactive terminal approval path; the owner, not this client, made every pending-target selector. */
+export async function runTerminalApprovalFlow(input: {
+  readonly approvalId: string;
+  readonly terminal: { question(prompt: string): Promise<string> };
+  readonly start: (approvalId: string) => Promise<TerminalApprovalStart>;
+  readonly testPendingTarget: (selector: B3PendingTargetSelectorV1) => Promise<unknown>;
+  readonly approve: (approvalId: string, answer: string) => Promise<unknown>;
+  readonly print: (result: unknown) => void;
+}): Promise<void> {
+  const start = await input.start(input.approvalId);
+  for (let index = 0; index < start.pendingTargetSelectors.length; index += 1) {
+    const selector = start.pendingTargetSelectors[index];
+    if (selector === undefined) continue;
+    const answer = await input.terminal.question(
+      `Test pending target ${index + 1} with the fixed synthetic payload before approving? [y/N] `,
+    );
+    if (/^\s*(?:y|yes)\s*$/iu.test(answer)) input.print(await input.testPendingTarget(selector));
+  }
+  const answer = await input.terminal.question(
+    `Type this approval challenge: ${escapeForDisplay(start.challenge)}\n> `,
+  );
+  input.print(await input.approve(input.approvalId, answer));
 }
 
 /** Retained dry-run listings as a person reads them: stored rule ids can hold any character a document allowed. */
@@ -594,7 +619,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
 
   program
     .command('approve <approval-id>')
-    .description('approve a standing disclosure by typing its challenge at this terminal')
+    .description('approve a standing disclosure by typing its challenge at this terminal, after optional target tests')
     .action(async (approvalId: string) => {
       ran = true;
       const options = program.opts<EventsCliOptions>();
@@ -606,11 +631,16 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       if (!canPrompt(env, streams, { json: options.json === true })) {
         throw new CommsError('APPROVAL_REQUIRED', 'approving standing disclosure needs an interactive terminal');
       }
-      const challenge = await disclosureChallenge(approvalId, controlOptions(program));
       const terminal = createInterface({ input: streams.stdin, output: streams.stdout });
       try {
-        const answer = await terminal.question(`Type this approval challenge: ${challenge}\n> `);
-        print(await approve(approvalId, answer, controlOptions(program)));
+        await runTerminalApprovalFlow({
+          approvalId,
+          terminal,
+          start: (id) => disclosureChallenge(id, controlOptions(program)),
+          testPendingTarget: (selector) => pendingTargetTest(selector, controlOptions(program)),
+          approve: (id, answer) => approve(id, answer, controlOptions(program)),
+          print,
+        });
       } finally {
         terminal.close();
       }

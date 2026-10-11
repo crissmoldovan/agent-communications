@@ -50,7 +50,9 @@ synthetic, hand-corrected and schema-validated, while `rules-list`, `rule-show`,
 update still surfaces B1's `UNEXPECTED`; that follow-up is not changed by this contract.
 
 The contract never contains a secret value. Secret controls accept only the `interactive-terminal` origin; app and
-approval-screen callers receive `APP_SECRET_CAPABILITY_UNAVAILABLE`. The pending target selector belongs only to the
+approval-screen callers receive `APP_SECRET_CAPABILITY_UNAVAILABLE`. A ready `approvalView` result carries one
+owner-built pending-target selector for each pending rule target (and none for other activation kinds); the terminal
+approval flow and an app approval screen pass that selector unchanged. The pending target selector belongs only to the
 approval flow, never an ordinary CLI/MCP target test.
 
 Phase E imports its real code and this contract, lands the build/ship negative gate before any owner registration or

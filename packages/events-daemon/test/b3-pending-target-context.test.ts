@@ -43,7 +43,7 @@ function activation() {
   };
 }
 
-test('B3 pending target context binds approval challenge to one pending activation and fixed target', {
+test('B3 pending target context binds approval challenge to one pending activation and refuses ordinary CLI selectors', {
   skip: WINDOWS_SKIP,
 }, async () => {
   const stateDir = await shortTempDir('events-b3-pending-');
@@ -75,17 +75,24 @@ test('B3 pending target context binds approval challenge to one pending activati
       approvalView: async () => ({ approvalId: 'approval-1', digest, challenge: 'challenge-1', expiresAt: 2_000 }),
     });
     assert.deepEqual(result, { ruleId: 'pending-rule', ruleVersion: 2, targetId: 'pending-target', targetVersion: 3 });
-    await assert.rejects(
-      () =>
-        verifyPendingTargetContext({
-          database: store.database,
-          selector,
-          origin: 'mcp',
-          now: () => 1_000,
-          approvalView: async () => ({ approvalId: 'approval-1', digest, challenge: 'challenge-1', expiresAt: 2_000 }),
-        }),
-      /approval-screen|terminal approval|challenge/i,
-    );
+    for (const origin of ['mcp', 'events-cli'] as const) {
+      await assert.rejects(
+        () =>
+          verifyPendingTargetContext({
+            database: store.database,
+            selector,
+            origin,
+            now: () => 1_000,
+            approvalView: async () => ({
+              approvalId: 'approval-1',
+              digest,
+              challenge: 'challenge-1',
+              expiresAt: 2_000,
+            }),
+          }),
+        /approval-screen|terminal approval|challenge/i,
+      );
+    }
   } finally {
     store.close();
     await rm(stateDir, { recursive: true, force: true });

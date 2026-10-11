@@ -60,7 +60,7 @@ Scripts should read these rather than parse output.
 | [`delivery`](#agent-events-delivery) | retry or drop one exact delivery |
 | [`held`](#agent-events-held) | inspect typed held decisions |
 | [`dryrun`](#agent-events-dryrun) | inspect retained local records at an interactive terminal |
-| [`approve`](#agent-events-approve) | approve a standing disclosure by typing its challenge at this terminal |
+| [`approve`](#agent-events-approve) | approve a standing disclosure by typing its challenge at this terminal, after optional target tests |
 | [`mcp`](#agent-events-mcp) | serve the MCP interface over standard input and output |
 | [`secrets`](#agent-events-secrets) | migrate the daemon-owned secret backend at a human terminal |
 
@@ -673,7 +673,7 @@ agent-events dryrun show [options] <delivery-id>
 
 ### `agent-events approve`
 
-approve a standing disclosure by typing its challenge at this terminal
+approve a standing disclosure by typing its challenge at this terminal, after optional target tests
 
 ```
 agent-events approve [options] <approval-id>

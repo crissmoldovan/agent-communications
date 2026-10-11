@@ -63,6 +63,12 @@ interface ApprovalViewChallengeRow {
   readonly expires_at: number | null;
 }
 
+interface RecoveryApprovalChallenge {
+  readonly challenge: ApprovalChallenge | undefined;
+  /** A previous un-serialised issuer overwrote an app answer after core accepted it; it is not an answerable row. */
+  readonly issuingResidue: boolean;
+}
+
 interface ApprovalChallenge {
   readonly origin: 'view' | 'terminal';
   readonly expiresAt?: number | undefined;
@@ -195,6 +201,8 @@ export class ActivationRuntime {
   readonly #failpoint: CutoverFailpoint | undefined;
   readonly #deadlineFailpoint: ActivationDeadlineFailpoint | undefined;
   readonly #assertObjectSecretReady: ActivationRuntimeOptions['assertObjectSecretReady'];
+  /** One owner process writes this state directory, so this in-memory queue is enough to serialise one approval. */
+  readonly #approvalOperations = new Map<string, Promise<void>>();
   constructor(options: ActivationRuntimeOptions) {
     this.#store = options.store;
     this.#approvals = options.approvals;
@@ -365,17 +373,34 @@ export class ActivationRuntime {
     });
   }
 
-  async approve(input: { readonly approvalId: string; readonly answer: string }): Promise<ActivationCompletion> {
-    this.#assertApprovalViewChallengeCurrent(input.approvalId, input.answer);
+  async approve(input: {
+    readonly approvalId: string;
+    readonly answer: string;
+    /** The authenticated owner picks this recording channel from its control connection's client name. */
+    readonly via?: 'terminal' | 'app' | undefined;
+  }): Promise<ActivationCompletion> {
+    return this.#withApprovalOperation(input.approvalId, () => this.#approve(input));
+  }
+
+  async #approve(input: {
+    readonly approvalId: string;
+    readonly answer: string;
+    readonly via?: 'terminal' | 'app' | undefined;
+  }): Promise<ActivationCompletion> {
+    const via = input.via ?? 'terminal';
+    this.#assertApprovalChannel(this.#assertApprovalViewChallengeCurrent(input.approvalId, input.answer), via);
     const intent = this.#intentForApproval(input.approvalId);
     const binding = this.#liveBinding(intent);
-    await this.#approvals.approveDisclosure(input.approvalId, binding, input.answer, 'terminal');
+    await this.#approvals.approveDisclosure(input.approvalId, binding, input.answer, via);
     // Approving persisted an await boundary: bind the exact current plan again before this process can spend it.
     const finalIntent = this.#intentForApproval(input.approvalId);
     const finalBinding = this.#liveBinding(finalIntent);
     // This is the final event-store fence before the core claim. It re-reads the durable, challenge-bound deadline
     // after the approval store await, so an owner restart or a slow terminal answer cannot spend an expired view.
-    const challenge = this.#assertApprovalViewChallengeCurrent(input.approvalId, input.answer);
+    const challenge = this.#assertApprovalChannel(
+      this.#assertApprovalViewChallengeCurrent(input.approvalId, input.answer),
+      via,
+    );
     const used = await this.#approvals.claimForDisclosure(
       input.approvalId,
       finalBinding,
@@ -387,12 +412,21 @@ export class ActivationRuntime {
 
   /** Issues the terminal's ordinary disclosure challenge, explicitly superseding any previously viewed short challenge. */
   async issueChallenge(approvalId: string): Promise<string> {
+    return this.#withApprovalOperation(approvalId, () => this.#issueChallenge(approvalId));
+  }
+
+  async #issueChallenge(approvalId: string): Promise<string> {
     const intent = this.#intentForApproval(approvalId);
     this.#liveBinding(intent);
     this.#beginApprovalChallenge(approvalId, 'terminal');
-    const challenge = await this.#approvals.issueDisclosureChallenge(approvalId);
-    this.#activateApprovalChallenge(approvalId, 'terminal', hashChallenge(challenge));
-    return challenge;
+    try {
+      const challenge = await this.#approvals.issueDisclosureChallenge(approvalId);
+      this.#activateApprovalChallenge(approvalId, 'terminal', hashChallenge(challenge));
+      return challenge;
+    } catch (error) {
+      this.#settleFailedApprovalChallengeIssuance(approvalId, 'terminal');
+      throw error;
+    }
   }
 
   /**
@@ -401,6 +435,10 @@ export class ActivationRuntime {
    * mistake the unresolved challenge for an unrestricted terminal one.
    */
   async issueApprovalViewChallenge(approvalId: string, expiresAt: number): Promise<string | null> {
+    return this.#withApprovalOperation(approvalId, () => this.#issueApprovalViewChallenge(approvalId, expiresAt));
+  }
+
+  async #issueApprovalViewChallenge(approvalId: string, expiresAt: number): Promise<string | null> {
     const intent = this.#intentForApproval(approvalId);
     this.#liveBinding(intent);
     if (!Number.isSafeInteger(expiresAt) || expiresAt <= this.#now())
@@ -421,9 +459,14 @@ export class ActivationRuntime {
       if (existing.state !== 'active' && existing.state !== 'expired') throw this.#challengeExpired();
     }
     this.#beginApprovalChallenge(approvalId, 'view');
-    const challenge = await this.#approvals.issueDisclosureChallenge(approvalId);
-    this.#activateApprovalChallenge(approvalId, 'view', hashChallenge(challenge), expiresAt);
-    return challenge;
+    try {
+      const challenge = await this.#approvals.issueDisclosureChallenge(approvalId);
+      this.#activateApprovalChallenge(approvalId, 'view', hashChallenge(challenge), expiresAt);
+      return challenge;
+    } catch (error) {
+      this.#settleFailedApprovalChallengeIssuance(approvalId, 'view', expiresAt);
+      throw error;
+    }
   }
 
   /**
@@ -509,17 +552,17 @@ export class ActivationRuntime {
       if (record.record.state === 'approved') {
         const binding = this.#settleOnDrift(intent);
         if (binding === null) continue;
-        const challenge = this.#approvalViewChallengeMayClaim(intent.approval_id);
-        if (challenge === undefined) continue;
+        const recoveryChallenge = this.#approvalViewChallengeMayRecover(intent.approval_id);
+        if (recoveryChallenge === undefined) continue;
         try {
           const used = await this.#approvals.claimForDisclosure(
             intent.approval_id,
             binding,
-            this.#claimOptions(challenge),
+            recoveryChallenge.challenge === undefined ? {} : this.#claimOptions(recoveryChallenge.challenge),
           );
           if (used.usedAt === undefined)
             throw new CommsError('BAD_DATA', 'the used disclosure approval has no usedAt value');
-          await this.#claimAndComplete(intent, used.usedAt);
+          await this.#claimAndComplete(intent, used.usedAt, recoveryChallenge.issuingResidue);
         } catch (error) {
           if (this.#isChallengeExpired(error)) continue;
           throw error;
@@ -533,9 +576,10 @@ export class ActivationRuntime {
         this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_BINDING_DRIFT);
         continue;
       }
-      if (!this.#approvalViewChallengeMayComplete(intent.approval_id, record.record.usedAt)) continue;
+      const completion = this.#usedApprovalCompletion(intent.approval_id, record.record.usedAt);
+      if (completion === undefined) continue;
       try {
-        await this.#claimAndComplete(intent, record.record.usedAt);
+        await this.#claimAndComplete(intent, record.record.usedAt, completion.issuingResidue);
       } catch (error) {
         // Expiry is terminal settlement. A replacement drain is deliberately nonterminal: recovery runs before the
         // worker, so it must leave the claimed old pointer live for that worker rather than preventing startup.
@@ -575,9 +619,10 @@ export class ActivationRuntime {
         this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_BINDING_DRIFT);
         continue;
       }
-      if (!this.#approvalViewChallengeMayComplete(intent.approval_id, record.record.usedAt)) continue;
+      const completion = this.#usedApprovalCompletion(intent.approval_id, record.record.usedAt);
+      if (completion === undefined) continue;
       try {
-        await this.#claimAndComplete(intent, record.record.usedAt);
+        await this.#claimAndComplete(intent, record.record.usedAt, completion.issuingResidue);
       } catch (error) {
         // One intent still draining, or settled as void, never holds back the others in this pass.
         if (
@@ -668,17 +713,25 @@ export class ActivationRuntime {
     };
   }
 
-  async #claimAndComplete(intent: IntentRow, usedAt: string): Promise<ActivationCompletion> {
+  async #claimAndComplete(
+    intent: IntentRow,
+    usedAt: string,
+    allowIssuingChallengeResidue = false,
+  ): Promise<ActivationCompletion> {
     // Recovery reaches this method from a core record already marked used. Compare its immutable core timestamp with
     // the persisted view deadline, rather than the recovery clock: a claim made before expiry may finish after a
     // restart, but an approved view may never be claimed after expiry.
-    this.#assertApprovalViewChallengeClaimedInTime(intent.approval_id, usedAt);
+    if (allowIssuingChallengeResidue) this.#assertApprovalIssuingChallengeResidue(intent.approval_id);
+    else this.#assertApprovalViewChallengeClaimedInTime(intent.approval_id, usedAt);
     const claimedAt = Date.parse(usedAt);
     if (!Number.isFinite(claimedAt)) throw new CommsError('BAD_DATA', 'the disclosure usedAt is not an instant');
     const deadline = claimedAt + 3_600_000;
     let revokedPlannedAccount = false;
     this.#store.immediate(() => {
       const row = this.#intent(intent.id);
+      // The core claim above is an await. A residual sentinel is usable only by recovery, only while it is still the
+      // same non-answerable issuer residue, and only in this transaction that starts completion.
+      if (allowIssuingChallengeResidue) this.#assertApprovalIssuingChallengeResidue(intent.approval_id);
       if (row.status === 'cancelled')
         throw new CommsError('APPROVAL_VOID', 'the activation was cancelled before completion');
       // A stable id can be configured again after removal. The approval predates that removal, so it can never
@@ -1307,6 +1360,12 @@ export class ActivationRuntime {
     return challenge;
   }
 
+  /** An app approval records only a view challenge; an ordinary terminal answer remains the terminal channel. */
+  #assertApprovalChannel(challenge: ApprovalChallenge, via: 'terminal' | 'app'): ApprovalChallenge {
+    if (via === 'app' && challenge.origin !== 'view') throw this.#challengeExpired();
+    return challenge;
+  }
+
   #assertApprovalViewChallengeClaimedInTime(approvalId: string | null, usedAt: string): void {
     if (approvalId === null) throw this.#challengeExpired();
     const row = this.#approvalViewChallenge(approvalId);
@@ -1330,6 +1389,25 @@ export class ActivationRuntime {
     }
   }
 
+  /** Recovery may spend core's already-approved record when only the old issuer race left this non-answerable row. */
+  #approvalViewChallengeMayRecover(approvalId: string): RecoveryApprovalChallenge | undefined {
+    const challenge = this.#approvalViewChallengeMayClaim(approvalId);
+    if (challenge !== undefined) return { challenge, issuingResidue: false };
+    if (!this.#isApprovalIssuingChallengeResidue(approvalId)) return undefined;
+    return { challenge: undefined, issuingResidue: true };
+  }
+
+  /**
+   * Whether work core has already claimed may finish: its view challenge was claimed in time or, core having spent the
+   * approval for exactly this binding, only an issuer's non-answerable `issuing` row remains — the residue an owner
+   * from before the per-approval serialisation could leave — which completes through the same residue path an
+   * approved record takes. Otherwise the claimed activation would stay neither completed nor re-approvable.
+   */
+  #usedApprovalCompletion(approvalId: string, usedAt: string): { readonly issuingResidue: boolean } | undefined {
+    if (this.#isApprovalIssuingChallengeResidue(approvalId)) return { issuingResidue: true };
+    return this.#approvalViewChallengeMayComplete(approvalId, usedAt) ? { issuingResidue: false } : undefined;
+  }
+
   #approvalViewChallengeMayComplete(approvalId: string, usedAt: string): boolean {
     try {
       this.#assertApprovalViewChallengeClaimedInTime(approvalId, usedAt);
@@ -1344,6 +1422,17 @@ export class ActivationRuntime {
     return this.#store.database
       .prepare('SELECT state, origin, challenge_hash, expires_at FROM activation_view_challenges WHERE approval_id = ?')
       .get(approvalId) as ApprovalViewChallengeRow | undefined;
+  }
+
+  /** An interrupted issuance remains deliberately non-answerable; only recovery after a core approval can consume it. */
+  #isApprovalIssuingChallengeResidue(approvalId: string | null): boolean {
+    if (approvalId === null) return false;
+    const row = this.#approvalViewChallenge(approvalId);
+    return row?.state === 'issuing' && (row.origin === 'terminal' || row.origin === 'view');
+  }
+
+  #assertApprovalIssuingChallengeResidue(approvalId: string | null): void {
+    if (!this.#isApprovalIssuingChallengeResidue(approvalId)) throw this.#challengeExpired();
   }
 
   #readApprovalChallenge(row: ApprovalViewChallengeRow): ApprovalChallenge {
@@ -1416,6 +1505,43 @@ export class ActivationRuntime {
     });
   }
 
+  /** A core failure cannot leave a durable `issuing` row that suppresses all future views. */
+  #settleFailedApprovalChallengeIssuance(
+    approvalId: string,
+    origin: ApprovalChallenge['origin'],
+    expiresAt?: number,
+  ): void {
+    this.#store.immediate(() => {
+      const issuing = this.#approvalViewChallenge(approvalId);
+      // A distinct writer can only have settled/replaced it; never overwrite that newer state while reporting core's
+      // original failure. The owner queue makes this a defensive cross-process/crash guard rather than the normal path.
+      if (issuing?.state !== 'issuing' || issuing.origin !== origin) return;
+      if (origin === 'terminal') {
+        this.#store.database
+          .prepare(
+            "DELETE FROM activation_view_challenges WHERE approval_id = ? AND state = 'issuing' AND origin = 'terminal'",
+          )
+          .run(approvalId);
+        if (this.#approvalViewChallenge(approvalId) !== undefined) throw this.#challengeExpired();
+        return;
+      }
+      if (expiresAt === undefined) throw this.#challengeExpired();
+      this.#store.database
+        .prepare(
+          "UPDATE activation_view_challenges SET state = 'expired', challenge_hash = ?, expires_at = ?, updated_at = ? WHERE approval_id = ? AND state = 'issuing' AND origin = 'view'",
+        )
+        .run(hashChallenge(`issuance-failed:${approvalId}:${this.#now()}`), expiresAt, this.#now(), approvalId);
+      const settled = this.#approvalViewChallenge(approvalId);
+      if (
+        settled?.state !== 'expired' ||
+        settled.origin !== origin ||
+        typeof settled.challenge_hash !== 'string' ||
+        settled.expires_at !== expiresAt
+      )
+        throw this.#challengeExpired();
+    });
+  }
+
   #expireApprovalViewChallenge(approvalId: string): void {
     this.#store.immediate(() => {
       this.#store.database
@@ -1424,6 +1550,23 @@ export class ActivationRuntime {
         )
         .run(this.#now(), approvalId);
     });
+  }
+
+  /** Serialises only one approval id; unrelated approvals retain full concurrency through every core await. */
+  async #withApprovalOperation<T>(approvalId: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.#approvalOperations.get(approvalId);
+    let release: (() => void) | undefined;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.#approvalOperations.set(approvalId, current);
+    await previous;
+    try {
+      return await work();
+    } finally {
+      release?.();
+      if (this.#approvalOperations.get(approvalId) === current) this.#approvalOperations.delete(approvalId);
+    }
   }
 
   #challengeExpired(): CommsError {
