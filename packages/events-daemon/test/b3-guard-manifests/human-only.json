@@ -165,8 +165,8 @@
       "productionEntry": "packages/events-daemon/src/cli/program.ts",
       "test": "packages/events-daemon/test/b3-human-only-surface.test.ts",
       "mutation": {
-        "from": "streams.stdout.write(`${result.rendered}\\n`);",
-        "to": "streams.stdout.write(`${result.rendered}\\n${result.rendered}\\n`);"
+        "from": "streams.stdout.write(`${escapeForDisplay(result.rendered)}\\n`);",
+        "to": "streams.stdout.write(`${escapeForDisplay(result.rendered)}\\n${escapeForDisplay(result.rendered)}\\n`);"
       },
       "mutationTest": "B3 retained hostile output is neutralised in exactly one envelope on every permitted terminal rendering",
       "loadedMarker": "retained-terminal-render-is-single-enveloped"
