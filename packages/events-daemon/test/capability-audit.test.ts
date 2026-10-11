@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { cp, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +22,7 @@ type Capability = {
   readonly argv?: readonly string[];
   readonly args?: { readonly source?: string };
   readonly expect?: { readonly source?: string };
+  readonly reason?: string;
 };
 
 const EXPECTED_B1_ROWS = [
@@ -118,16 +120,112 @@ const expectedRows = [
   ...shapedRows(EXPECTED_B1_ROWS.slice(27)),
 ];
 
-function headings(page: string): string[] {
-  return [...page.matchAll(/^### `([^`]+)`$/gm)].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
+/** Copy the production parity inputs, leaving package manager state immutable. The copied source is what the
+ * production parity script imports, so an export mutation cannot accidentally be masked by the worktree module. */
+async function parityFixture(): Promise<{ readonly root: string; readonly parent: string }> {
+  const parent = await mkdtemp(join(tmpdir(), 'events-daemon-parity-fixture-'));
+  const root = join(parent, 'repository');
+  const skip = (source: string) =>
+    !source
+      .split('/')
+      .some((part) => part === '.git' || part === 'node_modules' || part === 'dist' || part === '.mutants');
+  for (const path of ['scripts', 'packages', 'skills', 'capabilities.json', 'package.json'])
+    await cp(join(ROOT, path), join(root, path), { recursive: true, filter: skip });
+  await symlink(join(ROOT, 'node_modules'), join(root, 'node_modules'), 'dir');
+  for (const entry of await readdir(join(ROOT, 'packages'), { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    await symlink(
+      join(ROOT, 'packages', entry.name, 'node_modules'),
+      join(root, 'packages', entry.name, 'node_modules'),
+      'dir',
+    ).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+  }
+  return { root, parent };
 }
 
-test('PAR-B1: capability audit freezes the completed Decision 6 inventory', async () => {
-  const table = JSON.parse(await readFile(join(ROOT, 'capabilities.json'), 'utf8')) as {
-    readonly capabilities: readonly Capability[];
-  };
-  const rows = table.capabilities.filter((row) => row.package === 'events-daemon');
+async function expectStrictParityFailure(root: string, explanation: string): Promise<string> {
+  try {
+    await exec(process.execPath, ['scripts/parity.mjs', '--strict'], { cwd: root });
+  } catch (error) {
+    const failed = error as { readonly code?: number; readonly stdout?: string; readonly stderr?: string };
+    assert.equal(failed.code, 1, explanation);
+    return `${failed.stdout ?? ''}${failed.stderr ?? ''}`;
+  }
+  assert.fail(explanation);
+}
 
+const EXPECTED_B3_EXCEPTIONS = [
+  [
+    'events-daemon.rule.test-retained',
+    'rule test-retained',
+    'ruleTestRetained',
+    'Retained sender content may be selected only by a person outside model context.',
+  ],
+  [
+    'events-daemon.target.resume',
+    'target resume',
+    'targetResume',
+    'A person, not model context, decides to reopen a degraded target reset barrier.',
+  ],
+  [
+    'events-daemon.held.decide',
+    'held decide',
+    'decideHeld',
+    'A held model decision can be resolved only by a person at terminal/app, never by model context.',
+  ],
+  [
+    'events-daemon.target-secret.create',
+    'target secret create',
+    'targetSecretCreate',
+    'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+  ],
+  [
+    'events-daemon.target-secret.rotate',
+    'target secret rotate',
+    'targetSecretRotate',
+    'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+  ],
+  [
+    'events-daemon.target-url.set',
+    'target url set',
+    'targetUrlSet',
+    'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+  ],
+  [
+    'events-daemon.subscriber-token.create',
+    'subscriber token create',
+    'subscriberTokenCreate',
+    'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+  ],
+  [
+    'events-daemon.subscriber-token.rotate',
+    'subscriber token rotate',
+    'subscriberTokenRotate',
+    'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+  ],
+  [
+    'events-daemon.judge-key.set',
+    'judge key set',
+    'judgeKeySet',
+    'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+  ],
+  [
+    'events-daemon.judge-key.rotate',
+    'judge key rotate',
+    'judgeKeyRotate',
+    'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+  ],
+  [
+    'events-daemon.secrets.migrate',
+    'secrets migrate',
+    'migrateSecrets',
+    'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+  ],
+] as const;
+
+function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
   assert.deepEqual(rows.map(rowShape), expectedRows);
   assert.equal(new Set(rows.map((row) => row.id)).size, expectedRows.length);
   assert.ok(rows.every((row) => row.status !== 'pending'));
@@ -142,75 +240,7 @@ test('PAR-B1: capability audit freezes the completed Decision 6 inventory', asyn
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);
   }
-  const expectedB3Exceptions = [
-    [
-      'events-daemon.rule.test-retained',
-      'rule test-retained',
-      'ruleTestRetained',
-      'Retained sender content may be selected only by a person outside model context.',
-    ],
-    [
-      'events-daemon.target.resume',
-      'target resume',
-      'targetResume',
-      'A person, not model context, decides to reopen a degraded target reset barrier.',
-    ],
-    [
-      'events-daemon.held.decide',
-      'held decide',
-      'decideHeld',
-      'A held model decision can be resolved only by a person at terminal/app, never by model context.',
-    ],
-    [
-      'events-daemon.target-secret.create',
-      'target secret create',
-      'targetSecretCreate',
-      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
-    ],
-    [
-      'events-daemon.target-secret.rotate',
-      'target secret rotate',
-      'targetSecretRotate',
-      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
-    ],
-    [
-      'events-daemon.target-url.set',
-      'target url set',
-      'targetUrlSet',
-      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
-    ],
-    [
-      'events-daemon.subscriber-token.create',
-      'subscriber token create',
-      'subscriberTokenCreate',
-      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
-    ],
-    [
-      'events-daemon.subscriber-token.rotate',
-      'subscriber token rotate',
-      'subscriberTokenRotate',
-      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
-    ],
-    [
-      'events-daemon.judge-key.set',
-      'judge key set',
-      'judgeKeySet',
-      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
-    ],
-    [
-      'events-daemon.judge-key.rotate',
-      'judge key rotate',
-      'judgeKeyRotate',
-      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
-    ],
-    [
-      'events-daemon.secrets.migrate',
-      'secrets migrate',
-      'migrateSecrets',
-      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
-    ],
-  ] as const;
-  for (const [id, cli, operation, reason] of expectedB3Exceptions) {
+  for (const [id, cli, operation, reason] of EXPECTED_B3_EXCEPTIONS) {
     const row = exceptions.get(id);
     assert.deepEqual(
       row === undefined
@@ -219,11 +249,82 @@ test('PAR-B1: capability audit freezes the completed Decision 6 inventory', asyn
             cli: row.cli,
             mcp: row.mcp,
             operation: row.operation,
-            reason: (row as Capability & { reason?: string }).reason,
+            reason: row.reason,
           },
       { cli, mcp: null, operation, reason },
       `${id} is an exact, individual terminal-only exception row`,
     );
+  }
+}
+
+function headings(page: string): string[] {
+  return [...page.matchAll(/^### `([^`]+)`$/gm)].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
+}
+
+test('PAR-B1: capability audit freezes the completed Decision 6 inventory', async () => {
+  const table = JSON.parse(await readFile(join(ROOT, 'capabilities.json'), 'utf8')) as {
+    readonly capabilities: readonly Capability[];
+  };
+  const rows = table.capabilities.filter((row) => row.package === 'events-daemon');
+
+  assertDaemonCapabilityAudit(rows);
+});
+
+test('PAR-B3: capability audit rejects fixture copies that remove a row or weaken an exception reason', async () => {
+  const table = JSON.parse(await readFile(join(ROOT, 'capabilities.json'), 'utf8')) as {
+    readonly capabilities: readonly Capability[];
+  };
+  const removed = structuredClone(table) as { capabilities: Capability[] };
+  removed.capabilities = removed.capabilities.filter((row) => row.id !== 'events-daemon.approval.view');
+  assert.throws(
+    () => assertDaemonCapabilityAudit(removed.capabilities.filter((row) => row.package === 'events-daemon')),
+    /Expected values to be strictly deep-equal/u,
+    'the completed capability inventory cannot silently lose a paired control row',
+  );
+
+  const weakened = structuredClone(table) as { capabilities: Array<Capability & { reason?: string }> };
+  const secret = weakened.capabilities.find((row) => row.id === 'events-daemon.target-secret.create');
+  assert.ok(secret, 'the fixture contains an individual terminal-only secret exception');
+  secret.reason = 'terminal secret operation';
+  assert.throws(
+    () => assertDaemonCapabilityAudit(weakened.capabilities.filter((row) => row.package === 'events-daemon')),
+    /exact, individual terminal-only exception row/u,
+    'the audit rejects a vague replacement for the reviewed exception reason',
+  );
+});
+
+test('PAR-B3: strict parity rejects a fixture copy with a removed B3 capability row', async () => {
+  const fixture = await parityFixture();
+  try {
+    const path = join(fixture.root, 'capabilities.json');
+    const table = JSON.parse(await readFile(path, 'utf8')) as { capabilities: Array<{ id: string }> };
+    table.capabilities = table.capabilities.filter((row) => row.id !== 'events-daemon.approval.view');
+    await writeFile(path, `${JSON.stringify(table, null, 2)}\n`);
+    const output = await expectStrictParityFailure(
+      fixture.root,
+      'the strict production parity script must reject a missing paired B3 row',
+    );
+    assert.match(output, /agent-events approval view.*no row|events_approval_view.*no row/su);
+  } finally {
+    await rm(fixture.parent, { recursive: true, force: true });
+  }
+});
+
+test('PAR-B3: strict parity rejects a fixture copy with a removed B3 operation export', async () => {
+  const fixture = await parityFixture();
+  try {
+    const path = join(fixture.root, 'packages/events-daemon/src/operations/rule-test.ts');
+    const source = await readFile(path, 'utf8');
+    const changed = source.replace('export async function ruleTest(', 'async function ruleTest(');
+    assert.notEqual(changed, source, 'the operation-export mutant removes the real rule-test export');
+    await writeFile(path, changed);
+    const output = await expectStrictParityFailure(
+      fixture.root,
+      'the strict production parity script must reject a B3 row whose operation is no longer exported',
+    );
+    assert.match(output, /ruleTest|does not provide an export named/u);
+  } finally {
+    await rm(fixture.parent, { recursive: true, force: true });
   }
 });
 

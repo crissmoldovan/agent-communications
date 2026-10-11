@@ -1,0 +1,53 @@
+{
+  "area": "task-10-phase-integration",
+  "cases": [
+    {
+      "case": "integration-e-e2-discriminator",
+      "operation": "judgeUnavailable",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-judge-unavailable.ts",
+      "test": "packages/events-daemon/test/b3-e-phase-contract.test.ts",
+      "mutation": {
+        "from": "return { kind: 'unavailable', code: 'E_REQUIRED', phase: 'E' };",
+        "to": "return { kind: 'unavailable', code: 'E2_REQUIRED', phase: 'E2' };"
+      },
+      "mutationTest": "B3 E/E2 operators are content-free unavailable results with no producer state",
+      "loadedMarker": "integration-e-e2-discriminator"
+    },
+    {
+      "case": "integration-pending-context-binding",
+      "operation": "verifyPendingTargetContext",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-pending-activation-context.ts",
+      "test": "packages/events-daemon/test/b3-pending-target-context.test.ts",
+      "mutation": {
+        "from": "if (!validOrigin(input.origin))",
+        "to": "if (false)"
+      },
+      "mutationTest": "B3 pending target context binds approval challenge to one pending activation and fixed target",
+      "loadedMarker": "integration-pending-context-binding"
+    },
+    {
+      "case": "integration-sanitised-single-envelope",
+      "operation": "runCatalogueRuleTest",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-retained-control.ts",
+      "test": "packages/events-daemon/test/b3-rule-test.test.ts",
+      "mutation": {
+        "from": "return sanitiseSenderFields(entry.value, JSON.parse(canonicalJson(example)) as Record<string, unknown>);",
+        "to": "return JSON.parse(canonicalJson(example)) as Record<string, unknown>;"
+      },
+      "mutationTest": "B3 rule test evaluates a catalogue example as a live projection would: untrusted fields are neutralised first",
+      "loadedMarker": "integration-sanitised-single-envelope"
+    },
+    {
+      "case": "integration-awaiting-reapproval-restart-fence",
+      "operation": "EventScheduler.boundSourceScopes",
+      "productionEntry": "packages/events-daemon/src/runtime/scheduler.ts",
+      "test": "packages/events-daemon/test/b3-doctor-awaiting-reapproval.test.ts",
+      "mutation": {
+        "from": "if (point === undefined) continue;",
+        "to": "if (false) continue;"
+      },
+      "mutationTest": "B3 doctor K6 re-added account stays awaiting reapproval through restart until a fresh point",
+      "loadedMarker": "integration-awaiting-reapproval-restart-fence"
+    }
+  ]
+}
