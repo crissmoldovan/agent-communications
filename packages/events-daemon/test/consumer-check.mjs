@@ -144,6 +144,15 @@ if (process.platform !== 'win32') {
       mcp.notify('notifications/initialized', {});
       const status = await mcp.request('tools/call', { name: 'events_status', arguments: {} });
       assert.equal(status.result.structuredContent.owner, 'running');
+      const tools = await mcp.request('tools/list', {});
+      const names = tools.result.tools.map((tool) => tool.name);
+      for (const expected of ['events_approval_view', 'events_rule_test', 'events_target_test', 'events_held_list'])
+        assert.ok(names.includes(expected), `the packed daemon consumer exposes B3 paired tool ${expected}`);
+      for (const forbidden of ['events_target_secret_create', 'events_target_resume', 'events_held_decide'])
+        assert.ok(
+          !names.includes(forbidden),
+          `the packed daemon consumer keeps terminal-only B3 tool ${forbidden} absent`,
+        );
     } finally {
       await mcp.close();
     }
