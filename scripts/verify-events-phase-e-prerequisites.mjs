@@ -14,11 +14,13 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    '8364e57e4495d9ee9d3f4e472a1b50d307847256d789ddd364ee0106e6f447cb',
+    '97a4050e291828dbe006c39fec50fd16859c3048350f37b76564d7e51f321e86',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
-    'eafa60461ddc1a18c0065c31b2f7290d2b6a73b132e2639a683426d3df033713',
+    'df7d290b4229b6f88e84117ad8680abedc9442fd23272242e74a64ae04472da8',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-rule-preview.json':
+    '0a45270f6f3c366f1a1d1b3e3264b4318746c74cc82d1a99985600abc7fee89f',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-variants.json':
     'b75e356047e2285960e76042996a646c50919be4737c11d926e070a381a4f128',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/b3-operation-results.json':
@@ -58,11 +60,12 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-approval-preview-v1/stale.json':
     '2fb75f3b2201c619baa8ab2fd77c2c9052b96c3030ad5ad000265b9c3db9fd37',
   'packages/events-daemon/test/b3-consumer-contract.test.ts':
-    'e639b121d058768ef5e01ee4ec7e78dd8f4475b9ac1e1aaef6e994ad8b1d0095',
+    'bcb8620688a961117244f4562d2125073e2ec84d83fc04e485459d73a473ce12',
 });
 const REQUIRED_VECTOR_NAMES = Object.freeze([
   'doctor-result',
   'approval-view-ready',
+  'approval-view-rule-preview',
   'approval-view-stale',
   'approval-view-digest-mismatch',
   'approval-view-challenge-expired',
