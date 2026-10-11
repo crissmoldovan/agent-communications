@@ -175,6 +175,7 @@ async function approvalViewRuntimeFixture() {
       secrets: {} as never,
       assertObjectSecretReady: async () => ({ ready: true as const }),
     },
+    config: configStore,
     activations: runtime,
     cipher: { encrypt: async () => Buffer.alloc(0) },
     now: () => now,
@@ -754,6 +755,7 @@ test('B3 approval view returns authoritative ready, stale, digest, and expiry va
         secrets: {} as never,
         assertObjectSecretReady: async () => ({ ready: true as const }),
       },
+      config: { load: async () => ({ inboxes: {}, accounts: {} }) as never },
       activations: {
         issueApprovalViewChallenge: async (approvalId: string, expiresAt: number) => {
           if (lastViewExpiresAt !== undefined && lastViewExpiresAt <= now) {
@@ -877,6 +879,42 @@ test('B3 approval view challenge reaches the production activation approve fence
   } finally {
     expired.store.close();
     await rm(expired.root, { recursive: true, force: true });
+  }
+});
+
+test('B3 approval view reissues a fresh challenge after reporting its first expiry', async () => {
+  const fixture = await approvalViewRuntimeFixture();
+  try {
+    const first = await viewApproval(fixture);
+    fixture.advance(5 * 60 * 1_000);
+    const request = {
+      operation: 'approvalView' as const,
+      args: { approvalId: fixture.prepared.approvalId, digest: fixture.prepared.binding.digest },
+    };
+    assert.deepEqual(
+      await fixture.service.handle(request),
+      { kind: 'CHALLENGE_EXPIRED' },
+      'the first view at the deadline records and reports the expiry',
+    );
+    const reissued = (await fixture.service.handle(request)) as {
+      readonly kind: string;
+      readonly challenge?: { readonly challenge: string };
+    };
+    assert.equal(reissued.kind, 'READY', 'the next view replaces the expired one with a new challenge');
+    assert.equal(typeof reissued.challenge?.challenge, 'string');
+    const fresh = reissued.challenge?.challenge as string;
+    assert.notEqual(fresh, first.challenge, 'the reissued challenge is not the expired answer');
+    await assert.rejects(
+      () => fixture.runtime.approve({ approvalId: fixture.prepared.approvalId, answer: first.challenge }),
+      (error: unknown) =>
+        error instanceof CommsError && error.code === 'APPROVAL_VOID' && error.details?.reason === 'CHALLENGE_EXPIRED',
+      'the original challenge hash cannot approve after a fresh view replaces it',
+    );
+    const completed = await fixture.runtime.approve({ approvalId: fixture.prepared.approvalId, answer: fresh });
+    assert.equal(completed.status, 'completed');
+  } finally {
+    fixture.store.close();
+    await rm(fixture.root, { recursive: true, force: true });
   }
 });
 
@@ -1055,6 +1093,7 @@ test('B3 owner keeps pre-E judge controls inert and held decisions unclaimable',
         secrets: {} as never,
         assertObjectSecretReady: async () => ({ ready: true as const }),
       },
+      config: { load: async () => ({ inboxes: {}, accounts: {} }) as never },
       activations: { issueApprovalViewChallenge: async () => 'unused' },
       cipher: { encrypt: async () => Buffer.alloc(0) },
     });
@@ -1121,7 +1160,7 @@ test('B3 owner composes the reset record sealer from its cipher while the shared
       INSERT INTO target_versions (id, target_id, version, document, digest)
       VALUES ('target-owner-resume@1', 'target-owner-resume', 1, '{"targetId":"target-owner-resume","version":1,"kind":"dry-run","retentionMs":60000}', 'digest');
       INSERT INTO rule_versions (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
-      VALUES ('rule-owner-resume@1', 'rule-owner-resume', 1, '{}', 'digest', 'active', 'approval', 'activation', 1);
+      VALUES ('rule-owner-resume@1', 'rule-owner-resume', 1, '{"source":{"channel":"gmail","accountIds":["account-owner-resume"]}}', 'digest', 'active', 'approval', 'activation', 1);
       INSERT INTO system_reset_outbox (id, reset_epoch, target_id, target_version, encrypted_record, attempts, attempt_limit,
                                       expires_at, state, switch_generation, created_at)
       VALUES ('old-owner-resume', 4, 'target-owner-resume', 1, NULL, 20, 20, 86401000, 'dead-lettered', 9, 1000);
@@ -1149,6 +1188,10 @@ test('B3 owner composes the reset record sealer from its cipher while the shared
         quiescer,
         secrets: {} as never,
         assertObjectSecretReady: async () => ({ ready: true as const }),
+      },
+      config: {
+        load: async () =>
+          ({ inboxes: { account: { id: 'account-owner-resume', provider: 'gmail' } }, accounts: {} }) as never,
       },
       activations: { issueApprovalViewChallenge: async () => 'unused' },
       cipher: {

@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
+import { CommsError } from '@agentcomms/core';
 import { TargetResumeControl } from '../src/runtime/b3-target-test-control.ts';
 import { addActiveRuleTargetReferences } from '../src/runtime/target-version-references.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 import { testWriterQuiescer } from './support/writer-quiescer.ts';
+
+function resumeConfig(accountId: string) {
+  return {
+    load: async () => ({ inboxes: { account: { id: accountId, provider: 'gmail' } }, accounts: {} }) as never,
+  };
+}
 
 test('B3 target resume replaces only a degraded terminal reset with a fresh twenty-attempt 24-hour record', {
   skip: WINDOWS_SKIP,
@@ -16,7 +23,7 @@ test('B3 target resume replaces only a degraded terminal reset with a fresh twen
     store.database.exec(`UPDATE event_settings SET enabled = 1, switch_generation = 9 WHERE singleton = 1;
       INSERT INTO target_versions (id, target_id, version, document, digest) VALUES ('target-resume@1', 'target-resume', 1, '{"targetId":"target-resume","version":1,"kind":"dry-run","retentionMs":60000}', 'digest');
       INSERT INTO rule_versions (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
-      VALUES ('rule-resume@1', 'rule-resume', 1, '{}', 'digest', 'active', 'approval', 'activation', 1);
+      VALUES ('rule-resume@1', 'rule-resume', 1, '{"source":{"channel":"gmail","accountIds":["account-resume"]}}', 'digest', 'active', 'approval', 'activation', 1);
       INSERT INTO system_reset_outbox (id, reset_epoch, target_id, target_version, encrypted_record, attempts, attempt_limit, expires_at, state, switch_generation, created_at)
       VALUES ('old-reset', 4, 'target-resume', 1, NULL, 20, 20, 86401000, 'dead-lettered', 9, 1000);
       INSERT INTO reset_barriers (reset_epoch, target_id, target_version, state, system_outbox_id, degraded_at)
@@ -35,6 +42,7 @@ test('B3 target resume replaces only a degraded terminal reset with a fresh twen
         secrets: {} as never,
         assertObjectSecretReady: async () => ({ ready: true as const }),
       },
+      config: resumeConfig('account-resume'),
       now: () => 10_000,
       newId: () => 'fresh-reset',
     });
@@ -70,7 +78,7 @@ test('B3 target resume never rewrites retryable reset work as a new notice', { s
     store.database.exec(`UPDATE event_settings SET enabled = 1, switch_generation = 3 WHERE singleton = 1;
       INSERT INTO target_versions (id, target_id, version, document, digest) VALUES ('target-retry@1', 'target-retry', 1, '{"targetId":"target-retry","version":1,"kind":"dry-run","retentionMs":60000}', 'digest');
       INSERT INTO rule_versions (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
-      VALUES ('rule-retry@1', 'rule-retry', 1, '{}', 'digest', 'active', 'approval', 'activation', 1);
+      VALUES ('rule-retry@1', 'rule-retry', 1, '{"source":{"channel":"gmail","accountIds":["account-retry"]}}', 'digest', 'active', 'approval', 'activation', 1);
       INSERT INTO system_reset_outbox (id, reset_epoch, target_id, target_version, encrypted_record, attempts, attempt_limit, next_at, expires_at, state, switch_generation, created_at)
       VALUES ('retryable-reset', 2, 'target-retry', 1, X'01', 1, 20, 1, 86400001, 'retryable', 3, 1);
       INSERT INTO reset_barriers (reset_epoch, target_id, target_version, state, system_outbox_id, degraded_at)
@@ -89,6 +97,7 @@ test('B3 target resume never rewrites retryable reset work as a new notice', { s
         secrets: {} as never,
         assertObjectSecretReady: async () => ({ ready: true as const }),
       },
+      config: resumeConfig('account-retry'),
     });
     await assert.rejects(
       () => control.resume({ targetId: 'target-retry', targetVersion: 1 }),
@@ -114,7 +123,7 @@ test('B3 target resume refuses a revoked exact target before it can seal a repla
       INSERT INTO target_versions (id, target_id, version, document, digest, revoked_at)
       VALUES ('target-resume-revoked@1', 'target-resume-revoked', 1, '{"targetId":"target-resume-revoked","version":1,"kind":"dry-run","retentionMs":60000}', 'digest', 2);
       INSERT INTO rule_versions (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
-      VALUES ('rule-resume-revoked@1', 'rule-resume-revoked', 1, '{}', 'digest', 'active', 'approval', 'activation', 1);
+      VALUES ('rule-resume-revoked@1', 'rule-resume-revoked', 1, '{"source":{"channel":"gmail","accountIds":["account-resume-revoked"]}}', 'digest', 'active', 'approval', 'activation', 1);
       INSERT INTO system_reset_outbox (id, reset_epoch, target_id, target_version, encrypted_record, attempts, attempt_limit, expires_at, state, switch_generation, created_at)
       VALUES ('old-revoked', 3, 'target-resume-revoked', 1, NULL, 20, 20, 86401000, 'dead-lettered', 4, 1000);
       INSERT INTO reset_barriers (reset_epoch, target_id, target_version, state, system_outbox_id, degraded_at)
@@ -137,6 +146,7 @@ test('B3 target resume refuses a revoked exact target before it can seal a repla
         secrets: {} as never,
         assertObjectSecretReady: async () => ({ ready: true as const }),
       },
+      config: resumeConfig('account-resume-revoked'),
     });
     await assert.rejects(
       () => control.resume({ targetId: 'target-resume-revoked', targetVersion: 1 }),
@@ -158,7 +168,7 @@ test('B3 target resume purges an orphaned degraded barrier when its final exact 
     store.database.exec(`UPDATE event_settings SET enabled = 1, switch_generation = 5 WHERE singleton = 1;
       INSERT INTO target_versions (id, target_id, version, document, digest) VALUES ('target-orphan@1', 'target-orphan', 1, '{"targetId":"target-orphan","version":1,"kind":"dry-run","retentionMs":60000}', 'digest');
       INSERT INTO rule_versions (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
-      VALUES ('rule-orphan@1', 'rule-orphan', 1, '{}', 'digest', 'active', 'approval', 'activation', 1);
+      VALUES ('rule-orphan@1', 'rule-orphan', 1, '{"source":{"channel":"gmail","accountIds":["account-orphan"]}}', 'digest', 'active', 'approval', 'activation', 1);
       INSERT INTO system_reset_outbox (id, reset_epoch, target_id, target_version, encrypted_record, attempts, attempt_limit, expires_at, state, switch_generation, created_at)
       VALUES ('old-orphan', 7, 'target-orphan', 1, NULL, 20, 20, 86401000, 'dead-lettered', 5, 1000);
       INSERT INTO reset_barriers (reset_epoch, target_id, target_version, state, system_outbox_id, degraded_at)
@@ -180,6 +190,7 @@ test('B3 target resume purges an orphaned degraded barrier when its final exact 
         secrets: {} as never,
         assertObjectSecretReady: async () => ({ ready: true as const }),
       },
+      config: resumeConfig('account-orphan'),
       now: () => 10_000,
     });
     await assert.rejects(
@@ -193,6 +204,65 @@ test('B3 target resume purges an orphaned degraded barrier when its final exact 
     assert.equal(
       (store.database.prepare('SELECT count(*) AS count FROM system_reset_outbox').get() as { count: number }).count,
       0,
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B3 target resume refuses a still-referenced target when every bound source account was removed before its reset resume', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-b3-resume-account-fence-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    store.database.exec(`UPDATE event_settings SET enabled = 1, switch_generation = 6 WHERE singleton = 1;
+      INSERT INTO target_versions (id, target_id, version, document, digest) VALUES ('target-account-fence@1', 'target-account-fence', 1, '{"targetId":"target-account-fence","version":1,"kind":"dry-run","retentionMs":60000}', 'digest');
+      INSERT INTO rule_versions (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+      VALUES ('rule-account-fence@1', 'rule-account-fence', 1, '{"source":{"channel":"gmail","accountIds":["account-A"]}}', 'digest', 'active', 'approval', 'activation', 1);
+      INSERT INTO system_reset_outbox (id, reset_epoch, target_id, target_version, encrypted_record, attempts, attempt_limit, expires_at, state, switch_generation, created_at)
+      VALUES ('old-account-fence', 6, 'target-account-fence', 1, NULL, 20, 20, 86401000, 'dead-lettered', 6, 1000);
+      INSERT INTO reset_barriers (reset_epoch, target_id, target_version, state, system_outbox_id, degraded_at)
+      VALUES (6, 'target-account-fence', 1, 'degraded', 'old-account-fence', 2000);`);
+    addActiveRuleTargetReferences(store.database, {
+      ruleId: 'rule-account-fence',
+      ruleVersion: 1,
+      targets: [{ targetId: 'target-account-fence', targetVersion: 1 }],
+      createdAt: 1,
+    });
+    let accountPresent = true;
+    const control = new TargetResumeControl({
+      store,
+      resetSealer: async ({ plaintext }) => Buffer.from(plaintext),
+      ports: {
+        quiescer: testWriterQuiescer(),
+        secrets: {} as never,
+        assertObjectSecretReady: async () => ({ ready: true as const }),
+      },
+      config: {
+        load: async () =>
+          accountPresent
+            ? ({ inboxes: { account: { id: 'account-A', provider: 'gmail' } }, accounts: {} } as never)
+            : ({ inboxes: {}, accounts: {} } as never),
+      },
+      now: () => 10_000,
+      newId: () => 'fresh-account-fence',
+    });
+    accountPresent = false;
+    await assert.rejects(
+      () => control.resume({ targetId: 'target-account-fence', targetVersion: 1 }),
+      (error: unknown) =>
+        error instanceof CommsError && error.code === 'NOT_FOUND' && error.details?.reason === 'ACCOUNT_REMOVED',
+      'a target resume must not create replacement reset work for a removed source account before its removal sweep',
+    );
+    assert.deepEqual(
+      store.database
+        .prepare('SELECT id, state FROM system_reset_outbox')
+        .all()
+        .map((row) => ({ ...(row as { readonly id: string; readonly state: string }) })),
+      [{ id: 'old-account-fence', state: 'dead-lettered' }],
+      'the refusal inserts no replacement reset row',
     );
   } finally {
     store.close();

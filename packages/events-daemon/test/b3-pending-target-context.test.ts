@@ -141,6 +141,7 @@ test('B3 production owner lets only the approval flow test its exact pending tar
         secrets: {} as never,
         assertObjectSecretReady: async () => ({ ready: true as const }),
       },
+      config: { load: async () => ({ inboxes: {}, accounts: {} }) as never },
       activations: { issueApprovalViewChallenge: async () => null },
       cipher: { encrypt: async () => Buffer.alloc(0) },
       targetTestTransport: {

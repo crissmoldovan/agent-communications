@@ -113,6 +113,191 @@ function selectedBackend(opened: Awaited<ReturnType<typeof openEventDatabase>>):
     .value;
 }
 
+test('B3 verifying master and slot reads reach the keychain itself, not their cached values', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'aev-b3-verifying-secret-reads-'));
+  try {
+    const opened = await openEventDatabase({ stateDir });
+    try {
+      const items = new Map<string, string>();
+      const keychain = new KeychainSecretStore(fakeKeyring(items), 'synthetic-ns:events');
+      await selectEventSecretStore(opened.database, 'keychain');
+      const secrets = await openEventSecretStore({
+        database: opened.database,
+        paths: opened.paths,
+        configDir: '/synthetic/config',
+        stores: { keychain },
+      });
+      const quiescer = new WriterQuiescer();
+      const cipher = new EventRecordCipher(opened.database, secrets, quiescer);
+      const master = await secrets.currentMaster();
+      const masterRef = (
+        opened.database.prepare('SELECT secret_ref FROM event_secret_masters WHERE key_id = ?').get(master.keyId) as {
+          secret_ref: string;
+        }
+      ).secret_ref;
+      const masterAccount = [...items.keys()].find((account) => account.endsWith(`:${masterRef}`));
+      assert.ok(masterAccount, 'the fake keyring has the cached master item');
+
+      items.set(masterAccount, 'not-a-valid-master');
+      await assert.rejects(
+        () => secrets.currentMaster(),
+        (error: unknown) => error instanceof EventSecretError && error.code === 'EVENT_MASTER_LOST',
+        'currentMaster parses a changed keychain item instead of returning its cached master',
+      );
+      items.set(masterAccount, master.key.toString('base64'));
+
+      items.delete(masterAccount);
+      await assert.rejects(
+        () => secrets.currentMaster(),
+        (error: unknown) => error instanceof EventSecretError && error.code === 'EVENT_MASTER_LOST',
+        'currentMaster refuses a master removed outside the cached keychain store',
+      );
+      items.set(masterAccount, master.key.toString('base64'));
+
+      items.delete(masterAccount);
+      await assert.rejects(
+        () => secrets.master(master.keyId),
+        (error: unknown) => error instanceof EventSecretError && error.code === 'EVENT_MASTER_LOST',
+        'master(keyId) refuses a master removed outside the cached keychain store',
+      );
+      items.set(masterAccount, master.key.toString('base64'));
+
+      const document = canonicalJson({
+        targetId: 'target-verifying-read',
+        version: 1,
+        kind: 'webhook',
+        url: { kind: 'plain', value: 'https://receiver.invalid/events' },
+        approvedAddressSet: ['8.8.8.8'],
+        signing: 'standard-webhooks',
+        ordering: 'strict',
+        retryLimit: 20,
+        representation: 'plain',
+      });
+      const digest = sha256Hex(document);
+      opened.database
+        .prepare('INSERT INTO target_versions (id, target_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
+        .run('target-verifying-read@1', 'target-verifying-read', 1, document, digest);
+      await storeEventSecretGeneration({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher,
+        owner: { kind: 'target', id: 'target-verifying-read', version: 1, digest },
+        purpose: 'webhook-signing',
+        material: 'synthetic-verifying-slot',
+        expectedPriorGeneration: null,
+      });
+      await secrets.readLiveGenerations({
+        owner: { kind: 'target', id: 'target-verifying-read', version: 1, digest },
+        purpose: 'webhook-signing',
+        cipher,
+      });
+      const slotAccount = [...items.keys()].find((account) => account.includes(':event-secret:'));
+      assert.ok(slotAccount, 'the fake keyring has the cached slot item');
+      items.set(slotAccount, 'synthetic-changed-slot');
+      await assert.rejects(
+        () =>
+          secrets.readLiveGenerations({
+            owner: { kind: 'target', id: 'target-verifying-read', version: 1, digest },
+            purpose: 'webhook-signing',
+            cipher,
+          }),
+        (error: unknown) => error instanceof EventSecretError && error.code === 'EVENT_SECRET_REFERENCE',
+        'slot material changed outside the cached keychain store is unavailable',
+      );
+    } finally {
+      opened.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('B3 initial event-secret migration keeps every source copy when the selected copy changes after selector commit', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'aev-b3-migrate-initial-cleanup-'));
+  try {
+    const opened = await openEventDatabase({ stateDir });
+    try {
+      class ChangedTargetStore extends MemorySecretStore {
+        #changed = false;
+
+        override async get(ref: string): Promise<string | null> {
+          const value = await super.get(ref);
+          if (!this.#changed && value !== null) {
+            this.#changed = true;
+            this.values.set(ref, 'synthetic-selected-copy-replaced');
+          }
+          return value;
+        }
+      }
+
+      const source = new MemorySecretStore('file');
+      const target = new ChangedTargetStore('keychain');
+      await selectEventSecretStore(opened.database, 'file');
+      const secrets = await openEventSecretStore({
+        database: opened.database,
+        paths: opened.paths,
+        configDir: '/synthetic/config',
+        stores: { file: source, keychain: target },
+      });
+      await secrets.currentMaster();
+      const quiescer = new WriterQuiescer();
+      const cipher = new EventRecordCipher(opened.database, secrets, quiescer);
+      const document = canonicalJson({
+        targetId: 'target-migration-cleanup',
+        version: 1,
+        kind: 'webhook',
+        url: { kind: 'plain', value: 'https://receiver.invalid/events' },
+        approvedAddressSet: ['8.8.8.8'],
+        signing: 'standard-webhooks',
+        ordering: 'strict',
+        retryLimit: 20,
+        representation: 'plain',
+      });
+      const digest = sha256Hex(document);
+      opened.database
+        .prepare('INSERT INTO target_versions (id, target_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
+        .run('target-migration-cleanup@1', 'target-migration-cleanup', 1, document, digest);
+      await storeEventSecretGeneration({
+        database: opened.database,
+        paths: opened.paths,
+        store: secrets,
+        cipher,
+        owner: { kind: 'target', id: 'target-migration-cleanup', version: 1, digest },
+        purpose: 'webhook-signing',
+        material: 'synthetic-migration-cleanup-slot',
+        expectedPriorGeneration: null,
+      });
+      const before = new Map(source.values);
+
+      const result = await new B3SecretControl({
+        database: opened.database,
+        paths: opened.paths,
+        secrets,
+        cipher,
+        quiescer,
+      }).migrateSecrets({ from: 'file', to: 'keychain', source, target });
+
+      assert.equal(result.moved, before.size);
+      assert.equal(result.code, 'SELECTED_COPY_CHANGED_AFTER_MIGRATION');
+      assert.deepEqual(
+        new Set(result.leftovers),
+        new Set(before.keys()),
+        'every source copy is reported as a leftover',
+      );
+      assert.deepEqual(new Map(source.values), before, 'initial cleanup deletes no source copy after target drift');
+    } finally {
+      opened.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("B3 event-secret migration read-back reaches the keychain itself, not the store's cache", {
   skip: WINDOWS_SKIP,
 }, async () => {

@@ -93,8 +93,8 @@
       "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
       "test": "packages/events-daemon/test/b3-purge-closure.test.ts",
       "mutation": {
-        "from": "for (const listener of [...listeners]) listener.rotate({ ...input, generation: 0 });",
-        "to": "for (const listener of [...listeners]) void listener;"
+        "from": "    this.rotate({ ...input, generation: 0 });",
+        "to": "    void input;"
       },
       "mutationTest": "B3 subscriber removal closes every exact live SSE stream through the owner registry port",
       "loadedMarker": "owner-stream-registry-rotates-revoked-subscriber"
@@ -194,6 +194,19 @@
       },
       "mutationTest": "B3 approval challenges fail closed when their durable row is lost, while a terminal-prompt row remains valid",
       "loadedMarker": "approval-view-missing-row-cannot-be-terminal"
+    },
+    {
+      "case": "approval-view-reissues-expired-challenge",
+      "operation": "ActivationRuntime.issueApprovalViewChallenge",
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
+      "mutation": {
+        "from": "        existing.state === 'active' &&\n        current.origin === 'view' &&",
+        "to": "        current.origin === 'view' &&"
+      },
+      "mutationTest": "B3 approval view reissues a fresh challenge after reporting its first expiry",
+      "loadedMarker": "approval-view-reissues-expired-challenge"
     },
     {
       "case": "paired-capability-row-cannot-be-deleted",

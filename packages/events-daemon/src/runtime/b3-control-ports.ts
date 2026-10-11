@@ -5,6 +5,7 @@ import type { EventRecordCipher } from '../store/records.ts';
 import { B3SecretControl } from './b3-secret-control.ts';
 import { assertObjectSecretReady } from './object-secret-readiness.ts';
 import type { EventPaths } from './paths.ts';
+import type { SubscriberStreams } from './subscriber-streams.ts';
 import type { WriterQuiescer } from './writer-quiescer.ts';
 
 /**
@@ -57,6 +58,8 @@ export function createB3ControlPorts(input: {
   readonly eventSecrets: EventSecretStore;
   readonly cipher: EventRecordCipher;
   readonly quiescer: WriterQuiescer;
+  /** Required at the production composition root: token rotation closes every registered old-generation stream. */
+  readonly subscriberStreams: Pick<SubscriberStreams, 'rotate'>;
 }): B3ControlPorts {
   const secrets = new B3SecretControl({
     database: input.database,
@@ -64,6 +67,7 @@ export function createB3ControlPorts(input: {
     secrets: input.eventSecrets,
     cipher: input.cipher,
     quiescer: input.quiescer,
+    subscriberStreams: input.subscriberStreams,
   });
   return {
     quiescer: input.quiescer,
