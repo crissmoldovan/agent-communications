@@ -1780,6 +1780,17 @@
       "expect": { "catalogue.type": "gmail.message.received", "catalogue.version": 1, "catalogue.exampleIndex": 0 }
     },
     {
+      "id": "events-daemon.rule.test-retained",
+      "package": "events-daemon",
+      "cli": "rule test-retained",
+      "mcp": null,
+      "status": "exception",
+      "operation": "ruleTestRetained",
+      "argv": ["event-1", "--rule", "rule-1", "--version", "1"],
+      "expect": { "eventId": "event-1", "ruleId": "rule-1", "ruleVersion": 1 },
+      "reason": "Retained sender content may be selected only by a person outside model context."
+    },
+    {
       "id": "events-daemon.target.test",
       "package": "events-daemon",
       "cli": "target test",
@@ -1789,6 +1800,17 @@
       "argv": ["target-1", "--version", "1"],
       "args": { "targetId": "target-1", "targetVersion": 1 },
       "expect": { "targetId": "target-1", "targetVersion": 1 }
+    },
+    {
+      "id": "events-daemon.target.resume",
+      "package": "events-daemon",
+      "cli": "target resume",
+      "mcp": null,
+      "status": "exception",
+      "operation": "targetResume",
+      "argv": ["target-1", "--version", "1"],
+      "expect": { "targetId": "target-1", "targetVersion": 1 },
+      "reason": "A person, not model context, decides to reopen a degraded target reset barrier."
     },
     {
       "id": "events-daemon.subscribers.list",
@@ -1982,13 +2004,112 @@
       "operation": "heldList"
     },
     {
+      "id": "events-daemon.held.decide",
+      "package": "events-daemon",
+      "cli": "held decide",
+      "mcp": null,
+      "status": "exception",
+      "operation": "decideHeld",
+      "argv": ["held-1", "accept"],
+      "expect": { "decisionId": "held-1", "decision": "accept" },
+      "reason": "A held model decision can be resolved only by a person at terminal/app, never by model context."
+    },
+    {
+      "id": "events-daemon.target-secret.create",
+      "package": "events-daemon",
+      "cli": "target secret create",
+      "mcp": null,
+      "status": "exception",
+      "operation": "targetSecretCreate",
+      "argv": ["target-1", "--version", "1"],
+      "expect": { "targetId": "target-1", "version": 1 },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
+      "id": "events-daemon.target-secret.rotate",
+      "package": "events-daemon",
+      "cli": "target secret rotate",
+      "mcp": null,
+      "status": "exception",
+      "operation": "targetSecretRotate",
+      "argv": ["target-1", "--version", "1"],
+      "expect": { "targetId": "target-1", "version": 1 },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
+      "id": "events-daemon.target-url.set",
+      "package": "events-daemon",
+      "cli": "target url set",
+      "mcp": null,
+      "status": "exception",
+      "operation": "targetUrlSet",
+      "argv": ["target-1", "--predecessor-version", "1", "--new-version", "2"],
+      "expect": { "targetId": "target-1", "input.predecessorVersion": 1, "input.newVersion": 2 },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
+      "id": "events-daemon.subscriber-token.create",
+      "package": "events-daemon",
+      "cli": "subscriber token create",
+      "mcp": null,
+      "status": "exception",
+      "operation": "subscriberTokenCreate",
+      "argv": ["subscriber-1", "--version", "1"],
+      "expect": { "subscriberId": "subscriber-1", "version": 1 },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
+      "id": "events-daemon.subscriber-token.rotate",
+      "package": "events-daemon",
+      "cli": "subscriber token rotate",
+      "mcp": null,
+      "status": "exception",
+      "operation": "subscriberTokenRotate",
+      "argv": ["subscriber-1", "--version", "1"],
+      "expect": { "subscriberId": "subscriber-1", "version": 1 },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
+      "id": "events-daemon.judge-key.set",
+      "package": "events-daemon",
+      "cli": "judge key set",
+      "mcp": null,
+      "status": "exception",
+      "operation": "judgeKeySet",
+      "argv": ["judge-1", "--version", "1"],
+      "expect": { "judgeId": "judge-1", "version": 1 },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
+      "id": "events-daemon.judge-key.rotate",
+      "package": "events-daemon",
+      "cli": "judge key rotate",
+      "mcp": null,
+      "status": "exception",
+      "operation": "judgeKeyRotate",
+      "argv": ["judge-1", "--version", "1"],
+      "expect": { "judgeId": "judge-1", "version": 1 },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
+      "id": "events-daemon.secrets.migrate",
+      "package": "events-daemon",
+      "cli": "secrets migrate",
+      "mcp": null,
+      "status": "exception",
+      "operation": "migrateSecrets",
+      "argv": ["--to", "file"],
+      "expect": { "to": "file" },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
       "id": "events-daemon.dryrun.list",
       "package": "events-daemon",
       "cli": "dryrun list",
       "mcp": null,
       "status": "exception",
       "operation": "dryrunList",
-      "reason": "Retained sender content may be selected only by a person outside model context at an interactive terminal."
+      "reason": "Retained sender content may be selected only by a person outside model context at an interactive terminal/app renderer."
     },
     {
       "id": "events-daemon.dryrun.show",
@@ -1997,7 +2118,7 @@
       "mcp": null,
       "status": "exception",
       "operation": "dryrunShow",
-      "reason": "Retained sender content may be rendered only for a person at an interactive terminal, never in model context."
+      "reason": "Retained sender content may be rendered only for a person at an interactive terminal/app, never in model context."
     },
     {
       "id": "events-daemon.mcp.serve",

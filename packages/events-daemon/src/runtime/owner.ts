@@ -1,6 +1,14 @@
 import { randomBytes } from 'node:crypto';
 import { chmod, lstat, readFile, rm, writeFile } from 'node:fs/promises';
-import { type ApprovalStore, CommsError, type ConfigStore, openCore, resolvePaths } from '@agentcomms/core';
+import {
+  type ApprovalStore,
+  type AuditLog,
+  CommsError,
+  type ConfigStore,
+  openCore,
+  resolvePaths,
+  sha256Hex,
+} from '@agentcomms/core';
 import { CATALOGUE } from '@agentcomms/events';
 import { createGmailEventSource, type GmailEventSource } from '@agentcomms/gmail';
 import { createResendEventReaderForPaths, type ResendEventReader } from '@agentcomms/resend';
@@ -23,12 +31,19 @@ import {
   removeInstance,
   writeInstance,
 } from '../control/instance.ts';
-import type { ControlRequest } from '../control/protocol.ts';
+import type { AuthenticatedControlRequest } from '../control/protocol.ts';
 import { type RunningControlServer, startControlServer } from '../control/server.ts';
+import { HumanSecret } from '../domain/human-secret.ts';
 import { EventDomainError } from '../domain/lifecycle.ts';
 import { normaliseSourceOptions, type SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
-import { type B3OwnerRequest, type B3OwnerService, isB3ControlOperation } from '../operations/b3-contract.ts';
+import {
+  B3_SECRET_TERMINAL_ORIGIN,
+  type B3OwnerRequest,
+  type B3OwnerService,
+  isB3ControlOperation,
+  isB3SecretOperation,
+} from '../operations/b3-contract.ts';
 import { MailboxLock } from '../sources/mailbox-lock.ts';
 import { type LocalEventSourceRegistry, phaseDSourceRegistry } from '../sources/registry.ts';
 import { ResendReceivedStageExpiry } from '../sources/resend.ts';
@@ -44,7 +59,13 @@ import { assertLiveEventAccount } from './account-fence.ts';
 import { ActivationRuntime } from './activations.ts';
 import { type B3ControlPorts, type B3DeliveryWriteFenceRequest, createB3ControlPorts } from './b3-control-ports.ts';
 import { B3OperatorControl } from './b3-operator-control.ts';
-import { runCatalogueRuleTest } from './b3-retained-control.ts';
+import { type PendingTargetOrigin, verifyPendingTargetContext } from './b3-pending-activation-context.ts';
+import {
+  createRetainedRuleTestControl,
+  type RetainedRuleTestControl,
+  runCatalogueRuleTest,
+} from './b3-retained-control.ts';
+import { consumeGeneratedTerminalReveal, type SecretReceipt } from './b3-secret-control.ts';
 import {
   B3TargetTestControl,
   type FixedSyntheticTargetTransport,
@@ -62,6 +83,7 @@ import {
   createPhaseDWhatsAppOwnerComposition,
   requirePhaseDWhatsAppVisibilitySeam,
 } from './phase-d-whatsapp-owner-composition.ts';
+import { EventProjectionStore } from './projections.ts';
 import { recoverActivations } from './recovery.ts';
 import { GmailReplacementDrains, replacementIntentSummary } from './replacements.ts';
 import { disableRule, removeTarget } from './revocations.ts';
@@ -292,7 +314,11 @@ interface OwnerB3ControlServiceOptions {
   readonly ports: B3ControlPorts;
   readonly activations: Pick<ActivationRuntime, 'issueApprovalViewChallenge'>;
   readonly cipher: Pick<EventRecordCipher, 'encrypt'>;
+  /** A B3 secret command writes only this content-free receipt-shaped audit record. */
+  readonly audit?: Pick<AuditLog, 'append'> | undefined;
   readonly targetTestTransport?: FixedSyntheticTargetTransport | undefined;
+  /** The production exact-projection reader is composed by the owner, never by a public adapter. */
+  readonly retainedRuleTest?: Pick<RetainedRuleTestControl, 'test'> | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -300,19 +326,34 @@ interface OwnerB3ControlServiceOptions {
 export function createOwnerB3ControlService(options: OwnerB3ControlServiceOptions): B3OwnerService {
   const now = options.now ?? Date.now;
   const operator = new B3OperatorControl({ store: options.store, ports: options.ports, now });
-  const target = new B3TargetTestControl({
-    store: options.store,
-    ports: options.ports,
-    // The owner has no target-specific synthetic transport before the real transport owner is selected. Dry-run
-    // tests are a sealed local success; a network target cannot be reached by this fallback.
-    transport:
-      options.targetTestTransport ??
-      (async ({ target: selected }: { readonly target: { readonly kind: string } }) => {
-        if (selected.kind !== 'dry-run')
-          throw new CommsError('CONFIG', 'the selected target has no owner-composed synthetic test transport');
-      }),
-    now,
-  });
+  const target = (pendingOrigin?: PendingTargetOrigin) =>
+    new B3TargetTestControl({
+      store: options.store,
+      ports: options.ports,
+      // The owner has no target-specific synthetic transport before the real transport owner is selected. Dry-run
+      // tests are a sealed local success; a network target cannot be reached by this fallback.
+      transport:
+        options.targetTestTransport ??
+        (async ({ target: selected }: { readonly target: { readonly kind: string } }) => {
+          if (selected.kind !== 'dry-run')
+            throw new CommsError('CONFIG', 'the selected target has no owner-composed synthetic test transport');
+        }),
+      ...(pendingOrigin === undefined
+        ? {}
+        : {
+            pending: {
+              verify: (selector) =>
+                verifyPendingTargetContext({
+                  database: options.store.database,
+                  selector,
+                  origin: pendingOrigin,
+                  now,
+                  approvalView: () => livePendingTargetChallenge(options.store, selector, pendingOrigin, now),
+                }),
+            },
+          }),
+      now,
+    });
   const resume = new TargetResumeControl({
     store: options.store,
     ports: options.ports,
@@ -326,17 +367,46 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
   });
   return {
     async handle(request: B3OwnerRequest): Promise<unknown> {
+      if (isB3SecretOperation(request.operation)) {
+        // C has not supplied its non-forgeable secret-window capability.  The control hello's client name is only a
+        // caller assertion, so every value except the terminal origin is refused before parsing secret-shaped args or
+        // touching the Task 2 secret control.
+        const receipt = secretAuditReceipt(request);
+        if (request.origin !== B3_SECRET_TERMINAL_ORIGIN) {
+          await appendSecretAudit(options.audit, {
+            ...receipt,
+            outcome: 'refused',
+            reason: 'APP_SECRET_CAPABILITY_UNAVAILABLE',
+          });
+          return { kind: 'unavailable', code: 'APP_SECRET_CAPABILITY_UNAVAILABLE' } as const;
+        }
+        try {
+          const result = await handleTerminalSecretOperation(options.ports.secrets, request);
+          await appendSecretAudit(options.audit, { ...receipt, outcome: 'ok' });
+          return result;
+        } catch (error) {
+          await appendSecretAudit(options.audit, { ...receipt, outcome: 'failed' });
+          throw error;
+        }
+      }
       switch (request.operation) {
         case 'approvalView':
           return approvalViewFromOwner(options.store, options.activations, now, request.args);
         case 'ruleTest':
           return runCatalogueRuleTest({ document: request.args.document, catalogue: request.args.catalogue as never });
-        case 'targetTest':
-          return target.test({
+        case 'ruleTestRetained':
+          if (options.retainedRuleTest === undefined)
+            throw new CommsError('CONFIG', 'the owner has no retained rule-test reader');
+          return options.retainedRuleTest.test(request.args);
+        case 'targetTest': {
+          const pendingOrigin = pendingTargetOrigin(request.origin);
+          if (pendingOrigin !== undefined) return target(pendingOrigin).test(request.args);
+          return target().test({
             kind: 'active',
             targetId: requiredText(request.args.targetId, 'target id'),
             targetVersion: requiredVersion(request.args.targetVersion, 'target version'),
           });
+        }
         case 'targetResume':
           return resume.resume({
             targetId: requiredText(request.args.targetId, 'target id'),
@@ -347,6 +417,207 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
       }
     },
   };
+}
+
+/** The event audit contains only D2's operation, exact safe owner identity, closed outcome, and AuditLog's time. */
+async function appendSecretAudit(
+  audit: Pick<AuditLog, 'append'> | undefined,
+  receipt: Readonly<{
+    operation: B3OwnerRequest['operation'];
+    outcome: 'ok' | 'failed' | 'refused';
+    /** A closed refusal code; core's audit outcome stays its own shared vocabulary. */
+    reason?: 'APP_SECRET_CAPABILITY_UNAVAILABLE' | undefined;
+    ids?: Readonly<Record<string, string>> | undefined;
+  }>,
+): Promise<void> {
+  if (audit === undefined) return;
+  await audit.append({
+    inboxId: '',
+    operation: `events.${receipt.operation}`,
+    outcome: receipt.outcome,
+    ...(receipt.reason === undefined ? {} : { reason: receipt.reason }),
+    ...(receipt.ids === undefined ? {} : { ids: receipt.ids }),
+  });
+}
+
+/**
+ * Extracts only identifiers that D2 permits in an audit row, before either the origin gate or secret control. A
+ * refused origin therefore records its closed outcome without parsing hidden material, URL components, migration
+ * destination, or any other caller argument.
+ */
+function secretAuditReceipt(request: B3OwnerRequest): Readonly<{
+  operation: B3OwnerRequest['operation'];
+  ids?: Readonly<Record<string, string>> | undefined;
+}> {
+  switch (request.operation) {
+    case 'targetSecretCreate':
+    case 'targetSecretRotate':
+      return {
+        operation: request.operation,
+        ids: auditOwnerIdentity('targetId', request.args.targetId, request.args.version),
+      };
+    case 'targetUrlSet':
+      return {
+        operation: request.operation,
+        ids: auditOwnerIdentity('targetId', request.args.targetId, request.args.newVersion),
+      };
+    case 'subscriberTokenCreate':
+    case 'subscriberTokenRotate':
+      return {
+        operation: request.operation,
+        ids: auditOwnerIdentity('subscriberId', request.args.subscriberId, request.args.version),
+      };
+    case 'judgeKeySet':
+    case 'judgeKeyRotate':
+      return {
+        operation: request.operation,
+        ids: auditOwnerIdentity('judgeId', request.args.judgeId, request.args.version),
+      };
+    case 'migrateSecrets':
+      return { operation: request.operation };
+    default:
+      throw new CommsError('USAGE', 'the local secret operation is not recognised');
+  }
+}
+
+/** Audit a valid D2 subject id independently, then add its version only if the version is independently valid. */
+function auditOwnerIdentity(
+  idName: 'targetId' | 'subscriberId' | 'judgeId',
+  id: unknown,
+  version: unknown,
+): Readonly<Record<string, string>> | undefined {
+  if (typeof id !== 'string' || id.length === 0) return undefined;
+  if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) return { [idName]: id };
+  return { [idName]: id, version: String(version) };
+}
+
+function pendingTargetOrigin(origin: string | undefined): PendingTargetOrigin | undefined {
+  if (origin === 'terminal-approval' || origin === 'app-approval-screen') return origin;
+  return undefined;
+}
+
+/**
+ * Re-reads the daemon's durable challenge row instead of trusting a caller label. The raw challenge is never read
+ * from storage; its supplied value must hash to the active daemon value, then is passed only to Task 3's exact
+ * selector verifier. A terminal prompt has no deadline, while an approval-screen view must retain its live deadline.
+ */
+async function livePendingTargetChallenge(
+  store: Awaited<ReturnType<typeof openEventDatabase>>,
+  selector: { readonly approvalId: string; readonly digest: string; readonly challenge: string },
+  origin: PendingTargetOrigin,
+  now: () => number,
+): Promise<{
+  readonly approvalId: string;
+  readonly digest: string;
+  readonly challenge: string;
+  readonly expiresAt: number;
+}> {
+  const row = store.database
+    .prepare(
+      `SELECT state, origin, challenge_hash, expires_at
+       FROM activation_view_challenges WHERE approval_id = ?`,
+    )
+    .get(selector.approvalId) as
+    | {
+        readonly state: string;
+        readonly origin: string;
+        readonly challenge_hash: string | null;
+        readonly expires_at: number | null;
+      }
+    | undefined;
+  const expectedChallengeOrigin = origin === 'terminal-approval' ? 'terminal' : 'view';
+  const terminal = expectedChallengeOrigin === 'terminal';
+  if (
+    row === undefined ||
+    row.state !== 'active' ||
+    row.origin !== expectedChallengeOrigin ||
+    typeof row.challenge_hash !== 'string' ||
+    sha256Hex(selector.challenge) !== row.challenge_hash ||
+    (terminal
+      ? row.expires_at !== null
+      : typeof row.expires_at !== 'number' || !Number.isSafeInteger(row.expires_at) || row.expires_at <= now())
+  )
+    throw new CommsError('APPROVAL_VOID', 'the approval challenge is stale or does not bind this pending activation');
+  return {
+    approvalId: selector.approvalId,
+    digest: selector.digest,
+    challenge: selector.challenge,
+    expiresAt: terminal ? Number.MAX_SAFE_INTEGER : (row.expires_at as number),
+  };
+}
+
+async function handleTerminalSecretOperation(
+  secrets: B3ControlPorts['secrets'],
+  request: B3OwnerRequest,
+): Promise<unknown> {
+  switch (request.operation) {
+    case 'targetSecretCreate':
+      return terminalSecretResult(
+        await secrets.targetSecretCreate({
+          targetId: requiredText(request.args.targetId, 'target id'),
+          version: requiredVersion(request.args.version, 'target version'),
+        }),
+      );
+    case 'targetSecretRotate':
+      return terminalSecretResult(
+        await secrets.targetSecretRotate({
+          targetId: requiredText(request.args.targetId, 'target id'),
+          version: requiredVersion(request.args.version, 'target version'),
+        }),
+      );
+    case 'targetUrlSet':
+      return secrets.targetUrlSet({
+        targetId: requiredText(request.args.targetId, 'target id'),
+        ...(request.args.predecessorVersion === undefined
+          ? {}
+          : { predecessorVersion: requiredVersion(request.args.predecessorVersion, 'predecessor version') }),
+        ...(request.args.inertDraft === undefined
+          ? {}
+          : { inertDraft: requiredRecord(request.args.inertDraft, 'inert target draft') }),
+        newVersion: requiredVersion(request.args.newVersion, 'new target version'),
+        hiddenUrl: requiredText(request.args.hidden, 'hidden webhook URL'),
+      });
+    case 'subscriberTokenCreate':
+      return terminalSecretResult(
+        await secrets.subscriberTokenCreate({
+          subscriberId: requiredText(request.args.subscriberId, 'subscriber id'),
+          version: requiredVersion(request.args.version, 'subscriber version'),
+        }),
+      );
+    case 'subscriberTokenRotate':
+      return terminalSecretResult(
+        await secrets.subscriberTokenRotate({
+          subscriberId: requiredText(request.args.subscriberId, 'subscriber id'),
+          version: requiredVersion(request.args.version, 'subscriber version'),
+        }),
+      );
+    case 'judgeKeySet':
+      return secrets.judgeKeySet({
+        judgeId: requiredText(request.args.judgeId, 'judge id'),
+        version: requiredVersion(request.args.version, 'judge version'),
+        hidden: HumanSecret.fromTrustedInput(requiredText(request.args.hidden, 'hidden judge key')),
+      });
+    case 'judgeKeyRotate':
+      return secrets.judgeKeyRotate({
+        judgeId: requiredText(request.args.judgeId, 'judge id'),
+        version: requiredVersion(request.args.version, 'judge version'),
+        hidden: HumanSecret.fromTrustedInput(requiredText(request.args.hidden, 'hidden judge key')),
+      });
+    case 'migrateSecrets': {
+      const to = request.args.to;
+      if (to !== 'file' && to !== 'keychain')
+        throw new CommsError('USAGE', 'secret migration destination is file or keychain');
+      return secrets.migrateTo(to);
+    }
+    default:
+      throw new CommsError('USAGE', 'the local secret operation is not recognised');
+  }
+}
+
+/** The only serialization point for generated material; every other secret operation returns a receipt. */
+function terminalSecretResult(receipt: SecretReceipt): unknown {
+  const reveal = consumeGeneratedTerminalReveal(receipt);
+  return reveal === null ? receipt : { receipt, terminalReveal: reveal };
 }
 
 async function approvalViewFromOwner(
@@ -813,6 +1084,14 @@ async function startOwnerWithLock(
       ports: ownerB3Ports,
       activations,
       cipher,
+      audit: core.audit,
+      retainedRuleTest: createRetainedRuleTestControl({
+        store: database,
+        projections: new EventProjectionStore({ store: database, cipher }),
+        accountLive: ({ source, accountId }) => assertLiveEventAccount(core.config, { source, accountId }),
+        whatsappVisibilityFence: whatsappComposition.visibilityFence,
+        now,
+      }),
       now,
     });
   const token = randomBytes(32).toString('hex');
@@ -913,13 +1192,13 @@ async function handleControl(
   dispatcher: DryRunDispatcher,
   sourceRegistry: LocalEventSourceRegistry,
   writerQuiescer: WriterQuiescer,
-  request: ControlRequest,
+  request: AuthenticatedControlRequest,
   b3OwnerService: B3OwnerService | undefined,
 ): Promise<unknown> {
   if (isB3ControlOperation(request.operation)) {
     if (!b3OwnerService) throw new CommsError('USAGE', 'the local B3 control operation is not available');
     try {
-      return await b3OwnerService.handle({ operation: request.operation, args: request.args });
+      return await b3OwnerService.handle({ operation: request.operation, args: request.args, origin: request.origin });
     } catch (error) {
       // A document the domain refuses is the caller's input: its fixed reason goes back, as every other operation's does.
       if (error instanceof EventDomainError)
@@ -1000,6 +1279,12 @@ async function handleControl(
 function requiredText(value: unknown, name: string): string {
   if (typeof value !== 'string' || value.length === 0) throw new CommsError('USAGE', `${name} is required`);
   return value;
+}
+
+function requiredRecord(value: unknown, name: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw new CommsError('USAGE', `${name} is required`);
+  return value as Record<string, unknown>;
 }
 
 function requiredVersion(value: unknown, name: string): number {

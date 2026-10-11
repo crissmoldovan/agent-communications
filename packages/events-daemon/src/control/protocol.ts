@@ -52,6 +52,11 @@ export interface ControlRequest {
   readonly args: Record<string, unknown>;
 }
 
+/** Server-only request context: the origin is copied from the authenticated hello, never decoded from request args. */
+export interface AuthenticatedControlRequest extends ControlRequest {
+  readonly origin: string;
+}
+
 /** The future B3 request subset is typed at the authenticated protocol boundary without a public CLI or MCP registration. */
 export interface B3ControlRequest extends ControlRequest {
   readonly operation: B3ControlOperation;

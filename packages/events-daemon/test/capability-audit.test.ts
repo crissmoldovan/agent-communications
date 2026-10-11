@@ -57,11 +57,13 @@ const EXPECTED_B1_ROWS = [
   ['events-daemon.mcp.serve', 'mcp', null, 'exception'],
 ] as const;
 
-/** Task 5 registers the whole non-secret paired B3 surface in the same change as its command/tool. */
-const EXPECTED_B3_BOTH_ROWS = [
+/** Tasks 5–6 register B3's paired rows and its deliberately unpaired terminal exceptions in plan-table order. */
+const EXPECTED_B3_ROWS = [
   ['events-daemon.approval.view', 'approval view', 'events_approval_view', 'both', 'approvalView'],
   ['events-daemon.rule.test', 'rule test', 'events_rule_test', 'both', 'ruleTest'],
+  ['events-daemon.rule.test-retained', 'rule test-retained', null, 'exception', 'ruleTestRetained'],
   ['events-daemon.target.test', 'target test', 'events_target_test', 'both', 'targetTest'],
+  ['events-daemon.target.resume', 'target resume', null, 'exception', 'targetResume'],
   ['events-daemon.subscribers.list', 'subscribers list', 'events_subscribers_list', 'both', 'subscribersList'],
   ['events-daemon.subscriber.add', 'subscriber add', 'events_subscriber_add', 'both', 'addSubscriber'],
   ['events-daemon.subscriber.update', 'subscriber update', 'events_subscriber_update', 'both', 'updateSubscriber'],
@@ -82,6 +84,15 @@ const EXPECTED_B3_BOTH_ROWS = [
   ['events-daemon.delivery.retry', 'delivery retry', 'events_delivery_retry', 'both', 'retryDelivery'],
   ['events-daemon.delivery.drop', 'delivery drop', 'events_delivery_drop', 'both', 'dropDelivery'],
   ['events-daemon.held.list', 'held list', 'events_held_list', 'both', 'heldList'],
+  ['events-daemon.held.decide', 'held decide', null, 'exception', 'decideHeld'],
+  ['events-daemon.target-secret.create', 'target secret create', null, 'exception', 'targetSecretCreate'],
+  ['events-daemon.target-secret.rotate', 'target secret rotate', null, 'exception', 'targetSecretRotate'],
+  ['events-daemon.target-url.set', 'target url set', null, 'exception', 'targetUrlSet'],
+  ['events-daemon.subscriber-token.create', 'subscriber token create', null, 'exception', 'subscriberTokenCreate'],
+  ['events-daemon.subscriber-token.rotate', 'subscriber token rotate', null, 'exception', 'subscriberTokenRotate'],
+  ['events-daemon.judge-key.set', 'judge key set', null, 'exception', 'judgeKeySet'],
+  ['events-daemon.judge-key.rotate', 'judge key rotate', null, 'exception', 'judgeKeyRotate'],
+  ['events-daemon.secrets.migrate', 'secrets migrate', null, 'exception', 'migrateSecrets'],
 ] as const;
 
 const rowShape = (row: Capability) => ({
@@ -103,7 +114,7 @@ const shapedRows = (source: readonly (readonly [string, string, string | null, s
 
 const expectedRows = [
   ...shapedRows(EXPECTED_B1_ROWS.slice(0, 27)),
-  ...shapedRows(EXPECTED_B3_BOTH_ROWS),
+  ...shapedRows(EXPECTED_B3_ROWS),
   ...shapedRows(EXPECTED_B1_ROWS.slice(27)),
 ];
 
@@ -130,6 +141,89 @@ test('PAR-B1: capability audit freezes the completed Decision 6 inventory', asyn
   ]) {
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);
+  }
+  const expectedB3Exceptions = [
+    [
+      'events-daemon.rule.test-retained',
+      'rule test-retained',
+      'ruleTestRetained',
+      'Retained sender content may be selected only by a person outside model context.',
+    ],
+    [
+      'events-daemon.target.resume',
+      'target resume',
+      'targetResume',
+      'A person, not model context, decides to reopen a degraded target reset barrier.',
+    ],
+    [
+      'events-daemon.held.decide',
+      'held decide',
+      'decideHeld',
+      'A held model decision can be resolved only by a person at terminal/app, never by model context.',
+    ],
+    [
+      'events-daemon.target-secret.create',
+      'target secret create',
+      'targetSecretCreate',
+      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+    ],
+    [
+      'events-daemon.target-secret.rotate',
+      'target secret rotate',
+      'targetSecretRotate',
+      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+    ],
+    [
+      'events-daemon.target-url.set',
+      'target url set',
+      'targetUrlSet',
+      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+    ],
+    [
+      'events-daemon.subscriber-token.create',
+      'subscriber token create',
+      'subscriberTokenCreate',
+      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+    ],
+    [
+      'events-daemon.subscriber-token.rotate',
+      'subscriber token rotate',
+      'subscriberTokenRotate',
+      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+    ],
+    [
+      'events-daemon.judge-key.set',
+      'judge key set',
+      'judgeKeySet',
+      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+    ],
+    [
+      'events-daemon.judge-key.rotate',
+      'judge key rotate',
+      'judgeKeyRotate',
+      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+    ],
+    [
+      'events-daemon.secrets.migrate',
+      'secrets migrate',
+      'migrateSecrets',
+      'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+    ],
+  ] as const;
+  for (const [id, cli, operation, reason] of expectedB3Exceptions) {
+    const row = exceptions.get(id);
+    assert.deepEqual(
+      row === undefined
+        ? undefined
+        : {
+            cli: row.cli,
+            mcp: row.mcp,
+            operation: row.operation,
+            reason: (row as Capability & { reason?: string }).reason,
+          },
+      { cli, mcp: null, operation, reason },
+      `${id} is an exact, individual terminal-only exception row`,
+    );
   }
 });
 
@@ -169,7 +263,7 @@ test('D7: each registered source has a distinct source-show parity invocation', 
   );
 });
 
-test('PAR-B1: generated daemon references exactly describe the B1 registries', async () => {
+test('PAR-B3: generated daemon references exactly describe the completed registries', async () => {
   const registries = await deriveRegistries({ env: scratchEnv() });
   const daemon = registries['events-daemon'];
   assert.ok(daemon, 'the service declaration supplies a surface registry');
@@ -182,9 +276,18 @@ test('PAR-B1: generated daemon references exactly describe the B1 registries', a
   assert.deepEqual([...new Set(cliCommands)].sort(), [...new Set([...daemon.commands, ...daemon.groups])].sort());
   assert.deepEqual(headings(mcpPage).sort(), [...daemon.tools].sort());
 
-  assert.doesNotMatch(cliPage, /\btarget resume\b/);
-  assert.doesNotMatch(mcpPage, /\bevents_target_resume\b/);
-  for (const tool of ['events_run', 'events_approve', 'events_dryrun_list', 'events_dryrun_show']) {
+  for (const command of ['rule test-retained', 'target resume', 'held decide', 'secrets migrate'])
+    assert.match(cliPage, new RegExp(`\\bagent-events ${command}\\b`, 'u'));
+  for (const tool of [
+    'events_run',
+    'events_approve',
+    'events_dryrun_list',
+    'events_dryrun_show',
+    'events_target_resume',
+    'events_target_secret_create',
+    'events_subscriber_token_create',
+    'events_held_decide',
+  ]) {
     assert.ok(!daemon.tools.includes(tool), `${tool} cannot expose a model-context content or authority boundary`);
   }
 
@@ -196,7 +299,7 @@ test('PAR-B1: generated daemon references exactly describe the B1 registries', a
   ]);
 });
 
-test('PAR-B3: Task 5 exposes only its paired control surface and keeps human-only exceptions absent', async () => {
+test('PAR-B3: paired controls and terminal-only exceptions occupy their deliberate separate surfaces', async () => {
   const table = JSON.parse(await readFile(join(ROOT, 'capabilities.json'), 'utf8')) as {
     readonly capabilities: readonly Capability[];
   };
@@ -245,48 +348,36 @@ test('PAR-B3: Task 5 exposes only its paired control surface and keeps human-onl
   for (const tool of pairedTools) assert.ok(daemon.tools.includes(tool), `${tool} is paired in Task 5`);
 
   const humanOnlyCommands = [
-    'delivery hold',
-    'subscriber token create',
-    'target secret create',
-    'target url set',
+    'rule test-retained',
     'target resume',
     'held decide',
-    'rule test-retained',
+    'target secret create',
+    'target secret rotate',
+    'target url set',
+    'subscriber token create',
+    'subscriber token rotate',
+    'judge key set',
+    'judge key rotate',
+    'secrets migrate',
   ];
   const humanOnlyTools = [
-    'events_delivery_hold',
-    'events_subscriber_token_create',
-    'events_target_secret_create',
-    'events_target_url_set',
+    'events_rule_test_retained',
     'events_target_resume',
     'events_held_decide',
-    'events_rule_test_retained',
+    'events_target_secret_create',
+    'events_target_secret_rotate',
+    'events_target_url_set',
+    'events_subscriber_token_create',
+    'events_subscriber_token_rotate',
+    'events_judge_key_set',
+    'events_judge_key_rotate',
+    'events_secrets_migrate',
   ];
   for (const command of humanOnlyCommands)
-    assert.ok(!daemon.commands.includes(command), `${command} stays Task 6 human-only work`);
+    assert.ok(daemon.commands.includes(command), `${command} is a terminal-only CLI leaf`);
   for (const tool of humanOnlyTools) assert.ok(!daemon.tools.includes(tool), `${tool} stays absent from MCP`);
-  for (const row of rows.filter((row) => row.id.startsWith('events-daemon.'))) {
-    assert.ok(
-      !/\b(?:secret|token|migration|target\.resume|held\.decide|rule\.test-retained)\b/.test(row.id),
-      `${row.id} is not an early human-only exception row`,
-    );
-  }
-  const forbiddenCommands = [
-    'delivery hold',
-    'subscriber token create',
-    'target secret create',
-    'target url set',
-    'target resume',
-    'target replay',
-  ];
-  const forbiddenTools = [
-    'events_delivery_hold',
-    'events_subscriber_token_create',
-    'events_target_secret_create',
-    'events_target_url_set',
-    'events_target_resume',
-    'events_target_replay',
-  ];
+  const forbiddenCommands = ['delivery hold', 'target replay'];
+  const forbiddenTools = ['events_delivery_hold', 'events_target_replay'];
   for (const command of forbiddenCommands)
     assert.ok(!daemon.commands.includes(command), `${command} remains deferred beyond B2`);
   for (const tool of forbiddenTools) assert.ok(!daemon.tools.includes(tool), `${tool} remains deferred beyond B2`);

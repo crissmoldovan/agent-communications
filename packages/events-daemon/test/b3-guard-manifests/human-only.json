@@ -1,0 +1,200 @@
+{
+  "area": "task-6-human-only-surface",
+  "cases": [
+    {
+      "case": "secret-mcp-tool-remains-absent",
+      "operation": "createEventsMcpServer",
+      "productionEntry": "packages/events-daemon/src/mcp/server.ts",
+      "test": "packages/events-daemon/test/b3-mcp-absence.test.ts",
+      "mutation": {
+        "from": "'events_held_list',",
+        "to": "'events_target_secret_create',"
+      },
+      "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
+      "mutationTest": "B3 provided CLI/MCP surfaces keep secrets, retained reads, resume, held-decide, and pending selectors out of MCP",
+      "loadedMarker": "secret-mcp-tool-remains-absent"
+    },
+    {
+      "case": "secret-exception-reason-is-exact",
+      "operation": "B3_CAPABILITIES",
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/b3-mcp-absence.test.ts",
+      "mutation": {
+        "from": "'secret material must never enter model input or output; the person completes this operation at the terminal or app.'",
+        "to": "'terminal secret operation'"
+      },
+      "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
+      "mutationTest": "B3 provided CLI/MCP surfaces keep secrets, retained reads, resume, held-decide, and pending selectors out of MCP",
+      "loadedMarker": "secret-exception-reason-is-exact"
+    },
+    {
+      "case": "secret-cli-keeps-human-terminal-gate",
+      "operation": "assertHumanTerminal",
+      "productionEntry": "packages/events-daemon/src/cli/program.ts",
+      "test": "packages/events-daemon/test/b3-secret-cli.test.ts",
+      "mutation": {
+        "from": "const assertHuman = (): void => assertHumanTerminal(env, streams, program.opts<EventsCliOptions>().json === true);",
+        "to": "const assertHuman = (): void => undefined;"
+      },
+      "mutationTest": "B3 secret CLI refuses agent-marked, non-TTY, redirected-input, and JSON invocations before prompt or IPC",
+      "loadedMarker": "secret-cli-keeps-human-terminal-gate"
+    },
+    {
+      "case": "generated-secret-reveals-once",
+      "operation": "printHumanResult",
+      "productionEntry": "packages/events-daemon/src/cli/program.ts",
+      "test": "packages/events-daemon/test/b3-secret-cli.test.ts",
+      "mutation": {
+        "from": "streams.stdout.write(`Generated credential (shown once): ${result.terminalReveal}\\n`);",
+        "to": "streams.stdout.write(`Generated credential (shown once): ${result.terminalReveal}\\n`);\n      streams.stdout.write(`Generated credential (shown once): ${result.terminalReveal}\\n`);"
+      },
+      "mutationTest": "B3 secret CLI accepts material only through its injected hidden TTY reader and reveals generated material once",
+      "loadedMarker": "generated-secret-reveals-once"
+    },
+    {
+      "case": "secret-cli-has-no-secret-argv",
+      "operation": "targetSecretCreate",
+      "productionEntry": "packages/events-daemon/src/cli/program.ts",
+      "test": "packages/events-daemon/test/b3-secret-cli.test.ts",
+      "mutation": {
+        "from": ".command('create <target-id>')\n    .requiredOption('--version <version>')",
+        "to": ".command('create <target-id>')\n    .option('--secret <value>')\n    .requiredOption('--version <version>')"
+      },
+      "mutationTest": "B3 secret CLI has no argv, environment, JSON, or stdin-pipe material channel",
+      "loadedMarker": "secret-cli-has-no-secret-argv"
+    },
+    {
+      "case": "secret-audit-never-serializes-arguments",
+      "operation": "appendSecretAudit",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-secret-metadata-scan.test.ts",
+      "mutation": {
+        "from": "await appendSecretAudit(options.audit, { ...receipt, outcome: 'ok' });",
+        "to": "await appendSecretAudit(options.audit, { ...receipt, outcome: 'ok', ids: { ...receipt.ids, arguments: JSON.stringify(request.args) } });"
+      },
+      "mutationTest": "B3 secret persistence scan captures every Task 6 CLI output, audit row, and process-log boundary",
+      "loadedMarker": "secret-audit-never-serializes-arguments"
+    },
+    {
+      "case": "secret-audit-keeps-exact-owner-id-and-version",
+      "operation": "secretAuditReceipt",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-secret-metadata-scan.test.ts",
+      "mutation": {
+        "from": "ids: auditOwnerIdentity('targetId', request.args.targetId, request.args.version),",
+        "to": "ids: undefined,"
+      },
+      "mutationTest": "B3 secret audit records the exact owner identity and a closed success or failure outcome for every operation",
+      "loadedMarker": "secret-audit-keeps-exact-owner-id-and-version"
+    },
+    {
+      "case": "secret-audit-records-failures",
+      "operation": "createOwnerB3ControlService",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-secret-metadata-scan.test.ts",
+      "mutation": {
+        "from": "await appendSecretAudit(options.audit, { ...receipt, outcome: 'failed' });",
+        "to": "void 0;"
+      },
+      "mutationTest": "B3 secret audit records the exact owner identity and a closed success or failure outcome for every operation",
+      "loadedMarker": "secret-audit-records-failures"
+    },
+    {
+      "case": "secret-cli-cannot-bypass-owner-registrar",
+      "operation": "humanB3",
+      "productionEntry": "packages/events-daemon/src/cli/program.ts",
+      "test": "packages/events-daemon/test/b3-secret-cli.test.ts",
+      "mutation": {
+        "from": "deps.b3Registrar === undefined\n      ? throughOwner()",
+        "to": "true\n      ? throughOwner()"
+      },
+      "mutationTest": "B3 secret CLI accepts material only through its injected hidden TTY reader and reveals generated material once",
+      "loadedMarker": "secret-cli-cannot-bypass-owner-registrar"
+    },
+    {
+      "case": "secret-origin-refuses-forged-window-label",
+      "operation": "createOwnerB3ControlService",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-secret-origin.test.ts",
+      "mutation": {
+        "from": "if (request.origin !== B3_SECRET_TERMINAL_ORIGIN)",
+        "to": "if (false)"
+      },
+      "mutationTest": "B3 secret owner rejects every caller-selected app/window origin before the secret control and accepts only interactive-terminal",
+      "loadedMarker": "secret-origin-refuses-forged-window-label"
+    },
+    {
+      "case": "secret-origin-refusal-is-audited-before-secret-control",
+      "operation": "createOwnerB3ControlService",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-secret-metadata-scan.test.ts",
+      "mutation": {
+        "from": "await appendSecretAudit(options.audit, {\n            ...receipt,\n            outcome: 'refused',\n            reason: 'APP_SECRET_CAPABILITY_UNAVAILABLE',\n          });",
+        "to": "void 0;"
+      },
+      "mutationTest": "B3 secret audit records refused app, window, and secrets origins before secret-store activity",
+      "loadedMarker": "secret-origin-refusal-is-audited"
+    },
+    {
+      "case": "secret-audit-keeps-valid-id-when-version-is-malformed",
+      "operation": "auditOwnerIdentity",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-secret-metadata-scan.test.ts",
+      "mutation": {
+        "from": "if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) return { [idName]: id };",
+        "to": "if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) return undefined;"
+      },
+      "mutationTest": "B3 secret audit records a valid subject id but omits an invalid version from a malformed terminal request",
+      "loadedMarker": "secret-audit-keeps-valid-id-when-version-is-malformed"
+    },
+    {
+      "case": "owner-wires-pending-target-selector-only-for-approval-flow",
+      "operation": "createOwnerB3ControlService",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-pending-target-context.test.ts",
+      "mutation": {
+        "from": "if (pendingOrigin !== undefined) return target(pendingOrigin).test(request.args);",
+        "to": "if (false) return target(pendingOrigin as never).test(request.args);"
+      },
+      "mutationTest": "B3 production owner lets only the approval flow test its exact pending target",
+      "loadedMarker": "owner-wires-pending-target-selector-only-for-approval-flow"
+    },
+    {
+      "case": "retained-terminal-render-is-single-enveloped",
+      "operation": "printHumanResult",
+      "productionEntry": "packages/events-daemon/src/cli/program.ts",
+      "test": "packages/events-daemon/test/b3-human-only-surface.test.ts",
+      "mutation": {
+        "from": "streams.stdout.write(`${result.rendered}\\n`);",
+        "to": "streams.stdout.write(`${result.rendered}\\n${result.rendered}\\n`);"
+      },
+      "mutationTest": "B3 retained hostile output is neutralised in exactly one envelope on every permitted terminal rendering",
+      "loadedMarker": "retained-terminal-render-is-single-enveloped"
+    },
+    {
+      "case": "migration-terminal-names-leftovers",
+      "operation": "printHumanResult",
+      "productionEntry": "packages/events-daemon/src/cli/program.ts",
+      "test": "packages/events-daemon/test/b3-secret-cli.test.ts",
+      "mutation": {
+        "from": "if (result.leftovers.length > 0) {",
+        "to": "if (false) {"
+      },
+      "mutationTest": "B3 terminal migration names every failed post-selector cleanup reference so it can be retried before rotation",
+      "loadedMarker": "migration-terminal-names-leftovers"
+    },
+    {
+      "case": "mcp-cannot-expose-target-resume",
+      "operation": "createEventsMcpServer",
+      "productionEntry": "packages/events-daemon/src/mcp/server.ts",
+      "test": "packages/events-daemon/test/b3-mcp-absence.test.ts",
+      "mutation": {
+        "from": "'events_target_test',",
+        "to": "'events_target_resume',"
+      },
+      "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
+      "mutationTest": "B3 provided CLI/MCP surfaces keep secrets, retained reads, resume, held-decide, and pending selectors out of MCP",
+      "loadedMarker": "mcp-cannot-expose-target-resume"
+    }
+  ]
+}
