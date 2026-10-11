@@ -1,0 +1,110 @@
+[
+  {
+    "name": "error-usage",
+    "request": {
+      "operation": "targetUrlSet",
+      "args": {
+        "targetId": "target-1",
+        "newVersion": 1
+      },
+      "origin": "interactive-terminal"
+    },
+    "error": {
+      "code": "USAGE"
+    }
+  },
+  {
+    "name": "error-bad-data",
+    "request": {
+      "operation": "ruleTest",
+      "args": {
+        "document": {
+          "ruleId": "rule-1",
+          "version": 1,
+          "source": {
+            "channel": "gmail",
+            "accountIds": ["account-1"],
+            "options": {
+              "channel": "gmail",
+              "labels": "inbox",
+              "includeSpamTrash": false
+            }
+          },
+          "event": {
+            "type": "gmail.unknown",
+            "version": 1
+          },
+          "condition": {},
+          "mapping": {},
+          "targets": [
+            {
+              "targetId": "target-1",
+              "version": 1,
+              "kind": "dry-run",
+              "retentionMs": 1
+            }
+          ],
+          "subscribers": [],
+          "judges": [],
+          "deliveryRateCap": 1,
+          "retention": {
+            "ingestMs": 1,
+            "holdMs": 1,
+            "deliveryMs": 1,
+            "dryrunMs": 1,
+            "sseReplayMs": 1,
+            "deadLetterMs": 1,
+            "decisionMetadataMs": 1
+          }
+        },
+        "catalogue": {
+          "type": "gmail.message.received",
+          "version": 1,
+          "exampleIndex": 0
+        }
+      }
+    },
+    "error": {
+      "code": "BAD_DATA"
+    }
+  },
+  {
+    "name": "error-approval-void",
+    "request": {
+      "operation": "targetTest",
+      "args": {
+        "targetId": "target-1",
+        "targetVersion": 1
+      }
+    },
+    "error": {
+      "code": "APPROVAL_VOID"
+    }
+  },
+  {
+    "name": "error-not-found",
+    "request": {
+      "operation": "removeSubscriber",
+      "args": {
+        "subscriberId": "subscriber-1"
+      }
+    },
+    "error": {
+      "code": "NOT_FOUND"
+    }
+  },
+  {
+    "name": "error-config",
+    "request": {
+      "operation": "ruleTestRetained",
+      "args": {
+        "eventId": "event-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1
+      }
+    },
+    "error": {
+      "code": "CONFIG"
+    }
+  }
+]

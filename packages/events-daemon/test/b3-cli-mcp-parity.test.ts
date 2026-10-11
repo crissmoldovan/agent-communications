@@ -741,7 +741,9 @@ test('B3 approval view returns authoritative ready, stale, digest, and expiry va
         `INSERT INTO activation_intents
          (id, kind, document, digest, effect, replacement_of_version, required_points, acquisition_scopes, status,
           created_at, updated_at, approval_id)
-         VALUES ('intent-owner-approval', 'rule', '{"preview":"authoritative"}', 'approval-digest', '{}', NULL,
+         VALUES ('intent-owner-approval', 'enable-all',
+                 '{"documentVersion":1,"kind":"enable-all","switchGeneration":1,"ruleVersions":[]}',
+                 'approval-digest', '{}', NULL,
                  '[]', '[]', 'pending', 1, 1, 'approval-owner-view')`,
       )
       .run();
@@ -783,7 +785,7 @@ test('B3 approval view returns authoritative ready, stale, digest, and expiry va
       kind: 'READY',
       approvalId: 'approval-owner-view',
       digest: 'approval-digest',
-      preview: { preview: 'authoritative' },
+      preview: { documentVersion: 1, kind: 'enable-all', switchGeneration: 1, ruleVersions: [] },
       challenge: {
         approvalId: 'approval-owner-view',
         digest: 'approval-digest',

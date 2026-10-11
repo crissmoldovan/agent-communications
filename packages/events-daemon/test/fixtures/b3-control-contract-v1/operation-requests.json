@@ -1,0 +1,183 @@
+[
+  {
+    "name": "rule-test-request",
+    "request": {
+      "operation": "ruleTest",
+      "args": {
+        "document": {
+          "ruleId": "rule-1",
+          "version": 1,
+          "source": {
+            "channel": "gmail",
+            "accountIds": ["account-1"],
+            "options": { "channel": "gmail", "labels": "inbox", "includeSpamTrash": false }
+          },
+          "event": { "type": "gmail.message.received", "version": 1 },
+          "condition": {},
+          "mapping": {},
+          "targets": [{ "targetId": "target-1", "version": 1, "kind": "dry-run", "retentionMs": 1 }],
+          "subscribers": [],
+          "judges": [],
+          "deliveryRateCap": 1,
+          "retention": {
+            "ingestMs": 1,
+            "holdMs": 1,
+            "deliveryMs": 1,
+            "dryrunMs": 1,
+            "sseReplayMs": 1,
+            "deadLetterMs": 1,
+            "decisionMetadataMs": 1
+          }
+        },
+        "catalogue": { "type": "example.synthetic", "version": 1, "exampleIndex": 0 }
+      }
+    }
+  },
+  {
+    "name": "retained-test-request",
+    "request": {
+      "operation": "ruleTestRetained",
+      "args": { "eventId": "event-1", "ruleId": "rule-1", "ruleVersion": 1 }
+    }
+  },
+  {
+    "name": "target-resume-request",
+    "request": { "operation": "targetResume", "args": { "targetId": "target-1", "targetVersion": 1 } }
+  },
+  { "name": "subscribers-list-request", "request": { "operation": "subscribersList", "args": {} } },
+  {
+    "name": "subscriber-add-request",
+    "request": {
+      "operation": "addSubscriber",
+      "args": {
+        "document": {
+          "subscriberId": "subscriber-1",
+          "version": 1,
+          "kind": "sse",
+          "authority": { "host": "127.0.0.1", "port": 1 },
+          "origins": ["http://127.0.0.1"],
+          "retentionMs": 1
+        }
+      }
+    }
+  },
+  {
+    "name": "subscriber-update-request",
+    "request": {
+      "operation": "updateSubscriber",
+      "args": {
+        "document": {
+          "subscriberId": "subscriber-1",
+          "version": 1,
+          "kind": "sse",
+          "authority": { "host": "127.0.0.1", "port": 1 },
+          "origins": ["http://127.0.0.1"],
+          "retentionMs": 1
+        }
+      }
+    }
+  },
+  {
+    "name": "subscriber-remove-request",
+    "request": { "operation": "removeSubscriber", "args": { "subscriberId": "subscriber-1" } }
+  },
+  {
+    "name": "judge-add-request",
+    "request": {
+      "operation": "addJudge",
+      "args": {
+        "document": { "judgeId": "judge-1", "version": 1, "kind": "typesafe", "provider": "local", "model": "fixture" }
+      }
+    }
+  },
+  {
+    "name": "judge-update-request",
+    "request": {
+      "operation": "updateJudge",
+      "args": {
+        "document": { "judgeId": "judge-1", "version": 1, "kind": "typesafe", "provider": "local", "model": "fixture" }
+      }
+    }
+  },
+  { "name": "judge-remove-request", "request": { "operation": "removeJudge", "args": { "judgeId": "judge-1" } } },
+  {
+    "name": "judge-test-request",
+    "request": { "operation": "judgeTest", "args": { "judgeId": "judge-1", "version": 1 } }
+  },
+  { "name": "budget-show-request", "request": { "operation": "budgetShow", "args": {} } },
+  {
+    "name": "budget-update-request",
+    "request": { "operation": "updateBudget", "args": { "document": { "budgetId": "budget-1", "version": 1 } } }
+  },
+  { "name": "judge-kinds-request", "request": { "operation": "judgeKindsList", "args": {} } },
+  {
+    "name": "judge-kind-enable-request",
+    "request": { "operation": "enableJudgeKind", "args": { "kind": "typesafe" } }
+  },
+  {
+    "name": "judge-kind-disable-request",
+    "request": { "operation": "disableJudgeKind", "args": { "kind": "typesafe" } }
+  },
+  { "name": "judge-model-remove-request", "request": { "operation": "removeJudgeModel", "args": {} } },
+  { "name": "deliveries-list-request", "request": { "operation": "deliveriesList", "args": {} } },
+  {
+    "name": "delivery-retry-request",
+    "request": { "operation": "retryDelivery", "args": { "deliveryId": "delivery-1" } }
+  },
+  {
+    "name": "delivery-drop-request",
+    "request": { "operation": "dropDelivery", "args": { "deliveryId": "delivery-1" } }
+  },
+  {
+    "name": "target-secret-rotate-request",
+    "request": {
+      "operation": "targetSecretRotate",
+      "args": { "targetId": "target-1", "version": 1 },
+      "origin": "interactive-terminal"
+    }
+  },
+  {
+    "name": "target-url-set-request",
+    "request": {
+      "operation": "targetUrlSet",
+      "args": { "targetId": "target-1", "predecessorVersion": 1, "newVersion": 2 },
+      "origin": "interactive-terminal"
+    }
+  },
+  {
+    "name": "subscriber-token-create-request",
+    "request": {
+      "operation": "subscriberTokenCreate",
+      "args": { "subscriberId": "subscriber-1", "version": 1 },
+      "origin": "interactive-terminal"
+    }
+  },
+  {
+    "name": "subscriber-token-rotate-request",
+    "request": {
+      "operation": "subscriberTokenRotate",
+      "args": { "subscriberId": "subscriber-1", "version": 1 },
+      "origin": "interactive-terminal"
+    }
+  },
+  {
+    "name": "judge-key-set-request",
+    "request": {
+      "operation": "judgeKeySet",
+      "args": { "judgeId": "judge-1", "version": 1 },
+      "origin": "interactive-terminal"
+    }
+  },
+  {
+    "name": "judge-key-rotate-request",
+    "request": {
+      "operation": "judgeKeyRotate",
+      "args": { "judgeId": "judge-1", "version": 1 },
+      "origin": "interactive-terminal"
+    }
+  },
+  {
+    "name": "secrets-migrate-request",
+    "request": { "operation": "migrateSecrets", "args": { "to": "file" }, "origin": "interactive-terminal" }
+  }
+]

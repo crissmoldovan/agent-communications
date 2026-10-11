@@ -1,0 +1,699 @@
+[
+  {
+    "name": "status-result",
+    "request": {
+      "operation": "status",
+      "args": {}
+    },
+    "result": {
+      "owner": "running",
+      "enabled": false,
+      "paused": false,
+      "switchGeneration": 0,
+      "activationIntents": []
+    }
+  },
+  {
+    "name": "pause-result",
+    "request": {
+      "operation": "pause",
+      "args": {}
+    },
+    "result": {
+      "enabled": false,
+      "paused": true,
+      "switchGeneration": 0
+    }
+  },
+  {
+    "name": "resume-result",
+    "request": {
+      "operation": "resume",
+      "args": {}
+    },
+    "result": {
+      "enabled": false,
+      "paused": false,
+      "switchGeneration": 0
+    }
+  },
+  {
+    "name": "disable-all-result",
+    "request": {
+      "operation": "disable-all",
+      "args": {}
+    },
+    "result": {
+      "enabled": false,
+      "paused": false,
+      "switchGeneration": 1
+    }
+  },
+  {
+    "name": "enable-all-result",
+    "request": {
+      "operation": "enable-all",
+      "args": {}
+    },
+    "result": {
+      "intentId": "act_contract_1",
+      "approvalId": "ap_00000000000000000000000001",
+      "binding": {
+        "digest": "07012fe38da465315f0ae41e9f29d1c04cea453bf2f20b4354aa9d89039335dd",
+        "activationIntentId": "act_contract_1",
+        "activationKind": "enable-all",
+        "versions": []
+      },
+      "kind": "enable-all",
+      "status": "pending"
+    }
+  },
+  {
+    "name": "catalogue-list-result",
+    "request": {
+      "operation": "catalogue-list",
+      "args": {}
+    },
+    "result": [
+      {
+        "type": "gmail.message.received",
+        "version": 1
+      },
+      {
+        "type": "gmail.message.sent",
+        "version": 1
+      },
+      {
+        "type": "gmail.message.labelled",
+        "version": 1
+      },
+      {
+        "type": "slack.message.posted",
+        "version": 1
+      },
+      {
+        "type": "resend.email.received",
+        "version": 1
+      },
+      {
+        "type": "resend.email.status_changed",
+        "version": 1
+      },
+      {
+        "type": "whatsapp.message.received",
+        "version": 1
+      }
+    ]
+  },
+  {
+    "name": "catalogue-show-result",
+    "request": {
+      "operation": "catalogue-show",
+      "args": {
+        "type": "gmail.message.received"
+      }
+    },
+    "result": {
+      "type": "gmail.message.received",
+      "version": 1,
+      "channel": "gmail"
+    }
+  },
+  {
+    "name": "sources-list-result",
+    "request": {
+      "operation": "sources-list",
+      "args": {}
+    },
+    "result": [
+      {
+        "source": "gmail",
+        "accounts": []
+      },
+      {
+        "source": "resend",
+        "accounts": []
+      },
+      {
+        "source": "slack",
+        "accounts": []
+      },
+      {
+        "source": "whatsapp",
+        "accounts": []
+      }
+    ]
+  },
+  {
+    "name": "source-show-result",
+    "request": {
+      "operation": "source-show",
+      "args": {
+        "source": "gmail"
+      }
+    },
+    "result": {
+      "source": "gmail",
+      "accounts": []
+    }
+  },
+  {
+    "name": "targets-list-result",
+    "request": {
+      "operation": "targets-list",
+      "args": {}
+    },
+    "result": []
+  },
+  {
+    "name": "target-add-result",
+    "request": {
+      "operation": "target-add",
+      "args": {
+        "document": {
+          "targetId": "target-1",
+          "version": 1,
+          "kind": "dry-run",
+          "retentionMs": 1
+        }
+      }
+    },
+    "result": {
+      "id": "target-1@1",
+      "kind": "target",
+      "objectId": "target-1",
+      "version": 1,
+      "document": {
+        "kind": "dry-run",
+        "retentionMs": 1,
+        "targetId": "target-1",
+        "version": 1
+      },
+      "digest": "de658101f843f27716137138213de22a19531aac53d2111ffbc6c73c7929f98e",
+      "state": null
+    }
+  },
+  {
+    "name": "rules-list-result",
+    "request": {
+      "operation": "rules-list",
+      "args": {}
+    },
+    "result": []
+  },
+  {
+    "name": "rule-create-result",
+    "request": {
+      "operation": "rule-create",
+      "args": {
+        "document": {
+          "ruleId": "rule-1",
+          "version": 1,
+          "source": {
+            "channel": "gmail",
+            "accountIds": ["account-1"],
+            "options": {
+              "channel": "gmail",
+              "labels": "inbox",
+              "includeSpamTrash": false
+            }
+          },
+          "event": {
+            "type": "gmail.message.received",
+            "version": 1
+          },
+          "condition": {
+            "path": "/subject",
+            "op": "exists"
+          },
+          "mapping": {
+            "constant": "safe"
+          },
+          "targets": [
+            {
+              "targetId": "target-1",
+              "version": 1,
+              "kind": "dry-run",
+              "retentionMs": 1
+            }
+          ],
+          "subscribers": [],
+          "judges": [],
+          "deliveryRateCap": 1,
+          "retention": {
+            "ingestMs": 1,
+            "holdMs": 1,
+            "deliveryMs": 1,
+            "dryrunMs": 1,
+            "sseReplayMs": 1,
+            "deadLetterMs": 1,
+            "decisionMetadataMs": 1
+          }
+        }
+      }
+    },
+    "result": {
+      "id": "rule-1@1",
+      "kind": "rule",
+      "objectId": "rule-1",
+      "version": 1,
+      "document": {
+        "condition": {
+          "op": "exists",
+          "path": "/subject"
+        },
+        "deliveryRateCap": 1,
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "judges": [],
+        "mapping": {
+          "constant": "safe"
+        },
+        "retention": {
+          "deadLetterMs": 1,
+          "decisionMetadataMs": 1,
+          "deliveryMs": 1,
+          "dryrunMs": 1,
+          "holdMs": 1,
+          "ingestMs": 1,
+          "sseReplayMs": 1
+        },
+        "ruleId": "rule-1",
+        "source": {
+          "accountIds": ["account-1"],
+          "channel": "gmail",
+          "options": {
+            "channel": "gmail",
+            "includeSpamTrash": false,
+            "labels": "inbox"
+          }
+        },
+        "subscribers": [],
+        "targets": [
+          {
+            "kind": "dry-run",
+            "retentionMs": 1,
+            "targetId": "target-1",
+            "version": 1
+          }
+        ],
+        "version": 1
+      },
+      "digest": "fe5203032150c71328d2119f8f5eccb6d254cf48682191558469d48509ef8068",
+      "state": null
+    }
+  },
+  {
+    "name": "rule-show-result",
+    "request": {
+      "operation": "rule-show",
+      "args": {
+        "ruleId": "rule-1"
+      }
+    },
+    "result": [
+      {
+        "document": {
+          "condition": {
+            "op": "exists",
+            "path": "/subject"
+          },
+          "deliveryRateCap": 1,
+          "event": {
+            "type": "gmail.message.received",
+            "version": 1
+          },
+          "judges": [],
+          "mapping": {
+            "constant": "safe"
+          },
+          "retention": {
+            "deadLetterMs": 1,
+            "decisionMetadataMs": 1,
+            "deliveryMs": 1,
+            "dryrunMs": 1,
+            "holdMs": 1,
+            "ingestMs": 1,
+            "sseReplayMs": 1
+          },
+          "ruleId": "rule-1",
+          "source": {
+            "accountIds": ["account-1"],
+            "channel": "gmail",
+            "options": {
+              "channel": "gmail",
+              "includeSpamTrash": false,
+              "labels": "inbox"
+            }
+          },
+          "subscribers": [],
+          "targets": [
+            {
+              "kind": "dry-run",
+              "retentionMs": 1,
+              "targetId": "target-1",
+              "version": 1
+            }
+          ],
+          "version": 1
+        },
+        "digest": "fe5203032150c71328d2119f8f5eccb6d254cf48682191558469d48509ef8068",
+        "state": null,
+        "approval_id": null,
+        "authorization_activation_id": null
+      }
+    ]
+  },
+  {
+    "name": "rule-test-result",
+    "request": {
+      "operation": "ruleTest",
+      "args": {
+        "document": {
+          "ruleId": "rule-1",
+          "version": 1,
+          "source": {
+            "channel": "gmail",
+            "accountIds": ["account-1"],
+            "options": {
+              "channel": "gmail",
+              "labels": "inbox",
+              "includeSpamTrash": false
+            }
+          },
+          "event": {
+            "type": "gmail.message.received",
+            "version": 1
+          },
+          "condition": {
+            "path": "/subject",
+            "op": "exists"
+          },
+          "mapping": {
+            "constant": "safe"
+          },
+          "targets": [
+            {
+              "targetId": "target-1",
+              "version": 1,
+              "kind": "dry-run",
+              "retentionMs": 1
+            }
+          ],
+          "subscribers": [],
+          "judges": [],
+          "deliveryRateCap": 1,
+          "retention": {
+            "ingestMs": 1,
+            "holdMs": 1,
+            "deliveryMs": 1,
+            "dryrunMs": 1,
+            "sseReplayMs": 1,
+            "deadLetterMs": 1,
+            "decisionMetadataMs": 1
+          }
+        },
+        "catalogue": {
+          "type": "gmail.message.received",
+          "version": 1,
+          "exampleIndex": 0
+        }
+      }
+    },
+    "result": {
+      "agentic": "not-evaluated",
+      "outcome": "matched",
+      "rendered": "```text\n<untrusted-content boundary=\"BOUNDARY\" field=\"catalogue-example\" id=\"local-rule-test\">\n{\"mapped\":{\"data\":{\"constant\":\"safe\"},\"provenance\":[{\"kind\":\"constant\",\"output\":\"/constant\"}]},\"outcome\":\"matched\",\"untrusted\":[]}\n</untrusted-content boundary=\"BOUNDARY\">\n```"
+    }
+  },
+  {
+    "name": "rule-update-result",
+    "request": {
+      "operation": "rule-update",
+      "args": {
+        "document": {
+          "ruleId": "rule-1",
+          "version": 2,
+          "source": {
+            "channel": "gmail",
+            "accountIds": ["account-1"],
+            "options": {
+              "channel": "gmail",
+              "labels": "inbox",
+              "includeSpamTrash": false
+            }
+          },
+          "event": {
+            "type": "gmail.message.received",
+            "version": 1
+          },
+          "condition": {
+            "path": "/subject",
+            "op": "exists"
+          },
+          "mapping": {
+            "constant": "safe"
+          },
+          "targets": [
+            {
+              "targetId": "target-1",
+              "version": 1,
+              "kind": "dry-run",
+              "retentionMs": 1
+            }
+          ],
+          "subscribers": [],
+          "judges": [],
+          "deliveryRateCap": 1,
+          "retention": {
+            "ingestMs": 1,
+            "holdMs": 1,
+            "deliveryMs": 1,
+            "dryrunMs": 1,
+            "sseReplayMs": 1,
+            "deadLetterMs": 1,
+            "decisionMetadataMs": 1
+          }
+        }
+      }
+    },
+    "result": {
+      "id": "rule-1@2",
+      "kind": "rule",
+      "objectId": "rule-1",
+      "version": 2,
+      "document": {
+        "condition": {
+          "op": "exists",
+          "path": "/subject"
+        },
+        "deliveryRateCap": 1,
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "judges": [],
+        "mapping": {
+          "constant": "safe"
+        },
+        "retention": {
+          "deadLetterMs": 1,
+          "decisionMetadataMs": 1,
+          "deliveryMs": 1,
+          "dryrunMs": 1,
+          "holdMs": 1,
+          "ingestMs": 1,
+          "sseReplayMs": 1
+        },
+        "ruleId": "rule-1",
+        "source": {
+          "accountIds": ["account-1"],
+          "channel": "gmail",
+          "options": {
+            "channel": "gmail",
+            "includeSpamTrash": false,
+            "labels": "inbox"
+          }
+        },
+        "subscribers": [],
+        "targets": [
+          {
+            "kind": "dry-run",
+            "retentionMs": 1,
+            "targetId": "target-1",
+            "version": 1
+          }
+        ],
+        "version": 2
+      },
+      "digest": "75ba70d377cf0fa2bf89f2ecd7c26297eaa2d3e2b34132fbfecea7d80bba359b",
+      "state": null
+    }
+  },
+  {
+    "name": "target-update-result",
+    "request": {
+      "operation": "target-update",
+      "args": {
+        "document": {
+          "targetId": "target-1",
+          "version": 2,
+          "kind": "dry-run",
+          "retentionMs": 1
+        }
+      }
+    },
+    "result": {
+      "id": "target-1@2",
+      "kind": "target",
+      "objectId": "target-1",
+      "version": 2,
+      "document": {
+        "kind": "dry-run",
+        "retentionMs": 1,
+        "targetId": "target-1",
+        "version": 2
+      },
+      "digest": "4a8f1c91af494bb95c314c019c519264038f5e0adb58f933e15371462b4ecc06",
+      "state": null
+    }
+  },
+  {
+    "name": "target-remove-result",
+    "request": {
+      "operation": "target-remove",
+      "args": {
+        "targetId": "target-1"
+      }
+    },
+    "result": {
+      "targetId": "target-1",
+      "removed": true
+    }
+  },
+  {
+    "name": "subscribers-list-result",
+    "request": {
+      "operation": "subscribersList",
+      "args": {}
+    },
+    "result": []
+  },
+  {
+    "name": "subscriber-add-result",
+    "request": {
+      "operation": "addSubscriber",
+      "args": {
+        "document": {
+          "subscriberId": "subscriber-1",
+          "version": 1,
+          "kind": "sse",
+          "authority": {
+            "host": "127.0.0.1",
+            "port": 1
+          },
+          "origins": ["http://127.0.0.1"],
+          "retentionMs": 1
+        }
+      }
+    },
+    "result": {
+      "id": "subscriber-1@1",
+      "kind": "subscriber",
+      "objectId": "subscriber-1",
+      "version": 1,
+      "document": {
+        "authority": {
+          "host": "127.0.0.1",
+          "port": 1
+        },
+        "kind": "sse",
+        "origins": ["http://127.0.0.1"],
+        "retentionMs": 1,
+        "subscriberId": "subscriber-1",
+        "version": 1
+      },
+      "digest": "78f4d06f12b71bed83bb94112434c84969ea2045e7ab01ff4e31affe09547ca3",
+      "state": null
+    }
+  },
+  {
+    "name": "subscriber-update-result",
+    "request": {
+      "operation": "updateSubscriber",
+      "args": {
+        "document": {
+          "subscriberId": "subscriber-1",
+          "version": 2,
+          "kind": "sse",
+          "authority": {
+            "host": "127.0.0.1",
+            "port": 1
+          },
+          "origins": ["http://127.0.0.1"],
+          "retentionMs": 1
+        }
+      }
+    },
+    "result": {
+      "id": "subscriber-1@2",
+      "kind": "subscriber",
+      "objectId": "subscriber-1",
+      "version": 2,
+      "document": {
+        "authority": {
+          "host": "127.0.0.1",
+          "port": 1
+        },
+        "kind": "sse",
+        "origins": ["http://127.0.0.1"],
+        "retentionMs": 1,
+        "subscriberId": "subscriber-1",
+        "version": 2
+      },
+      "digest": "0a3f2df052624fee233efccd2b2841ae515fbeb9673081e9af54b1f734d8645a",
+      "state": null
+    }
+  },
+  {
+    "name": "subscriber-remove-result",
+    "request": {
+      "operation": "removeSubscriber",
+      "args": {
+        "subscriberId": "subscriber-1"
+      }
+    },
+    "result": {
+      "subscriberId": "subscriber-1",
+      "removed": true
+    }
+  },
+  {
+    "name": "deliveries-list-result",
+    "request": {
+      "operation": "deliveriesList",
+      "args": {}
+    },
+    "result": []
+  },
+  {
+    "name": "dryrun-list-result",
+    "request": {
+      "operation": "dryrun-list",
+      "args": {}
+    },
+    "result": []
+  },
+  {
+    "name": "stop-result",
+    "request": {
+      "operation": "stop",
+      "args": {}
+    },
+    "result": {
+      "stopping": true
+    }
+  }
+]

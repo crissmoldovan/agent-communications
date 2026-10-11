@@ -1,0 +1,4 @@
+{
+  "result": { "kind": "CHALLENGE_EXPIRED" },
+  "expected": { "kind": "CHALLENGE_EXPIRED", "structured": {}, "terminal": "Approval view: CHALLENGE_EXPIRED" }
+}

@@ -1,0 +1,257 @@
+[
+  {
+    "name": "judge-add-result",
+    "request": {
+      "operation": "addJudge",
+      "args": {
+        "document": {
+          "judgeId": "judge-1",
+          "version": 1,
+          "kind": "typesafe",
+          "provider": "local",
+          "model": "fixture"
+        }
+      }
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "E_REQUIRED",
+      "phase": "E"
+    }
+  },
+  {
+    "name": "judge-update-result",
+    "request": {
+      "operation": "updateJudge",
+      "args": {
+        "document": {
+          "judgeId": "judge-1",
+          "version": 1,
+          "kind": "typesafe",
+          "provider": "local",
+          "model": "fixture"
+        }
+      }
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "E_REQUIRED",
+      "phase": "E"
+    }
+  },
+  {
+    "name": "judge-remove-result",
+    "request": {
+      "operation": "removeJudge",
+      "args": {
+        "judgeId": "judge-1"
+      }
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "E_REQUIRED",
+      "phase": "E"
+    }
+  },
+  {
+    "name": "judge-test-result",
+    "request": {
+      "operation": "judgeTest",
+      "args": {
+        "judgeId": "judge-1",
+        "version": 1
+      }
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "E_REQUIRED",
+      "phase": "E"
+    }
+  },
+  {
+    "name": "budget-show-result",
+    "request": {
+      "operation": "budgetShow",
+      "args": {}
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "E_REQUIRED",
+      "phase": "E"
+    }
+  },
+  {
+    "name": "budget-update-result",
+    "request": {
+      "operation": "updateBudget",
+      "args": {
+        "document": {
+          "budgetId": "budget-1",
+          "version": 1
+        }
+      }
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "E_REQUIRED",
+      "phase": "E"
+    }
+  },
+  {
+    "name": "judge-kinds-list-result",
+    "request": {
+      "operation": "judgeKindsList",
+      "args": {}
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "E_REQUIRED",
+      "phase": "E"
+    }
+  },
+  {
+    "name": "judge-kind-enable-result",
+    "request": {
+      "operation": "enableJudgeKind",
+      "args": {
+        "kind": "typesafe"
+      }
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "E_REQUIRED",
+      "phase": "E"
+    }
+  },
+  {
+    "name": "judge-kind-disable-result",
+    "request": {
+      "operation": "disableJudgeKind",
+      "args": {
+        "kind": "typesafe"
+      }
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "E_REQUIRED",
+      "phase": "E"
+    }
+  },
+  {
+    "name": "judge-model-remove-result",
+    "request": {
+      "operation": "removeJudgeModel",
+      "args": {}
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "E2_REQUIRED",
+      "phase": "E2"
+    }
+  },
+  {
+    "name": "target-secret-rotate-result",
+    "request": {
+      "operation": "targetSecretRotate",
+      "args": {
+        "targetId": "target-1",
+        "version": 1
+      },
+      "origin": "app-window"
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "APP_SECRET_CAPABILITY_UNAVAILABLE"
+    }
+  },
+  {
+    "name": "target-url-set-result",
+    "request": {
+      "operation": "targetUrlSet",
+      "args": {
+        "targetId": "target-1",
+        "predecessorVersion": 1,
+        "newVersion": 2
+      },
+      "origin": "app-window"
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "APP_SECRET_CAPABILITY_UNAVAILABLE"
+    }
+  },
+  {
+    "name": "subscriber-token-create-result",
+    "request": {
+      "operation": "subscriberTokenCreate",
+      "args": {
+        "subscriberId": "subscriber-1",
+        "version": 1
+      },
+      "origin": "app-window"
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "APP_SECRET_CAPABILITY_UNAVAILABLE"
+    }
+  },
+  {
+    "name": "subscriber-token-rotate-result",
+    "request": {
+      "operation": "subscriberTokenRotate",
+      "args": {
+        "subscriberId": "subscriber-1",
+        "version": 1
+      },
+      "origin": "app-window"
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "APP_SECRET_CAPABILITY_UNAVAILABLE"
+    }
+  },
+  {
+    "name": "judge-key-set-result",
+    "request": {
+      "operation": "judgeKeySet",
+      "args": {
+        "judgeId": "judge-1",
+        "version": 1
+      },
+      "origin": "app-window"
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "APP_SECRET_CAPABILITY_UNAVAILABLE"
+    }
+  },
+  {
+    "name": "judge-key-rotate-result",
+    "request": {
+      "operation": "judgeKeyRotate",
+      "args": {
+        "judgeId": "judge-1",
+        "version": 1
+      },
+      "origin": "app-window"
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "APP_SECRET_CAPABILITY_UNAVAILABLE"
+    }
+  },
+  {
+    "name": "secrets-migrate-result",
+    "request": {
+      "operation": "migrateSecrets",
+      "args": {
+        "to": "file"
+      },
+      "origin": "app-window"
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "APP_SECRET_CAPABILITY_UNAVAILABLE"
+    }
+  }
+]

@@ -1,0 +1,27 @@
+{
+  "name": "approval-view-ready",
+  "request": {
+    "operation": "approvalView",
+    "args": {
+      "approvalId": "approval-1",
+      "digest": "digest-1"
+    }
+  },
+  "result": {
+    "kind": "READY",
+    "approvalId": "approval-1",
+    "digest": "digest-1",
+    "preview": {
+      "documentVersion": 1,
+      "kind": "enable-all",
+      "switchGeneration": 1,
+      "ruleVersions": []
+    },
+    "challenge": {
+      "approvalId": "approval-1",
+      "digest": "digest-1",
+      "challenge": "challenge-1",
+      "expiresAt": 301000
+    }
+  }
+}

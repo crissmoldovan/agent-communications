@@ -32,15 +32,18 @@ import {
   writeInstance,
 } from '../control/instance.ts';
 import type { AuthenticatedControlRequest } from '../control/protocol.ts';
-import { type RunningControlServer, startControlServer } from '../control/server.ts';
+import { type ControlServerOptions, type RunningControlServer, startControlServer } from '../control/server.ts';
+import { normaliseActivationDocument } from '../domain/activation-documents.ts';
 import { HumanSecret } from '../domain/human-secret.ts';
 import { EventDomainError } from '../domain/lifecycle.ts';
 import { normaliseSourceOptions, type SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import {
   B3_SECRET_TERMINAL_ORIGIN,
+  type B3ApprovalViewResultV1,
   type B3OwnerRequest,
   type B3OwnerService,
+  type B3SecretCapabilityUnavailableV1,
   isB3ControlOperation,
   isB3SecretOperation,
 } from '../operations/b3-contract.ts';
@@ -72,6 +75,7 @@ import {
   type FixedSyntheticTargetTransport,
   TargetResumeControl,
 } from './b3-target-test-control.ts';
+import { isOwnerControlWireOperation, OWNER_CONTROL_WIRES } from './control-operation-registry.ts';
 import { hasLiveDeliveryLineage } from './delivery-claim.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
@@ -94,6 +98,8 @@ import { SseDispatcher } from './sse-dispatcher.ts';
 import type { SseServer } from './sse-server.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
+
+export { OWNER_CONTROL_WIRE_OPERATIONS } from './control-operation-registry.ts';
 
 export interface EventOwnerStatus extends EventLifecycleStatus {
   readonly owner: 'running';
@@ -152,6 +158,13 @@ export interface EventOwnerOptions {
   readonly pollIntervalMs?: number | undefined;
   /** Test/embedding clock; every status P sample must use the same injected clock as the owner loop. */
   readonly now?: (() => number) | undefined;
+  /** Test-only deterministic identifiers for contract-vector reproduction. */
+  readonly newIntentId?: (() => string) | undefined;
+  /**
+   * Test-only control transport seam. It receives the production authenticated-request handler without opening a
+   * Unix listener, which lets contract tests run in restricted sandboxes while exercising the real owner.
+   */
+  readonly startControlServer?: ((options: ControlServerOptions) => Promise<RunningControlServer>) | undefined;
   /** Task 1 seam: later B3 requests are owned here, not by a second CLI/MCP path. */
   readonly b3OwnerService?: B3OwnerService | undefined;
 }
@@ -391,7 +404,10 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
             outcome: 'refused',
             reason: 'APP_SECRET_CAPABILITY_UNAVAILABLE',
           });
-          return { kind: 'unavailable', code: 'APP_SECRET_CAPABILITY_UNAVAILABLE' } as const;
+          return {
+            kind: 'unavailable',
+            code: 'APP_SECRET_CAPABILITY_UNAVAILABLE',
+          } satisfies B3SecretCapabilityUnavailableV1;
         }
         try {
           const result = await handleTerminalSecretOperation(options.ports.secrets, request);
@@ -638,7 +654,7 @@ async function approvalViewFromOwner(
   activations: Pick<ActivationRuntime, 'issueApprovalViewChallenge'>,
   now: () => number,
   args: Readonly<Record<string, unknown>>,
-): Promise<unknown> {
+): Promise<B3ApprovalViewResultV1> {
   const approvalId = requiredText(args.approvalId, 'approval id');
   const digest = requiredText(args.digest, 'approval digest');
   const row = store.database
@@ -653,7 +669,7 @@ async function approvalViewFromOwner(
     kind: 'READY',
     approvalId,
     digest: row.digest,
-    preview: JSON.parse(row.document),
+    preview: normaliseActivationDocument(JSON.parse(row.document)),
     challenge: { approvalId, digest: row.digest, challenge, expiresAt: nextExpiry },
   };
 }
@@ -700,6 +716,7 @@ async function startOwnerWithLock(
       stateDir,
       ...(options.configDir === undefined ? {} : { configDir: options.configDir }),
     },
+    now: () => new Date(now()),
   });
   const eventSecrets = await openEventSecretStore({
     database: database.database,
@@ -1038,6 +1055,7 @@ async function startOwnerWithLock(
     sourceRegistry,
     retainedContentHooks: whatsappComposition.retainedContentHooks,
     now,
+    ...(options.newIntentId === undefined ? {} : { newIntentId: options.newIntentId }),
     assertObjectSecretReady: b3Ports.assertObjectSecretReady,
   });
   const scheduler = new EventScheduler({
@@ -1169,7 +1187,7 @@ async function startOwnerWithLock(
     // Expired delivery leases are recovered by the scheduler's ticks, which claim nothing while paused or disabled.
     await withEventWriterLease(writerQuiescer, () => recoverActivations(activations));
     await writeToken(paths, token);
-    control = await startControlServer({
+    control = await (options.startControlServer ?? startControlServer)({
       endpoint: instance.endpoint,
       token,
       handle: async (request) =>
@@ -1187,8 +1205,10 @@ async function startOwnerWithLock(
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
-    await chmod(instance.endpoint, 0o600);
-    await verifyControlSocket(instance.endpoint);
+    if (options.startControlServer === undefined) {
+      await chmod(instance.endpoint, 0o600);
+      await verifyControlSocket(instance.endpoint);
+    }
     await writeInstance(paths, instance);
     scheduler.start();
     return owner;
@@ -1227,6 +1247,8 @@ async function handleControl(
   b3OwnerService: B3OwnerService | undefined,
   doctorReport: () => Promise<unknown>,
 ): Promise<unknown> {
+  if (!isOwnerControlWireOperation(request.operation))
+    throw new CommsError('USAGE', 'the local event control operation is not recognised');
   if (isB3ControlOperation(request.operation)) {
     if (!b3OwnerService) throw new CommsError('USAGE', 'the local B3 control operation is not available');
     try {
@@ -1239,64 +1261,64 @@ async function handleControl(
     }
   }
   switch (request.operation) {
-    case 'status':
+    case OWNER_CONTROL_WIRES.status:
       return owner.status();
-    case 'stop':
+    case OWNER_CONTROL_WIRES.stop:
       setTimeout(() => {
         void owner.stop();
       }, 0);
       return { stopping: true };
-    case 'pause':
+    case OWNER_CONTROL_WIRES.pause:
       return lifecycle.pause();
-    case 'resume':
+    case OWNER_CONTROL_WIRES.resume:
       return lifecycle.resume();
-    case 'disable-all':
+    case OWNER_CONTROL_WIRES.disableAll:
       return lifecycle.disableAll();
-    case 'enable-all':
+    case OWNER_CONTROL_WIRES.enableAll:
       return activations.prepareEnableAll();
-    case 'doctor':
+    case OWNER_CONTROL_WIRES.doctor:
       return doctorReport();
-    case 'dryrun-list':
+    case OWNER_CONTROL_WIRES.dryrunList:
       return dispatcher.list();
-    case 'dryrun-show':
+    case OWNER_CONTROL_WIRES.dryrunShow:
       return dispatcher.read(requiredText(request.args.deliveryId, 'local delivery id'));
-    case 'catalogue-list':
+    case OWNER_CONTROL_WIRES.catalogueList:
       return CATALOGUE.map((definition) => ({ type: definition.type, version: definition.version }));
-    case 'catalogue-show': {
+    case OWNER_CONTROL_WIRES.catalogueShow: {
       const type = requiredText(request.args.type, 'catalogue type');
       const definition = CATALOGUE.find((candidate) => candidate.type === type);
       if (!definition) throw new CommsError('NOT_FOUND', 'the requested event type is not in the local catalogue');
       return { type: definition.type, version: definition.version, channel: definition.type.split('.')[0] };
     }
-    case 'sources-list':
+    case OWNER_CONTROL_WIRES.sourcesList:
       return sourceRows(database, sourceRegistry);
-    case 'source-show':
+    case OWNER_CONTROL_WIRES.sourceShow:
       return sourceShow(database, sourceRegistry, requiredText(request.args.source, 'source'));
-    case 'rules-list':
+    case OWNER_CONTROL_WIRES.rulesList:
       return ruleRows(database);
-    case 'rule-show':
+    case OWNER_CONTROL_WIRES.ruleShow:
       return ruleShow(database, requiredText(request.args.ruleId, 'rule id'));
-    case 'rule-create':
-    case 'rule-update':
+    case OWNER_CONTROL_WIRES.createRule:
+    case OWNER_CONTROL_WIRES.updateRule:
       return createRule(database, request.args.document);
-    case 'rule-enable':
+    case OWNER_CONTROL_WIRES.enableRule:
       return activations.prepareRule({
         ruleId: requiredText(request.args.ruleId, 'rule id'),
         version: requiredVersion(request.args.version, 'rule version'),
       });
-    case 'rule-disable':
-    case 'rule-remove':
+    case OWNER_CONTROL_WIRES.disableRule:
+    case OWNER_CONTROL_WIRES.removeRule:
       return disableRule(database, activations, requiredText(request.args.ruleId, 'rule id'));
-    case 'targets-list':
+    case OWNER_CONTROL_WIRES.targetsList:
       return targetRows(database);
-    case 'target-add':
-    case 'target-update':
+    case OWNER_CONTROL_WIRES.addTarget:
+    case OWNER_CONTROL_WIRES.updateTarget:
       return createTarget(database, request.args.document);
-    case 'target-remove':
+    case OWNER_CONTROL_WIRES.removeTarget:
       return removeTarget(database, activations, requiredText(request.args.targetId, 'target id'));
-    case 'approve-challenge':
+    case OWNER_CONTROL_WIRES.approveChallenge:
       return activations.issueChallenge(requiredText(request.args.approvalId, 'approval id'));
-    case 'approve':
+    case OWNER_CONTROL_WIRES.approve:
       return withEventWriterLease(writerQuiescer, () =>
         activations.approve({
           approvalId: requiredText(request.args.approvalId, 'approval id'),

@@ -1,0 +1,111 @@
+[
+  { "name": "status-request", "request": { "operation": "status", "args": {} } },
+  { "name": "stop-request", "request": { "operation": "stop", "args": {} } },
+  { "name": "pause-request", "request": { "operation": "pause", "args": {} } },
+  { "name": "resume-request", "request": { "operation": "resume", "args": {} } },
+  { "name": "disable-all-request", "request": { "operation": "disable-all", "args": {} } },
+  { "name": "enable-all-request", "request": { "operation": "enable-all", "args": {} } },
+  { "name": "catalogue-list-request", "request": { "operation": "catalogue-list", "args": {} } },
+  {
+    "name": "catalogue-show-request",
+    "request": { "operation": "catalogue-show", "args": { "type": "gmail.message.received" } }
+  },
+  { "name": "sources-list-request", "request": { "operation": "sources-list", "args": {} } },
+  { "name": "source-show-request", "request": { "operation": "source-show", "args": { "source": "gmail" } } },
+  { "name": "rules-list-request", "request": { "operation": "rules-list", "args": {} } },
+  { "name": "rule-show-request", "request": { "operation": "rule-show", "args": { "ruleId": "rule-1" } } },
+  {
+    "name": "rule-create-request",
+    "request": {
+      "operation": "rule-create",
+      "args": {
+        "document": {
+          "ruleId": "rule-1",
+          "version": 1,
+          "source": {
+            "channel": "gmail",
+            "accountIds": ["account-1"],
+            "options": { "channel": "gmail", "labels": "inbox", "includeSpamTrash": false }
+          },
+          "event": { "type": "gmail.message.received", "version": 1 },
+          "condition": {},
+          "mapping": {},
+          "targets": [{ "targetId": "target-1", "version": 1, "kind": "dry-run", "retentionMs": 1 }],
+          "subscribers": [],
+          "judges": [],
+          "deliveryRateCap": 1,
+          "retention": {
+            "ingestMs": 1,
+            "holdMs": 1,
+            "deliveryMs": 1,
+            "dryrunMs": 1,
+            "sseReplayMs": 1,
+            "deadLetterMs": 1,
+            "decisionMetadataMs": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "rule-update-request",
+    "request": {
+      "operation": "rule-update",
+      "args": {
+        "document": {
+          "ruleId": "rule-1",
+          "version": 1,
+          "source": {
+            "channel": "gmail",
+            "accountIds": ["account-1"],
+            "options": { "channel": "gmail", "labels": "inbox", "includeSpamTrash": false }
+          },
+          "event": { "type": "gmail.message.received", "version": 1 },
+          "condition": {},
+          "mapping": {},
+          "targets": [{ "targetId": "target-1", "version": 1, "kind": "dry-run", "retentionMs": 1 }],
+          "subscribers": [],
+          "judges": [],
+          "deliveryRateCap": 1,
+          "retention": {
+            "ingestMs": 1,
+            "holdMs": 1,
+            "deliveryMs": 1,
+            "dryrunMs": 1,
+            "sseReplayMs": 1,
+            "deadLetterMs": 1,
+            "decisionMetadataMs": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "rule-enable-request",
+    "request": { "operation": "rule-enable", "args": { "ruleId": "rule-1", "version": 1 } }
+  },
+  { "name": "rule-disable-request", "request": { "operation": "rule-disable", "args": { "ruleId": "rule-1" } } },
+  { "name": "rule-remove-request", "request": { "operation": "rule-remove", "args": { "ruleId": "rule-1" } } },
+  { "name": "targets-list-request", "request": { "operation": "targets-list", "args": {} } },
+  {
+    "name": "target-add-request",
+    "request": {
+      "operation": "target-add",
+      "args": { "document": { "targetId": "target-1", "version": 1, "kind": "dry-run", "retentionMs": 1 } }
+    }
+  },
+  {
+    "name": "target-update-request",
+    "request": {
+      "operation": "target-update",
+      "args": { "document": { "targetId": "target-1", "version": 1, "kind": "dry-run", "retentionMs": 1 } }
+    }
+  },
+  { "name": "target-remove-request", "request": { "operation": "target-remove", "args": { "targetId": "target-1" } } },
+  {
+    "name": "approve-request",
+    "request": { "operation": "approve", "args": { "approvalId": "approval-1", "answer": "challenge-1" } }
+  },
+  { "name": "dryrun-list-request", "request": { "operation": "dryrun-list", "args": {} } },
+  { "name": "dryrun-show-request", "request": { "operation": "dryrun-show", "args": { "deliveryId": "delivery-1" } } }
+]

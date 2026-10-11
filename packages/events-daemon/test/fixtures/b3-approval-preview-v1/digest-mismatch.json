@@ -1,0 +1,4 @@
+{
+  "result": { "kind": "DIGEST_MISMATCH" },
+  "expected": { "kind": "DIGEST_MISMATCH", "structured": {}, "terminal": "Approval view: DIGEST_MISMATCH" }
+}

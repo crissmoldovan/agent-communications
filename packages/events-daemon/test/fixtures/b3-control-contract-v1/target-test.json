@@ -1,0 +1,4 @@
+{
+  "name": "target-test-active-request",
+  "request": { "operation": "targetTest", "args": { "targetId": "target-1", "targetVersion": 1 } }
+}

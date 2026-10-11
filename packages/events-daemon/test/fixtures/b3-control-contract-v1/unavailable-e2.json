@@ -1,0 +1,12 @@
+{
+  "name": "judge-e2-unavailable",
+  "request": {
+    "operation": "judgeModelStatus",
+    "args": {}
+  },
+  "result": {
+    "kind": "unavailable",
+    "code": "E2_REQUIRED",
+    "phase": "E2"
+  }
+}

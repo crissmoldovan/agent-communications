@@ -1,0 +1,1580 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentcomms.local/b3-control-v1.schema.json",
+  "title": "B3 control contract v1",
+  "description": "Language-neutral data-only contract for every desktop-callable B3 control operation. Secret values never appear here.",
+  "$defs": {
+    "id": { "type": "string", "minLength": 1 },
+    "positive": { "type": "integer", "minimum": 1 },
+    "emptyArgs": { "type": "object", "additionalProperties": false, "maxProperties": 0 },
+    "json": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/$defs/json" } },
+        { "type": "object", "additionalProperties": { "$ref": "#/$defs/json" } }
+      ]
+    },
+    "sourceOptions": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel", "labels", "includeSpamTrash"],
+          "properties": {
+            "channel": { "const": "gmail" },
+            "labels": {
+              "oneOf": [
+                { "enum": ["inbox", "any"] },
+                { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } }
+              ]
+            },
+            "includeSpamTrash": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel", "conversations"],
+          "properties": {
+            "channel": { "const": "slack" },
+            "conversations": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel", "kinds"],
+          "properties": {
+            "channel": { "const": "resend" },
+            "kinds": { "type": "array", "minItems": 1, "items": { "enum": ["received", "status"] } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel", "chats"],
+          "properties": {
+            "channel": { "const": "whatsapp" },
+            "chats": {
+              "oneOf": [
+                { "const": "all-allowed" },
+                { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "targetDocument": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["targetId", "version", "kind", "retentionMs"],
+          "properties": {
+            "targetId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "dry-run" },
+            "retentionMs": { "type": "integer", "minimum": 1, "maximum": 86400000 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["targetId", "version", "kind", "subscriberId", "subscriberVersion", "representation"],
+          "properties": {
+            "targetId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "sse" },
+            "subscriberId": { "$ref": "#/$defs/id" },
+            "subscriberVersion": { "$ref": "#/$defs/positive" },
+            "representation": { "enum": ["plain", "enveloped"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "targetId",
+            "version",
+            "kind",
+            "url",
+            "approvedAddressSet",
+            "signing",
+            "ordering",
+            "retryLimit",
+            "representation"
+          ],
+          "properties": {
+            "targetId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "webhook" },
+            "url": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "value"],
+                  "properties": { "kind": { "const": "plain" }, "value": { "$ref": "#/$defs/id" } }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "scheme", "host", "port", "sha256"],
+                  "properties": {
+                    "kind": { "const": "secret" },
+                    "scheme": { "enum": ["http", "https"] },
+                    "host": { "$ref": "#/$defs/id" },
+                    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+                  }
+                }
+              ]
+            },
+            "approvedAddressSet": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+            "signing": { "const": "standard-webhooks" },
+            "ordering": { "const": "strict" },
+            "retryLimit": { "type": "integer", "minimum": 1, "maximum": 20 },
+            "representation": { "enum": ["plain", "enveloped"] }
+          }
+        }
+      ]
+    },
+    "subscriberDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subscriberId", "version", "kind", "authority", "origins", "retentionMs"],
+      "properties": {
+        "subscriberId": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/positive" },
+        "kind": { "const": "sse" },
+        "authority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["host", "port"],
+          "properties": {
+            "host": { "enum": ["127.0.0.1", "::1"] },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        },
+        "origins": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+        "retentionMs": { "type": "integer", "minimum": 1, "maximum": 604800000 }
+      }
+    },
+    "judgeDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["judgeId", "version", "kind", "provider", "model"],
+      "properties": {
+        "judgeId": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/positive" },
+        "kind": { "enum": ["typesafe", "laya", "local-endpoint"] },
+        "provider": { "$ref": "#/$defs/id" },
+        "model": { "$ref": "#/$defs/id" }
+      }
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ingestMs", "holdMs", "deliveryMs", "dryrunMs", "sseReplayMs", "deadLetterMs", "decisionMetadataMs"],
+      "properties": {
+        "ingestMs": { "$ref": "#/$defs/positive" },
+        "holdMs": { "$ref": "#/$defs/positive" },
+        "deliveryMs": { "$ref": "#/$defs/positive" },
+        "dryrunMs": { "type": "integer", "minimum": 1, "maximum": 86400000 },
+        "sseReplayMs": { "$ref": "#/$defs/positive" },
+        "deadLetterMs": { "$ref": "#/$defs/positive" },
+        "decisionMetadataMs": { "$ref": "#/$defs/positive" }
+      }
+    },
+    "ruleDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ruleId",
+        "version",
+        "source",
+        "event",
+        "condition",
+        "mapping",
+        "targets",
+        "subscribers",
+        "judges",
+        "deliveryRateCap",
+        "retention"
+      ],
+      "properties": {
+        "ruleId": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/positive" },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel", "accountIds", "options"],
+          "properties": {
+            "channel": { "enum": ["gmail", "slack", "resend", "whatsapp"] },
+            "accountIds": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+            "options": { "$ref": "#/$defs/sourceOptions" }
+          }
+        },
+        "event": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "version"],
+          "properties": { "type": { "$ref": "#/$defs/id" }, "version": { "$ref": "#/$defs/positive" } }
+        },
+        "condition": { "$ref": "#/$defs/json" },
+        "mapping": { "$ref": "#/$defs/json" },
+        "cloudEventType": { "$ref": "#/$defs/id" },
+        "targets": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/targetDocument" } },
+        "subscribers": { "type": "array", "items": { "$ref": "#/$defs/subscriberDocument" } },
+        "judges": { "type": "array", "items": { "$ref": "#/$defs/judgeDocument" } },
+        "deliveryRateCap": { "$ref": "#/$defs/positive" },
+        "retention": { "$ref": "#/$defs/retention" }
+      }
+    },
+    "budgetDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["budgetId", "version"],
+      "properties": { "budgetId": { "$ref": "#/$defs/id" }, "version": { "$ref": "#/$defs/positive" } }
+    },
+    "activationDocument": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["documentVersion", "kind", "rule"],
+          "properties": {
+            "documentVersion": { "const": 1 },
+            "kind": { "const": "rule" },
+            "rule": { "$ref": "#/$defs/ruleDocument" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["documentVersion", "kind", "budget"],
+          "properties": {
+            "documentVersion": { "const": 1 },
+            "kind": { "const": "judge-budget" },
+            "budget": { "$ref": "#/$defs/budgetDocument" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["documentVersion", "kind", "enablement"],
+          "properties": {
+            "documentVersion": { "const": 1 },
+            "kind": { "const": "judge-kind" },
+            "enablement": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "version"],
+              "properties": {
+                "kind": { "enum": ["typesafe", "laya", "local-endpoint"] },
+                "version": { "$ref": "#/$defs/positive" }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["documentVersion", "kind", "switchGeneration", "ruleVersions"],
+          "properties": {
+            "documentVersion": { "const": 1 },
+            "kind": { "const": "enable-all" },
+            "switchGeneration": { "type": "integer", "minimum": 0 },
+            "ruleVersions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["ruleId", "ruleVersion"],
+                "properties": { "ruleId": { "$ref": "#/$defs/id" }, "ruleVersion": { "$ref": "#/$defs/positive" } }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "documentArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["document"],
+      "properties": {
+        "document": {
+          "oneOf": [
+            { "$ref": "#/$defs/ruleDocument" },
+            { "$ref": "#/$defs/targetDocument" },
+            { "$ref": "#/$defs/subscriberDocument" },
+            { "$ref": "#/$defs/judgeDocument" },
+            { "$ref": "#/$defs/budgetDocument" }
+          ]
+        }
+      }
+    },
+    "request": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": {
+              "enum": [
+                "status",
+                "stop",
+                "pause",
+                "resume",
+                "disable-all",
+                "enable-all",
+                "doctor",
+                "catalogue-list",
+                "sources-list",
+                "rules-list",
+                "targets-list",
+                "subscribersList",
+                "judgesList",
+                "budgetShow",
+                "judgeKindsList",
+                "judgeModelStatus",
+                "removeJudgeModel",
+                "deliveriesList",
+                "heldList",
+                "dryrun-list"
+              ]
+            },
+            "args": { "$ref": "#/$defs/emptyArgs" },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "catalogue-show" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type"],
+              "properties": { "type": { "$ref": "#/$defs/id" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "source-show" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["source"],
+              "properties": { "source": { "$ref": "#/$defs/id" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "enum": ["rule-show", "rule-disable", "rule-remove"] },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["ruleId"],
+              "properties": { "ruleId": { "$ref": "#/$defs/id" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": {
+              "enum": [
+                "rule-create",
+                "rule-update",
+                "target-add",
+                "target-update",
+                "addSubscriber",
+                "updateSubscriber",
+                "addJudge",
+                "updateJudge",
+                "updateBudget"
+              ]
+            },
+            "args": { "$ref": "#/$defs/documentArgs" },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "rule-enable" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["ruleId", "version"],
+              "properties": { "ruleId": { "$ref": "#/$defs/id" }, "version": { "$ref": "#/$defs/positive" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "target-remove" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["targetId"],
+              "properties": { "targetId": { "$ref": "#/$defs/id" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "approve" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["approvalId", "answer"],
+              "properties": { "approvalId": { "$ref": "#/$defs/id" }, "answer": { "$ref": "#/$defs/id" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "approvalView" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["approvalId", "digest"],
+              "properties": { "approvalId": { "$ref": "#/$defs/id" }, "digest": { "$ref": "#/$defs/id" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "ruleTest" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["document", "catalogue"],
+              "properties": {
+                "document": { "$ref": "#/$defs/ruleDocument" },
+                "catalogue": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["type", "version", "exampleIndex"],
+                  "properties": {
+                    "type": { "$ref": "#/$defs/id" },
+                    "version": { "$ref": "#/$defs/positive" },
+                    "exampleIndex": { "type": "integer", "minimum": 0 }
+                  }
+                }
+              }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "ruleTestRetained" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["eventId", "ruleId", "ruleVersion"],
+              "properties": {
+                "eventId": { "$ref": "#/$defs/id" },
+                "ruleId": { "$ref": "#/$defs/id" },
+                "ruleVersion": { "$ref": "#/$defs/positive" }
+              }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "enum": ["targetTest", "targetResume"] },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["targetId", "targetVersion"],
+              "properties": { "targetId": { "$ref": "#/$defs/id" }, "targetVersion": { "$ref": "#/$defs/positive" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "enum": ["targetSecretCreate", "targetSecretRotate"] },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["targetId", "version"],
+              "properties": { "targetId": { "$ref": "#/$defs/id" }, "version": { "$ref": "#/$defs/positive" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "removeSubscriber" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["subscriberId"],
+              "properties": { "subscriberId": { "$ref": "#/$defs/id" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "removeJudge" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["judgeId"],
+              "properties": { "judgeId": { "$ref": "#/$defs/id" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "judgeTest" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["judgeId", "version"],
+              "properties": { "judgeId": { "$ref": "#/$defs/id" }, "version": { "$ref": "#/$defs/positive" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "enum": ["enableJudgeKind", "disableJudgeKind"] },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": { "kind": { "$ref": "#/$defs/id" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "enum": ["retryDelivery", "dropDelivery", "dryrun-show"] },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["deliveryId"],
+              "properties": { "deliveryId": { "$ref": "#/$defs/id" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "decideHeld" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["decisionId", "decision"],
+              "properties": { "decisionId": { "$ref": "#/$defs/id" }, "decision": { "enum": ["accept", "reject"] } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "targetUrlSet" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["targetId", "newVersion"],
+              "properties": {
+                "targetId": { "$ref": "#/$defs/id" },
+                "predecessorVersion": { "$ref": "#/$defs/positive" },
+                "inertDraft": { "$ref": "#/$defs/targetDocument" },
+                "newVersion": { "$ref": "#/$defs/positive" }
+              }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "enum": ["subscriberTokenCreate", "subscriberTokenRotate"] },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["subscriberId", "version"],
+              "properties": { "subscriberId": { "$ref": "#/$defs/id" }, "version": { "$ref": "#/$defs/positive" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "enum": ["judgeKeySet", "judgeKeyRotate"] },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["judgeId", "version"],
+              "properties": { "judgeId": { "$ref": "#/$defs/id" }, "version": { "$ref": "#/$defs/positive" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "migrateSecrets" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["to"],
+              "properties": { "to": { "enum": ["file", "keychain"] } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        }
+      ]
+    },
+    "approvalFlowRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["surface", "operation", "selector"],
+      "properties": {
+        "surface": { "enum": ["terminal-approval", "app-approval-screen"] },
+        "operation": { "const": "targetTest" },
+        "selector": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "activationId",
+            "ruleId",
+            "ruleVersion",
+            "targetId",
+            "targetVersion",
+            "approvalId",
+            "digest",
+            "challenge"
+          ],
+          "properties": {
+            "kind": { "const": "pending-activation" },
+            "activationId": { "$ref": "#/$defs/id" },
+            "ruleId": { "$ref": "#/$defs/id" },
+            "ruleVersion": { "$ref": "#/$defs/positive" },
+            "targetId": { "$ref": "#/$defs/id" },
+            "targetVersion": { "$ref": "#/$defs/positive" },
+            "approvalId": { "$ref": "#/$defs/id" },
+            "digest": { "$ref": "#/$defs/id" },
+            "challenge": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "approvalReady": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "approvalId", "digest", "preview", "challenge"],
+      "properties": {
+        "kind": { "const": "READY" },
+        "approvalId": { "$ref": "#/$defs/id" },
+        "digest": { "$ref": "#/$defs/id" },
+        "preview": { "$ref": "#/$defs/activationDocument" },
+        "challenge": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["approvalId", "digest", "challenge", "expiresAt"],
+          "properties": {
+            "approvalId": { "$ref": "#/$defs/id" },
+            "digest": { "$ref": "#/$defs/id" },
+            "challenge": { "$ref": "#/$defs/id" },
+            "expiresAt": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "approvalResult": {
+      "oneOf": [
+        { "$ref": "#/$defs/approvalReady" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "STALE_APPROVAL" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "DIGEST_MISMATCH" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "CHALLENGE_EXPIRED" } }
+        }
+      ]
+    },
+    "judgeUnavailable": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "code", "phase"],
+          "properties": {
+            "kind": { "const": "unavailable" },
+            "code": { "const": "E_REQUIRED" },
+            "phase": { "const": "E" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "code", "phase"],
+          "properties": {
+            "kind": { "const": "unavailable" },
+            "code": { "const": "E2_REQUIRED" },
+            "phase": { "const": "E2" }
+          }
+        }
+      ]
+    },
+    "holdsUnavailable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "phase"],
+      "properties": {
+        "kind": { "const": "unavailable" },
+        "code": { "const": "HOLDS_UNAVAILABLE" },
+        "phase": { "const": "E" }
+      }
+    },
+    "secretCapabilityUnavailable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code"],
+      "properties": { "kind": { "const": "unavailable" }, "code": { "const": "APP_SECRET_CAPABILITY_UNAVAILABLE" } }
+    },
+    "heldList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "decisions"],
+      "properties": { "kind": { "const": "held-list" }, "decisions": { "type": "array", "maxItems": 0 } }
+    },
+    "doctor": { "$ref": "https://agentcomms.local/events-doctor-v1.schema.json" },
+    "activationIntentSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "failureCode", "count"],
+      "properties": {
+        "status": { "enum": ["pending", "pending-completion", "completed", "failed", "cancelled"] },
+        "failureCode": {
+          "anyOf": [
+            {
+              "enum": [
+                "ACCOUNT_REMOVED",
+                "APPROVAL_ABSENT",
+                "APPROVAL_BINDING_DRIFT",
+                "AUTHORIZATION_REVOKED",
+                "COMPLETION_TIMEOUT",
+                "STALE_GENERATION",
+                "STALE_POINTER"
+              ]
+            },
+            { "type": "null" }
+          ]
+        },
+        "count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "disclosureVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "version"],
+      "properties": {
+        "kind": { "enum": ["rule", "target", "subscriber", "judge", "judge-budget", "judge-kind"] },
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/positive" }
+      }
+    },
+    "disclosureBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "activationIntentId", "activationKind", "versions"],
+      "properties": {
+        "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "activationIntentId": { "$ref": "#/$defs/id" },
+        "activationKind": { "enum": ["rule", "judge-budget", "judge-kind", "enable-all"] },
+        "versions": { "type": "array", "items": { "$ref": "#/$defs/disclosureVersion" } }
+      }
+    },
+    "preparedActivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["intentId", "approvalId", "binding", "kind", "status"],
+      "properties": {
+        "intentId": { "$ref": "#/$defs/id" },
+        "approvalId": { "$ref": "#/$defs/id" },
+        "binding": { "$ref": "#/$defs/disclosureBinding" },
+        "kind": { "enum": ["rule", "judge-budget", "judge-kind", "enable-all"] },
+        "status": { "const": "pending" },
+        "replacementOfVersion": { "$ref": "#/$defs/id" }
+      }
+    },
+    "dryrunRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deliveryId",
+        "ruleId",
+        "ruleVersion",
+        "targetId",
+        "targetVersion",
+        "eventId",
+        "accountId",
+        "deliveredAt",
+        "expiresAt",
+        "record"
+      ],
+      "properties": {
+        "deliveryId": { "$ref": "#/$defs/id" },
+        "ruleId": { "$ref": "#/$defs/id" },
+        "ruleVersion": { "$ref": "#/$defs/positive" },
+        "targetId": { "$ref": "#/$defs/id" },
+        "targetVersion": { "$ref": "#/$defs/positive" },
+        "eventId": { "$ref": "#/$defs/id" },
+        "accountId": { "$ref": "#/$defs/id" },
+        "deliveredAt": { "type": "integer", "minimum": 0 },
+        "expiresAt": { "type": "integer", "minimum": 0 },
+        "record": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cloudEventBytes", "untrusted", "representation"],
+          "properties": {
+            "cloudEventBytes": { "$ref": "#/$defs/id" },
+            "untrusted": { "type": "array", "items": { "$ref": "#/$defs/id" } },
+            "representation": { "enum": ["plain", "enveloped"] }
+          }
+        }
+      }
+    },
+    "resultsByOperation": {
+      "$defs": {
+        "status": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["owner", "enabled", "paused", "switchGeneration", "activationIntents"],
+          "properties": {
+            "owner": { "enum": ["running", "not-running"] },
+            "enabled": { "type": "boolean" },
+            "paused": { "type": "boolean" },
+            "switchGeneration": { "type": "integer", "minimum": 0 },
+            "activationIntents": { "type": "array", "items": { "$ref": "#/$defs/activationIntentSummary" } }
+          }
+        },
+        "stop": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stopping"],
+          "properties": { "stopping": { "const": true } }
+        },
+        "pause": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "paused", "switchGeneration"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "paused": { "type": "boolean" },
+            "switchGeneration": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "resume": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "paused", "switchGeneration"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "paused": { "type": "boolean" },
+            "switchGeneration": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "disable-all": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "paused", "switchGeneration"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "paused": { "type": "boolean" },
+            "switchGeneration": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "enable-all": { "$ref": "#/$defs/preparedActivation" },
+        "catalogue-list": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "version"],
+            "properties": { "type": { "$ref": "#/$defs/id" }, "version": { "$ref": "#/$defs/positive" } }
+          }
+        },
+        "catalogue-show": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "version", "channel"],
+          "properties": {
+            "type": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "channel": { "$ref": "#/$defs/id" }
+          }
+        },
+        "sources-list": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "accounts"],
+            "properties": {
+              "source": { "$ref": "#/$defs/id" },
+              "accounts": { "type": "array", "items": { "$ref": "#/$defs/json" } }
+            }
+          }
+        },
+        "source-show": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "accounts"],
+          "properties": {
+            "source": { "$ref": "#/$defs/id" },
+            "accounts": { "type": "array", "items": { "$ref": "#/$defs/json" } }
+          }
+        },
+        "rules-list": { "type": "array", "items": { "$ref": "#/$defs/json" } },
+        "rule-show": { "type": "array", "items": { "$ref": "#/$defs/json" } },
+        "rule-create": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "objectId", "version", "document", "digest", "state"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "kind": { "const": "rule" },
+            "objectId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "document": { "$ref": "#/$defs/ruleDocument" },
+            "digest": { "$ref": "#/$defs/id" },
+            "state": { "type": "null" }
+          }
+        },
+        "rule-update": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "objectId", "version", "document", "digest", "state"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "kind": { "const": "rule" },
+            "objectId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "document": { "$ref": "#/$defs/ruleDocument" },
+            "digest": { "$ref": "#/$defs/id" },
+            "state": { "type": "null" }
+          }
+        },
+        "rule-enable": { "$ref": "#/$defs/preparedActivation" },
+        "rule-disable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ruleId", "disabled"],
+          "properties": { "ruleId": { "$ref": "#/$defs/id" }, "disabled": { "const": true } }
+        },
+        "rule-remove": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ruleId", "disabled"],
+          "properties": { "ruleId": { "$ref": "#/$defs/id" }, "disabled": { "const": true } }
+        },
+        "targets-list": { "type": "array", "items": { "$ref": "#/$defs/json" } },
+        "target-add": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "objectId", "version", "document", "digest", "state"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "kind": { "const": "target" },
+            "objectId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "document": { "$ref": "#/$defs/targetDocument" },
+            "digest": { "$ref": "#/$defs/id" },
+            "state": { "type": "null" }
+          }
+        },
+        "target-update": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "objectId", "version", "document", "digest", "state"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "kind": { "const": "target" },
+            "objectId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "document": { "$ref": "#/$defs/targetDocument" },
+            "digest": { "$ref": "#/$defs/id" },
+            "state": { "type": "null" }
+          }
+        },
+        "target-remove": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["targetId", "removed"],
+          "properties": { "targetId": { "$ref": "#/$defs/id" }, "removed": { "const": true } }
+        },
+        "approve": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["intentId", "status", "usedAt"],
+          "properties": {
+            "intentId": { "$ref": "#/$defs/id" },
+            "status": { "const": "completed" },
+            "usedAt": { "$ref": "#/$defs/id" }
+          }
+        },
+        "approvalView": { "$ref": "#/$defs/approvalResult" },
+        "ruleTest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agentic", "outcome", "rendered"],
+          "properties": {
+            "agentic": { "const": "not-evaluated" },
+            "outcome": { "enum": ["matched", "condition-false", "mapping-rejected"] },
+            "rendered": { "$ref": "#/$defs/id" }
+          }
+        },
+        "ruleTestRetained": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agentic", "outcome", "rendered"],
+          "properties": {
+            "agentic": { "const": "not-evaluated" },
+            "outcome": { "enum": ["matched", "condition-false", "mapping-rejected"] },
+            "rendered": { "$ref": "#/$defs/id" }
+          }
+        },
+        "targetTest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["attempts", "targetId", "targetVersion"],
+          "properties": {
+            "attempts": { "$ref": "#/$defs/positive" },
+            "targetId": { "$ref": "#/$defs/id" },
+            "targetVersion": { "$ref": "#/$defs/positive" }
+          }
+        },
+        "targetResume": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "resetEpoch"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "resetEpoch": { "$ref": "#/$defs/positive" }
+          }
+        },
+        "subscribersList": { "type": "array", "items": { "$ref": "#/$defs/json" } },
+        "addSubscriber": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "objectId", "version", "document", "digest", "state"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "kind": { "const": "subscriber" },
+            "objectId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "document": { "$ref": "#/$defs/subscriberDocument" },
+            "digest": { "$ref": "#/$defs/id" },
+            "state": { "type": "null" }
+          }
+        },
+        "updateSubscriber": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "objectId", "version", "document", "digest", "state"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "kind": { "const": "subscriber" },
+            "objectId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "document": { "$ref": "#/$defs/subscriberDocument" },
+            "digest": { "$ref": "#/$defs/id" },
+            "state": { "type": "null" }
+          }
+        },
+        "removeSubscriber": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["subscriberId", "removed"],
+          "properties": { "subscriberId": { "$ref": "#/$defs/id" }, "removed": { "const": true } }
+        },
+        "judgesList": { "$ref": "#/$defs/judgeUnavailable" },
+        "addJudge": { "$ref": "#/$defs/judgeUnavailable" },
+        "updateJudge": { "$ref": "#/$defs/judgeUnavailable" },
+        "removeJudge": { "$ref": "#/$defs/judgeUnavailable" },
+        "judgeTest": { "$ref": "#/$defs/judgeUnavailable" },
+        "budgetShow": { "$ref": "#/$defs/judgeUnavailable" },
+        "updateBudget": { "$ref": "#/$defs/judgeUnavailable" },
+        "judgeKindsList": { "$ref": "#/$defs/judgeUnavailable" },
+        "enableJudgeKind": { "$ref": "#/$defs/judgeUnavailable" },
+        "disableJudgeKind": { "$ref": "#/$defs/judgeUnavailable" },
+        "judgeModelStatus": { "$ref": "#/$defs/judgeUnavailable" },
+        "removeJudgeModel": { "$ref": "#/$defs/judgeUnavailable" },
+        "deliveriesList": { "type": "array", "items": { "$ref": "#/$defs/json" } },
+        "retryDelivery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "deliveryId", "nextAt"],
+          "properties": {
+            "kind": { "const": "delivery-retried" },
+            "deliveryId": { "$ref": "#/$defs/id" },
+            "nextAt": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "dropDelivery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "deliveryId"],
+          "properties": { "kind": { "const": "delivery-dropped" }, "deliveryId": { "$ref": "#/$defs/id" } }
+        },
+        "heldList": { "$ref": "#/$defs/heldList" },
+        "decideHeld": { "$ref": "#/$defs/holdsUnavailable" },
+        "targetSecretCreate": { "$ref": "#/$defs/secretCapabilityUnavailable" },
+        "targetSecretRotate": { "$ref": "#/$defs/secretCapabilityUnavailable" },
+        "targetUrlSet": { "$ref": "#/$defs/secretCapabilityUnavailable" },
+        "subscriberTokenCreate": { "$ref": "#/$defs/secretCapabilityUnavailable" },
+        "subscriberTokenRotate": { "$ref": "#/$defs/secretCapabilityUnavailable" },
+        "judgeKeySet": { "$ref": "#/$defs/secretCapabilityUnavailable" },
+        "judgeKeyRotate": { "$ref": "#/$defs/secretCapabilityUnavailable" },
+        "migrateSecrets": { "$ref": "#/$defs/secretCapabilityUnavailable" },
+        "dryrun-list": { "type": "array", "items": { "$ref": "#/$defs/json" } },
+        "dryrun-show": { "$ref": "#/$defs/dryrunRecord" },
+        "doctor": { "$ref": "#/$defs/doctor" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code"],
+      "properties": { "code": { "enum": ["USAGE", "BAD_DATA", "APPROVAL_VOID", "NOT_FOUND", "CONFIG"] } }
+    },
+    "requestVector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "request"],
+      "not": { "anyOf": [{ "required": ["result"] }, { "required": ["error"] }] },
+      "properties": {
+        "name": { "$ref": "#/$defs/id" },
+        "request": { "$ref": "#/$defs/request" }
+      }
+    },
+    "errorVector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "request", "error"],
+      "not": { "required": ["result"] },
+      "properties": {
+        "name": { "$ref": "#/$defs/id" },
+        "request": { "$ref": "#/$defs/request" },
+        "error": { "$ref": "#/$defs/error" }
+      }
+    },
+    "approvalFlowVector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "request"],
+      "properties": {
+        "name": { "$ref": "#/$defs/id" },
+        "request": { "$ref": "#/$defs/approvalFlowRequest" }
+      }
+    },
+    "resultVector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "request", "result"],
+      "not": { "required": ["error"] },
+      "properties": {
+        "name": { "$ref": "#/$defs/id" },
+        "request": { "$ref": "#/$defs/request" },
+        "result": true
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "request": {
+              "properties": {
+                "operation": {
+                  "enum": [
+                    "status",
+                    "stop",
+                    "pause",
+                    "resume",
+                    "disable-all",
+                    "enable-all",
+                    "catalogue-list",
+                    "catalogue-show",
+                    "sources-list",
+                    "source-show",
+                    "rules-list",
+                    "rule-show",
+                    "rule-create",
+                    "rule-update",
+                    "rule-enable",
+                    "rule-disable",
+                    "rule-remove",
+                    "targets-list",
+                    "target-add",
+                    "target-update",
+                    "target-remove",
+                    "approve",
+                    "ruleTest",
+                    "ruleTestRetained",
+                    "targetTest",
+                    "targetResume",
+                    "subscribersList",
+                    "addSubscriber",
+                    "updateSubscriber",
+                    "removeSubscriber",
+                    "deliveriesList",
+                    "retryDelivery",
+                    "dropDelivery",
+                    "dryrun-list",
+                    "dryrun-show"
+                  ]
+                }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "status" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/status" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "stop" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/stop" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "pause" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/pause" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "resume" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/resume" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "disable-all" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/disable-all" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "enable-all" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/enable-all" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "catalogue-list" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/catalogue-list" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "catalogue-show" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/catalogue-show" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "sources-list" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/sources-list" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "source-show" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/source-show" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "rules-list" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/rules-list" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "rule-show" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/rule-show" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "rule-create" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/rule-create" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "rule-update" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/rule-update" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "rule-enable" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/rule-enable" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "rule-disable" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/rule-disable" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "rule-remove" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/rule-remove" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "targets-list" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/targets-list" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "target-add" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/target-add" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "target-update" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/target-update" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "target-remove" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/target-remove" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "approve" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/approve" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "ruleTest" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/ruleTest" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "ruleTestRetained" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/ruleTestRetained" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "targetTest" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/targetTest" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "targetResume" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/targetResume" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "subscribersList" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/subscribersList" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "addSubscriber" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/addSubscriber" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "updateSubscriber" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/updateSubscriber" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "removeSubscriber" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/removeSubscriber" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "deliveriesList" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/deliveriesList" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "retryDelivery" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/retryDelivery" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "dropDelivery" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/dropDelivery" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "dryrun-list" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/dryrun-list" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "dryrun-show" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/dryrun-show" } } }
+            }
+          ]
+        },
+        {
+          "properties": {
+            "request": { "properties": { "operation": { "const": "approvalView" } } },
+            "result": { "$ref": "#/$defs/approvalResult" }
+          }
+        },
+        {
+          "properties": {
+            "request": { "properties": { "operation": { "const": "doctor" } } },
+            "result": { "$ref": "#/$defs/doctor" }
+          }
+        },
+        {
+          "properties": {
+            "request": {
+              "properties": {
+                "operation": {
+                  "enum": [
+                    "judgesList",
+                    "addJudge",
+                    "updateJudge",
+                    "removeJudge",
+                    "judgeTest",
+                    "budgetShow",
+                    "updateBudget",
+                    "judgeKindsList"
+                  ]
+                }
+              }
+            },
+            "result": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "code", "phase"],
+              "properties": {
+                "kind": { "const": "unavailable" },
+                "code": { "const": "E_REQUIRED" },
+                "phase": { "const": "E" }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "request": { "properties": { "operation": { "enum": ["enableJudgeKind", "disableJudgeKind"] } } },
+            "result": { "$ref": "#/$defs/judgeUnavailable" }
+          }
+        },
+        {
+          "properties": {
+            "request": { "properties": { "operation": { "enum": ["judgeModelStatus", "removeJudgeModel"] } } },
+            "result": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "code", "phase"],
+              "properties": {
+                "kind": { "const": "unavailable" },
+                "code": { "const": "E2_REQUIRED" },
+                "phase": { "const": "E2" }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "request": { "properties": { "operation": { "const": "heldList" } } },
+            "result": { "$ref": "#/$defs/heldList" }
+          }
+        },
+        {
+          "properties": {
+            "request": { "properties": { "operation": { "const": "decideHeld" } } },
+            "result": { "$ref": "#/$defs/holdsUnavailable" }
+          }
+        },
+        {
+          "properties": {
+            "request": {
+              "properties": {
+                "operation": {
+                  "enum": [
+                    "targetSecretCreate",
+                    "targetSecretRotate",
+                    "targetUrlSet",
+                    "subscriberTokenCreate",
+                    "subscriberTokenRotate",
+                    "judgeKeySet",
+                    "judgeKeyRotate",
+                    "migrateSecrets"
+                  ]
+                }
+              }
+            },
+            "result": { "$ref": "#/$defs/secretCapabilityUnavailable" }
+          }
+        }
+      ]
+    },
+    "vector": {
+      "oneOf": [
+        { "$ref": "#/$defs/requestVector" },
+        { "$ref": "#/$defs/errorVector" },
+        { "$ref": "#/$defs/approvalFlowVector" },
+        { "$ref": "#/$defs/resultVector" }
+      ]
+    }
+  }
+}

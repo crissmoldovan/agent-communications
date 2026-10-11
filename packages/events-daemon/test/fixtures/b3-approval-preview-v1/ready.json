@@ -1,0 +1,19 @@
+{
+  "result": {
+    "kind": "READY",
+    "approvalId": "approval-1",
+    "digest": "digest-1",
+    "preview": { "documentVersion": 1, "kind": "enable-all", "switchGeneration": 1, "ruleVersions": [] },
+    "challenge": { "approvalId": "approval-1", "digest": "digest-1", "challenge": "challenge-1", "expiresAt": 301000 }
+  },
+  "expected": {
+    "kind": "READY",
+    "structured": {
+      "approvalId": "approval-1",
+      "digest": "digest-1",
+      "preview": { "documentVersion": 1, "kind": "enable-all", "switchGeneration": 1, "ruleVersions": [] },
+      "challenge": { "approvalId": "approval-1", "digest": "digest-1", "challenge": "challenge-1", "expiresAt": 301000 }
+    },
+    "terminal": "Approval approval-1\nDigest digest-1\nPreview {\"documentVersion\":1,\"kind\":\"enable-all\",\"ruleVersions\":[],\"switchGeneration\":1}\nChallenge challenge-1\nExpires 1970-01-01T00:05:01.000Z"
+  }
+}
