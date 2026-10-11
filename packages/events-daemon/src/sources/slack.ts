@@ -1,4 +1,4 @@
-import { CommsError } from '@agentcomms/core';
+import { CommsError, neutralise } from '@agentcomms/core';
 import { normaliseSlackSourceOptions } from '../domain/source-options.ts';
 import type { CutoverFailpoint } from '../runtime/cutover-failpoint.ts';
 import type { AsyncSourceStageExpiry, PreparedSourceStageTerminalisation } from '../runtime/expiry.ts';
@@ -20,6 +20,7 @@ export interface SlackSourceMessage {
   readonly ts: string;
   readonly threadTs: string | null;
   readonly replyCount: number;
+  /** Sanitised source prose for the catalogue, never the interactive read envelope. */
   readonly text: string;
   readonly [field: string]: unknown;
 }
@@ -28,6 +29,15 @@ export interface SlackSourcePage {
   readonly messages: readonly SlackSourceMessage[];
   readonly nextCursor: string | null;
   readonly retainedHistoryBoundary: boolean;
+}
+
+/**
+ * D-7: whatever a reader handed over, a Slack message's prose is neutralised before it becomes a durable stage. The
+ * channel reader has already sanitised it, and core's neutraliser is idempotent, so a reader's text is unchanged; a
+ * bare provider body loses its control tokens, role markers and envelope-tag mimics here instead of being staged.
+ */
+export function neutraliseSlackSourceMessage(message: SlackSourceMessage): SlackSourceMessage {
+  return { ...message, text: neutralise(message.text).text };
 }
 
 export interface SlackHistoryReader {
@@ -366,11 +376,6 @@ export class SlackHistoryStageExpiry implements AsyncSourceStageExpiry {
   }
 }
 
-function assertTaintedMessage(message: SlackSourceMessage): void {
-  if (!/^<untrusted-content\b[^>]*>[\s\S]*<\/untrusted-content(?:\s[^>]*)?>$/u.test(message.text))
-    throw new CommsError('BAD_DATA', 'a Slack event message arrived without its untrusted-content envelope');
-}
-
 /**
  * Resumes one conversation's fixed `[oldest, latest]` history interval. The channel package supplies only
  * normalised pages; this daemon-owned state machine owns stage retention, persistence, and the watermark.
@@ -630,7 +635,6 @@ export class SlackHistorySource {
     snapshot: SlackWriteSnapshot,
     rules: readonly SlackHistoryRule[],
   ): Promise<StoredStage> {
-    for (const message of page.messages) assertTaintedMessage(message);
     const id = pageId(scope.accountId, conversationId, scan.state, page.nextCursor);
     const current = await this.#loadStage(scope, conversationId, scan);
     if (current !== null) return current;
@@ -639,7 +643,7 @@ export class SlackHistorySource {
       scanGeneration: scan.state.generation,
       cursorBefore: scan.state.cursor,
       nextCursor: page.nextCursor,
-      page,
+      page: { ...page, messages: page.messages.map(neutraliseSlackSourceMessage) },
       completed: [],
     };
     const record = await this.#encryptStage(value, id);
