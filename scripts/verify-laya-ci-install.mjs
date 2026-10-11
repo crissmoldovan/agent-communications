@@ -36,6 +36,18 @@ export async function assertNoRuntimeClosure(store) {
   }
 }
 
+/**
+ * pnpm 11 reinstalls before a script when it judges node_modules stale, and that install is unfiltered: it would bring
+ * the runtime closure into an ordinary checkout. The workspace must tell pnpm to stop instead.
+ */
+export async function assertNoAutomaticInstall(root = repositoryRoot) {
+  const workspace = await readFile(join(root, 'pnpm-workspace.yaml'), 'utf8');
+  if (!/^verifyDepsBeforeRun: error$/mu.test(workspace))
+    throw new Error(
+      'pnpm-workspace.yaml must set verifyDepsBeforeRun: error, or pnpm reinstalls unfiltered before scripts',
+    );
+}
+
 function run(command, args, cwd) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, stdio: 'inherit' });
@@ -45,6 +57,20 @@ function run(command, args, cwd) {
 }
 
 export async function selfTest() {
+  await assertNoAutomaticInstall();
+  const unguarded = await mkdtemp(join(tmpdir(), 'agentcomms-laya-workspace-self-test-'));
+  try {
+    const workspace = await readFile(join(repositoryRoot, 'pnpm-workspace.yaml'), 'utf8');
+    await writeFile(join(unguarded, 'pnpm-workspace.yaml'), workspace.replace(/^verifyDepsBeforeRun: error\n/mu, ''));
+    await assertNoAutomaticInstall(unguarded).then(
+      () => {
+        throw new Error('the workspace guard accepted a workspace that lets pnpm reinstall unfiltered');
+      },
+      () => undefined,
+    );
+  } finally {
+    await rm(unguarded, { recursive: true, force: true });
+  }
   const store = await mkdtemp(join(tmpdir(), 'agentcomms-laya-cold-store-self-test-'));
   try {
     if (NORMAL_INSTALL_ARGS.join(' ') !== `install --frozen-lockfile --filter !${runtimeName}`) {

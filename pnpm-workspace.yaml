@@ -13,3 +13,6 @@ catalog:
 # with install scripts unless it is listed here.
 minimumReleaseAge: 1440
 allowBuilds: {}
+# Before a script, pnpm 11 reinstalls whatever it thinks is stale — unfiltered, which would pull in the Laya runtime
+# closure the normal install leaves out. Stop instead: the person runs the filtered install CONTRIBUTING gives.
+verifyDepsBeforeRun: error
