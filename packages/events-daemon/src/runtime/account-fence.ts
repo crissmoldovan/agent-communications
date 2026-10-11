@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { CommsError, type ConfigStore } from '@agentcomms/core';
+import { ACTIVATION_FAILURE } from '../domain/activation-failure-codes.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
 import type { SourceScope } from '../sources/contracts.ts';
 import { purgeRevokedRuleWork } from './replacements.ts';
@@ -97,10 +98,10 @@ export function purgeRemovedAccountWork(
   database
     .prepare(
       `UPDATE activation_intents
-       SET status = 'cancelled', failure_code = 'ACCOUNT_REMOVED', updated_at = ?
+       SET status = 'cancelled', failure_code = ?, updated_at = ?
        WHERE id IN (${plannedIntentIds})`,
     )
-    .run(now, accountId, source);
+    .run(ACTIVATION_FAILURE.ACCOUNT_REMOVED, now, accountId, source);
   if (source === 'whatsapp') {
     // stream_log carries the optional WhatsApp occurrence foreign key, so retained frames must go before their parent
     // occurrence ledger when a re-check observes account removal under the list lock.

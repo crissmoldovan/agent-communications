@@ -9,6 +9,8 @@ import {
   B3_EXCEPTION_REASON_SECRET,
   B3_JUDGE_UNAVAILABLE_VARIANTS,
 } from '../src/operations/b3-contract.ts';
+import type { DoctorReportV1 } from '../src/operations/doctor.ts';
+import { DOCTOR_REPORT_V1_SCHEMA_VERSION } from '../src/runtime/b3-doctor-projection.ts';
 
 const ROOT = join(import.meta.dirname, '../../..');
 
@@ -90,4 +92,22 @@ test('B3 contract exports data-only approval and E/E2 result grammars for deskto
   assert.deepEqual(B3_CONTROL_CONTRACT.capabilities, B3_CAPABILITIES);
   assert.deepEqual(B3_CONTROL_CONTRACT.approvalView, B3_APPROVAL_VIEW_VARIANTS);
   assert.deepEqual(B3_CONTROL_CONTRACT.judgeUnavailable, B3_JUDGE_UNAVAILABLE_VARIANTS);
+});
+
+test('B3 doctor contract pins the versioned, closed result grammar', () => {
+  const version: DoctorReportV1['schemaVersion'] = DOCTOR_REPORT_V1_SCHEMA_VERSION;
+  assert.equal(version, 'doctor-v1');
+});
+
+test('B3 doctor schema closes every object level', async () => {
+  const schema = JSON.parse(
+    await readFile(join(import.meta.dirname, '../src/operations/contracts/doctor-v1.schema.json'), 'utf8'),
+  ) as unknown;
+  const visit = (value: unknown, path: string): void => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return;
+    const record = value as Readonly<Record<string, unknown>>;
+    if (record.type === 'object') assert.equal(record.additionalProperties, false, `${path} is closed`);
+    for (const [key, child] of Object.entries(record)) visit(child, `${path}.${key}`);
+  };
+  visit(schema, '$');
 });

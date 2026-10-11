@@ -61,7 +61,7 @@ export interface DisclosureSnapshot {
   readonly switchGeneration: number;
 }
 
-interface RuleRow {
+export interface RuleLineageRow {
   readonly id: string;
   readonly rule_id: string;
   readonly version: number;
@@ -187,12 +187,12 @@ function verifyRuleVersions(database: DatabaseSync, rule: CanonicalFullRuleDocum
     storedDocument(database, 'judge_versions', 'judge_id', judge.judgeId, judge.version, judge, true);
 }
 
-function versionRow(database: DatabaseSync, ruleId: string, version: number): RuleRow {
+function versionRow(database: DatabaseSync, ruleId: string, version: number): RuleLineageRow {
   const row = database
     .prepare(
       `SELECT id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, revoked_at FROM rule_versions WHERE rule_id = ? AND version = ?`,
     )
-    .get(ruleId, version) as RuleRow | undefined;
+    .get(ruleId, version) as RuleLineageRow | undefined;
   if (!row || row.revoked_at !== null || row.state === 'revoked')
     return refuse('RULE_REVOKED', 'the exact rule version is no longer authorised');
   if (!['active', 'superseded'].includes(row.state ?? ''))
@@ -200,7 +200,7 @@ function versionRow(database: DatabaseSync, ruleId: string, version: number): Ru
   return row;
 }
 
-function ruleDocument(row: RuleRow): CanonicalFullRuleDocument {
+function ruleDocument(row: RuleLineageRow): CanonicalFullRuleDocument {
   let rule: CanonicalFullRuleDocument;
   try {
     const document = normaliseActivationDocument({ documentVersion: 1, kind: 'rule', rule: JSON.parse(row.document) });
@@ -215,7 +215,7 @@ function ruleDocument(row: RuleRow): CanonicalFullRuleDocument {
   return rule;
 }
 
-function completedIntent(database: DatabaseSync, row: RuleRow): IntentRow | null {
+function completedIntent(database: DatabaseSync, row: RuleLineageRow): IntentRow | null {
   if (!row.authorization_activation_id || !row.approval_id) return null;
   const activation = database
     .prepare(
@@ -313,71 +313,160 @@ export function isWhitelistedTightening(
   }
 }
 
+export type LineageFailureCode =
+  | 'ACTIVATION_DOCUMENT_INVALID'
+  | 'ACTIVATION_DIGEST_DRIFT'
+  | 'ACTIVATION_LINEAGE_MISMATCH'
+  | 'ACTIVATION_LINEAGE_MISSING'
+  | 'BOUND_OBJECT_REVOKED'
+  | 'DERIVATION_CYCLE'
+  | 'DERIVATION_EDGE_INVALID'
+  | 'DERIVATION_NOT_TIGHTENING'
+  | 'DERIVATION_PARENT_INVALID'
+  | 'DERIVATION_ROOT_INVALID'
+  | 'DISCLOSURE_BINDING_DRIFT'
+  | 'DISCLOSURE_NOT_USED'
+  | 'IMMUTABLE_VERSION_DRIFT'
+  | 'RULE_LINEAGE_MISSING';
+
+export type ValidatedDerivationEdge = Readonly<{
+  versionId: string;
+  parentApprovalId: string;
+  parentVersionId: string;
+  editKind: 'remove-target' | 'remove-output-field' | 'lower-rate-cap' | 'shorten-retention' | 'narrow-source-options';
+}>;
+
+export type RuleLineageValidation =
+  | Readonly<{
+      valid: true;
+      root: IntentRow;
+      approvalId: string;
+      usedAt: string;
+      rule: CanonicalFullRuleDocument;
+      derivation: readonly ValidatedDerivationEdge[];
+    }>
+  | Readonly<{ valid: false; code: LineageFailureCode; message: string }>;
+
+const LINEAGE_FAILURE_CODES = new Set<LineageFailureCode>([
+  'ACTIVATION_DOCUMENT_INVALID',
+  'ACTIVATION_DIGEST_DRIFT',
+  'ACTIVATION_LINEAGE_MISMATCH',
+  'ACTIVATION_LINEAGE_MISSING',
+  'BOUND_OBJECT_REVOKED',
+  'DERIVATION_CYCLE',
+  'DERIVATION_EDGE_INVALID',
+  'DERIVATION_NOT_TIGHTENING',
+  'DERIVATION_PARENT_INVALID',
+  'DERIVATION_ROOT_INVALID',
+  'DISCLOSURE_BINDING_DRIFT',
+  'DISCLOSURE_NOT_USED',
+  'IMMUTABLE_VERSION_DRIFT',
+  'RULE_LINEAGE_MISSING',
+]);
+
+function lineageFailure(error: unknown): RuleLineageValidation | null {
+  if (!(error instanceof CommsError)) return null;
+  const reason = error.details?.reason;
+  if (typeof reason !== 'string' || !LINEAGE_FAILURE_CODES.has(reason as LineageFailureCode)) return null;
+  return { valid: false, code: reason as LineageFailureCode, message: error.message };
+}
+
+/**
+ * The one complete D2 derivation walk. The live disclosure fence refuses its failures unchanged; doctor renders only
+ * this content-free status and its stable failure code. No caller may treat a missing edge as an implicit root.
+ */
+export async function validateRuleLineage(
+  database: DatabaseSync,
+  approvals: Pick<ApprovalStore, 'get'>,
+  initial: RuleLineageRow,
+): Promise<RuleLineageValidation> {
+  try {
+    const rule = ruleDocument(initial);
+    verifyRuleVersions(database, rule);
+    const direct = completedIntent(database, initial);
+    if (direct) {
+      const used = await usedBinding(approvals, direct);
+      if (used.document.kind !== 'rule' || !sameJson(used.document.rule, rule))
+        return refuse('ACTIVATION_LINEAGE_MISMATCH', 'the activation does not name this exact rule version');
+      return { valid: true, root: direct, approvalId: used.approvalId, usedAt: used.usedAt, rule, derivation: [] };
+    }
+    if (!initial.approval_id || !initial.authorization_activation_id)
+      return refuse('RULE_LINEAGE_MISSING', 'the rule version has no immutable disclosure lineage');
+    const visited = new Set<string>();
+    const derivation: ValidatedDerivationEdge[] = [];
+    let child = initial;
+    let childRule = rule;
+    for (;;) {
+      if (visited.has(child.id)) return refuse('DERIVATION_CYCLE', 'the rule derivation lineage contains a cycle');
+      visited.add(child.id);
+      // D2: a derived version is its own authorisation-activation id, and carries the root approval unchanged.
+      if (child.authorization_activation_id !== child.id || child.approval_id !== initial.approval_id)
+        return refuse(
+          'DERIVATION_EDGE_INVALID',
+          'a derived rule version does not carry its own lineage id and root approval',
+        );
+      const edge = database
+        .prepare(
+          'SELECT parent_approval_id, parent_version_id, edit_kind FROM derived_authorizations WHERE version_id = ?',
+        )
+        .get(child.id) as { parent_approval_id: string; parent_version_id: string; edit_kind: string } | undefined;
+      if (!edge || edge.parent_approval_id !== initial.approval_id)
+        return refuse('DERIVATION_EDGE_INVALID', 'the rule derivation edge is missing or has the wrong approval');
+      const parent = database
+        .prepare(
+          'SELECT id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, revoked_at FROM rule_versions WHERE id = ?',
+        )
+        .get(edge.parent_version_id) as RuleLineageRow | undefined;
+      if (parent !== undefined && visited.has(parent.id))
+        return refuse('DERIVATION_CYCLE', 'the rule derivation lineage contains a cycle');
+      if (!parent || parent.rule_id !== initial.rule_id || parent.version >= child.version)
+        return refuse('DERIVATION_PARENT_INVALID', 'the rule derivation edge names an invalid parent version');
+      const parentRule = ruleDocument(parent);
+      verifyRuleVersions(database, parentRule);
+      if (!isWhitelistedTightening(parentRule, childRule, edge.edit_kind))
+        return refuse('DERIVATION_NOT_TIGHTENING', 'the rule derivation is not an allowed narrowing');
+      derivation.push({
+        versionId: child.id,
+        parentApprovalId: edge.parent_approval_id,
+        parentVersionId: edge.parent_version_id,
+        editKind: edge.edit_kind as ValidatedDerivationEdge['editKind'],
+      });
+      const root = completedIntent(database, parent);
+      if (root) {
+        const used = await usedBinding(approvals, root);
+        if (
+          used.approvalId !== initial.approval_id ||
+          used.document.kind !== 'rule' ||
+          !sameJson(used.document.rule, parentRule)
+        )
+          return refuse('DERIVATION_ROOT_INVALID', 'the rule derivation does not terminate at its used approval');
+        return {
+          valid: true,
+          root,
+          approvalId: used.approvalId,
+          usedAt: used.usedAt,
+          rule,
+          derivation: derivation.reverse(),
+        };
+      }
+      child = parent;
+      childRule = parentRule;
+    }
+  } catch (error) {
+    const failure = lineageFailure(error);
+    if (failure !== null) return failure;
+    throw error;
+  }
+}
+
 async function resolveLineage(
   database: DatabaseSync,
   approvals: Pick<ApprovalStore, 'get'>,
-  initial: RuleRow,
-): Promise<{
-  readonly root: IntentRow;
-  readonly approvalId: string;
-  readonly usedAt: string;
-  readonly rule: CanonicalFullRuleDocument;
-}> {
-  const rule = ruleDocument(initial);
-  verifyRuleVersions(database, rule);
-  const direct = completedIntent(database, initial);
-  if (direct) {
-    const used = await usedBinding(approvals, direct);
-    if (used.document.kind !== 'rule' || !sameJson(used.document.rule, rule))
-      return refuse('ACTIVATION_LINEAGE_MISMATCH', 'the activation does not name this exact rule version');
-    return { root: direct, approvalId: used.approvalId, usedAt: used.usedAt, rule };
-  }
-  if (!initial.approval_id || !initial.authorization_activation_id)
-    return refuse('RULE_LINEAGE_MISSING', 'the rule version has no immutable disclosure lineage');
-  const visited = new Set<string>();
-  let child = initial;
-  let childRule = rule;
-  for (;;) {
-    if (visited.has(child.id)) return refuse('DERIVATION_CYCLE', 'the rule derivation lineage contains a cycle');
-    visited.add(child.id);
-    // D2: a derived version is its own authorisation-activation id, and carries the root approval unchanged.
-    if (child.authorization_activation_id !== child.id || child.approval_id !== initial.approval_id)
-      return refuse(
-        'DERIVATION_EDGE_INVALID',
-        'a derived rule version does not carry its own lineage id and root approval',
-      );
-    const edge = database
-      .prepare(
-        'SELECT parent_approval_id, parent_version_id, edit_kind FROM derived_authorizations WHERE version_id = ?',
-      )
-      .get(child.id) as { parent_approval_id: string; parent_version_id: string; edit_kind: string } | undefined;
-    if (!edge || edge.parent_approval_id !== initial.approval_id)
-      return refuse('DERIVATION_EDGE_INVALID', 'the rule derivation edge is missing or has the wrong approval');
-    const parent = database
-      .prepare(
-        'SELECT id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, revoked_at FROM rule_versions WHERE id = ?',
-      )
-      .get(edge.parent_version_id) as RuleRow | undefined;
-    if (!parent || parent.rule_id !== initial.rule_id || parent.version >= child.version)
-      return refuse('DERIVATION_PARENT_INVALID', 'the rule derivation edge names an invalid parent version');
-    const parentRule = ruleDocument(parent);
-    verifyRuleVersions(database, parentRule);
-    if (!isWhitelistedTightening(parentRule, childRule, edge.edit_kind))
-      return refuse('DERIVATION_NOT_TIGHTENING', 'the rule derivation is not an allowed narrowing');
-    const root = completedIntent(database, parent);
-    if (root) {
-      const used = await usedBinding(approvals, root);
-      if (
-        used.approvalId !== initial.approval_id ||
-        used.document.kind !== 'rule' ||
-        !sameJson(used.document.rule, parentRule)
-      )
-        return refuse('DERIVATION_ROOT_INVALID', 'the rule derivation does not terminate at its used approval');
-      return { root, approvalId: used.approvalId, usedAt: used.usedAt, rule };
-    }
-    child = parent;
-    childRule = parentRule;
-  }
+  initial: RuleLineageRow,
+): Promise<Extract<RuleLineageValidation, { readonly valid: true }>> {
+  const result = await validateRuleLineage(database, approvals, initial);
+  if (!result.valid) return refuse(result.code, result.message);
+  return result;
 }
 
 /** The one live disclosure fence; all branches re-read SQLite, core approval state and configuration at this boundary. */
@@ -416,7 +505,7 @@ export async function assertDisclosable(request: DisclosableRequest): Promise<Di
             `SELECT id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, revoked_at
              FROM rule_versions WHERE id = ?`,
           )
-          .get(pending.replacement_of_version) as RuleRow | undefined;
+          .get(pending.replacement_of_version) as RuleLineageRow | undefined;
         if (old?.state !== 'active' || old.revoked_at !== null)
           return refuse('REPLACEMENT_PARENT_INVALID', 'the old replacement rule is no longer eligible to drain');
         const oldLineage = await resolveLineage(request.database, request.approvals, old);

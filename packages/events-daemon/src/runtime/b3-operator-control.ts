@@ -1,4 +1,5 @@
 import { CommsError } from '@agentcomms/core';
+import { ACTIVATION_FAILURE } from '../domain/activation-failure-codes.ts';
 import { normaliseSourceOptions, type SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { B3OwnerRequest, B3OwnerService } from '../operations/b3-contract.ts';
@@ -271,10 +272,8 @@ export class B3OperatorControl implements B3OwnerService {
       if (!activationIntentReferencesSubscriber(this.#store.database, intent.document, subscriberId, removedVersions))
         continue;
       this.#store.database
-        .prepare(
-          "UPDATE activation_intents SET status = 'cancelled', failure_code = 'AUTHORIZATION_REVOKED', updated_at = ? WHERE id = ?",
-        )
-        .run(now, intent.id);
+        .prepare("UPDATE activation_intents SET status = 'cancelled', failure_code = ?, updated_at = ? WHERE id = ?")
+        .run(ACTIVATION_FAILURE.AUTHORIZATION_REVOKED, now, intent.id);
       this.#store.database.prepare('DELETE FROM activation_baselines WHERE intent_id = ?').run(intent.id);
       this.#store.database.prepare('DELETE FROM replacement_drains WHERE intent_id = ?').run(intent.id);
       this.#store.database.prepare('DELETE FROM slack_reply_drains WHERE intent_id = ?').run(intent.id);

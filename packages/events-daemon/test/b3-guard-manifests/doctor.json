@@ -1,0 +1,222 @@
+{
+  "area": "task-7-doctor-projection",
+  "cases": [
+    {
+      "case": "doctor-retains-current-cutover-point",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/b3-doctor.test.ts",
+      "overlayInputs": ["packages/events-daemon/src/operations/contracts/doctor-v1.schema.json"],
+      "mutation": { "from": "currentCutoverId: row.current_cutover_id,", "to": "currentCutoverId: null," },
+      "mutationTest": "B3 doctor reports closed lineage, completion, recovery, and unavailable health state",
+      "loadedMarker": "doctor-retains-current-cutover-point"
+    },
+    {
+      "case": "doctor-reports-lineage-not-active-pointer",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/b3-doctor.test.ts",
+      "overlayInputs": ["packages/events-daemon/src/operations/contracts/doctor-v1.schema.json"],
+      "mutation": {
+        "from": "authorizationActivationId: row.authorization_activation_id,",
+        "to": "authorizationActivationId: row.current_cutover_id ?? 'missing',"
+      },
+      "mutationTest": "B3 doctor reports closed lineage, completion, recovery, and unavailable health state",
+      "loadedMarker": "doctor-reports-lineage-not-active-pointer"
+    },
+    {
+      "case": "doctor-keeps-claimed-drain-count",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/b3-doctor.test.ts",
+      "overlayInputs": ["packages/events-daemon/src/operations/contracts/doctor-v1.schema.json"],
+      "mutation": {
+        "from": "'SELECT count(*) AS count FROM replacement_drains WHERE intent_id = ? AND drained_at IS NULL'",
+        "to": "'SELECT 0 AS count FROM replacement_drains WHERE intent_id = ? AND drained_at IS NULL'"
+      },
+      "mutationTest": "B3 doctor reports closed lineage, completion, recovery, and unavailable health state",
+      "loadedMarker": "doctor-keeps-claimed-drain-count"
+    },
+    {
+      "case": "doctor-reports-missing-secret-kind",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/b3-doctor.test.ts",
+      "overlayInputs": ["packages/events-daemon/src/operations/contracts/doctor-v1.schema.json"],
+      "mutation": { "from": "missingSecrets.push(candidate);", "to": "void candidate;" },
+      "mutationTest": "B3 doctor reports closed lineage, completion, recovery, and unavailable health state",
+      "loadedMarker": "doctor-reports-missing-secret-kind"
+    },
+    {
+      "case": "doctor-preserves-awaiting-reapproval",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/b3-doctor-awaiting-reapproval.test.ts",
+      "mutation": { "from": "status: 'awaitingReapproval' as const", "to": "status: 'absent' as never" },
+      "mutationTest": "B3 doctor K6 re-added account stays awaiting reapproval through restart until a fresh point",
+      "loadedMarker": "doctor-preserves-awaiting-reapproval"
+    },
+    {
+      "case": "doctor-k6-no-poll-before-fresh-activation",
+      "operation": "EventScheduler.boundSourceScopes",
+      "productionEntry": "packages/events-daemon/src/runtime/scheduler.ts",
+      "test": "packages/events-daemon/test/b3-doctor-awaiting-reapproval.test.ts",
+      "mutation": { "from": "if (point === undefined) continue;", "to": "if (false) continue;" },
+      "mutationTest": "B3 doctor K6 re-added account stays awaiting reapproval through restart until a fresh point",
+      "loadedMarker": "doctor-k6-no-poll-before-fresh-activation"
+    },
+    {
+      "case": "doctor-reports-applied-whatsapp-list-state",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/b3-doctor.test.ts",
+      "overlayInputs": ["packages/events-daemon/src/operations/contracts/doctor-v1.schema.json"],
+      "mutation": { "from": "live.has(`whatsapp\\u0000${accountId}`) ? 'applied' : 'stale'", "to": "'applied'" },
+      "mutationTest": "B3 doctor reports closed lineage, completion, recovery, and unavailable health state",
+      "loadedMarker": "doctor-reports-applied-whatsapp-list-state"
+    },
+    {
+      "case": "doctor-schema-rejects-unrecognised-property",
+      "operation": "assertDoctorReportV1",
+      "productionEntry": "packages/events-daemon/src/operations/doctor.ts",
+      "test": "packages/events-daemon/test/b3-doctor.test.ts",
+      "overlayInputs": ["packages/events-daemon/src/operations/contracts/doctor-v1.schema.json"],
+      "mutation": {
+        "from": "if (Object.keys(report).some((key) => !DOCTOR_REPORT_V1_KEYS.includes(key as (typeof DOCTOR_REPORT_V1_KEYS)[number])))",
+        "to": "if (false)"
+      },
+      "mutationTest": "B3 doctor reports closed lineage, completion, recovery, and unavailable health state",
+      "loadedMarker": "doctor-schema-rejects-unrecognised-property"
+    },
+    {
+      "case": "doctor-never-serializes-forbidden-document-content",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/b3-doctor-content-scan.test.ts",
+      "mutation": { "from": "ruleId: row.rule_id,", "to": "ruleId: row.document," },
+      "mutationTest": "B3 doctor projection has a closed content-free data surface",
+      "loadedMarker": "doctor-never-serializes-forbidden-document-content"
+    },
+    {
+      "case": "doctor-requires-shared-lineage-root-approval",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/disclosure-fence.ts",
+      "test": "packages/events-daemon/test/b3-doctor-validation.test.ts",
+      "overlayInputs": ["packages/events-daemon/src/operations/contracts/doctor-v1.schema.json"],
+      "mutation": {
+        "from": "        if (\n          used.approvalId !== initial.approval_id ||\n          used.document.kind !== 'rule' ||\n          !sameJson(used.document.rule, parentRule)\n        )",
+        "to": "        if (false)"
+      },
+      "mutationTest": "B3 doctor refuses a used root that does not approve the exact parent rule",
+      "loadedMarker": "doctor-requires-shared-lineage-root-approval"
+    },
+    {
+      "case": "doctor-reports-lazy-materialisation-resolution",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/b3-doctor.test.ts",
+      "overlayInputs": ["packages/events-daemon/src/operations/contracts/doctor-v1.schema.json"],
+      "mutation": {
+        "from": "if (source === 'gmail')\n    return category === 'metadata' ? 'source_occurrence_resolutions' : 'source_projection_resolutions';",
+        "to": "if (source === 'gmail') return 'source_occurrence_resolutions';"
+      },
+      "mutationTest": "B3 doctor reports Gmail metadata and lazy materialisation recovery independently",
+      "loadedMarker": "doctor-reports-lazy-materialisation-resolution"
+    },
+    {
+      "case": "doctor-routes-resend-received-resolution-to-materialisation",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/b3-doctor.test.ts",
+      "overlayInputs": ["packages/events-daemon/src/operations/contracts/doctor-v1.schema.json"],
+      "mutation": {
+        "from": "if (source === 'resend' && category === 'materialisation') return 'source_occurrence_resolutions';",
+        "to": "if (source === 'resend' && category === 'metadata') return 'source_occurrence_resolutions';"
+      },
+      "mutationTest": "B3 doctor routes a Resend received-email 404 to materialisation and keeps Gmail metadata separate",
+      "loadedMarker": "doctor-routes-resend-received-resolution-to-materialisation"
+    },
+    {
+      "case": "doctor-does-not-forward-stored-failure-code",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/b3-doctor.test.ts",
+      "overlayInputs": ["packages/events-daemon/src/operations/contracts/doctor-v1.schema.json"],
+      "mutation": {
+        "from": "return isActivationFailureCode(value) ? value : 'UNRECOGNISED';",
+        "to": "return typeof value === 'string' ? (value as DoctorActivationFailureCode) : 'UNRECOGNISED';"
+      },
+      "mutationTest": "B3 doctor exposes only recognised activation failure codes",
+      "loadedMarker": "doctor-does-not-forward-stored-failure-code"
+    },
+    {
+      "case": "doctor-excludes-fully-purged-superseded-versions",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/b3-doctor.test.ts",
+      "overlayInputs": ["packages/events-daemon/src/operations/contracts/doctor-v1.schema.json"],
+      "mutation": { "from": "return retained === 0 ? [] :", "to": "return false ? [] :" },
+      "mutationTest": "B3 doctor lists only superseded versions that own non-terminal or retained delivery, dry-run, stream, or hold work",
+      "loadedMarker": "doctor-excludes-fully-purged-superseded-versions"
+    },
+    {
+      "case": "doctor-scans-cli-stderr-for-content",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/cli/program.ts",
+      "test": "packages/events-daemon/test/b3-doctor-content-scan.test.ts",
+      "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
+      "mutation": {
+        "from": "const result = await operation(controlOptions(program));\n        if (program.opts<EventsCliOptions>().json) streams.stdout.write(`${JSON.stringify(result)}\\n`);",
+        "to": "const result = await operation(controlOptions(program));\n        if (program.opts<EventsCliOptions>().json) {\n          streams.stderr.write('doctor-secret-marker\\n');\n          streams.stdout.write(`${JSON.stringify(result)}\\n`);\n        }"
+      },
+      "mutationTest": "B3 doctor serializes no sender, secret, reference, fingerprint, URL, alias, tuple, provider response, or stack on every result, output, log, and audit sink",
+      "loadedMarker": "doctor-scans-cli-stderr-for-content"
+    },
+    {
+      "case": "doctor-uses-earliest-pending-retry-failure",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/b3-doctor-validation.test.ts",
+      "overlayInputs": ["packages/events-daemon/src/operations/contracts/doctor-v1.schema.json"],
+      "mutation": { "from": "entry.firstFailedAt < oldest", "to": "entry.firstFailedAt > oldest" },
+      "mutationTest": "B3 doctor reads retry age, occurrence count, and maximum attempts from pending encrypted state",
+      "loadedMarker": "doctor-uses-earliest-pending-retry-failure"
+    },
+    {
+      "case": "doctor-counts-pending-metadata-retries",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-doctor-projection.ts",
+      "test": "packages/events-daemon/test/b3-doctor-validation.test.ts",
+      "overlayInputs": ["packages/events-daemon/src/operations/contracts/doctor-v1.schema.json"],
+      "mutation": { "from": "if (category === 'metadata') {", "to": "if (false) {" },
+      "mutationTest": "B3 doctor reads retry age, occurrence count, and maximum attempts from pending encrypted state",
+      "loadedMarker": "doctor-counts-pending-metadata-retries"
+    },
+    {
+      "case": "doctor-scans-process-log-for-content",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-doctor-content-scan.test.ts",
+      "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
+      "mutation": {
+        "from": "    case 'doctor':\n      return doctorReport();",
+        "to": "    case 'doctor':\n      process.stderr.write('doctor-secret-marker\\n');\n      return doctorReport();"
+      },
+      "mutationTest": "B3 doctor serializes no sender, secret, reference, fingerprint, URL, alias, tuple, provider response, or stack on every result, output, log, and audit sink",
+      "loadedMarker": "doctor-scans-process-log-for-content"
+    },
+    {
+      "case": "doctor-scans-audit-for-content",
+      "operation": "doctor",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-doctor-content-scan.test.ts",
+      "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
+      "mutation": {
+        "from": "    return projectB3Doctor({",
+        "to": "    await core.audit.append({ inboxId: '', operation: 'doctor-secret-marker', outcome: 'ok' });\n    return projectB3Doctor({"
+      },
+      "mutationTest": "B3 doctor serializes no sender, secret, reference, fingerprint, URL, alias, tuple, provider response, or stack on every result, output, log, and audit sink",
+      "loadedMarker": "doctor-scans-audit-for-content"
+    }
+  ]
+}

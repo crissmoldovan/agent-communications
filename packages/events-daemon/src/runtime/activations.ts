@@ -14,6 +14,7 @@ import {
   canonicalFullRuleDocument,
   disclosureBindingFor,
 } from '../domain/activation-documents.ts';
+import { ACTIVATION_FAILURE, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { SourceScope } from '../sources/contracts.ts';
@@ -459,7 +460,7 @@ export class ActivationRuntime {
     }
     if (cancelled.length === 0) return;
     this.#store.immediate(() => {
-      for (const intentId of cancelled) this.#cancel(intentId, 'AUTHORIZATION_REVOKED');
+      for (const intentId of cancelled) this.#cancel(intentId, ACTIVATION_FAILURE.AUTHORIZATION_REVOKED);
     });
   }
 
@@ -481,7 +482,7 @@ export class ActivationRuntime {
             canonicalJson(candidate.record.disclosure) === canonicalJson(binding),
         );
         if (matches.length !== 1) {
-          this.#cancel(intent.id, 'APPROVAL_ABSENT');
+          this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_ABSENT);
           continue;
         }
         const candidate = matches[0] as Extract<(typeof matches)[number], { form: 'v2' }>;
@@ -497,7 +498,7 @@ export class ActivationRuntime {
       if (!intent.approval_id) continue;
       const record = await this.#approvals.get(intent.approval_id);
       if (record?.form !== 'v2' || record.record.kind !== 'disclosure') {
-        this.#cancel(intent.id, 'APPROVAL_ABSENT');
+        this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_ABSENT);
         continue;
       }
       if (record.record.state === 'approved') {
@@ -524,7 +525,7 @@ export class ActivationRuntime {
       const binding = this.#settleOnDrift(intent);
       if (binding === null) continue;
       if (canonicalJson(record.record.disclosure) !== canonicalJson(binding)) {
-        this.#cancel(intent.id, 'APPROVAL_BINDING_DRIFT');
+        this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_BINDING_DRIFT);
         continue;
       }
       if (!this.#approvalViewChallengeMayComplete(intent.approval_id, record.record.usedAt)) continue;
@@ -555,18 +556,18 @@ export class ActivationRuntime {
       .all() as unknown as IntentRow[];
     for (const intent of rows) {
       if (!intent.approval_id) {
-        this.#cancel(intent.id, 'APPROVAL_ABSENT');
+        this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_ABSENT);
         continue;
       }
       const record = await this.#approvals.get(intent.approval_id);
       if (record?.form !== 'v2' || record.record.kind !== 'disclosure' || record.record.state !== 'used') {
-        this.#cancel(intent.id, 'APPROVAL_ABSENT');
+        this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_ABSENT);
         continue;
       }
       const binding = this.#settleOnDrift(intent);
       if (binding === null) continue;
       if (record.record.usedAt === undefined || canonicalJson(record.record.disclosure) !== canonicalJson(binding)) {
-        this.#cancel(intent.id, 'APPROVAL_BINDING_DRIFT');
+        this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_BINDING_DRIFT);
         continue;
       }
       if (!this.#approvalViewChallengeMayComplete(intent.approval_id, record.record.usedAt)) continue;
@@ -594,7 +595,7 @@ export class ActivationRuntime {
       return this.#liveBinding(intent);
     } catch (error) {
       if (!(error instanceof CommsError) || error.code !== 'APPROVAL_VOID') throw error;
-      this.#store.immediate(() => this.#cancel(intent.id, 'APPROVAL_BINDING_DRIFT'));
+      this.#store.immediate(() => this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_BINDING_DRIFT));
       return null;
     }
   }
@@ -688,7 +689,7 @@ export class ActivationRuntime {
         )
         .get(intent.id) as { present: number } | undefined;
       if (revoked !== undefined) {
-        this.#cancel(intent.id, 'ACCOUNT_REMOVED');
+        this.#cancel(intent.id, ACTIVATION_FAILURE.ACCOUNT_REMOVED);
         revokedPlannedAccount = true;
         return;
       }
@@ -705,7 +706,7 @@ export class ActivationRuntime {
     const current = this.#intent(intent.id);
     this.#deadlineFailpoint?.('before-claim-deadline');
     if ((current.completion_deadline ?? deadline) <= this.#now()) {
-      this.#fail(intent.id, 'COMPLETION_TIMEOUT');
+      this.#fail(intent.id, ACTIVATION_FAILURE.COMPLETION_TIMEOUT);
       return Promise.reject(new CommsError('APPROVAL_VOID', 'the activation completion deadline has passed'));
     }
     const document = this.#document(current);
@@ -855,7 +856,7 @@ export class ActivationRuntime {
     const afterBaselines = this.#intent(current.id);
     this.#deadlineFailpoint?.('before-baseline-deadline');
     if (afterBaselines.completion_deadline !== null && afterBaselines.completion_deadline <= this.#now()) {
-      this.#fail(current.id, 'COMPLETION_TIMEOUT');
+      this.#fail(current.id, ACTIVATION_FAILURE.COMPLETION_TIMEOUT);
       throw new CommsError('APPROVAL_VOID', 'the activation completion deadline has passed');
     }
     this.#failpoint?.('before-move');
@@ -923,14 +924,14 @@ export class ActivationRuntime {
       // slow profile call or encryption) installs nothing.
       this.#deadlineFailpoint?.('before-finalise-deadline');
       if (latest.completion_deadline !== null && latest.completion_deadline <= this.#now()) {
-        this.#failWithin(intent.id, 'COMPLETION_TIMEOUT');
+        this.#failWithin(intent.id, ACTIVATION_FAILURE.COMPLETION_TIMEOUT);
         settled = new CommsError('APPROVAL_VOID', 'the activation completion deadline has passed');
         return;
       }
       const effect = JSON.parse(latest.effect) as ActivationEffect;
       const settings = this.#switch();
       if (settings.generation !== effect.switchGeneration) {
-        this.#cancel(intent.id, 'STALE_GENERATION');
+        this.#cancel(intent.id, ACTIVATION_FAILURE.STALE_GENERATION);
         settled = new CommsError('APPROVAL_VOID', 'the global event switch changed before activation completed');
         return;
       }
@@ -945,7 +946,7 @@ export class ActivationRuntime {
             return { ruleId: value.object_id, ruleVersion: value.version, cutoverId: value.current_cutover_id };
           });
         if (canonicalJson(currentCutovers) !== canonicalJson(effect.currentCutovers)) {
-          this.#cancel(intent.id, 'STALE_POINTER');
+          this.#cancel(intent.id, ACTIVATION_FAILURE.STALE_POINTER);
           settled = new CommsError(
             'APPROVAL_VOID',
             'an enabled rule pointer changed before global activation completed',
@@ -963,7 +964,7 @@ export class ActivationRuntime {
           latest.replacement_of_version !== null &&
           (active === null || `${document.rule.ruleId}@${active.version}` !== latest.replacement_of_version)
         ) {
-          this.#cancel(intent.id, 'STALE_POINTER');
+          this.#cancel(intent.id, ACTIVATION_FAILURE.STALE_POINTER);
           settled = new CommsError('APPROVAL_VOID', 'the old rule pointer changed before replacement finalisation');
           return;
         }
@@ -1277,7 +1278,7 @@ export class ActivationRuntime {
     return { enabled: row.enabled === 1, generation: row.switch_generation };
   }
 
-  #cancel(intentId: string, code: string): void {
+  #cancel(intentId: string, code: ActivationFailureCode): void {
     this.#store.database
       .prepare("UPDATE activation_intents SET status = 'cancelled', failure_code = ?, updated_at = ? WHERE id = ?")
       .run(code, this.#now(), intentId);
@@ -1426,12 +1427,12 @@ export class ActivationRuntime {
     });
   }
 
-  #fail(intentId: string, code: string): void {
+  #fail(intentId: string, code: ActivationFailureCode): void {
     this.#store.immediate(() => this.#failWithin(intentId, code));
   }
 
   /** The failure's writes, for a caller already inside a transaction. */
-  #failWithin(intentId: string, code: string): void {
+  #failWithin(intentId: string, code: ActivationFailureCode): void {
     this.#store.database
       .prepare("UPDATE activation_intents SET status = 'failed', failure_code = ?, updated_at = ? WHERE id = ?")
       .run(code, this.#now(), intentId);

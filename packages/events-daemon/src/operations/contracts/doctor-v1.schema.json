@@ -1,0 +1,305 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentcomms.local/events-doctor-v1.schema.json",
+  "title": "Events Doctor Report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "owner",
+    "switch",
+    "lineages",
+    "superseded",
+    "points",
+    "awaitingReapproval",
+    "activationIntents",
+    "sources",
+    "recovery",
+    "judgeBoundary",
+    "whatsapp"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "doctor-v1" },
+    "owner": { "$ref": "#/$defs/owner" },
+    "switch": { "$ref": "#/$defs/switch" },
+    "lineages": { "type": "array", "items": { "$ref": "#/$defs/lineage" } },
+    "superseded": { "type": "array", "items": { "$ref": "#/$defs/superseded" } },
+    "points": { "type": "array", "items": { "$ref": "#/$defs/point" } },
+    "awaitingReapproval": { "type": "array", "items": { "$ref": "#/$defs/awaiting" } },
+    "activationIntents": { "type": "array", "items": { "$ref": "#/$defs/intent" } },
+    "sources": { "type": "array", "items": { "$ref": "#/$defs/sourceHealth" } },
+    "recovery": { "$ref": "#/$defs/recovery" },
+    "judgeBoundary": { "type": "array", "items": { "$ref": "#/$defs/judgeBoundary" } },
+    "whatsapp": { "type": "array", "items": { "$ref": "#/$defs/whatsapp" } }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1 },
+    "time": { "type": "integer", "minimum": 0 },
+    "count": { "type": "integer", "minimum": 0 },
+    "sourceCode": { "enum": ["gmail", "slack", "resend", "whatsapp"] },
+    "owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "protocolVersions", "installationId"],
+      "properties": {
+        "status": { "enum": ["running"] },
+        "protocolVersions": { "type": "array", "items": { "type": "integer", "minimum": 1 } },
+        "installationId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "switch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "paused", "generation"],
+      "properties": {
+        "status": { "enum": ["enabled", "disabled"] },
+        "paused": { "type": "boolean" },
+        "generation": { "$ref": "#/$defs/count" }
+      }
+    },
+    "lineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ruleId",
+        "ruleVersion",
+        "status",
+        "approvalId",
+        "authorizationActivationId",
+        "currentCutoverId",
+        "activatedAt",
+        "retainedWork",
+        "validation",
+        "derivation"
+      ],
+      "properties": {
+        "ruleId": { "$ref": "#/$defs/id" },
+        "ruleVersion": { "type": "integer", "minimum": 1 },
+        "status": { "const": "active" },
+        "approvalId": { "$ref": "#/$defs/id" },
+        "authorizationActivationId": { "$ref": "#/$defs/id" },
+        "currentCutoverId": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "activatedAt": { "$ref": "#/$defs/time" },
+        "retainedWork": { "$ref": "#/$defs/count" },
+        "validation": { "$ref": "#/$defs/lineageValidation" },
+        "derivation": { "type": "array", "items": { "$ref": "#/$defs/derivationEdge" } }
+      }
+    },
+    "derivationEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["versionId", "parentApprovalId", "parentVersionId", "editKind"],
+      "properties": {
+        "versionId": { "$ref": "#/$defs/id" },
+        "parentApprovalId": { "$ref": "#/$defs/id" },
+        "parentVersionId": { "$ref": "#/$defs/id" },
+        "editKind": {
+          "enum": [
+            "remove-target",
+            "remove-output-field",
+            "lower-rate-cap",
+            "shorten-retention",
+            "narrow-source-options"
+          ]
+        }
+      }
+    },
+    "lineageValidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": { "enum": ["valid", "invalid"] },
+        "code": {
+          "enum": [
+            "ACTIVATION_DOCUMENT_INVALID",
+            "ACTIVATION_DIGEST_DRIFT",
+            "ACTIVATION_LINEAGE_MISMATCH",
+            "ACTIVATION_LINEAGE_MISSING",
+            "BOUND_OBJECT_REVOKED",
+            "DERIVATION_CYCLE",
+            "DERIVATION_EDGE_INVALID",
+            "DERIVATION_NOT_TIGHTENING",
+            "DERIVATION_PARENT_INVALID",
+            "DERIVATION_ROOT_INVALID",
+            "DISCLOSURE_BINDING_DRIFT",
+            "DISCLOSURE_NOT_USED",
+            "IMMUTABLE_VERSION_DRIFT",
+            "RULE_LINEAGE_MISSING"
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["status"],
+          "not": { "required": ["code"] },
+          "properties": { "status": { "const": "valid" } }
+        },
+        {
+          "required": ["status", "code"],
+          "properties": {
+            "status": { "const": "invalid" },
+            "code": { "$ref": "#/$defs/lineageValidation/properties/code" }
+          }
+        }
+      ]
+    },
+    "superseded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ruleId", "ruleVersion", "retainedWork"],
+      "properties": {
+        "ruleId": { "$ref": "#/$defs/id" },
+        "ruleVersion": { "type": "integer", "minimum": 1 },
+        "retainedWork": { "$ref": "#/$defs/count" }
+      }
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["activationId", "ruleId", "ruleVersion", "source", "accountId", "scopeId", "status", "createdAt"],
+      "properties": {
+        "activationId": { "$ref": "#/$defs/id" },
+        "ruleId": { "$ref": "#/$defs/id" },
+        "ruleVersion": { "type": "integer", "minimum": 1 },
+        "source": { "$ref": "#/$defs/sourceCode" },
+        "accountId": { "$ref": "#/$defs/id" },
+        "scopeId": { "$ref": "#/$defs/id" },
+        "status": { "const": "active" },
+        "createdAt": { "$ref": "#/$defs/time" }
+      }
+    },
+    "awaiting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accountId", "scopeId", "status"],
+      "properties": {
+        "accountId": { "$ref": "#/$defs/id" },
+        "scopeId": { "$ref": "#/$defs/id" },
+        "status": { "const": "awaitingReapproval" }
+      }
+    },
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "status", "claimedAt", "completionDeadline", "failureCode", "baselines", "draining"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["rule", "enable-all", "unknown"] },
+        "status": { "enum": ["pending", "pending-completion", "completed", "failed", "cancelled"] },
+        "claimedAt": { "anyOf": [{ "$ref": "#/$defs/time" }, { "type": "null" }] },
+        "completionDeadline": { "anyOf": [{ "$ref": "#/$defs/time" }, { "type": "null" }] },
+        "failureCode": {
+          "anyOf": [
+            {
+              "enum": [
+                "ACCOUNT_REMOVED",
+                "APPROVAL_ABSENT",
+                "APPROVAL_BINDING_DRIFT",
+                "AUTHORIZATION_REVOKED",
+                "COMPLETION_TIMEOUT",
+                "STALE_GENERATION",
+                "STALE_POINTER",
+                "UNRECOGNISED"
+              ]
+            },
+            { "type": "null" }
+          ]
+        },
+        "baselines": { "$ref": "#/$defs/count" },
+        "draining": { "$ref": "#/$defs/count" }
+      }
+    },
+    "sourceHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "accountId", "metadata", "materialisation", "lagMs"],
+      "properties": {
+        "source": { "$ref": "#/$defs/sourceCode" },
+        "accountId": { "$ref": "#/$defs/id" },
+        "metadata": { "$ref": "#/$defs/retryHealth" },
+        "materialisation": { "$ref": "#/$defs/retryHealth" },
+        "lagMs": { "anyOf": [{ "$ref": "#/$defs/time" }, { "type": "null" }] }
+      }
+    },
+    "retryHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["retryAgeMs", "retryCount", "maxAttempts", "unreadable", "resolutions"],
+      "properties": {
+        "retryAgeMs": { "anyOf": [{ "$ref": "#/$defs/time" }, { "type": "null" }] },
+        "retryCount": { "$ref": "#/$defs/count" },
+        "maxAttempts": { "$ref": "#/$defs/count" },
+        "unreadable": { "$ref": "#/$defs/count" },
+        "resolutions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["vanished", "unresolvable", "retentionExpired", "last"],
+          "properties": {
+            "vanished": { "$ref": "#/$defs/count" },
+            "unresolvable": { "$ref": "#/$defs/count" },
+            "retentionExpired": { "$ref": "#/$defs/count" },
+            "last": { "anyOf": [{ "$ref": "#/$defs/resolution" }, { "type": "null" }] }
+          }
+        }
+      }
+    },
+    "resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "at"],
+      "properties": {
+        "code": { "enum": ["vanished", "unresolvable", "retentionExpired"] },
+        "at": { "$ref": "#/$defs/time" }
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["leases", "held", "deadLetters", "deadlines", "resetBarriers", "missingSecrets"],
+      "properties": {
+        "leases": { "$ref": "#/$defs/count" },
+        "held": { "$ref": "#/$defs/count" },
+        "deadLetters": { "$ref": "#/$defs/count" },
+        "deadlines": { "$ref": "#/$defs/count" },
+        "resetBarriers": { "type": "array", "items": { "$ref": "#/$defs/resetBarrier" } },
+        "missingSecrets": { "type": "array", "items": { "$ref": "#/$defs/missingSecret" } }
+      }
+    },
+    "resetBarrier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "count"],
+      "properties": { "state": { "enum": ["open", "closed", "degraded"] }, "count": { "$ref": "#/$defs/count" } }
+    },
+    "missingSecret": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "version"],
+      "properties": {
+        "kind": { "enum": ["target", "subscriber", "judge"] },
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "judgeBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "phase"],
+      "properties": {
+        "kind": { "enum": ["typesafe", "local-endpoint", "laya"] },
+        "code": { "enum": ["E_REQUIRED", "E2_REQUIRED"] },
+        "phase": { "enum": ["E", "E2"] }
+      }
+    },
+    "whatsapp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accountId", "status", "appliedAt"],
+      "properties": {
+        "accountId": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["applied", "missing", "stale"] },
+        "appliedAt": { "anyOf": [{ "$ref": "#/$defs/time" }, { "type": "null" }] }
+      }
+    }
+  }
+}

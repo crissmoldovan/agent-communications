@@ -17,7 +17,7 @@ This server identifies itself as `events`. Read each tool's input schema before 
 | [`events_resume`](#events_resume) | Resumes work retained by an operational pause. |
 | [`events_disable_all`](#events_disable_all) | Disables collection, advances the global generation and purges B1 work. |
 | [`events_enable_all`](#events_enable_all) | Reports that a standing disclosure approval is required before enablement. |
-| [`events_doctor`](#events_doctor) | Reports content-free owner and protocol health. |
+| [`events_doctor`](#events_doctor) | Reports content-free lineage validation, pending metadata/materialisation retry health, recovery and protocol health. |
 | [`events_catalogue_list`](#events_catalogue_list) | Lists selectable local event definitions. |
 | [`events_approval_view`](#events_approval_view) | Returns the daemon-authoritative preview and fresh challenge without claiming it. |
 | [`events_rule_test`](#events_rule_test) | Locally evaluates one selectable catalogue example without provider or judge I/O. |
@@ -107,7 +107,7 @@ Takes no arguments.
 
 ### `events_doctor`
 
-Reports content-free owner and protocol health.
+Reports content-free lineage validation, pending metadata/materialisation retry health, recovery and protocol health.
 
 *writes · idempotent*
 
