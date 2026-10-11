@@ -98,7 +98,7 @@ const JUDGE_MIGRATION_MUTATIONS: Record<JudgeMigrationMutation, (statement: stri
 
 function judgeMigrationsWithMutation(mutation: JudgeMigrationMutation): readonly EventMigration[] {
   const mutate = JUDGE_MIGRATION_MUTATIONS[mutation];
-  return EVENT_MIGRATIONS.filter((migration) => migration.version <= 14).map((migration) => {
+  return EVENT_MIGRATIONS.filter((migration) => migration.version <= 17).map((migration) => {
     if (migration.name !== 'event-judge-hold-durability-v1') return migration;
     return {
       ...migration,
@@ -148,7 +148,7 @@ test('E5 schema: every fresh and upgraded judge-kind CHECK admits exactly JUDGE_
     {
       name: 'upgraded',
       apply(database: DatabaseSync) {
-        applyMigrations(database, migrationsThrough(14));
+        applyMigrations(database, migrationsThrough(16));
         applyMigrations(database);
       },
     },
@@ -316,9 +316,9 @@ function assertJudgeVersionKinds(database: DatabaseSync): void {
   );
 }
 
-test('E2: v14 upgrades every B1, B2, and D fixture once without changing encrypted bytes', () => {
+test('E2: v17/v18 upgrades every B1, B2, and D fixture through B3 once without changing encrypted bytes', () => {
   const migration = judgeMigration();
-  assert.equal(migration.version, 14, 'Task 2 owns the next integrated migration');
+  assert.equal(migration.version, 17, 'Task 2 owns the next integrated migration after B3 14–16');
   for (const fixture of JUDGE_MIGRATION_FIXTURES) {
     const database = new DatabaseSync(':memory:');
     try {
@@ -327,10 +327,22 @@ test('E2: v14 upgrades every B1, B2, and D fixture once without changing encrypt
       fixture.seed(database);
       const before = Buffer.from(fixture.readCiphertext(database));
 
+      applyMigrations(database, migrationsThrough(16));
+      assert.equal(
+        (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
+        '16',
+        `${fixture.name} reaches B3 before Phase E`,
+      );
+      applyMigrations(database, migrationsThrough(17));
+      assert.equal(
+        (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
+        '17',
+        `${fixture.name} reaches E durability before ledger detachment`,
+      );
       applyMigrations(database);
       assert.equal(
         (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
-        '15',
+        '18',
         fixture.name,
       );
       assert.deepEqual(
@@ -347,7 +359,7 @@ test('E2: v14 upgrades every B1, B2, and D fixture once without changing encrypt
       applyMigrations(database);
       assert.equal(
         (
-          database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 15').get() as {
+          database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 18').get() as {
             count: number;
           }
         ).count,
@@ -360,13 +372,13 @@ test('E2: v14 upgrades every B1, B2, and D fixture once without changing encrypt
   }
 });
 
-test('E5: v15 keeps source-owned ledger audit rows when their projection is terminally purged', () => {
+test('E5: v18 keeps source-owned ledger audit rows when their projection is terminally purged', () => {
   const migration = ledgerDetachmentMigration();
-  assert.equal(migration.version, 15, "Task 5 owns E's next local migration");
+  assert.equal(migration.version, 18, "Task 5 owns E's ledger detachment migration after durability");
   const database = new DatabaseSync(':memory:');
   try {
     database.exec('PRAGMA foreign_keys = ON');
-    applyMigrations(database, migrationsThrough(14));
+    applyMigrations(database, migrationsThrough(17));
     seedJudgeAuthority(database);
     insertSourceReservation(database, {
       id: 'projection-detached-reservation',
@@ -406,7 +418,7 @@ test('E5: v15 keeps source-owned ledger audit rows when their projection is term
   }
 });
 
-test('E2: v14 reserves DB-clock hold creation and a decision-bound random-token lease', () => {
+test('E2: v17 reserves DB-clock hold creation and a decision-bound random-token lease', () => {
   judgeMigration();
   const database = new DatabaseSync(':memory:');
   try {
@@ -443,7 +455,7 @@ test('E2: v14 reserves DB-clock hold creation and a decision-bound random-token 
   }
 });
 
-test('E2: v14 rejects invalid reservation state and duplicate source or work identities', () => {
+test('E2: v17 rejects invalid reservation state and duplicate source or work identities', () => {
   judgeMigration();
   const database = new DatabaseSync(':memory:');
   try {
@@ -521,7 +533,7 @@ test('E2: v14 rejects invalid reservation state and duplicate source or work ide
   }
 });
 
-test('E2: v14 rejects malformed source-owned and synthetic-test reservation scopes', () => {
+test('E2: v17 rejects malformed source-owned and synthetic-test reservation scopes', () => {
   judgeMigration();
   const database = new DatabaseSync(':memory:');
   try {
@@ -534,7 +546,7 @@ test('E2: v14 rejects malformed source-owned and synthetic-test reservation scop
   }
 });
 
-test('E2: v14 reservation judge kinds match the lifecycle vocabulary', () => {
+test('E2: v17 reservation judge kinds match the lifecycle vocabulary', () => {
   judgeMigration();
   const database = new DatabaseSync(':memory:');
   try {
@@ -547,7 +559,7 @@ test('E2: v14 reservation judge kinds match the lifecycle vocabulary', () => {
   }
 });
 
-test('E2: v14 declares rolling and account/source scope indexes without plaintext judge request or response storage', () => {
+test('E2: v17 declares rolling and account/source scope indexes without plaintext judge request or response storage', () => {
   judgeMigration();
   const database = new DatabaseSync(':memory:');
   try {
@@ -587,7 +599,7 @@ test('E2: a fresh daemon database keeps secure-delete enabled across a reopen', 
       assert.equal(
         (first.database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string })
           .value,
-        '15',
+        '18',
       );
     } finally {
       first.close();
@@ -596,7 +608,7 @@ test('E2: a fresh daemon database keeps secure-delete enabled across a reopen', 
     try {
       assert.equal(
         (
-          reopened.database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 15').get() as {
+          reopened.database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 18').get() as {
             count: number;
           }
         ).count,

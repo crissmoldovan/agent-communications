@@ -8,8 +8,11 @@
           "judgeId": "judge-1",
           "version": 1,
           "kind": "typesafe",
-          "provider": "local",
-          "model": "fixture"
+          "provider": "typesafe",
+          "model": "jev-1.13.0",
+          "endpoint": "https://api.typesafe.ai/v1/systemone",
+          "promptTemplate": "typesafe-jev-noul-v1",
+          "protocol": "noul"
         }
       }
     },
@@ -28,8 +31,11 @@
           "judgeId": "judge-1",
           "version": 1,
           "kind": "typesafe",
-          "provider": "local",
-          "model": "fixture"
+          "provider": "typesafe",
+          "model": "jev-1.13.0",
+          "endpoint": "https://api.typesafe.ai/v1/systemone",
+          "promptTemplate": "typesafe-jev-noul-v1",
+          "protocol": "noul"
         }
       }
     },

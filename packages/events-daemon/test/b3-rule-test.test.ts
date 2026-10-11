@@ -63,7 +63,27 @@ test('B3 rule test rejects retained event and account selectors before any local
 test('B3 rule test never invokes a judge node while testing deterministic mapping', () => {
   const result = runCatalogueRuleTest({
     document: document({
-      judges: [{ judgeId: 'judge-1', version: 1, kind: 'typesafe', provider: 'fake', model: 'fake' }],
+      agentic: {
+        judge: {
+          judgeId: 'judge-1',
+          version: 1,
+          kind: 'typesafe',
+          provider: 'typesafe',
+          model: 'jev-1.13.0',
+          endpoint: 'https://api.typesafe.ai/v1/systemone',
+          promptTemplate: 'typesafe-jev-noul-v1',
+          protocol: 'noul',
+        },
+        question: 'Does this deterministic fixture match?',
+        inputs: ['/subject'],
+        threshold: 0.5,
+        onUncertain: 'no-match',
+        callsPerRollingHour: 1,
+        inputTokensPerRolling30Days: 1,
+        concurrency: 1,
+        maxInputTokens: 1,
+        maxOutputTokens: 1,
+      },
     }),
     catalogue: { type: 'gmail.message.received', version: 1, exampleIndex: 0 },
   });

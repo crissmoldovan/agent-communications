@@ -478,7 +478,7 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
     version: 18,
     name: 'event-judge-ledger-projection-detachment-v1',
     statements: [
-      `CREATE TABLE judge_budget_reservations_v15 (
+      `CREATE TABLE judge_budget_reservations_v18 (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL UNIQUE,
         work_scope TEXT NOT NULL CHECK (work_scope IN ('source-owned', 'synthetic-test')),
@@ -526,7 +526,7 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
             AND provider IS NULL)
         )
       ) STRICT`,
-      `INSERT INTO judge_budget_reservations_v15
+      `INSERT INTO judge_budget_reservations_v18
        (id, work_id, work_scope, source, account_id, event_id, rule_id, rule_version, judge_id, judge_version,
         judge_kind, test_work_id, budget_version, provider, global_ledger_key, state, estimated_input_tokens,
         actual_input_tokens, concurrency_owned, reserved_at, in_flight_at, settled_at, released_at, switch_generation)
@@ -535,7 +535,7 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
               actual_input_tokens, concurrency_owned, reserved_at, in_flight_at, settled_at, released_at, switch_generation
        FROM judge_budget_reservations`,
       'DROP TABLE judge_budget_reservations',
-      'ALTER TABLE judge_budget_reservations_v15 RENAME TO judge_budget_reservations',
+      'ALTER TABLE judge_budget_reservations_v18 RENAME TO judge_budget_reservations',
       `CREATE UNIQUE INDEX judge_budget_reservations_synthetic_work_identity
         ON judge_budget_reservations(test_work_id)
         WHERE work_scope = 'synthetic-test'`,

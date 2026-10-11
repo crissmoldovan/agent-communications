@@ -86,7 +86,16 @@
     "request": {
       "operation": "addJudge",
       "args": {
-        "document": { "judgeId": "judge-1", "version": 1, "kind": "typesafe", "provider": "local", "model": "fixture" }
+        "document": {
+          "judgeId": "judge-1",
+          "version": 1,
+          "kind": "typesafe",
+          "provider": "typesafe",
+          "model": "jev-1.13.0",
+          "endpoint": "https://api.typesafe.ai/v1/systemone",
+          "promptTemplate": "typesafe-jev-noul-v1",
+          "protocol": "noul"
+        }
       }
     }
   },
@@ -95,7 +104,16 @@
     "request": {
       "operation": "updateJudge",
       "args": {
-        "document": { "judgeId": "judge-1", "version": 1, "kind": "typesafe", "provider": "local", "model": "fixture" }
+        "document": {
+          "judgeId": "judge-1",
+          "version": 1,
+          "kind": "typesafe",
+          "provider": "typesafe",
+          "model": "jev-1.13.0",
+          "endpoint": "https://api.typesafe.ai/v1/systemone",
+          "promptTemplate": "typesafe-jev-noul-v1",
+          "protocol": "noul"
+        }
       }
     }
   },
