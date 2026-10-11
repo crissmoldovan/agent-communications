@@ -39,6 +39,7 @@ Before B3 is merged, the only permitted E work is unregistered, unreachable foun
 | E3 review fix — what makes mutation ownership live? | Each manifest case names one strict runner registry key; B3 gate mutants edit copied production code below `packages/events-daemon/src`. | A manifest row or a verifier-text mutation is not evidence that its named regression executes. |
 | E3 review fix — where are release gates enforced? | `release.mjs` launches both Phase-E gates before release preflight, independent of `--skip-verify`. | Package-script wrappers do not cover direct release invocation. |
 | E3 second review fix — how is B3 v1 consumed? | B3 v1 is frozen as E-owned exact paths and SHA-256 pins. A deliberate change to a pinned file updates its pin in the same commit, with the reason in that commit. | Empty, substituted or inert fixture/consumer sets cannot silently weaken the prerequisite gate. |
+| E3 gate position — where do the Phase E gates run in `pnpm verify`? | Right after `pnpm build`, before typecheck, the tests and packaging; `preverify:packages` and the release scripts keep running them before ship. | The prerequisite gate loads the daemon's real source, which imports the built workspace packages. The first placement ran it before the build: the first clean-checkout run (the release dry run on GitHub, 2026-10-12) could not load `@agentcomms/core` and failed every verify leg — a local tree passed only because an earlier build remained. A test now requires build → gates → typecheck/tests/packages. |
 
 ## Decisions the spec leaves to the plan
 

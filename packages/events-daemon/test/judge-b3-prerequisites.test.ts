@@ -84,7 +84,7 @@ test('E3: phase-E prerequisites consume the real E parser and judge-kind registr
   assert.deepEqual(await verifyPhaseEPrerequisites({ root: ROOT }), []);
 });
 
-test('E3: root verify and package verification invoke both Phase-E gates before build or ship', async () => {
+test('E3: root verify and package verification invoke both Phase-E gates once built, before typecheck, tests or ship', async () => {
   const rootPackage = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8')) as {
     readonly scripts: Readonly<Record<string, string>>;
   };
@@ -92,6 +92,13 @@ test('E3: root verify and package verification invoke both Phase-E gates before 
     assert.match(rootPackage.scripts[script] ?? '', /verify:events-phase-e-prerequisites/u, script);
     assert.match(rootPackage.scripts[script] ?? '', /verify:events-phase-e-tests/u, script);
   }
+  // The prerequisite gate loads the daemon's real source, which imports the built workspace packages: on a clean
+  // checkout it can run only after `pnpm build`, and it must still refuse before typecheck, the tests and packaging.
+  const verify = rootPackage.scripts.verify ?? '';
+  const at = (step: string): number => verify.indexOf(step);
+  assert.ok(at('pnpm build') >= 0 && at('pnpm build') < at('pnpm verify:events-phase-e-prerequisites'), verify);
+  for (const later of ['pnpm typecheck', 'pnpm test', 'pnpm verify:packages'])
+    assert.ok(at('pnpm verify:events-phase-e-tests') < at(later), `${later} runs after both gates`);
 });
 
 test('E3: release --publish --skip-verify stops at a failing Phase-E gate before registry or publish work', async () => {
