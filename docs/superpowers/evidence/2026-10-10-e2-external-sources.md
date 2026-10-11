@@ -122,6 +122,45 @@ licence, package, tarball), so a change to any row changes it.
 | `serialize-error@8.1.0` | MIT | `https://registry.npmjs.org/serialize-error/-/serialize-error-8.1.0.tgz` | `sha512-3NnuWfM6vBYoy5gZFvHiYsVbafvI9vZv/+jlIigFn4oP4zjNPK3LhcY0xSCgeb1a5L8jO71Mit9LlNoi2UfDDQ==` | none |
 | `type-fest@0.20.2` | (MIT OR CC0-1.0) | `https://registry.npmjs.org/type-fest/-/type-fest-0.20.2.tgz` | `sha512-Ne+eE4r0/iWnpAxD852z3A+N0Bt5RN//NjJwRd2VFHEmrywxf5vsZlh4R6lixl6B+wz/8d+maTSAkN1FIkI3LQ==` | none |
 
+## Task 9 (E2-H) — the Python reference, chosen by the owner
+
+### hf-laya-python-reference
+
+- id: `hf-laya-python-reference`
+- url: `https://huggingface.co/convaiinnovations/laya/tree/55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851` (files
+  `rl_agent_api.py`, `rl_common.py`, `rl_agent_config.json`, `tokenizer/`, `encoder/config.json`, `model.safetensors`)
+- fetchedAt: `2026-10-11T04:03:09Z` (revision metadata, `rl_agent_api.py`, `rl_common.py`, the two tokenizer files and
+  the weights' LFS id); `2026-10-11T18:44:29Z` (`rl_agent_config.json`)
+- immutable: `55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851`
+- fact: `convaiinnovations/laya at revision 55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851 (last modified
+  2026-09-24T05:39:22Z; licence apache-2.0; not gated) is the reference: rl_agent_api.py sha256
+  be3b46819c9999c3ef88e0f2ecf6d3ab1cdfed1d9a8b466fc89811e34d44031b; rl_common.py sha256
+  8d83611d480c971d640a7b7d3aa2f2219c5e8455e9cc2329fd073681bd8be23e; rl_agent_config.json sha256
+  ae287b56bbcf5f8c4f4541ae9dfd00c914c4c48b940b8398c3058af37ba92bbd (encoder answerdotai/ModernBERT-large, max_len 512,
+  head_max_len 192); model.safetensors 842609210 bytes sha256
+  891102d372688fc2a094dac56a384bc537b87c63f21f9f3dac0be2b7cbc8d86c (the manifest's weights.originSha256);
+  tokenizer/tokenizer.json sha256 6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30 and
+  tokenizer/tokenizer_config.json sha256 50044de60daaa73df97d262e15a40d4faf0160e7d742df64b377877a1320dd12, byte-identical
+  to receptron/laya-onnx@68f27dfe5a27a54fb2b1fefc432f43f972e90868`
+- invocation: `RLAgent(<snapshot of this revision>, device="cpu")`, then, per request, the path `system_one(state,
+  questions)` takes: `_to_internal(question)` → `build_sequence(tokenizer, state, question, 512, 192)` →
+  `collate_items([items], tokenizer.pad_token_id)` → `model(input_ids, attention_mask, marker_pos, marker_mask, qtype)`
+  under `torch.no_grad()`. On CPU there is no autocast, so the forward pass is fp32. Question types map choice 0,
+  score 1, noul 2. Compare `input_ids`, `attention_mask`, `marker_pos`, `marker_mask` and `qtype` exactly before any
+  number; then the raw `logits` and `softmax(act)` against the ONNX outputs `logits` and `act_probs`. The reference
+  applies its fitted temperatures only after these, so they are not part of the comparison.
+- reviewer: `owner` (the choice, 2026-10-11: "okay with record A"); `coordinator` (every fact above, re-read from the
+  fetched files)
+
+Considered and not chosen, per the coordinator's research on 2026-10-11 (not relied on, so not re-verified here):
+receptron's export script (`github.com/receptron/laya`, `export/export_onnx.py`), which is not a complete
+implementation and only prints its check; and the `laya` package on PyPI (`github.com/NandhaKishorM/laya`), which
+releases often and differs from the JavaScript port, so it would report false mismatches.
+
+Not pinned by the source, so Task 9 pins it: the Python, torch and transformers versions of the locked reference
+environment, recorded here when the gate first runs. The report-excluding candidate-subject digest is computed by
+Task 9's verifier from the candidate's assets and source, as the plan says.
+
 ## Not yet recorded (blocks the named task)
 
 - Task 4: RFC 9110 redirect, `Range`/`Content-Range` and request-header facts, and the Hugging Face download/API
@@ -129,5 +168,5 @@ licence, package, tarball), so a change to any row changes it.
 - Task 7: macOS `sandbox-exec` availability, deprecation and profile semantics; the owner-run real-mac proof.
 - Task 8: the `@receptron/laya` package's load, request-rendering, output-parsing and token-counting source, from its
   SRI-verified bytes.
-- Task 9 (E2-H): the owner-selected Python reference repository, revision and invocation (the weights-source
-  revision is recorded above: `00c37c405e3c3ad73ee070227614c89cda06b99e`).
+- Task 9: the locked reference environment's Python, torch and transformers versions, when the gate first runs (the
+  reference itself is `hf-laya-python-reference` above).
