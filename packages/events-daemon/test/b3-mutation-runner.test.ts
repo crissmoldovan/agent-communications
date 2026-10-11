@@ -45,6 +45,9 @@ test('B3 mutation proof: a sealed owner dispatches only B3 contract operations',
   try {
     const client = new EventControlClient({ stateDir, clientName: 'events-daemon-b3-mutation-test' });
     assert.deepEqual(await client.request('targetTest', { fixture: 'b3-control' }), { accepted: 'targetTest' });
+    // A recognised operation outside the B3 set stays with the owner's own dispatcher: the B3 service never sees it.
+    const status = (await client.request('status', {})) as { readonly owner?: unknown };
+    assert.equal(status.owner, 'running', 'status is answered by the owner, not by the B3 service');
     await assert.rejects(
       () => client.request('not-a-b3-operation', { fixture: 'b3-control' }),
       (error: unknown) =>

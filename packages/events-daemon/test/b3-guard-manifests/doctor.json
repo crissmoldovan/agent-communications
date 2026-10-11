@@ -199,8 +199,8 @@
       "test": "packages/events-daemon/test/b3-doctor-content-scan.test.ts",
       "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
       "mutation": {
-        "from": "    case 'doctor':\n      return doctorReport();",
-        "to": "    case 'doctor':\n      process.stderr.write('doctor-secret-marker\\n');\n      return doctorReport();"
+        "from": "    case OWNER_CONTROL_WIRES.doctor:\n      return doctorReport();",
+        "to": "    case OWNER_CONTROL_WIRES.doctor:\n      process.stderr.write('doctor-secret-marker\\n');\n      return doctorReport();"
       },
       "mutationTest": "B3 doctor serializes no sender, secret, reference, fingerprint, URL, alias, tuple, provider response, or stack on every result, output, log, and audit sink",
       "loadedMarker": "doctor-scans-process-log-for-content"
