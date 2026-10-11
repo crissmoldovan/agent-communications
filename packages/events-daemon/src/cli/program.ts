@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline/promises';
-import { agentMarker, CommsError, canPrompt, isCommsError } from '@agentcomms/core';
+import { agentMarker, CommsError, canPrompt, escapeForDisplay, isCommsError, isDangerous } from '@agentcomms/core';
 import { Command, CommanderError } from 'commander';
 import { createEventsMcpServer } from '../mcp/server.ts';
 import { approvalView } from '../operations/approval-view.ts';
@@ -9,6 +9,7 @@ import {
   type B3CliRegistrar,
   type B3ControlOperation,
   isB3SecretOperation,
+  renderB3ApprovalPreviewV1,
 } from '../operations/b3-contract.ts';
 import { catalogueList, catalogueShow } from '../operations/catalogue.ts';
 import { decideHeld, deliveriesList, dropDelivery, heldList, retryDelivery } from '../operations/deliveries.ts';
@@ -84,6 +85,39 @@ interface EventsCliOptions {
   readonly configDir?: string;
 }
 
+/**
+ * D13: a terminal never receives a raw control, bidi or invisible character, whatever a stored document holds. The JSON
+ * keeps the exact data: every such character is written as its `\uXXXX` escape (a surrogate pair for an astral one),
+ * which a terminal shows as text and any JSON reader decodes back to the same value.
+ */
+export function terminalSafeJson(value: unknown): string {
+  let out = '';
+  for (const char of JSON.stringify(value) ?? 'null') {
+    if (!isDangerous(char.codePointAt(0) ?? 0)) {
+      out += char;
+      continue;
+    }
+    for (let index = 0; index < char.length; index += 1)
+      out += `\\u${char.charCodeAt(index).toString(16).padStart(4, '0')}`;
+  }
+  return out;
+}
+
+/** The approval preview a person reads before deciding: the B3 terminal renderer, with every dangerous character shown. */
+export function renderApprovalViewForTerminal(result: unknown): string {
+  return escapeForDisplay(renderB3ApprovalPreviewV1(result).terminal);
+}
+
+/** Retained dry-run listings as a person reads them: stored rule ids can hold any character a document allowed. */
+export function renderDryRunListForTerminal(entries: Parameters<typeof renderDryRunList>[0]): string {
+  return escapeForDisplay(renderDryRunList(entries));
+}
+
+/** One retained dry-run record as a person reads it; its body is already enveloped, its header ids are not. */
+export function renderDryRunRecordForTerminal(record: Parameters<typeof renderDryRunRecord>[0]): string {
+  return escapeForDisplay(renderDryRunRecord(record));
+}
+
 /** Runs the intentionally small Task B1 command surface. */
 export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Promise<number> {
   const streams = deps.streams ?? { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr };
@@ -102,8 +136,8 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .option('--secrets-dir <dir>', 'pin the secrets directory for this run')
     .option('--downloads-dir <dir>', 'pin the downloads directory for this run')
     .configureOutput({
-      writeOut: (text) => streams.stdout.write(text),
-      writeErr: (text) => streams.stderr.write(text),
+      writeOut: (text) => streams.stdout.write(escapeForDisplay(text)),
+      writeErr: (text) => streams.stderr.write(escapeForDisplay(text)),
     })
     .exitOverride();
 
@@ -113,8 +147,8 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .action(async () => {
       ran = true;
       const result = await status(controlOptions(program));
-      if (program.opts<EventsCliOptions>().json) streams.stdout.write(`${JSON.stringify(result)}\n`);
-      else streams.stdout.write(`Local event service owner: ${result.owner}\n`);
+      if (program.opts<EventsCliOptions>().json) streams.stdout.write(`${terminalSafeJson(result)}\n`);
+      else streams.stdout.write(`Local event service owner: ${escapeForDisplay(String(result.owner))}\n`);
     });
 
   program
@@ -143,12 +177,12 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       .action(async () => {
         ran = true;
         const result = await operation(controlOptions(program));
-        if (program.opts<EventsCliOptions>().json) streams.stdout.write(`${JSON.stringify(result)}\n`);
-        else streams.stdout.write(`${JSON.stringify(result)}\n`);
+        if (program.opts<EventsCliOptions>().json) streams.stdout.write(`${terminalSafeJson(result)}\n`);
+        else streams.stdout.write(`${terminalSafeJson(result)}\n`);
       });
   }
 
-  const print = (result: unknown) => streams.stdout.write(`${JSON.stringify(result)}\n`);
+  const print = (result: unknown) => streams.stdout.write(`${terminalSafeJson(result)}\n`);
   const humanB3 = async (
     operation: B3ControlOperation,
     args: Record<string, unknown>,
@@ -173,14 +207,14 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       return;
     }
     if (isRenderedResult(result)) {
-      streams.stdout.write(`${result.rendered}\n`);
+      streams.stdout.write(`${escapeForDisplay(result.rendered)}\n`);
       return;
     }
     if (isMigrationResult(result)) {
       streams.stdout.write(`Moved ${result.moved} event secret references.\n`);
       if (result.leftovers.length > 0) {
         streams.stdout.write('Leftover references (retry this migration before rotating):\n');
-        for (const reference of result.leftovers) streams.stdout.write(`${reference}\n`);
+        for (const reference of result.leftovers) streams.stdout.write(`${escapeForDisplay(reference)}\n`);
       }
       return;
     }
@@ -211,7 +245,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .requiredOption('--digest <digest>')
     .action(async (approvalId: string, options) => {
       ran = true;
-      print(await approvalView(approvalId, options.digest as string, controlOptions(program)));
+      const result = await approvalView(approvalId, options.digest as string, controlOptions(program));
+      if (program.opts<EventsCliOptions>().json) print(result);
+      else streams.stdout.write(`${renderApprovalViewForTerminal(result)}\n`);
     });
   const catalogue = program.command('catalogue').description('inspect the held local event catalogue');
   catalogue.command('list').action(async () => {
@@ -548,12 +584,12 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   dryrun.command('list').action(async () => {
     ran = true;
     assertHumanTerminal(env, streams, program.opts<EventsCliOptions>().json === true);
-    streams.stdout.write(`${renderDryRunList(await dryrunList(controlOptions(program)))}\n`);
+    streams.stdout.write(`${renderDryRunListForTerminal(await dryrunList(controlOptions(program)))}\n`);
   });
   dryrun.command('show <delivery-id>').action(async (deliveryId: string) => {
     ran = true;
     assertHumanTerminal(env, streams, program.opts<EventsCliOptions>().json === true);
-    streams.stdout.write(`${renderDryRunRecord(await dryrunShow(deliveryId, controlOptions(program)))}\n`);
+    streams.stdout.write(`${renderDryRunRecordForTerminal(await dryrunShow(deliveryId, controlOptions(program)))}\n`);
   });
 
   program
@@ -609,11 +645,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   } catch (error) {
     if (error instanceof CommanderError) return error.exitCode;
     if (isCommsError(error)) {
-      streams.stderr.write(`${error.message}\n`);
-      if (error.hint !== undefined) streams.stderr.write(`${error.hint}\n`);
+      streams.stderr.write(`${escapeForDisplay(error.message)}\n`);
+      if (error.hint !== undefined) streams.stderr.write(`${escapeForDisplay(error.hint)}\n`);
       return error.exitCode;
     }
-    streams.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    streams.stderr.write(`${escapeForDisplay(error instanceof Error ? error.message : String(error))}\n`);
     return 1;
   }
 }
