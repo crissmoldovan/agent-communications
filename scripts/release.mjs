@@ -23,10 +23,6 @@ import { join } from 'node:path';
 import { PACKAGES, SCOPE } from './packages.mjs';
 import { isVisible } from './release-confirm.mjs';
 
-const args = new Set(process.argv.slice(2));
-const publish = args.has('--publish');
-const skipVerify = args.has('--skip-verify');
-
 function run(command, commandArgs, options = {}) {
   return execFileSync(command, commandArgs, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...options }).trim();
 }
@@ -35,6 +31,22 @@ function run(command, commandArgs, options = {}) {
 function runLoud(command, commandArgs) {
   execFileSync(command, commandArgs, { stdio: 'inherit' });
 }
+
+// Release gates are safety boundaries; --skip-verify cannot make publishing reachable without them.
+runLoud(process.execPath, [
+  '--experimental-strip-types',
+  '--disable-warning=ExperimentalWarning',
+  'scripts/verify-events-phase-e-prerequisites.mjs',
+]);
+runLoud(process.execPath, [
+  '--experimental-strip-types',
+  '--disable-warning=ExperimentalWarning',
+  'scripts/verify-events-phase-e-tests.mjs',
+]);
+
+const args = new Set(process.argv.slice(2));
+const publish = args.has('--publish');
+const skipVerify = args.has('--skip-verify');
 
 const failures = [];
 function refuse(what, fix) {

@@ -1,0 +1,322 @@
+#!/usr/bin/env node
+import { createHash } from 'node:crypto';
+import { readdir, readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import Ajv from '../packages/events-daemon/node_modules/ajv/dist/2020.js';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const VECTORS = 'packages/events-daemon/test/fixtures/b3-control-contract-v1';
+const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-preview-v1';
+/**
+ * E owns this exact B3-v1 input inventory.  B3 is frozen here: a deliberate B3-v1 change updates its pin in the
+ * same commit and records why in that commit, rather than silently weakening E's prerequisite gate.
+ */
+const B3_V1_INVENTORY = Object.freeze({
+  'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
+    '8364e57e4495d9ee9d3f4e472a1b50d307847256d789ddd364ee0106e6f447cb',
+  'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
+    'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
+    'eafa60461ddc1a18c0065c31b2f7290d2b6a73b132e2639a683426d3df033713',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-variants.json':
+    'b75e356047e2285960e76042996a646c50919be4737c11d926e070a381a4f128',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/b3-operation-results.json':
+    'b917918b966c0c4935a417acf890da26adba9dc59e29b494106cbcb47f8e5a19',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/desktop-operation-requests.json':
+    '7687bbf9d530d19832cd029f351ec7ceb64f749a38a213f0fcd9c093c6545494',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/doctor-result.json':
+    '2ac2678746992c9c36b9f917cecdc245298a0d8384be0a1b37b84762a1277279',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/error-vectors.json':
+    '2d77017ee83bc6eb81de98bc32464196c9f7807bd446a57117ce22d7a6c059fb',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/held-decide.json':
+    '6fc694fd79ad444659d3f36300ae14aa08482a6402871f204fa17d17fb3492f9',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/holds.json':
+    '2e3eaa8886260d56019350e33aa16f3db4ebbc1b4d6292671a9ded44045ab490',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/operation-requests.json':
+    'f722a05d3197e2090a9fd70ae0fe4702119452b6214a8312b8048a7369b6e9c9',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/ordinary-results.json':
+    'b1d86dd3f4a31d96e0d99dddcff4840f57dd26a9f470264a0a3f3a6b40eeca78',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/pending-target.json':
+    'b5ced3972a7ea890fe7239edf3f56147b1c2d352d10006405640b3e8bd333b06',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/secret-origin.json':
+    'e0192f61837d2e8faaca1cfe5ad99db26ffb02ee1a325c31eb595243e6a4e6b4',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/seeded-results.json':
+    '47e2737fb102a12b1352d7b54f29a9202717e9bf4a84101b5dd13a4099395855',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/target-test.json':
+    'dda54666b9959991200f3a67c1ef6173142db7ca1bb1730de1efa480e3f34c3b',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/unavailable-e2.json':
+    'b3108e4c29bec8fc9844dd3bb116e155e790d8951f7e77fe0b625425b1332a2c',
+  'packages/events-daemon/test/fixtures/b3-control-contract-v1/unavailable.json':
+    'a1607b7dd787a5b70572b7d68e42ce59a9ecf8f3dcd3819d74bbd58d0a578ddd',
+  'packages/events-daemon/test/fixtures/b3-approval-preview-v1/challenge-expired.json':
+    '599d7efe00637c16b6409b2aec989760be7f49ca29b2b66d93d36ae2c890cfba',
+  'packages/events-daemon/test/fixtures/b3-approval-preview-v1/digest-mismatch.json':
+    'fa084bd7155b5ff3f88a1a2807ebb3ec81821c8edd47ec6c057a1e01d2dd7d7f',
+  'packages/events-daemon/test/fixtures/b3-approval-preview-v1/ready.json':
+    '21217c186a24006e7c87722eb141b4700c284c47d4955f391fb6dd6c78f7c2a7',
+  'packages/events-daemon/test/fixtures/b3-approval-preview-v1/stale.json':
+    '2fb75f3b2201c619baa8ab2fd77c2c9052b96c3030ad5ad000265b9c3db9fd37',
+  'packages/events-daemon/test/b3-consumer-contract.test.ts':
+    'e639b121d058768ef5e01ee4ec7e78dd8f4475b9ac1e1aaef6e994ad8b1d0095',
+});
+const REQUIRED_VECTOR_NAMES = Object.freeze([
+  'doctor-result',
+  'approval-view-ready',
+  'approval-view-stale',
+  'approval-view-digest-mismatch',
+  'approval-view-challenge-expired',
+  'held-decide-unavailable',
+  'held-list-empty',
+  'secret-app-unavailable',
+  'pending-target-approval-flow',
+  'target-test-active-request',
+  'error-usage',
+  'error-bad-data',
+  'error-approval-void',
+  'error-not-found',
+  'error-config',
+]);
+const EXCEPTIONS = [
+  'events-daemon.target-secret.create',
+  'events-daemon.target-secret.rotate',
+  'events-daemon.target-url.set',
+  'events-daemon.subscriber-token.create',
+  'events-daemon.subscriber-token.rotate',
+  'events-daemon.judge-key.set',
+  'events-daemon.judge-key.rotate',
+  'events-daemon.secrets.migrate',
+  'events-daemon.approve',
+  'events-daemon.rule.test-retained',
+  'events-daemon.target.resume',
+  'events-daemon.held.decide',
+  'events-daemon.dryrun.list',
+  'events-daemon.dryrun.show',
+];
+
+async function text(root, file, problems) {
+  const value = await readFile(join(root, file), 'utf8').catch(() => undefined);
+  if (value === undefined) problems.push(`missing prerequisite input: ${file}`);
+  return value ?? '';
+}
+async function inventoryFiles(root, directory, problems) {
+  try {
+    const entries = await readdir(join(root, directory), { withFileTypes: true });
+    const files = [];
+    for (const entry of entries) {
+      const file = join(directory, entry.name);
+      if (entry.isDirectory()) files.push(...(await inventoryFiles(root, file, problems)));
+      else if (entry.isFile()) files.push(file);
+      else problems.push(`B3 v1 inventory has unsupported entry: ${file}`);
+    }
+    return files;
+  } catch (error) {
+    problems.push(`B3 v1 inventory cannot read directory: ${directory}: ${String(error)}`);
+    return [];
+  }
+}
+async function verifyB3Inventory(root, problems) {
+  const found = new Set([
+    ...(await inventoryFiles(root, VECTORS, problems)),
+    ...(await inventoryFiles(root, PREVIEW_FIXTURES, problems)),
+    'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json',
+    'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json',
+    'packages/events-daemon/test/b3-consumer-contract.test.ts',
+  ]);
+  for (const file of found) if (!(file in B3_V1_INVENTORY)) problems.push(`B3 v1 inventory extra file: ${file}`);
+  for (const [file, expected] of Object.entries(B3_V1_INVENTORY)) {
+    let bytes;
+    try {
+      bytes = await readFile(join(root, file));
+    } catch {
+      problems.push(`B3 v1 inventory missing file: ${file}`);
+      continue;
+    }
+    if (createHash('sha256').update(bytes).digest('hex') !== expected)
+      problems.push(`B3 v1 inventory digest mismatch: ${file}`);
+  }
+}
+function json(value, message, problems) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    problems.push(message);
+    return undefined;
+  }
+}
+async function load(root, file, problems) {
+  try {
+    return await import(pathToFileURL(join(root, file)).href);
+  } catch (error) {
+    problems.push(`cannot load prerequisite production module ${file}: ${String(error)}`);
+    return undefined;
+  }
+}
+async function vectors(root, problems) {
+  const files = await readdir(join(root, VECTORS)).catch(() => undefined);
+  if (files === undefined) {
+    problems.push(`missing prerequisite input: ${VECTORS}`);
+    return [];
+  }
+  const result = [];
+  for (const file of files.filter((name) => name.endsWith('.json')).sort()) {
+    const value = json(await text(root, join(VECTORS, file), problems), `B3 vector ${file} is valid JSON`, problems);
+    if (value !== undefined) result.push(...(Array.isArray(value) ? value : [value]));
+  }
+  return result;
+}
+async function previewFixtures(root, problems) {
+  const files = await readdir(join(root, PREVIEW_FIXTURES)).catch(() => undefined);
+  if (files === undefined) {
+    problems.push(`missing prerequisite input: ${PREVIEW_FIXTURES}`);
+    return [];
+  }
+  const result = [];
+  for (const file of files.filter((name) => name.endsWith('.json')).sort()) {
+    const value = json(
+      await text(root, join(PREVIEW_FIXTURES, file), problems),
+      `B3 preview fixture ${file} is valid JSON`,
+      problems,
+    );
+    if (value !== undefined) result.push({ file, value });
+  }
+  return result;
+}
+function requireVectors(values, specs, problems) {
+  const byName = new Map(values.map((vector) => [vector?.name, vector]));
+  for (const name of REQUIRED_VECTOR_NAMES)
+    if (!byName.has(name)) problems.push(`B3 required vector is absent: ${name}`);
+  const secret = byName.get('secret-app-unavailable');
+  if (secret?.request?.origin !== 'app-window')
+    problems.push('B3 required vector secret-app-unavailable keeps its forged app/window origin');
+  const pending = byName.get('pending-target-approval-flow');
+  if (pending?.request?.surface !== 'app-approval-screen')
+    problems.push('B3 required vector pending-target-approval-flow is app approval only');
+  const ordinary = byName.get('target-test-active-request');
+  if (ordinary?.request?.operation !== 'targetTest' || Object.hasOwn(ordinary?.request ?? {}, 'selector'))
+    problems.push(
+      'B3 required vector target-test-active-request refuses a pending target selector on ordinary CLI/MCP',
+    );
+  for (const spec of specs ?? []) {
+    if (!values.some((vector) => vector?.request?.operation === spec?.operation))
+      problems.push(`B3 operation has no request vector: ${String(spec?.operation)}`);
+  }
+}
+
+function validate(schema, doctor, values, specs, problems) {
+  if (schema?.$id !== 'https://agentcomms.local/b3-control-v1.schema.json')
+    problems.push('B3 control schema has the stable v1 id');
+  if (doctor?.$id !== 'https://agentcomms.local/events-doctor-v1.schema.json')
+    problems.push('B3 doctor schema has the stable v1 id');
+  if (!schema || !doctor) return;
+  let validator;
+  let validateDoctor;
+  try {
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    ajv.addSchema(doctor);
+    ajv.addSchema(schema);
+    validator = ajv.compile({ $ref: `${schema.$id}#/$defs/vector` });
+    validateDoctor = ajv.compile({ $ref: `${schema.$id}#/$defs/doctor` });
+  } catch (error) {
+    problems.push(`B3 control schema and doctor-v1 $ref compile: ${String(error)}`);
+    return;
+  }
+  for (const vector of values)
+    if (!validator(vector))
+      problems.push(
+        `B3 schema rejects checked-in vector ${typeof vector?.name === 'string' ? vector.name : '<unnamed>'}`,
+      );
+  const doctorVector = values.find((vector) => vector?.name === 'doctor-result');
+  if (!doctorVector) problems.push('B3 required doctor result vector is absent');
+  else if (!validateDoctor(doctorVector.result)) problems.push('B3 schema rejects checked-in doctor result branch');
+  requireVectors(values, specs, problems);
+}
+function consume(contract, values, previews, problems) {
+  if (!contract) return;
+  const {
+    assertB3ControlContractVectorV1: guard,
+    renderB3ApprovalPreviewV1: render,
+    B3_CONTROL_CONTRACT: control,
+    B3_CONTROL_V1_OPERATION_SPECS: specs,
+  } = contract;
+  if (typeof guard !== 'function') {
+    problems.push('B3 exports the runtime vector guard');
+    return;
+  }
+  if (typeof render !== 'function') problems.push('B3 exports the approval preview renderer');
+  if (control?.version !== 'b3-control-v1' || !Array.isArray(specs) || specs.length === 0)
+    problems.push('B3 exports its consumed contract constants');
+  for (const vector of values) {
+    try {
+      guard(vector);
+      if (vector?.request?.operation === 'approvalView' && Object.hasOwn(vector, 'result')) {
+        const rendered = render(vector.result);
+        if (rendered?.kind !== vector.result?.kind) throw new TypeError('renderer drifted the discriminant');
+      }
+    } catch (error) {
+      problems.push(
+        `B3 runtime contract rejects checked-in vector ${typeof vector?.name === 'string' ? vector.name : '<unnamed>'}: ${String(error)}`,
+      );
+    }
+  }
+  try {
+    guard({ name: 'phase-e-invalid-operation', request: { operation: 'not-a-b3-operation', args: {} } });
+    problems.push('B3 runtime vector guard accepts invalid vector phase-e-invalid-operation');
+  } catch {}
+  try {
+    render({ kind: 'NOT_A_B3_PREVIEW' });
+    problems.push('B3 preview renderer accepts an invalid preview variant');
+  } catch {}
+  for (const { file, value } of previews) {
+    try {
+      if (JSON.stringify(render(value?.result)) !== JSON.stringify(value?.expected)) {
+        problems.push(`B3 consumer preview fixture ${file} does not match the real preview renderer`);
+      }
+    } catch (error) {
+      problems.push(`B3 consumer preview fixture ${file} is rejected by the real preview renderer: ${String(error)}`);
+    }
+  }
+}
+
+export async function verifyPhaseEPrerequisites({ root = ROOT } = {}) {
+  const problems = [];
+  const [phase, contract, schemaText, doctorText, capabilitiesText, checked, previews] = await Promise.all([
+    load(root, 'packages/events-daemon/src/runtime/phase-e-prerequisites.ts', problems),
+    load(root, 'packages/events-daemon/src/operations/b3-contract.ts', problems),
+    text(root, 'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json', problems),
+    text(root, 'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json', problems),
+    text(root, 'capabilities.json', problems),
+    vectors(root, problems),
+    previewFixtures(root, problems),
+  ]);
+  await verifyB3Inventory(root, problems);
+  try {
+    phase?.assertPhaseEPrerequisites();
+  } catch (error) {
+    problems.push(`E runtime prerequisite gate refuses its real parser/registry/B3 contract: ${String(error)}`);
+  }
+  validate(
+    json(schemaText, 'B3 control schema is valid JSON', problems),
+    json(doctorText, 'B3 doctor schema is valid JSON', problems),
+    checked,
+    contract?.B3_CONTROL_V1_OPERATION_SPECS,
+    problems,
+  );
+  consume(contract, checked, previews, problems);
+  const capabilities = json(capabilitiesText, 'capabilities.json is valid JSON', problems)?.capabilities;
+  if (!Array.isArray(capabilities)) problems.push('capabilities.json has capability rows');
+  else
+    for (const id of EXCEPTIONS) {
+      const row = capabilities.find((candidate) => candidate?.id === id);
+      if (row?.status !== 'exception' || row?.mcp !== null || typeof row?.operation !== 'string' || !row.reason)
+        problems.push(`B3 human-only exception row exists: ${id}`);
+    }
+  return problems;
+}
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const problems = await verifyPhaseEPrerequisites();
+  if (problems.length) {
+    console.error(problems.map((problem) => `- ${problem}`).join('\n'));
+    process.exitCode = 1;
+  }
+}

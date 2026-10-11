@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { ApprovalStore, ConfigStore } from '@agentcomms/core';
 import { isActivationFailureCode } from '../domain/activation-failure-codes.ts';
+import { JUDGE_KINDS, type JudgeKind } from '../domain/lifecycle.ts';
 import {
   assertDoctorReportV1,
   type DoctorActivationFailureCode,
@@ -15,6 +16,10 @@ import type { B3ControlPorts } from './b3-control-ports.ts';
 import { type LineageFailureCode, type RuleLineageRow, validateRuleLineage } from './disclosure-fence.ts';
 
 export const DOCTOR_REPORT_V1_SCHEMA_VERSION = 'doctor-v1' as const;
+
+function preEJudgeBoundary(kind: JudgeKind): DoctorReportV1['judgeBoundary'][number] {
+  return kind === 'laya' ? { kind, code: 'E2_REQUIRED', phase: 'E2' } : { kind, code: 'E_REQUIRED', phase: 'E' };
+}
 
 interface DoctorProjectionInput {
   readonly database: DatabaseSync;
@@ -569,11 +574,9 @@ export async function projectB3Doctor(input: DoctorProjectionInput): Promise<Doc
       resetBarriers,
       missingSecrets,
     },
-    judgeBoundary: [
-      { kind: 'typesafe', code: 'E_REQUIRED', phase: 'E' },
-      { kind: 'local-endpoint', code: 'E_REQUIRED', phase: 'E' },
-      { kind: 'laya', code: 'E2_REQUIRED', phase: 'E2' },
-    ],
+    judgeBoundary: [...JUDGE_KINDS]
+      .sort((left, right) => preEJudgeBoundary(left).phase.localeCompare(preEJudgeBoundary(right).phase))
+      .map(preEJudgeBoundary),
     whatsapp: whatsappHealth(input.database, live),
   });
 }

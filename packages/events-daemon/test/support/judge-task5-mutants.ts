@@ -20,6 +20,13 @@ const judgeKindSqlSource =
 
 export const JUDGE_TASK5_MUTATIONS: readonly JudgeTask5Mutation[] = [
   {
+    id: 'e2-durable-schema',
+    source: 'src/store/schema-v1.ts',
+    test: 'test/judge-migrations.test.ts',
+    testName: 'E5 schema: every fresh and upgraded judge-kind CHECK admits exactly JUDGE_KINDS',
+    changes: [{ before: judgeKindSqlSource, after: "const JUDGE_KIND_SQL_VALUES = \"'typesafe', 'local-endpoint'\";" }],
+  },
+  {
     id: 'e5-owner-start-recovery',
     source: 'src/runtime/owner.ts',
     test: 'test/judge-crash-recovery.test.ts',

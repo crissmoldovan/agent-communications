@@ -1,5 +1,6 @@
 import { EventControlClient } from '../control/client.ts';
 import { ACTIVATION_FAILURE_CODES, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
+import type { JudgeKind } from '../domain/lifecycle.ts';
 
 /** The checked binding for contracts/doctor-v1.schema.json. No free-form values cross this operation boundary. */
 export type DoctorSource = 'gmail' | 'slack' | 'resend' | 'whatsapp';
@@ -134,7 +135,7 @@ export interface DoctorReportV1 {
     }[];
   };
   readonly judgeBoundary: readonly {
-    readonly kind: 'typesafe' | 'local-endpoint' | 'laya';
+    readonly kind: JudgeKind;
     readonly code: 'E_REQUIRED' | 'E2_REQUIRED';
     readonly phase: 'E' | 'E2';
   }[];
