@@ -286,6 +286,43 @@ test('E3 scope: required E-owned rows and imported strict-runner collections can
   }
 });
 
+test('E4 scope: deleting every Task-4 row from its manifest and strict runner is refused', async () => {
+  const root = await manifestFixture();
+  try {
+    const task4Rows = new Set([
+      'e4-no-pointer-at-prepare',
+      'e4-final-pointer-drift',
+      'e4-claim-pointer-drift',
+      'e4-disabled-judge-add',
+      'e4-kind-disable-recovery',
+      'e4-laya-before-intent',
+    ]);
+    const manifestPath = join(root, 'packages/events-daemon/test/fixtures/judges/case-manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+      guards: { id: string }[];
+      mutations: { id: string }[];
+      cases: { id: string }[];
+    };
+    manifest.guards = manifest.guards.filter((entry) => !task4Rows.has(entry.id));
+    manifest.mutations = manifest.mutations.filter((entry) => !task4Rows.has(entry.id));
+    manifest.cases = manifest.cases.filter((entry) => !task4Rows.has(entry.id));
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    await writeFile(
+      join(root, 'packages/events-daemon/test/support/judge-task4-mutants.ts'),
+      'export const JUDGE_TASK4_MUTATIONS = [] as const;\n',
+    );
+
+    const problems = await verifyPhaseETestManifest({ root });
+    for (const id of task4Rows)
+      assert.ok(
+        problems.includes(`required Phase-E guard row is absent: ${id}`),
+        `removing ${id} from both manifest and runner must refuse: ${problems.join('; ')}`,
+      );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('E3 scope: a strict runner whose loop only diagnoses mutations is rejected from a copied tree', async () => {
   const root = await manifestFixture();
   try {
@@ -343,6 +380,27 @@ test('E3 scope: static guards analyse each kind literal and each SQL statement i
       source:
         'const statement = `DELETE FROM judge_budget_reservations WHERE work_scope = ? AND account_id = ? AND source = ?`;',
     }),
-    ['src/runtime/unbound.ts: judge SQL work_scope must compare with a source-owned or synthetic-test literal'],
+    [
+      'src/runtime/unbound.ts: judge work SQL selected by kind, judge, rule, or no selector must bind a literal work_scope with its scope predicates',
+      'src/runtime/unbound.ts: judge SQL work_scope must compare with a source-owned or synthetic-test literal',
+    ],
+  );
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'src/runtime/unscoped-kind.ts',
+      source: 'const statement = `SELECT id FROM judge_budget_reservations WHERE judge_kind = ?`;',
+    }),
+    [
+      'src/runtime/unscoped-kind.ts: judge work SQL selected by kind, judge, rule, or no selector must bind a literal work_scope with its scope predicates',
+    ],
+  );
+  assert.deepEqual(
+    verifyPhaseEJudgeSource({
+      file: 'src/runtime/primary-key.ts',
+      source:
+        "const statement = `UPDATE judge_budget_reservations SET state = 'released' WHERE id = ?`;\nconst read = `SELECT id FROM judge_budget_reservations WHERE id = ?`;",
+    }),
+    [],
+    'a single-row primary-key transition is the only unscoped judge-work exemption',
   );
 });

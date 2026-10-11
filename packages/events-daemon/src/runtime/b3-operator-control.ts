@@ -178,7 +178,7 @@ export class B3OperatorControl implements B3OwnerService {
               WHERE rule_id = ? AND version = ? AND state IN ('active', 'superseded')`,
           )
           .run(now, rule.rule_id, rule.version);
-        purgeRevokedRuleWork(this.#store.database, rule.rule_id, [rule.version]);
+        purgeRevokedRuleWork(this.#store.database, rule.rule_id, [rule.version], now);
         this.#store.database
           .prepare("DELETE FROM active_versions WHERE kind = 'rule' AND object_id = ? AND version = ?")
           .run(rule.rule_id, rule.version);

@@ -45,8 +45,10 @@ export const JUDGE_KIND_MUTATIONS: readonly JudgeKindMutation[] = [
   {
     id: 'e1-local-claim-transaction-disabled-kind',
     file: 'runtime/activations.ts',
-    before: 'this.#assertRuleJudgeKindEnabled(this.#document(row));',
-    after: 'void row;',
+    before: `const document = this.#document(row);
+      this.#assertRuleJudgeKindEnabled(document);`,
+    after: `const document = this.#document(row);
+      void row;`,
     testFile: 'judge-kind-activation-race.test.ts',
     testName:
       'E1 judge-kind claimed race: disabling after the core claim refuses its local claim transaction before a baseline',
@@ -54,8 +56,12 @@ export const JUDGE_KIND_MUTATIONS: readonly JudgeKindMutation[] = [
   {
     id: 'e1-finalise-transaction-disabled-kind',
     file: 'runtime/activations.ts',
-    before: 'this.#assertRuleJudgeKindEnabled(document);',
-    after: 'void document;',
+    before: `// Baseline and point encryption have awaited.  Check under the pointer-write transaction, not only when the
+      // rule was prepared or approved, so a disabled kind can never become effective through this final swap.
+      this.#assertRuleJudgeKindEnabled(document);`,
+    after: `// Baseline and point encryption have awaited.  Check under the pointer-write transaction, not only when the
+      // rule was prepared or approved, so a disabled kind can never become effective through this final swap.
+      void document;`,
     testFile: 'judge-kind-activation-race.test.ts',
     testName: 'E1 judge-kind finalisation race: disabling after claim refuses the final pointer transaction',
   },

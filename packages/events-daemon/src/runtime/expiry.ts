@@ -1,5 +1,6 @@
 import type { EventDatabase } from '../store/database.ts';
 import { fixedDeadline } from '../store/retention.ts';
+import { JudgePurgeParticipant } from './judge-purge.ts';
 import { purgeExpiredB2StreamRecords } from './phase-d-b2-retention.ts';
 import { degradeResetBarrier } from './system-reset-outbox.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
@@ -118,6 +119,31 @@ export class EventExpiry {
     const now = this.#now();
     return this.#store.immediate(() => {
       const database = this.#store.database;
+      const expiringJudgeWork = database
+        .prepare(
+          `SELECT projection.event_id, projection.rule_id, projection.rule_version, ingest.account_id,
+                  json_extract(rule.document, '$.source.channel') AS source
+             FROM ingest_rules AS projection
+             JOIN ingest ON ingest.event_id = projection.event_id
+             JOIN rule_versions AS rule ON rule.rule_id = projection.rule_id AND rule.version = projection.rule_version
+            WHERE projection.decision_deadline <= ?`,
+        )
+        .all(now) as Array<{
+        event_id: string;
+        rule_id: string;
+        rule_version: number;
+        account_id: string;
+        source: 'gmail' | 'slack' | 'resend' | 'whatsapp';
+      }>;
+      const judgePurge = new JudgePurgeParticipant({ database, now: this.#now });
+      for (const work of expiringJudgeWork)
+        judgePurge.event({
+          source: work.source,
+          accountId: work.account_id,
+          eventId: work.event_id,
+          ruleId: work.rule_id,
+          ruleVersion: work.rule_version,
+        });
       const expiring = database
         .prepare(
           `SELECT id FROM deliveries

@@ -17,8 +17,9 @@ import {
   canonicalJudge,
   canonicalJudgeBudget,
   canonicalJudgeKindEnablement,
+  judgeKindDefinition,
 } from './judges.ts';
-import { assertJudgeKindEnabled, EventDomainError } from './lifecycle.ts';
+import { assertJudgeKindEnabled, EventDomainError, isJudgeKind } from './lifecycle.ts';
 
 export type ActiveVersionKind = 'rule' | 'judge-budget' | 'judge-kind';
 
@@ -93,17 +94,75 @@ export class ImmutableVersions {
     return canonicalJudgeBudget(input);
   }
 
+  /** The sole digest-verifying loader for an immutable budget document. */
+  loadJudgeBudget(version: number): CanonicalJudgeBudgetDocument {
+    const row = this.#database
+      .prepare('SELECT document, digest FROM judge_budget_versions WHERE version = ? AND revoked_at IS NULL')
+      .get(version) as { document: string; digest: string } | undefined;
+    if (row === undefined)
+      throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'the requested judge budget version does not exist');
+    let budget: CanonicalJudgeBudgetDocument;
+    try {
+      budget = canonicalJudgeBudget(JSON.parse(row.document));
+    } catch {
+      throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'the stored judge budget document is invalid');
+    }
+    if (sha256Hex(canonicalJson(budget)) !== row.digest)
+      throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'the stored judge budget document digest has drifted');
+    return budget;
+  }
+
+  /** Loads the sole immutable budget document; callers derive its singleton identity rather than accepting one. */
+  prepareJudgeBudget(version: number): Extract<ActivationDocumentV1, { kind: 'judge-budget' }> {
+    const budget = this.loadJudgeBudget(version);
+    return {
+      documentVersion: 1,
+      kind: 'judge-budget',
+      budget,
+    };
+  }
+
   createJudgeBudget(input: unknown): PendingVersion {
     const document = this.prepareBudget(input);
     return this.insert('judge_budget_versions', 'judge-budget', document.budgetId, document.version, document);
   }
 
-  prepareJudgeKind(input: unknown): CanonicalJudgeKindEnablementDocument {
+  prepareJudgeKindDocument(input: unknown): CanonicalJudgeKindEnablementDocument {
     return canonicalJudgeKindEnablement(input);
   }
 
+  /** The sole digest-verifying loader for an immutable kind enablement document. */
+  loadJudgeKind(kind: string, version: number): CanonicalJudgeKindEnablementDocument {
+    if (isJudgeKind(kind) && judgeKindDefinition(kind).availability === 'unavailable')
+      throw new EventDomainError('E2_REQUIRED', 'laya is unavailable until E2');
+    const row = this.#database
+      .prepare('SELECT document, digest FROM judge_kind_versions WHERE kind = ? AND version = ? AND revoked_at IS NULL')
+      .get(kind, version) as { document: string; digest: string } | undefined;
+    if (row === undefined)
+      throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'the requested judge kind version does not exist');
+    let enablement: CanonicalJudgeKindEnablementDocument;
+    try {
+      enablement = canonicalJudgeKindEnablement(JSON.parse(row.document));
+    } catch {
+      throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'the stored judge kind document is invalid');
+    }
+    if (sha256Hex(canonicalJson(enablement)) !== row.digest)
+      throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'the stored judge kind document digest has drifted');
+    return enablement;
+  }
+
+  /** Loads one exact immutable kind enablement document, never inferring a default enabled state. */
+  prepareJudgeKind(kind: string, version: number): Extract<ActivationDocumentV1, { kind: 'judge-kind' }> {
+    const enablement = this.loadJudgeKind(kind, version);
+    return {
+      documentVersion: 1,
+      kind: 'judge-kind',
+      enablement,
+    };
+  }
+
   createJudgeKind(input: unknown): PendingVersion {
-    const document = this.prepareJudgeKind(input);
+    const document = this.prepareJudgeKindDocument(input);
     return this.insert('judge_kind_versions', 'judge-kind', document.kind, document.version, document);
   }
 

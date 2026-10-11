@@ -185,6 +185,21 @@ function verifyRuleVersions(database: DatabaseSync, rule: CanonicalFullRuleDocum
     );
   for (const judge of rule.judges)
     storedDocument(database, 'judge_versions', 'judge_id', judge.judgeId, judge.version, judge, true);
+  if (rule.agentic !== undefined) {
+    storedDocument(
+      database,
+      'judge_versions',
+      'judge_id',
+      rule.agentic.judge.judgeId,
+      rule.agentic.judge.version,
+      rule.agentic.judge,
+      true,
+    );
+    const active = database
+      .prepare("SELECT version FROM active_versions WHERE kind = 'judge-kind' AND object_id = ?")
+      .get(rule.agentic.judge.kind) as { version: number } | undefined;
+    if (active === undefined) refuse('JUDGE_KIND_DISABLED', 'the exact judge kind is disabled before disclosure');
+  }
 }
 
 function versionRow(database: DatabaseSync, ruleId: string, version: number): RuleLineageRow {

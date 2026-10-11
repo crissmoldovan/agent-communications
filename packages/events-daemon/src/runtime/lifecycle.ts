@@ -1,5 +1,6 @@
 import { CommsError } from '@agentcomms/core';
 import type { EventDatabase } from '../store/database.ts';
+import { JudgePurgeParticipant } from './judge-purge.ts';
 import { purgeAllB2StreamRecords } from './phase-d-b2-retention.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 
@@ -57,6 +58,7 @@ export class EventLifecycle {
     return this.store.immediate(() => {
       const database = this.store.database;
       const now = this.now();
+      new JudgePurgeParticipant({ database, now: this.now }).all();
       const retained = database
         .prepare(
           `SELECT id FROM deliveries

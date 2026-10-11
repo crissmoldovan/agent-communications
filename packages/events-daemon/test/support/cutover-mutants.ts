@@ -114,7 +114,7 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
   {
     id: 'whatsapp-target-removal-leaves-rule-work',
     file: 'runtime/revocations.ts',
-    before: 'purgeRevokedRuleWork(database.database, rule.rule_id, [rule.version]);',
+    before: 'purgeRevokedRuleWork(database.database, rule.rule_id, [rule.version], revokedAt);',
     after: 'void rule;',
     cell: 'W:disable-or-remove-cancels-and-purges-hidden-tuples',
     exportName: 'removeTarget',
@@ -366,8 +366,8 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
       .prepare(
         "UPDATE rule_versions SET state = 'revoked', revoked_at = ? WHERE rule_id = ? AND state IN ('active', 'superseded')",
       )
-      .run(Date.now(), ruleId);
-    purgeRevokedRuleWork(database.database, ruleId, live);
+      .run(revokedAt, ruleId);
+    purgeRevokedRuleWork(database.database, ruleId, live, revokedAt);
     database.database.prepare("DELETE FROM active_versions WHERE kind = 'rule' AND object_id = ?").run(ruleId);`,
     after: 'void ruleId; void live;',
     cell: 'S:disable-or-remove-cancels-and-purges',
@@ -687,7 +687,7 @@ export const CUTOVER_MUTATIONS: readonly CutoverMutation[] = [
   {
     id: 'resend-disable-retains-source-points',
     file: 'runtime/revocations.ts',
-    before: 'purgeRevokedRuleWork(database.database, ruleId, live);',
+    before: 'purgeRevokedRuleWork(database.database, ruleId, live, revokedAt);',
     after: 'void ruleId; void live;',
     cell: 'R:disable-or-remove-cancels-and-purges',
     exportName: 'disableRule',
