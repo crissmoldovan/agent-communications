@@ -17,12 +17,22 @@ async function fixture() {
     if (!entry.isDirectory()) continue;
     const directory = entry.name;
     await mkdir(path.join(root, 'packages', directory), { recursive: true });
-    await cp(
-      path.join(repository, 'packages', directory, 'package.json'),
-      path.join(root, 'packages', directory, 'package.json'),
-    );
     // A service's declaration names its server entry and operations directory, and the registry checks both exist.
     const manifest = JSON.parse(await readFile(path.join(repository, 'packages', directory, 'package.json'), 'utf8'));
+    // This fixture is about generic verification. The event-service fixture owns service-family checks, so do not
+    // make each generic case carry the event skill and its contract.
+    const declaration = manifest.agentcommsPackage;
+    const fixtureManifest =
+      declaration?.kind === 'service' && declaration.skills
+        ? {
+            ...manifest,
+            agentcommsPackage: Object.fromEntries(Object.entries(declaration).filter(([key]) => key !== 'skills')),
+          }
+        : manifest;
+    await writeFile(
+      path.join(root, 'packages', directory, 'package.json'),
+      `${JSON.stringify(fixtureManifest, null, 2)}\n`,
+    );
     const service = manifest.agentcommsPackage?.kind === 'service' ? manifest.agentcommsPackage : null;
     if (service !== null) {
       for (const declared of [service.server.entry, service.operations]) {

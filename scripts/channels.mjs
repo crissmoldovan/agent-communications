@@ -91,6 +91,7 @@ export function readDeclarations(root = ROOT) {
   const held = holds
     .map(({ directory, packageJson }) => readHold(directory, packageJson, undeclared))
     .sort(byDirectory);
+  assertSkillPrefixes(channels, services);
   return { channels, libraries, services, held, undeclared };
 }
 
@@ -100,6 +101,28 @@ export function readChannels(root = ROOT) {
 }
 
 const byDirectory = (a, b) => (a.directory < b.directory ? -1 : a.directory > b.directory ? 1 : 0);
+
+/** A skill name must resolve to exactly one family; exact duplicates and overlapping prefixes are both ambiguous. */
+function assertSkillPrefixes(channels, services) {
+  const declared = [
+    ...channels
+      .filter(({ manifest }) => manifest.skills)
+      .map(({ directory, manifest }) => ({ directory, prefix: manifest.skills.prefix })),
+    ...services
+      .filter(({ declaration }) => declaration.skills)
+      .map(({ directory, declaration }) => ({ directory, prefix: declaration.skills.prefix })),
+  ];
+  for (let index = 0; index < declared.length; index += 1) {
+    for (const other of declared.slice(index + 1)) {
+      const current = declared[index];
+      if (current.prefix.startsWith(other.prefix) || other.prefix.startsWith(current.prefix)) {
+        throw new Error(
+          `packages/${current.directory}/package.json: skill prefix ${JSON.stringify(current.prefix)} is already declared by packages/${other.directory}/package.json`,
+        );
+      }
+    }
+  }
+}
 
 /** One channel's entry, from a package whose `"agentcomms"` field is set. */
 function readChannel(directory, packageJson) {
@@ -134,6 +157,9 @@ function readLibrary(directory, packageJson) {
   if (declaration === null || typeof declaration !== 'object' || Array.isArray(declaration)) {
     throw new Error(`${where}: "agentcommsPackage" must be an object, { "kind": "library" }`);
   }
+  if (Object.hasOwn(declaration, 'skills')) {
+    throw new Error(`${where}: a library cannot declare "skills"; only a service has a skills family`);
+  }
   const unknown = Object.keys(declaration).find((key) => key !== 'kind');
   if (unknown !== undefined) {
     throw new Error(
@@ -167,7 +193,9 @@ function readService(root, directory, packageJson) {
   if (declaration === null || typeof declaration !== 'object' || Array.isArray(declaration)) {
     throw new Error(`${where}: "agentcommsPackage" must be an object`);
   }
-  const unknown = Object.keys(declaration).find((key) => !['kind', 'binary', 'server', 'operations'].includes(key));
+  const unknown = Object.keys(declaration).find(
+    (key) => !['kind', 'binary', 'server', 'operations', 'skills'].includes(key),
+  );
   if (unknown !== undefined) throw new Error(`${where}: "agentcommsPackage" has unknown key "${unknown}"`);
   for (const key of ['kind', 'binary', 'server', 'operations']) {
     if (!Object.hasOwn(declaration, key)) throw new Error(`${where}: "agentcommsPackage" has no "${key}"`);
@@ -224,7 +252,35 @@ function readService(root, directory, packageJson) {
   if (!isDirectory(join(packageRoot, operations))) {
     throw new Error(`${where}: "agentcommsPackage".operations ${JSON.stringify(operations)} is not a directory`);
   }
+  readServiceSkills(root, where, declaration.skills);
   return { directory, packageName: packageJson.name, declaration, packageJson };
+}
+
+/** A service may declare one request-only skills family without becoming a channel. */
+function readServiceSkills(root, where, skills) {
+  if (skills === undefined) return;
+  if (skills === null || typeof skills !== 'object' || Array.isArray(skills)) {
+    throw new Error(`${where}: "agentcommsPackage".skills must be an object`);
+  }
+  const unknown = Object.keys(skills).find((key) => !['prefix', 'contract'].includes(key));
+  if (unknown !== undefined) {
+    throw new Error(`${where}: "agentcommsPackage".skills has unknown key "${unknown}"`);
+  }
+  for (const key of ['prefix', 'contract']) {
+    if (!Object.hasOwn(skills, key)) throw new Error(`${where}: "agentcommsPackage".skills has no "${key}"`);
+  }
+  if (typeof skills.prefix !== 'string' || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*-$/.test(skills.prefix)) {
+    throw new Error(`${where}: "agentcommsPackage".skills.prefix must be a skill-name prefix ending in "-"`);
+  }
+  if (
+    typeof skills.contract !== 'string' ||
+    !/^skills\/_shared\/contract-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/.test(skills.contract)
+  ) {
+    throw new Error(`${where}: "agentcommsPackage".skills.contract must name skills/_shared/contract-<family>.md`);
+  }
+  if (!isFile(join(root, skills.contract))) {
+    throw new Error(`${where}: "agentcommsPackage".skills.contract ${JSON.stringify(skills.contract)} is not a file`);
+  }
 }
 
 /** A declaration path is package-relative and cannot escape into another package or the checkout. */
@@ -398,8 +454,9 @@ const escapeRegExp = (text) => text.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
  *   A channel's CLI is `src/cli.ts`, its Commander program `src/cli/program.ts` exporting `run`, and its server
  *   `src/mcp/server.ts` exporting `create<Label>McpServer`. The core's CLI is a usage table, and `main`.
  * - `reference`: each channel's and service's generated reference pages. `products`: what `tool-drift` checks.
- * - `skillFamilies`: each channel's skill prefix and contract, with the words of every *other* channel its skills
- *   must never use (`foreign`). The core's `comms-` skills manage every channel, so theirs is empty.
+ * - `skillFamilies`: each declared channel or service skill prefix and contract. Channel families carry the words of
+ *   every *other* channel their skills must never use (`foreign`); service families are deliberately not channels.
+ *   The core's `comms-` skills manage every channel, so theirs is empty.
  * - `platforms`: the platform words accounts are named with (`cue/<platform>`).
  */
 export function loadRegistry(root = ROOT) {
@@ -514,18 +571,31 @@ export function loadRegistry(root = ROOT) {
       .filter((skill) => manifest.skills && skill.startsWith(manifest.skills.prefix))
       .map((skill) => new RegExp(`\\b${escapeRegExp(skill)}\\b`)),
   ];
-  const skillFamilies = channels
-    .filter(({ manifest }) => manifest.skills)
-    .map((channel) => ({
-      channel: channel.directory,
-      family: channel.manifest.skills.prefix.slice(0, -1),
-      prefix: channel.manifest.skills.prefix,
-      contract: channel.manifest.skills.contract,
-      readme: `packages/${channel.directory}/README.md`,
-      foreign: isCore(channel.directory)
-        ? []
-        : channels.filter((other) => other !== channel && !isCore(other.directory)).flatMap(wordsOf),
-    }));
+  const skillFamilies = [
+    ...channels
+      .filter(({ manifest }) => manifest.skills)
+      .map((channel) => ({
+        channel: channel.directory,
+        family: channel.manifest.skills.prefix.slice(0, -1),
+        prefix: channel.manifest.skills.prefix,
+        contract: channel.manifest.skills.contract,
+        readme: `packages/${channel.directory}/README.md`,
+        foreign: isCore(channel.directory)
+          ? []
+          : channels.filter((other) => other !== channel && !isCore(other.directory)).flatMap(wordsOf),
+      })),
+    ...services
+      .filter(({ declaration }) => declaration.skills)
+      .map((service) => ({
+        kind: 'service',
+        package: service.directory,
+        family: service.declaration.skills.prefix.slice(0, -1),
+        prefix: service.declaration.skills.prefix,
+        contract: service.declaration.skills.contract,
+        readme: `packages/${service.directory}/README.md`,
+        foreign: [],
+      })),
+  ];
   const platforms = channels.filter(({ manifest }) => manifest.accounts).map(({ manifest }) => manifest.channel);
 
   return {

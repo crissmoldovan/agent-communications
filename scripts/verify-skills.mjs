@@ -9,7 +9,7 @@
  * - no directory is exempt from the whole-tree scan.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, relative, resolve, sep } from 'node:path';
+import { basename, dirname, relative, resolve, sep } from 'node:path';
 import { REGISTRY } from './channels.mjs';
 
 const root = process.cwd();
@@ -286,6 +286,128 @@ for (const file of skillFiles) {
     if (!['.md', '.mdx', '.txt'].includes(extension)) continue;
     validateCarriedFiles(readFileSync(carried, 'utf8'), carried, skillDirectory);
   }
+}
+
+/** Event services may declare a request-only skill family without entering any channel-only registry view. */
+function serviceOf(family) {
+  return REGISTRY.services.find((service) => service.directory === family.package);
+}
+
+function escaped(text) {
+  return text.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
+}
+
+function eventServiceRows(family) {
+  const capabilityPath = resolve(root, 'capabilities.json');
+  let capabilities;
+  try {
+    capabilities = JSON.parse(readFileSync(capabilityPath, 'utf8')).capabilities;
+  } catch (error) {
+    fail(`capabilities.json: cannot read event skill safety surface: ${error.message}`);
+    return null;
+  }
+  if (!Array.isArray(capabilities)) {
+    fail('capabilities.json: event skill safety surface has no capabilities array');
+    return null;
+  }
+  return capabilities.filter((row) => row?.package === family.package);
+}
+
+function unsafeSecretInstruction(source) {
+  const action =
+    /\b(?:ask|request|read|type|relay|paste|provide|collect|share|enter)\w*\b[^.\n]{0,100}\b(?:secret|token|password|key|credential)\b/i;
+  const denial =
+    /\b(?:never|do not|don't|must not|cannot)\b[^.\n]{0,100}\b(?:ask|request|read|type|relay|paste|provide|collect|share|enter)\w*\b/i;
+  return source.split('\n').find((line) => action.test(line) && !denial.test(line));
+}
+
+function validateEventServiceSkill(service, rows, file, source) {
+  const where = show(file);
+  const name = service.declaration.server.defaultName;
+  // Markdown wraps prose, while the safety promises are semantic sentences rather than line-oriented syntax.
+  const prose = source.replace(/\s+/g, ' ');
+  const requiredTools = [
+    `${name}_catalogue_list`,
+    `${name}_sources_list`,
+    `${name}_rule_create`,
+    `${name}_rule_test`,
+    `${name}_rule_enable`,
+    `${name}_approval_view`,
+  ];
+  if (!source.includes('## Safe workflow') || requiredTools.some((tool) => !source.includes(`\`${tool}\``))) {
+    fail(`${where}: event service skill is missing the safe workflow`);
+  }
+  if (
+    !prose.includes('`plain` leaves each sanitised string as it is; `enveloped` wraps each untrusted string.') ||
+    !prose.includes('sanitised and enveloped regardless of the target representation')
+  ) {
+    fail(`${where}: event service skill must explain plain and enveloped output`);
+  }
+  if (!source.includes('Every judge kind is off until a person enables it.')) {
+    fail(`${where}: event service skill must say every judge kind is off`);
+  }
+  if (
+    !source.includes('## Approval handoff') ||
+    !source.includes('Give the approval id and preview to\nthe person.') ||
+    !source.includes(
+      'Standing disclosure can be approved only by a person typing the challenge at an interactive terminal.',
+    )
+  ) {
+    fail(`${where}: event service skill is missing the approval handoff`);
+  }
+
+  // The handoffs come from the capability rows, so a new or reworded human-only row cannot leave the skill behind.
+  // A human-only exception's reason names the person; the process entry points (`run`, the server) name none.
+  const humanOnlyHandoffs = [
+    ...new Set(
+      rows
+        .filter((row) => row.status === 'exception' && row.mcp === null && /\bperson\b/i.test(row.reason ?? ''))
+        .map((row) => row.reason),
+    ),
+  ];
+  if (humanOnlyHandoffs.length === 0) fail(`${where}: the event service declares no human-only exception rows`);
+  for (const handoff of humanOnlyHandoffs) {
+    if (!prose.includes(handoff))
+      fail(`${where}: event service skill is missing the exact human-only handoff: ${handoff}`);
+  }
+
+  const secret = unsafeSecretInstruction(source);
+  if (secret !== undefined)
+    fail(`${where}: event service skill contains a secret-request instruction: ${secret.trim()}`);
+
+  const allowedTools = new Set(rows.map((row) => row.mcp).filter((tool) => typeof tool === 'string'));
+  const toolPattern = new RegExp(`\\b${escaped(name)}_[a-z][a-z0-9_]*\\b`, 'g');
+  for (const [tool] of source.matchAll(toolPattern)) {
+    if (!allowedTools.has(tool)) fail(`${where}: ${tool} is not a registered MCP tool`);
+  }
+
+  const binary = service.declaration.binary;
+  for (const row of rows) {
+    if (row.status !== 'exception' || row.mcp !== null || typeof row.cli !== 'string') continue;
+    const command = `${binary} ${row.cli}`;
+    const instruction = new RegExp(`\\b(?:run|call|invoke|use|execute)\\s+\`?${escaped(command)}\\b`, 'i');
+    if (instruction.test(source)) fail(`${where}: event service skill instructs a model to use human-only ${command}`);
+  }
+}
+
+const serviceFamilies = REGISTRY.skillFamilies.filter((family) => family.kind === 'service');
+for (const family of serviceFamilies) {
+  const service = serviceOf(family);
+  if (!service) {
+    fail(`skills/${family.prefix}*: service skill family has no declared service`);
+    continue;
+  }
+  const files = skillFiles.filter((file) => basename(dirname(file)).startsWith(family.prefix));
+  if (files.length === 0) {
+    fail(`skills/${family.prefix}*: no skill belongs to declared service family ${family.prefix}`);
+    continue;
+  }
+  const rows = eventServiceRows(family);
+  if (rows === null) continue;
+  const name = service.declaration.server.defaultName;
+  const tools = new Set(rows.map((row) => row.mcp));
+  if (!tools.has(`${name}_rule_test`) || !tools.has(`${name}_judge_kinds_list`)) continue;
+  for (const file of files) validateEventServiceSkill(service, rows, file, readFileSync(file, 'utf8'));
 }
 
 for (const file of walk(root)) {

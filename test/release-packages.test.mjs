@@ -85,6 +85,11 @@ async function treeWithShelf({ held = true, dependents = [], extra = {}, full = 
         await mkdir(dirname(target), { recursive: true });
         await cp(join(ROOT, 'packages', entry.name, path), target, { recursive: true });
       }
+      if (declaration.skills?.contract) {
+        const target = join(root, declaration.skills.contract);
+        await mkdir(dirname(target), { recursive: true });
+        await cp(join(ROOT, declaration.skills.contract), target);
+      }
     }
   }
   const { version } = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));

@@ -75,11 +75,11 @@ async function exists(entry, binary, argv) {
   return usage.startsWith([binary, ...argv].join(' '));
 }
 
-/** Every channel's Commander CLI, with the prefix of its skills and its README — from the channel registry. */
+/** Every surfaced Commander CLI, with the prefix of its skills and its README — from the registry. */
 const CLIS = REGISTRY.surfaces
   .filter((surface) => surface.cli === 'commander')
   .map((surface) => {
-    const family = REGISTRY.skillFamilies.find((each) => each.channel === surface.package);
+    const family = REGISTRY.skillFamilies.find((each) => (each.package ?? each.channel) === surface.package);
     return {
       package: surface.package,
       binary: surface.binary,
@@ -100,16 +100,18 @@ const SERVICE_PACKAGES = new Set(
 const HELD_PACKAGES = new Set(REGISTRY.held.map((held) => (typeof held === 'string' ? held : held.directory)));
 const heldServiceWithoutSkills = (cli) =>
   cli.prefix === undefined && SERVICE_PACKAGES.has(cli.package) && HELD_PACKAGES.has(cli.package);
+const requestOnlyServiceSkill = (cli) =>
+  REGISTRY.skillFamilies.some((family) => family.kind === 'service' && family.package === cli.package);
 
 test('every channel CLI is checked here, with the skills that name it', () => {
   assert.ok(CLIS.length >= 2, 'the registry should list the channel CLIs');
   for (const cli of CLIS) {
-    if (heldServiceWithoutSkills(cli)) continue;
+    if (heldServiceWithoutSkills(cli) || requestOnlyServiceSkill(cli)) continue;
     assert.ok(cli.prefix && cli.readme, `${cli.binary} has no skills family in its manifest`);
   }
 });
 
-for (const cli of CLIS.filter((cli) => !heldServiceWithoutSkills(cli))) {
+for (const cli of CLIS.filter((cli) => !heldServiceWithoutSkills(cli) && !requestOnlyServiceSkill(cli))) {
   test(`every ${cli.binary} command the skills and readme promise actually exists`, async () => {
     const dirs = (await readdir(join(ROOT, 'skills'), { withFileTypes: true }))
       .filter((entry) => entry.isDirectory() && entry.name.startsWith(cli.prefix))
@@ -129,6 +131,20 @@ for (const cli of CLIS.filter((cli) => !heldServiceWithoutSkills(cli))) {
     assert.deepEqual(missing, [], `documented but not implemented: ${missing.join(', ')}`);
   });
 }
+
+test('a request-only service skill promises no CLI command', async () => {
+  for (const cli of CLIS.filter(requestOnlyServiceSkill)) {
+    const dirs = (await readdir(join(ROOT, 'skills'), { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith(cli.prefix))
+      .map((entry) => join(ROOT, 'skills', entry.name, 'SKILL.md'));
+    const promised = new Set();
+    for (const file of dirs) {
+      const text = await readFile(file, 'utf8');
+      for (const command of promisedCommands(text, cli.binary)) promised.add(command);
+    }
+    assert.deepEqual([...promised], [], `${cli.binary} is request-only: its skill names a CLI command`);
+  }
+});
 
 // ── What a skill tells a person to run (CUE-403) ─────────────────────────────────────────────────────────────────
 

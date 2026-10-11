@@ -372,7 +372,7 @@ test('a channel package dropped into the tree is discovered by every consumer of
   );
 });
 
-test('a skill whose prefix no channel declares is refused, even with a contract file to match', async () => {
+test('a skill whose prefix no declared family declares is refused, even with a contract file to match', async () => {
   const { root } = await treeWithNewcomer();
   // The old rule chose a contract by the name alone, so any `_shared/contract-<word>.md` made a family.
   await writeFile(join(root, 'skills', '_shared', 'contract-orphan.md'), '# Orphan\n');
@@ -382,7 +382,7 @@ test('a skill whose prefix no channel declares is refused, even with a contract 
     '---\nname: orphan-skill\ndescription: "An orphan. Symptoms: none."\n---\n',
   );
   await assert.rejects(run(root, 'sync-skills.mjs', ['--check']), (error) => {
-    assert.match(String(error.stderr), /skills\/orphan-skill: no channel's skills start "orphan-"/);
+    assert.match(String(error.stderr), /skills\/orphan-skill: no declared skills family starts "orphan-"/);
     return true;
   });
 });

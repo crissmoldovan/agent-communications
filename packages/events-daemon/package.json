@@ -63,7 +63,11 @@
       "entry": "src/mcp/server.ts",
       "factory": "createEventsMcpServer"
     },
-    "operations": "src/operations"
+    "operations": "src/operations",
+    "skills": {
+      "prefix": "agentcomms-",
+      "contract": "skills/_shared/contract-events.md"
+    }
   },
   "agentcommsRelease": {
     "hold": "Held until the owner elects to release the first daemon consumer, alongside @agentcomms/events."
