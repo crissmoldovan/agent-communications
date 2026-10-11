@@ -211,16 +211,31 @@ async function copyOverlayInputs(root: string, overlay: string, entry: MutationE
 }
 
 /**
+ * Directories a repository snapshot never copies: installed modules, build output (the packages' `dist` and Cargo's
+ * `target` for the desktop app — gigabytes of generated files, never source), Git bookkeeping and another test's
+ * disposable `.mutants` directory.
+ */
+export const SNAPSHOT_SKIPPED_DIRECTORIES: ReadonlySet<string> = new Set([
+  'node_modules',
+  'dist',
+  'target',
+  '.git',
+  '.mutants',
+]);
+
+/**
  * Parity tests deliberately reach registry tooling which can discover any package metadata or script by filesystem
  * walk. A byte-verified repository snapshot is therefore the only honest baseline: source, tests, scripts and
- * manifests all come from the overlay, while installed modules, build output, Git bookkeeping and another test's
- * disposable `.mutants` directory stay outside it.
+ * manifests all come from the overlay, while everything in SNAPSHOT_SKIPPED_DIRECTORIES stays outside it.
  */
-async function copyRepositorySnapshot(root: string, overlay: string, entry: MutationEntry): Promise<void> {
+export async function copyRepositorySnapshot(
+  root: string,
+  overlay: string,
+  entry: { readonly case: string },
+): Promise<void> {
   const visit = async (directory: string): Promise<void> => {
     for (const child of await readdir(directory, { withFileTypes: true })) {
-      if (child.name === 'node_modules' || child.name === 'dist' || child.name === '.git' || child.name === '.mutants')
-        continue;
+      if (SNAPSHOT_SKIPPED_DIRECTORIES.has(child.name)) continue;
       const source = join(directory, child.name);
       if (child.isDirectory()) {
         await visit(source);
