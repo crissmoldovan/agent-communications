@@ -3,7 +3,8 @@ import { CommsError } from '@agentcomms/core';
 import { callSlack, type SlackResponse } from '../api/call.ts';
 import type { FetchLike } from '../api/guard.ts';
 import { SlackContext } from '../context.ts';
-import { readMessage } from '../text/message.ts';
+import { senderField } from '../text/field.ts';
+import { readMessageForEvent } from '../text/message.ts';
 import { openWorkspace, type SessionDeps } from './session.ts';
 
 type Raw = Record<string, unknown>;
@@ -130,7 +131,7 @@ function conversation(response: SlackResponse, expectedId: string): SlackEventCo
         : raw.is_private === true
           ? 'private_channel'
           : 'public_channel';
-  return { id, name: string(raw.name) ?? null, kind };
+  return { id, name: senderField(string(raw.name))?.text ?? null, kind };
 }
 
 /** Converts one provider object into the channel package's tainted, typed event fact. */
@@ -138,9 +139,10 @@ export function normaliseSlackEventMessage(raw: Raw, accountName: string, worksp
   const ts = timestamp(string(raw.ts) ?? '', 'message timestamp');
   const threadTs = string(raw.thread_ts);
   if (threadTs !== undefined) timestamp(threadTs, 'thread timestamp');
-  const seen = readMessage(raw, { accountName, ourTeamId: workspaceId });
-  // `readMessage` makes the one model-facing envelope. The daemon receives this envelope, never the provider's
-  // bare text; a later event mapper can select documented fields while retaining their taint provenance.
+  const eventRead = readMessageForEvent(raw, { accountName, ourTeamId: workspaceId });
+  const seen = eventRead.message;
+  // D3 catalogue values are the reader's sanitised inner values.  Delivery adds the target-specific envelope once;
+  // the event reader therefore consumes the same pipeline without parsing its model-facing envelope.
   const references = [...seen.references, ...seen.fallbackReferences];
   const mentionKeys = new Set<string>();
   const mentions: SlackEventMessage['mentions'][number][] = [];
@@ -159,7 +161,7 @@ export function normaliseSlackEventMessage(raw: Raw, accountName: string, worksp
   return {
     ts,
     threadTs: threadTs ?? null,
-    text: seen.enveloped,
+    text: eventRead.cleanText,
     truncated: seen.truncated,
     mismatch: seen.mismatch,
     unrenderable: seen.unrenderable,
@@ -176,7 +178,11 @@ export function normaliseSlackEventMessage(raw: Raw, accountName: string, worksp
     files:
       seen.files
         ?.filter((file) => file.id !== '')
-        .map((file) => ({ id: file.id, name: file.name?.text ?? null, mimeType: file.mimetype ?? null })) ?? [],
+        .map((file) => ({
+          id: file.id,
+          name: file.name?.text ?? null,
+          mimeType: senderField(file.mimetype)?.text ?? null,
+        })) ?? [],
   };
 }
 

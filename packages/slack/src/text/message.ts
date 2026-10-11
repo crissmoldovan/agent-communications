@@ -241,7 +241,17 @@ export interface ReadMessageOptions {
   accountName?: string | undefined;
 }
 
-export function readMessage(raw: Raw, options: ReadMessageOptions = {}): ReadMessage {
+/**
+ * The event reader's internal view of a message. Its clean text is deliberately separate from the interactive
+ * `ReadMessage` result: catalogue values are sanitised source facts, while interactive reads must expose only an
+ * envelope to a model.
+ */
+export interface EventReadMessage {
+  readonly message: ReadMessage;
+  readonly cleanText: string;
+}
+
+function readMessageWithCleanText(raw: Raw, options: ReadMessageOptions = {}): EventReadMessage {
   const names = options.names ?? {};
   const ourTeamId = options.ourTeamId;
   const { shown, fallback, mismatch, unrenderable } = reconcile(str(raw.text), raw.blocks, names);
@@ -326,8 +336,9 @@ export function readMessage(raw: Raw, options: ReadMessageOptions = {}): ReadMes
     const parts = [unfurl.title?.text, unfurl.text?.text].filter((part) => part !== undefined && part !== '');
     sections.push(`--- unfurled from ${unfurl.url} — the author did not write this ---\n${parts.join('\n')}`);
   }
+  const cleanText = sections.join('\n\n');
   const enveloped = wrapUntrusted(
-    sections.join('\n\n'),
+    cleanText,
     {
       field: 'message',
       id: str(raw.ts) ?? '',
@@ -337,25 +348,38 @@ export function readMessage(raw: Raw, options: ReadMessageOptions = {}): ReadMes
   );
 
   return {
-    ts: str(raw.ts) ?? '',
-    threadTs: str(raw.thread_ts),
-    userId: str(raw.user),
-    botId: str(raw.bot_id),
-    attribution,
-    enveloped,
-    truncated: body.truncated,
-    tokensNeutralised,
-    mismatch,
-    ...(fallbackField ? { fallback: fallbackField.text } : {}),
-    unrenderable,
-    references: body.references,
-    fallbackReferences: fallbackField?.references ?? [],
-    links,
-    unfurls,
-    attachments,
-    editedTs: str((raw.edited as Raw | undefined)?.ts),
-    replyCount: num(raw.reply_count),
-    ...(reactions.length > 0 ? { reactions } : {}),
-    ...(files.length > 0 ? { files } : {}),
+    message: {
+      ts: str(raw.ts) ?? '',
+      threadTs: str(raw.thread_ts),
+      userId: str(raw.user),
+      botId: str(raw.bot_id),
+      attribution,
+      enveloped,
+      truncated: body.truncated,
+      tokensNeutralised,
+      mismatch,
+      ...(fallbackField ? { fallback: fallbackField.text } : {}),
+      unrenderable,
+      references: body.references,
+      fallbackReferences: fallbackField?.references ?? [],
+      links,
+      unfurls,
+      attachments,
+      editedTs: str((raw.edited as Raw | undefined)?.ts),
+      replyCount: num(raw.reply_count),
+      ...(reactions.length > 0 ? { reactions } : {}),
+      ...(files.length > 0 ? { files } : {}),
+    },
+    cleanText,
   };
+}
+
+/** The model-facing read contract: no clean duplicate accompanies the untrusted envelope. */
+export function readMessage(raw: Raw, options: ReadMessageOptions = {}): ReadMessage {
+  return readMessageWithCleanText(raw, options).message;
+}
+
+/** The event-only read contract, which shares the interactive reader's sanitisation without parsing its envelope. */
+export function readMessageForEvent(raw: Raw, options: ReadMessageOptions = {}): EventReadMessage {
+  return readMessageWithCleanText(raw, options);
 }

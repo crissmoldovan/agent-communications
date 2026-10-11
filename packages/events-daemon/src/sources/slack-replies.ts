@@ -6,6 +6,7 @@ import type { SourceScopeLock } from './scope-lock.ts';
 import {
   assertSlackTimestamp,
   compareSlackTimestamp,
+  neutraliseSlackSourceMessage,
   type SlackCandidate,
   type SlackSourceMessage,
   type SlackSourcePage,
@@ -94,11 +95,6 @@ function timestampMicros(value: string): bigint {
 function _wallClockSlackTimestamp(now: number): string {
   if (!Number.isSafeInteger(now) || now < 0) throw new CommsError('BAD_DATA', 'the Slack reply clock is invalid');
   return `${Math.floor(now / 1_000)}.${String((now % 1_000) * 1_000).padStart(6, '0')}`;
-}
-
-function assertTaintedMessage(message: SlackSourceMessage): void {
-  if (!/^<untrusted-content\b[^>]*>[\s\S]*<\/untrusted-content(?:\s[^>]*)?>$/u.test(message.text))
-    throw new CommsError('BAD_DATA', 'a Slack reply arrived without its untrusted-content envelope');
 }
 
 function isInvalidCursor(error: unknown): boolean {
@@ -377,17 +373,18 @@ class SlackReplyPageStager {
   }): Promise<StoredReplyPage> {
     for (const message of input.page.messages) {
       assertSlackTimestamp(message.ts);
-      assertTaintedMessage(message);
     }
     const existing = await this.load(input);
     if (existing !== null) return existing;
-    const messages = input.page.messages.filter(
-      (message) =>
-        message.ts !== input.parentTs &&
-        message.threadTs === input.parentTs &&
-        compareSlackTimestamp(message.ts, input.latest) <= 0 &&
-        (input.lowerExclusive === null || compareSlackTimestamp(message.ts, input.lowerExclusive) > 0),
-    );
+    const messages = input.page.messages
+      .filter(
+        (message) =>
+          message.ts !== input.parentTs &&
+          message.threadTs === input.parentTs &&
+          compareSlackTimestamp(message.ts, input.latest) <= 0 &&
+          (input.lowerExclusive === null || compareSlackTimestamp(message.ts, input.lowerExclusive) > 0),
+      )
+      .map(neutraliseSlackSourceMessage);
     const id = replyPageId({
       ...input,
       nextCursor: input.page.nextCursor,
@@ -521,7 +518,6 @@ class SlackReplyPageStager {
       if (typeof message !== 'object' || message === null)
         throw new CommsError('BAD_DATA', 'a staged Slack reply is malformed');
       assertSlackTimestamp((message as SlackSourceMessage).ts);
-      assertTaintedMessage(message as SlackSourceMessage);
     }
     if (!value.completed.every((timestamp) => typeof timestamp === 'string'))
       throw new CommsError('BAD_DATA', 'a staged Slack reply completion is malformed');
