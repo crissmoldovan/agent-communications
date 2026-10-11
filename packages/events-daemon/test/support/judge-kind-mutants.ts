@@ -16,6 +16,14 @@ export interface JudgeKindMutation {
 /** Each E1 kind fence is removed in one copied production file and killed by its sole real-path oracle. */
 export const JUDGE_KIND_MUTATIONS: readonly JudgeKindMutation[] = [
   {
+    id: 'e1-canonical-documents',
+    file: 'domain/judges.ts',
+    before: "if (judge.provider !== 'typesafe') return fail('a typesafe judge names the TypeSafe Jev adapter');",
+    after: "if (false) return fail('a typesafe judge names the TypeSafe Jev adapter');",
+    testFile: 'judge-documents.test.ts',
+    testName: 'E1: judge documents are closed discriminated forms with a concrete local score pointer',
+  },
+  {
     id: 'e1-prepare-disabled-kind',
     file: 'domain/versions.ts',
     before: `      assertJudgeKindEnabled(
