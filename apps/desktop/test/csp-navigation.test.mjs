@@ -224,7 +224,20 @@ test('desktop-http-opener-capability', async () => {
       await readFile(label === 'settings' ? settingsCapabilityUrl : secretsCapabilityUrl, 'utf8'),
     );
     assert.deepEqual(capability.windows, [label]);
-    assert.deepEqual(capability.permissions, []);
+    assert.deepEqual(
+      capability.permissions,
+      label === 'settings'
+        ? [
+            'allow-desktop-control',
+            'allow-desktop-approve',
+            'allow-desktop-preferences',
+            'allow-desktop-supervision-status',
+            'allow-desktop-start-daemon',
+            'allow-desktop-quit-daemon',
+            'allow-desktop-open-secrets',
+          ]
+        : [],
+    );
   }
   const cargo = await readFile(cargoUrl, 'utf8');
   const npm = JSON.parse(await readFile(packageUrl, 'utf8'));

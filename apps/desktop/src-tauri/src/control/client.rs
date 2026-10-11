@@ -7,29 +7,40 @@ use crate::preferences::DaemonProfile;
 #[cfg(unix)]
 use serde_json::Value;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum NonSecretControlRequest {
     Status,
     Doctor,
     Stop,
+    B3(Box<super::b3_contract::B3Request>),
 }
 impl NonSecretControlRequest {
     #[cfg(unix)]
-    fn operation(self) -> &'static str {
+    fn operation(&self) -> &'static str {
         match self {
             Self::Status => "status",
             Self::Doctor => "doctor",
             Self::Stop => "stop",
+            Self::B3(request) => request.operation().wire(),
         }
     }
 }
 
 pub struct DesktopControlClient {
     profile: DaemonProfile,
+    client_name: &'static str,
 }
 impl DesktopControlClient {
     pub fn new(profile: DaemonProfile) -> Self {
-        Self { profile }
+        Self::with_client_name(profile, "desktop")
+    }
+
+    /// Approval owns a separate authenticated session so its origin is explicit to the daemon and audit fence.
+    pub fn with_client_name(profile: DaemonProfile, client_name: &'static str) -> Self {
+        Self {
+            profile,
+            client_name,
+        }
     }
 
     pub fn request(
@@ -235,7 +246,7 @@ impl DesktopControlClient {
             .map_err(|_| ControlError::new("CONTROL_IO", "cannot set write timeout"))?;
         let hello = exchange(
             &mut stream,
-            &json!({"hello":{"supportedVersions":versions,"token":token,"client":{"name":"desktop"}}}),
+            &json!({"hello":{"supportedVersions":versions,"token":token,"client":{"name":self.client_name}}}),
         )?;
         let hello: ControlReply = serde_json::from_value(hello)
             .map_err(|_| ControlError::new("MALFORMED_FRAME", "invalid hello reply"))?;
@@ -264,7 +275,7 @@ impl DesktopControlClient {
         );
         let reply = exchange(
             &mut stream,
-            &json!({"version":version,"requestId":request_id,"session":session,"operation":operation.operation(),"args":{}}),
+            &json!({"version":version,"requestId":request_id,"session":session,"operation":operation.operation(),"args":match &operation { NonSecretControlRequest::B3(request) => request.args(), _ => json!({}) }}),
         )?;
         let reply: ControlReply = serde_json::from_value(reply)
             .map_err(|_| ControlError::new("MALFORMED_FRAME", "invalid operation reply"))?;

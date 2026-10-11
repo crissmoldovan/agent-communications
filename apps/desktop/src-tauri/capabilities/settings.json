@@ -1,6 +1,14 @@
 {
   "identifier": "settings",
-  "description": "Settings window; no commands are granted yet.",
+  "description": "Non-secret desktop control, authoritative approval preview and preferences.",
   "windows": ["settings"],
-  "permissions": []
+  "permissions": [
+    "allow-desktop-control",
+    "allow-desktop-approve",
+    "allow-desktop-preferences",
+    "allow-desktop-supervision-status",
+    "allow-desktop-start-daemon",
+    "allow-desktop-quit-daemon",
+    "allow-desktop-open-secrets"
+  ]
 }

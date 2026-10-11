@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/control-compat.test.mjs test/csp-navigation.test.mjs test/daemon-profile.test.mjs test/mutation-runner.spec.mjs test/production-probe-parser.test.mjs test/release-notes.test.mjs test/supervision-lifecycle.test.mjs test/supervision-ui.test.mjs test/supervisor.test.mjs test/windows-support-matrix.test.mjs test/workspace.test.mjs",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test --test-reporter=tap --import ../../test/helpers/loopback-seal-preload.mjs --import ./test/helpers/tsx-register.mjs test/app-approval-owner.test.mjs test/control-compat.test.mjs test/csp-navigation.test.mjs test/daemon-profile.test.mjs test/mutation-runner.test.mjs test/production-probe-parser.test.mjs test/release-notes.test.mjs test/supervision-lifecycle.test.mjs test/supervision-ui.test.mjs test/supervisor.test.mjs test/windows-support-matrix.test.mjs test/workspace.test.mjs test/b3-terminal-fixture.test.mjs test/task5-native.test.mjs \"test/*.test.ts\" \"test/*.test.tsx\"",
     "test:e2e": "node --import ../../test/helpers/loopback-seal-preload.mjs test/e2e/production-probe.mjs",
     "tauri:build": "tauri build"
   },

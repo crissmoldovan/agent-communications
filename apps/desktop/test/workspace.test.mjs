@@ -73,7 +73,20 @@ test('desktop labelled capability files are present and Git-visible', async () =
     const capability = JSON.parse(await readFile(new URL(`../src-tauri/capabilities/${label}.json`, import.meta.url)));
     assert.equal(capability.identifier, label);
     assert.deepEqual(capability.windows, [label]);
-    assert.deepEqual(capability.permissions, []);
+    assert.deepEqual(
+      capability.permissions,
+      label === 'secrets'
+        ? []
+        : [
+            'allow-desktop-control',
+            'allow-desktop-approve',
+            'allow-desktop-preferences',
+            'allow-desktop-supervision-status',
+            'allow-desktop-start-daemon',
+            'allow-desktop-quit-daemon',
+            'allow-desktop-open-secrets',
+          ],
+    );
     const ignored = spawnSync('git', ['check-ignore', '--no-index', '--quiet', relative], { cwd: root });
     assert.equal(ignored.status, 1, `${relative} is ignored by Git or Git could not check it`);
   }

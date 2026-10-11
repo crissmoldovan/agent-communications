@@ -15,12 +15,14 @@ use tauri::{Manager, State, WebviewWindow};
 pub struct DesktopService {
     pub store: PreferenceStore,
     pub supervisor: DesktopSupervisor,
+    pub control: std::sync::Mutex<super::control::ControlState>,
 }
 impl DesktopService {
     pub fn new(preferences_path: PathBuf) -> Self {
         Self {
             store: PreferenceStore::new(preferences_path),
             supervisor: DesktopSupervisor::default(),
+            control: std::sync::Mutex::default(),
         }
     }
 }

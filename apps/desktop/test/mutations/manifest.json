@@ -347,8 +347,8 @@
       "import": "../src-tauri/capabilities/settings.json",
       "mutation": {
         "file": "apps/desktop/src-tauri/capabilities/settings.json",
-        "find": "\"permissions\": []",
-        "replace": "\"permissions\": [\"http:default\", \"opener:default\"]"
+        "find": "\"allow-desktop-control\"",
+        "replace": "\"allow-desktop-control\", \"http:default\", \"opener:default\""
       }
     },
     {
@@ -981,6 +981,445 @@
         "file": "scripts/verify-desktop-mutations.mjs",
         "find": "scanMutationMarkers();",
         "replace": "// scanMutationMarkers();"
+      }
+    },
+    {
+      "id": "desktop-b3-wire-contract",
+      "group": "task-5",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/control-contract.test.ts",
+        "name": "control-contract: desktop-b3-wire-contract rejects schema and vector drift"
+      },
+      "production": "apps/desktop/scripts/b3-contract.mjs",
+      "import": "../scripts/b3-contract.mjs",
+      "mutation": {
+        "file": "apps/desktop/scripts/b3-contract.mjs",
+        "find": "for (const vector of vectors) assert.ok(validate(vector), `${vector.name}: ${JSON.stringify(validate.errors)}`);",
+        "replace": "for (const vector of vectors) void validate(vector);"
+      }
+    },
+    {
+      "id": "desktop-control-command-manifest",
+      "group": "task-5",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/control-contract.test.ts",
+        "name": "control-contract: built app manifest registers exactly the settings commands and isolates secrets"
+      },
+      "production": "apps/desktop/src-tauri/build.rs",
+      "import": "../src-tauri/build.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/build.rs",
+        "find": ".expect(\"desktop command manifest is valid\");",
+        "replace": ".expect(\"desktop command manifest is valid\");\n    panic!(\"desktop command manifest omitted\");"
+      }
+    },
+    {
+      "id": "desktop-mutation-runner-single-test-count",
+      "group": "task-5",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/mutation-runner.test.mjs",
+        "name": "mutation runner requires the complete one-test TAP summary for Node kills"
+      },
+      "production": "apps/desktop/test/mutations/run.mjs",
+      "import": "./mutations/run.mjs",
+      "mutation": {
+        "file": "apps/desktop/test/mutations/run.mjs",
+        "find": "oneMatch(output, /^# tests 1$/gm) &&",
+        "replace": "true &&"
+      }
+    },
+    {
+      "id": "desktop-mutation-runner-declared-name",
+      "group": "task-5",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/mutation-runner.test.mjs",
+        "name": "mutation runner executes exactly the declared test name"
+      },
+      "production": "apps/desktop/test/mutations/run.mjs",
+      "import": "./mutations/run.mjs",
+      "mutation": {
+        "file": "apps/desktop/test/mutations/run.mjs",
+        "find": "if (baseline.status !== 0 || baseline.error || !baselineOne) {",
+        "replace": "if (baseline.status !== 0 || baseline.error || false) {"
+      }
+    },
+    {
+      "id": "desktop-b3-terminal-fixture",
+      "group": "task-5",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/b3-terminal-fixture.test.mjs",
+        "name": "b3-terminal-fixture: B3 production terminal bytes match every shared disclosure preview"
+      },
+      "production": "packages/events-daemon/src/cli/program.ts",
+      "import": "../../../packages/events-daemon/src/cli/program.ts",
+      "mutation": {
+        "file": "packages/events-daemon/src/cli/program.ts",
+        "find": "return escapeForDisplay(renderB3ApprovalPreviewV1(result).terminal);",
+        "replace": "return 'drifted terminal preview';"
+      }
+    },
+    {
+      "id": "desktop-approval-renderer",
+      "group": "task-5",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/approval-renderer.test.tsx",
+        "name": "approval-renderer: only Rust safe preview and typed challenge enter the approval screen"
+      },
+      "production": "apps/desktop/src/screens/approvals.tsx",
+      "import": "../src/screens/approvals.tsx",
+      "mutation": {
+        "file": "apps/desktop/src/screens/approvals.tsx",
+        "find": "<p>{result?.approval?.challenge}</p>",
+        "replace": "<p />"
+      }
+    },
+    {
+      "id": "desktop-preview-links",
+      "group": "task-5",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/untrusted-result-renderer.test.tsx",
+        "name": "untrusted-result-renderer: desktop-preview-links keeps tags and URLs inert"
+      },
+      "production": "apps/desktop/src/screens/shared.tsx",
+      "import": "../src/screens/shared.tsx",
+      "mutation": {
+        "file": "apps/desktop/src/screens/shared.tsx",
+        "find": "<pre>{segment.text}</pre>",
+        "replace": "<a href={segment.text}>{segment.text}</a>"
+      }
+    },
+    {
+      "id": "desktop-screen-contract-completeness",
+      "group": "task-5",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/screen-contract.test.tsx",
+        "name": "screen-contract: desktop-screen-contract-completeness renders every required screen item"
+      },
+      "production": "apps/desktop/src/screens/overview.tsx",
+      "import": "../src/screens/overview.tsx",
+      "mutation": {
+        "file": "apps/desktop/src/screens/overview.tsx",
+        "find": "<DataItem id=\"source-lag\" title=\"Source lag\" props={props} paths={['/sources']} />",
+        "replace": "{/* source lag omitted */}"
+      }
+    },
+    {
+      "id": "desktop-id-scope",
+      "group": "task-5",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/id-scope.test.tsx",
+        "name": "id-scope: desktop-id-scope rejects same-looking cross-account and stale-version replies"
+      },
+      "production": "apps/desktop/src/control-model.ts",
+      "import": "../src/control-model.ts",
+      "mutation": {
+        "file": "apps/desktop/src/control-model.ts",
+        "find": "return actual === expected;",
+        "replace": "return true;"
+      }
+    },
+    {
+      "id": "desktop-nested-document-scope",
+      "group": "task-5",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test control_commands",
+        "name": "desktop_rule_update_rejects_cross_scope_document_before_paint"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/id-scope.test.tsx",
+        "name": "id-scope: rule update carries nested document identity and refuses a cross-rule reply before paint"
+      },
+      "production": "apps/desktop/src-tauri/src/commands/control.rs",
+      "import": "../src-tauri/src/commands/control.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/commands/control.rs",
+        "find": "|| !input.request.result_matches_request_scope(&value)",
+        "replace": "|| false"
+      }
+    },
+    {
+      "id": "desktop-superseded-destructive-invalidation",
+      "group": "task-5",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/purge-ui-orphans.test.tsx",
+        "name": "purge-ui: superseded destructive success invalidates cached and painted state"
+      },
+      "production": "apps/desktop/src/control-model.ts",
+      "import": "../src/control-model.ts",
+      "mutation": {
+        "file": "apps/desktop/src/control-model.ts",
+        "find": "if (!current && !invalidating.has(operation)) return null;",
+        "replace": "if (!current) return null;"
+      }
+    },
+    {
+      "id": "desktop-purge-ui-orphans",
+      "group": "task-5",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/purge-ui-orphans.test.tsx",
+        "name": "purge-ui: desktop-purge-ui-orphans cancels late results after destructive replies and reconnect"
+      },
+      "production": "apps/desktop/src/control-model.ts",
+      "import": "../src/control-model.ts",
+      "mutation": {
+        "file": "apps/desktop/src/control-model.ts",
+        "find": "if (invalidating.has(operation)) {",
+        "replace": "if (false) {"
+      }
+    },
+    {
+      "id": "desktop-no-secret-generic-dispatch",
+      "group": "task-5",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test b3_wire_contract",
+        "name": "desktop_no_secret_generic_dispatch"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/task5-native.test.mjs",
+        "name": "native-boundary: the generated enum excludes the complete D2 operation set"
+      },
+      "production": "apps/desktop/scripts/b3-contract.mjs",
+      "import": "../scripts/b3-contract.mjs",
+      "mutation": {
+        "file": "apps/desktop/scripts/b3-contract.mjs",
+        "find": "const operations = registry.filter((operation) => !secret.includes(operation));",
+        "replace": "const operations = registry.filter((operation) => !secret.includes(operation) || operation === 'targetSecretCreate');"
+      }
+    },
+    {
+      "id": "desktop-approval-authoritative-preview",
+      "group": "task-5",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test preview",
+        "name": "desktop_approval_authoritative_preview"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/task5-native.test.mjs",
+        "name": "native-boundary: the native approval session binds the fetched digest"
+      },
+      "production": "apps/desktop/src-tauri/src/commands/approval.rs",
+      "import": "../src-tauri/src/commands/approval.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/commands/approval.rs",
+        "find": "if reply[\"digest\"] != input.digest || reply[\"challenge\"][\"digest\"] != input.digest {",
+        "replace": "if false {"
+      }
+    },
+    {
+      "id": "desktop-approval-fresh-view",
+      "group": "task-5",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test preview",
+        "name": "desktop_app_approval_view_then_approve_and_reviews_void"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/app-approval-owner.test.mjs",
+        "name": "app approval: compiled Rust command views and approves through the sealed real B3 owner"
+      },
+      "production": "apps/desktop/src-tauri/src/commands/approval.rs",
+      "import": "../src-tauri/src/commands/approval.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/commands/approval.rs",
+        "find": "self.clear(); // consume this challenge before the daemon sees its answer",
+        "replace": "// challenge replay guard removed"
+      }
+    },
+    {
+      "id": "desktop-preview-controls",
+      "group": "task-5",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test preview",
+        "name": "desktop_preview_controls"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/task5-native.test.mjs",
+        "name": "native-boundary: the native preview neutralises controls before display"
+      },
+      "production": "apps/desktop/src-tauri/src/preview.rs",
+      "import": "../src-tauri/src/preview.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/preview.rs",
+        "find": ".filter(|c| !dangerous(*c))",
+        "replace": ".filter(|_| true)"
+      }
+    },
+    {
+      "id": "desktop-untrusted-result-raw-forward",
+      "group": "task-5",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test untrusted_result",
+        "name": "desktop_untrusted_result_raw_forward"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/task5-native.test.mjs",
+        "name": "native-boundary: the native result boundary sanitises every text segment"
+      },
+      "production": "apps/desktop/src-tauri/src/untrusted_result.rs",
+      "import": "../src-tauri/src/untrusted_result.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/untrusted_result.rs",
+        "find": "let clean = neutralise(text).replace('<', \"&lt;\").replace('>', \"&gt;\");",
+        "replace": "let clean = text.to_owned();"
+      }
+    },
+    {
+      "id": "desktop-untrusted-result-bounds",
+      "group": "task-5",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test untrusted_result",
+        "name": "desktop_untrusted_result_bounds"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/task5-native.test.mjs",
+        "name": "native-boundary: the native result boundary limits text before IPC"
+      },
+      "production": "apps/desktop/src-tauri/src/untrusted_result.rs",
+      "import": "../src-tauri/src/untrusted_result.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/untrusted_result.rs",
+        "find": "let (text, text_cut) = safe_text(text, MAX_SEGMENT_BYTES.min(*budget));",
+        "replace": "let (text, text_cut) = (text.to_owned(), false);"
+      }
+    },
+    {
+      "id": "desktop-settings-autostart-no-spawn",
+      "group": "task-5",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test control_commands",
+        "name": "desktop_settings_autostart_no_spawn"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/task5-native.test.mjs",
+        "name": "native-boundary: the persisted login preference never starts a daemon"
+      },
+      "production": "apps/desktop/src-tauri/src/supervisor.rs",
+      "import": "../src-tauri/src/supervisor.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/supervisor.rs",
+        "find": "pub fn startup(&self) -> SupervisorStatus {\n        self.status()\n    }",
+        "replace": "pub fn startup(&self) -> SupervisorStatus {\n        let _ = self.runtime.spawn(&DaemonProfile { executable: \"/dev/null/agent-events\".into(), state_dir: \"/dev/null\".into(), config_dir: \"/dev/null\".into() });\n        self.status()\n    }"
+      }
+    },
+    {
+      "id": "desktop-b3-stale-rust-type",
+      "group": "task-5",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test b3_wire_contract",
+        "name": "desktop_b3_wire_contract"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/task5-native.test.mjs",
+        "name": "native-boundary: schema-derived Rust numeric DTOs consume the B3 vectors"
+      },
+      "production": "apps/desktop/scripts/b3-contract.mjs",
+      "import": "../scripts/b3-contract.mjs",
+      "mutation": {
+        "file": "apps/desktop/scripts/b3-contract.mjs",
+        "find": "integer: 'i64'",
+        "replace": "integer: 'String'"
+      }
+    },
+    {
+      "id": "desktop-screen-current-request",
+      "group": "task-5",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/screen-request.test.tsx",
+        "name": "screen-request: the production screen route rejects out-of-order selection replies"
+      },
+      "production": "apps/desktop/src/control-model.ts",
+      "import": "../src/control-model.ts",
+      "mutation": {
+        "file": "apps/desktop/src/control-model.ts",
+        "find": "epoch === this.#epoch && this.#requests.get(operation) === requestId",
+        "replace": "epoch === this.#epoch"
+      }
+    },
+    {
+      "id": "desktop-screen-contract-seams",
+      "group": "task-5",
+      "test": {
+        "kind": "node",
+        "file": "apps/desktop/test/screen-contract.test.tsx",
+        "name": "screen-contract: unavailable fields never substitute unrelated daemon records"
+      },
+      "production": "apps/desktop/src/screens/shared.tsx",
+      "import": "../src/screens/shared.tsx",
+      "mutation": {
+        "file": "apps/desktop/src/screens/shared.tsx",
+        "find": "data-contract-seam={code}",
+        "replace": "data-contract-seam=\"READY\""
+      }
+    },
+    {
+      "id": "desktop-schema-scope-native",
+      "group": "task-5",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test control_commands",
+        "name": "desktop_schema_scoped_dryrun"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/task5-native.test.mjs",
+        "name": "native-boundary: request identities bind without optional UI scope"
+      },
+      "production": "apps/desktop/src-tauri/src/control/b3_contract.rs",
+      "import": "../src-tauri/src/control/b3_contract.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/control/b3_contract.rs",
+        "find": "args.get(*field)\n                .is_some_and(|expected| result.get(*field) != Some(expected))",
+        "replace": "args.get(*field).is_some_and(|_expected| false)"
+      }
+    },
+    {
+      "id": "desktop-generic-approve-refusal",
+      "group": "task-5",
+      "test": {
+        "kind": "cargo",
+        "manifest": "apps/desktop/src-tauri/Cargo.toml",
+        "cargoTestPath": "--test control_commands",
+        "name": "desktop_control_command_closed_boundary"
+      },
+      "structuralTest": {
+        "file": "apps/desktop/test/task5-native.test.mjs",
+        "name": "native-boundary: the generic command cannot execute approval"
+      },
+      "production": "apps/desktop/src-tauri/src/control/b3_contract.rs",
+      "import": "../src-tauri/src/control/b3_contract.rs",
+      "mutation": {
+        "file": "apps/desktop/src-tauri/src/control/b3_contract.rs",
+        "find": "NonSecretOperation::Approve | NonSecretOperation::ApprovalView",
+        "replace": "NonSecretOperation::ApprovalView"
       }
     }
   ]

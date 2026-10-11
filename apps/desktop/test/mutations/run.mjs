@@ -25,7 +25,7 @@ if (selected.length === 0) {
   process.stderr.write('Usage: run.mjs --case <id> | --group <group> | --all\n');
   process.exitCode = 1;
 } else {
-  const sharedTaskFour = selected.every((item) => item.group === 'task-4');
+  const sharedTaskFour = selected.every((item) => item.group === 'task-4' || item.group === 'task-5');
   const sharedTemp = sharedTaskFour ? await mkdtemp(join(tmpdir(), 'desktop-mutation-')) : null;
   let sharedPrepared = false;
   for (const item of selected) {
@@ -60,6 +60,18 @@ if (selected.length === 0) {
       const gitDir = execFileSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: root, encoding: 'utf8' }).trim();
       const childEnv = { ...process.env, NODE_OPTIONS: '', GIT_DIR: gitDir, GIT_WORK_TREE: temp };
       delete childEnv.DESKTOP_PROBE_BINARY;
+      if (item.group === 'task-5') {
+        const kind = process.platform === 'win32' ? 'junction' : 'dir';
+        for (const dependencyRoot of ['', 'apps/desktop', 'packages/events-daemon']) {
+          try {
+            await symlink(join(root, dependencyRoot, 'node_modules'), join(temp, dependencyRoot, 'node_modules'), kind);
+          } catch (error) {
+            if (error.code !== 'EEXIST') throw error;
+          }
+        }
+        childEnv.npm_config_verify_deps_before_run = 'false';
+        childEnv.pnpm_config_verify_deps_before_run = 'false';
+      }
       // The copy excludes target/, so a packaged probe would rebuild every dependency for the baseline and again for
       // the mutant. They share one dedicated cache instead: not the checkout's own target/, which keeps its real build.
       if (declared.kind === 'node' && declared.file.includes('/e2e/')) {
@@ -76,6 +88,14 @@ if (selected.length === 0) {
         if (key.startsWith('NODE_TEST')) delete childEnv[key];
       }
       const testArgs = [
+        ...(item.group === 'task-5'
+          ? [
+              '--import',
+              './apps/desktop/test/helpers/tsx-register.mjs',
+              '--import',
+              './test/helpers/loopback-seal-preload.mjs',
+            ]
+          : []),
         ...(declared.kind === 'node' && declared.file.endsWith('.test.mjs') && item.production.endsWith('.ts')
           ? ['--experimental-strip-types', '--disable-warning=ExperimentalWarning']
           : []),
@@ -98,23 +118,42 @@ if (selected.length === 0) {
       if (item.group === 'task-4' && item.production.endsWith('.rs') && !cargoArgs) {
         throw new Error(`${item.id}: Task-4 Rust mutation requires a compiled behavioral test`);
       }
-      if (cargoArgs) childEnv.CARGO_TARGET_DIR = join(root, 'apps/desktop/src-tauri/target/desktop-mutations');
+      if (cargoArgs)
+        childEnv.CARGO_TARGET_DIR = join(
+          root,
+          item.group === 'task-5' ? 'apps/desktop/src-tauri/target' : 'apps/desktop/src-tauri/target/desktop-mutations',
+        );
       const runNamed = () =>
         cargoArgs
           ? spawnSync('cargo', cargoArgs, { cwd: temp, encoding: 'utf8', env: childEnv })
           : spawnSync(process.execPath, testArgs, { cwd: temp, encoding: 'utf8', env: childEnv });
+      const oneMatch = (text, expression) => [...text.matchAll(expression)].length === 1;
+      const nodeSummary = (output, expected) =>
+        oneMatch(output, new RegExp(`^# Subtest: ${declared.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'gm')) &&
+        oneMatch(output, /^# tests 1$/gm) &&
+        oneMatch(output, new RegExp(`^# pass ${expected.pass}$`, 'gm')) &&
+        oneMatch(output, new RegExp(`^# fail ${expected.fail}$`, 'gm'));
+      const cargoSummary = (output, expected) =>
+        oneMatch(output, /^running 1 test$/gm) &&
+        oneMatch(
+          output,
+          new RegExp(
+            `^test result: ${expected.ok ? 'ok\\.' : 'FAILED\\.'} ${expected.pass} passed; ${expected.fail} failed;`,
+            'gm',
+          ),
+        );
       const baseline = runNamed();
       const baselineOne = cargoArgs
-        ? /test result: ok\. 1 passed;/.test(baseline.stdout)
-        : baseline.stdout.includes(`# Subtest: ${declared.name}`) && /^# pass 1$/m.test(baseline.stdout);
+        ? cargoSummary(baseline.stdout, { ok: true, pass: 1, fail: 0 })
+        : nodeSummary(baseline.stdout, { pass: 1, fail: 0 });
       if (baseline.status !== 0 || baseline.error || !baselineOne) {
         throw new Error(`${item.id}: named test is not green before mutation\n${baseline.stderr}\n${baseline.stdout}`);
       }
       await writeFile(target, original.replace(item.mutation.find, item.mutation.replace));
       const result = runNamed();
       const mutantFailed = cargoArgs
-        ? /test result: FAILED\. 0 passed; 1 failed;/.test(result.stdout)
-        : result.stdout.includes(`# Subtest: ${declared.name}`) && /^# fail 1$/m.test(result.stdout);
+        ? cargoSummary(result.stdout, { ok: false, pass: 0, fail: 1 })
+        : nodeSummary(result.stdout, { pass: 0, fail: 1 });
       if (result.status === 0 || !mutantFailed) {
         throw new Error(`${item.id}: mutant did not fail its named test\n${result.stderr}\n${result.stdout}`);
       }

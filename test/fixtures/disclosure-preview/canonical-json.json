@@ -1,0 +1,69 @@
+{
+  "result": {
+    "kind": "READY",
+    "approvalId": "approval-1",
+    "digest": "digest-1",
+    "preview": {
+      "documentVersion": 1,
+      "kind": "rule",
+      "rule": {
+        "ruleId": "rule-1",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["account-1"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "exists"
+        },
+        "mapping": {
+          "constant": {
+            "": 1e21,
+            "𐀀": 1e-7,
+            "tiny": 5e-324,
+            "whole": 1000000000000000100
+          }
+        },
+        "targets": [
+          {
+            "targetId": "target-1",
+            "version": 1,
+            "kind": "dry-run",
+            "retentionMs": 1
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 1,
+        "retention": {
+          "ingestMs": 1,
+          "holdMs": 1,
+          "deliveryMs": 1,
+          "dryrunMs": 1,
+          "sseReplayMs": 1,
+          "deadLetterMs": 1,
+          "decisionMetadataMs": 1
+        }
+      }
+    },
+    "challenge": {
+      "approvalId": "approval-1",
+      "digest": "digest-1",
+      "challenge": "challenge-1",
+      "expiresAt": 301000
+    }
+  },
+  "expected": {
+    "terminal": "Approval approval-1\nDigest digest-1\nPreview {\"documentVersion\":1,\"kind\":\"rule\",\"rule\":{\"condition\":{\"op\":\"exists\",\"path\":\"/subject\"},\"deliveryRateCap\":1,\"event\":{\"type\":\"gmail.message.received\",\"version\":1},\"judges\":[],\"mapping\":{\"constant\":{\"tiny\":5e-324,\"whole\":1000000000000000100,\"𐀀\":1e-7,\"\":1e+21}},\"retention\":{\"deadLetterMs\":1,\"decisionMetadataMs\":1,\"deliveryMs\":1,\"dryrunMs\":1,\"holdMs\":1,\"ingestMs\":1,\"sseReplayMs\":1},\"ruleId\":\"rule-1\",\"source\":{\"accountIds\":[\"account-1\"],\"channel\":\"gmail\",\"options\":{\"channel\":\"gmail\",\"includeSpamTrash\":false,\"labels\":\"inbox\"}},\"subscribers\":[],\"targets\":[{\"kind\":\"dry-run\",\"retentionMs\":1,\"targetId\":\"target-1\",\"version\":1}],\"version\":1}}\nChallenge challenge-1\nExpires 1970-01-01T00:05:01.000Z"
+  }
+}

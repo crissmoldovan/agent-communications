@@ -1,0 +1,79 @@
+{
+  "overview": {
+    "global-switch": "Global switch",
+    "daemon-protocol-health": "Daemon and protocol health",
+    "source-lag": "Source lag",
+    "lineage-ids": "Exact and derived authorisation ids",
+    "current-cutover": "Current cut-over id",
+    "superseded-work": "Superseded retained work",
+    "delivery-outcomes": "Delivery outcomes",
+    "holds": "Held decisions",
+    "judge-kinds": "Enabled judge kinds",
+    "whatsapp-live-lists": "WhatsApp live lists",
+    "pending-approvals": "Pending approvals",
+    "activation-completion": "Staged, replacement and enable-all completion"
+  },
+  "sources": {
+    "accounts": "Accounts",
+    "event-types": "Event types",
+    "interval-budget": "Interval and budget",
+    "expected-latency": "Expected latency",
+    "shared-cursor": "Shared acquisition cursor",
+    "activation-cutover": "Per-rule activation and current cut-over",
+    "slack-drains": "Slack reply drains",
+    "materialisation-health": "Gmail and Resend materialisation health",
+    "observation-time": "Observation-time labels"
+  },
+  "rules": {
+    "tree": "Deterministic tree",
+    "optional-judge": "Optional judge",
+    "inputs-budgets": "Exact inputs and budgets",
+    "mapping-builder": "Mapping builder",
+    "representation-schema": "Representation and schema",
+    "rate-cap": "Delivery rate cap",
+    "preview-dryrun": "Preview and dry-run test"
+  },
+  "targets": {
+    "retention": "Dry-run retention",
+    "webhook-policy": "Webhook network policy",
+    "sse-origins": "SSE retention and origins",
+    "versions": "Approved and pending versions",
+    "tests": "Target tests",
+    "secret-handoff": "Secret completion and rotation",
+    "new-url-version": "New secret URL version"
+  },
+  "deliveries": {
+    "filters": "Delivery filters",
+    "state": "Delivery state",
+    "retryability": "Retryable deliveries",
+    "drop": "Drop delivery",
+    "safe-dryrun": "Safe dry-run results",
+    "reset-barrier": "Reset barriers and target resume",
+    "holds": "Held decisions"
+  },
+  "judges": {
+    "three-kinds": "Judge kinds",
+    "approval-enable": "Approval to enable",
+    "immediate-disable": "Immediate disable",
+    "inputs": "Exact judge inputs",
+    "hosted-warning": "Hosted disclosure warning",
+    "keys": "Human-only keys",
+    "endpoints": "Local endpoints",
+    "laya-boundary": "Laya limits and boundary",
+    "laya-progress": "Laya progress and verified state",
+    "laya-remove": "Remove Laya files",
+    "secret-handoff": "Judge secret handoff"
+  },
+  "approvals": {
+    "complete-preview": "Complete authorisation preview",
+    "typed-challenge": "Typed challenge"
+  },
+  "settings": {
+    "open-at-login": "Open at login",
+    "keep-collecting": "Keep collecting after quit",
+    "secret-backend": "Event secret backend and migration",
+    "retention": "Retention",
+    "data-disk-use": "Data location and Laya disk use",
+    "unsigned-about": "Unsigned version 1"
+  }
+}

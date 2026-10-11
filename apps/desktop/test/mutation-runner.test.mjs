@@ -9,6 +9,7 @@ const root = new URL('../../../', import.meta.url);
 const manifest = new URL('./mutations/manifest.json', import.meta.url);
 const runner = new URL('./mutations/run.mjs', import.meta.url);
 
+// desktop-mutation: desktop-mutation-runner-declared-name
 test('mutation runner executes exactly the declared test name', async (t) => {
   const original = await readFile(manifest, 'utf8');
   const temp = await mkdtemp(join(tmpdir(), 'desktop-manifest-'));
@@ -34,4 +35,14 @@ test('mutation runner executes exactly the declared test name', async (t) => {
   });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /named test is not green/);
+});
+
+// desktop-mutation: desktop-mutation-runner-single-test-count
+test('mutation runner requires the complete one-test TAP summary for Node kills', async () => {
+  const source = await readFile(runner, 'utf8');
+  assert.match(source, /\^# tests 1\$/u, 'the baseline must reject a missing or extra Node test');
+  assert.match(source, /\^# pass \$\{expected\.pass\}/u, 'the runner must inspect the TAP pass count');
+  assert.match(source, /\^# fail \$\{expected\.fail\}/u, 'the runner must inspect the TAP failure count');
+  assert.match(source, /nodeSummary\(baseline\.stdout, \{ pass: 1, fail: 0 \}\)/u);
+  assert.match(source, /nodeSummary\(result\.stdout, \{ pass: 0, fail: 1 \}\)/u);
 });

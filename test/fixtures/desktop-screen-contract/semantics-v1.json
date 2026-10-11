@@ -1,0 +1,364 @@
+{
+  "overview": {
+    "global-switch": {
+      "actions": ["disable-all", "enable-all"],
+      "data": {
+        "operation": "enable-all",
+        "path": "/approvalId",
+        "text": "approval-prepared"
+      }
+    },
+    "daemon-protocol-health": {
+      "data": {
+        "operation": "doctor",
+        "path": "/owner/protocolVersions/0",
+        "text": "1"
+      }
+    },
+    "source-lag": {
+      "data": {
+        "operation": "doctor",
+        "path": "/sources/0",
+        "text": "{\"source\":\"slack\",\"accountId\":\"account-1\",\"lagMs\":2317}"
+      },
+      "needles": ["2317"]
+    },
+    "lineage-ids": {
+      "data": {
+        "operation": "doctor",
+        "path": "/lineages/0",
+        "text": "{\"authorizationActivationId\":\"authority-1\",\"derivation\":[{\"parentApprovalId\":\"parent-1\"}]}"
+      },
+      "needles": ["authority-1", "parent-1"]
+    },
+    "current-cutover": {
+      "data": {
+        "operation": "doctor",
+        "path": "/lineages/0",
+        "text": "{\"currentCutoverId\":\"cutover-1\"}"
+      },
+      "needles": ["cutover-1"]
+    },
+    "superseded-work": {
+      "data": {
+        "operation": "doctor",
+        "path": "/superseded/0",
+        "text": "{\"ruleId\":\"old-rule\",\"retainedWork\":7}"
+      },
+      "needles": ["old-rule"]
+    },
+    "delivery-outcomes": {
+      "seam": "DESKTOP_B3_FIELD_UNAVAILABLE",
+      "actions": ["deliveriesList"]
+    },
+    "holds": {
+      "data": {
+        "operation": "doctor",
+        "path": "/recovery/held",
+        "text": "17"
+      }
+    },
+    "judge-kinds": {
+      "data": {
+        "operation": "doctor",
+        "path": "/judgeBoundary/0",
+        "text": "{\"kind\":\"laya\",\"code\":\"E2_REQUIRED\",\"phase\":\"E2\"}"
+      },
+      "needles": ["E2_REQUIRED"]
+    },
+    "whatsapp-live-lists": {
+      "data": {
+        "operation": "doctor",
+        "path": "/whatsapp/0",
+        "text": "{\"accountId\":\"wa-1\",\"status\":\"applied\",\"appliedAt\":1700}"
+      },
+      "needles": ["wa-1", "applied"]
+    },
+    "pending-approvals": {
+      "data": {
+        "operation": "doctor",
+        "path": "/awaitingReapproval/0",
+        "text": "{\"accountId\":\"pending-account\",\"scopeId\":\"scope-1\",\"status\":\"awaitingReapproval\"}"
+      },
+      "needles": ["pending-account", "awaitingReapproval"]
+    },
+    "activation-completion": {
+      "data": {
+        "operation": "doctor",
+        "path": "/activationIntents/0",
+        "text": "{\"id\":\"failed-intent\",\"kind\":\"rule\",\"status\":\"failed\",\"completionDeadline\":9000,\"failureCode\":\"COMPLETION_TIMEOUT\"}"
+      },
+      "needles": ["failed-intent", "9000", "COMPLETION_TIMEOUT"],
+      "seam": "DESKTOP_B3_FIELD_UNAVAILABLE"
+    }
+  },
+  "sources": {
+    "accounts": {
+      "data": {
+        "operation": "sources-list",
+        "path": "/0",
+        "text": "{\"source\":\"gmail\",\"accounts\":[{\"opaque\":\"account-record\"}]}"
+      },
+      "needles": ["account-record"],
+      "seam": "DESKTOP_B3_OPAQUE_RECORD",
+      "actions": ["sources-list"]
+    },
+    "event-types": {
+      "data": {
+        "operation": "catalogue-list",
+        "path": "/0",
+        "text": "{\"type\":\"gmail.message\",\"version\":1}"
+      },
+      "actions": ["catalogue-list", "catalogue-show"],
+      "needles": ["gmail.message"]
+    },
+    "interval-budget": {
+      "seam": "DESKTOP_B3_FIELD_UNAVAILABLE"
+    },
+    "expected-latency": {
+      "seam": "DESKTOP_B3_FIELD_UNAVAILABLE"
+    },
+    "shared-cursor": {
+      "seam": "DESKTOP_B3_FIELD_UNAVAILABLE"
+    },
+    "activation-cutover": {
+      "data": {
+        "operation": "doctor",
+        "path": "/points/0",
+        "text": "{\"activationId\":\"activation-point\",\"scopeId\":\"scope-1\",\"accountId\":\"account-1\"}"
+      },
+      "needles": ["activation-point", "scope-1"]
+    },
+    "slack-drains": {
+      "seam": "DESKTOP_B3_FIELD_UNAVAILABLE"
+    },
+    "materialisation-health": {
+      "data": {
+        "operation": "doctor",
+        "path": "/sources/0",
+        "text": "{\"source\":\"gmail\",\"metadata\":{\"retryCount\":0},\"materialisation\":{\"retryCount\":2}}"
+      },
+      "needles": ["materialisation", "retryCount", "2"]
+    },
+    "observation-time": {
+      "needles": ["observed during acquisition", "do not reconstruct earlier provider state"]
+    }
+  },
+  "rules": {
+    "tree": {
+      "seam": "DESKTOP_B3_OPAQUE_RECORD",
+      "actions": ["rules-list"]
+    },
+    "optional-judge": {
+      "seam": "DESKTOP_B3_OPAQUE_RECORD",
+      "actions": ["rule-show"]
+    },
+    "inputs-budgets": {
+      "seam": "DESKTOP_B3_OPAQUE_RECORD"
+    },
+    "mapping-builder": {
+      "actions": ["rule-create", "rule-update"],
+      "needles": ["complete versioned rule document"]
+    },
+    "representation-schema": {
+      "seam": "DESKTOP_B3_OPAQUE_RECORD"
+    },
+    "rate-cap": {
+      "seam": "DESKTOP_B3_OPAQUE_RECORD"
+    },
+    "preview-dryrun": {
+      "actions": ["ruleTest", "ruleTestRetained"],
+      "data": {
+        "operation": "ruleTestRetained",
+        "path": "/rendered",
+        "text": "safe-retained-result"
+      }
+    }
+  },
+  "targets": {
+    "retention": {
+      "seam": "DESKTOP_B3_OPAQUE_RECORD",
+      "actions": ["targets-list"]
+    },
+    "webhook-policy": {
+      "seam": "DESKTOP_B3_OPAQUE_RECORD"
+    },
+    "sse-origins": {
+      "seam": "DESKTOP_B3_OPAQUE_RECORD",
+      "actions": ["subscribersList"]
+    },
+    "versions": {
+      "seam": "DESKTOP_B3_OPAQUE_RECORD"
+    },
+    "tests": {
+      "actions": ["targetTest"],
+      "data": {
+        "operation": "targetTest",
+        "path": "/targetVersion",
+        "text": "3"
+      },
+      "needles": ["active version"]
+    },
+    "secret-handoff": {
+      "actions": ["secrets"]
+    },
+    "new-url-version": {
+      "actions": ["secrets"],
+      "needles": ["new target version", "new rule activation"]
+    }
+  },
+  "deliveries": {
+    "filters": {
+      "actions": ["deliveriesList"]
+    },
+    "state": {
+      "seam": "DESKTOP_B3_OPAQUE_RECORD"
+    },
+    "retryability": {
+      "actions": ["retryDelivery"],
+      "needles": ["daemon checks its current state"]
+    },
+    "drop": {
+      "actions": ["dropDelivery"]
+    },
+    "safe-dryrun": {
+      "actions": ["dryrun-list", "dryrun-show"],
+      "data": {
+        "operation": "dryrun-show",
+        "path": "/record/cloudEventBytes",
+        "text": "safe-dryrun-bytes"
+      }
+    },
+    "reset-barrier": {
+      "data": {
+        "operation": "doctor",
+        "path": "/recovery/resetBarriers/0",
+        "text": "{\"state\":\"degraded\",\"count\":4}"
+      },
+      "needles": ["degraded"],
+      "actions": ["targetResume"]
+    },
+    "holds": {
+      "actions": ["heldList", "decideHeld"],
+      "data": {
+        "operation": "heldList",
+        "path": "/decisions",
+        "text": "[]"
+      },
+      "unavailable": {
+        "operation": "decideHeld",
+        "code": "HOLDS_UNAVAILABLE"
+      }
+    }
+  },
+  "judges": {
+    "three-kinds": {
+      "data": {
+        "operation": "doctor",
+        "path": "/judgeBoundary/0",
+        "text": "{\"kind\":\"typesafe\",\"code\":\"E_REQUIRED\",\"phase\":\"E\"}"
+      },
+      "needles": ["typesafe", "E_REQUIRED"],
+      "unavailable": {
+        "operation": "judgeKindsList",
+        "code": "E_REQUIRED"
+      }
+    },
+    "approval-enable": {
+      "actions": ["enableJudgeKind"],
+      "unavailable": {
+        "operation": "enableJudgeKind",
+        "code": "E_REQUIRED"
+      }
+    },
+    "immediate-disable": {
+      "actions": ["disableJudgeKind"],
+      "unavailable": {
+        "operation": "disableJudgeKind",
+        "code": "E_REQUIRED"
+      }
+    },
+    "inputs": {
+      "unavailable": {
+        "operation": "judgesList",
+        "code": "E_REQUIRED"
+      }
+    },
+    "hosted-warning": {
+      "needles": ["future matching event inputs", "leave this machine"]
+    },
+    "keys": {
+      "actions": ["secrets"]
+    },
+    "endpoints": {
+      "unavailable": {
+        "operation": "judgesList",
+        "code": "E_REQUIRED"
+      }
+    },
+    "laya-boundary": {
+      "data": {
+        "operation": "doctor",
+        "path": "/judgeBoundary/0",
+        "text": "{\"kind\":\"laya\",\"code\":\"E2_REQUIRED\",\"phase\":\"E2\"}"
+      },
+      "needles": ["E2_REQUIRED"]
+    },
+    "laya-progress": {
+      "actions": ["judgeModelStatus"],
+      "unavailable": {
+        "operation": "judgeModelStatus",
+        "code": "E2_REQUIRED"
+      }
+    },
+    "laya-remove": {
+      "actions": ["removeJudgeModel"],
+      "unavailable": {
+        "operation": "removeJudgeModel",
+        "code": "E2_REQUIRED"
+      }
+    },
+    "secret-handoff": {
+      "actions": ["secrets"]
+    }
+  },
+  "approvals": {
+    "complete-preview": {
+      "data": {
+        "operation": "approvalView",
+        "path": "preview",
+        "text": "authoritative-preview"
+      }
+    },
+    "typed-challenge": {
+      "needles": ["challenge-from-native", "Approve"]
+    }
+  },
+  "settings": {
+    "open-at-login": {
+      "preferences": "openAtLogin",
+      "needles": ["OS registration is not available"]
+    },
+    "keep-collecting": {
+      "preferences": "keepCollectingAfterQuit"
+    },
+    "secret-backend": {
+      "seam": "APP_SECRET_CAPABILITY_UNAVAILABLE",
+      "actions": ["secrets"]
+    },
+    "retention": {
+      "seam": "DESKTOP_B3_FIELD_UNAVAILABLE"
+    },
+    "data-disk-use": {
+      "seam": "DESKTOP_B3_FIELD_UNAVAILABLE",
+      "actions": ["judgeModelStatus"],
+      "unavailable": {
+        "operation": "judgeModelStatus",
+        "code": "E2_REQUIRED"
+      }
+    },
+    "unsigned-about": {
+      "needles": ["unsigned desktop prerelease"]
+    }
+  }
+}

@@ -186,8 +186,10 @@ fn tray_quit_waits_for_cancelled_start_before_late_spawn() {
     let selected = profile(&root, "a");
     let path = root.join("private/desktop.json");
     let store = PreferenceStore::new(path.clone());
-    let mut preferences = DesktopPreferences::default();
-    preferences.revision = 1;
+    let preferences = DesktopPreferences {
+        revision: 1,
+        ..DesktopPreferences::default()
+    };
     store.save(&preferences).unwrap();
     let before_start = fs::read(&path).unwrap();
     let runtime = FakeRuntime::absent();
@@ -239,8 +241,10 @@ fn start_rejects_external_revision_change_after_authenticated_status() {
     let selected = profile(&root, "a");
     let path = root.join("private/desktop.json");
     let store = PreferenceStore::new(path.clone());
-    let mut preferences = DesktopPreferences::default();
-    preferences.revision = 1;
+    let preferences = DesktopPreferences {
+        revision: 1,
+        ..DesktopPreferences::default()
+    };
     store.save(&preferences).unwrap();
     let runtime = FakeRuntime::attached(identity(101));
     let entered = Arc::new(Barrier::new(2));

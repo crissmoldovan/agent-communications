@@ -1,9 +1,11 @@
-mod commands;
+pub mod commands;
 pub mod control;
 pub mod preferences;
+pub mod preview;
 pub mod security;
 pub mod supervisor;
 mod tray;
+pub mod untrusted_result;
 
 use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder, WindowEvent};
@@ -56,7 +58,10 @@ pub fn run() {
         commands::supervision::desktop_supervision_status,
         commands::supervision::desktop_start_daemon,
         commands::supervision::desktop_quit_daemon,
-        commands::supervision::desktop_open_secrets
+        commands::supervision::desktop_open_secrets,
+        commands::control::desktop_control,
+        commands::control::desktop_approve,
+        commands::control::desktop_preferences
     ]);
     #[cfg(feature = "no-egress-probe")]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -64,6 +69,9 @@ pub fn run() {
         commands::supervision::desktop_start_daemon,
         commands::supervision::desktop_quit_daemon,
         commands::supervision::desktop_open_secrets,
+        commands::control::desktop_control,
+        commands::control::desktop_approve,
+        commands::control::desktop_preferences,
         desktop_probe_ping,
         desktop_probe_port,
         desktop_probe_report

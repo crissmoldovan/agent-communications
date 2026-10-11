@@ -1,7 +1,11 @@
 import { ThemeProvider } from '@cueplusplus/ui/system';
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { ControlModel } from './control-model';
+import { createScreenController } from './screen-controller';
+import { screens } from './screens';
+import { OperationResults } from './screens/shared';
 import { type SupervisionView, supervisionCommands, WindowLifecycle } from './supervision';
-import type { DesktopWindowKind } from './types';
+import type { AppPreferences, DesktopWindowKind, SafeAppResult } from './types';
 
 declare global {
   interface Window {
@@ -15,6 +19,89 @@ function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> 
 }
 
 const commands = supervisionCommands(invoke);
+
+function Workspace() {
+  const [screen, setScreen] = useState<keyof typeof screens>('overview');
+  const [results, setResults] = useState<Record<string, SafeAppResult>>({});
+  const [preferences, setPreferences] = useState<AppPreferences>({
+    openAtLogin: false,
+    keepCollectingAfterQuit: false,
+    revision: 0,
+  });
+  const [error, setError] = useState('');
+  const model = useRef(new ControlModel(invoke));
+  const lifecycle = useRef(new WindowLifecycle());
+  const Current = screens[screen];
+  useEffect(() => {
+    const request = lifecycle.current.request();
+    void invoke<AppPreferences>('desktop_preferences')
+      .then((value) => lifecycle.current.publish(request, () => setPreferences(value)))
+      .catch((reason) => lifecycle.current.publish(request, () => setError(String(reason))));
+    const clear = () => {
+      lifecycle.current.purge();
+      model.current.close();
+      setResults({});
+    };
+    const hide = () => {
+      if (document.visibilityState === 'hidden') clear();
+    };
+    window.addEventListener('pagehide', clear);
+    window.addEventListener('agentcomms:purge', clear);
+    document.addEventListener('visibilitychange', hide);
+    return () => {
+      clear();
+      window.removeEventListener('pagehide', clear);
+      window.removeEventListener('agentcomms:purge', clear);
+      document.removeEventListener('visibilitychange', hide);
+    };
+  }, []);
+  const controller = createScreenController(model.current, setResults, setError);
+  return (
+    <div>
+      <h1>Local events</h1>
+      <nav aria-label="Event screens">
+        {(Object.keys(screens) as (keyof typeof screens)[]).map((name) => (
+          <button
+            type="button"
+            key={name}
+            aria-current={screen === name ? 'page' : undefined}
+            onClick={() => {
+              model.current.close();
+              setResults({});
+              setScreen(name);
+            }}
+          >
+            {name}
+          </button>
+        ))}
+      </nav>
+      {error && <p role="alert">{error}</p>}
+      <Current
+        results={results}
+        preferences={preferences}
+        supervision={<Settings />}
+        onOperation={controller.run}
+        onSecrets={() => {
+          model.current.close();
+          setResults({});
+          void commands.openSecrets().catch((reason) => setError(String(reason)));
+        }}
+        onApproval={controller.approval}
+        onPreferences={(value) => {
+          const request = lifecycle.current.request();
+          void invoke<AppPreferences>('desktop_preferences', {
+            expectedRevision: preferences.revision,
+            openAtLogin: value.openAtLogin,
+            keepCollectingAfterQuit: value.keepCollectingAfterQuit,
+          })
+            .then((next) => lifecycle.current.publish(request, () => setPreferences(next)))
+            .catch((reason) => lifecycle.current.publish(request, () => setError(String(reason))));
+        }}
+      />
+      <OperationResults results={results} />
+    </div>
+  );
+}
 
 function Settings() {
   const [view, setView] = useState<SupervisionView | null>(null);
@@ -151,7 +238,7 @@ export function App({ kind }: { kind: DesktopWindowKind }) {
   return (
     <ThemeProvider theme="cue" density="normal" mode="system">
       {kind === 'settings' ? (
-        <Settings />
+        <Workspace />
       ) : (
         <main>
           <h1>Secrets</h1>
