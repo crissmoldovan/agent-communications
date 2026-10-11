@@ -15,12 +15,12 @@ import {
   canonicalSubscriber,
   canonicalTarget,
   type JudgeBudgetDocument,
-  type JudgeDocument,
   normaliseActivationDocument,
   type SubscriberDocument,
   type TargetDocument,
 } from '../domain/activation-documents.ts';
 import { ACTIVATION_FAILURE_CODES, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
+import type { CanonicalJudgeDocument } from '../domain/judges.ts';
 import {
   type B3ControlWireOperation,
   type DesktopControlWireOperation,
@@ -584,8 +584,8 @@ export interface B3ControlRequestArgumentsV1 {
   readonly updateSubscriber: { readonly document: SubscriberDocument };
   readonly removeSubscriber: { readonly subscriberId: string };
   readonly judgesList: Record<string, never>;
-  readonly addJudge: { readonly document: JudgeDocument };
-  readonly updateJudge: { readonly document: JudgeDocument };
+  readonly addJudge: { readonly document: CanonicalJudgeDocument };
+  readonly updateJudge: { readonly document: CanonicalJudgeDocument };
   readonly removeJudge: { readonly judgeId: string };
   readonly judgeTest: { readonly judgeId: string; readonly version: number };
   readonly budgetShow: Record<string, never>;

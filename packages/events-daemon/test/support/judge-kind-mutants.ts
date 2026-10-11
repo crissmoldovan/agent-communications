@@ -29,8 +29,8 @@ export const JUDGE_KIND_MUTATIONS: readonly JudgeKindMutation[] = [
   {
     id: 'e1-claim-before-core-disabled-kind',
     file: 'runtime/activations.ts',
-    before: 'const claimedBinding = this.#liveBinding(this.#intent(intent.id));',
-    after: 'const claimedBinding = binding;',
+    before: 'const finalBinding = this.#liveBinding(finalIntent);',
+    after: 'const finalBinding = binding;',
     testFile: 'judge-kind-activation-race.test.ts',
     testName: 'E1 judge-kind claim race: disabling after approval refuses the claim before a baseline or rule pointer',
   },
@@ -141,6 +141,8 @@ export async function expectJudgeKindMutationToFail(mutation: JudgeKindMutation)
         '--experimental-strip-types',
         '--disable-warning=ExperimentalWarning',
         '--test',
+        // The strict kill rule reads TAP's summary; Node 24 defaults to the spec reporter when piped.
+        '--test-reporter=tap',
         '--test-name-pattern',
         exactTestName(mutation.testName),
         join(root, 'test', mutation.testFile),

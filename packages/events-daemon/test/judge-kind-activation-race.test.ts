@@ -159,7 +159,7 @@ test('E1 judge-kind claim race: disabling after approval refuses the claim befor
   disable = () => disabledJudgeKind(setup.store);
   try {
     const prepared = await prepare(setup);
-    const challenge = await setup.approvals.issueDisclosureChallenge(prepared.approvalId);
+    const challenge = await setup.runtime.issueChallenge(prepared.approvalId);
     await assert.rejects(
       () => setup.runtime.approve({ approvalId: prepared.approvalId, answer: challenge }),
       disabledKind,
@@ -190,7 +190,7 @@ test('E1 judge-kind claimed race: disabling after the core claim refuses its loc
   disable = () => disabledJudgeKind(setup.store);
   try {
     const prepared = await prepare(setup);
-    const challenge = await setup.approvals.issueDisclosureChallenge(prepared.approvalId);
+    const challenge = await setup.runtime.issueChallenge(prepared.approvalId);
     await assert.rejects(
       () => setup.runtime.approve({ approvalId: prepared.approvalId, answer: challenge }),
       disabledKind,
@@ -226,7 +226,7 @@ test('E1 judge-kind finalisation race: disabling after claim refuses the final p
   disable = () => disabledJudgeKind(setup.store);
   try {
     const prepared = await prepare(setup);
-    const challenge = await setup.approvals.issueDisclosureChallenge(prepared.approvalId);
+    const challenge = await setup.runtime.issueChallenge(prepared.approvalId);
     await assert.rejects(
       () => setup.runtime.approve({ approvalId: prepared.approvalId, answer: challenge }),
       disabledKind,

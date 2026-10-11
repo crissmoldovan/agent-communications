@@ -31,9 +31,9 @@ export const JUDGE_TASK5_MUTATIONS: readonly JudgeTask5Mutation[] = [
           "import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';\nimport { recoverJudgeWork } from './judge-recovery.ts';",
       },
       {
-        before: '    await expiry.sweepAll();',
+        before: '    await withEventWriterLease(writerQuiescer, () => expiry.sweepAll());',
         after:
-          '    await expiry.sweepAll();\n    database.immediate(() => recoverJudgeWork({ database: database.database, now: now() }));',
+          '    await withEventWriterLease(writerQuiescer, () => expiry.sweepAll());\n    database.immediate(() => recoverJudgeWork({ database: database.database, now: now() }));',
       },
     ],
   },
@@ -132,6 +132,8 @@ export async function expectJudgeTask5MutationToFail(mutation: JudgeTask5Mutatio
         '--experimental-strip-types',
         '--disable-warning=ExperimentalWarning',
         '--test',
+        // The strict kill rule reads TAP's summary; Node 24 defaults to the spec reporter when piped.
+        '--test-reporter=tap',
         '--test-name-pattern',
         exactTestName(mutation.testName),
         join(root, mutation.test),
