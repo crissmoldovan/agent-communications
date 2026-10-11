@@ -5,6 +5,7 @@ import type { SourceOptions } from '../domain/source-options.ts';
 import type { SourceScope } from '../sources/contracts.ts';
 import { isWhitelistedTightening } from './disclosure-fence.ts';
 import type { PreparedSourceStageTerminalisation } from './expiry.ts';
+import { JudgePurgeParticipant } from './judge-purge.ts';
 import {
   purgeB2RetainedContentForRuleVersions,
   shortenB2DeadLetterDeadlines,
@@ -415,7 +416,13 @@ export function replacementIntentSummary(database: DatabaseSync): readonly {
  * or active version of the same rule that is not revoked keeps its own validly authorised work. Content-free history
  * is retained. The caller owns the surrounding BEGIN IMMEDIATE, so lifecycle, pointer and purge are observed together.
  */
-export function purgeRevokedRuleWork(database: DatabaseSync, ruleId: string, versions: readonly number[]): void {
+export function purgeRevokedRuleWork(
+  database: DatabaseSync,
+  ruleId: string,
+  versions: readonly number[],
+  now: number = Date.now(),
+): void {
+  new JudgePurgeParticipant({ database, now: () => now }).rule({ ruleId, versions });
   purgeB2RetainedContentForRuleVersions(database, { ruleId, ruleVersions: versions });
   for (const version of versions) {
     const versionId = ruleVersionId(ruleId, version);
@@ -653,6 +660,12 @@ export function shortenRuleRetentionDeadlines(input: {
     )
     .all(ruleId, now) as Array<{ event_id: string; rule_id: string; rule_version: number; account_id: string }>;
   for (const projection of dueProjections) {
+    new JudgePurgeParticipant({ database, now: () => now }).retainedProjection({
+      accountId: projection.account_id,
+      eventId: projection.event_id,
+      ruleId: projection.rule_id,
+      ruleVersion: projection.rule_version,
+    });
     database
       .prepare(
         `INSERT OR IGNORE INTO decisions
@@ -919,7 +932,7 @@ export async function applyDerivedTightening(input: {
       childVersion: input.child.version,
       childActivationId: childId,
     });
-    purgeRevokedRuleWork(database, input.parent.ruleId, [input.parent.version]);
+    purgeRevokedRuleWork(database, input.parent.ruleId, [input.parent.version], input.now);
     database
       .prepare("UPDATE rule_versions SET state = 'revoked', revoked_at = ? WHERE id = ? AND state = 'active'")
       .run(input.now, parentId);

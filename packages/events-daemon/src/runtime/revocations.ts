@@ -15,6 +15,7 @@ export async function disableRule(
 ): Promise<{ readonly ruleId: string; readonly disabled: true }> {
   await activations.cancelForRevocation({ ruleId });
   database.immediate(() => {
+    const revokedAt = Date.now();
     const active = new ImmutableVersions(database.database).activeVersion('rule', ruleId);
     if (!active) throw new CommsError('NOT_FOUND', 'the rule has no active version to disable');
     // D2: disabling a rule revokes its standing authorisation, so a superseded version still holding retained work is
@@ -28,8 +29,8 @@ export async function disableRule(
       .prepare(
         "UPDATE rule_versions SET state = 'revoked', revoked_at = ? WHERE rule_id = ? AND state IN ('active', 'superseded')",
       )
-      .run(Date.now(), ruleId);
-    purgeRevokedRuleWork(database.database, ruleId, live);
+      .run(revokedAt, ruleId);
+    purgeRevokedRuleWork(database.database, ruleId, live, revokedAt);
     database.database.prepare("DELETE FROM active_versions WHERE kind = 'rule' AND object_id = ?").run(ruleId);
   });
   return { ruleId, disabled: true };
@@ -69,7 +70,7 @@ export async function removeTarget(
       database.database
         .prepare("UPDATE rule_versions SET state = 'revoked', revoked_at = ? WHERE rule_id = ? AND version = ?")
         .run(revokedAt, rule.rule_id, rule.version);
-      purgeRevokedRuleWork(database.database, rule.rule_id, [rule.version]);
+      purgeRevokedRuleWork(database.database, rule.rule_id, [rule.version], revokedAt);
       database.database
         .prepare("DELETE FROM active_versions WHERE kind = 'rule' AND object_id = ? AND version = ?")
         .run(rule.rule_id, rule.version);

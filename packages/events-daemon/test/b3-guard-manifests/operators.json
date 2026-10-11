@@ -187,8 +187,8 @@
       "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
       "test": "packages/events-daemon/test/b3-purge-closure.test.ts",
       "mutation": {
-        "from": "purgeRevokedRuleWork(this.#store.database, rule.rule_id, [rule.version]);",
-        "to": "if (false) purgeRevokedRuleWork(this.#store.database, rule.rule_id, [rule.version]);"
+        "from": "purgeRevokedRuleWork(this.#store.database, rule.rule_id, [rule.version], now);",
+        "to": "if (false) purgeRevokedRuleWork(this.#store.database, rule.rule_id, [rule.version], now);"
       },
       "mutationTest": "B3 subscriber removal cancels every orphaned retained or claimed row in one closure transaction",
       "loadedMarker": "subscriber-removal-cancels-orphaned-work"

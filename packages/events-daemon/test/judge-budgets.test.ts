@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
+import { EventDomainError } from '../src/domain/lifecycle.ts';
 import { ImmutableVersions } from '../src/domain/versions.ts';
 import {
   beginJudgeTransport,
@@ -94,6 +95,12 @@ async function fixture(
   const budgetDocument = budget(1, options.budget);
   versions.createTarget(target);
   versions.createJudge(judge);
+  versions.createJudgeKind({
+    id: 'judge-kind:typesafe',
+    kind: 'typesafe',
+    version: 1,
+    endpoint: 'https://api.typesafe.ai/v1/systemone',
+  });
   versions.createJudgeBudget(budgetDocument);
   versions.createRule({ ...rule(1), agentic: { ...rule(1).agentic, ...sourceLimits } });
   store.database.exec(`INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at)
@@ -162,6 +169,64 @@ function reserve(
 function expectBudget(code: JudgeBudgetError['code']) {
   return (error: unknown): boolean => error instanceof JudgeBudgetError && error.code === code;
 }
+
+test('E4 budget digest fence: a live reservation refuses an altered active budget before it creates ledger work', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture({ budget: { callsPerRollingHour: 1 } });
+  try {
+    addProjection(setup, { eventId: 'event-e4-altered-live-budget' });
+    setup.store.database
+      .prepare('UPDATE judge_budget_versions SET document = replace(document, ?, ?) WHERE version = 1')
+      .run('"callsPerRollingHour":1', '"callsPerRollingHour":2');
+
+    assert.throws(
+      () => reserve(setup, 'altered-live-budget', 'event-e4-altered-live-budget'),
+      (error: unknown) => error instanceof EventDomainError && error.code === 'VERSION_DOCUMENT_INVALID',
+    );
+    assert.equal(
+      (
+        setup.store.database.prepare('SELECT COUNT(*) AS count FROM judge_budget_reservations').get() as {
+          count: number;
+        }
+      ).count,
+      0,
+      'a digest-drifting active budget cannot create a reservation under its raised limits',
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test('E4 kind digest fence: a live reservation treats an altered active kind document as unavailable', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    addProjection(setup, { eventId: 'event-e4-altered-live-kind' });
+    setup.store.database
+      .prepare('UPDATE judge_kind_versions SET document = replace(document, ?, ?) WHERE kind = ? AND version = 1')
+      .run('"version":1', '"version":2', 'typesafe');
+
+    assert.throws(
+      () => reserve(setup, 'altered-live-kind', 'event-e4-altered-live-kind'),
+      expectBudget('JUDGE_KIND_DISABLED'),
+    );
+    assert.equal(
+      (
+        setup.store.database.prepare('SELECT COUNT(*) AS count FROM judge_budget_reservations').get() as {
+          count: number;
+        }
+      ).count,
+      0,
+      'an unavailable kind cannot create a reservation',
+    );
+  } finally {
+    setup.store.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
 
 test('E5 budget: rolling call and token windows include reserved, in-flight, and settled but never released', {
   skip: WINDOWS_SKIP,

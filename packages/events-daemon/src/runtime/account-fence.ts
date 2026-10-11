@@ -3,6 +3,7 @@ import { CommsError, type ConfigStore } from '@agentcomms/core';
 import { ACTIVATION_FAILURE } from '../domain/activation-failure-codes.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
 import type { SourceScope } from '../sources/contracts.ts';
+import { JudgePurgeParticipant } from './judge-purge.ts';
 import { purgeRevokedRuleWork } from './replacements.ts';
 
 export interface EventAccountScope {
@@ -82,6 +83,7 @@ export function purgeRemovedAccountWork(
 ): void {
   const scope: EventAccountScope = typeof account === 'string' ? { source: 'gmail', accountId: account } : account;
   const { accountId, source } = scope;
+  new JudgePurgeParticipant({ database, now: () => now }).account({ source, accountId });
   // A used approval names the planned stable ids, not aliases. Cancel every unfinished intent that includes this
   // source/account before removing its durable source state: a later re-add of the same id must require a new
   // approval and a fresh point. Version-one plans omitted `source` for Gmail, so preserve that canonical default.
@@ -183,7 +185,7 @@ export function purgeRemovedAccountWork(
     database
       .prepare("UPDATE rule_versions SET state = 'revoked', revoked_at = ? WHERE rule_id = ? AND version = ?")
       .run(now, version.rule_id, version.version);
-    purgeRevokedRuleWork(database, version.rule_id, [version.version]);
+    purgeRevokedRuleWork(database, version.rule_id, [version.version], now);
     database
       .prepare("DELETE FROM active_versions WHERE kind = 'rule' AND object_id = ? AND version = ?")
       .run(version.rule_id, version.version);

@@ -558,6 +558,20 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '18' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // A disable must beat a prepare that yielded before it could persist an activation intent. The per-kind fence is
+    // content-free and advances even when the kind pointer is already absent.
+    version: 19,
+    name: 'event-judge-kind-disable-generations-v1',
+    statements: [
+      `CREATE TABLE judge_kind_disable_generations (
+        kind TEXT PRIMARY KEY CHECK (kind IN (${JUDGE_KIND_SQL_VALUES})),
+        generation INTEGER NOT NULL CHECK (generation >= 0),
+        disabled_at INTEGER NOT NULL
+      ) STRICT`,
+      "UPDATE meta SET value = '19' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {
