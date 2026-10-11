@@ -127,7 +127,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
   runtimeTool(
     'events_doctor',
     'Local event service doctor',
-    'Reports content-free owner and protocol health.',
+    'Reports content-free lineage validation, pending metadata/materialisation retry health, recovery and protocol health.',
     doctor,
     {
       destructiveHint: false,

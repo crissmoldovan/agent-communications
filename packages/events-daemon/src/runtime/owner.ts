@@ -58,6 +58,7 @@ import { EventRecordCipher } from '../store/records.ts';
 import { assertLiveEventAccount } from './account-fence.ts';
 import { ActivationRuntime } from './activations.ts';
 import { type B3ControlPorts, type B3DeliveryWriteFenceRequest, createB3ControlPorts } from './b3-control-ports.ts';
+import { projectB3Doctor } from './b3-doctor-projection.ts';
 import { B3OperatorControl } from './b3-operator-control.ts';
 import { type PendingTargetOrigin, verifyPendingTargetContext } from './b3-pending-activation-context.ts';
 import {
@@ -1094,6 +1095,21 @@ async function startOwnerWithLock(
       }),
       now,
     });
+  // Task 7 is a read-only projection over the same Task 2 control ports used by the mutating B3 control service.
+  // It deliberately has no writer capability and never reads a decrypted cursor or provider response.
+  const doctorReport = async () => {
+    return projectB3Doctor({
+      database: database.database,
+      installationId: database.installationId,
+      lifecycle: lifecycle.status(),
+      protocolVersions: [1],
+      ports: ownerB3Ports,
+      config: core.config,
+      approvals: core.approvals,
+      decryptSourceState: decryptSourceStage,
+      now,
+    });
+  };
   const token = randomBytes(32).toString('hex');
   const instance = newInstanceRecord(controlEndpoint(paths), token);
   let control: RunningControlServer | undefined;
@@ -1144,7 +1160,6 @@ async function startOwnerWithLock(
         handleControl(
           owner,
           lifecycle,
-          database.installationId,
           database,
           activations,
           dryrun,
@@ -1152,6 +1167,7 @@ async function startOwnerWithLock(
           writerQuiescer,
           request,
           ownerB3Service,
+          doctorReport,
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -1186,7 +1202,6 @@ export async function runEventOwner(options: EventOwnerOptions = {}): Promise<vo
 async function handleControl(
   owner: EventOwner,
   lifecycle: EventLifecycle,
-  installationId: string,
   database: Awaited<ReturnType<typeof openEventDatabase>>,
   activations: ActivationRuntime,
   dispatcher: DryRunDispatcher,
@@ -1194,6 +1209,7 @@ async function handleControl(
   writerQuiescer: WriterQuiescer,
   request: AuthenticatedControlRequest,
   b3OwnerService: B3OwnerService | undefined,
+  doctorReport: () => Promise<unknown>,
 ): Promise<unknown> {
   if (isB3ControlOperation(request.operation)) {
     if (!b3OwnerService) throw new CommsError('USAGE', 'the local B3 control operation is not available');
@@ -1223,7 +1239,7 @@ async function handleControl(
     case 'enable-all':
       return activations.prepareEnableAll();
     case 'doctor':
-      return { ...owner.status(), protocolVersions: [1], installationId, dryrun: dispatcher.summary() };
+      return doctorReport();
     case 'dryrun-list':
       return dispatcher.list();
     case 'dryrun-show':

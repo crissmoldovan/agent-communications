@@ -131,7 +131,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     ['resume', 'resume operational work retained by pause', resume],
     ['disable-all', 'disable collection, advance the global generation and purge B1 work', disableAll],
     ['enable-all', 'report the standing approval required before collection can be enabled', enableAll],
-    ['doctor', 'report content-free owner, protocol and global switch health', doctor],
+    [
+      'doctor',
+      'report content-free lineage validation, pending source retry health, recovery and global switch health',
+      doctor,
+    ],
   ] as const) {
     program
       .command(name)
