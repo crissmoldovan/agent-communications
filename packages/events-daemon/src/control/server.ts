@@ -1,10 +1,10 @@
 import { createServer, type Server, type Socket } from 'node:net';
 import { isCommsError } from '@agentcomms/core';
 import {
+  type AuthenticatedControlRequest,
   CONTROL_PROTOCOL_VERSIONS,
   type ControlError,
   ControlFrameReader,
-  type ControlRequest,
   controlFailure,
   encodeControlFrame,
   isControlHello,
@@ -16,7 +16,7 @@ import { ControlSessions, matchesControlToken } from './session.ts';
 export interface ControlServerOptions {
   readonly endpoint: string;
   readonly token: string;
-  readonly handle: (request: ControlRequest) => Promise<unknown>;
+  readonly handle: (request: AuthenticatedControlRequest) => Promise<unknown>;
   /**
    * Re-proves, for every accepted connection, that only this user can reach the endpoint (B1-G): the owner passes the
    * private socket-directory check. A rejection closes the connection before any frame is read.
@@ -116,7 +116,7 @@ async function serve(
         socket.end();
         return;
       }
-      session = options.sessions.create(negotiated.version);
+      session = options.sessions.create(negotiated.version, message.hello.client.name);
       write(socket, { ok: true, version: session.version, session: session.id });
       return;
     }
@@ -143,7 +143,11 @@ async function serve(
     }
     active.requestIds.add(message.requestId);
     try {
-      write(socket, { ok: true, requestId: message.requestId, data: await options.handle(message) });
+      write(socket, {
+        ok: true,
+        requestId: message.requestId,
+        data: await options.handle({ ...message, origin: active.clientName }),
+      });
     } catch (error) {
       write(socket, { ok: false, requestId: message.requestId, error: operationError(error) });
     }

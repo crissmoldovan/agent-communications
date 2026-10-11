@@ -318,9 +318,10 @@ function parseMaster(ref: string, value: string | null): Buffer {
 export class EventSecretStore {
   readonly #database: DatabaseSync;
   readonly #paths: EventPaths;
-  readonly #kind: EventSecretStoreKind;
-  readonly #store: SecretStore;
+  #kind: EventSecretStoreKind;
+  #store: SecretStore;
   readonly #selectorWasAbsent: boolean;
+  readonly #openStore: (kind: EventSecretStoreKind) => Promise<SecretStore>;
 
   constructor(
     database: DatabaseSync,
@@ -328,12 +329,14 @@ export class EventSecretStore {
     kind: EventSecretStoreKind,
     store: SecretStore,
     selectorWasAbsent: boolean,
+    openStore: (kind: EventSecretStoreKind) => Promise<SecretStore>,
   ) {
     this.#database = database;
     this.#paths = paths;
     this.#kind = kind;
     this.#store = store;
     this.#selectorWasAbsent = selectorWasAbsent;
+    this.#openStore = openStore;
   }
 
   get kind(): EventSecretStoreKind {
@@ -342,6 +345,32 @@ export class EventSecretStore {
 
   async references(cipher?: EventSecretReferenceCipher): Promise<readonly string[]> {
     return this.withLock(() => referencesFor(this.#database, cipher));
+  }
+
+  /** The owner alone opens the other events-only backend; no core selector or namespace participates. */
+  async migrateTo(
+    to: EventSecretStoreKind,
+    referenceCipher: EventSecretReferenceCipher,
+  ): Promise<EventSecretMigrationResult> {
+    const target = to === this.#kind ? this.#store : await this.#openStore(to);
+    const result = await migrateEventSecrets({
+      database: this.#database,
+      paths: this.#paths,
+      from: this.#kind,
+      to,
+      source: this.#store,
+      target,
+      referenceCipher,
+    });
+    // The long-lived owner must use the newly selected backend after the selector commit.  Keeping the old instance
+    // would make the next rotation fail closed on selector drift, which in turn would make a named cleanup leftover
+    // impossible to retry before rotating.  `migrateEventSecrets` only returns after the selector is destination (or
+    // after an idempotent destination cleanup), so this swap never follows a failed copy.
+    if (selectedKind(this.#database) === to) {
+      this.#kind = to;
+      this.#store = target;
+    }
+    return result;
   }
 
   async currentMaster(): Promise<EventMaster> {
@@ -993,7 +1022,14 @@ async function readBackend(store: SecretStore, ref: string): Promise<string | nu
 export async function openEventSecretStore(options: OpenEventSecretStoreOptions): Promise<EventSecretStore> {
   const recorded = selectedKind(options.database);
   const kind = recorded ?? 'keychain';
-  return new EventSecretStore(options.database, options.paths, kind, await storeFor(options, kind), recorded === null);
+  return new EventSecretStore(
+    options.database,
+    options.paths,
+    kind,
+    await storeFor(options, kind),
+    recorded === null,
+    (requested) => storeFor(options, requested),
+  );
 }
 
 /**

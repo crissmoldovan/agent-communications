@@ -62,6 +62,7 @@ Scripts should read these rather than parse output.
 | [`dryrun`](#agent-events-dryrun) | inspect retained local records at an interactive terminal |
 | [`approve`](#agent-events-approve) | approve a standing disclosure by typing its challenge at this terminal |
 | [`mcp`](#agent-events-mcp) | serve the MCP interface over standard input and output |
+| [`secrets`](#agent-events-secrets) | migrate the daemon-owned secret backend at a human terminal |
 
 ### `agent-events status`
 
@@ -257,6 +258,17 @@ agent-events rule remove [options] <rule-id>
 agent-events rule test [options] <document> <catalogue-example>
 ```
 
+### `agent-events rule test-retained`
+
+```
+agent-events rule test-retained [options] <event-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--rule <rule-id>` |  | — |
+| `--version <version>` |  | — |
+
 ### `agent-events targets`
 
 inspect immutable local event target versions
@@ -307,6 +319,64 @@ agent-events target test [options] <target-id>
 |---|---|---|
 | `--version <version>` |  | — |
 
+### `agent-events target resume`
+
+```
+agent-events target resume [options] <target-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--version <version>` |  | — |
+
+### `agent-events target secret`
+
+create or rotate terminal-only webhook signing material
+
+```
+agent-events target secret [options] [command]
+```
+
+### `agent-events target secret create`
+
+```
+agent-events target secret create [options] <target-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--version <version>` |  | — |
+
+### `agent-events target secret rotate`
+
+```
+agent-events target secret rotate [options] <target-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--version <version>` |  | — |
+
+### `agent-events target url`
+
+set a concealed webhook URL into a new immutable target version
+
+```
+agent-events target url [options] [command]
+```
+
+### `agent-events target url set`
+
+```
+agent-events target url set [options] <target-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--predecessor-version <version>` |  | — |
+| `--draft <inert-target-document>` |  | — |
+| `--new-version <version>` |  | — |
+
 ### `agent-events subscribers`
 
 inspect immutable SSE subscriber versions
@@ -346,6 +416,34 @@ agent-events subscriber update [options] <document>
 ```
 agent-events subscriber remove [options] <subscriber-id>
 ```
+
+### `agent-events subscriber token`
+
+create or rotate a terminal-only SSE bearer token
+
+```
+agent-events subscriber token [options] [command]
+```
+
+### `agent-events subscriber token create`
+
+```
+agent-events subscriber token create [options] <subscriber-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--version <version>` |  | — |
+
+### `agent-events subscriber token rotate`
+
+```
+agent-events subscriber token rotate [options] <subscriber-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--version <version>` |  | — |
 
 ### `agent-events judges`
 
@@ -451,6 +549,34 @@ agent-events judge model status [options]
 agent-events judge model remove [options]
 ```
 
+### `agent-events judge key`
+
+set or rotate a terminal-only hosted judge credential
+
+```
+agent-events judge key [options] [command]
+```
+
+### `agent-events judge key set`
+
+```
+agent-events judge key set [options] <judge-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--version <version>` |  | — |
+
+### `agent-events judge key rotate`
+
+```
+agent-events judge key rotate [options] <judge-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--version <version>` |  | — |
+
 ### `agent-events budget`
 
 use typed unavailable budget controls until Phase E
@@ -519,6 +645,12 @@ agent-events held [options] [command]
 agent-events held list [options]
 ```
 
+### `agent-events held decide`
+
+```
+agent-events held decide [options] <decision-id> <accept|reject>
+```
+
 ### `agent-events dryrun`
 
 inspect retained local records at an interactive terminal
@@ -554,3 +686,21 @@ serve the MCP interface over standard input and output
 ```
 agent-events mcp [options]
 ```
+
+### `agent-events secrets`
+
+migrate the daemon-owned secret backend at a human terminal
+
+```
+agent-events secrets [options] [command]
+```
+
+### `agent-events secrets migrate`
+
+```
+agent-events secrets migrate [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--to <keychain\|file>` |  | — |

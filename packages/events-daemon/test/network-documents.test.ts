@@ -160,16 +160,16 @@ test('B2-T3: activation documents embed exact stored webhook and SSE versions wi
   assert.equal(JSON.stringify(rule as CanonicalFullRuleDocument).includes(secretUrl), false);
 });
 
-test('B2-T3/B3: public capability inventory keeps secret and human-only operations absent while Task 5 pairs content-free controls', async () => {
+test('B2-T3/B3: public capability inventory names individual terminal-only secret operations while Task 5 pairs content-free controls', async () => {
   const capabilities = JSON.parse(await readFile(new URL('../../../capabilities.json', import.meta.url), 'utf8')) as {
     capabilities: Array<{ id: string }>;
   };
   const rows = capabilities.capabilities.filter((row) => row.id.startsWith('events-daemon.')).map((row) => row.id);
-  for (const forbidden of ['target.secret', 'target.url', 'secrets.migrate', 'target.resume', 'held.decide']) {
+  for (const terminalOnly of ['target-secret', 'target-url', 'secrets.migrate', 'target.resume', 'held.decide']) {
     assert.equal(
-      rows.some((id) => id.includes(forbidden)),
-      false,
-      forbidden,
+      rows.some((id) => id.includes(terminalOnly)),
+      true,
+      terminalOnly,
     );
   }
   for (const paired of ['subscriber', 'delivery.retry'])

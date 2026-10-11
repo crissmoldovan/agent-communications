@@ -5,6 +5,7 @@ export interface ControlSession {
   readonly version: number;
   readonly expiresAt: number;
   readonly requestIds: Set<string>;
+  readonly clientName: string;
 }
 
 export class ControlSessions {
@@ -15,13 +16,14 @@ export class ControlSessions {
     this.options = options;
   }
 
-  create(version: number): ControlSession {
+  create(version: number, clientName = ''): ControlSession {
     this.prune();
     const session: ControlSession = {
       id: randomBytes(24).toString('base64url'),
       version,
       expiresAt: this.now() + (this.options.ttlMs ?? 60_000),
       requestIds: new Set(),
+      clientName,
     };
     this.#sessions.set(session.id, session);
     return session;

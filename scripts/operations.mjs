@@ -807,6 +807,9 @@ async function drive(inputPath, outputPath) {
           probe: blocked,
           read: blocked,
           appConfig: blocked,
+          // B3 exception rows are driven through the real Commander surface in a fake TTY.  This test-only hook is
+          // the sole synthetic secret input: production deps have no fallback reader and never consume pipe bytes.
+          readSecret: async () => 'parity-synthetic-hidden-material',
         });
       }
       // A stream hands its last chunk over on the next turn, not on the write that made it.

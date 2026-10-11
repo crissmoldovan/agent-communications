@@ -5,6 +5,9 @@
 export const B3_EXCEPTION_REASON_SECRET =
   'secret material must never enter model input or output; the person completes this operation at the terminal or app.';
 
+/** C may replace this only after the daemon verifies its future non-forgeable secret-window capability. */
+export const B3_SECRET_TERMINAL_ORIGIN = 'interactive-terminal';
+
 export interface B3CapabilityContract {
   readonly id: `events-daemon.${string}`;
   readonly cli: string;
@@ -216,9 +219,19 @@ const B3_CONTROL_OPERATIONS: ReadonlySet<B3ControlOperation> = new Set(
   B3_CAPABILITIES.map(({ operation }) => operation as B3ControlOperation),
 );
 
+export const B3_SECRET_OPERATIONS: ReadonlySet<B3ControlOperation> = new Set(
+  B3_CAPABILITIES.filter((capability) => capability.secret === true).map(
+    ({ operation }) => operation as B3ControlOperation,
+  ),
+);
+
 /** The owner accepts only the B3 operation vocabulary that its future CLI/MCP registrars may expose. */
 export function isB3ControlOperation(value: string): value is B3ControlOperation {
   return B3_CONTROL_OPERATIONS.has(value as B3ControlOperation);
+}
+
+export function isB3SecretOperation(value: B3ControlOperation): boolean {
+  return B3_SECRET_OPERATIONS.has(value);
 }
 
 export type B3ApprovalViewVariant = 'READY' | 'STALE_APPROVAL' | 'DIGEST_MISMATCH' | 'CHALLENGE_EXPIRED';
@@ -250,6 +263,8 @@ export interface B3ControlContract {
 export interface B3OwnerRequest {
   readonly operation: B3ControlOperation;
   readonly args: Readonly<Record<string, unknown>>;
+  /** Captured from the authenticated control hello; request arguments cannot choose it. */
+  readonly origin?: string | undefined;
 }
 
 export interface B3OwnerService {

@@ -28,6 +28,33 @@ export type SecretReceipt =
     }
   | { readonly kind: 'judge-key'; readonly judgeId: string; readonly version: number; readonly generation: number };
 
+/**
+ * A generated credential has no JSON representation until the terminal owner consumes it.  Keeping the material on a
+ * non-enumerable symbol lets the durable engine continue to return receipt-shaped values to audit/log/result code;
+ * only `consumeGeneratedTerminalReveal` can turn it into the transient terminal control reply.
+ */
+const GENERATED_TERMINAL_REVEAL = Symbol('generated-terminal-reveal');
+type GeneratedSecretReceipt = SecretReceipt & { [GENERATED_TERMINAL_REVEAL]?: string };
+
+function generatedReceipt(receipt: SecretReceipt, material: string): SecretReceipt {
+  Object.defineProperty(receipt, GENERATED_TERMINAL_REVEAL, {
+    configurable: true,
+    enumerable: false,
+    value: material,
+    writable: false,
+  });
+  return receipt;
+}
+
+/** Consumes a generated credential exactly once at the controlling terminal boundary. */
+export function consumeGeneratedTerminalReveal(receipt: SecretReceipt): string | null {
+  const generated = receipt as GeneratedSecretReceipt;
+  const material = generated[GENERATED_TERMINAL_REVEAL];
+  if (material === undefined) return null;
+  delete generated[GENERATED_TERMINAL_REVEAL];
+  return material;
+}
+
 function currentGeneration(database: DatabaseSync, owner: ExactOwner, purpose: EventSecretPurpose): number | null {
   const row = database
     .prepare(
@@ -86,8 +113,12 @@ export class B3SecretControl {
   async targetSecretCreate(input: { readonly targetId: string; readonly version: number }): Promise<SecretReceipt> {
     return withEventWriterLease(this.#quiescer, async () => {
       const owner = exactOwner(this.#database, 'target', input.targetId, input.version);
-      const generation = await this.#store(owner, 'webhook-signing', this.#newSigningSecret(), null, false, true);
-      return { kind: 'target-secret', targetId: input.targetId, version: input.version, generation };
+      const material = this.#newSigningSecret();
+      const generation = await this.#store(owner, 'webhook-signing', material, null, false, true);
+      return generatedReceipt(
+        { kind: 'target-secret', targetId: input.targetId, version: input.version, generation },
+        material,
+      );
     });
   }
 
@@ -97,13 +128,17 @@ export class B3SecretControl {
       const prior = this.#requiredCurrent(owner, 'webhook-signing');
       const retired = await this.#secrets.currentMaster();
       await this.#cipher.rotateAndReencrypt();
-      const generation = await this.#store(owner, 'webhook-signing', this.#newSigningSecret(), prior, false);
+      const material = this.#newSigningSecret();
+      const generation = await this.#store(owner, 'webhook-signing', material, prior, false);
       await this.#secrets.destroyRetiredMaster({
         keyId: retired.keyId,
         cipher: this.#cipher,
         quiescer: this.#quiescer,
       });
-      return { kind: 'target-secret', targetId: input.targetId, version: input.version, generation };
+      return generatedReceipt(
+        { kind: 'target-secret', targetId: input.targetId, version: input.version, generation },
+        material,
+      );
     });
   }
 
@@ -113,8 +148,12 @@ export class B3SecretControl {
   }): Promise<SecretReceipt> {
     return withEventWriterLease(this.#quiescer, async () => {
       const owner = exactOwner(this.#database, 'subscriber', input.subscriberId, input.version);
-      const generation = await this.#store(owner, 'sse-bearer', this.#newToken(), null, false, true);
-      return { kind: 'subscriber-token', subscriberId: input.subscriberId, version: input.version, generation };
+      const material = this.#newToken();
+      const generation = await this.#store(owner, 'sse-bearer', material, null, false, true);
+      return generatedReceipt(
+        { kind: 'subscriber-token', subscriberId: input.subscriberId, version: input.version, generation },
+        material,
+      );
     });
   }
 
@@ -127,7 +166,8 @@ export class B3SecretControl {
       const prior = this.#requiredCurrent(owner, 'sse-bearer');
       const retired = await this.#secrets.currentMaster();
       await this.#cipher.rotateAndReencrypt();
-      const generation = await this.#store(owner, 'sse-bearer', this.#newToken(), prior, true);
+      const material = this.#newToken();
+      const generation = await this.#store(owner, 'sse-bearer', material, prior, true);
       this.#subscriberStreams?.rotate({
         subscriberId: input.subscriberId,
         subscriberVersion: input.version,
@@ -139,7 +179,10 @@ export class B3SecretControl {
         cipher: this.#cipher,
         quiescer: this.#quiescer,
       });
-      return { kind: 'subscriber-token', subscriberId: input.subscriberId, version: input.version, generation };
+      return generatedReceipt(
+        { kind: 'subscriber-token', subscriberId: input.subscriberId, version: input.version, generation },
+        material,
+      );
     });
   }
 
@@ -234,6 +277,11 @@ export class B3SecretControl {
         referenceCipher: this.#cipher,
       }),
     );
+  }
+
+  /** Terminal migration chooses only the destination kind; this owner resolves both independent event stores itself. */
+  async migrateTo(to: EventSecretStoreKind): Promise<EventSecretMigrationResult> {
+    return withEventWriterLease(this.#quiescer, () => this.#secrets.migrateTo(to, this.#cipher));
   }
 
   async #store(

@@ -52,7 +52,13 @@ test('B3 mutation proof: a sealed owner dispatches only B3 contract operations',
         (error as Error).message === 'the local event control operation is not recognised',
       'an unknown control operation must not cross into the B3 owner service',
     );
-    assert.deepEqual(seen, [{ operation: 'targetTest', args: { fixture: 'b3-control' } }]);
+    assert.deepEqual(seen, [
+      {
+        operation: 'targetTest',
+        args: { fixture: 'b3-control' },
+        origin: 'events-daemon-b3-mutation-test',
+      },
+    ]);
   } finally {
     await owner.stop();
     await rm(stateDir, { recursive: true, force: true });
