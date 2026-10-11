@@ -300,6 +300,8 @@ function commandForNamedTest(
     '--experimental-strip-types',
     '--disable-warning=ExperimentalWarning',
     '--test',
+    // The kill rule reads TAP's `# tests` / `# pass` / `# fail` summary; Node 24 defaults to the spec reporter when piped.
+    '--test-reporter=tap',
     '--test-name-pattern',
     entry.mutationTest,
     join(overlay, entry.test),
