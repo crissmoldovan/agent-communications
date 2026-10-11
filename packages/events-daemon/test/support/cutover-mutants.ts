@@ -824,6 +824,8 @@ export async function expectMatrixCellToKillMutant(copy: MutantCopy): Promise<vo
         '--experimental-strip-types',
         '--disable-warning=ExperimentalWarning',
         '--test',
+        // The kill rule reads TAP's `# tests` / `# fail` summary; Node 24 defaults to the spec reporter when piped.
+        '--test-reporter=tap',
         ...(isMatrixCellTest
           ? ['--test-name-pattern', `^${copy.mutation.cell.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`]
           : []),
