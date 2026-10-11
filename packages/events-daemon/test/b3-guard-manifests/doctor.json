@@ -166,8 +166,8 @@
       "test": "packages/events-daemon/test/b3-doctor-content-scan.test.ts",
       "overlayInputs": ["package.json", "capabilities.json", "packages/*/package.json", "scripts/**"],
       "mutation": {
-        "from": "const result = await operation(controlOptions(program));\n        if (program.opts<EventsCliOptions>().json) streams.stdout.write(`${JSON.stringify(result)}\\n`);",
-        "to": "const result = await operation(controlOptions(program));\n        if (program.opts<EventsCliOptions>().json) {\n          streams.stderr.write('doctor-secret-marker\\n');\n          streams.stdout.write(`${JSON.stringify(result)}\\n`);\n        }"
+        "from": "const result = await operation(controlOptions(program));\n        if (program.opts<EventsCliOptions>().json) streams.stdout.write(`${terminalSafeJson(result)}\\n`);",
+        "to": "const result = await operation(controlOptions(program));\n        if (program.opts<EventsCliOptions>().json) {\n          streams.stderr.write('doctor-secret-marker\\n');\n          streams.stdout.write(`${terminalSafeJson(result)}\\n`);\n        }"
       },
       "mutationTest": "B3 doctor serializes no sender, secret, reference, fingerprint, URL, alias, tuple, provider response, or stack on every result, output, log, and audit sink",
       "loadedMarker": "doctor-scans-cli-stderr-for-content"

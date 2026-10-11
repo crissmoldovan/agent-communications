@@ -2,6 +2,68 @@
   "area": "task-5-surface",
   "cases": [
     {
+      "case": "cli-errors-are-shown-as-text",
+      "operation": "createRule",
+      "productionEntry": "packages/events-daemon/src/cli/program.ts",
+      "test": "packages/events-daemon/test/b3-terminal-output.test.ts",
+      "mutationTest": "D13: a daemon error that quotes a document reaches the terminal with its bidi character shown, not obeyed",
+      "overlayInputs": ["packages/events-daemon/test/fixtures/b3-control-contract-v1/ordinary-results.json"],
+      "mutation": {
+        "from": "      streams.stderr.write(`${escapeForDisplay(error.message)}\\n`);",
+        "to": "      streams.stderr.write(`${error.message}\\n`);"
+      },
+      "loadedMarker": "cli-errors-are-shown-as-text"
+    },
+    {
+      "case": "cli-dryrun-list-is-shown-as-text",
+      "operation": "dryrunList",
+      "productionEntry": "packages/events-daemon/src/cli/program.ts",
+      "test": "packages/events-daemon/test/b3-terminal-output.test.ts",
+      "mutationTest": "D13: a retained dry-run listing shows stored rule ids with their bidi and invisible characters made visible",
+      "overlayInputs": ["packages/events-daemon/test/fixtures/b3-control-contract-v1/ordinary-results.json"],
+      "mutation": {
+        "from": "  return escapeForDisplay(renderDryRunList(entries));",
+        "to": "  return renderDryRunList(entries);"
+      },
+      "loadedMarker": "cli-dryrun-list-is-shown-as-text"
+    },
+    {
+      "case": "cli-dryrun-record-is-shown-as-text",
+      "operation": "dryrunShow",
+      "productionEntry": "packages/events-daemon/src/cli/program.ts",
+      "test": "packages/events-daemon/test/b3-terminal-output.test.ts",
+      "mutationTest": "D13: a retained dry-run record shows stored target ids with their bidi and invisible characters made visible",
+      "overlayInputs": ["packages/events-daemon/test/fixtures/b3-control-contract-v1/ordinary-results.json"],
+      "mutation": {
+        "from": "  return escapeForDisplay(renderDryRunRecord(record));",
+        "to": "  return renderDryRunRecord(record);"
+      },
+      "loadedMarker": "cli-dryrun-record-is-shown-as-text"
+    },
+    {
+      "case": "cli-output-is-terminal-safe",
+      "operation": "ruleShow",
+      "productionEntry": "packages/events-daemon/src/cli/program.ts",
+      "test": "packages/events-daemon/test/b3-terminal-output.test.ts",
+      "mutationTest": "D13: the CLI writes a stored rule document to the terminal without its bidi and invisible characters",
+      "overlayInputs": ["packages/events-daemon/test/fixtures/b3-control-contract-v1/ordinary-results.json"],
+      "mutation": { "from": "    if (!isDangerous(char.codePointAt(0) ?? 0)) {", "to": "    if (true) {" },
+      "loadedMarker": "cli-output-is-terminal-safe"
+    },
+    {
+      "case": "cli-approval-view-renders-for-terminal",
+      "operation": "approvalView",
+      "productionEntry": "packages/events-daemon/src/cli/program.ts",
+      "test": "packages/events-daemon/test/b3-terminal-output.test.ts",
+      "mutationTest": "D13: the approval preview a person reads at the terminal neutralises a bidi override instead of obeying it",
+      "overlayInputs": ["packages/events-daemon/test/fixtures/b3-control-contract-v1/ordinary-results.json"],
+      "mutation": {
+        "from": "  return escapeForDisplay(renderB3ApprovalPreviewV1(result).terminal);",
+        "to": "  return JSON.stringify(result);"
+      },
+      "loadedMarker": "cli-approval-view-renders-for-terminal"
+    },
+    {
       "case": "paired-cli-rule-test-command-is-registered",
       "operation": "ruleTest",
       "productionEntry": "packages/events-daemon/src/cli/program.ts",
