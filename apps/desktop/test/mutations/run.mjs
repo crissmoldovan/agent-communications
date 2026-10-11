@@ -81,6 +81,8 @@ if (selected.length === 0) {
           : []),
         `--test-name-pattern=${declared.name}`,
         '--test',
+        // The kill rule reads TAP's `# Subtest` / `# pass 1` / `# fail 1`; Node 24 defaults to spec when piped.
+        '--test-reporter=tap',
         declared.file,
       ];
       const cargoArgs = declared.kind === 'cargo' && [
