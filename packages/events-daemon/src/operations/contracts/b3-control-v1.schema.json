@@ -165,16 +165,131 @@
       }
     },
     "judgeDocument": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["judgeId", "version", "kind", "provider", "model"],
-      "properties": {
-        "judgeId": { "$ref": "#/$defs/id" },
-        "version": { "$ref": "#/$defs/positive" },
-        "kind": { "enum": ["typesafe", "laya", "local-endpoint"] },
-        "provider": { "$ref": "#/$defs/id" },
-        "model": { "$ref": "#/$defs/id" }
-      }
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["judgeId", "version", "kind", "provider", "model", "endpoint", "promptTemplate", "protocol"],
+          "properties": {
+            "judgeId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "typesafe" },
+            "provider": { "const": "typesafe" },
+            "model": { "const": "jev-1.13.0" },
+            "endpoint": { "const": "https://api.typesafe.ai/v1/systemone" },
+            "promptTemplate": { "$ref": "#/$defs/id" },
+            "protocol": { "const": "noul" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "judgeId",
+            "version",
+            "kind",
+            "provider",
+            "model",
+            "endpoint",
+            "approvedAddressSet",
+            "promptTemplate",
+            "protocol"
+          ],
+          "properties": {
+            "judgeId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "local-endpoint" },
+            "provider": { "$ref": "#/$defs/id" },
+            "model": { "$ref": "#/$defs/id" },
+            "endpoint": { "type": "string", "pattern": "^http://127\\.0\\.0\\.1(?::[0-9]+)?(?:/[^?#]*)?$" },
+            "approvedAddressSet": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "const": "127.0.0.1" } },
+            "promptTemplate": { "$ref": "#/$defs/id" },
+            "protocol": { "const": "noul" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "judgeId",
+            "version",
+            "kind",
+            "provider",
+            "model",
+            "endpoint",
+            "approvedAddressSet",
+            "promptTemplate",
+            "protocol"
+          ],
+          "properties": {
+            "judgeId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "local-endpoint" },
+            "provider": { "$ref": "#/$defs/id" },
+            "model": { "$ref": "#/$defs/id" },
+            "endpoint": { "type": "string", "pattern": "^http://\\[::1\\](?::[0-9]+)?(?:/[^?#]*)?$" },
+            "approvedAddressSet": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "const": "::1" } },
+            "promptTemplate": { "$ref": "#/$defs/id" },
+            "protocol": { "const": "noul" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "judgeId",
+            "version",
+            "kind",
+            "provider",
+            "model",
+            "endpoint",
+            "approvedAddressSet",
+            "promptTemplate",
+            "protocol",
+            "scorePointer"
+          ],
+          "properties": {
+            "judgeId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "local-endpoint" },
+            "provider": { "$ref": "#/$defs/id" },
+            "model": { "$ref": "#/$defs/id" },
+            "endpoint": { "type": "string", "pattern": "^http://127\\.0\\.0\\.1(?::[0-9]+)?(?:/[^?#]*)?$" },
+            "approvedAddressSet": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "const": "127.0.0.1" } },
+            "promptTemplate": { "$ref": "#/$defs/id" },
+            "protocol": { "const": "json-score" },
+            "scorePointer": { "type": "string", "pattern": "^(?:/(?:[^~/]|~[01])*)+$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "judgeId",
+            "version",
+            "kind",
+            "provider",
+            "model",
+            "endpoint",
+            "approvedAddressSet",
+            "promptTemplate",
+            "protocol",
+            "scorePointer"
+          ],
+          "properties": {
+            "judgeId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "local-endpoint" },
+            "provider": { "$ref": "#/$defs/id" },
+            "model": { "$ref": "#/$defs/id" },
+            "endpoint": { "type": "string", "pattern": "^http://\\[::1\\](?::[0-9]+)?(?:/[^?#]*)?$" },
+            "approvedAddressSet": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "const": "::1" } },
+            "promptTemplate": { "$ref": "#/$defs/id" },
+            "protocol": { "const": "json-score" },
+            "scorePointer": { "type": "string", "pattern": "^(?:/(?:[^~/]|~[01])*)+$" }
+          }
+        }
+      ]
     },
     "retention": {
       "type": "object",
@@ -226,11 +341,39 @@
           "properties": { "type": { "$ref": "#/$defs/id" }, "version": { "$ref": "#/$defs/positive" } }
         },
         "condition": { "$ref": "#/$defs/json" },
+        "agentic": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "judge",
+            "question",
+            "inputs",
+            "threshold",
+            "onUncertain",
+            "callsPerRollingHour",
+            "inputTokensPerRolling30Days",
+            "concurrency",
+            "maxInputTokens",
+            "maxOutputTokens"
+          ],
+          "properties": {
+            "judge": { "$ref": "#/$defs/judgeDocument" },
+            "question": { "type": "string" },
+            "inputs": { "type": "array", "items": { "type": "string" } },
+            "threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+            "onUncertain": { "enum": ["no-match", "hold"] },
+            "callsPerRollingHour": { "$ref": "#/$defs/positive" },
+            "inputTokensPerRolling30Days": { "$ref": "#/$defs/positive" },
+            "concurrency": { "$ref": "#/$defs/positive" },
+            "maxInputTokens": { "$ref": "#/$defs/positive" },
+            "maxOutputTokens": { "$ref": "#/$defs/positive" }
+          }
+        },
         "mapping": { "$ref": "#/$defs/json" },
         "cloudEventType": { "$ref": "#/$defs/id" },
         "targets": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/targetDocument" } },
         "subscribers": { "type": "array", "items": { "$ref": "#/$defs/subscriberDocument" } },
-        "judges": { "type": "array", "items": { "$ref": "#/$defs/judgeDocument" } },
+        "judges": { "type": "array", "maxItems": 0 },
         "deliveryRateCap": { "$ref": "#/$defs/positive" },
         "retention": { "$ref": "#/$defs/retention" }
       }
