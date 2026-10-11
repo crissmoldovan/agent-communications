@@ -1339,8 +1339,15 @@ test('E6: the mutation runner rejects copied-tree import crashes and mutants who
 });
 
 test('E6: every sealed transport guard has one destructive mutation and its named production-path oracle', async (context) => {
+  const verdicts: { id: string; killed: boolean }[] = [];
   for (const mutation of JUDGE_TRANSPORT_MUTATIONS) {
     const changedLine = await expectTransportMutationToFail(mutation);
+    verdicts.push({ id: mutation.id, killed: true });
     context.diagnostic(`${mutation.id}: src/${mutation.file}:${changedLine} -> ${mutation.testName}`);
   }
+  assert.deepEqual(
+    verdicts.map((verdict) => verdict.id),
+    JUDGE_TRANSPORT_MUTATIONS.map((mutation) => mutation.id),
+  );
+  assert.ok(verdicts.every((verdict) => verdict.killed));
 });

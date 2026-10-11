@@ -7,6 +7,7 @@ test('E1: every prepare, claim and finalise disabled-kind guard has one exact de
   assert.deepEqual(
     JUDGE_KIND_MUTATIONS.map((mutation) => mutation.id),
     [
+      'e1-canonical-documents',
       'e1-prepare-disabled-kind',
       'e1-claim-before-core-disabled-kind',
       'e1-local-claim-transaction-disabled-kind',
@@ -43,8 +44,15 @@ test('E1: the mutation runner rejects copied-tree import crashes and mutants who
 test('E1: each disabled-kind guard mutation fails its named production-path test', {
   skip: WINDOWS_SKIP,
 }, async (context) => {
+  const verdicts: { id: string; killed: boolean }[] = [];
   for (const mutation of JUDGE_KIND_MUTATIONS) {
     const changedLine = await expectJudgeKindMutationToFail(mutation);
+    verdicts.push({ id: mutation.id, killed: true });
     context.diagnostic(`${mutation.id}: src/${mutation.file}:${changedLine} -> ${mutation.testName}`);
   }
+  assert.deepEqual(
+    verdicts.map((verdict) => verdict.id),
+    JUDGE_KIND_MUTATIONS.map((mutation) => mutation.id),
+  );
+  assert.ok(verdicts.every((verdict) => verdict.killed));
 });

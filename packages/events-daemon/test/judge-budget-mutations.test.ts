@@ -28,8 +28,15 @@ test('E5 budget mutation: every ledger guard has one destructive mutation and on
 test('E5 budget mutation: each guard dies only when its named production-path test fails', {
   skip: WINDOWS_SKIP,
 }, async (context) => {
+  const verdicts: { id: string; killed: boolean }[] = [];
   for (const mutation of JUDGE_BUDGET_MUTATIONS) {
     const changedLine = await expectJudgeBudgetMutationToFail(mutation);
+    verdicts.push({ id: mutation.id, killed: true });
     context.diagnostic(`${mutation.id}: src/runtime/judge-budget.ts:${changedLine} -> ${mutation.testName}`);
   }
+  assert.deepEqual(
+    verdicts.map((verdict) => verdict.id),
+    JUDGE_BUDGET_MUTATIONS.map((mutation) => mutation.id),
+  );
+  assert.ok(verdicts.every((verdict) => verdict.killed));
 });

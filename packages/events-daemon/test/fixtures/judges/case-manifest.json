@@ -1,0 +1,804 @@
+{
+  "version": 1,
+  "guards": [
+    { "id": "task-1-canonical-documents" },
+    { "id": "task-2-durable-schema" },
+    { "id": "phase-e-b3-prerequisite-gate" },
+    { "id": "phase-e-b3-secret-origin" },
+    { "id": "phase-e-b3-pending-target-origin" },
+    { "id": "phase-e-source-scope" },
+    { "id": "phase-e-synthetic-scope" },
+    { "id": "e1-prepare-disabled-kind" },
+    { "id": "e1-claim-before-core-disabled-kind" },
+    { "id": "e1-local-claim-transaction-disabled-kind" },
+    { "id": "e1-finalise-transaction-disabled-kind" },
+    { "id": "e5-rolling-includes-reserved" },
+    { "id": "e5-rolling-includes-in-flight" },
+    { "id": "e5-concurrency-excludes-settled" },
+    { "id": "e5-stable-rule-key" },
+    { "id": "e5-input-max-before-io" },
+    { "id": "e5-byte-estimate" },
+    { "id": "e5-no-active-singleton" },
+    { "id": "e5-unparsed-outcome-never-refunds" },
+    { "id": "e5-omitted-result-never-defaults-completed" },
+    { "id": "e5-terminal-decision-is-no-match" },
+    { "id": "e5-terminal-projection-purge" },
+    { "id": "e5-single-transport-entry" },
+    { "id": "e5-concurrency-release" },
+    { "id": "e5-double-settle" },
+    { "id": "e5-owner-start-recovery" },
+    { "id": "e5-v1-literal-judge-kinds" },
+    { "id": "e6-reference-date" },
+    { "id": "e6-header-allowlist" },
+    { "id": "e6-single-line-hosted-key" },
+    { "id": "e6-request-cap" },
+    { "id": "e6-response-cap" },
+    { "id": "e6-streaming-response-cap" },
+    { "id": "e6-output-token-limit" },
+    { "id": "e6-provider-match" },
+    { "id": "e6-score-clamp" },
+    { "id": "e6-closed-score-pointer" },
+    { "id": "e6-dns-final-gate" },
+    { "id": "e6-tcp-final-gate" },
+    { "id": "e6-tls-final-gate" },
+    { "id": "e6-write-final-gate" },
+    { "id": "e6-write-gate-adjacency" },
+    { "id": "e6-no-http-client" },
+    { "id": "e6-no-proxy-path" },
+    { "id": "e6-no-redirect" },
+    { "id": "e6-literal-loopback-only" },
+    { "id": "e6-attempt-deadline" },
+    { "id": "e6-post-gate-deadline" },
+    { "id": "e6-final-gate-deadline" },
+    { "id": "e6-synchronous-final-gate" },
+    { "id": "e6-response-deadline" },
+    { "id": "e6-fatal-utf8" },
+    { "id": "e6-a-accept-non-global" },
+    { "id": "e6-a-skip-embedded-addresses" },
+    { "id": "e6-a-allow-global-only-non-typesafe" },
+    { "id": "e6-m-accept-alias" },
+    { "id": "e6-m-substitute-constant-model" }
+  ],
+  "mutations": [
+    { "id": "e1-canonical-documents" },
+    { "id": "e2-durable-schema" },
+    { "id": "e3-b3-contract-version" },
+    { "id": "e3-b3-unavailable-variants" },
+    { "id": "e3-b3-vector-schema-validation" },
+    { "id": "e3-scope-account-source" },
+    { "id": "e3-scope-synthetic-work" },
+    { "id": "e1-prepare-disabled-kind" },
+    { "id": "e1-claim-before-core-disabled-kind" },
+    { "id": "e1-local-claim-transaction-disabled-kind" },
+    { "id": "e1-finalise-transaction-disabled-kind" },
+    { "id": "e5-rolling-includes-reserved" },
+    { "id": "e5-rolling-includes-in-flight" },
+    { "id": "e5-concurrency-excludes-settled" },
+    { "id": "e5-stable-rule-key" },
+    { "id": "e5-input-max-before-io" },
+    { "id": "e5-byte-estimate" },
+    { "id": "e5-no-active-singleton" },
+    { "id": "e5-unparsed-outcome-never-refunds" },
+    { "id": "e5-omitted-result-never-defaults-completed" },
+    { "id": "e5-terminal-decision-is-no-match" },
+    { "id": "e5-terminal-projection-purge" },
+    { "id": "e5-single-transport-entry" },
+    { "id": "e5-concurrency-release" },
+    { "id": "e5-double-settle" },
+    { "id": "e5-owner-start-recovery" },
+    { "id": "e5-v1-literal-judge-kinds" },
+    { "id": "e6-reference-date" },
+    { "id": "e6-header-allowlist" },
+    { "id": "e6-single-line-hosted-key" },
+    { "id": "e6-request-cap" },
+    { "id": "e6-response-cap" },
+    { "id": "e6-streaming-response-cap" },
+    { "id": "e6-output-token-limit" },
+    { "id": "e6-provider-match" },
+    { "id": "e6-score-clamp" },
+    { "id": "e6-closed-score-pointer" },
+    { "id": "e6-dns-final-gate" },
+    { "id": "e6-tcp-final-gate" },
+    { "id": "e6-tls-final-gate" },
+    { "id": "e6-write-final-gate" },
+    { "id": "e6-write-gate-adjacency" },
+    { "id": "e6-no-http-client" },
+    { "id": "e6-no-proxy-path" },
+    { "id": "e6-no-redirect" },
+    { "id": "e6-literal-loopback-only" },
+    { "id": "e6-attempt-deadline" },
+    { "id": "e6-post-gate-deadline" },
+    { "id": "e6-final-gate-deadline" },
+    { "id": "e6-synchronous-final-gate" },
+    { "id": "e6-response-deadline" },
+    { "id": "e6-fatal-utf8" },
+    { "id": "e6-a-accept-non-global" },
+    { "id": "e6-a-skip-embedded-addresses" },
+    { "id": "e6-a-allow-global-only-non-typesafe" },
+    { "id": "e6-m-accept-alias" },
+    { "id": "e6-m-substitute-constant-model" }
+  ],
+  "cases": [
+    {
+      "id": "e1-canonical-documents",
+      "task": "E1",
+      "coverage": ["task-1-canonical-documents"],
+      "productionEntry": "packages/events-daemon/src/domain/judges.ts",
+      "test": "packages/events-daemon/test/judge-documents.test.ts",
+      "mutation": {
+        "id": "e1-canonical-documents",
+        "test": "E1: judge documents are closed discriminated forms with a concrete local score pointer"
+      },
+      "strictRunner": "judge-kind-mutants"
+    },
+    {
+      "id": "e2-durable-schema",
+      "task": "E2",
+      "coverage": ["task-2-durable-schema"],
+      "productionEntry": "packages/events-daemon/src/store/schema-v1.ts",
+      "test": "packages/events-daemon/test/judge-migrations.test.ts",
+      "mutation": {
+        "id": "e2-durable-schema",
+        "test": "E5 schema: every fresh and upgraded judge-kind CHECK admits exactly JUDGE_KINDS"
+      },
+      "strictRunner": "judge-task5-mutants"
+    },
+    {
+      "id": "e3-b3-prerequisite-gate",
+      "task": "E3",
+      "coverage": ["phase-e-b3-prerequisite-gate"],
+      "productionEntry": "packages/events-daemon/src/runtime/phase-e-prerequisites.ts",
+      "test": "packages/events-daemon/test/judge-b3-prerequisites.test.ts",
+      "mutation": {
+        "id": "e3-b3-contract-version",
+        "test": "E3: phase-E prerequisites consume the real E parser and judge-kind registry with B3 data-only inputs"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e3-b3-unavailable-variants",
+      "task": "E3",
+      "coverage": ["phase-e-b3-secret-origin"],
+      "productionEntry": "packages/events-daemon/src/operations/b3-contract.ts",
+      "test": "packages/events-daemon/test/judge-b3-prerequisites.test.ts",
+      "mutation": {
+        "id": "e3-b3-unavailable-variants",
+        "test": "E3: phase-E prerequisites consume the real E parser and judge-kind registry with B3 data-only inputs"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e3-b3-vector-schema-validation",
+      "task": "E3",
+      "coverage": ["phase-e-b3-pending-target-origin"],
+      "productionEntry": "scripts/verify-events-phase-e-prerequisites.mjs",
+      "test": "packages/events-daemon/test/judge-b3-prerequisites.test.ts",
+      "mutation": {
+        "id": "e3-b3-vector-schema-validation",
+        "test": "E3: phase-E prerequisites consume the real E parser and judge-kind registry with B3 data-only inputs"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e3-scope-account-source",
+      "task": "E3",
+      "coverage": ["phase-e-source-scope"],
+      "productionEntry": "scripts/verify-events-phase-e-tests.mjs",
+      "test": "packages/events-daemon/test/judge-scope.test.ts",
+      "mutation": {
+        "id": "e3-scope-account-source",
+        "test": "E3 scope: static guards reject hollow manifests, missing runners, unsealed network tests and test-local models"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e3-scope-synthetic-work",
+      "task": "E3",
+      "coverage": ["phase-e-synthetic-scope"],
+      "productionEntry": "scripts/verify-events-phase-e-tests.mjs",
+      "test": "packages/events-daemon/test/judge-scope.test.ts",
+      "mutation": {
+        "id": "e3-scope-synthetic-work",
+        "test": "E3 scope: static guards reject hollow manifests, missing runners, unsealed network tests and test-local models"
+      },
+      "strictRunner": "judge-mutants"
+    },
+    {
+      "id": "e1-prepare-disabled-kind",
+      "task": "E1",
+      "coverage": ["e1-prepare-disabled-kind"],
+      "productionEntry": "packages/events-daemon/src/domain/versions.ts",
+      "test": "packages/events-daemon/test/version-lifecycle.test.ts",
+      "mutation": {
+        "id": "e1-prepare-disabled-kind",
+        "test": "E1: only a rule activation that names an agentic judge refuses its disabled kind with the stable code"
+      },
+      "strictRunner": "judge-kind-mutants"
+    },
+    {
+      "id": "e1-claim-before-core-disabled-kind",
+      "task": "E1",
+      "coverage": ["e1-claim-before-core-disabled-kind"],
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/judge-kind-activation-race.test.ts",
+      "mutation": {
+        "id": "e1-claim-before-core-disabled-kind",
+        "test": "E1 judge-kind claim race: disabling after approval refuses the claim before a baseline or rule pointer"
+      },
+      "strictRunner": "judge-kind-mutants"
+    },
+    {
+      "id": "e1-local-claim-transaction-disabled-kind",
+      "task": "E1",
+      "coverage": ["e1-local-claim-transaction-disabled-kind"],
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/judge-kind-activation-race.test.ts",
+      "mutation": {
+        "id": "e1-local-claim-transaction-disabled-kind",
+        "test": "E1 judge-kind claimed race: disabling after the core claim refuses its local claim transaction before a baseline"
+      },
+      "strictRunner": "judge-kind-mutants"
+    },
+    {
+      "id": "e1-finalise-transaction-disabled-kind",
+      "task": "E1",
+      "coverage": ["e1-finalise-transaction-disabled-kind"],
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/judge-kind-activation-race.test.ts",
+      "mutation": {
+        "id": "e1-finalise-transaction-disabled-kind",
+        "test": "E1 judge-kind finalisation race: disabling after claim refuses the final pointer transaction"
+      },
+      "strictRunner": "judge-kind-mutants"
+    },
+    {
+      "id": "e5-rolling-includes-reserved",
+      "task": "E5",
+      "coverage": ["e5-rolling-includes-reserved"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-rolling-includes-reserved",
+        "test": "E5 budget: rolling call and token windows include reserved, in-flight, and settled but never released"
+      },
+      "strictRunner": "judge-budget-mutants"
+    },
+    {
+      "id": "e5-rolling-includes-in-flight",
+      "task": "E5",
+      "coverage": ["e5-rolling-includes-in-flight"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-rolling-includes-in-flight",
+        "test": "E5 budget: rolling call and token windows include reserved, in-flight, and settled but never released"
+      },
+      "strictRunner": "judge-budget-mutants"
+    },
+    {
+      "id": "e5-concurrency-excludes-settled",
+      "task": "E5",
+      "coverage": ["e5-concurrency-excludes-settled"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-concurrency-excludes-settled",
+        "test": "E5 budget: concurrency counts only reserved and in-flight work"
+      },
+      "strictRunner": "judge-budget-mutants"
+    },
+    {
+      "id": "e5-stable-rule-key",
+      "task": "E5",
+      "coverage": ["e5-stable-rule-key"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-stable-rule-key",
+        "test": "E5 budget: a stable rule ledger key does not include its immutable version"
+      },
+      "strictRunner": "judge-budget-mutants"
+    },
+    {
+      "id": "e5-input-max-before-io",
+      "task": "E5",
+      "coverage": ["e5-input-max-before-io"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-input-max-before-io",
+        "test": "E5 budget: final-envelope UTF-8 bytes are reserved before I/O and over-limit input never reaches transport"
+      },
+      "strictRunner": "judge-budget-mutants"
+    },
+    {
+      "id": "e5-byte-estimate",
+      "task": "E5",
+      "coverage": ["e5-byte-estimate"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-byte-estimate",
+        "test": "E5 budget: final-envelope UTF-8 bytes are reserved before I/O and over-limit input never reaches transport"
+      },
+      "strictRunner": "judge-budget-mutants"
+    },
+    {
+      "id": "e5-no-active-singleton",
+      "task": "E5",
+      "coverage": ["e5-no-active-singleton"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-no-active-singleton",
+        "test": "E5 budget: no active singleton refuses before a transport can begin"
+      },
+      "strictRunner": "judge-budget-mutants"
+    },
+    {
+      "id": "e5-unparsed-outcome-never-refunds",
+      "task": "E5",
+      "coverage": ["e5-unparsed-outcome-never-refunds"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-unparsed-outcome-never-refunds",
+        "test": "E5 budget: only a parsed successful answer may replace the estimate"
+      },
+      "strictRunner": "judge-budget-mutants"
+    },
+    {
+      "id": "e5-omitted-result-never-defaults-completed",
+      "task": "E5",
+      "coverage": ["e5-omitted-result-never-defaults-completed"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-omitted-result-never-defaults-completed",
+        "test": "E5 budget: only a parsed successful answer may replace the estimate"
+      },
+      "strictRunner": "judge-budget-mutants"
+    },
+    {
+      "id": "e5-terminal-decision-is-no-match",
+      "task": "E5",
+      "coverage": ["e5-terminal-decision-is-no-match"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-terminal-decision-is-no-match",
+        "test": "E5 budget: only a parsed successful answer may replace the estimate"
+      },
+      "strictRunner": "judge-budget-mutants"
+    },
+    {
+      "id": "e5-terminal-projection-purge",
+      "task": "E5",
+      "coverage": ["e5-terminal-projection-purge"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-terminal-projection-purge",
+        "test": "E5 budget: only a parsed successful answer may replace the estimate"
+      },
+      "strictRunner": "judge-budget-mutants"
+    },
+    {
+      "id": "e5-single-transport-entry",
+      "task": "E5",
+      "coverage": ["e5-single-transport-entry"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-single-transport-entry",
+        "test": "E5 budget: one reservation crosses the pre-I/O transport gate at most once"
+      },
+      "strictRunner": "judge-budget-mutants"
+    },
+    {
+      "id": "e5-concurrency-release",
+      "task": "E5",
+      "coverage": ["e5-concurrency-release"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-concurrency-release",
+        "test": "E5 budget: concurrency counts only reserved and in-flight work"
+      },
+      "strictRunner": "judge-budget-mutants"
+    },
+    {
+      "id": "e5-double-settle",
+      "task": "E5",
+      "coverage": ["e5-double-settle"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e5-double-settle",
+        "test": "E5 budget: a settled reservation cannot be charged or terminalised a second time"
+      },
+      "strictRunner": "judge-budget-mutants"
+    },
+    {
+      "id": "e5-owner-start-recovery",
+      "task": "E5",
+      "coverage": ["e5-owner-start-recovery"],
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/judge-crash-recovery.test.ts",
+      "mutation": {
+        "id": "e5-owner-start-recovery",
+        "test": "E5 crash: owner startup does not issue a judge-ledger statement before the B3 gate"
+      },
+      "strictRunner": "judge-task5-mutants"
+    },
+    {
+      "id": "e5-v1-literal-judge-kinds",
+      "task": "E5",
+      "coverage": ["e5-v1-literal-judge-kinds"],
+      "productionEntry": "packages/events-daemon/src/store/schema-v1.ts",
+      "test": "packages/events-daemon/test/judge-migrations.test.ts",
+      "mutation": {
+        "id": "e5-v1-literal-judge-kinds",
+        "test": "E5 schema: every fresh and upgraded judge-kind CHECK admits exactly JUDGE_KINDS"
+      },
+      "strictRunner": "judge-task5-mutants"
+    },
+    {
+      "id": "e6-reference-date",
+      "task": "E6",
+      "coverage": ["e6-reference-date"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-reference-date",
+        "test": "E6: dated TypeSafe and Ollama vectors allow only documented request fields and headers"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-header-allowlist",
+      "task": "E6",
+      "coverage": ["e6-header-allowlist"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-header-allowlist",
+        "test": "E6: dated TypeSafe and Ollama vectors allow only documented request fields and headers"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-single-line-hosted-key",
+      "task": "E6",
+      "coverage": ["e6-single-line-hosted-key"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-single-line-hosted-key",
+        "test": "E6: dated TypeSafe and Ollama vectors allow only documented request fields and headers"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-request-cap",
+      "task": "E6",
+      "coverage": ["e6-request-cap"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-request-cap",
+        "test": "E6: missing dated generic-json-score vectors refuse before DNS and request-cap refusal does too"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-response-cap",
+      "task": "E6",
+      "coverage": ["e6-response-cap"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-response-cap",
+        "test": "E6: bounded parsers reject oversized and concatenated JSON, and the transport has no HTTP-client path"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-streaming-response-cap",
+      "task": "E6",
+      "coverage": ["e6-streaming-response-cap"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-streaming-response-cap",
+        "test": "E6: streaming response cap destroys the socket before parsing oversized peer bytes"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-output-token-limit",
+      "task": "E6",
+      "coverage": ["e6-output-token-limit"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-output-token-limit",
+        "test": "E6: response parsing returns only bounded scores and usage metadata"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-provider-match",
+      "task": "E6",
+      "coverage": ["e6-provider-match"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-provider-match",
+        "test": "E6: response parsing returns only bounded scores and usage metadata"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-score-clamp",
+      "task": "E6",
+      "coverage": ["e6-score-clamp"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-score-clamp",
+        "test": "E6: response parsing returns only bounded scores and usage metadata"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-closed-score-pointer",
+      "task": "E6",
+      "coverage": ["e6-closed-score-pointer"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-closed-score-pointer",
+        "test": "E6: response parsing returns only bounded scores and usage metadata"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-dns-final-gate",
+      "task": "E6",
+      "coverage": ["e6-dns-final-gate"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-network-fences.test.ts",
+      "mutation": {
+        "id": "e6-dns-final-gate",
+        "test": "E6: every hosted final gate refuses before its next physical network action"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-tcp-final-gate",
+      "task": "E6",
+      "coverage": ["e6-tcp-final-gate"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-network-fences.test.ts",
+      "mutation": {
+        "id": "e6-tcp-final-gate",
+        "test": "E6: every hosted final gate refuses before its next physical network action"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-tls-final-gate",
+      "task": "E6",
+      "coverage": ["e6-tls-final-gate"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-network-fences.test.ts",
+      "mutation": {
+        "id": "e6-tls-final-gate",
+        "test": "E6: every hosted final gate refuses before its next physical network action"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-write-final-gate",
+      "task": "E6",
+      "coverage": ["e6-write-final-gate"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-network-fences.test.ts",
+      "mutation": {
+        "id": "e6-write-final-gate",
+        "test": "E6: every hosted final gate refuses before its next physical network action"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-write-gate-adjacency",
+      "task": "E6",
+      "coverage": ["e6-write-gate-adjacency"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-write-gate-adjacency",
+        "test": "E6: no response byte can be read before the synchronous write gate"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-no-http-client",
+      "task": "E6",
+      "coverage": ["e6-no-http-client"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-no-http-client",
+        "test": "E6: bounded parsers reject oversized and concatenated JSON, and the transport has no HTTP-client path"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-no-proxy-path",
+      "task": "E6",
+      "coverage": ["e6-no-proxy-path"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-no-proxy-path",
+        "test": "E6: bounded parsers reject oversized and concatenated JSON, and the transport has no HTTP-client path"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-no-redirect",
+      "task": "E6",
+      "coverage": ["e6-no-redirect"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-no-redirect",
+        "test": "E6: a 3xx is refused after exactly one raw request and never followed"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-literal-loopback-only",
+      "task": "E6",
+      "coverage": ["e6-literal-loopback-only"],
+      "productionEntry": "packages/events-daemon/src/network/local-endpoint.ts",
+      "test": "packages/events-daemon/test/judge-network-fences.test.ts",
+      "mutation": {
+        "id": "e6-literal-loopback-only",
+        "test": "E6: hostname loopback is refused before DNS or TCP, never resolved as a local endpoint"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-attempt-deadline",
+      "task": "E6",
+      "coverage": ["e6-attempt-deadline"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-attempt-deadline",
+        "test": "E6: a phase that exceeds the fixed all-phase deadline produces no request bytes"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-post-gate-deadline",
+      "task": "E6",
+      "coverage": ["e6-post-gate-deadline"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-post-gate-deadline",
+        "test": "E6: an awaited gate that crosses the all-phase deadline stops that phase and every later phase"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-final-gate-deadline",
+      "task": "E6",
+      "coverage": ["e6-final-gate-deadline"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-final-gate-deadline",
+        "test": "E6: a final gate that reaches the all-phase deadline lets no later phase or byte through"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-synchronous-final-gate",
+      "task": "E6",
+      "coverage": ["e6-synchronous-final-gate"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-synchronous-final-gate",
+        "test": "E6: a final gate that has not finished deciding refuses its phase before any network action"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-response-deadline",
+      "task": "E6",
+      "coverage": ["e6-response-deadline"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-response-deadline",
+        "test": "E6: a deadline reached while receiving a response is not accepted as an answer"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-fatal-utf8",
+      "task": "E6",
+      "coverage": ["e6-fatal-utf8"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-adapters.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": { "id": "e6-fatal-utf8", "test": "E6: malformed UTF-8 anywhere in a Noul answer is fail-closed" },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-a-accept-non-global",
+      "task": "E6",
+      "coverage": ["e6-a-accept-non-global"],
+      "productionEntry": "packages/events-daemon/src/network/address-policy.ts",
+      "test": "packages/events-daemon/test/network/address-policy.test.ts",
+      "mutation": {
+        "id": "e6-a-accept-non-global",
+        "test": "E6-A: global-only policy accepts only globally reachable literals and every embedded transition address"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-a-skip-embedded-addresses",
+      "task": "E6",
+      "coverage": ["e6-a-skip-embedded-addresses"],
+      "productionEntry": "packages/events-daemon/src/network/address-policy.ts",
+      "test": "packages/events-daemon/test/network/address-policy.test.ts",
+      "mutation": {
+        "id": "e6-a-skip-embedded-addresses",
+        "test": "E6-A: global-only policy accepts only globally reachable literals and every embedded transition address"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-a-allow-global-only-non-typesafe",
+      "task": "E6",
+      "coverage": ["e6-a-allow-global-only-non-typesafe"],
+      "productionEntry": "packages/events-daemon/src/network/pinned-connection.ts",
+      "test": "packages/events-daemon/test/network/pinned-connection.test.ts",
+      "mutation": {
+        "id": "e6-a-allow-global-only-non-typesafe",
+        "test": "E6-A: global-only mode is reserved for the exact fixed TypeSafe endpoint"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-m-accept-alias",
+      "task": "E6",
+      "coverage": ["e6-m-accept-alias"],
+      "productionEntry": "packages/events-daemon/src/domain/judges.ts",
+      "test": "packages/events-daemon/test/judge-documents.test.ts",
+      "mutation": {
+        "id": "e6-m-accept-alias",
+        "test": "E6-M: TypeSafe documents name only concrete provider-record models, never aliases"
+      },
+      "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e6-m-substitute-constant-model",
+      "task": "E6",
+      "coverage": ["e6-m-substitute-constant-model"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-transport.ts",
+      "test": "packages/events-daemon/test/judge-transport.test.ts",
+      "mutation": {
+        "id": "e6-m-substitute-constant-model",
+        "test": "E6-M: TypeSafe request bytes take the approved document model, never a transport constant"
+      },
+      "strictRunner": "judge-transport-mutants"
+    }
+  ]
+}
