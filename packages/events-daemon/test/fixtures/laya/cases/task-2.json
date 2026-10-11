@@ -1,0 +1,286 @@
+{
+  "schemaVersion": 1,
+  "task": 2,
+  "owners": [{ "id": "task-2" }],
+  "section5": [
+    {
+      "id": "e2-reviewed-manifest-runtime-lock",
+      "owner": "task-2",
+      "test": "E2 runtime lock: rebuilds canonical platform files from synthetic verified archives"
+    },
+    {
+      "id": "e2-private-runtime-package",
+      "owner": "task-2",
+      "test": "E2 runtime package: dependency-only manifest pins the reviewed runtime roots"
+    }
+  ],
+  "traceability": [
+    {
+      "id": "d11-2215-2256-reviewed-manifest",
+      "owner": "task-2",
+      "test": "E2 manifest: contains the reviewed single English ONNX entry"
+    },
+    {
+      "id": "d11-2258-2277-runtime-lock",
+      "owner": "task-2",
+      "test": "E2 runtime lock: rejects a changed SRI before the archive parser runs"
+    },
+    {
+      "id": "d11-2321-2335-daemon-runtime-boundary",
+      "owner": "task-2",
+      "test": "E2 runtime package: daemon package ships reviewed assets without importing the runtime"
+    }
+  ],
+  "awaits": [],
+  "fixtures": [{ "path": "task-2.json", "owner": "task-2" }],
+  "externalSources": [
+    {
+      "id": "hf-laya-onnx-tree",
+      "url": "https://huggingface.co/api/models/receptron/laya-onnx/tree/68f27dfe5a27a54fb2b1fefc432f43f972e90868?recursive=true&expand=true",
+      "fetchedAt": "2026-10-10T17:30:25Z",
+      "immutable": "68f27dfe5a27a54fb2b1fefc432f43f972e90868",
+      "fact": "receptron/laya-onnx at revision 68f27dfe5a27a54fb2b1fefc432f43f972e90868 holds exactly seven files: .gitattributes 1570 bytes; README.md 1388 bytes; laya.onnx 3807291 bytes sha256 a874eb254b58b0fcb1e7ad56fbb188c29d64e08c9a46b689433e1f52c66dba1e; laya.onnx.data 1685258240 bytes sha256 487746363a8da57bcadb4345352997d22a0fb90d70aa22c6856668d023242aba; laya_config.json 369 bytes; tokenizer/tokenizer.json 3583228 bytes; tokenizer/tokenizer_config.json 308 bytes",
+      "reviewer": "coordinator"
+    },
+    {
+      "id": "hf-laya-onnx-readme",
+      "url": "https://huggingface.co/receptron/laya-onnx/raw/68f27dfe5a27a54fb2b1fefc432f43f972e90868/README.md",
+      "fetchedAt": "2026-10-10T17:30:25Z",
+      "immutable": "66f5b09344193c4fa3fb4b8072705cd40381273b249f2456791495174386b199",
+      "fact": "the ONNX export of convaiinnovations/laya (ModernBERT-large encoder plus Laya's decision head) is the English checkpoint, 421M parameters, fp32 weights; weights are Convai Innovations' under Apache-2.0 and the export code is MIT; inputs input_ids, attention_mask, marker_pos, marker_mask, qtype; outputs logits (uncalibrated) and act_probs; @receptron/laya's Laya.load() downloads this bundle on first use by default",
+      "reviewer": "coordinator"
+    },
+    {
+      "id": "hf-laya-origin-weights",
+      "url": "https://huggingface.co/api/models/convaiinnovations/laya/paths-info/7b928d828b7b0e022f929d9bd2e44165aa270148",
+      "fetchedAt": "2026-10-10T22:07:11Z",
+      "immutable": "891102d372688fc2a094dac56a384bc537b87c63f21f9f3dac0be2b7cbc8d86c",
+      "fact": "convaiinnovations/laya model.safetensors is 842609210 bytes with SHA-256 891102d372688fc2a094dac56a384bc537b87c63f21f9f3dac0be2b7cbc8d86c; it was last changed by commit 00c37c405e3c3ad73ee070227614c89cda06b99e on 2026-09-18 (\"Initial release of Laya fine-tuned System 1 decision model\"), before receptron/laya-onnx's export at revision 68f27dfe5a27a54fb2b1fefc432f43f972e90868 (2026-09-19); the repository is licensed apache-2.0 and its later commits up to 7b928d828b7b0e022f929d9bd2e44165aa270148 changed only the README, assets and a root config.json",
+      "reviewer": "coordinator"
+    },
+    {
+      "id": "npm-receptron-laya-0.1.2",
+      "url": "https://registry.npmjs.org/%40receptron%2Flaya/0.1.2",
+      "fetchedAt": "2026-10-10T17:30:25Z",
+      "immutable": "sha512-cTqQC4DEY/wDAHY44EQhbW8wlrO7mZyLVWOy512783LUq55a7nLGGu16wXVi6oi4uNRfR0cLctKcQAxdXCXQfA==",
+      "fact": "@receptron/laya 0.1.2 is MIT, source git+https://github.com/receptron/laya.git at gitHead 6478649e723122ca24bbf5fb69ed1010023c9750, published by snakajima; dependencies onnxruntime-node ^1.22.0 and @huggingface/tokenizers ^0.2.0; no preinstall, install, postinstall or prepare script; engines node >=20; tarball https://registry.npmjs.org/@receptron/laya/-/laya-0.1.2.tgz, 23 files, 52526 bytes unpacked; latest of versions 0.1.0, 0.1.1, 0.1.2",
+      "reviewer": "coordinator"
+    },
+    {
+      "id": "npm-onnxruntime-node-1.30.0",
+      "url": "https://registry.npmjs.org/onnxruntime-node/1.30.0",
+      "fetchedAt": "2026-10-10T17:30:25Z",
+      "immutable": "sha512-twhs1C2C/BFkz1yc5OY0KIU2GUq6DURO7hD4bx5Q2Qy3nAMJwRXW8xU3NVczE29VA9lolLOYepoD8fjTGOfIqw==",
+      "fact": "onnxruntime-node 1.30.0 is MIT, source git+https://github.com/Microsoft/onnxruntime.git, published by microsoft1es; dependencies adm-zip ^0.6.0, global-agent ^4.1.3 and onnxruntime-common 1.30.0; it declares a postinstall script \"node ./script/install\" (and a prepare script); os win32, darwin, linux; tarball https://registry.npmjs.org/onnxruntime-node/-/onnxruntime-node-1.30.0.tgz, 43 files, 301068136 bytes unpacked",
+      "reviewer": "coordinator"
+    },
+    {
+      "id": "npm-huggingface-tokenizers-0.2.0",
+      "url": "https://registry.npmjs.org/%40huggingface%2Ftokenizers/0.2.0",
+      "fetchedAt": "2026-10-10T17:30:25Z",
+      "immutable": "sha512-LidMHe1FpcSYH4vcSjXooda34pC0M8m1gmDOv7SQi6Iv+ib1zX7J3sHBCC9/3FPCkn2k1b55FneVqMRxrr99pg==",
+      "fact": "@huggingface/tokenizers 0.2.0 is Apache-2.0, source git+https://github.com/huggingface/tokenizers.js.git; no dependencies; no install-time script; tarball https://registry.npmjs.org/@huggingface/tokenizers/-/tokenizers-0.2.0.tgz, 80 files, 360962 bytes unpacked",
+      "reviewer": "coordinator"
+    },
+    {
+      "id": "npm-laya-runtime-closure",
+      "url": "https://registry.npmjs.org/",
+      "fetchedAt": "2026-10-10T22:38:05Z",
+      "immutable": "5e23d92819feccb28ab2be114fa0a26613ec61d6dc5373c5d462a560f23bd181",
+      "fact": "the private @agentcomms/events-laya-runtime importer's closure in pnpm-lock.yaml is exactly the 19 packages tabled below; for each, the coordinator fetched https://registry.npmjs.org/<name>/<version> and the registry's dist.integrity equals the lockfile's and its tarball is the canonical registry URL; only onnxruntime-node declares an install-time script (postinstall), which never runs",
+      "reviewer": "coordinator"
+    }
+  ],
+  "mutations": [
+    {
+      "id": "e2-runtime-private-declaration",
+      "kind": "input",
+      "owner": "task-2",
+      "source": "packages/events-laya-runtime/package.json",
+      "testFile": "packages/events-daemon/test/laya-runtime-package.test.mjs",
+      "testName": "E2 runtime package: dependency-only manifest pins the reviewed runtime roots",
+      "testPattern": "E2 runtime package: dependency-only manifest pins the reviewed runtime roots"
+    },
+    {
+      "id": "e2-runtime-daemon-dependency",
+      "kind": "input",
+      "owner": "task-2",
+      "source": "packages/events-daemon/package.json",
+      "testFile": "packages/events-daemon/test/laya-runtime-package.test.mjs",
+      "testName": "E2 runtime package: daemon package ships reviewed assets without importing the runtime",
+      "testPattern": "E2 runtime package: daemon package ships reviewed assets without importing the runtime"
+    },
+    {
+      "id": "e2-runtime-pack-assets",
+      "kind": "input",
+      "owner": "task-2",
+      "source": "packages/events-daemon/package.json",
+      "testFile": "packages/events-daemon/test/laya-runtime-package.test.mjs",
+      "testName": "E2 runtime package: daemon package ships reviewed assets without importing the runtime",
+      "testPattern": "E2 runtime package: daemon package ships reviewed assets without importing the runtime"
+    },
+    {
+      "id": "e2-runtime-manifest-facts",
+      "kind": "input",
+      "owner": "task-2",
+      "source": "packages/events-daemon/laya-manifest.json",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 manifest: contains the reviewed single English ONNX entry",
+      "testPattern": "E2 manifest: contains the reviewed single English ONNX entry"
+    },
+    {
+      "id": "e2-runtime-registry-origin",
+      "kind": "production",
+      "owner": "task-2",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 runtime acquirer: rejects every noncanonical registry URL spelling before a request",
+      "testPattern": "E2 runtime acquirer: rejects every noncanonical registry URL spelling before a request",
+      "before": "if (string(rawUrl, 'RUNTIME_ORIGIN') !== expected || parsed.href !== expected) {",
+      "after": "if (false) {"
+    },
+    {
+      "id": "e2-runtime-sri-before-extraction",
+      "kind": "production",
+      "owner": "task-2",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 runtime lock: rejects a changed SRI before the archive parser runs",
+      "testPattern": "E2 runtime lock: rejects a changed SRI before the archive parser runs",
+      "before": "if (expected.length !== actual.length || !timingSafeEqual(expected, actual))\n    throw new RuntimeLockError('RUNTIME_SRI');",
+      "after": "if (false)\n    throw new RuntimeLockError('RUNTIME_SRI');"
+    },
+    {
+      "id": "e2-runtime-canonical-sorting",
+      "kind": "production",
+      "owner": "task-2",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 runtime lock: rebuilds canonical platform files from acquirer-verified fixture bytes",
+      "testPattern": "E2 runtime lock: rebuilds canonical platform files from acquirer-verified fixture bytes",
+      "before": "return [...values].sort(rawByteCompare);",
+      "after": "return [...values];"
+    },
+    {
+      "id": "e2-manifest-canonical-json",
+      "kind": "production",
+      "owner": "task-2",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 manifest: refuses noncanonical JSON text",
+      "testPattern": "E2 manifest: refuses noncanonical JSON text",
+      "before": "if (canonicalLayaManifest(manifest) !== source) throw new RuntimeLockError('LAYA_MANIFEST_CANONICAL');",
+      "after": "if (false) throw new RuntimeLockError('LAYA_MANIFEST_CANONICAL');"
+    },
+    {
+      "id": "e2-manifest-file-order",
+      "kind": "production",
+      "owner": "task-2",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 manifest: refuses duplicate, unsorted, and unsafe file paths",
+      "testPattern": "E2 manifest: refuses duplicate, unsorted, and unsafe file paths",
+      "before": "assertStrictOrder(\n    files.map((file) => file.path),\n    'LAYA_MANIFEST_ORDER',\n  );",
+      "after": "void files;"
+    },
+    {
+      "id": "e2-manifest-nul-path",
+      "kind": "production",
+      "owner": "task-2",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 manifest: refuses duplicate, unsorted, and unsafe file paths",
+      "testPattern": "E2 manifest: refuses duplicate, unsorted, and unsafe file paths",
+      "before": "path.includes('\\0') ||",
+      "after": "false ||"
+    },
+    {
+      "id": "e2-runtime-no-archive-path",
+      "kind": "production",
+      "owner": "task-2",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 runtime lock: refuses a local archive path",
+      "testPattern": "E2 runtime lock: refuses a local archive path",
+      "before": "const record = exactKeys(value, ['name', 'version', 'url', 'integrity'], 'RUNTIME_LOCK_INPUT');",
+      "after": "const record = exactKeys(value, ['name', 'version', 'url', 'integrity', 'archivePath'], 'RUNTIME_LOCK_INPUT');"
+    },
+    {
+      "id": "e2-runtime-closure-evidence",
+      "kind": "production",
+      "owner": "task-2",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 runtime lock: refuses a closure row absent from or different from the reviewed table",
+      "testPattern": "E2 runtime lock: refuses a closure row absent from or different from the reviewed table",
+      "before": "if (reviewed === undefined || reviewed.url !== entry.url || reviewed.integrity !== entry.integrity) {",
+      "after": "if (false) {"
+    },
+    {
+      "id": "e2-path-well-formed",
+      "kind": "production",
+      "owner": "task-2",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 manifest and runtime lock: refuses lone-surrogate paths before comparison",
+      "testPattern": "E2 manifest and runtime lock: refuses lone-surrogate paths before comparison",
+      "before": "!path.isWellFormed() ||",
+      "after": "false ||"
+    },
+    {
+      "id": "e2-canonical-sha512-sri",
+      "kind": "production",
+      "owner": "task-2",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 runtime integrity: rejects noncanonical Base64 before acquisition or parsing",
+      "testPattern": "E2 runtime integrity: rejects noncanonical Base64 before acquisition or parsing",
+      "before": "if (decoded.length !== 64 || decoded.toString('base64') !== payload) throw new RuntimeLockError(code);",
+      "after": "if (false) throw new RuntimeLockError(code);"
+    },
+    {
+      "id": "e2-npm-package-name",
+      "kind": "production",
+      "owner": "task-2",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 runtime acquirer: rejects invalid package names and normalised URLs before a request",
+      "testPattern": "E2 runtime acquirer: rejects invalid package names and normalised URLs before a request",
+      "before": "const packageName = assertNpmPackageName(name);",
+      "after": "const packageName = string(name, 'RUNTIME_ORIGIN');"
+    },
+    {
+      "id": "e2-release-closure-binding",
+      "kind": "production",
+      "owner": "task-2",
+      "source": "scripts/laya-runtime-lock.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 release runtime lock: refuses an unreviewed caller closure before acquisition",
+      "testPattern": "E2 release runtime lock: refuses an unreviewed caller closure before acquisition",
+      "before": "const closure = readPrivateRuntimeClosure(await readFile(ROOT_LOCKFILE, 'utf8'));",
+      "after": "const closure = suppliedPackages;"
+    },
+    {
+      "id": "e2-external-source-canonical-sri",
+      "kind": "production",
+      "owner": "task-2",
+      "source": "scripts/verify-events-phase-e2-tests.mjs",
+      "testFile": "packages/events-daemon/test/laya-scope.test.ts",
+      "testName": "laya scope: the checker refuses a copied noncanonical external-source SRI",
+      "testPattern": "laya scope: the checker refuses a copied noncanonical external-source SRI",
+      "before": "if (decoded.length !== expectedLength || decoded.toString('base64') !== payload) {",
+      "after": "if (false) {"
+    },
+    {
+      "id": "e2-release-acquirer-is-owner-gated",
+      "kind": "production",
+      "owner": "task-2",
+      "source": "scripts/fetch-laya-release-tarballs.mjs",
+      "testFile": "packages/events-daemon/test/laya-manifest-lock.test.ts",
+      "testName": "E2 release runtime lock: requires an explicit owner-gated acquirer",
+      "testPattern": "E2 release runtime lock: requires an explicit owner-gated acquirer",
+      "before": "if (typeof acquire !== 'function') throw new RuntimeLockError('RUNTIME_LOCK_INPUT');",
+      "after": "if (acquire === undefined) return requestRegistryTarball;\n  if (typeof acquire !== 'function') throw new RuntimeLockError('RUNTIME_LOCK_INPUT');"
+    }
+  ]
+}

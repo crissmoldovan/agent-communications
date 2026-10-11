@@ -75,6 +75,23 @@ function externalSourceBlocked(message) {
   fail(`E2_EXTERNAL_REFERENCE_BLOCKED: ${message}`);
 }
 
+function assertExternalSourceImmutable(fragment, immutable) {
+  const sri = /^sha(256|512)-([A-Za-z0-9+/]{40,}={0,2})$/.exec(immutable);
+  if (sri !== null) {
+    const algorithm = sri[1];
+    const payload = sri[2];
+    const expectedLength = algorithm === '256' ? 32 : 64;
+    const decoded = Buffer.from(payload, 'base64');
+    if (decoded.length !== expectedLength || decoded.toString('base64') !== payload) {
+      externalSourceBlocked(`${fragment.file}.externalSources[] has a mutable revision or digest`);
+    }
+    return;
+  }
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64}|sha(?:256|512):[a-f0-9]{64,128})$/.test(immutable)) {
+    externalSourceBlocked(`${fragment.file}.externalSources[] has a mutable revision or digest`);
+  }
+}
+
 function externalSourceFields(fragment, source) {
   if (source === null || typeof source !== 'object' || Array.isArray(source)) {
     externalSourceBlocked(`${fragment.file}.externalSources[] must be an object`);
@@ -98,17 +115,11 @@ function externalSourceFields(fragment, source) {
   if (!Number.isFinite(fetchedAt) || !fields.fetchedAt.endsWith('Z') || fetchedAt > Date.now()) {
     externalSourceBlocked(`${fragment.file}.externalSources[] has no valid UTC fetch date`);
   }
-  if (
-    !/^(?:[a-f0-9]{40}|[a-f0-9]{64}|sha(?:256|512):[a-f0-9]{64,128}|sha(?:256|512)-[A-Za-z0-9+/]{40,}={0,2})$/.test(
-      fields.immutable,
-    )
-  ) {
-    externalSourceBlocked(`${fragment.file}.externalSources[] has a mutable revision or digest`);
-  }
+  assertExternalSourceImmutable(fragment, fields.immutable);
   return fields;
 }
 
-function verifyExternalSources(root, fragment) {
+export function verifyExternalSources(root, fragment) {
   const record = 'docs/superpowers/evidence/2026-10-10-e2-external-sources.md';
   if (!existsSync(resolve(root, record))) {
     externalSourceBlocked(`${fragment.file} requires the coordinator-fetched ${record}`);
@@ -506,10 +517,12 @@ function parseArguments(argv) {
   return { root };
 }
 
-try {
-  verifyEventsPhaseE2(parseArguments(process.argv.slice(2)));
-  process.stdout.write('Phase E2 proof pairing: OK\n');
-} catch (error) {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    verifyEventsPhaseE2(parseArguments(process.argv.slice(2)));
+    process.stdout.write('Phase E2 proof pairing: OK\n');
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  }
 }

@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "packages": [
+    {
+      "name": "runtime-a",
+      "version": "1.0.0",
+      "url": "https://registry.npmjs.org/runtime-a/-/runtime-a-1.0.0.tgz",
+      "integrity": "sha512-c1IF79QcLq44FZVssNV7egmJf6CB1oHcYpRJK79X69+9gqTyJtGidi+TE+yTbpUNlL2S+2n8zwoFXbRo0wobaQ==",
+      "files": {
+        "darwin-arm64": [
+          {
+            "path": "bin/arm64.mjs",
+            "size": 26,
+            "sha256": "e869ab2800c011d7297d741f3833d02125e99b4ecb3d070ce501f03a6c8aee83",
+            "executable": true
+          },
+          {
+            "path": "shared.mjs",
+            "size": 25,
+            "sha256": "7c5439c189c1ecbefcc478ca861b893d05975dbab95f12e0fcd3b87534190dca",
+            "executable": false
+          }
+        ],
+        "darwin-x64": [
+          {
+            "path": "bin/x64.mjs",
+            "size": 24,
+            "sha256": "138fcbf1738779b233df8fe3c7d68d38fb12d4e03c891ce82c840652aec9c09a",
+            "executable": true
+          },
+          {
+            "path": "shared.mjs",
+            "size": 25,
+            "sha256": "7c5439c189c1ecbefcc478ca861b893d05975dbab95f12e0fcd3b87534190dca",
+            "executable": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "runtime-b",
+      "version": "1.0.0",
+      "url": "https://registry.npmjs.org/runtime-b/-/runtime-b-1.0.0.tgz",
+      "integrity": "sha512-YIOp/LFbgnYoD5eEyrWPuX8Gs33ZzKPAB28SXPMXqbBRHfMSB+g2rQyNV+fgXOqzTwLR4/PzIIjlR974l+V7GA==",
+      "files": {
+        "darwin-arm64": [
+          {
+            "path": "index.mjs",
+            "size": 28,
+            "sha256": "9df43d305d97b6c41b100ed0e26fbbd8168a4b77086a0d4e681869ee43160512",
+            "executable": false
+          }
+        ],
+        "darwin-x64": [
+          {
+            "path": "index.mjs",
+            "size": 28,
+            "sha256": "9df43d305d97b6c41b100ed0e26fbbd8168a4b77086a0d4e681869ee43160512",
+            "executable": false
+          }
+        ]
+      }
+    }
+  ]
+}

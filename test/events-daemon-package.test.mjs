@@ -38,7 +38,14 @@ test('PKG-B1-b: the local event daemon is a held service with its declared runti
     '@agentcomms/slack': 'workspace:*',
     '@agentcomms/whatsapp': 'workspace:*',
   });
-  assert.deepEqual(manifest.files, ['dist', 'README.md', 'LICENSE', 'THIRD_PARTY_LICENSES']);
+  assert.deepEqual(manifest.files, [
+    'dist',
+    'laya-manifest.json',
+    'laya-runtime.json',
+    'README.md',
+    'LICENSE',
+    'THIRD_PARTY_LICENSES',
+  ]);
   assert.doesNotMatch(
     JSON.stringify({ ...manifest.dependencies, ...manifest.optionalDependencies }),
     /(?:better-sqlite3|sqlite3|node-sqlite3)/,

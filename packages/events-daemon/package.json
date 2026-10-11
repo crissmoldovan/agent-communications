@@ -26,6 +26,8 @@
   },
   "files": [
     "dist",
+    "laya-manifest.json",
+    "laya-runtime.json",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_LICENSES"

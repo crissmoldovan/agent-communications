@@ -1,7 +1,7 @@
 // Runs inside a fresh project that installed the packed tarball (scripts/verify-package.mjs).
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -16,6 +16,10 @@ const refusesWindows = /does not run on Windows/;
 if (windows) await assert.rejects(() => status(), refusesWindows);
 else assert.deepEqual(await status(), { owner: 'not-running' });
 const dist = dirname(fileURLToPath(import.meta.resolve('@agentcomms/events-daemon')));
+const packageRoot = join(dist, '..');
+for (const asset of ['laya-manifest.json', 'laya-runtime.json']) {
+  await readFile(join(packageRoot, asset), 'utf8');
+}
 const cli = join(dist, 'cli.mjs');
 // `--import` takes a module specifier: on Windows an absolute path reads as a URL scheme, so pass a file URL.
 const sealUrl = new URL('./loopback-seal-preload.mjs', import.meta.url).href;

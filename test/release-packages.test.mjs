@@ -8,7 +8,9 @@ import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { REGISTRY } from '../scripts/channels.mjs';
+import { DRIVERS } from '../scripts/operations.mjs';
 import { HELD, PACKAGES, PUBLISHABLE } from '../scripts/packages.mjs';
+import { SURFACES } from '../scripts/registries.mjs';
 import { isVisible } from '../scripts/release-confirm.mjs';
 import { workspaceClosure } from '../scripts/verify-package.mjs';
 import { tempDir } from './helpers/temp-dir.mjs';
@@ -33,6 +35,20 @@ const escapeRegExp = (text) => text.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const exec = promisify(execFile);
+
+test('E2 runtime package: private dependency declaration reaches no package, surface, or driver registry', async () => {
+  const manifest = JSON.parse(await readFile(join(ROOT, 'packages', 'events-laya-runtime', 'package.json'), 'utf8'));
+  assert.equal(manifest.private, true, 'the runtime declaration is never publishable');
+  assert.ok(!PUBLISHABLE.includes('events-laya-runtime'));
+  assert.ok(!PACKAGES.includes('events-laya-runtime'));
+  assert.ok(
+    ![...REGISTRY.channels, ...REGISTRY.libraries, ...REGISTRY.services].some(
+      (entry) => entry.directory === 'events-laya-runtime',
+    ),
+  );
+  assert.ok(!SURFACES.some((surface) => surface.package === 'events-laya-runtime'));
+  assert.equal(DRIVERS['events-laya-runtime'], undefined);
+});
 
 /** Runs a script and returns its exit status and output; a refusal is an answer, not a thrown error. */
 async function runScript(script, args, options = {}) {

@@ -43,6 +43,18 @@ the SRI-verified package bytes). The README does not pin the base model's revisi
 `7b928d828b7b0e022f929d9bd2e44165aa270148`, last modified 2026-10-03, when fetched — after this export's 2026-09-19),
 so the weights-source revision E2-H needs is still to be recorded before Task 9.
 
+### hf-laya-origin-weights
+
+- id: `hf-laya-origin-weights`
+- url: `https://huggingface.co/api/models/convaiinnovations/laya/paths-info/7b928d828b7b0e022f929d9bd2e44165aa270148`
+- fetchedAt: `2026-10-10T22:07:11Z`
+- immutable: `891102d372688fc2a094dac56a384bc537b87c63f21f9f3dac0be2b7cbc8d86c`
+- fact: `convaiinnovations/laya model.safetensors is 842609210 bytes with SHA-256 891102d372688fc2a094dac56a384bc537b87c63f21f9f3dac0be2b7cbc8d86c; it was last changed by commit 00c37c405e3c3ad73ee070227614c89cda06b99e on 2026-09-18 ("Initial release of Laya fine-tuned System 1 decision model"), before receptron/laya-onnx's export at revision 68f27dfe5a27a54fb2b1fefc432f43f972e90868 (2026-09-19); the repository is licensed apache-2.0 and its later commits up to 7b928d828b7b0e022f929d9bd2e44165aa270148 changed only the README, assets and a root config.json`
+- reviewer: `coordinator`
+
+This is the manifest's `weights.originSha256`. It also answers part of E2-H: the weights-source revision the export was
+made from is `00c37c405e3c3ad73ee070227614c89cda06b99e`. The Python reference and invocation are still to be recorded.
+
 ### npm-receptron-laya-0.1.2
 
 - id: `npm-receptron-laya-0.1.2`
@@ -76,6 +88,40 @@ accepted.
 - fact: `@huggingface/tokenizers 0.2.0 is Apache-2.0, source git+https://github.com/huggingface/tokenizers.js.git; no dependencies; no install-time script; tarball https://registry.npmjs.org/@huggingface/tokenizers/-/tokenizers-0.2.0.tgz, 80 files, 360962 bytes unpacked`
 - reviewer: `coordinator`
 
+### npm-laya-runtime-closure
+
+- id: `npm-laya-runtime-closure`
+- url: `https://registry.npmjs.org/`
+- fetchedAt: `2026-10-10T22:38:05Z`
+- immutable: `5e23d92819feccb28ab2be114fa0a26613ec61d6dc5373c5d462a560f23bd181`
+- fact: `the private @agentcomms/events-laya-runtime importer's closure in pnpm-lock.yaml is exactly the 19 packages tabled below; for each, the coordinator fetched https://registry.npmjs.org/<name>/<version> and the registry's dist.integrity equals the lockfile's and its tarball is the canonical registry URL; only onnxruntime-node declares an install-time script (postinstall), which never runs`
+- reviewer: `coordinator`
+
+The `immutable` value is the SHA-256 of the canonical JSON of this table (keys sorted: installScripts, integrity,
+licence, package, tarball), so a change to any row changes it.
+
+| Package | Licence | Tarball | Integrity (sha512) | Install-time script |
+| --- | --- | --- | --- | --- |
+| `@huggingface/tokenizers@0.2.0` | Apache-2.0 | `https://registry.npmjs.org/@huggingface/tokenizers/-/tokenizers-0.2.0.tgz` | `sha512-LidMHe1FpcSYH4vcSjXooda34pC0M8m1gmDOv7SQi6Iv+ib1zX7J3sHBCC9/3FPCkn2k1b55FneVqMRxrr99pg==` | none |
+| `@receptron/laya@0.1.2` | MIT | `https://registry.npmjs.org/@receptron/laya/-/laya-0.1.2.tgz` | `sha512-cTqQC4DEY/wDAHY44EQhbW8wlrO7mZyLVWOy512783LUq55a7nLGGu16wXVi6oi4uNRfR0cLctKcQAxdXCXQfA==` | none |
+| `adm-zip@0.6.1` | MIT | `https://registry.npmjs.org/adm-zip/-/adm-zip-0.6.1.tgz` | `sha512-Xwrja8nx9e5o2N1my4DsKCeKpdrnACyr1wtbPxBDgGzKzKyE9kRtBFA8mWldI+RVlD7CBZNWY/wQ2+ydwOR6kQ==` | none |
+| `define-data-property@1.1.4` | MIT | `https://registry.npmjs.org/define-data-property/-/define-data-property-1.1.4.tgz` | `sha512-rBMvIzlpA8v6E+SJZoo++HAYqsLrkg7MSfIinMPFhmkorw7X+dOXVJQs+QT69zGkzMyfDnIMN2Wid1+NbL3T+A==` | none |
+| `define-properties@1.2.1` | MIT | `https://registry.npmjs.org/define-properties/-/define-properties-1.2.1.tgz` | `sha512-8QmQKqEASLd5nx0U1B1okLElbUuuttJ/AnYmRXbbbGDWh6uS208EjD4Xqq/I9wK7u0v6O08XhTWnt5XtEbR6Dg==` | none |
+| `es-define-property@1.0.1` | MIT | `https://registry.npmjs.org/es-define-property/-/es-define-property-1.0.1.tgz` | `sha512-e3nRfgfUZ4rNGL232gUgX06QNyyez04KdjFrF+LTRoOXmrOgFKDg4BCdsjW8EnT69eqdYGmRpJwiPVYNrCaW3g==` | none |
+| `es-errors@1.3.0` | MIT | `https://registry.npmjs.org/es-errors/-/es-errors-1.3.0.tgz` | `sha512-Zf5H2Kxt2xjTvbJvP2ZWLEICxA6j+hAmMzIlypy4xcBg1vKVnx89Wy0GbS+kf5cwCVFFzdCFh2XSCFNULS6csw==` | none |
+| `escape-string-regexp@4.0.0` | MIT | `https://registry.npmjs.org/escape-string-regexp/-/escape-string-regexp-4.0.0.tgz` | `sha512-TtpcNJ3XAzx3Gq8sWRzJaVajRs0uVxA2YAkdb1jm2YkPz4G6egUFAyA3n5vtEIZefPk5Wa4UXbKuS5fKkJWdgA==` | none |
+| `global-agent@4.1.3` | BSD-3-Clause | `https://registry.npmjs.org/global-agent/-/global-agent-4.1.3.tgz` | `sha512-KUJEViiuFT3I97t+GYMikLPJS2Lfo/S2F+DQuBWzuzaMPnvt5yyZePzArx36fBzpGTxZjIpDbXLeySLgh+k76g==` | none |
+| `globalthis@1.0.4` | MIT | `https://registry.npmjs.org/globalthis/-/globalthis-1.0.4.tgz` | `sha512-DpLKbNU4WylpxJykQujfCcwYWiV/Jhm50Goo0wrVILAv5jOr9d+H+UR3PhSCD2rCCEIg0uc+G+muBTwD54JhDQ==` | none |
+| `gopd@1.2.0` | MIT | `https://registry.npmjs.org/gopd/-/gopd-1.2.0.tgz` | `sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==` | none |
+| `has-property-descriptors@1.0.2` | MIT | `https://registry.npmjs.org/has-property-descriptors/-/has-property-descriptors-1.0.2.tgz` | `sha512-55JNKuIW+vq4Ke1BjOTjM2YctQIvCT7GFzHwmfZPGo5wnrgkid0YQtnAleFSqumZm4az3n2BS+erby5ipJdgrg==` | none |
+| `matcher@4.0.0` | MIT | `https://registry.npmjs.org/matcher/-/matcher-4.0.0.tgz` | `sha512-S6x5wmcDmsDRRU/c2dkccDwQPXoFczc5+HpQ2lON8pnvHlnvHAHj5WlLVvw6n6vNyHuVugYrFohYxbS+pvFpKQ==` | none |
+| `object-keys@1.1.1` | MIT | `https://registry.npmjs.org/object-keys/-/object-keys-1.1.1.tgz` | `sha512-NuAESUOUMrlIXOfHKzD6bpPu3tYt3xvjNdRIQ+FeT0lNb4K8WR70CaDxhuNguS2XG+GjkyMwOzsN5ZktImfhLA==` | none |
+| `onnxruntime-common@1.30.0` | MIT | `https://registry.npmjs.org/onnxruntime-common/-/onnxruntime-common-1.30.0.tgz` | `sha512-7fdVWjAID1dVhH/G8qK3APARunV4VkBFoCQAP7qp4Wkab0mrorvmc+sqiT+mKXOzDqdjN5j+/Z9nb4gzNPWcyA==` | none |
+| `onnxruntime-node@1.30.0` | MIT | `https://registry.npmjs.org/onnxruntime-node/-/onnxruntime-node-1.30.0.tgz` | `sha512-twhs1C2C/BFkz1yc5OY0KIU2GUq6DURO7hD4bx5Q2Qy3nAMJwRXW8xU3NVczE29VA9lolLOYepoD8fjTGOfIqw==` | `postinstall: node ./script/install` |
+| `semver@7.8.5` | ISC | `https://registry.npmjs.org/semver/-/semver-7.8.5.tgz` | `sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==` | none |
+| `serialize-error@8.1.0` | MIT | `https://registry.npmjs.org/serialize-error/-/serialize-error-8.1.0.tgz` | `sha512-3NnuWfM6vBYoy5gZFvHiYsVbafvI9vZv/+jlIigFn4oP4zjNPK3LhcY0xSCgeb1a5L8jO71Mit9LlNoi2UfDDQ==` | none |
+| `type-fest@0.20.2` | (MIT OR CC0-1.0) | `https://registry.npmjs.org/type-fest/-/type-fest-0.20.2.tgz` | `sha512-Ne+eE4r0/iWnpAxD852z3A+N0Bt5RN//NjJwRd2VFHEmrywxf5vsZlh4R6lixl6B+wz/8d+maTSAkN1FIkI3LQ==` | none |
+
 ## Not yet recorded (blocks the named task)
 
 - Task 4: RFC 9110 redirect, `Range`/`Content-Range` and request-header facts, and the Hugging Face download/API
@@ -83,5 +129,5 @@ accepted.
 - Task 7: macOS `sandbox-exec` availability, deprecation and profile semantics; the owner-run real-mac proof.
 - Task 8: the `@receptron/laya` package's load, request-rendering, output-parsing and token-counting source, from its
   SRI-verified bytes.
-- Task 9 (E2-H): the owner-selected Python reference repository, revision and invocation, and the weights-source
-  revision of `convaiinnovations/laya` this export was made from.
+- Task 9 (E2-H): the owner-selected Python reference repository, revision and invocation (the weights-source
+  revision is recorded above: `00c37c405e3c3ad73ee070227614c89cda06b99e`).
