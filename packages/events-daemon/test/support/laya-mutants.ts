@@ -186,6 +186,8 @@ export async function expectLayaMutationToFail(mutation: LayaMutation): Promise<
           '--experimental-strip-types',
           '--disable-warning=ExperimentalWarning',
           '--test',
+          // The strict kill rule reads TAP's summary; Node 24 defaults to the spec reporter when piped.
+          '--test-reporter=tap',
           '--test-name-pattern',
           exactTestName(mutation.testName),
           join(root, mutation.testFile),
