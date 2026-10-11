@@ -3,7 +3,8 @@ import { canonicalJson } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import { canonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import type { CanonicalJudgeBudgetDocument, CanonicalJudgeDocument, JudgeBudgetLimits } from '../domain/judges.ts';
-import { canonicalJudge, canonicalJudgeBudget, JUDGE_BUDGET_ID } from '../domain/judges.ts';
+import { canonicalJudge, JUDGE_BUDGET_ID } from '../domain/judges.ts';
+import { ImmutableVersions } from '../domain/versions.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { JudgeWorkScope } from '../store/records.ts';
 import { fixedDeadline } from '../store/retention.ts';
@@ -208,17 +209,7 @@ function activeBudget(database: DatabaseSync): ActiveBudget {
     .prepare("SELECT version FROM active_versions WHERE kind = 'judge-budget' AND object_id = ?")
     .get(JUDGE_BUDGET_ID) as { version: number } | undefined;
   if (active === undefined) refusal('NO_ACTIVE_BUDGET', 'no approved judge budget is active');
-  const row = database
-    .prepare('SELECT document, revoked_at FROM judge_budget_versions WHERE version = ?')
-    .get(active.version) as { document: string; revoked_at: number | null } | undefined;
-  if (row === undefined || row.revoked_at !== null)
-    refusal('NO_ACTIVE_BUDGET', 'the active judge budget is unavailable');
-  let document: CanonicalJudgeBudgetDocument;
-  try {
-    document = canonicalJudgeBudget(JSON.parse(row.document));
-  } catch {
-    refusal('NO_ACTIVE_BUDGET', 'the active judge budget is invalid');
-  }
+  const document = new ImmutableVersions(database).loadJudgeBudget(active.version);
   if (document.version !== active.version || document.budgetId !== JUDGE_BUDGET_ID)
     refusal('NO_ACTIVE_BUDGET', 'the active judge budget does not bind its immutable singleton');
   return { version: active.version, document };
@@ -226,9 +217,16 @@ function activeBudget(database: DatabaseSync): ActiveBudget {
 
 function activeKind(database: DatabaseSync, kind: CanonicalJudgeDocument['kind']): void {
   const row = database
-    .prepare("SELECT 1 AS present FROM active_versions WHERE kind = 'judge-kind' AND object_id = ?")
-    .get(kind) as { present: number } | undefined;
+    .prepare("SELECT version FROM active_versions WHERE kind = 'judge-kind' AND object_id = ?")
+    .get(kind) as { version: number } | undefined;
   if (row === undefined) refusal('JUDGE_KIND_DISABLED', 'the judge kind is disabled');
+  try {
+    const document = new ImmutableVersions(database).loadJudgeKind(kind, row.version);
+    if (document.kind !== kind || document.version !== row.version)
+      refusal('JUDGE_KIND_DISABLED', 'the judge kind is unavailable');
+  } catch {
+    refusal('JUDGE_KIND_DISABLED', 'the judge kind is unavailable');
+  }
 }
 
 function immutableJudge(database: DatabaseSync, judgeId: string, judgeVersion: number): CanonicalJudgeDocument {

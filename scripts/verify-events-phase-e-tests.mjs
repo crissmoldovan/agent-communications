@@ -30,6 +30,12 @@ const STRICT_RUNNERS = Object.freeze({
     collection: 'JUDGE_TASK5_MUTATIONS',
     helper: 'expectJudgeTask5MutationToFail',
   },
+  'judge-task4-mutants': {
+    test: 'packages/events-daemon/test/judge-task4-mutations.test.ts',
+    support: 'packages/events-daemon/test/support/judge-task4-mutants.ts',
+    collection: 'JUDGE_TASK4_MUTATIONS',
+    helper: 'expectJudgeTask4MutationToFail',
+  },
   'judge-mutants': {
     test: 'packages/events-daemon/test/judge-mutations.test.ts',
     support: 'packages/events-daemon/test/support/judge-mutants.ts',
@@ -54,6 +60,27 @@ const REQUIRED_GUARD_ROWS = Object.freeze([
   'phase-e-b3-pending-target-origin',
   'phase-e-source-scope',
   'phase-e-synthetic-scope',
+  'e4-no-pointer-at-prepare',
+  'e4-final-pointer-drift',
+  'e4-claim-pointer-drift',
+  'e4-disabled-judge-add',
+  'e4-kind-disable-recovery',
+  'e4-laya-before-intent',
+  'e4-budget-digest-prepare',
+  'e4-kind-digest-prepare',
+  'e4-budget-digest-claim',
+  'e4-kind-digest-claim',
+  'e4-budget-digest-finalise',
+  'e4-kind-digest-finalise',
+  'e4-budget-digest-live-reservation',
+  'e4-kind-digest-live-reservation',
+  'e4-first-enablement-disable',
+  'e4-absent-kind-disable-generation',
+  'e4-expiry-rule-version',
+  'e4-tightening-rule-version',
+  'e4-unscoped-kind-static-guard',
+  'e4-primary-key-exemption',
+  'e4-required-guard-rows',
 ]);
 
 async function source(root, file) {
@@ -111,6 +138,60 @@ function sqlStatements(text) {
   return strings;
 }
 
+function primaryKeyOnly(statement) {
+  const match = /\bWHERE\s+([\s\S]*)$/iu.exec(statement);
+  if (match === null) return false;
+  const predicates = match[1]
+    .trim()
+    .split(/\s+AND\s+/iu)
+    .map((predicate) => predicate.trim());
+  if (predicates.length === 0 || /\bOR\b|\(|\)|\bSELECT\b/iu.test(match[1])) return false;
+  const primaryKeyEquality = /^(?:[a-z_]+\.)?id\s*=\s*\?$/iu;
+  const primaryKeyMentions = /(?:^|\s|\.)(?:[a-z_]+\.)?id\b/iu;
+  const primaryKeyPredicates = predicates.filter((predicate) => primaryKeyEquality.test(predicate));
+  return (
+    primaryKeyPredicates.length === 1 &&
+    predicates.every((predicate) => primaryKeyEquality.test(predicate) || !primaryKeyMentions.test(predicate))
+  );
+}
+
+function hasJudgeWorkScopeLiteral(statement) {
+  return /\bwork_scope\s*=\s*'(?:source-owned|synthetic-test)'/iu.test(statement);
+}
+
+/**
+ * A reservation transition may address exactly one row by its primary key. Every broader judge-work selection must
+ * disclose its closed source/account or synthetic-test scope in that SQL statement, before it can feed a mutation.
+ */
+function unscopedJudgeWorkSelection(statement) {
+  if (!/\bjudge_budget_reservations\b/iu.test(statement) || primaryKeyOnly(statement)) return false;
+  if (!/^\s*(?:SELECT|UPDATE|DELETE)\b/iu.test(statement)) return false;
+  // Rolling-accounting reads interpolate a closed accounting predicate and cannot feed the recovery/purge transition.
+  if (/\$\{where\}/u.test(statement)) return false;
+  // A migration copy is neither an UPDATE/DELETE nor a selecting read that feeds one.
+  if (/^\s*INSERT\b/iu.test(statement)) return false;
+  return !hasJudgeWorkScopeLiteral(statement);
+}
+
+function isScopeEnumeration(statement) {
+  return (
+    /^\s*SELECT\s+DISTINCT\s+work_scope\s*,\s*source\s*,\s*account_id\s*,\s*test_work_id\b/iu.test(statement) &&
+    /\bwork_scope\s*=\s*'source-owned'\s+AND\s+source\s+IS\s+NOT\s+NULL\s+AND\s+account_id\s+IS\s+NOT\s+NULL/iu.test(
+      statement,
+    ) &&
+    /\bwork_scope\s*=\s*'synthetic-test'\s+AND\s+test_work_id\s+IS\s+NOT\s+NULL/iu.test(statement)
+  );
+}
+
+function isSourceScopeEnumeration(statement) {
+  return (
+    /^\s*SELECT\s+DISTINCT\s+source\s*,\s*account_id\s*,\s*rule_version\b/iu.test(statement) &&
+    /\bwork_scope\s*=\s*'source-owned'\s+AND\s+source\s+IS\s+NOT\s+NULL\s+AND\s+account_id\s+IS\s+NOT\s+NULL/iu.test(
+      statement,
+    )
+  );
+}
+
 /** Scan one production source file; exported so fixture-copy tests exercise the exact static rules. */
 export function verifyPhaseEJudgeSource({ file, source: text }) {
   const problems = [];
@@ -118,14 +199,23 @@ export function verifyPhaseEJudgeSource({ file, source: text }) {
     problems.push(`${file}: judge kind literals must come from domain/lifecycle.ts`);
   }
   for (const statement of sqlStatements(text)) {
+    if (unscopedJudgeWorkSelection(statement)) {
+      problems.push(
+        `${file}: judge work SQL selected by kind, judge, rule, or no selector must bind a literal work_scope with its scope predicates`,
+      );
+    }
     const scopes = [...statement.matchAll(/\bwork_scope\s*=\s*([^\s)]+)/giu)];
     for (const scope of scopes) {
       const value = scope[1];
       if (value === "'source-owned'") {
-        if (!/\baccount_id\s*=\s*\?/iu.test(statement) || !/\bsource\s*=\s*\?/iu.test(statement))
+        if (
+          !isScopeEnumeration(statement) &&
+          !isSourceScopeEnumeration(statement) &&
+          (!/\baccount_id\s*=\s*\?/iu.test(statement) || !/\bsource\s*=\s*\?/iu.test(statement))
+        )
           problems.push(`${file}: source-owned judge SQL must bind account_id and source in the same statement`);
       } else if (value === "'synthetic-test'") {
-        if (!/\btest_work_id\s*=\s*\?/iu.test(statement))
+        if (!isScopeEnumeration(statement) && !/\btest_work_id\s*=\s*\?/iu.test(statement))
           problems.push(`${file}: synthetic judge SQL must bind test_work_id in the same statement`);
       } else {
         problems.push(`${file}: judge SQL work_scope must compare with a source-owned or synthetic-test literal`);

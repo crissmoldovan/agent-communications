@@ -69,6 +69,12 @@ async function fixture() {
   const versions = new ImmutableVersions(store.database);
   versions.createTarget(target);
   versions.createJudge(judge);
+  versions.createJudgeKind({
+    id: 'judge-kind:typesafe',
+    kind: 'typesafe',
+    version: 1,
+    endpoint: 'https://api.typesafe.ai/v1/systemone',
+  });
   versions.createJudgeBudget({
     budgetId: 'judge-budget',
     version: 1,

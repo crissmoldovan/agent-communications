@@ -1,6 +1,7 @@
 import { CommsError, canonicalJson } from '@agentcomms/core';
 import { chatKindOf } from '@agentcomms/whatsapp';
 import type { EventDatabase } from '../store/database.ts';
+import { JudgePurgeParticipant } from './judge-purge.ts';
 import type { WhatsAppVisibilityRecheck } from './phase-d-whatsapp-seam.ts';
 import { purgeWhatsAppStagedPayload } from './whatsapp-staged-payload.ts';
 
@@ -213,6 +214,15 @@ export class WhatsAppVisibilityFence {
       }
       if (newlyHidden.length === 0) return;
       const marks = newlyHidden.map(() => '?').join(', ');
+      const affectedEvents = this.#store.database
+        .prepare(
+          `SELECT DISTINCT occurrence.event_id
+             FROM whatsapp_occurrences AS occurrence
+            WHERE occurrence.account_id = ? AND occurrence.message_id IN (${marks}) AND occurrence.event_id IS NOT NULL`,
+        )
+        .all(accountId, ...newlyHidden) as Array<{ event_id: string }>;
+      const judgePurge = new JudgePurgeParticipant({ database: this.#store.database, now: this.#now });
+      for (const event of affectedEvents) judgePurge.event({ source: 'whatsapp', accountId, eventId: event.event_id });
       for (const messageId of newlyHidden) purgeWhatsAppStagedPayload(this.#store.database, { accountId, messageId });
       this.#store.database
         .prepare(

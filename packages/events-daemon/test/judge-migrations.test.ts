@@ -124,6 +124,23 @@ function ledgerDetachmentMigration(): EventMigration {
   return migration;
 }
 
+test('E4 schema: an absent-kind disable has a durable monotonically increasing generation fence', () => {
+  const migration = EVENT_MIGRATIONS.find((candidate) => candidate.name === 'event-judge-kind-disable-generations-v1');
+  assert.ok(migration, 'the Task 4 disable-generation migration is registered');
+  assert.equal(migration.version, 19);
+  const database = new DatabaseSync(':memory:');
+  try {
+    applyMigrations(database);
+    assert.match(tableSql(database, 'judge_kind_disable_generations'), /kind TEXT PRIMARY KEY/u);
+    assert.match(
+      tableSql(database, 'judge_kind_disable_generations'),
+      /generation INTEGER NOT NULL CHECK \(generation >= 0\)/u,
+    );
+  } finally {
+    database.close();
+  }
+});
+
 test('E5 schema: every fresh and upgraded judge-kind CHECK admits exactly JUDGE_KINDS', async () => {
   const source = await readFile(new URL('../src/store/schema-v1.ts', import.meta.url), 'utf8');
   assert.match(source, /import \{ JUDGE_KINDS \} from '..\/domain\/lifecycle\.ts';/u);
@@ -342,7 +359,7 @@ test('E2: v17/v18 upgrades every B1, B2, and D fixture through B3 once without c
       applyMigrations(database);
       assert.equal(
         (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
-        '18',
+        '19',
         fixture.name,
       );
       assert.deepEqual(
@@ -359,7 +376,7 @@ test('E2: v17/v18 upgrades every B1, B2, and D fixture through B3 once without c
       applyMigrations(database);
       assert.equal(
         (
-          database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 18').get() as {
+          database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 19').get() as {
             count: number;
           }
         ).count,
@@ -599,7 +616,7 @@ test('E2: a fresh daemon database keeps secure-delete enabled across a reopen', 
       assert.equal(
         (first.database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string })
           .value,
-        '18',
+        '19',
       );
     } finally {
       first.close();
@@ -608,7 +625,7 @@ test('E2: a fresh daemon database keeps secure-delete enabled across a reopen', 
     try {
       assert.equal(
         (
-          reopened.database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 18').get() as {
+          reopened.database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 19').get() as {
             count: number;
           }
         ).count,

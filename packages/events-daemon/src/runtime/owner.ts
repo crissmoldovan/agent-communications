@@ -813,6 +813,8 @@ async function startOwnerWithLock(
     database,
     eventOperations: whatsappEventOperations,
     createRetainedContentParticipants: createB2RetainedContentParticipants,
+    // The visibility-triggered judge purge shares the owner clock with every other immediate lifecycle closure.
+    now,
   });
   // D7: with D's WhatsApp source registered, a missing concrete fence refuses start here — before any dispatcher,
   // scheduler or listener exists — and never falls back to B2's pre-D pass-through gate.

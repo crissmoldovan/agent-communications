@@ -15,6 +15,7 @@ import {
   disclosureBindingFor,
 } from '../domain/activation-documents.ts';
 import { ACTIVATION_FAILURE, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
+import { JUDGE_BUDGET_ID } from '../domain/judges.ts';
 import { assertJudgeKindEnabled } from '../domain/lifecycle.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
@@ -90,6 +91,16 @@ interface PreparedPoint extends PlannedPoint {
 
 interface ActivationEffect {
   readonly switchGeneration: number;
+  /** The activation may move only the exact kind/singleton pointer it prepared against. */
+  readonly judgePointer?:
+    | {
+        readonly kind: 'judge-budget' | 'judge-kind';
+        readonly objectId: string;
+        readonly version: number | null;
+        /** A disable that occurs after prepare invalidates this otherwise inert kind-enable plan. */
+        readonly disableGeneration?: number | undefined;
+      }
+    | undefined;
   readonly currentCutovers?: readonly {
     readonly ruleId: string;
     readonly ruleVersion: number;
@@ -374,6 +385,41 @@ export class ActivationRuntime {
     });
   }
 
+  /** Prepares the singleton budget solely from its immutable stored document. */
+  async prepareJudgeBudget(input: { readonly version: number }): Promise<PreparedActivation> {
+    await this.assertNoCompletingMutation();
+    const versions = new ImmutableVersions(this.#store.database);
+    const document = versions.prepareJudgeBudget(input.version);
+    const active = versions.activeVersion('judge-budget', JUDGE_BUDGET_ID);
+    if (active?.version === input.version)
+      throw new CommsError('CONFIG', 'the requested judge budget is already active');
+    return this.#prepare(document, [], {
+      switchGeneration: this.#switch().generation,
+      judgePointer: { kind: 'judge-budget', objectId: JUDGE_BUDGET_ID, version: active?.version ?? null },
+    });
+  }
+
+  /** Prepares a separately approved available judge-kind pointer; it performs no provider work. */
+  async prepareJudgeKind(input: { readonly kind: string; readonly version: number }): Promise<PreparedActivation> {
+    const disableGeneration = this.#judgeKindDisableGeneration(input.kind);
+    const versions = new ImmutableVersions(this.#store.database);
+    // Availability is a local, closed document check. In particular Laya must report E2_REQUIRED before waiting on
+    // another activation and before it can create an intent, approval, pointer or download request.
+    const document = versions.prepareJudgeKind(input.kind, input.version);
+    await this.assertNoCompletingMutation();
+    const active = versions.activeVersion('judge-kind', document.enablement.kind);
+    if (active?.version === input.version) throw new CommsError('CONFIG', 'the requested judge kind is already active');
+    return this.#prepare(document, [], {
+      switchGeneration: this.#switch().generation,
+      judgePointer: {
+        kind: 'judge-kind',
+        objectId: document.enablement.kind,
+        version: active?.version ?? null,
+        disableGeneration,
+      },
+    });
+  }
+
   async approve(input: {
     readonly approvalId: string;
     readonly answer: string;
@@ -512,6 +558,27 @@ export class ActivationRuntime {
     this.#store.immediate(() => {
       for (const intentId of cancelled) this.#cancel(intentId, ACTIVATION_FAILURE.AUTHORIZATION_REVOKED);
     });
+  }
+
+  /** Called by the kind-disable transaction; no pending kind approval may recreate the pointer after disable wins. */
+  cancelForJudgeKindInTransaction(kind: string): number {
+    const rows = this.#store.database
+      .prepare(
+        "SELECT id, document FROM activation_intents WHERE status IN ('pending', 'pending-completion') ORDER BY id",
+      )
+      .all() as Array<{ id: string; document: string }>;
+    let cancelled = 0;
+    for (const row of rows) {
+      const document = JSON.parse(row.document) as ActivationDocumentV1;
+      const bound =
+        (document.kind === 'judge-kind' && document.enablement.kind === kind) ||
+        (document.kind === 'rule' && document.rule.agentic?.judge.kind === kind);
+      if (bound) {
+        this.#cancel(row.id, ACTIVATION_FAILURE.AUTHORIZATION_REVOKED);
+        cancelled += 1;
+      }
+    }
+    return cancelled;
   }
 
   /** Startup path: a used core approval is never reclaimed; its original usedAt remains the deadline origin. */
@@ -663,6 +730,7 @@ export class ActivationRuntime {
     const now = this.#now();
     const plannedAccountIds = [...new Set(points.map((point) => point.accountId))];
     this.#store.immediate(() => {
+      this.#assertJudgeActivationLive(document, effect);
       // `revoked_at >= created_at` is deliberately inclusive: an intent planned before a same-millisecond removal
       // must lose its authority.  Give an intent made after a re-add a logically later creation instant even when a
       // low-resolution clock has not ticked.  This records the ordering needed to distinguish its fresh approval
@@ -729,6 +797,7 @@ export class ActivationRuntime {
     if (!Number.isFinite(claimedAt)) throw new CommsError('BAD_DATA', 'the disclosure usedAt is not an instant');
     const deadline = claimedAt + 3_600_000;
     let revokedPlannedAccount = false;
+    let judgePointerDrift = false;
     this.#store.immediate(() => {
       const row = this.#intent(intent.id);
       // The core claim above is an await. A residual sentinel is usable only by recovery, only while it is still the
@@ -738,7 +807,17 @@ export class ActivationRuntime {
         throw new CommsError('APPROVAL_VOID', 'the activation was cancelled before completion');
       // Core claiming is another await boundary.  This transaction owns the local claim, so it must fence a judge
       // kind disabled after the core claim but before any provider baseline or local state mutation.
-      this.#assertRuleJudgeKindEnabled(this.#document(row));
+      const document = this.#document(row);
+      this.#assertRuleJudgeKindEnabled(document);
+      if (document.kind === 'judge-budget' || document.kind === 'judge-kind') {
+        try {
+          this.#assertJudgeActivationLive(document, JSON.parse(row.effect) as ActivationEffect);
+        } catch (_error) {
+          this.#cancel(intent.id, ACTIVATION_FAILURE.STALE_POINTER);
+          judgePointerDrift = true;
+          return;
+        }
+      }
       // A stable id can be configured again after removal. The approval predates that removal, so it can never
       // authorise the re-added account even if an interrupted purge left this intent pending.
       const revoked = this.#store.database
@@ -764,6 +843,8 @@ export class ActivationRuntime {
           .run(claimedAt, deadline, this.#now(), intent.id);
       }
     });
+    if (judgePointerDrift)
+      throw new CommsError('APPROVAL_VOID', 'the judge pointer or immutable document changed after the core claim');
     if (revokedPlannedAccount)
       throw new CommsError('APPROVAL_VOID', 'an account planned by this activation was removed after its approval');
     const current = this.#intent(intent.id);
@@ -996,7 +1077,10 @@ export class ActivationRuntime {
       this.#assertRuleJudgeKindEnabled(document);
       const effect = JSON.parse(latest.effect) as ActivationEffect;
       const settings = this.#switch();
-      if (settings.generation !== effect.switchGeneration) {
+      if (
+        (document.kind === 'rule' || document.kind === 'enable-all') &&
+        settings.generation !== effect.switchGeneration
+      ) {
         this.#cancel(intent.id, ACTIVATION_FAILURE.STALE_GENERATION);
         settled = new CommsError('APPROVAL_VOID', 'the global event switch changed before activation completed');
         return;
@@ -1037,6 +1121,17 @@ export class ActivationRuntime {
       } else if (document.kind === 'enable-all') {
         if (settings.enabled)
           throw new CommsError('CONFIG', 'collection became enabled before this approval completed');
+      } else if (document.kind === 'judge-budget' || document.kind === 'judge-kind') {
+        try {
+          this.#assertJudgeActivationLive(document, effect);
+        } catch (_error) {
+          this.#cancel(intent.id, ACTIVATION_FAILURE.STALE_POINTER);
+          settled = new CommsError(
+            'APPROVAL_VOID',
+            'the judge pointer or immutable document changed before finalisation',
+          );
+          return;
+        }
       } else {
         throw new CommsError('CONFIG', 'this activation kind is not enabled in B1');
       }
@@ -1102,7 +1197,7 @@ export class ActivationRuntime {
           })),
           createdAt: this.#now(),
         });
-      } else {
+      } else if (document.kind === 'enable-all') {
         for (const entry of document.ruleVersions) {
           this.#store.database
             .prepare(
@@ -1113,6 +1208,25 @@ export class ActivationRuntime {
         this.#store.database
           .prepare('UPDATE event_settings SET enabled = 1, activation_id = ?, changed_at = ? WHERE singleton = 1')
           .run(intent.id, this.#now());
+      } else {
+        const pointer = effect.judgePointer;
+        if (pointer === undefined) throw new CommsError('APPROVAL_VOID', 'the judge pointer expectation is missing');
+        const version = document.kind === 'judge-budget' ? document.budget.version : document.enablement.version;
+        if (pointer.version === null) {
+          this.#store.database
+            .prepare(
+              'INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES (?, ?, ?, NULL, ?)',
+            )
+            .run(pointer.kind, pointer.objectId, version, Date.parse(usedAt));
+        } else {
+          const changed = this.#store.database
+            .prepare(
+              'UPDATE active_versions SET version = ?, current_cutover_id = NULL, activated_at = ? WHERE kind = ? AND object_id = ? AND version = ?',
+            )
+            .run(version, Date.parse(usedAt), pointer.kind, pointer.objectId, pointer.version).changes;
+          if (changed !== 1)
+            throw new CommsError('APPROVAL_VOID', 'the judge pointer changed before it could be swapped');
+        }
       }
       this.#store.database.prepare('DELETE FROM activation_baselines WHERE intent_id = ?').run(intent.id);
       this.#store.database.prepare('DELETE FROM replacement_drains WHERE intent_id = ?').run(intent.id);
@@ -1205,8 +1319,47 @@ export class ActivationRuntime {
       ) {
         throw new CommsError('APPROVAL_VOID', 'the global enablement plan changed after preparation');
       }
+    } else if (document.kind === 'judge-budget' || document.kind === 'judge-kind') {
+      this.#assertJudgeActivationLive(document, JSON.parse(intent.effect) as ActivationEffect);
     }
     return binding;
+  }
+
+  /** The prepare, claim and final-pointer transactions all call this exact immutable-pointer fence. */
+  #assertJudgeActivationLive(document: ActivationDocumentV1, effect: ActivationEffect): void {
+    if (document.kind !== 'judge-budget' && document.kind !== 'judge-kind') return;
+    const pointer = effect.judgePointer;
+    const expectedKind = document.kind;
+    const expectedObjectId = document.kind === 'judge-budget' ? JUDGE_BUDGET_ID : document.enablement.kind;
+    const expectedVersion = document.kind === 'judge-budget' ? document.budget.version : document.enablement.version;
+    if (pointer?.kind !== expectedKind || pointer.objectId !== expectedObjectId)
+      throw new CommsError('APPROVAL_VOID', 'the judge activation pointer expectation is invalid');
+    if (
+      document.kind === 'judge-kind' &&
+      pointer.disableGeneration !== this.#judgeKindDisableGeneration(expectedObjectId)
+    )
+      assertJudgeKindEnabled(document.enablement.kind, false);
+    const versions = new ImmutableVersions(this.#store.database);
+    const active = versions.activeVersion(pointer.kind, pointer.objectId);
+    if ((active?.version ?? null) !== pointer.version)
+      throw new CommsError('APPROVAL_VOID', 'the judge activation pointer changed after preparation');
+    const live =
+      document.kind === 'judge-budget'
+        ? versions.prepareJudgeBudget(expectedVersion)
+        : versions.prepareJudgeKind(expectedObjectId, expectedVersion);
+    if (
+      canonicalJson(live) !== canonicalJson(document) ||
+      activationDocumentDigest(live) !== activationDocumentDigest(document)
+    )
+      throw new CommsError('APPROVAL_VOID', 'the immutable judge activation document changed after preparation');
+  }
+
+  /** A disable advances this durable fence even when the kind has no active pointer yet. */
+  #judgeKindDisableGeneration(kind: string): number {
+    const row = this.#store.database
+      .prepare('SELECT generation FROM judge_kind_disable_generations WHERE kind = ?')
+      .get(kind) as { generation: number } | undefined;
+    return row?.generation ?? 0;
   }
 
   /** The absence of the sole judge-kind pointer is disabled; deterministic-only rules need no kind check. */

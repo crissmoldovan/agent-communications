@@ -57,7 +57,28 @@
     { "id": "e6-a-skip-embedded-addresses" },
     { "id": "e6-a-allow-global-only-non-typesafe" },
     { "id": "e6-m-accept-alias" },
-    { "id": "e6-m-substitute-constant-model" }
+    { "id": "e6-m-substitute-constant-model" },
+    { "id": "e4-no-pointer-at-prepare" },
+    { "id": "e4-final-pointer-drift" },
+    { "id": "e4-claim-pointer-drift" },
+    { "id": "e4-disabled-judge-add" },
+    { "id": "e4-kind-disable-recovery" },
+    { "id": "e4-laya-before-intent" },
+    { "id": "e4-budget-digest-prepare" },
+    { "id": "e4-kind-digest-prepare" },
+    { "id": "e4-budget-digest-claim" },
+    { "id": "e4-kind-digest-claim" },
+    { "id": "e4-budget-digest-finalise" },
+    { "id": "e4-kind-digest-finalise" },
+    { "id": "e4-budget-digest-live-reservation" },
+    { "id": "e4-kind-digest-live-reservation" },
+    { "id": "e4-first-enablement-disable" },
+    { "id": "e4-absent-kind-disable-generation" },
+    { "id": "e4-expiry-rule-version" },
+    { "id": "e4-tightening-rule-version" },
+    { "id": "e4-unscoped-kind-static-guard" },
+    { "id": "e4-primary-key-exemption" },
+    { "id": "e4-required-guard-rows" }
   ],
   "mutations": [
     { "id": "e1-canonical-documents" },
@@ -116,7 +137,28 @@
     { "id": "e6-a-skip-embedded-addresses" },
     { "id": "e6-a-allow-global-only-non-typesafe" },
     { "id": "e6-m-accept-alias" },
-    { "id": "e6-m-substitute-constant-model" }
+    { "id": "e6-m-substitute-constant-model" },
+    { "id": "e4-no-pointer-at-prepare" },
+    { "id": "e4-final-pointer-drift" },
+    { "id": "e4-claim-pointer-drift" },
+    { "id": "e4-disabled-judge-add" },
+    { "id": "e4-kind-disable-recovery" },
+    { "id": "e4-laya-before-intent" },
+    { "id": "e4-budget-digest-prepare" },
+    { "id": "e4-kind-digest-prepare" },
+    { "id": "e4-budget-digest-claim" },
+    { "id": "e4-kind-digest-claim" },
+    { "id": "e4-budget-digest-finalise" },
+    { "id": "e4-kind-digest-finalise" },
+    { "id": "e4-budget-digest-live-reservation" },
+    { "id": "e4-kind-digest-live-reservation" },
+    { "id": "e4-first-enablement-disable" },
+    { "id": "e4-absent-kind-disable-generation" },
+    { "id": "e4-expiry-rule-version" },
+    { "id": "e4-tightening-rule-version" },
+    { "id": "e4-unscoped-kind-static-guard" },
+    { "id": "e4-primary-key-exemption" },
+    { "id": "e4-required-guard-rows" }
   ],
   "cases": [
     {
@@ -799,6 +841,258 @@
         "test": "E6-M: TypeSafe request bytes take the approved document model, never a transport constant"
       },
       "strictRunner": "judge-transport-mutants"
+    },
+    {
+      "id": "e4-no-pointer-at-prepare",
+      "task": "E4",
+      "coverage": ["e4-no-pointer-at-prepare"],
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/judge-budget-activation.test.ts",
+      "mutation": {
+        "id": "e4-no-pointer-at-prepare",
+        "test": "E4 judge-budget activation: an approved immutable singleton is the only path that swaps its exact pointer"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-final-pointer-drift",
+      "task": "E4",
+      "coverage": ["e4-final-pointer-drift"],
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/judge-budget-activation.test.ts",
+      "mutation": {
+        "id": "e4-final-pointer-drift",
+        "test": "E4 judge-budget activation: the final write rejects pointer drift after the core claim"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-claim-pointer-drift",
+      "task": "E4",
+      "coverage": ["e4-claim-pointer-drift"],
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/judge-budget-activation.test.ts",
+      "mutation": {
+        "id": "e4-claim-pointer-drift",
+        "test": "E4 judge-budget activation: the local claim transaction rejects post-await pointer drift before finalisation"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-disabled-judge-add",
+      "task": "E4",
+      "coverage": ["e4-disabled-judge-add"],
+      "productionEntry": "packages/events-daemon/src/domain/versions.ts",
+      "test": "packages/events-daemon/test/judge-kind-enablements.test.ts",
+      "mutation": {
+        "id": "e4-disabled-judge-add",
+        "test": "E4 judge kind: fresh, installed, updated and imported immutable versions leave every kind pointer absent"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-kind-disable-recovery",
+      "task": "E4",
+      "coverage": ["e4-kind-disable-recovery"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-kinds.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e4-kind-disable-recovery",
+        "test": "E4 purge closure: kind disable settles in-flight and releases reserved work through the one recovery helper"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-laya-before-intent",
+      "task": "E4",
+      "coverage": ["e4-laya-before-intent"],
+      "productionEntry": "packages/events-daemon/src/domain/versions.ts",
+      "test": "packages/events-daemon/test/judge-budget-activation.test.ts",
+      "mutation": {
+        "id": "e4-laya-before-intent",
+        "test": "E4 judge kind: TypeSafe enablement has no request, while Laya refuses before an intent or pointer exists"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-budget-digest-prepare",
+      "task": "E4",
+      "coverage": ["e4-budget-digest-prepare"],
+      "productionEntry": "packages/events-daemon/src/domain/versions.ts",
+      "test": "packages/events-daemon/test/judge-budget-activation.test.ts",
+      "mutation": {
+        "id": "e4-budget-digest-prepare",
+        "test": "E4 activation digest fence: prepare rejects altered budget and kind version documents"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-kind-digest-prepare",
+      "task": "E4",
+      "coverage": ["e4-kind-digest-prepare"],
+      "productionEntry": "packages/events-daemon/src/domain/versions.ts",
+      "test": "packages/events-daemon/test/judge-budget-activation.test.ts",
+      "mutation": {
+        "id": "e4-kind-digest-prepare",
+        "test": "E4 activation digest fence: the production kind loader rejects a valid altered document with its original digest"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-budget-digest-claim",
+      "task": "E4",
+      "coverage": ["e4-budget-digest-claim"],
+      "productionEntry": "packages/events-daemon/src/domain/versions.ts",
+      "test": "packages/events-daemon/test/judge-budget-activation.test.ts",
+      "mutation": {
+        "id": "e4-budget-digest-claim",
+        "test": "E4 activation digest fence: claim rejects a budget or kind digest changed after approval"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-kind-digest-claim",
+      "task": "E4",
+      "coverage": ["e4-kind-digest-claim"],
+      "productionEntry": "packages/events-daemon/src/domain/versions.ts",
+      "test": "packages/events-daemon/test/judge-budget-activation.test.ts",
+      "mutation": {
+        "id": "e4-kind-digest-claim",
+        "test": "E4 activation digest fence: claim rejects a budget or kind digest changed after approval"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-budget-digest-finalise",
+      "task": "E4",
+      "coverage": ["e4-budget-digest-finalise"],
+      "productionEntry": "packages/events-daemon/src/domain/versions.ts",
+      "test": "packages/events-daemon/test/judge-budget-activation.test.ts",
+      "mutation": {
+        "id": "e4-budget-digest-finalise",
+        "test": "E4 activation digest fence: finalise rejects a budget or kind digest changed after claim"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-kind-digest-finalise",
+      "task": "E4",
+      "coverage": ["e4-kind-digest-finalise"],
+      "productionEntry": "packages/events-daemon/src/domain/versions.ts",
+      "test": "packages/events-daemon/test/judge-budget-activation.test.ts",
+      "mutation": {
+        "id": "e4-kind-digest-finalise",
+        "test": "E4 activation digest fence: finalise rejects a budget or kind digest changed after claim"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-budget-digest-live-reservation",
+      "task": "E4",
+      "coverage": ["e4-budget-digest-live-reservation"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e4-budget-digest-live-reservation",
+        "test": "E4 budget digest fence: a live reservation refuses an altered active budget before it creates ledger work"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-kind-digest-live-reservation",
+      "task": "E4",
+      "coverage": ["e4-kind-digest-live-reservation"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-budget.ts",
+      "test": "packages/events-daemon/test/judge-budgets.test.ts",
+      "mutation": {
+        "id": "e4-kind-digest-live-reservation",
+        "test": "E4 kind digest fence: a live reservation treats an altered active kind document as unavailable"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-first-enablement-disable",
+      "task": "E4",
+      "coverage": ["e4-first-enablement-disable"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-kinds.ts",
+      "test": "packages/events-daemon/test/judge-budget-activation.test.ts",
+      "mutation": {
+        "id": "e4-first-enablement-disable",
+        "test": "E4 judge kind: disable before first enablement cancels the pending activation and reports its absent pointer"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-absent-kind-disable-generation",
+      "task": "E4",
+      "coverage": ["e4-absent-kind-disable-generation"],
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/judge-budget-activation.test.ts",
+      "mutation": {
+        "id": "e4-absent-kind-disable-generation",
+        "test": "E4 judge kind: an absent-kind disable during prepare refuses before it can install a first pointer"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-expiry-rule-version",
+      "task": "E4",
+      "coverage": ["e4-expiry-rule-version"],
+      "productionEntry": "packages/events-daemon/src/runtime/expiry.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e4-expiry-rule-version",
+        "test": "E4 purge closure: expiry settles only the expired rule on an event shared with live rule B work"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-tightening-rule-version",
+      "task": "E4",
+      "coverage": ["e4-tightening-rule-version"],
+      "productionEntry": "packages/events-daemon/src/runtime/replacements.ts",
+      "test": "packages/events-daemon/test/judge-purge-closure.test.ts",
+      "mutation": {
+        "id": "e4-tightening-rule-version",
+        "test": "E4 purge closure: retention tightening settles only rule A on an event shared with live rule B work"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-unscoped-kind-static-guard",
+      "task": "E4",
+      "coverage": ["e4-unscoped-kind-static-guard"],
+      "productionEntry": "scripts/verify-events-phase-e-tests.mjs",
+      "test": "packages/events-daemon/test/judge-task4-mutations.test.ts",
+      "mutation": {
+        "id": "e4-unscoped-kind-static-guard",
+        "test": "E4 mutation: verifier static scope and required Task-4 guard rows refuse drift"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-primary-key-exemption",
+      "task": "E4",
+      "coverage": ["e4-primary-key-exemption"],
+      "productionEntry": "scripts/verify-events-phase-e-tests.mjs",
+      "test": "packages/events-daemon/test/judge-task4-mutations.test.ts",
+      "mutation": {
+        "id": "e4-primary-key-exemption",
+        "test": "E4 verifier: the primary-key exemption permits one bound equality and rejects broadening clauses"
+      },
+      "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e4-required-guard-rows",
+      "task": "E4",
+      "coverage": ["e4-required-guard-rows"],
+      "productionEntry": "scripts/verify-events-phase-e-tests.mjs",
+      "test": "packages/events-daemon/test/judge-task4-mutations.test.ts",
+      "mutation": {
+        "id": "e4-required-guard-rows",
+        "test": "E4 mutation: verifier static scope and required Task-4 guard rows refuse drift"
+      },
+      "strictRunner": "judge-task4-mutants"
     }
   ]
 }
