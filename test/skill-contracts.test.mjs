@@ -39,11 +39,11 @@ async function skills() {
     .sort();
 }
 
-test('every skill belongs to a channel, and carries the contract its channel names', async () => {
+test("every skill belongs to a declared family, and carries that family's contract", async () => {
   for (const name of await skills()) {
     // An unknown prefix used to be `?? []` below: a skill of a platform nobody listed was simply not checked.
     const family = skillFamilyOf(REGISTRY, name);
-    assert.ok(family, `${name}: no channel's manifest declares skills starting "${name.split('-')[0]}-"`);
+    assert.ok(family, `${name}: no declared family has skills starting "${name.split('-')[0]}-"`);
     const source = await readFile(join(ROOT, family.contract), 'utf8');
     const copy = await readFile(join(SKILLS, name, 'references', 'contract.md'), 'utf8');
     assert.equal(copy, source, `${name} should carry ${family.contract}`);
@@ -224,9 +224,9 @@ test('Slack mode guidance keeps each account path and consent step in its own se
   }
 });
 
-test('every channel’s contract says a command for a person is the one a result gives, or why there is none (CUE-403)', async () => {
+test('every channel contract says a command for a person is the one a result gives, or why there is none (CUE-403)', async () => {
   // From the registry: a new channel's contract has to say it from its first commit.
-  for (const family of REGISTRY.skillFamilies) {
+  for (const family of REGISTRY.skillFamilies.filter((family) => family.kind !== 'service')) {
     const prose = (await readFile(join(ROOT, family.contract), 'utf8')).replace(/\s+/g, ' ');
     const required = [
       /## \d+\. A command for a person is the one a result gives\./,
@@ -347,7 +347,7 @@ async function renderedContracts(family) {
 
 test('the families held to the approval rules are every channel’s that hands out approvals (CUE-404)', () => {
   // Every channel names an `approve`, so every skill family is held to the rules; and some can send.
-  assert.equal(APPROVING.length, REGISTRY.skillFamilies.length);
+  assert.equal(APPROVING.length, REGISTRY.skillFamilies.filter((family) => family.kind !== 'service').length);
   assert.ok(SENDING.length > 0, 'a sending family is read');
   const coreWait = toolsOf('waitForApproval', 'core');
   const coreRevoke = toolsOf('revokeApproval', 'core');

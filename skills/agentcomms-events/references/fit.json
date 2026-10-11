@@ -1,0 +1,5 @@
+{
+  "kind": "requestOnly",
+  "group": "communications",
+  "useWhen": "Plan and locally test safe event-emission rules with the events MCP tools, keeping proposals disabled and handing approvals to a person."
+}

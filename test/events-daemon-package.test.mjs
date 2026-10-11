@@ -24,6 +24,10 @@ test('PKG-B1-b: the local event daemon is a held service with its declared runti
       factory: 'createEventsMcpServer',
     },
     operations: 'src/operations',
+    skills: {
+      prefix: 'agentcomms-',
+      contract: 'skills/_shared/contract-events.md',
+    },
   });
   assert.match(manifest.agentcommsRelease.hold, /held/i);
   assert.deepEqual(manifest.dependencies, {

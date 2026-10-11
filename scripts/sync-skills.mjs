@@ -17,15 +17,15 @@ import { REGISTRY, skillFamilyOf } from './channels.mjs';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SKILLS = join(ROOT, 'skills');
 /**
- * One contract per platform, chosen by the skill's name: `gmail-search` gets `_shared/contract-gmail.md`.
+ * One contract per declared family, chosen by the skill's name: `gmail-search` gets `_shared/contract-gmail.md`.
  *
  * There used to be one contract, written for mail, and it was copied into the Slack skills word for word — so an
  * agent following `slack-reading` was told to call `gmail_inboxes_list`, that only `gmail-send` sends, and to fall
  * back to `npx @agentcomms/gmail` when the Slack tools were missing. Choosing by prefix, and refusing a skill whose
  * prefix has no contract, means a new platform cannot inherit another's rules by default.
  *
- * The prefixes and their contracts are the channels' own (`skills` in each manifest, through the registry), so a
- * skill whose prefix no channel declares has no contract at all, and is refused.
+ * The prefixes and their contracts come from channel manifests and optional service declarations through the one
+ * registry, so a skill whose prefix no family declares has no contract at all, and is refused.
  */
 const contractFor = (name) => {
   const family = skillFamilyOf(REGISTRY, name);
@@ -99,7 +99,7 @@ for (const name of names) {
   const contract = contractPath === null ? null : await readFile(contractPath, 'utf8').catch(() => null);
   if (contractPath === null) {
     problems.push(
-      `skills/${name}: no channel's skills start "${name.split('-')[0]}-" — name it for its channel, whose manifest says which contract it carries`,
+      `skills/${name}: no declared skills family starts "${name.split('-')[0]}-" — name it for a channel or service declaration that says which contract it carries`,
     );
   } else if (contract === null) {
     problems.push(`skills/${name}: no contract for its platform — add ${contractPath.replace(ROOT, '')}`);
@@ -112,6 +112,12 @@ for (const name of names) {
     join(SKILLS, name, 'references', 'fit.json'),
     `${JSON.stringify({ kind: 'requestOnly', group: 'communications', useWhen: useWhenFor(meta) }, null, 2)}\n`,
   );
+}
+
+for (const family of REGISTRY.skillFamilies) {
+  if (!names.some((name) => name.startsWith(family.prefix))) {
+    problems.push(`skills/${family.prefix}*: no skill belongs to declared family ${family.prefix}`);
+  }
 }
 
 const table = [

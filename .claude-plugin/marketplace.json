@@ -19,6 +19,7 @@
       "keywords": ["gmail", "email", "slack", "resend", "whatsapp", "mcp", "communications"],
       "strict": false,
       "skills": [
+        "./skills/agentcomms-events",
         "./skills/comms-onboarding",
         "./skills/comms-update",
         "./skills/gmail-setup",

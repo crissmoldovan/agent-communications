@@ -178,6 +178,9 @@ function defaultProse(directory) {
 
 function serviceProse(directory) {
   const service = serviceOf(directory);
+  const skills = service.declaration.skills;
+  const label = `${directory[0].toUpperCase()}${directory.slice(1).replaceAll('-', ' ')}`;
+  const contractName = skills?.contract.slice(skills.contract.lastIndexOf('/') + 1);
   return {
     approval: 'a local service action needs a person or is unavailable',
     unavailable: 'the local service is unavailable',
@@ -189,6 +192,12 @@ function serviceProse(directory) {
       '',
       `This server identifies itself as \`${service.declaration.server.defaultName}\`. Read each tool's input schema before calling it.`,
     ],
+    contract: skills
+      ? [
+          `- **${label} service** ([\`_shared/${contractName}\`](../${skills.contract})): request-only;`,
+          '  model-callable tools inspect and propose safe local state, while human-only actions stay with a person.',
+        ]
+      : [],
   };
 }
 
@@ -427,16 +436,17 @@ const skillParts = [
   "npx skills add crissmoldovan/agent-communications --skill '*'",
   '```',
   '',
-  'They work with the MCP server connected and without it, falling back to the CLI. Installing skills does not',
-  'install a server, and installing a server does not install skills.',
+  'Skills use the MCP server described by their own contract. Channel skills can fall back to their CLI where the',
+  'contract allows; request-only service skills do not fall back to a CLI. Installing skills does not install a',
+  'server, and installing a server does not install skills.',
   '',
   'Each family of skills shares one contract, copied into every skill as `references/contract.md`.',
   '',
-  // One line per skill family: each channel's, then the core's, whose skills manage the rest.
+  // One line per declared skill family: channels and services, then the core, whose skills manage the rest.
   ...[
     ...REGISTRY.skillFamilies.filter((family) => family.channel !== 'core'),
     ...REGISTRY.skillFamilies.filter((family) => family.channel === 'core'),
-  ].flatMap((family) => proseOf(family.channel).contract),
+  ].flatMap((family) => proseOf(family.package ?? family.channel).contract),
   '',
   table(skillRows, ['Skill', 'What it is for']),
   '',
