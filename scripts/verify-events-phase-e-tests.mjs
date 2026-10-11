@@ -91,7 +91,8 @@ async function tsFiles(root, directory) {
   const entries = await readdir(join(root, directory), { withFileTypes: true }).catch(() => []);
   const files = [];
   for (const entry of entries) {
-    const file = join(directory, entry.name);
+    // Rule exemptions name repository paths with `/` on every platform; `join` would give `\` on Windows.
+    const file = `${directory}/${entry.name}`;
     if (entry.isDirectory()) files.push(...(await tsFiles(root, file)));
     else if (entry.isFile() && entry.name.endsWith('.ts')) {
       const text = await source(root, file);

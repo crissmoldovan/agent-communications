@@ -107,7 +107,8 @@ async function inventoryFiles(root, directory, problems) {
     const entries = await readdir(join(root, directory), { withFileTypes: true });
     const files = [];
     for (const entry of entries) {
-      const file = join(directory, entry.name);
+      // Inventory keys are repository paths with `/` on every platform; `join` would give `\\` on Windows.
+      const file = `${directory}/${entry.name}`;
       if (entry.isDirectory()) files.push(...(await inventoryFiles(root, file, problems)));
       else if (entry.isFile()) files.push(file);
       else problems.push(`B3 v1 inventory has unsupported entry: ${file}`);
