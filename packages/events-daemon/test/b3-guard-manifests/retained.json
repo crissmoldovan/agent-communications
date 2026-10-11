@@ -94,7 +94,7 @@
         "from": "if (!validOrigin(input.origin))",
         "to": "if (false)"
       },
-      "mutationTest": "B3 pending target context binds approval challenge to one pending activation and fixed target",
+      "mutationTest": "B3 pending target context binds approval challenge to one pending activation and refuses ordinary CLI selectors",
       "loadedMarker": "pending-target-origin-is-approval-only"
     },
     {

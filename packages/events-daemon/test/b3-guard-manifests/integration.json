@@ -14,6 +14,18 @@
       "loadedMarker": "integration-e-e2-discriminator"
     },
     {
+      "case": "integration-app-approval-channel",
+      "operation": "ActivationRuntime.approve",
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/b3-e2e-surface.test.ts",
+      "mutation": {
+        "from": "await this.#approvals.approveDisclosure(input.approvalId, binding, input.answer, via);",
+        "to": "await this.#approvals.approveDisclosure(input.approvalId, binding, input.answer, 'terminal');"
+      },
+      "mutationTest": "B3 app approval records app while ordinary CLI approval records terminal and an app terminal challenge is refused",
+      "loadedMarker": "integration-app-approval-channel"
+    },
+    {
       "case": "integration-pending-context-binding",
       "operation": "verifyPendingTargetContext",
       "productionEntry": "packages/events-daemon/src/runtime/b3-pending-activation-context.ts",
@@ -22,8 +34,56 @@
         "from": "if (!validOrigin(input.origin))",
         "to": "if (false)"
       },
-      "mutationTest": "B3 pending target context binds approval challenge to one pending activation and fixed target",
+      "mutationTest": "B3 pending target context binds approval challenge to one pending activation and refuses ordinary CLI selectors",
       "loadedMarker": "integration-pending-context-binding"
+    },
+    {
+      "case": "integration-approval-operation-serialization",
+      "operation": "ActivationRuntime.approve",
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "return this.#withApprovalOperation(input.approvalId, () => this.#approve(input));",
+        "to": "return this.#approve(input);"
+      },
+      "mutationTest": "B3 serializes one app approval against concurrent terminal and view challenge issuers",
+      "loadedMarker": "integration-approval-operation-serialization"
+    },
+    {
+      "case": "integration-approval-challenge-issuance-settlement",
+      "operation": "ActivationRuntime.issueApprovalViewChallenge",
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "this.#settleFailedApprovalChallengeIssuance(approvalId, 'view', expiresAt);",
+        "to": "void approvalId;"
+      },
+      "mutationTest": "B3 failed challenge issuance settles its sentinel so a later approval view gets a fresh challenge",
+      "loadedMarker": "integration-approval-challenge-issuance-settlement"
+    },
+    {
+      "case": "integration-approval-view-selectors-present",
+      "operation": "approvalViewFromOwner",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-e2e-surface.test.ts",
+      "mutation": {
+        "from": "    pendingTargetSelectors: pendingTargetSelectorsForApproval({\n      activationId: row.id,\n      approvalId,\n      digest: row.digest,\n      challenge,\n      preview,\n    }),",
+        "to": "    pendingTargetSelectors: [],"
+      },
+      "mutationTest": "B3 owner-built approval view selectors pass unchanged to pending target testing and stay refused from MCP or ordinary CLI",
+      "loadedMarker": "integration-approval-view-selectors-present"
+    },
+    {
+      "case": "integration-approval-view-selector-owner-binding",
+      "operation": "pendingTargetSelectorsForApproval",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/b3-e2e-surface.test.ts",
+      "mutation": {
+        "from": "    activationId: input.activationId,",
+        "to": "    activationId: 'not-the-owner-pending-activation',"
+      },
+      "mutationTest": "B3 owner-built approval view selectors pass unchanged to pending target testing and stay refused from MCP or ordinary CLI",
+      "loadedMarker": "integration-approval-view-selector-owner-binding"
     },
     {
       "case": "integration-sanitised-single-envelope",
@@ -48,6 +108,18 @@
       },
       "mutationTest": "B3 doctor K6 re-added account stays awaiting reapproval through restart until a fresh point",
       "loadedMarker": "integration-awaiting-reapproval-restart-fence"
+    },
+    {
+      "case": "integration-used-approval-issuing-residue-recovery",
+      "operation": "ActivationRuntime.recover",
+      "productionEntry": "packages/events-daemon/src/runtime/activations.ts",
+      "test": "packages/events-daemon/test/b3-cli-mcp-parity.test.ts",
+      "mutation": {
+        "from": "    if (this.#isApprovalIssuingChallengeResidue(approvalId)) return { issuingResidue: true };",
+        "to": "    if (false) return { issuingResidue: true };"
+      },
+      "mutationTest": "B3 recovery completes a claimed activation left behind an issuing challenge sentinel exactly once",
+      "loadedMarker": "integration-used-approval-issuing-residue-recovery"
     }
   ]
 }

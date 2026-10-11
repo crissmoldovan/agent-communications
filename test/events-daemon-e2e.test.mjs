@@ -297,12 +297,12 @@ test('REL-B1: a fake-Google Gmail event crosses the foreground owner, CLI and MC
       const enabled = await cli(['--state-dir', stateDir, 'rule', 'enable', rule.ruleId, '1']);
       assert.equal(enabled.code, 0, enabled.stderr);
       const prepared = JSON.parse(enabled.stdout);
-      const challenge = await disclosureChallenge(prepared.approvalId, { stateDir });
+      const { challenge } = await disclosureChallenge(prepared.approvalId, { stateDir });
       assert.equal((await approve(prepared.approvalId, challenge, { stateDir })).status, 'completed');
       const all = await cli(['--state-dir', stateDir, 'enable-all']);
       assert.equal(all.code, 0, all.stderr);
       const allPrepared = JSON.parse(all.stdout);
-      const allChallenge = await disclosureChallenge(allPrepared.approvalId, { stateDir });
+      const { challenge: allChallenge } = await disclosureChallenge(allPrepared.approvalId, { stateDir });
       assert.equal((await approve(allPrepared.approvalId, allChallenge, { stateDir })).status, 'completed');
 
       // The foreground owner owns acquisition, evaluation and local delivery. A deterministic tick keeps this

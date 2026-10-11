@@ -48,8 +48,10 @@ local endpoint or another tool for a judge.
 ## Approval handoff
 
 An approval id, digest and preview mean the proposed activation is still pending. Give the approval id and preview to
-the person. Standing disclosure can be approved only by a person typing the challenge at an interactive terminal. Do
-not approve, claim, repeat the call to force activation, or relay a challenge.
+the person. Standing disclosure can be approved only by a person typing the challenge at an interactive terminal. That
+terminal flow may offer the person a fixed synthetic test for each pending target before it asks for the challenge; an
+app approval screen uses only the complete selector returned by `events_approval_view`. Do not approve, claim, repeat
+the call to force activation, reconstruct a selector, or relay a challenge.
 
 ## Human-only boundaries
 

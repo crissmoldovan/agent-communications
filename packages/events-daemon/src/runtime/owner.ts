@@ -43,6 +43,7 @@ import {
   type B3ApprovalViewResultV1,
   type B3OwnerRequest,
   type B3OwnerService,
+  type B3PendingTargetSelectorV1,
   type B3SecretCapabilityUnavailableV1,
   isB3ControlOperation,
   isB3SecretOperation,
@@ -665,13 +666,79 @@ async function approvalViewFromOwner(
   const nextExpiry = now() + 5 * 60 * 1_000;
   const challenge = await activations.issueApprovalViewChallenge(approvalId, nextExpiry);
   if (challenge === null) return { kind: 'CHALLENGE_EXPIRED' };
+  const preview = normaliseActivationDocument(JSON.parse(row.document));
   return {
     kind: 'READY',
     approvalId,
     digest: row.digest,
-    preview: normaliseActivationDocument(JSON.parse(row.document)),
+    preview,
+    pendingTargetSelectors: pendingTargetSelectorsForApproval({
+      activationId: row.id,
+      approvalId,
+      digest: row.digest,
+      challenge,
+      preview,
+    }),
     challenge: { approvalId, digest: row.digest, challenge, expiresAt: nextExpiry },
   };
+}
+
+export interface TerminalApprovalStart {
+  readonly challenge: string;
+  readonly pendingTargetSelectors: readonly B3PendingTargetSelectorV1[];
+}
+
+/**
+ * The interactive terminal receives a selector only after it owns a terminal challenge.  Ordinary raw callers retain
+ * the historical string result; the label is not an authority boundary, only the repository's supplied surface.
+ */
+export async function issueTerminalApprovalChallenge(input: {
+  readonly store: Awaited<ReturnType<typeof openEventDatabase>>;
+  readonly activations: Pick<ActivationRuntime, 'issueChallenge'>;
+  readonly approvalId: string;
+  readonly origin: string | undefined;
+}): Promise<string | TerminalApprovalStart> {
+  const challenge = await input.activations.issueChallenge(input.approvalId);
+  if (input.origin !== 'terminal-approval') return challenge;
+  const row = input.store.database
+    .prepare('SELECT id, document, digest, status FROM activation_intents WHERE approval_id = ?')
+    .get(input.approvalId) as { id: string; document: string; digest: string; status: string } | undefined;
+  if (row === undefined || row.status !== 'pending')
+    throw new CommsError('APPROVAL_VOID', 'the approval is no longer pending');
+  const preview = normaliseActivationDocument(JSON.parse(row.document));
+  return {
+    challenge,
+    pendingTargetSelectors: pendingTargetSelectorsForApproval({
+      activationId: row.id,
+      approvalId: input.approvalId,
+      digest: row.digest,
+      challenge,
+      preview,
+    }),
+  };
+}
+
+/** These bindings are produced from the owner row alone, never reconstructed from a desktop or terminal request. */
+function pendingTargetSelectorsForApproval(input: {
+  readonly activationId: string;
+  readonly approvalId: string;
+  readonly digest: string;
+  readonly challenge: string;
+  readonly preview: ReturnType<typeof normaliseActivationDocument>;
+}): readonly B3PendingTargetSelectorV1[] {
+  if (input.preview.kind !== 'rule' || !('rule' in input.preview)) return [];
+  const rule = input.preview.rule;
+  return rule.targets.map((target) => ({
+    kind: 'pending-activation',
+    activationId: input.activationId,
+    ruleId: rule.ruleId,
+    ruleVersion: rule.version,
+    targetId: target.targetId,
+    targetVersion: target.version,
+    approvalId: input.approvalId,
+    digest: input.digest,
+    challenge: input.challenge,
+  }));
 }
 
 export async function startEventOwner(options: EventOwnerOptions = {}): Promise<EventOwner> {
@@ -1317,17 +1384,28 @@ async function handleControl(
     case OWNER_CONTROL_WIRES.removeTarget:
       return removeTarget(database, activations, requiredText(request.args.targetId, 'target id'));
     case OWNER_CONTROL_WIRES.approveChallenge:
-      return activations.issueChallenge(requiredText(request.args.approvalId, 'approval id'));
+      return issueTerminalApprovalChallenge({
+        store: database,
+        activations,
+        approvalId: requiredText(request.args.approvalId, 'approval id'),
+        origin: request.origin,
+      });
     case OWNER_CONTROL_WIRES.approve:
       return withEventWriterLease(writerQuiescer, () =>
         activations.approve({
           approvalId: requiredText(request.args.approvalId, 'approval id'),
           answer: requiredText(request.args.answer, 'approval answer'),
+          via: disclosureApprovalChannel(request.origin),
         }),
       );
     default:
       throw new CommsError('USAGE', 'the local event control operation is not recognised');
   }
+}
+
+/** The client name chooses only the receipt channel; same-user token holders remain inside B3's trust boundary. */
+export function disclosureApprovalChannel(origin: string | undefined): 'terminal' | 'app' {
+  return origin === 'app-approval-screen' ? 'app' : 'terminal';
 }
 
 function requiredText(value: unknown, name: string): string {

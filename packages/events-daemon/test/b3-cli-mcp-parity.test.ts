@@ -29,6 +29,7 @@ import { ActivationRuntime } from '../src/runtime/activations.ts';
 import { B3OperatorControl } from '../src/runtime/b3-operator-control.ts';
 import { runCatalogueRuleTest } from '../src/runtime/b3-retained-control.ts';
 import { createOwnerB3ControlService, createOwnerDeliveryWriteFence, startEventOwner } from '../src/runtime/owner.ts';
+import { recoverActivations } from '../src/runtime/recovery.ts';
 import { addActiveRuleTargetReferences } from '../src/runtime/target-version-references.ts';
 import { WriterQuiescer } from '../src/runtime/writer-quiescer.ts';
 import { MailboxLock } from '../src/sources/mailbox-lock.ts';
@@ -101,11 +102,15 @@ async function approvalViewRuntimeFixture() {
   });
   let mutateAfterApproval: (() => void) | undefined;
   let mutateAtClaim: (() => void) | undefined;
+  let pauseAfterCoreApproval: (() => Promise<void>) | undefined;
+  let failNextCoreChallengeIssue: Error | undefined;
   const runtimeApprovals = {
     createDisclosure: approvals.createDisclosure.bind(approvals),
     approveDisclosure: async (...input: Parameters<ApprovalStore['approveDisclosure']>) => {
       const approved = await approvals.approveDisclosure(...input);
       mutateAfterApproval?.();
+      // This pauses after the real core record write and before ActivationRuntime's post-await re-check.
+      await pauseAfterCoreApproval?.();
       return approved;
     },
     claimForDisclosure: async (...input: Parameters<ApprovalStore['claimForDisclosure']>) => {
@@ -113,7 +118,12 @@ async function approvalViewRuntimeFixture() {
       return approvals.claimForDisclosure(...input);
     },
     get: approvals.get.bind(approvals),
-    issueDisclosureChallenge: approvals.issueDisclosureChallenge.bind(approvals),
+    issueDisclosureChallenge: async (...input: Parameters<ApprovalStore['issueDisclosureChallenge']>) => {
+      const failure = failNextCoreChallengeIssue;
+      failNextCoreChallengeIssue = undefined;
+      if (failure !== undefined) throw failure;
+      return approvals.issueDisclosureChallenge(...input);
+    },
     list: approvals.list.bind(approvals),
   };
   const versions = new ImmutableVersions(store.database);
@@ -197,6 +207,12 @@ async function approvalViewRuntimeFixture() {
     mutateAtClaim: (mutation: () => void) => {
       mutateAtClaim = mutation;
     },
+    pauseAfterCoreApproval: (pause: () => Promise<void>) => {
+      pauseAfterCoreApproval = pause;
+    },
+    failNextCoreChallengeIssue: (error: Error) => {
+      failNextCoreChallengeIssue = error;
+    },
   };
 }
 
@@ -210,6 +226,18 @@ async function viewApproval(
   assert.equal(view.kind, 'READY');
   assert.equal(typeof view.challenge?.challenge, 'string');
   return { challenge: view.challenge?.challenge as string };
+}
+
+function deferred(): { readonly promise: Promise<void>; readonly release: () => void } {
+  let release: (() => void) | undefined;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release: () => release?.() };
+}
+
+async function nextTurn(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 /** What a catalogue example could carry to break out of its envelope or speak as the model's operator. */
@@ -786,6 +814,7 @@ test('B3 approval view returns authoritative ready, stale, digest, and expiry va
       approvalId: 'approval-owner-view',
       digest: 'approval-digest',
       preview: { documentVersion: 1, kind: 'enable-all', switchGeneration: 1, ruleVersions: [] },
+      pendingTargetSelectors: [],
       challenge: {
         approvalId: 'approval-owner-view',
         digest: 'approval-digest',
@@ -1081,6 +1110,197 @@ test('B3 approval view deadline is rechecked inside core claim, leaving the appr
   } finally {
     recovery.store.close();
     await rm(recovery.root, { recursive: true, force: true });
+  }
+});
+
+test('B3 serializes one app approval against concurrent terminal and view challenge issuers', async () => {
+  for (const issuer of ['approve-challenge', 'approval view'] as const) {
+    const fixture = await approvalViewRuntimeFixture();
+    try {
+      const view = await viewApproval(fixture);
+      const coreApprovalPaused = deferred();
+      const coreApprovalEntered = deferred();
+      fixture.pauseAfterCoreApproval(async () => {
+        coreApprovalEntered.release();
+        await coreApprovalPaused.promise;
+      });
+      const approving = fixture.runtime.approve({
+        approvalId: fixture.prepared.approvalId,
+        answer: view.challenge,
+        via: 'app',
+      });
+      await coreApprovalEntered.promise;
+      const issuing =
+        issuer === 'approve-challenge'
+          ? fixture.runtime.issueChallenge(fixture.prepared.approvalId)
+          : fixture.service.handle({
+              operation: 'approvalView',
+              args: { approvalId: fixture.prepared.approvalId, digest: fixture.prepared.binding.digest },
+            });
+      const issuingOutcome = issuing.then(
+        () => ({ succeeded: true as const }),
+        () => ({ succeeded: false as const }),
+      );
+      // Without the per-approval queue this gives the issuer one turn to overwrite the active daemon challenge
+      // while approve is paused immediately after its real core write.
+      await nextTurn();
+      coreApprovalPaused.release();
+
+      const completed = await approving;
+      assert.equal(completed.status, 'completed', `${issuer} cannot strand an already-approved activation`);
+      assert.deepEqual(
+        await issuingOutcome,
+        { succeeded: false },
+        `${issuer} observes the completed approval rather than issuing a replacement`,
+      );
+      const core = await fixture.approvals.get(fixture.prepared.approvalId);
+      assert.equal(core?.form, 'v2');
+      if (core?.form === 'v2') assert.equal(core.record.state, 'used');
+      const intent = fixture.store.database
+        .prepare('SELECT status FROM activation_intents WHERE id = ?')
+        .get(fixture.prepared.intentId) as { status: string };
+      assert.equal(intent.status, 'completed');
+    } finally {
+      fixture.store.close();
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('B3 failed challenge issuance settles its sentinel so a later approval view gets a fresh challenge', async () => {
+  const fixture = await approvalViewRuntimeFixture();
+  try {
+    fixture.failNextCoreChallengeIssue(new Error('synthetic core challenge failure'));
+    const request = {
+      operation: 'approvalView' as const,
+      args: { approvalId: fixture.prepared.approvalId, digest: fixture.prepared.binding.digest },
+    };
+    await assert.rejects(
+      () => fixture.service.handle(request),
+      /synthetic core challenge failure/u,
+      'the first owner issuance reaches its core-call failure path',
+    );
+    const settled = fixture.store.database
+      .prepare('SELECT state, origin, challenge_hash, expires_at FROM activation_view_challenges WHERE approval_id = ?')
+      .get(fixture.prepared.approvalId) as {
+      state: string;
+      origin: string;
+      challenge_hash: string | null;
+      expires_at: number | null;
+    };
+    assert.equal(settled.state, 'expired');
+    assert.equal(settled.origin, 'view');
+    assert.match(settled.challenge_hash ?? '', /^[a-f0-9]{64}$/u);
+    assert.equal(settled.expires_at, Date.parse('2026-10-10T00:05:00.000Z'));
+    const fresh = (await fixture.service.handle(request)) as {
+      readonly kind: string;
+      readonly challenge?: { readonly challenge: string };
+    };
+    assert.equal(fresh.kind, 'READY');
+    assert.equal(typeof fresh.challenge?.challenge, 'string', 'the next view receives a newly issued challenge');
+  } finally {
+    fixture.store.close();
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('B3 challenge issuers preserve core’s approved state when a replacement is no longer possible', async () => {
+  const fixture = await approvalViewRuntimeFixture();
+  try {
+    const view = await viewApproval(fixture);
+    await fixture.approvals.approveDisclosure(
+      fixture.prepared.approvalId,
+      fixture.prepared.binding,
+      view.challenge,
+      'app',
+    );
+    await assert.rejects(
+      () =>
+        fixture.service.handle({
+          operation: 'approvalView',
+          args: { approvalId: fixture.prepared.approvalId, digest: fixture.prepared.binding.digest },
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof CommsError);
+        assert.equal(error.code, 'USAGE');
+        assert.equal(error.details?.state, 'approved');
+        return true;
+      },
+      'the owner returns core’s recorded approval state, not CHALLENGE_EXPIRED',
+    );
+  } finally {
+    fixture.store.close();
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('B3 recovery claims an approved activation left behind an issuing challenge sentinel exactly once', async () => {
+  const fixture = await approvalViewRuntimeFixture();
+  try {
+    const view = await viewApproval(fixture);
+    await fixture.approvals.approveDisclosure(
+      fixture.prepared.approvalId,
+      fixture.prepared.binding,
+      view.challenge,
+      'app',
+    );
+    fixture.store.database
+      .prepare(
+        "UPDATE activation_view_challenges SET state = 'issuing', origin = 'view', challenge_hash = NULL, expires_at = NULL WHERE approval_id = ?",
+      )
+      .run(fixture.prepared.approvalId);
+
+    await recoverActivations(fixture.restartRuntime());
+    await recoverActivations(fixture.restartRuntime());
+
+    const core = await fixture.approvals.get(fixture.prepared.approvalId);
+    assert.equal(core?.form, 'v2');
+    if (core?.form === 'v2')
+      assert.equal(core.record.state, 'used', 'recovery spends the already-approved core record');
+    const intent = fixture.store.database
+      .prepare('SELECT status, claimed_at FROM activation_intents WHERE id = ?')
+      .get(fixture.prepared.intentId) as { status: string; claimed_at: number | null };
+    assert.deepEqual(intent.status, 'completed', 'recovery finishes the stranded activation once');
+    assert.notEqual(intent.claimed_at, null);
+  } finally {
+    fixture.store.close();
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('B3 recovery completes a claimed activation left behind an issuing challenge sentinel exactly once', async () => {
+  const fixture = await approvalViewRuntimeFixture();
+  try {
+    const view = await viewApproval(fixture);
+    await fixture.approvals.approveDisclosure(
+      fixture.prepared.approvalId,
+      fixture.prepared.binding,
+      view.challenge,
+      'app',
+    );
+    // The other interleaving an owner from before the per-approval serialisation could leave: core claimed the
+    // approval for this binding, then an issuer replaced the view row with its sentinel and failed.
+    await fixture.approvals.claimForDisclosure(fixture.prepared.approvalId, fixture.prepared.binding);
+    fixture.store.database
+      .prepare(
+        "UPDATE activation_view_challenges SET state = 'issuing', origin = 'view', challenge_hash = NULL, expires_at = NULL WHERE approval_id = ?",
+      )
+      .run(fixture.prepared.approvalId);
+
+    await recoverActivations(fixture.restartRuntime());
+    await recoverActivations(fixture.restartRuntime());
+
+    const core = await fixture.approvals.get(fixture.prepared.approvalId);
+    assert.equal(core?.form, 'v2');
+    if (core?.form === 'v2') assert.equal(core.record.state, 'used');
+    const intent = fixture.store.database
+      .prepare('SELECT status, claimed_at FROM activation_intents WHERE id = ?')
+      .get(fixture.prepared.intentId) as { status: string; claimed_at: number | null };
+    assert.equal(intent.status, 'completed', 'recovery finishes the claimed activation once instead of stranding it');
+    assert.notEqual(intent.claimed_at, null);
+  } finally {
+    fixture.store.close();
+    await rm(fixture.root, { recursive: true, force: true });
   }
 });
 

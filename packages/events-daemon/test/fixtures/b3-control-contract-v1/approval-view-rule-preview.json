@@ -1,0 +1,82 @@
+{
+  "name": "approval-view-rule-preview",
+  "request": {
+    "operation": "approvalView",
+    "args": {
+      "approvalId": "approval-rule-view-1",
+      "digest": "digest-rule-view-1"
+    }
+  },
+  "result": {
+    "kind": "READY",
+    "approvalId": "approval-rule-view-1",
+    "digest": "digest-rule-view-1",
+    "preview": {
+      "documentVersion": 1,
+      "kind": "rule",
+      "rule": {
+        "ruleId": "rule-view-1",
+        "version": 2,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["account-1"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "exists"
+        },
+        "mapping": {
+          "constant": "safe"
+        },
+        "targets": [
+          {
+            "targetId": "target-view-1",
+            "version": 3,
+            "kind": "dry-run",
+            "retentionMs": 1
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 1,
+        "retention": {
+          "ingestMs": 1,
+          "holdMs": 1,
+          "deliveryMs": 1,
+          "dryrunMs": 1,
+          "sseReplayMs": 1,
+          "deadLetterMs": 1,
+          "decisionMetadataMs": 1
+        }
+      }
+    },
+    "pendingTargetSelectors": [
+      {
+        "kind": "pending-activation",
+        "activationId": "activation-rule-view-1",
+        "ruleId": "rule-view-1",
+        "ruleVersion": 2,
+        "targetId": "target-view-1",
+        "targetVersion": 3,
+        "approvalId": "approval-rule-view-1",
+        "digest": "digest-rule-view-1",
+        "challenge": "challenge-rule-view-1"
+      }
+    ],
+    "challenge": {
+      "approvalId": "approval-rule-view-1",
+      "digest": "digest-rule-view-1",
+      "challenge": "challenge-rule-view-1",
+      "expiresAt": 301000
+    }
+  }
+}

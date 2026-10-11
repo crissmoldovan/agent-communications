@@ -713,6 +713,32 @@
         }
       ]
     },
+    "pendingTargetSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "activationId",
+        "ruleId",
+        "ruleVersion",
+        "targetId",
+        "targetVersion",
+        "approvalId",
+        "digest",
+        "challenge"
+      ],
+      "properties": {
+        "kind": { "const": "pending-activation" },
+        "activationId": { "$ref": "#/$defs/id" },
+        "ruleId": { "$ref": "#/$defs/id" },
+        "ruleVersion": { "$ref": "#/$defs/positive" },
+        "targetId": { "$ref": "#/$defs/id" },
+        "targetVersion": { "$ref": "#/$defs/positive" },
+        "approvalId": { "$ref": "#/$defs/id" },
+        "digest": { "$ref": "#/$defs/id" },
+        "challenge": { "$ref": "#/$defs/id" }
+      }
+    },
     "approvalFlowRequest": {
       "type": "object",
       "additionalProperties": false,
@@ -720,43 +746,22 @@
       "properties": {
         "surface": { "enum": ["terminal-approval", "app-approval-screen"] },
         "operation": { "const": "targetTest" },
-        "selector": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "activationId",
-            "ruleId",
-            "ruleVersion",
-            "targetId",
-            "targetVersion",
-            "approvalId",
-            "digest",
-            "challenge"
-          ],
-          "properties": {
-            "kind": { "const": "pending-activation" },
-            "activationId": { "$ref": "#/$defs/id" },
-            "ruleId": { "$ref": "#/$defs/id" },
-            "ruleVersion": { "$ref": "#/$defs/positive" },
-            "targetId": { "$ref": "#/$defs/id" },
-            "targetVersion": { "$ref": "#/$defs/positive" },
-            "approvalId": { "$ref": "#/$defs/id" },
-            "digest": { "$ref": "#/$defs/id" },
-            "challenge": { "$ref": "#/$defs/id" }
-          }
-        }
+        "selector": { "$ref": "#/$defs/pendingTargetSelector" }
       }
     },
     "approvalReady": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "approvalId", "digest", "preview", "challenge"],
+      "required": ["kind", "approvalId", "digest", "preview", "pendingTargetSelectors", "challenge"],
       "properties": {
         "kind": { "const": "READY" },
         "approvalId": { "$ref": "#/$defs/id" },
         "digest": { "$ref": "#/$defs/id" },
         "preview": { "$ref": "#/$defs/activationDocument" },
+        "pendingTargetSelectors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/pendingTargetSelector" }
+        },
         "challenge": {
           "type": "object",
           "additionalProperties": false,

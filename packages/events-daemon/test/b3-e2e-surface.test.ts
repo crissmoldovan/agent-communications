@@ -3,16 +3,21 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { ApprovalStore, ConfigStore, EXIT_CODES, emptyConfig } from '@agentcomms/core';
+import { ApprovalStore, CommsError, ConfigStore, EXIT_CODES, emptyConfig } from '@agentcomms/core';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
-import { type EventsCliStreams, run } from '../src/cli/program.ts';
+import { type EventsCliStreams, run, runTerminalApprovalFlow } from '../src/cli/program.ts';
 import { EventControlClient } from '../src/control/client.ts';
 import { ImmutableVersions } from '../src/domain/versions.ts';
 import { createEventsMcpServer } from '../src/mcp/server.ts';
 import { B3_CAPABILITIES } from '../src/operations/b3-contract.ts';
 import { ActivationRuntime } from '../src/runtime/activations.ts';
-import { createOwnerB3ControlService, startEventOwner } from '../src/runtime/owner.ts';
+import {
+  createOwnerB3ControlService,
+  disclosureApprovalChannel,
+  issueTerminalApprovalChallenge,
+  startEventOwner,
+} from '../src/runtime/owner.ts';
 import { WriterQuiescer } from '../src/runtime/writer-quiescer.ts';
 import { MailboxLock } from '../src/sources/mailbox-lock.ts';
 import { openEventDatabase } from '../src/store/database.ts';
@@ -147,10 +152,12 @@ async function approvalFlowFixture() {
     loadConfig: () => configStore.load(),
   });
   let mutateAfterApproval: (() => void) | undefined;
+  const approvedChannels: Array<'terminal' | 'app' | undefined> = [];
   const runtimeApprovals = {
     createDisclosure: approvals.createDisclosure.bind(approvals),
     approveDisclosure: async (...input: Parameters<ApprovalStore['approveDisclosure']>) => {
       const approved = await approvals.approveDisclosure(...input);
+      approvedChannels.push(approved.approvedVia);
       mutateAfterApproval?.();
       return approved;
     },
@@ -228,6 +235,8 @@ async function approvalFlowFixture() {
   return {
     root,
     store,
+    approvals,
+    approvedChannels,
     prepared: preparedResult,
     runtime,
     service,
@@ -240,6 +249,119 @@ async function approvalFlowFixture() {
     },
   };
 }
+
+test('B3 app approval records app while ordinary CLI approval records terminal and an app terminal challenge is refused', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const app = await approvalFlowFixture();
+  try {
+    assert.equal(disclosureApprovalChannel('app-approval-screen'), 'app');
+    assert.equal(disclosureApprovalChannel('events-cli'), 'terminal');
+    const view = (await app.service.handle({
+      operation: 'approvalView',
+      args: { approvalId: app.prepared.approvalId, digest: app.prepared.binding.digest },
+      origin: 'app-approval-screen',
+    })) as { readonly kind: string; readonly challenge?: { readonly challenge: string } };
+    assert.equal(view.kind, 'READY');
+    await app.runtime.approve({
+      approvalId: app.prepared.approvalId,
+      answer: view.challenge?.challenge as string,
+      via: 'app',
+    });
+    assert.deepEqual(app.approvedChannels, ['app'], 'the app approval screen records the only app approval channel');
+  } finally {
+    app.store.close();
+    await rm(app.root, { recursive: true, force: true });
+  }
+
+  const terminal = await approvalFlowFixture();
+  try {
+    const challenge = await terminal.runtime.issueChallenge(terminal.prepared.approvalId);
+    await terminal.runtime.approve({
+      approvalId: terminal.prepared.approvalId,
+      answer: challenge,
+      via: 'terminal',
+    });
+    assert.deepEqual(
+      terminal.approvedChannels,
+      ['terminal'],
+      'all non-app approval clients retain the terminal channel',
+    );
+  } finally {
+    terminal.store.close();
+    await rm(terminal.root, { recursive: true, force: true });
+  }
+
+  const rejected = await approvalFlowFixture();
+  try {
+    const challenge = await rejected.runtime.issueChallenge(rejected.prepared.approvalId);
+    await assert.rejects(
+      () =>
+        rejected.runtime.approve({
+          approvalId: rejected.prepared.approvalId,
+          answer: challenge,
+          via: 'app',
+        }),
+      (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_VOID',
+      'an app answer must bind a challenge issued by approval view, never approve-challenge',
+    );
+  } finally {
+    rejected.store.close();
+    await rm(rejected.root, { recursive: true, force: true });
+  }
+});
+
+test('B3 terminal approval offers each owner-built pending target test before the challenge prompt', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fixture = await approvalFlowFixture();
+  try {
+    const events: string[] = [];
+    let start:
+      | {
+          readonly challenge: string;
+          readonly pendingTargetSelectors: readonly unknown[];
+        }
+      | undefined;
+    await runTerminalApprovalFlow({
+      approvalId: fixture.prepared.approvalId,
+      terminal: {
+        async question(prompt) {
+          events.push(prompt.startsWith('Test pending target') ? 'prompt-test' : 'prompt-challenge');
+          return prompt.startsWith('Test pending target') ? 'yes' : (start?.challenge as string);
+        },
+      },
+      start: async (approvalId) => {
+        events.push('start');
+        const value = await issueTerminalApprovalChallenge({
+          store: fixture.store,
+          activations: fixture.runtime,
+          approvalId,
+          origin: 'terminal-approval',
+        });
+        if (typeof value === 'string')
+          assert.fail('the terminal approval origin receives selectors with its challenge');
+        start = value;
+        return value;
+      },
+      testPendingTarget: async (selector) => {
+        events.push('test');
+        return fixture.service.handle({ operation: 'targetTest', args: { ...selector }, origin: 'terminal-approval' });
+      },
+      approve: async (approvalId, answer) => {
+        events.push('approve');
+        return fixture.runtime.approve({ approvalId, answer, via: 'terminal' });
+      },
+      print: () => events.push('print'),
+    });
+    assert.deepEqual(events, ['start', 'prompt-test', 'test', 'print', 'prompt-challenge', 'approve', 'print']);
+    assert.equal(fixture.sent.length, 1, 'the offered target test uses the owner-built selector exactly once');
+    assert.deepEqual(fixture.approvedChannels, ['terminal']);
+  } finally {
+    fixture.store.close();
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
 
 test('B3 e2e drives every declared both control row through real Commander and MCP adapters', {
   skip: WINDOWS_SKIP,
@@ -381,7 +503,7 @@ test('B3 e2e keeps every terminal exception out of MCP and refuses forged secret
   }
 });
 
-test('B3 e2e keeps approval views challenge-bound, re-plans terminal approval, and exposes pending target testing only to approval flow', async () => {
+test('B3 owner-built approval view selectors pass unchanged to pending target testing and stay refused from MCP or ordinary CLI', async () => {
   const fixture = await approvalFlowFixture();
   try {
     assert.deepEqual(
@@ -406,6 +528,17 @@ test('B3 e2e keeps approval views challenge-bound, re-plans terminal approval, a
     })) as {
       readonly kind: string;
       readonly challenge?: { readonly challenge: string; readonly expiresAt: number };
+      readonly pendingTargetSelectors?: readonly {
+        readonly kind: 'pending-activation';
+        readonly activationId: string;
+        readonly ruleId: string;
+        readonly ruleVersion: number;
+        readonly targetId: string;
+        readonly targetVersion: number;
+        readonly approvalId: string;
+        readonly digest: string;
+        readonly challenge: string;
+      }[];
     };
     assert.equal(ready.kind, 'READY');
     assert.equal(
@@ -414,28 +547,26 @@ test('B3 e2e keeps approval views challenge-bound, re-plans terminal approval, a
       'only a real pending approval obtains a short-lived challenge',
     );
     assert.equal(typeof ready.challenge?.expiresAt, 'number');
-    const selector = {
-      kind: 'pending-activation' as const,
-      activationId: fixture.prepared.intentId,
-      ruleId: 'rule-b3-e2e-approval',
-      ruleVersion: 1,
-      targetId: 'target-b3-e2e-approval',
-      targetVersion: 1,
-      approvalId: fixture.prepared.approvalId,
-      digest: fixture.prepared.binding.digest,
-      challenge: ready.challenge?.challenge as string,
-    };
+    assert.equal(
+      ready.pendingTargetSelectors?.length,
+      1,
+      'the view supplies one owner-built selector per pending target',
+    );
+    const selector = ready.pendingTargetSelectors?.[0];
+    assert.ok(selector, 'the pending target selector exists');
     assert.deepEqual(
       await fixture.service.handle({ operation: 'targetTest', args: selector, origin: 'app-approval-screen' }),
       { attempts: 1, targetId: selector.targetId, targetVersion: selector.targetVersion },
       'only the approval screen can exercise its exact pending target selector',
     );
     assert.equal(fixture.sent.length, 1, 'the synthetic target transport saw only the approval-flow test');
-    await assert.rejects(
-      () => fixture.service.handle({ operation: 'targetTest', args: selector, origin: 'mcp' }),
-      /active exact rule reference|pending target selector/u,
-      'the ordinary MCP target-test route cannot use the pending selector',
-    );
+    for (const origin of ['mcp', 'events-cli'] as const) {
+      await assert.rejects(
+        () => fixture.service.handle({ operation: 'targetTest', args: selector, origin }),
+        /active exact rule reference|pending target selector/u,
+        `the ${origin} target-test route cannot use the pending selector`,
+      );
+    }
     assert.equal(fixture.sent.length, 1, 'the rejected MCP selector never reaches target transport');
 
     fixture.advance(5 * 60 * 1_000);
@@ -485,10 +616,16 @@ test('B3 e2e declares a mutation-backed integration ledger for the phase-level s
   assert.deepEqual(
     manifest.cases?.map((entry) => entry.case).sort(),
     [
+      'integration-app-approval-channel',
+      'integration-approval-challenge-issuance-settlement',
+      'integration-approval-operation-serialization',
+      'integration-approval-view-selector-owner-binding',
+      'integration-approval-view-selectors-present',
       'integration-awaiting-reapproval-restart-fence',
       'integration-e-e2-discriminator',
       'integration-pending-context-binding',
       'integration-sanitised-single-envelope',
+      'integration-used-approval-issuing-residue-recovery',
     ],
     'Task 10 records each integration mutation outside the consumer-contract entry reserved for Task 9 merge',
   );

@@ -17,6 +17,7 @@
       "switchGeneration": 1,
       "ruleVersions": []
     },
+    "pendingTargetSelectors": [],
     "challenge": {
       "approvalId": "approval-1",
       "digest": "digest-1",

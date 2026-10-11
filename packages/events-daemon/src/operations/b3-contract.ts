@@ -264,6 +264,19 @@ export const B3_PENDING_TARGET_APPROVAL_SURFACES: readonly ['terminal-approval',
 );
 export type B3PendingTargetApprovalSurface = (typeof B3_PENDING_TARGET_APPROVAL_SURFACES)[number];
 
+/** An owner-built binding to one target in a still-pending rule activation. */
+export interface B3PendingTargetSelectorV1 {
+  readonly kind: 'pending-activation';
+  readonly activationId: string;
+  readonly ruleId: string;
+  readonly ruleVersion: number;
+  readonly targetId: string;
+  readonly targetVersion: number;
+  readonly approvalId: string;
+  readonly digest: string;
+  readonly challenge: string;
+}
+
 export const B3_JUDGE_UNAVAILABLE_VARIANTS: readonly [
   { readonly code: 'E_REQUIRED'; readonly phase: 'E' },
   { readonly code: 'E2_REQUIRED'; readonly phase: 'E2' },
@@ -304,6 +317,8 @@ type B3ApprovalViewReadyV1 = {
   readonly approvalId: string;
   readonly digest: string;
   readonly preview: ActivationDocumentV1;
+  /** One complete owner-built selector for each target in a pending rule preview; enable-all has none. */
+  readonly pendingTargetSelectors: readonly B3PendingTargetSelectorV1[];
   readonly challenge: {
     readonly approvalId: string;
     readonly digest: string;
@@ -665,17 +680,7 @@ export type B3DesktopControlRequestV1 = {
 export interface B3PendingTargetApprovalRequestV1 {
   readonly surface: B3PendingTargetApprovalSurface;
   readonly operation: 'targetTest';
-  readonly selector: {
-    readonly kind: 'pending-activation';
-    readonly activationId: string;
-    readonly ruleId: string;
-    readonly ruleVersion: number;
-    readonly targetId: string;
-    readonly targetVersion: number;
-    readonly approvalId: string;
-    readonly digest: string;
-    readonly challenge: string;
-  };
+  readonly selector: B3PendingTargetSelectorV1;
 }
 
 type B3ControlRequestVectorV1 = {
@@ -812,6 +817,19 @@ function assertPositiveInteger(value: unknown, name: string): asserts value is n
 function assertNonNegativeInteger(value: unknown, name: string): asserts value is number {
   if (!Number.isSafeInteger(value) || (value as number) < 0)
     throw new TypeError(`${name} must be a non-negative integer`);
+}
+
+function assertPendingTargetSelector(value: unknown, name: string): asserts value is B3PendingTargetSelectorV1 {
+  assertClosedRecord(
+    value,
+    ['kind', 'activationId', 'ruleId', 'ruleVersion', 'targetId', 'targetVersion', 'approvalId', 'digest', 'challenge'],
+    name,
+  );
+  if (value.kind !== 'pending-activation') throw new TypeError(`${name} has an unknown selector kind`);
+  for (const field of ['activationId', 'ruleId', 'targetId', 'approvalId', 'digest', 'challenge'])
+    assertText(value[field], `${name} ${field}`);
+  assertPositiveInteger(value.ruleVersion, `${name} rule version`);
+  assertPositiveInteger(value.targetVersion, `${name} target version`);
 }
 
 function assertB3ActivationBinding(value: unknown, intentId: string, kind: B3IntentKind): void {
@@ -998,9 +1016,17 @@ function assertB3ControlResultV1(value: unknown): asserts value is B3ControlResu
   if (typeof value.kind !== 'string') throw new TypeError('a B3 control result has no known result kind');
   if (B3_APPROVAL_VIEW_VARIANTS.includes(value.kind as B3ApprovalViewVariant)) {
     if (value.kind === 'READY') {
-      assertClosedRecord(value, ['kind', 'approvalId', 'digest', 'preview', 'challenge'], 'a ready approval result');
+      assertClosedRecord(
+        value,
+        ['kind', 'approvalId', 'digest', 'preview', 'pendingTargetSelectors', 'challenge'],
+        'a ready approval result',
+      );
       if (typeof value.approvalId !== 'string' || typeof value.digest !== 'string' || !isJsonValue(value.preview))
         throw new TypeError('a ready approval result needs identifiers');
+      if (!Array.isArray(value.pendingTargetSelectors))
+        throw new TypeError('a ready approval result needs pending target selectors');
+      for (const selector of value.pendingTargetSelectors)
+        assertPendingTargetSelector(selector, 'a ready approval pending target selector');
       assertClosedRecord(value.challenge, ['approvalId', 'digest', 'challenge', 'expiresAt'], 'an approval challenge');
       if (
         typeof value.challenge.approvalId !== 'string' ||
@@ -1144,12 +1170,9 @@ export function assertB3ControlContractVectorV1(value: unknown): asserts value i
     throw new TypeError('a B3 control v1 vector needs a name and request');
   const request = value.request;
   if (request.surface === 'terminal-approval' || request.surface === 'app-approval-screen') {
-    if (
-      request.operation !== 'targetTest' ||
-      !isRecord(request.selector) ||
-      request.selector.kind !== 'pending-activation'
-    )
+    if (request.operation !== 'targetTest')
       throw new TypeError('a pending target vector is only valid in an approval flow');
+    assertPendingTargetSelector(request.selector, 'a pending target vector selector');
     return;
   }
   if (
