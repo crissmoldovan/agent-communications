@@ -7,6 +7,7 @@ import { commitDecisionOutbox, type DecisionFailpoint, StaleDecisionError } from
 import { prepareDeliveries } from './deliveries.ts';
 import type { ActiveDisclosableRequest, DisclosureSnapshot } from './disclosure-fence.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
+import { sqliteTransactionNow } from './holds.ts';
 import { JudgeCoordinator } from './judge-coordinator.ts';
 import { evaluateRuleProjection, matchesRuleCondition } from './mapping.ts';
 import { EventProjectionStore, type ProjectionCipher } from './projections.ts';
@@ -195,8 +196,11 @@ export class EventEvaluator {
 
     // A projection past its decision deadline is settled content-free, without decryption and without the fence: no
     // authority is needed to stop retaining content, and waiting for one would hold the mailbox cursor indefinitely.
-    if (this.#now() >= row.decisionDeadline) {
-      const now = this.#now();
+    // E's only retained-continuation path is an agentic hold, so it must use the same SQLite clock as its final hold
+    // transaction. Deterministic D decisions retain their established injected-clock semantics.
+    const dbNow = this.#store.immediate(() => sqliteTransactionNow(this.#store.database));
+    const expiryNow = rule.agentic === undefined ? this.#now() : dbNow;
+    if (expiryNow >= row.decisionDeadline) {
       return this.#commit(() =>
         commitDecisionOutbox(
           this.#store,
@@ -207,7 +211,7 @@ export class EventEvaluator {
             ruleId: input.ruleId,
             ruleVersion: input.ruleVersion,
             outcome: 'retention-expired',
-            metadataExpiresAt: fixedDeadline(now, rule.retention.decisionMetadataMs),
+            metadataExpiresAt: fixedDeadline(expiryNow, rule.retention.decisionMetadataMs),
             switchGeneration: this.#switchGeneration(),
             deliveries: [],
           },
@@ -391,7 +395,12 @@ export class EventEvaluator {
                     },
                   }),
               encryptedMetadata,
-              ...(outcome === 'hold' ? { retainProjection: true } : {}),
+              ...(outcome === 'hold'
+                ? {
+                    retainProjection: true,
+                    hold: { holdMs: rule.retention.holdMs, ingestMs: rule.retention.ingestMs },
+                  }
+                : {}),
             },
             this.#failpoint,
           ),

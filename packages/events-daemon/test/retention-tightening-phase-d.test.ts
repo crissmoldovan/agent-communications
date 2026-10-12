@@ -3,6 +3,7 @@ import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
 import type { CanonicalFullRuleDocument } from '../src/domain/activation-documents.ts';
 import { EventExpiry, SourceStageExpiryGroup } from '../src/runtime/expiry.ts';
+import { sqliteTransactionNow } from '../src/runtime/holds.ts';
 import { shortenRuleRetentionDeadlines } from '../src/runtime/replacements.ts';
 import { ResendReceivedSource, ResendReceivedStageExpiry } from '../src/sources/resend.ts';
 import { SourceScopeLock } from '../src/sources/scope-lock.ts';
@@ -22,7 +23,7 @@ const previousRetention = {
 
 const tightenedRetention = {
   ingestMs: 50,
-  holdMs: 40,
+  holdMs: 80,
   deliveryMs: 30,
   dryrunMs: 20,
   sseReplayMs: 10,
@@ -36,38 +37,43 @@ test('D4a: a due retention tightening purges every D-owned staged and retained p
   const stateDir = await shortTempDir('events-retention-d-');
   const store = await openEventDatabase({ stateDir });
   try {
+    // Holds use SQLite's transaction clock. Keep this legacy fixture due by that clock after the tightening, rather
+    // than accidentally treating its historical synthetic timestamps as already expired before the change.
+    const dbNow = store.immediate(() => sqliteTransactionNow(store.database));
+    const stagedAt = dbNow - 60;
+    const initialExpiry = stagedAt + previousRetention.ingestMs;
     const document = JSON.stringify({ retention: previousRetention });
     store.database.exec(`
       INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES
         ('rule-retention@1', 'rule-retention', 1, '${document}', 'one'),
         ('rule-retention@2', 'rule-retention', 2, '${document}', 'two');
       INSERT INTO whatsapp_visibility (account_id, version, lists_digest, changed_at)
-        VALUES ('account-1', 1, '0000000000000000000000000000000000000000000000000000000000000000', 10);
+        VALUES ('account-1', 1, '0000000000000000000000000000000000000000000000000000000000000000', ${stagedAt});
       INSERT INTO source_scan_state
         (id, source, account_id, cursor_scope, staged_at, stage_expires_at, encrypted_record, updated_at)
-        VALUES ('whatsapp-payload', 'whatsapp', 'account-1', 'chat:chat', 10, 1_010, X'01', 10);
+        VALUES ('whatsapp-payload', 'whatsapp', 'account-1', 'chat:chat', ${stagedAt}, ${initialExpiry}, X'01', ${stagedAt});
       INSERT INTO source_stage_rule_debts (stage_id, rule_id, rule_version)
         VALUES ('whatsapp-payload', 'other-owed-rule', 1);
       INSERT INTO whatsapp_occurrences
         (account_id, message_id, first_seen_generation, first_seen_at, visibility_version, staged_payload_ref, stage_expires_at)
-        VALUES ('account-1', '["wa-msg","chat","sender","stanza"]', 1, 10, 1, 'whatsapp-payload', 1_010);
+        VALUES ('account-1', '["wa-msg","chat","sender","stanza"]', 1, ${stagedAt}, 1, 'whatsapp-payload', ${initialExpiry});
       INSERT INTO whatsapp_rule_admissions
         (account_id, message_id, rule_id, rule_version, admission, activation_id, visibility_version, admitted_at)
-        VALUES ('account-1', '["wa-msg","chat","sender","stanza"]', 'rule-retention', 1, 'admitted', 'activation', 1, 10);
+        VALUES ('account-1', '["wa-msg","chat","sender","stanza"]', 'rule-retention', 1, 'admitted', 'activation', 1, ${stagedAt});
       INSERT INTO ingest
         (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
-        VALUES ('event-due', 'installation', 'slack.message.posted', 1, 'account-1', 'dedupe', 10, 10, 10);
+        VALUES ('event-due', 'installation', 'slack.message.posted', 1, 'account-1', 'dedupe', ${stagedAt}, ${stagedAt}, ${stagedAt});
       INSERT INTO ingest_rules (event_id, rule_id, rule_version, decision_deadline, encrypted_projection)
-        VALUES ('event-due', 'rule-retention', 1, 1_010, X'01');
+        VALUES ('event-due', 'rule-retention', 1, ${initialExpiry}, X'01');
       INSERT INTO decisions
         (id, event_id, account_id, rule_id, rule_version, outcome, hold_expires_at, metadata_expires_at, metadata_state, encrypted_record)
-        VALUES ('decision-due', 'event-due', 'account-1', 'rule-retention', 1, 'hold', 1_010, 1_010, 'retained', X'01');
+        VALUES ('decision-due', 'event-due', 'account-1', 'rule-retention', 1, 'hold', ${initialExpiry}, ${initialExpiry}, 'retained', X'01');
       INSERT INTO deliveries
         (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, encrypted_record, expires_at, state, switch_generation)
-        VALUES ('delivery-due', 'decision-due', 'account-1', 'rule-retention', 1, 'target@1', 'target', 1, X'01', 1_010, 'disclosing', 0);
+        VALUES ('delivery-due', 'decision-due', 'account-1', 'rule-retention', 1, 'target@1', 'target', 1, X'01', ${initialExpiry}, 'disclosing', 0);
       INSERT INTO dryrun_log
         (delivery_id, rule_id, rule_version, target_id, target_version, event_id, account_id, encrypted_record, delivered_at, expires_at)
-        VALUES ('delivery-due', 'rule-retention', 1, 'target', 1, 'event-due', 'account-1', X'01', 10, 1_010);
+        VALUES ('delivery-due', 'rule-retention', 1, 'target', 1, 'event-due', 'account-1', X'01', ${stagedAt}, ${initialExpiry});
     `);
 
     store.immediate(() =>
@@ -75,7 +81,7 @@ test('D4a: a due retention tightening purges every D-owned staged and retained p
         database: store.database,
         ruleId: 'rule-retention',
         child: { retention: tightenedRetention } as CanonicalFullRuleDocument,
-        now: 60,
+        now: dbNow,
       }),
     );
 
@@ -127,6 +133,154 @@ test('D4a: a due retention tightening purges every D-owned staged and retained p
     assert.equal(
       store.database.prepare("SELECT 1 FROM dryrun_log WHERE delivery_id = 'delivery-due'").get(),
       undefined,
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('D4a: a legacy hold whose tightened hold window wins expires content-free as hold-expired', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-retention-legacy-hold-d-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const dbNow = store.immediate(() => sqliteTransactionNow(store.database));
+    const stagedAt = dbNow - 60;
+    const document = JSON.stringify({ retention: previousRetention });
+    store.database.exec(`
+      INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES
+        ('rule-legacy-hold@1', 'rule-legacy-hold', 1, '${document}', 'one');
+      INSERT INTO ingest
+        (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
+        VALUES ('event-legacy-hold', 'installation', 'slack.message.posted', 1, 'account-1', 'legacy-hold', ${stagedAt}, ${stagedAt}, ${stagedAt});
+      INSERT INTO decisions
+        (id, event_id, account_id, rule_id, rule_version, outcome, hold_expires_at, metadata_expires_at, metadata_state, encrypted_record)
+        VALUES ('decision-legacy-hold', 'event-legacy-hold', 'account-1', 'rule-legacy-hold', 1, 'hold', ${stagedAt + previousRetention.ingestMs}, ${stagedAt + previousRetention.ingestMs}, 'retained', X'01');
+    `);
+
+    store.immediate(() =>
+      shortenRuleRetentionDeadlines({
+        database: store.database,
+        ruleId: 'rule-legacy-hold',
+        child: { retention: { ...tightenedRetention, holdMs: 40 } } as CanonicalFullRuleDocument,
+        now: dbNow,
+      }),
+    );
+
+    assert.deepEqual(
+      {
+        ...(store.database
+          .prepare('SELECT outcome, hold_expires_at, encrypted_record FROM decisions WHERE id = ?')
+          .get('decision-legacy-hold') as Record<string, unknown>),
+      },
+      { outcome: 'hold-expired', hold_expires_at: null, encrypted_record: null },
+      'the tightened hold window is earlier than the ingest cap, so expiry keeps the truthful hold-window outcome',
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('D4a: every retention tightening recomputes a live legacy hold from its current deadline', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-retention-legacy-hold-repeat-d-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const dbNow = store.immediate(() => sqliteTransactionNow(store.database));
+    const stagedAt = dbNow;
+    const document = JSON.stringify({ retention: previousRetention });
+    store.database.exec(`
+      INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES
+        ('rule-legacy-repeat@1', 'rule-legacy-repeat', 1, '${document}', 'one');
+      INSERT INTO ingest
+        (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
+        VALUES ('event-legacy-repeat', 'installation', 'slack.message.posted', 1, 'account-1', 'legacy-repeat', ${stagedAt}, ${stagedAt}, ${stagedAt});
+      INSERT INTO decisions
+        (id, event_id, account_id, rule_id, rule_version, outcome, hold_expires_at, metadata_expires_at, metadata_state, encrypted_record)
+        VALUES ('decision-legacy-repeat', 'event-legacy-repeat', 'account-1', 'rule-legacy-repeat', 1, 'hold', ${stagedAt + previousRetention.ingestMs}, ${stagedAt + previousRetention.ingestMs}, 'retained', X'01');
+    `);
+
+    store.immediate(() =>
+      shortenRuleRetentionDeadlines({
+        database: store.database,
+        ruleId: 'rule-legacy-repeat',
+        child: { retention: { ...tightenedRetention, holdMs: 800, ingestMs: 900 } } as CanonicalFullRuleDocument,
+        now: dbNow,
+      }),
+    );
+    store.immediate(() =>
+      shortenRuleRetentionDeadlines({
+        database: store.database,
+        ruleId: 'rule-legacy-repeat',
+        child: { retention: { ...tightenedRetention, holdMs: 400, ingestMs: 700 } } as CanonicalFullRuleDocument,
+        now: dbNow,
+      }),
+    );
+
+    assert.deepEqual(
+      {
+        ...(store.database
+          .prepare('SELECT outcome, hold_expires_at, hold_bound_by FROM decisions WHERE id = ?')
+          .get('decision-legacy-repeat') as Record<string, unknown>),
+      },
+      { outcome: 'hold', hold_expires_at: stagedAt + 400, hold_bound_by: 'hold-window' },
+      'the second tightening, not the first bound label, determines the shorter live legacy deadline',
+    );
+  } finally {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('D4a: a legacy hold due only after its second tightening terminalises as hold-expired', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('events-retention-legacy-hold-second-expiry-d-');
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const dbNow = store.immediate(() => sqliteTransactionNow(store.database));
+    const stagedAt = dbNow - 50;
+    const document = JSON.stringify({ retention: previousRetention });
+    store.database.exec(`
+      INSERT INTO rule_versions (id, rule_id, version, document, digest) VALUES
+        ('rule-legacy-second-expiry@1', 'rule-legacy-second-expiry', 1, '${document}', 'one');
+      INSERT INTO ingest
+        (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
+        VALUES ('event-legacy-second-expiry', 'installation', 'slack.message.posted', 1, 'account-1', 'legacy-second-expiry', ${stagedAt}, ${stagedAt}, ${stagedAt});
+      INSERT INTO decisions
+        (id, event_id, account_id, rule_id, rule_version, outcome, hold_expires_at, metadata_expires_at, metadata_state, encrypted_record)
+        VALUES ('decision-legacy-second-expiry', 'event-legacy-second-expiry', 'account-1', 'rule-legacy-second-expiry', 1, 'hold', ${stagedAt + previousRetention.ingestMs}, ${stagedAt + previousRetention.ingestMs}, 'retained', X'01');
+    `);
+
+    store.immediate(() =>
+      shortenRuleRetentionDeadlines({
+        database: store.database,
+        ruleId: 'rule-legacy-second-expiry',
+        child: { retention: { ...tightenedRetention, holdMs: 800, ingestMs: 900 } } as CanonicalFullRuleDocument,
+        now: dbNow,
+      }),
+    );
+    store.immediate(() =>
+      shortenRuleRetentionDeadlines({
+        database: store.database,
+        ruleId: 'rule-legacy-second-expiry',
+        child: { retention: { ...tightenedRetention, holdMs: 20, ingestMs: 600 } } as CanonicalFullRuleDocument,
+        now: dbNow,
+      }),
+    );
+
+    assert.deepEqual(
+      {
+        ...(store.database
+          .prepare('SELECT outcome, hold_expires_at, hold_bound_by, encrypted_record FROM decisions WHERE id = ?')
+          .get('decision-legacy-second-expiry') as Record<string, unknown>),
+      },
+      { outcome: 'hold-expired', hold_expires_at: null, hold_bound_by: null, encrypted_record: null },
+      'the second hold-window bound is due by SQLite time and has the hold-window terminal outcome',
     );
   } finally {
     store.close();

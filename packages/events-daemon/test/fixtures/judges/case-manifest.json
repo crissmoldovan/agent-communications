@@ -87,7 +87,21 @@
     { "id": "e7-full-request-estimate" },
     { "id": "e7-single-decision-owner" },
     { "id": "e7-deterministic-shared-route" },
-    { "id": "e7-evaluator-writer-lease" }
+    { "id": "e7-evaluator-writer-lease" },
+    { "id": "e8-sqlite-hold-clock" },
+    { "id": "e8-ingest-tie" },
+    { "id": "e8-lease-recovery" },
+    { "id": "e8-expiry-before-control" },
+    { "id": "e8-decision-bound-token" },
+    { "id": "e8-final-resolution-recheck" },
+    { "id": "e8-account-purge-claim" },
+    { "id": "e8-evaluator-db-clock" },
+    { "id": "e8-hold-write-expiry" },
+    { "id": "e8-held-whatsapp-live-fence" },
+    { "id": "e8-held-whatsapp-journal-version" },
+    { "id": "e8-legacy-hold-ingest-cap" },
+    { "id": "e8-legacy-hold-repeated-tightening" },
+    { "id": "e8-held-final-live-account-fence" }
   ],
   "mutations": [
     { "id": "e1-canonical-documents" },
@@ -176,7 +190,21 @@
     { "id": "e7-full-request-estimate" },
     { "id": "e7-single-decision-owner" },
     { "id": "e7-deterministic-shared-route" },
-    { "id": "e7-evaluator-writer-lease" }
+    { "id": "e7-evaluator-writer-lease" },
+    { "id": "e8-sqlite-hold-clock" },
+    { "id": "e8-ingest-tie" },
+    { "id": "e8-lease-recovery" },
+    { "id": "e8-expiry-before-control" },
+    { "id": "e8-decision-bound-token" },
+    { "id": "e8-final-resolution-recheck" },
+    { "id": "e8-account-purge-claim" },
+    { "id": "e8-evaluator-db-clock" },
+    { "id": "e8-hold-write-expiry" },
+    { "id": "e8-held-whatsapp-live-fence" },
+    { "id": "e8-held-whatsapp-journal-version" },
+    { "id": "e8-legacy-hold-ingest-cap" },
+    { "id": "e8-legacy-hold-repeated-tightening" },
+    { "id": "e8-held-final-live-account-fence" }
   ],
   "cases": [
     {
@@ -1219,6 +1247,174 @@
         "test": "E4 mutation: verifier static scope and required Task-4 guard rows refuse drift"
       },
       "strictRunner": "judge-task4-mutants"
+    },
+    {
+      "id": "e8-sqlite-hold-clock",
+      "task": "E8",
+      "coverage": ["e8-sqlite-hold-clock"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-holds.test.ts",
+      "mutation": {
+        "id": "e8-sqlite-hold-clock",
+        "test": "E8: a hold uses the SQLite transaction clock and retention wins its deadline tie"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-ingest-tie",
+      "task": "E8",
+      "coverage": ["e8-ingest-tie"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-holds.test.ts",
+      "mutation": {
+        "id": "e8-ingest-tie",
+        "test": "E8: a hold uses the SQLite transaction clock and retention wins its deadline tie"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-lease-recovery",
+      "task": "E8",
+      "coverage": ["e8-lease-recovery"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-holds.test.ts",
+      "mutation": {
+        "id": "e8-lease-recovery",
+        "test": "E8: a DB-time claim is decision-bound, expires for recovery, and cannot claim at the hold deadline"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-expiry-before-control",
+      "task": "E8",
+      "coverage": ["e8-expiry-before-control"],
+      "productionEntry": "packages/events-daemon/src/runtime/expiry.ts",
+      "test": "packages/events-daemon/test/judge-hold-retention.test.ts",
+      "mutation": {
+        "id": "e8-expiry-before-control",
+        "test": "E8: expiry uses SQLite time before control despite process-clock rollback and cannot leave a late hold"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-decision-bound-token",
+      "task": "E8",
+      "coverage": ["e8-decision-bound-token"],
+      "productionEntry": "packages/events-daemon/src/runtime/decisions.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e8-decision-bound-token",
+        "test": "E8: final hold resolution refuses a mismatched decision-bound claim token before any delivery write"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-final-resolution-recheck",
+      "task": "E8",
+      "coverage": ["e8-final-resolution-recheck"],
+      "productionEntry": "packages/events-daemon/src/runtime/decisions.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e8-final-resolution-recheck",
+        "test": "E8: resolution rechecks its authority after decrypt and refuses a disabled hold without a delivery"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-account-purge-claim",
+      "task": "E8",
+      "coverage": ["e8-account-purge-claim"],
+      "productionEntry": "packages/events-daemon/src/runtime/judge-purge.ts",
+      "test": "packages/events-daemon/test/judge-hold-retention.test.ts",
+      "mutation": {
+        "id": "e8-account-purge-claim",
+        "test": "E8: tightening recomputes creation-bound hold limits and purge removes the held claim"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-evaluator-db-clock",
+      "task": "E8",
+      "coverage": ["e8-evaluator-db-clock"],
+      "productionEntry": "packages/events-daemon/src/runtime/evaluate.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e8-evaluator-db-clock",
+        "test": "E8 P1: a fast evaluator clock cannot expire a hold before its SQLite ingest deadline"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-hold-write-expiry",
+      "task": "E8",
+      "coverage": ["e8-hold-write-expiry"],
+      "productionEntry": "packages/events-daemon/src/runtime/decisions.ts",
+      "test": "packages/events-daemon/test/judge-holds.test.ts",
+      "mutation": {
+        "id": "e8-hold-write-expiry",
+        "test": "E8 P1: the final hold writer terminalises from its SQLite transaction time when ingest has already ended"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-held-whatsapp-live-fence",
+      "task": "E8",
+      "coverage": ["e8-held-whatsapp-live-fence"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e8-held-whatsapp-live-fence",
+        "test": "E8 P1: held WhatsApp resolution applies the shared live-list fence before it reads retained content"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-held-whatsapp-journal-version",
+      "task": "E8",
+      "coverage": ["e8-held-whatsapp-journal-version"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e8-held-whatsapp-journal-version",
+        "test": "E8 P2: held WhatsApp resolution commits against the journal head after a visible list change"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-legacy-hold-ingest-cap",
+      "task": "E8",
+      "coverage": ["e8-legacy-hold-ingest-cap"],
+      "productionEntry": "packages/events-daemon/src/runtime/replacements.ts",
+      "test": "packages/events-daemon/test/tightening.test.ts",
+      "mutation": {
+        "id": "e8-legacy-hold-ingest-cap",
+        "test": "APR-B1: a retention tightening moves every persisted B1 deadline only earlier"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-legacy-hold-repeated-tightening",
+      "task": "E8",
+      "coverage": ["e8-legacy-hold-repeated-tightening"],
+      "productionEntry": "packages/events-daemon/src/runtime/replacements.ts",
+      "test": "packages/events-daemon/test/retention-tightening-phase-d.test.ts",
+      "mutation": {
+        "id": "e8-legacy-hold-repeated-tightening",
+        "test": "D4a: every retention tightening recomputes a live legacy hold from its current deadline"
+      },
+      "strictRunner": "judge-hold-mutants"
+    },
+    {
+      "id": "e8-held-final-live-account-fence",
+      "task": "E8",
+      "coverage": ["e8-held-final-live-account-fence"],
+      "productionEntry": "packages/events-daemon/src/runtime/holds.ts",
+      "test": "packages/events-daemon/test/judge-races.test.ts",
+      "mutation": {
+        "id": "e8-held-final-live-account-fence",
+        "test": "E8 P1: held resolution rechecks the live account after delivery encryption and taint before its final write"
+      },
+      "strictRunner": "judge-hold-mutants"
     }
   ]
 }
